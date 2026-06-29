@@ -1,0 +1,27 @@
+{
+  "sections": {
+    "data": "Daten",
+    "calibration": "Kalibrierung",
+    "indexAnalyze": "Indizieren & Analysieren",
+    "tools": "Werkzeuge",
+    "settings": "Einstellungen"
+  },
+  "pages": {
+    "dashboard": { "label": "Dashboard", "tooltip": "Startseite mit Modulübersicht und zuletzt geöffneten Dateien" },
+    "ebsdviewer": { "label": "EBSD Viewer", "tooltip": "H5OINA/HDF5-Dateien laden, Beugungsmuster ansehen, EDS-Zusammensetzung" },
+    "eds": { "label": "EDS-Analyse", "tooltip": "Elementverteilungskarten, Quantifizierung, Phasenvorschlag aus der Chemie" },
+    "pcrefinement": { "label": "PC-Verfeinerung", "tooltip": "Musterzentrum-Kalibrierung und -Verfeinerung" },
+    "crystal": { "label": "Kristall-DB", "tooltip": "CIF/XTAL-Konverter, Kristalldatenbank, DWF-Editor" },
+    "simulation": { "label": "Simulation", "tooltip": "EMsoft Monte-Carlo- und Master-Pattern-Simulation" },
+    "database": { "label": "Datenbank-Browser", "tooltip": "Simulationsergebnisse auf der Netzwerkfreigabe durchsuchen" },
+    "indexing": { "label": "Indizierung", "tooltip": "Hough-, Dictionary- oder Spherical-Indizierung (EMSphinx)" },
+    "phasemap": { "label": "Phasenkarten", "tooltip": "Indizierungsergebnisse mit konfigurierbarem Maßstab visualisieren" },
+    "analysis": { "label": "Analyse", "tooltip": "MTEX-äquivalente Nachverarbeitung: Kornanalyse, Textur, RX-Klassifizierung" },
+    "batch": { "label": "Stapel", "tooltip": "Mehrphasen-Stapelindizierung mit Checkpoint-Wiederherstellung" },
+    "refinement": { "label": "Verfeinerung", "tooltip": "Mehrphasen-Indizierungsergebnisse prüfen und verfeinern" },
+    "crystalhint": { "label": "Kristall-Hinweis", "tooltip": "Symmetrie + Gitter aus Mustern erkennen. Schlägt Kandidatenphasen vor, wenn die Bibliothek keine Übereinstimmung hat." },
+    "mlhub": { "label": "ML-Prädiktor", "tooltip": "ML-Modell aus Indizierungsergebnissen trainieren, Phasen vorhersagen" },
+    "settings": { "label": "Einstellungen", "tooltip": "Systemstatus, Server-Modus, EMsoft/EMSphinx-Pfade" }
+  },
+  "hdf5Viewer": { "label": "HDF5 Viewer", "tooltip": "HDF5-Dateistruktur, Muster, EDS-Karten erkunden" }
+}

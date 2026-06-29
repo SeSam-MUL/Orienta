@@ -1,0 +1,48 @@
+{
+  "appTitle": "Orienta",
+  "appSubtitle": "EBSD-Musteranalyse",
+  "loadingModule": "Modul wird geladen…",
+  "toolbar": {
+    "edsColors": "EDS-Farben",
+    "edsColorsTooltip": "Elementfarben für EDS-Overlay-Karten konfigurieren",
+    "shortcutsTooltip": "Tastenkürzel (?)"
+  },
+  "disconnected": {
+    "message": "Backend nicht verbunden — Server starten mit"
+  },
+  "crash": {
+    "title": "Dieses Modul ist abgestürzt"
+  },
+  "sidebar": {
+    "expand": "Seitenleiste ausklappen",
+    "collapse": "Seitenleiste einklappen",
+    "dataLoaded": "Daten geladen",
+    "themeTooltip": "Design: {{name}} — zum Ändern klicken",
+    "backendTooltip": "Backend: {{status}}",
+    "connected": "Verbunden",
+    "language": "Sprache"
+  },
+  "hdf5": {
+    "title": "HDF5 Viewer"
+  },
+  "shortcuts": {
+    "title": "Tastenkürzel",
+    "closeHint": "{{k1}} oder {{k2}} zum Schließen drücken"
+  },
+  "hoverTips": {
+    "errorTryAgain": "Fehler verwerfen und dieses Modul ohne App-Neustart neu einbinden",
+    "errorReload": "Die gesamte Anwendung im Browser neu laden",
+    "h5ViewerClose": "HDF5-Viewer-Panel schließen (Ctrl+H)",
+    "shortcutHelpClose": "Tastenkürzel-Hilfe schließen",
+    "devLogFilter": "Log-Einträge nach dieser Kategorie filtern",
+    "fileSwitcher": "Aktive geladene Datei wechseln — lädt sie im Backend neu und aktualisiert alle Seiten",
+    "openSettings": "Klicken, um die Einstellungen zu öffnen",
+    "appStatus": "Anwendungsstatus",
+    "moduleNav": "Modulnavigation",
+    "dismissNotification": "Benachrichtigung schließen",
+    "devOpen": "Dev-Panel öffnen (Ctrl+Shift+D)",
+    "copyLogs": "Logs kopieren",
+    "clearLogs": "Logs löschen",
+    "closeDevPanel": "Schließen (Ctrl+Shift+D)"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "page": {
+    "title": "Phase Refinement",
+    "fileStemPlaceholder": "File stem (e.g. sample_B)...",
+    "searchDirPlaceholder": "Search directory (optional)...",
+    "clear": "Clear",
+    "uncertaintyOverlay": "Uncertainty overlay",
+    "loadingPhaseMap": "Loading phase map...",
+    "emptyPrompt": "Enter a file stem and click Load to start refining."
+  },
+  "hoverTips": {
+    "showUncertainty": "Overlay low-confidence (high-uncertainty) pixels on the map"
+  },
+  "tooltips": {
+    "fileStem": "Enter the dataset file stem (e.g. sample_B) of the multi-phase indexing checkpoint to load.",
+    "searchDir": "Optional folder to search for the checkpoint file; leave empty to use the default location.",
+    "load": "Load the indexing checkpoint for the given file stem and display its phase map.",
+    "clear": "Clear the loaded dataset and reset all overrides and pixel selection.",
+    "uncertaintyOverlay": "Toggle dimming of low-CI (uncertain) pixels on the phase map.",
+    "phaseMapCanvas": "Click a pixel to inspect its phase candidates and confidence index (CI).",
+    "assign": "Manually assign this phase to the selected pixel, overriding the automatic result.",
+    "modePixel": "Click mode: select individual pixels on the map to reassign their phase.",
+    "ciThreshold": "Set the confidence index (CI) threshold below which pixels count as uncertain.",
+    "export": "Export the refined phase map; opens the export URL from the summary."
+  },
+  "errors": {
+    "loadFailed": "Failed to load",
+    "overrideFailed": "Override failed"
+  },
+  "inspector": {
+    "title": "Pixel Inspector",
+    "prompt": "Click a pixel on the map to inspect its phase candidates.",
+    "pixelCoords": "Pixel ({{row}}, {{col}})",
+    "noPhaseData": "No phase data.",
+    "phaseFallback": "Phase {{id}}",
+    "ciLabel": "CI {{value}}",
+    "assign": "Assign"
+  },
+  "stats": {
+    "title": "Statistics",
+    "totalPixels": "Total pixels",
+    "overridden": "Overridden",
+    "avgCi": "Avg CI",
+    "lowCi": "Low CI (<0.1)"
+  },
+  "phaseMap": {
+    "noData": "No phase map data loaded.",
+    "ariaLabel": "Phase map — click to inspect pixel"
+  },
+  "tools": {
+    "modePixel": "Pixel",
+    "ciLessThan": "CI <",
+    "overrideCount_one": "{{count}} override",
+    "overrideCount_other": "{{count}} overrides"
+  }
+}

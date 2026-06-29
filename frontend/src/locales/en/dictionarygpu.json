@@ -1,0 +1,78 @@
+{
+  "page": {
+    "title": "GPU Dictionary Generator",
+    "description": "Generate a dictionary of simulated EBSD patterns on the GPU from an EMsoft master pattern. Stand-alone tool — does not touch the main indexing pipeline."
+  },
+  "generate": {
+    "button": "Generate",
+    "generating": "Generating…",
+    "taskLabel": "task: {{taskId}}",
+    "tooltip": "Start GPU generation of a simulated EBSD pattern dictionary from the master pattern.",
+    "tooltipPickMaster": "Pick a master pattern first",
+    "tooltipInProgress": "Generation in progress"
+  },
+  "errors": {
+    "detectorIntegers": "Detector H and W must be integers.",
+    "resolutionPositive": "Resolution must be a positive number.",
+    "noTaskId": "Backend did not return a task_id.",
+    "generateFailed": "Generate failed: {{detail}}",
+    "deleteFailed": "Delete failed: {{detail}}",
+    "progressPollFailed": "Progress poll failed: {{message}}"
+  },
+  "master": {
+    "groupTitle": "Master Pattern",
+    "fieldLabel": "Master .h5",
+    "placeholder": "C:\\path\\to\\Ni-master.h5",
+    "inputTooltip": "Paste the full file path to an EMsoft master pattern HDF5 (.h5) file.",
+    "use": "Use",
+    "useTooltip": "Commit the entered master pattern path (only shown when a commit handler is wired).",
+    "hint": "Paste a full path to an EMsoft master pattern HDF5 file. The dictionary is generated on the GPU from this master + the detector settings below."
+  },
+  "detector": {
+    "groupTitle": "Detector",
+    "patternSize": "Pattern size",
+    "patternSizeUnit": "px",
+    "heightTooltip": "Detector pattern height in pixels (rows). Range 16–2048.",
+    "widthTooltip": "Detector pattern width in pixels (columns). Range 16–2048.",
+    "pcLabel": "PC (x, y, z)",
+    "pcxTooltip": "Pattern Center x-coordinate (PCx), fractional 0–1 across the detector width.",
+    "pcyTooltip": "Pattern Center y-coordinate (PCy), fractional 0–1 across the detector height.",
+    "pczTooltip": "Pattern Center z / detector distance (PCz), fractional 0–1.",
+    "sampleTilt": "Sample tilt",
+    "sampleTiltUnit": "deg",
+    "sampleTiltTooltip": "Sample tilt angle in degrees (typically 70 for EBSD). Range 0–90."
+  },
+  "orientation": {
+    "groupTitle": "Orientations",
+    "resolution": "Resolution",
+    "resolutionUnit": "deg",
+    "sliderTooltip": "SO(3) orientation sampling step in degrees; lower = more orientations, larger dictionary.",
+    "numberTooltip": "Exact orientation sampling resolution in degrees. 5 deg coarse, 1–2 deg production.",
+    "normalize": "Normalize",
+    "normalizeCheckboxLabel": "Zero-mean / unit-variance each pattern",
+    "normalizeTooltip": "Zero-mean / unit-variance normalize each generated pattern before storing.",
+    "hint": "Lower resolution → more orientations → larger dictionary. 5° is typical for a coarse first pass; drop to 1–2° for production runs."
+  },
+  "progress": {
+    "statusLabel": "Status: {{status}}",
+    "statusIdle": "idle",
+    "submitting": "Submitting…",
+    "generatedPatterns": "Generated <0>{{count}}</0> patterns",
+    "polling": "Polling every 500 ms…"
+  },
+  "list": {
+    "groupTitle": "Existing Dictionaries",
+    "count_one": "{{count}} dictionary on disk",
+    "count_other": "{{count}} dictionaries on disk",
+    "refresh": "Refresh",
+    "refreshTooltip": "Reload the list of GPU-generated dictionaries from disk.",
+    "empty": "No dictionaries yet. Generate one above.",
+    "colName": "Name",
+    "colPatterns": "Patterns",
+    "colSize": "Size",
+    "colCreated": "Created",
+    "delete": "Delete",
+    "deleteTooltip": "Delete this dictionary file from disk (asks for confirmation; cannot be undone).",
+    "deleteConfirm": "Delete \"{{name}}\"? This cannot be undone."
+  }
+}

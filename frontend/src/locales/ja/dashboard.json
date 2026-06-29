@@ -1,0 +1,98 @@
+{
+  "title": "Orienta",
+  "subtitle": "EBSD パターン解析・シミュレーション ツールキット",
+  "sections": {
+    "dataCalibration": "データと校正",
+    "indexAnalysis": "指数付けと解析"
+  },
+  "cards": {
+    "ebsdviewer": {
+      "title": "EBSD ビューア",
+      "description": "H5OINA/EDAX ファイルを読み込み。パターン処理、EDS オーバーレイ。",
+      "tooltip": "EBSD ビューアを開く：H5OINA/EDAX ファイルを読み込み、パターンを処理し、EDS オーバーレイを表示。"
+    },
+    "eds": {
+      "title": "EDS 解析",
+      "description": "元素マップ、定量（Counts/Wt%/At%）、相の提案。",
+      "tooltip": "EDS 解析を開く：元素マップ、定量（Counts/Wt%/At%）、相の提案。"
+    },
+    "pcrefinement": {
+      "title": "PC 精密化",
+      "description": "パターン中心（PC）の校正と画素ごとのドリフト補正。",
+      "tooltip": "PC 精密化を開く：パターン中心（PC）の校正と画素ごとのドリフト補正。"
+    },
+    "crystal": {
+      "title": "Crystal DB",
+      "description": "CIF を .xtal 形式に変換。結晶構造データベースを管理。",
+      "tooltip": "Crystal DB を開く：CIF を .xtal に変換し、結晶構造データベースを管理。"
+    },
+    "indexing": {
+      "title": "指数付け",
+      "description": "Dictionary・Hough・Spherical 指数付け（画素選択対応）。",
+      "tooltip": "指数付けを開く：Dictionary・Hough・Spherical 指数付け（画素選択対応）。"
+    },
+    "phasemap": {
+      "title": "相分布図",
+      "description": "指数付け結果を可視化。スケールバー設定とエクスポートに対応。",
+      "tooltip": "相分布図を開く：指数付け結果をスケールバー設定とエクスポートで可視化。"
+    },
+    "analysis": {
+      "title": "EBSD 解析",
+      "description": "結晶粒の再構築、集合組織解析、KAM/GOS マップ、バッチ出力。",
+      "tooltip": "EBSD 解析を開く：結晶粒の再構築、集合組織解析、KAM/GOS マップ、バッチ出力。"
+    },
+    "mlhub": {
+      "title": "ML 予測器",
+      "description": "指数付け結果から相認識モデルを学習。",
+      "tooltip": "ML 予測器を開く：指数付け結果から相認識モデルを学習。"
+    },
+    "batch": {
+      "title": "マルチ相バッチ",
+      "description": "複数ファイルを複数の相に対し一晩でバッチ指数付け。",
+      "tooltip": "マルチ相バッチを開く：多数のファイルを多数の相に対し一晩で指数付け。"
+    },
+    "refinement": {
+      "title": "相の精密化",
+      "description": "マルチ相の指数付け結果を画素ごとに確認・精密化。",
+      "tooltip": "相の精密化を開く：マルチ相の指数付け結果を画素ごとに確認・精密化。"
+    }
+  },
+  "ready": {
+    "label": "準備完了",
+    "tooltip": "データ読み込み済み — 使用可能"
+  },
+  "recent": {
+    "title": "最近使ったファイル",
+    "empty": {
+      "title": "最近使ったファイルはありません",
+      "hint": "EBSD ビューアから H5OINA/HDF5 ファイルを開いて始めましょう"
+    },
+    "itemTooltip": "クリックして読み込み：{{path}}",
+    "quickLoad": "最後のファイルをすぐに読み込み",
+    "quickLoadTooltip": "最後に開いたファイルをワンクリックで読み込み",
+    "clear": "最近使ったファイルを消去",
+    "clearTooltip": "最近使ったファイルの一覧をすべて消去（確認あり）",
+    "confirm": {
+      "title": "最近使ったファイルを消去",
+      "message": "最近使ったファイルをすべて消去しますか？この操作は元に戻せません。",
+      "confirmLabel": "消去"
+    }
+  },
+  "shortcuts": {
+    "hint": "カードをクリック、サイドバーを使用、または Ctrl+1〜9 でナビゲートできます。",
+    "toggleTooltip": "キーボードショートカット一覧の表示／非表示を切り替え",
+    "dashboard": "ダッシュボード",
+    "ebsdViewer": "EBSD ビューア",
+    "analysis": "解析",
+    "crystalDb": "Crystal DB",
+    "simulation": "シミュレーション",
+    "database": "データベース",
+    "phaseMaps": "相分布図",
+    "indexing": "指数付け",
+    "mlPredictor": "ML 予測器",
+    "pcRefinement": "PC 精密化",
+    "hdf5Viewer": "HDF5 ビューア",
+    "edsAnalysis": "EDS 解析",
+    "toggleSidebar": "サイドバーの切り替え"
+  }
+}

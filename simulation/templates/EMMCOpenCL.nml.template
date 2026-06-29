@@ -1,0 +1,77 @@
+&MCCLdata
+ ! only bse1, full or Ivol simulation
+  mode = '{mode}' ! 'bse1' (=ECP) or 'full' (=EBSD), 'Ivol' for interaction volume output
+ ! name of the crystal structure file
+  xtalname = '{xtalname}',
+ ! for EBSD and ECP: number of pixels along x-direction of square projection [odd number!]
+  numsx = {numsx},
+ !
+ !================ EBSD parameters ==================
+ !
+ ! for full EBSD mode: sample tilt angle from horizontal [degrees]
+  sig = {sig},
+ ! sample tilt angle around RD axis [degrees]
+ omega = {omega},
+ !
+ !================ ECP (BSE1) parameters ============
+ !
+ ! start angle
+ sigstart = {sigstart},
+ ! end angle
+ sigend = {sigend},
+ ! sig step size
+ sigstep = {sigstep},
+ !
+ !======== Interaction Volume parameters ============
+ ! beam enters volume at [(ivolx-1)/2, (ivoly-1)/2, 0]
+ !
+ ! x, y, z number of voxels [odd numbers!]
+ ivolx = {ivolx},
+ ivoly = {ivoly},
+ ivolz = {ivolz},
+ ! x, y, z voxel step sizes [nm]
+ ivolstepx = {ivolstepx},
+ ivolstepy = {ivolstepy},
+ ivolstepz = {ivolstepz},
+ !
+ !================ GPU parameters ===================
+ !
+ ! number of incident electrons per thread
+ num_el = {num_el},
+ ! GPU platform ID selector
+ platid = {platid},
+ ! GPU device ID selector
+ devid = {devid},
+ ! number of work items (depends on GPU card; leave unchanged)
+ globalworkgrpsz = {globalworkgrpsz},
+ !
+ !================ # electrons ======================
+ !
+ ! total number of incident electrons and multiplier (to get more than 2^(31)-1 electrons)
+ totnum_el = {totnum_el},
+ multiplier = {multiplier},
+ !
+ !================ energy parameters ================
+ !
+ ! incident beam energy [keV]
+ EkeV = {EkeV}D0,
+ ! minimum energy to consider [keV]
+ Ehistmin = {Ehistmin}D0,
+ ! energy binsize [keV]
+ Ebinsize = {Ebinsize}D0,
+ !
+ !========= EBSD/ECP depth parameters ===============
+ ! (these parameters are not used for Ivol mode)
+ !
+ ! maximum depth to consider for exit depth statistics [nm]
+ depthmax = {depthmax}D0,
+ ! depth step size [nm]
+ depthstep = {depthstep}D0,
+ !
+ !========= output file =============================
+ !
+ ! output data file name; pathname is relative to the EMdatapathname path !!!
+ dataname = '{dataname}',
+ ! should the user be notified by email or Slack that the program has completed its run?
+ Notify = '{Notify}',
+ /

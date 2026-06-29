@@ -1,0 +1,415 @@
+/* Dracula Dark Theme */
+:root {
+  --bg-primary: #282a36;
+  --bg-secondary: #1e1f29;
+  --bg-tertiary: #44475a;
+  --bg-hover: #3d3f4f;
+  --text-primary: #f8f8f2;
+  --text-secondary: #8b93a8;
+  --text-muted: #6272a4;
+  --accent-purple: #bd93f9;
+  --accent-pink: #ff79c6;
+  --accent-green: #50fa7b;
+  --accent-cyan: #8be9fd;
+  --accent-orange: #ffb86c;
+  --accent-red: #ff5555;
+  --accent-yellow: #f1fa8c;
+  --border-color: #44475a;
+  --sidebar-bg: #1a1b26;
+  --sidebar-active: #2a2b3d;
+  --sidebar-border: #3b3d54;
+  --sidebar-text: #c0c0c0;
+  --card-bg: #2d2f3d;
+  --card-bg-hover: #353749;
+  --card-border: #3b3d54;
+  --text-on-accent: #282a36;
+  --sidebar-width: 260px;
+  --radius: 8px;
+  --radius-sm: 4px;
+  --transition: 0.2s ease;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  transition: background 0.3s ease, color 0.3s ease;
+}
+
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: var(--bg-secondary); }
+::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 4px; transition: background 0.15s; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* Thin scrollbar variant for compact panels */
+.thin-scrollbar::-webkit-scrollbar { width: 4px; height: 4px; }
+.thin-scrollbar::-webkit-scrollbar-thumb { border-radius: 2px; }
+
+.card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 16px;
+}
+
+.card-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent-purple);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+  min-height: 34px;
+}
+.btn-primary { background: var(--accent-purple); color: var(--bg-primary); }
+.btn-primary:hover { background: #c8a4ff; transform: translateY(-1px); box-shadow: 0 2px 8px rgba(189,147,249,0.3); }
+.btn-success { background: var(--accent-green); color: var(--bg-primary); }
+.btn-danger { background: var(--accent-red); color: #fff; }
+.btn-outline { background: transparent; border: 1px solid var(--border-color); color: var(--text-primary); }
+.btn-outline:hover { background: var(--bg-hover); border-color: var(--accent-purple); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+button:focus-visible,
+[role="button"]:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent-purple);
+  outline-offset: 2px;
+}
+
+/* Checkbox accent color for dark theme */
+input[type="checkbox"] {
+  accent-color: var(--accent-purple);
+  cursor: pointer;
+}
+
+input, select, textarea {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  font-size: 13px;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 2px rgba(189, 147, 249, 0.25);
+}
+input[type="number"] { width: 80px; }
+label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-secondary);
+  padding: 3px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-color);
+}
+.tab-item {
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  transition: all var(--transition);
+}
+.tab-item:hover { background: var(--bg-hover); color: var(--text-primary); }
+.tab-item.active { background: var(--accent-purple); color: var(--bg-primary); font-weight: 600; }
+
+.progress-bar { width: 100%; height: 5px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; }
+.progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent-purple), var(--accent-cyan)); border-radius: 3px; transition: width 0.3s; }
+
+.image-container {
+  background: #000;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 200px;
+}
+.image-container img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-success { background: rgba(80,250,123,0.15); color: var(--accent-green); }
+.badge-warning { background: rgba(255,184,108,0.15); color: var(--accent-orange); }
+.badge-error { background: rgba(255,85,85,0.15); color: var(--accent-red); }
+.badge-info { background: rgba(139,233,253,0.15); color: var(--accent-cyan); }
+
+.form-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.form-row label { min-width: 100px; text-align: right; }
+
+/* Table styling — hover feedback for all tbody rows */
+tbody tr { transition: background 0.1s; }
+tbody tr:hover { background: var(--bg-hover) !important; }
+/* Ensure table cell text doesn't wrap awkwardly on small screens */
+td { vertical-align: middle; }
+
+/* Select dropdown option styling for dark theme */
+option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 4px 8px;
+}
+
+/* Input focus glow — subtle accent border on focused text/number/select inputs */
+input[type="text"],
+input[type="number"],
+select {
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+input[type="text"]:focus,
+input[type="number"]:focus,
+select:focus {
+  border-color: var(--accent-purple) !important;
+  box-shadow: 0 0 0 1px rgba(189, 147, 249, 0.2);
+  outline: none;
+}
+
+/* Subtle glow on focused GroupBox */
+.group-focus:focus-within {
+  border-color: var(--accent-purple);
+  box-shadow: 0 0 0 1px rgba(189, 147, 249, 0.15);
+}
+
+/* Page fade-in animation for stacked pages */
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Subtle entry for status messages and inline alerts */
+@keyframes fadeSlideIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Skeleton loading pulse */
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 0.7; }
+}
+
+/* Spinner animation for processing overlay */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Scroll-shadow indicators for scrollable panels */
+.scroll-shadow-y {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0, black 12px,
+    black calc(100% - 12px), transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0, black 12px,
+    black calc(100% - 12px), transparent 100%
+  );
+}
+
+/* Subtle text selection color matching theme */
+::selection {
+  background: rgba(189, 147, 249, 0.3);
+  color: var(--text-primary);
+}
+
+/* Disabled button uniform styling */
+button:disabled, .btn:disabled {
+  pointer-events: none;
+}
+
+/* Active button press feedback — subtle scale-down on click */
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+
+/* Interactive list item hover — used for dataset lists, file lists, etc. */
+.list-item-interactive {
+  transition: background 0.1s, opacity 0.1s;
+}
+.list-item-interactive:hover {
+  background: var(--bg-hover) !important;
+}
+
+/* Subtle number input stepper styling */
+input[type="number"]::-webkit-inner-spin-button {
+  opacity: 0.4;
+}
+input[type="number"]:hover::-webkit-inner-spin-button {
+  opacity: 1;
+}
+
+/* Range slider styling for dark theme */
+input[type="range"] {
+  accent-color: var(--accent-purple);
+  cursor: pointer;
+  height: 4px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  cursor: grab;
+}
+input[type="range"]:active::-webkit-slider-thumb {
+  cursor: grabbing;
+}
+
+/* Color picker border for dark theme */
+input[type="color"] {
+  cursor: pointer;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  background: transparent;
+}
+input[type="color"]:hover {
+  border-color: var(--accent-purple);
+}
+
+/* Inline spinner for loading buttons — place inside button as ::before via class */
+.btn-loading {
+  position: relative;
+  pointer-events: none;
+}
+.btn-loading::before {
+  content: '';
+  display: inline-block;
+  width: 12px; height: 12px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  margin-right: 6px;
+  vertical-align: middle;
+  opacity: 0.8;
+}
+
+/* Gradient section divider — used between major page sections */
+.section-divider {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--border-color) 20%,
+    var(--border-color) 80%,
+    transparent 100%
+  );
+  margin: 8px 0;
+  flex-shrink: 0;
+}
+
+/* Keyboard shortcut badge — subtle inline hint for shortcuts */
+.kbd {
+  display: inline-block;
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 7.5pt;
+  padding: 0px 4px;
+  border-radius: 3px;
+  border: 1px solid rgba(139, 233, 253, 0.15);
+  background: rgba(139, 233, 253, 0.06);
+  color: rgba(139, 233, 253, 0.5);
+  line-height: 1.6;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+/* Smooth image reveal — apply to images that load asynchronously */
+@keyframes imageReveal {
+  from { opacity: 0; filter: blur(2px); }
+  to   { opacity: 1; filter: blur(0); }
+}
+.image-reveal {
+  animation: imageReveal 0.25s ease-out;
+}
+
+/* Map image crosshair cursor — for scientific map/pattern viewers */
+.map-image {
+  cursor: crosshair;
+  image-rendering: pixelated;
+}
+
+/* Coordinate overlay badge — bottom-right inside map container */
+.coord-overlay {
+  position: absolute;
+  bottom: 6px;
+  right: 8px;
+  background: rgba(0,0,0,0.7);
+  color: var(--accent-cyan);
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 8pt;
+  font-family: 'Consolas', 'Courier New', monospace;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+/* Show on parent hover */
+.map-container:hover .coord-overlay {
+  opacity: 1;
+}
+
+/* Table row hover — subtle highlight for data tables */
+.table-row-hover {
+  transition: background 0.1s;
+}
+.table-row-hover:hover {
+  background: rgba(68, 71, 90, 0.5) !important;
+}
+
+/* Skeleton loading shimmer — reusable placeholder for async content */
+@keyframes skeleton-shimmer {
+  0%   { opacity: 0.4; }
+  50%  { opacity: 0.7; }
+  100% { opacity: 0.4; }
+}
+.skeleton-shimmer {
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+}
+
+/* Accessibility: reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

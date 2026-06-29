@@ -1,0 +1,48 @@
+{
+  "appTitle": "Orienta",
+  "appSubtitle": "EBSD Pattern Analysis",
+  "loadingModule": "Loading module…",
+  "toolbar": {
+    "edsColors": "EDS Colors",
+    "edsColorsTooltip": "Configure element colors for EDS overlay maps",
+    "shortcutsTooltip": "Keyboard shortcuts (?)"
+  },
+  "disconnected": {
+    "message": "Backend not connected — start the server with"
+  },
+  "crash": {
+    "title": "This module crashed"
+  },
+  "sidebar": {
+    "expand": "Expand sidebar",
+    "collapse": "Collapse sidebar",
+    "dataLoaded": "Data loaded",
+    "themeTooltip": "Theme: {{name}} — click to change",
+    "backendTooltip": "Backend: {{status}}",
+    "connected": "Connected",
+    "language": "Language"
+  },
+  "hdf5": {
+    "title": "HDF5 Viewer"
+  },
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "closeHint": "Press {{k1}} or {{k2}} to close"
+  },
+  "hoverTips": {
+    "errorTryAgain": "Dismiss the error and try re-mounting this module without reloading the app",
+    "errorReload": "Reload the entire application in the browser",
+    "h5ViewerClose": "Close the HDF5 Viewer panel (Ctrl+H)",
+    "shortcutHelpClose": "Close the keyboard shortcuts help",
+    "devLogFilter": "Filter log entries by this category",
+    "fileSwitcher": "Switch the active loaded file — reloads it on the backend and refreshes all pages",
+    "openSettings": "Click to open Settings",
+    "appStatus": "Application status",
+    "moduleNav": "Module navigation",
+    "dismissNotification": "Dismiss notification",
+    "devOpen": "Open Dev Panel (Ctrl+Shift+D)",
+    "copyLogs": "Copy logs",
+    "clearLogs": "Clear logs",
+    "closeDevPanel": "Close (Ctrl+Shift+D)"
+  }
+}

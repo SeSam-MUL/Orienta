@@ -1,0 +1,141 @@
+{
+  "header": {
+    "title": "ML Hub",
+    "subtitle": "机器学习模型管理与花样预测"
+  },
+  "hoverTips": {
+    "epochs": "训练轮次数 (对数据的完整遍历次数)",
+    "batch": "每个训练步骤处理的花样数量",
+    "learningRate": "学习率 — 优化器的步长",
+    "ciThreshold": "训练样本的最小置信度指数 — 越高数据越纯净但样本越少",
+    "patternIndices": "用于分类的花样索引 (逗号或空格分隔)"
+  },
+  "tabs": {
+    "status": "状态",
+    "statusTip": "显示模型可用性、已加载模型信息和训练存储统计",
+    "training": "训练",
+    "trainingTip": "训练相分类器、降噪器或嵌入编码器",
+    "prediction": "预测",
+    "predictionTip": "对选定的花样索引运行相预测"
+  },
+  "modelCard": {
+    "unknownModel": "未知模型",
+    "loaded": "已加载",
+    "accuracy": "{{value}}% 准确率",
+    "tooltip": "选择此模型作为预测的活动模型"
+  },
+  "results": {
+    "columns": {
+      "index": "索引",
+      "phase": "相",
+      "confidence": "置信度",
+      "score": "得分"
+    },
+    "empty": "—"
+  },
+  "log": {
+    "title": "训练日志",
+    "titleWithCount": "训练日志 ({{count}})",
+    "copyTooltip": "将日志复制到剪贴板",
+    "copiedTooltip": "已复制！",
+    "copyAria": "将训练日志复制到剪贴板",
+    "placeholder": "训练日志将在此处显示..."
+  },
+  "status": {
+    "modelStatus": "模型状态",
+    "failedToLoad": "加载状态失败",
+    "modelLoaded": "模型已加载",
+    "modelLoadedPhases": "模型已加载 — {{count}} 个相: {{names}}",
+    "noModelLoaded": "未加载模型",
+    "mlModule": "ML 模块",
+    "available": "可用",
+    "unavailable": "不可用",
+    "model": "模型",
+    "loaded": "已加载",
+    "notLoaded": "未加载",
+    "backend": "后端",
+    "device": "设备",
+    "trainingStore": "训练存储",
+    "storeTotal": "总计: {{count}} 个样本",
+    "storePhases": " | 相: {{phases}}",
+    "storeMeanCi": " | 平均 CI: {{value}}",
+    "noTrainingData": "无训练数据",
+    "goToTraining": "前往训练",
+    "goToTrainingTooltip": "切换到训练选项卡以添加样本或训练模型",
+    "modelsLoading": "模型 (加载中...)",
+    "modelsCount": "模型 ({{count}})",
+    "noModels": "无可用模型",
+    "noModelsHint": "从标定结果训练相分类器，或加载现有的模型检查点。",
+    "goToTrainingEmptyTooltip": "切换到训练选项卡以训练相分类器"
+  },
+  "training": {
+    "classifierTitle": "相分类器训练",
+    "classifierDesc": "在收集的标定结果上训练 CNN 分类器。使用训练存储中按置信度索引的数据。",
+    "usesLastResult": "训练使用最近的标定结果。",
+    "epochs": "轮次:",
+    "epochsTooltip": "训练轮次数 (对数据的完整遍历次数)",
+    "batch": "批量:",
+    "batchTooltip": "每个训练步骤处理的花样数量",
+    "lr": "LR:",
+    "lrTooltip": "学习率 — 优化器的步长",
+    "ciThreshold": "CI 阈值:",
+    "ciThresholdTooltip": "训练样本的最小置信度指数 — 越高数据越纯净但样本越少",
+    "startTraining": "开始训练",
+    "trainingInProgress": "训练中...",
+    "startTrainingTooltip": "在最近的标定结果上训练 CNN 相分类器 (先添加样本，然后训练)",
+    "stop": "停止",
+    "stopTooltip": "停止监视训练运行 (训练在后端继续)",
+    "clearStore": "清空存储",
+    "clearStoreTooltip": "删除训练存储中的所有样本 (清除过时/错误标记的数据)",
+    "epochProgress": "轮次 {{current}} / {{total}}",
+    "denoiserTitle": "降噪训练 (U-Net)",
+    "denoiserDesc": "在已存储的降噪对上训练 U-Net 降噪器。在标定前降低 EBSD 花样中的噪声。",
+    "notWired": "此版本不可用 — 尚未接入训练端点。",
+    "notWiredTooltip": "此版本不可用 — 无后端端点",
+    "trainDenoiser": "训练降噪器",
+    "loadDenoiser": "加载降噪器",
+    "denoiserEpochsTooltip": "U-Net 降噪器的训练轮次 (此版本未接入)",
+    "embeddingTitle": "嵌入标定 (FAISS)",
+    "embeddingDesc": "在收集的标定结果上训练嵌入编码器，然后构建 FAISS 索引以实现快速的基于神经网络的标定。",
+    "embeddingNotWired": "此版本不可用 — 尚未接入嵌入/FAISS 端点。",
+    "dim": "维度:",
+    "embeddingDimTooltip": "FAISS 编码器的嵌入向量维度 (已禁用)",
+    "trainEncoder": "训练编码器",
+    "buildFaissIndex": "构建 FAISS 索引",
+    "logTitle": "训练日志"
+  },
+  "trainLog": {
+    "starting": "开始训练: {{epochs}} 轮次, 批量={{batch}}, LR={{lr}}, CI>={{ci}}",
+    "addingSamples": "正在从最近的标定结果添加样本，然后训练...",
+    "stoppedWatching": "已停止监视 (训练在后端继续)。",
+    "taskExpired": "任务已过期。",
+    "error": "错误: {{message}}",
+    "clearCancelled": "已取消清空存储。",
+    "storeCleared": "训练存储已清空 (已删除 {{count}} 个样本)。"
+  },
+  "trainMsg": {
+    "complete": "训练完成 — {{count}} 个相: {{names}}, 最佳验证损失 {{loss}}",
+    "failed": "训练失败。",
+    "storeCleared": "训练存储已清空。",
+    "clearFailed": "清空失败。"
+  },
+  "clearStorePrompt": "删除训练存储中的所有样本？此操作无法撤销 (可通过 \"Add from Indexing\" 重新添加)。输入 \"clear\" 以确认:",
+  "prediction": {
+    "title": "预测",
+    "desc": "输入花样索引 (逗号或空格分隔) 以运行相预测。",
+    "model": "模型:",
+    "unknownModel": "未知",
+    "patternIndices": "花样索引:",
+    "patternIndicesPlaceholder": "0, 1, 2, 100, 200",
+    "patternIndicesTooltip": "用于分类的花样索引 (逗号或空格分隔)",
+    "predict": "预测",
+    "predicting": "预测中...",
+    "predictTooltip": "对输入的花样索引运行相预测",
+    "mlUnavailable": "ML 模块不可用。请确保已安装 ebsd-ai 模块。",
+    "noValidIndex": "请输入至少一个有效的花样索引。",
+    "predictionFailed": "预测失败。",
+    "resultsTitle": "结果 ({{count}} 个花样)",
+    "noPredictions": "尚无预测",
+    "noPredictionsHint": "输入花样索引并点击预测"
+  }
+}

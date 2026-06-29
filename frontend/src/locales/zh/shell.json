@@ -1,0 +1,48 @@
+{
+  "appTitle": "Orienta",
+  "appSubtitle": "EBSD 花样分析",
+  "loadingModule": "正在加载模块…",
+  "toolbar": {
+    "edsColors": "EDS 颜色",
+    "edsColorsTooltip": "配置 EDS 叠加图的元素颜色",
+    "shortcutsTooltip": "键盘快捷键 (?)"
+  },
+  "disconnected": {
+    "message": "后端未连接 — 使用以下命令启动服务器"
+  },
+  "crash": {
+    "title": "此模块已崩溃"
+  },
+  "sidebar": {
+    "expand": "展开侧边栏",
+    "collapse": "折叠侧边栏",
+    "dataLoaded": "数据已加载",
+    "themeTooltip": "主题：{{name}} — 点击切换",
+    "backendTooltip": "后端：{{status}}",
+    "connected": "已连接",
+    "language": "语言"
+  },
+  "hdf5": {
+    "title": "HDF5 查看器"
+  },
+  "shortcuts": {
+    "title": "键盘快捷键",
+    "closeHint": "按 {{k1}} 或 {{k2}} 关闭"
+  },
+  "hoverTips": {
+    "errorTryAgain": "清除错误并尝试重新挂载此模块，无需重新加载应用",
+    "errorReload": "在浏览器中重新加载整个应用程序",
+    "h5ViewerClose": "关闭 HDF5 查看器面板 (Ctrl+H)",
+    "shortcutHelpClose": "关闭键盘快捷键帮助",
+    "devLogFilter": "按此类别筛选日志条目",
+    "fileSwitcher": "切换当前加载的文件 — 在后端重新加载并刷新所有页面",
+    "openSettings": "点击打开设置",
+    "appStatus": "应用程序状态",
+    "moduleNav": "模块导航",
+    "dismissNotification": "关闭通知",
+    "devOpen": "打开开发面板 (Ctrl+Shift+D)",
+    "copyLogs": "复制日志",
+    "clearLogs": "清除日志",
+    "closeDevPanel": "关闭 (Ctrl+Shift+D)"
+  }
+}

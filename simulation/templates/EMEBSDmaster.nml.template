@@ -1,0 +1,26 @@
+&EBSDmastervars
+ ! kleinster d-Spacing [nm]
+ dmin = {dmin},
+ !
+ ! Anzahl der Pixel in x-Richtung (halbe Groesse des Master-Patterns)
+ npx = {npx},
+ !
+ ! Anzahl OpenMP-Threads (0 = alle verfuegbaren nutzen)
+ nthreads = {nthreads},
+ !
+ ! HDF5-Datei, die EMMCOpenCL erzeugt hat (relativ zu EMdatapathname)
+ energyfile = '{energyfile}',
+ !
+ ! Bethe-Parameter-Datei (liegt im selben Ordner wie diese NML)
+ BetheParametersFile = '{BetheParametersFile}',
+ !
+ ! soll eine DOI in die Master-Pattern-Datei geschrieben werden?
+ useDOI = '{useDOI}',
+ !
+ ! Soll eine Benachrichtigung verschickt werden?
+ Notify = '{Notify}',
+ !
+ ! Restart-Flag und -Datei (fuer unterbrochene Laeufe)
+ restart = .FALSE.,
+ ! uniform = .FALSE.,
+ /

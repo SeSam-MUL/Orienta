@@ -1,0 +1,63 @@
+{
+  "windowTitle": "極点図 — Orienta",
+  "controls": {
+    "phaseLabel": "相",
+    "phaseTooltip": "極点を表示する指数付け済みの結晶相を選択します。",
+    "phaseAria": "相",
+    "noPhases": "（相なし）",
+    "hklLabel": "極点ファミリー（hkl、カンマ区切り）",
+    "hklTooltip": "極点ファミリーをカンマ区切りの hkl 指数で入力します（例: 100,110,111）。",
+    "hklAria": "hkl",
+    "styleLabel": "表示スタイル",
+    "styleTooltip": "プロットスタイルを選択します: 密度マップ、散布点、または両方の組み合わせ。",
+    "styleAria": "表示スタイル",
+    "styleBoth": "密度 + 点",
+    "styleDensity": "密度（Aztec スタイル）",
+    "styleScatter": "点（MTEX スタイル）"
+  },
+  "view": {
+    "rendering": "極点図を描画しています…",
+    "imageAlt": "極点図",
+    "noResult": "指数付け結果がまだありません。"
+  },
+  "hoverTips": {
+    "zIntoPlane": "Z を面の内側を向くものとして扱います（座標系の面外方向を反転します）。",
+    "applyToExport": "この回転をエクスポートした .ang/.h5 にも書き込みます（ベンダーオフセットと合成）。"
+  },
+  "coordSys": {
+    "title": "座標系",
+    "noDataset": "アクティブなデータセットがありません。",
+    "rotationMode": "回転モード",
+    "modeOpt": {
+      "preset": "プリセット",
+      "axis_angle": "軸–角度",
+      "euler": "オイラー (Bunge ZXZ)"
+    },
+    "preset": "プリセット",
+    "presetOpt": {
+      "identity": "恒等 (ネイティブ)",
+      "mtex_default": "MTEX デフォルト",
+      "aztec_oxford": "Aztec / Oxford (Rz +90°)",
+      "edax": "EDAX / TSL"
+    },
+    "axis": "軸 {{ax}}",
+    "angle": "角度",
+    "xDirection": "X方向",
+    "xDirOpt": {
+      "east": "X → 東 (右)",
+      "north": "X → 北 (上)"
+    },
+    "projection": "投影",
+    "projOpt": {
+      "equal_area": "等面積 (Schmidt)",
+      "stereographic": "ステレオ投影 (Wulff)"
+    },
+    "hemisphere": "半球",
+    "hemiOpt": {
+      "upper": "上半球",
+      "lower": "下半球"
+    },
+    "zIntoPlane": "Z を面内へ",
+    "applyToExports": "エクスポートに適用"
+  }
+}

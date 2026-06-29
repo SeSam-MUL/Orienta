@@ -1,0 +1,130 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+.eggs/
+dist/
+build/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
+# EMsoft & Script-Output
+*.h5
+*.h5oina
+*.log
+SHT_output/
+TempRuns/
+*_unfin.h5
+
+# GPU spherical indexing — oracle is per-machine, but its sha256 IS committed.
+# (The *.h5 rule above already covers reference_oracle.h5; keep this comment
+# so future maintainers don't try to add it to git.)
+!tests/test_spherical_gpu/data/reference_oracle.sha256
+
+# Generierte Datenbanken und Plots
+crystal_database.xlsx
+database_builder.log
+Plots/
+
+# IDE
+.idea/
+.vscode/
+
+# Config files
+emsphinx_config.ini
+emsphinx_config_cluster.ini
+
+# Local per-machine editor/agent state (never tracked)
+.claude/
+
+# Data files — stored in Database/, not version-controlled
+Database/
+crystal-structures-for-ebsd-main/_xtal_files/
+crystal-structures-for-ebsd-main/calculationxtal/Cif_Files/
+
+# Generated test artifacts
+test_*.png
+tests/screenshots/
+
+# Stale directories (prevent re-creation)
+crystal/
+data/
+# Re-allow the forward-sim crystal subpackage (the bare `crystal/` rule above
+# otherwise swallows backend/forward_sim/crystal/).
+!backend/forward_sim/crystal/
+!backend/forward_sim/crystal/**
+# Re-allow our spherical-gpu test fixtures dir + the sha256 lock file.
+# The reference_oracle.h5 itself is per-machine, so it stays ignored
+# (caught by the *.h5 rule above and explicitly below).
+!tests/test_spherical_gpu/data/
+!tests/test_spherical_gpu/data/reference_oracle.sha256
+tests/test_spherical_gpu/data/reference_oracle.h5
+# Re-allow our dict-gpu test fixtures dir (Task 4 of the GPU dict
+# indexing plan). Files here are intentionally checked in; producers
+# in this dir regenerate them on demand.
+!tests/data/
+!tests/data/dict_gpu/
+!tests/data/dict_gpu/**
+
+# Test data (large binary files)
+Test_data/*.h5
+Test_data/*.h5oina
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build / tool caches
+.cache/
+.playwright-mcp/
+.superpowers/
+node_modules/
+
+# Stray screenshot dumps at repo root (intentional ones live in screenshots/ or tests/screenshots/)
+/simulation-*.png
+/screenshot-*.png
+/page-*.png
+
+# Per-machine ground truth artefacts (heavy, not version-controlled)
+tasks/ni_lowgain_ground_truth/*.ang
+tasks/ni_lowgain_ground_truth/*.tif
+
+# --- Go-live prep (2026-06-24) ---
+# ML model checkpoints (large, per-machine)
+ml_training_data/
+*.pt
+# Test-data binaries not covered by the *.h5 / *.h5oina rules above
+Test_data/*.tif
+Test_data/*.tiff
+# EMsoft namelists + render/export scratch dropped at repo ROOT (anchored so
+# real frontend PNGs / assets are untouched — *.png is intentionally NOT global)
+/*.nml
+/*.ang
+/*.jpeg
+/*.jpg
+/sphere_*.png
+/diag_*.png
+/phasemap-*.png
+# Root scratch snapshots
+/ch-snap.md
+/db_snapshot.md
+/snap*.md
+/rows*.md
+# Root diagnostic/debug scratch scripts (guard against new ones; untrack later)
+/debug_*.py
+/diag_*.py
+/friedel_test.py
+# Machine-specific local config (the tracked copies get git rm --cached too)
+.claude/settings.local.json
+frontend/.npmrc
+# __pycache__ / .pyc leaking through the forward-sim + dict-gpu re-allow rules
+backend/forward_sim/crystal/**/__pycache__/
+backend/forward_sim/crystal/**/*.pyc
+tests/data/dict_gpu/**/__pycache__/
+tests/data/dict_gpu/**/*.pyc
+# Release archives built by tasks/golive/make_release_archive.py
+release/

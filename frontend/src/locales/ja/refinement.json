@@ -1,0 +1,56 @@
+{
+  "page": {
+    "title": "相の精密化",
+    "fileStemPlaceholder": "ファイルステム（例: sample_B）...",
+    "searchDirPlaceholder": "検索ディレクトリ（省略可）...",
+    "clear": "クリア",
+    "uncertaintyOverlay": "不確実性オーバーレイ",
+    "loadingPhaseMap": "相分布図を読み込み中...",
+    "emptyPrompt": "ファイルステムを入力し「読み込み」をクリックして精密化を開始します。"
+  },
+  "hoverTips": {
+    "showUncertainty": "CI が低い（不確実性が高い）ピクセルを図上に重ねて表示します"
+  },
+  "tooltips": {
+    "fileStem": "読み込むマルチ相指数付けチェックポイントのデータセットのファイルステム（例: sample_B）を入力します。",
+    "searchDir": "チェックポイントファイルを検索する任意のフォルダ。空欄の場合は既定の場所を使用します。",
+    "load": "指定したファイルステムの指数付けチェックポイントを読み込み、その相分布図を表示します。",
+    "clear": "読み込み済みのデータセットを消去し、すべての変更とピクセル選択をリセットします。",
+    "uncertaintyOverlay": "相分布図上で CI が低い（不確実な）ピクセルの減光を切り替えます。",
+    "phaseMapCanvas": "ピクセルをクリックして、その相候補と確信指数（CI）を確認します。",
+    "assign": "この相を選択中のピクセルに手動で割り当て、自動結果を上書きします。",
+    "modePixel": "クリックモード: 図上の個々のピクセルを選択して相を再割り当てします。",
+    "ciThreshold": "ピクセルを不確実とみなす確信指数（CI）のしきい値を設定します。",
+    "export": "精密化した相分布図をエクスポートします。サマリーのエクスポート URL を開きます。"
+  },
+  "errors": {
+    "loadFailed": "読み込みに失敗しました",
+    "overrideFailed": "上書きに失敗しました"
+  },
+  "inspector": {
+    "title": "ピクセルインスペクター",
+    "prompt": "図上のピクセルをクリックして、その相候補を確認します。",
+    "pixelCoords": "ピクセル ({{row}}, {{col}})",
+    "noPhaseData": "相データがありません。",
+    "phaseFallback": "相 {{id}}",
+    "ciLabel": "CI {{value}}",
+    "assign": "割り当て"
+  },
+  "stats": {
+    "title": "統計",
+    "totalPixels": "総ピクセル数",
+    "overridden": "上書き済み",
+    "avgCi": "平均 CI",
+    "lowCi": "低 CI（<0.1）"
+  },
+  "phaseMap": {
+    "noData": "相分布図データが読み込まれていません。",
+    "ariaLabel": "相分布図 — クリックしてピクセルを確認"
+  },
+  "tools": {
+    "modePixel": "ピクセル",
+    "ciLessThan": "CI <",
+    "overrideCount_one": "{{count}} 件の上書き",
+    "overrideCount_other": "{{count}} 件の上書き"
+  }
+}

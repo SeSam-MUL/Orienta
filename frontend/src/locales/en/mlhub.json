@@ -1,0 +1,141 @@
+{
+  "header": {
+    "title": "ML Hub",
+    "subtitle": "Machine learning model management and pattern prediction"
+  },
+  "hoverTips": {
+    "epochs": "Number of training epochs (full passes over the data)",
+    "batch": "Number of patterns processed per training step",
+    "learningRate": "Learning rate — step size of the optimiser",
+    "ciThreshold": "Minimum confidence index for training samples — higher = cleaner data but fewer samples",
+    "patternIndices": "Comma- or space-separated pattern indices to classify"
+  },
+  "tabs": {
+    "status": "Status",
+    "statusTip": "Model availability, loaded model info, training store statistics",
+    "training": "Training",
+    "trainingTip": "Train phase classifier, denoiser, or embedding encoder",
+    "prediction": "Prediction",
+    "predictionTip": "Run phase prediction on selected pattern indices"
+  },
+  "modelCard": {
+    "unknownModel": "Unknown Model",
+    "loaded": "Loaded",
+    "accuracy": "{{value}}% acc",
+    "tooltip": "Select this model as the active model for prediction"
+  },
+  "results": {
+    "columns": {
+      "index": "Index",
+      "phase": "Phase",
+      "confidence": "Confidence",
+      "score": "Score"
+    },
+    "empty": "—"
+  },
+  "log": {
+    "title": "Training Log",
+    "titleWithCount": "Training Log ({{count}})",
+    "copyTooltip": "Copy log to clipboard",
+    "copiedTooltip": "Copied!",
+    "copyAria": "Copy training log to clipboard",
+    "placeholder": "Training log will appear here..."
+  },
+  "status": {
+    "modelStatus": "Model Status",
+    "failedToLoad": "Failed to load status",
+    "modelLoaded": "Model loaded",
+    "modelLoadedPhases": "Model loaded — {{count}} phase(s): {{names}}",
+    "noModelLoaded": "No model loaded",
+    "mlModule": "ML Module",
+    "available": "Available",
+    "unavailable": "Unavailable",
+    "model": "Model",
+    "loaded": "Loaded",
+    "notLoaded": "Not loaded",
+    "backend": "Backend",
+    "device": "Device",
+    "trainingStore": "Training Store",
+    "storeTotal": "Total: {{count}} samples",
+    "storePhases": " | Phases: {{phases}}",
+    "storeMeanCi": " | Mean CI: {{value}}",
+    "noTrainingData": "No training data",
+    "goToTraining": "Go to Training",
+    "goToTrainingTooltip": "Switch to the Training tab to add samples or train a model",
+    "modelsLoading": "Models (loading...)",
+    "modelsCount": "Models ({{count}})",
+    "noModels": "No models available",
+    "noModelsHint": "Train a phase classifier from indexing results or load an existing model checkpoint.",
+    "goToTrainingEmptyTooltip": "Switch to the Training tab to train a phase classifier"
+  },
+  "training": {
+    "classifierTitle": "Phase Classifier Training",
+    "classifierDesc": "Train a CNN classifier on collected indexing results. Uses confidence-indexed data from the training store.",
+    "usesLastResult": "Training uses the most recent indexing result.",
+    "epochs": "Epochs:",
+    "epochsTooltip": "Number of training epochs (full passes over the data)",
+    "batch": "Batch:",
+    "batchTooltip": "Number of patterns processed per training step",
+    "lr": "LR:",
+    "lrTooltip": "Learning rate — step size of the optimiser",
+    "ciThreshold": "CI Threshold:",
+    "ciThresholdTooltip": "Minimum confidence index for training samples — higher = cleaner data but fewer samples",
+    "startTraining": "Start Training",
+    "trainingInProgress": "Training...",
+    "startTrainingTooltip": "Train a CNN phase classifier on the last indexing result (adds samples, then trains)",
+    "stop": "Stop",
+    "stopTooltip": "Stop watching the training run (training continues on the backend)",
+    "clearStore": "Clear Store",
+    "clearStoreTooltip": "Delete all samples from the training store (purges stale/mislabelled data)",
+    "epochProgress": "Epoch {{current}} / {{total}}",
+    "denoiserTitle": "Denoising Training (U-Net)",
+    "denoiserDesc": "Train a U-Net denoiser on stored denoising pairs. Reduces noise in EBSD patterns before indexing.",
+    "notWired": "Not available in this build — no training endpoint is wired yet.",
+    "notWiredTooltip": "Not available in this build — no backend endpoint",
+    "trainDenoiser": "Train Denoiser",
+    "loadDenoiser": "Load Denoiser",
+    "denoiserEpochsTooltip": "Training epochs for the U-Net denoiser (not wired in this build)",
+    "embeddingTitle": "Embedding Indexing (FAISS)",
+    "embeddingDesc": "Train an embedding encoder on collected indexing results, then build a FAISS index for fast neural-network-based indexing.",
+    "embeddingNotWired": "Not available in this build — no embedding/FAISS endpoint is wired yet.",
+    "dim": "Dim:",
+    "embeddingDimTooltip": "Embedding vector dimensionality for the FAISS encoder (disabled)",
+    "trainEncoder": "Train Encoder",
+    "buildFaissIndex": "Build FAISS Index",
+    "logTitle": "Training Log"
+  },
+  "trainLog": {
+    "starting": "Starting training: {{epochs}} epochs, batch={{batch}}, lr={{lr}}, CI>={{ci}}",
+    "addingSamples": "Adding samples from the last indexing result, then training...",
+    "stoppedWatching": "Stopped watching (training continues on the backend).",
+    "taskExpired": "Task expired.",
+    "error": "ERROR: {{message}}",
+    "clearCancelled": "Clear store cancelled.",
+    "storeCleared": "Training store cleared ({{count}} samples removed)."
+  },
+  "trainMsg": {
+    "complete": "Training complete — {{count}} phase(s): {{names}}, best val loss {{loss}}",
+    "failed": "Training failed.",
+    "storeCleared": "Training store cleared.",
+    "clearFailed": "Clear failed."
+  },
+  "clearStorePrompt": "Delete ALL samples from the training store? This cannot be undone (re-add via \"Add from Indexing\"). Type \"clear\" to confirm:",
+  "prediction": {
+    "title": "Predict",
+    "desc": "Enter pattern indices (comma or space separated) to run phase prediction.",
+    "model": "Model:",
+    "unknownModel": "Unknown",
+    "patternIndices": "Pattern indices:",
+    "patternIndicesPlaceholder": "0, 1, 2, 100, 200",
+    "patternIndicesTooltip": "Comma- or space-separated pattern indices to classify",
+    "predict": "Predict",
+    "predicting": "Predicting...",
+    "predictTooltip": "Run phase prediction on the entered pattern indices",
+    "mlUnavailable": "ML module is not available. Ensure the ebsd-ai module is installed.",
+    "noValidIndex": "Enter at least one valid pattern index.",
+    "predictionFailed": "Prediction failed.",
+    "resultsTitle": "Results ({{count}} patterns)",
+    "noPredictions": "No predictions yet",
+    "noPredictionsHint": "Enter pattern indices and click Predict"
+  }
+}

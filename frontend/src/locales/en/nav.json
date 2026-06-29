@@ -1,0 +1,27 @@
+{
+  "sections": {
+    "data": "Data",
+    "calibration": "Calibration",
+    "indexAnalyze": "Index & Analyze",
+    "tools": "Tools",
+    "settings": "Settings"
+  },
+  "pages": {
+    "dashboard": { "label": "Dashboard", "tooltip": "Home screen with module overview and recent files" },
+    "ebsdviewer": { "label": "EBSD Viewer", "tooltip": "Load H5OINA/HDF5 files, view patterns, EDS composition" },
+    "eds": { "label": "EDS Analysis", "tooltip": "Element maps, quantification, phase suggestion from chemistry" },
+    "pcrefinement": { "label": "PC Refinement", "tooltip": "Pattern Center calibration and refinement" },
+    "crystal": { "label": "Crystal DB", "tooltip": "CIF/XTAL converter, crystal database, DWF editor" },
+    "simulation": { "label": "Simulation", "tooltip": "EMsoft Monte Carlo + master pattern simulation" },
+    "database": { "label": "Database Browser", "tooltip": "Browse simulation results on the network share" },
+    "indexing": { "label": "Indexing", "tooltip": "Hough, Dictionary, or Spherical (EMSphinx) indexing" },
+    "phasemap": { "label": "Phase Maps", "tooltip": "Visualize indexing results with a configurable scalebar" },
+    "analysis": { "label": "Analysis", "tooltip": "MTEX-equivalent post-processing: grain analysis, texture, RX classification" },
+    "batch": { "label": "Batch", "tooltip": "Multi-phase batch indexing with checkpoint recovery" },
+    "refinement": { "label": "Refinement", "tooltip": "Review and refine multi-phase indexing results" },
+    "crystalhint": { "label": "Crystal Hint", "tooltip": "Detect symmetry + lattice from patterns. Suggest candidate phases when the library has no match." },
+    "mlhub": { "label": "ML Predictor", "tooltip": "Train an ML model from indexing results, predict phases" },
+    "settings": { "label": "Settings", "tooltip": "System status, server mode, EMsoft/EMSphinx paths" }
+  },
+  "hdf5Viewer": { "label": "HDF5 Viewer", "tooltip": "Explore HDF5 file structure, patterns, EDS maps" }
+}

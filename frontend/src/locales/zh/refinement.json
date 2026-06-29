@@ -1,0 +1,56 @@
+{
+  "page": {
+    "title": "相精修",
+    "fileStemPlaceholder": "文件名主干（例如 sample_B）...",
+    "searchDirPlaceholder": "搜索目录（可选）...",
+    "clear": "清除",
+    "uncertaintyOverlay": "不确定性叠加层",
+    "loadingPhaseMap": "正在加载相分布图...",
+    "emptyPrompt": "输入文件名主干并点击“加载”以开始精修。"
+  },
+  "hoverTips": {
+    "showUncertainty": "在图上叠加显示低 CI（高不确定性）像素"
+  },
+  "tooltips": {
+    "fileStem": "输入要加载的多相标定检查点数据集的文件名主干（例如 sample_B）。",
+    "searchDir": "用于搜索检查点文件的可选文件夹；留空则使用默认位置。",
+    "load": "加载指定文件名主干的标定检查点并显示其相分布图。",
+    "clear": "清除已加载的数据集，并重置所有更改和像素选择。",
+    "uncertaintyOverlay": "在相分布图上切换对低 CI（不确定）像素的变暗显示。",
+    "phaseMapCanvas": "点击某个像素以查看其候选相和置信指数（CI）。",
+    "assign": "将此相手动指定给所选像素，覆盖自动结果。",
+    "modePixel": "点击模式：在图上选择单个像素以重新指定其相。",
+    "ciThreshold": "设置置信指数（CI）阈值，低于该值的像素视为不确定。",
+    "export": "导出精修后的相分布图；打开摘要中的导出 URL。"
+  },
+  "errors": {
+    "loadFailed": "加载失败",
+    "overrideFailed": "覆盖失败"
+  },
+  "inspector": {
+    "title": "像素检查器",
+    "prompt": "点击图上的像素以查看其候选相。",
+    "pixelCoords": "像素 ({{row}}, {{col}})",
+    "noPhaseData": "无相数据。",
+    "phaseFallback": "相 {{id}}",
+    "ciLabel": "CI {{value}}",
+    "assign": "指定"
+  },
+  "stats": {
+    "title": "统计",
+    "totalPixels": "总像素数",
+    "overridden": "已覆盖",
+    "avgCi": "平均 CI",
+    "lowCi": "低 CI（<0.1）"
+  },
+  "phaseMap": {
+    "noData": "未加载相分布图数据。",
+    "ariaLabel": "相分布图 — 点击以查看像素"
+  },
+  "tools": {
+    "modePixel": "像素",
+    "ciLessThan": "CI <",
+    "overrideCount_one": "{{count}} 个覆盖",
+    "overrideCount_other": "{{count}} 个覆盖"
+  }
+}

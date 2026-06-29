@@ -1,0 +1,27 @@
+{
+  "sections": {
+    "data": "データ",
+    "calibration": "キャリブレーション",
+    "indexAnalyze": "指数付け・解析",
+    "tools": "ツール",
+    "settings": "設定"
+  },
+  "pages": {
+    "dashboard": { "label": "ダッシュボード", "tooltip": "モジュール一覧と最近開いたファイルを表示するホーム画面" },
+    "ebsdviewer": { "label": "EBSD ビューア", "tooltip": "H5OINA/HDF5 ファイルを読み込み、パターンと EDS 組成を表示" },
+    "eds": { "label": "EDS 解析", "tooltip": "元素マップ、定量、組成からの相提案" },
+    "pcrefinement": { "label": "PC 精密化", "tooltip": "パターン中心 (PC) のキャリブレーションと精密化" },
+    "crystal": { "label": "結晶 DB", "tooltip": "CIF/XTAL 変換、結晶データベース、DWF エディタ" },
+    "simulation": { "label": "シミュレーション", "tooltip": "EMsoft モンテカルロ + マスターパターンのシミュレーション" },
+    "database": { "label": "データベースブラウザ", "tooltip": "ネットワーク共有上のシミュレーション結果を閲覧" },
+    "indexing": { "label": "指数付け", "tooltip": "Hough、Dictionary、または Spherical (EMSphinx) 指数付け" },
+    "phasemap": { "label": "相分布図", "tooltip": "指数付け結果をスケールバー付きで可視化" },
+    "analysis": { "label": "解析", "tooltip": "MTEX 相当の後処理：結晶粒解析、集合組織、RX 分類" },
+    "batch": { "label": "バッチ", "tooltip": "チェックポイント復元付きの多相バッチ指数付け" },
+    "refinement": { "label": "精密化", "tooltip": "多相の指数付け結果を確認・精密化" },
+    "crystalhint": { "label": "結晶ヒント", "tooltip": "パターンから対称性と格子を検出。ライブラリに一致がない場合に候補相を提案。" },
+    "mlhub": { "label": "ML 予測器", "tooltip": "指数付け結果から ML モデルを学習し、相を予測" },
+    "settings": { "label": "設定", "tooltip": "システム状態、サーバーモード、EMsoft/EMSphinx パス" }
+  },
+  "hdf5Viewer": { "label": "HDF5 ビューア", "tooltip": "HDF5 のファイル構造、パターン、EDS マップを確認" }
+}

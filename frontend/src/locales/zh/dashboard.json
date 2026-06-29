@@ -1,0 +1,98 @@
+{
+  "title": "Orienta",
+  "subtitle": "EBSD 花样分析与模拟工具集",
+  "sections": {
+    "dataCalibration": "数据与校准",
+    "indexAnalysis": "标定与分析"
+  },
+  "cards": {
+    "ebsdviewer": {
+      "title": "EBSD 查看器",
+      "description": "加载 H5OINA/EDAX 文件。处理花样、EDS 叠加。",
+      "tooltip": "打开 EBSD 查看器：加载 H5OINA/EDAX 文件、处理花样、查看 EDS 叠加。"
+    },
+    "eds": {
+      "title": "EDS 分析",
+      "description": "元素分布图、定量（Counts/Wt%/At%）、相推荐。",
+      "tooltip": "打开 EDS 分析：元素分布图、定量（Counts/Wt%/At%）、相推荐。"
+    },
+    "pcrefinement": {
+      "title": "PC 精修",
+      "description": "花样中心（PC）校准与逐像素漂移校正。",
+      "tooltip": "打开 PC 精修：花样中心（PC）校准与逐像素漂移校正。"
+    },
+    "crystal": {
+      "title": "Crystal DB",
+      "description": "将 CIF 转换为 .xtal 格式。管理晶体结构数据库。",
+      "tooltip": "打开 Crystal DB：将 CIF 转换为 .xtal 并管理晶体结构数据库。"
+    },
+    "indexing": {
+      "title": "标定",
+      "description": "Dictionary、Hough 与 Spherical 标定，支持像素选择。",
+      "tooltip": "打开标定：Dictionary、Hough 与 Spherical 标定，支持像素选择。"
+    },
+    "phasemap": {
+      "title": "相分布图",
+      "description": "可视化标定结果，支持可配置比例尺与导出。",
+      "tooltip": "打开相分布图：可视化标定结果，支持可配置比例尺与导出。"
+    },
+    "analysis": {
+      "title": "EBSD 分析",
+      "description": "晶粒重构、织构分析、KAM/GOS 图、批量导出。",
+      "tooltip": "打开 EBSD 分析：晶粒重构、织构分析、KAM/GOS 图、批量导出。"
+    },
+    "mlhub": {
+      "title": "ML 预测器",
+      "description": "从标定结果训练相识别模型。",
+      "tooltip": "打开 ML 预测器：从标定结果训练相识别模型。"
+    },
+    "batch": {
+      "title": "多相批处理",
+      "description": "夜间将多个文件批量标定到多个相。",
+      "tooltip": "打开多相批处理：夜间将多个文件批量标定到多个相。"
+    },
+    "refinement": {
+      "title": "相精修",
+      "description": "逐像素查看并精修多相标定结果。",
+      "tooltip": "打开相精修：逐像素查看并精修多相标定结果。"
+    }
+  },
+  "ready": {
+    "label": "就绪",
+    "tooltip": "数据已加载 — 可以使用"
+  },
+  "recent": {
+    "title": "最近文件",
+    "empty": {
+      "title": "暂无最近文件",
+      "hint": "从 EBSD 查看器打开一个 H5OINA/HDF5 文件即可开始"
+    },
+    "itemTooltip": "点击加载：{{path}}",
+    "quickLoad": "快速加载最后一个文件",
+    "quickLoadTooltip": "一键加载最近打开的文件",
+    "clear": "清除最近文件",
+    "clearTooltip": "清除整个最近文件列表（需确认）",
+    "confirm": {
+      "title": "清除最近文件",
+      "message": "清除所有最近文件？此操作无法撤销。",
+      "confirmLabel": "清除"
+    }
+  },
+  "shortcuts": {
+    "hint": "点击卡片、使用侧边栏，或按 Ctrl+1–9 进行导航。",
+    "toggleTooltip": "显示或隐藏完整的键盘快捷键参考表",
+    "dashboard": "仪表盘",
+    "ebsdViewer": "EBSD 查看器",
+    "analysis": "分析",
+    "crystalDb": "Crystal DB",
+    "simulation": "模拟",
+    "database": "数据库",
+    "phaseMaps": "相分布图",
+    "indexing": "标定",
+    "mlPredictor": "ML 预测器",
+    "pcRefinement": "PC 精修",
+    "hdf5Viewer": "HDF5 查看器",
+    "edsAnalysis": "EDS 分析",
+    "toggleSidebar": "切换侧边栏"
+  }
+}

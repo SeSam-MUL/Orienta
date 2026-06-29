@@ -1,0 +1,107 @@
+#------------------------------------------------------------------------------
+#$Date: 2016-01-06 10:13:11 +0200 (Wed, 06 Jan 2016) $
+#$Revision: 173564 $
+#$URL: file:///home/coder/svn-repositories/_RELOADED_COD/cod-reloaded/cif/7/22/37/7223749.cif $
+#------------------------------------------------------------------------------
+#
+# This file is available in the Crystallography Open Database (COD),
+# http://www.crystallography.net/
+#
+# All data on this site have been placed in the public domain by the
+# contributors.
+#
+data_7223749
+loop_
+_publ_author_name
+'Pillaca Quispe, Mirtha'
+'Landauro S\'aenz, Carlos V.'
+'Pinto Vergara, Milida Z.'
+'Quispe Marcatoma, Justiniano'
+'Rojas Ayala, Chachi'
+'Pe\~na Rodr\'iguez, Victor A.'
+'Saitovitch, Elisa B.'
+_publ_section_title
+;
+ Influence of high energy milling on the microstructure and magnetic
+ properties of the Al-Cu-Fe phases: the case of the
+ i-Al64Cu23Fe13quasicrystalline and the \w-Al70Cu20Fe10crystalline phases
+;
+_journal_name_full               'RSC Adv.'
+_journal_paper_doi               10.1039/C5RA21093C
+_journal_year                    2016
+_chemical_formula_structural     'Al7 Fe Cu2'
+_chemical_formula_sum            'Al7 Cu2 Fe'
+_chemical_formula_weight         371.81
+_chemical_name_systematic        'Aluminium Iron Copper (7/1/2)'
+_space_group_IT_number           128
+_symmetry_cell_setting           tetragonal
+_symmetry_Int_Tables_number      128
+_symmetry_space_group_name_Hall  '-P 4 2n'
+_symmetry_space_group_name_H-M   'P 4/m n c'
+_audit_creation_date             2003/10/01
+_cell_angle_alpha                90.
+_cell_angle_beta                 90.
+_cell_angle_gamma                90.
+_cell_formula_units_Z            4
+_cell_length_a                   6.336(1)
+_cell_length_b                   6.336
+_cell_length_c                   14.870(2)
+_cell_volume                     596.95(12)
+_exptl_crystal_density_meas      4.3
+_refine_ls_R_factor_all          0.081
+_cod_data_source_file            c5ra21093c1.cif
+_cod_data_source_block           57677-ICSD
+_cod_original_cell_volume        596.95
+_cod_original_formula_sum        'Al7 Cu2 Fe1'
+_cod_database_code               7223749
+loop_
+_symmetry_equiv_pos_site_id
+_symmetry_equiv_pos_as_xyz
+1 'y+1/2, x+1/2, -z+1/2'
+2 '-y+1/2, -x+1/2, -z+1/2'
+3 '-y, x, -z'
+4 'y, -x, -z'
+5 'x+1/2, -y+1/2, -z+1/2'
+6 '-x+1/2, y+1/2, -z+1/2'
+7 'x, y, -z'
+8 '-x, -y, -z'
+9 '-y+1/2, -x+1/2, z+1/2'
+10 'y+1/2, x+1/2, z+1/2'
+11 'y, -x, z'
+12 '-y, x, z'
+13 '-x+1/2, y+1/2, z+1/2'
+14 'x+1/2, -y+1/2, z+1/2'
+15 '-x, -y, z'
+16 'x, y, z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_symmetry_multiplicity
+_atom_site_Wyckoff_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_occupancy
+_atom_site_attached_hydrogens
+Al1 Al0+ 4 e 0 0 0.134(1) 1. 0
+Al2 Al0+ 8 g 0.165(2) 0.665 0.25 1. 0
+Al3 Al0+ 16 i 0.198(2) 0.420(2) 0.100(1) 1. 0
+Fe1 Fe0+ 4 e 0 0 0.2992(3) 1. 0
+Cu1 Cu0+ 8 h 0.278(1) 0.088(1) 0 1. 0
+loop_
+_atom_type_symbol
+_atom_type_oxidation_number
+Al0+ 0
+Cu0+ 0
+Fe0+ 0
+loop_
+_citation_id
+_citation_year
+_citation_page_first
+_citation_page_last
+primary 1956 911 914
+
+_publ_section_references
+;
+RSC Advances 6 (2016). Crystallography Open Database (COD) entry 7223749; data placed in the public domain (CC0).
+;

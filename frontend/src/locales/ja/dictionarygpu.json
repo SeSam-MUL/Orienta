@@ -1,0 +1,78 @@
+{
+  "page": {
+    "title": "GPU Dictionary ジェネレーター",
+    "description": "EMsoft のマスターパターンから、GPU 上でシミュレーションした EBSD パターンの辞書を生成します。スタンドアロンのツールで、メインの指数付けパイプラインには影響しません。"
+  },
+  "generate": {
+    "button": "生成",
+    "generating": "生成中…",
+    "taskLabel": "タスク: {{taskId}}",
+    "tooltip": "マスターパターンから、シミュレーションした EBSD パターン辞書の GPU 生成を開始します。",
+    "tooltipPickMaster": "先にマスターパターンを選択してください",
+    "tooltipInProgress": "生成中です"
+  },
+  "errors": {
+    "detectorIntegers": "検出器の H と W は整数でなければなりません。",
+    "resolutionPositive": "分解能は正の数でなければなりません。",
+    "noTaskId": "Backend が task_id を返しませんでした。",
+    "generateFailed": "生成に失敗しました: {{detail}}",
+    "deleteFailed": "削除に失敗しました: {{detail}}",
+    "progressPollFailed": "進捗の取得に失敗しました: {{message}}"
+  },
+  "master": {
+    "groupTitle": "マスターパターン",
+    "fieldLabel": "マスター .h5",
+    "placeholder": "C:\\path\\to\\Ni-master.h5",
+    "inputTooltip": "EMsoft マスターパターンの HDF5（.h5）ファイルへの完全なパスを貼り付けてください。",
+    "use": "使用",
+    "useTooltip": "入力したマスターパターンのパスを確定します（コミットハンドラーが接続されている場合のみ表示）。",
+    "hint": "EMsoft マスターパターンの HDF5 ファイルへの完全なパスを貼り付けてください。辞書は、このマスターと下記の検出器設定から GPU 上で生成されます。"
+  },
+  "detector": {
+    "groupTitle": "検出器",
+    "patternSize": "パターンサイズ",
+    "patternSizeUnit": "px",
+    "heightTooltip": "検出器パターンの高さ（ピクセル、行数）。範囲 16〜2048。",
+    "widthTooltip": "検出器パターンの幅（ピクセル、列数）。範囲 16〜2048。",
+    "pcLabel": "PC (x, y, z)",
+    "pcxTooltip": "パターン中心の x 座標（PCx）。検出器の幅方向に対する 0〜1 の割合。",
+    "pcyTooltip": "パターン中心の y 座標（PCy）。検出器の高さ方向に対する 0〜1 の割合。",
+    "pczTooltip": "パターン中心の z／検出器距離（PCz）。0〜1 の割合。",
+    "sampleTilt": "試料傾斜",
+    "sampleTiltUnit": "度",
+    "sampleTiltTooltip": "試料傾斜角（度）。EBSD では通常 70。範囲 0〜90。"
+  },
+  "orientation": {
+    "groupTitle": "結晶方位",
+    "resolution": "分解能",
+    "resolutionUnit": "度",
+    "sliderTooltip": "SO(3) 方位サンプリングのステップ（度）。小さいほど方位数が増え、辞書が大きくなります。",
+    "numberTooltip": "正確な方位サンプリング分解能（度）。5 度は粗く、1〜2 度は本番用です。",
+    "normalize": "正規化",
+    "normalizeCheckboxLabel": "各パターンを平均 0／分散 1 に",
+    "normalizeTooltip": "保存前に、生成した各パターンを平均 0／分散 1 に正規化します。",
+    "hint": "分解能が低い → 方位数が増える → 辞書が大きくなる。5° は粗い初回パスとして一般的です。本番では 1〜2° まで下げてください。"
+  },
+  "progress": {
+    "statusLabel": "ステータス: {{status}}",
+    "statusIdle": "アイドル",
+    "submitting": "送信中…",
+    "generatedPatterns": "<0>{{count}}</0> 個のパターンを生成しました",
+    "polling": "500 ms ごとに取得中…"
+  },
+  "list": {
+    "groupTitle": "既存の辞書",
+    "count_one": "ディスク上に {{count}} 個の辞書",
+    "count_other": "ディスク上に {{count}} 個の辞書",
+    "refresh": "更新",
+    "refreshTooltip": "GPU で生成した辞書の一覧をディスクから再読み込みします。",
+    "empty": "辞書はまだありません。上で生成してください。",
+    "colName": "名前",
+    "colPatterns": "パターン",
+    "colSize": "サイズ",
+    "colCreated": "作成日時",
+    "delete": "削除",
+    "deleteTooltip": "この辞書ファイルをディスクから削除します（確認あり、取り消し不可）。",
+    "deleteConfirm": "\"{{name}}\" を削除しますか？この操作は取り消せません。"
+  }
+}

@@ -1,0 +1,1173 @@
+#------------------------------------------------------------------------------
+#$Date: 2016-02-19 16:29:56 +0200 (Fri, 19 Feb 2016) $
+#$Revision: 176759 $
+#$URL: file:///home/coder/svn-repositories/_RELOADED_COD/cod-reloaded/cif/2/00/71/2007194.cif $
+#------------------------------------------------------------------------------
+#
+# This file is available in the Crystallography Open Database (COD),
+# http://www.crystallography.net/. The original data for this entry
+# were provided by IUCr Journals, http://journals.iucr.org/.
+#
+# The file may be used within the scientific community so long as
+# proper attribution is given to the journal article from which the
+# data were obtained.
+#
+data_2007194
+loop_
+_publ_author_name
+'Sugiyama, Kazumasa'
+'Kaji, Nobutaka'
+'Hiraga, Kenji'
+_publ_section_title
+;
+ Re-Refinement of \a-(AlMnSi)
+;
+_journal_issue                   4
+_journal_name_full               'Acta Crystallographica Section C'
+_journal_page_first              445
+_journal_page_last               447
+_journal_paper_doi               10.1107/S0108270197015989
+_journal_volume                  54
+_journal_year                    1998
+_chemical_formula_analytical     'Al4 Mn1.01 Si0.74'
+_chemical_formula_structural     'Al4.01 Mn1 Si0.74'
+_chemical_formula_sum            'Al4 Mn1.01 Si0.74'
+_chemical_formula_weight         184.197
+_chemical_name_common            \a-(AlMnSi)
+_chemical_name_systematic
+;
+ \a-(AlMnSi)
+;
+_space_group_IT_number           200
+_symmetry_cell_setting           cubic
+_symmetry_space_group_name_Hall  '-P 2 2 3'
+_symmetry_space_group_name_H-M   'P m -3'
+_audit_creation_method           SHELXL
+_cell_angle_alpha                90.00
+_cell_angle_beta                 90.00
+_cell_angle_gamma                90.00
+_cell_formula_units_Z            24
+_cell_length_a                   12.6430(10)
+_cell_length_b                   12.6430(10)
+_cell_length_c                   12.6430(10)
+_cell_measurement_reflns_used    24
+_cell_measurement_temperature    297(2)
+_cell_measurement_theta_max      19.16
+_cell_measurement_theta_min      16.31
+_cell_volume                     2020.9(3)
+_computing_cell_refinement       'MSC/AFC Diffractometer Control Software'
+_computing_data_collection
+;MSC/AFC Diffractometer Control Software (Molecular Structure Corporation,
+ 1988)
+;
+_computing_molecular_graphics    'ATOMS (Dowty, 1991)'
+_computing_publication_material  SHELXL93
+_computing_structure_refinement  'SHELXL93 (Sheldrick, 1993)'
+_diffrn_ambient_temperature      297(2)
+_diffrn_measurement_device       'Rigaku AFC-6S'
+_diffrn_measurement_method       \w/2\q
+_diffrn_radiation_monochromator  graphite
+_diffrn_radiation_source         'nomal-focus sealed tube'
+_diffrn_radiation_type           MoK\a
+_diffrn_radiation_wavelength     0.71069
+_diffrn_reflns_av_R_equivalents  0.049
+_diffrn_reflns_av_sigmaI/netI    0.0503
+_diffrn_reflns_limit_h_max       20
+_diffrn_reflns_limit_h_min       0
+_diffrn_reflns_limit_k_max       20
+_diffrn_reflns_limit_k_min       0
+_diffrn_reflns_limit_l_max       20
+_diffrn_reflns_limit_l_min       0
+_diffrn_reflns_number            4955
+_diffrn_reflns_theta_max         34.98
+_diffrn_reflns_theta_min         1.61
+_diffrn_standards_decay_%        0.0
+_diffrn_standards_interval_count 200
+_diffrn_standards_number         3
+_exptl_absorpt_coefficient_mu    4.983
+_exptl_absorpt_correction_T_max  0.429
+_exptl_absorpt_correction_T_min  0.357
+_exptl_absorpt_correction_type   '\y scan (North, Phillips & Mathews, 1968)'
+_exptl_crystal_colour            'metallic grey'
+_exptl_crystal_density_diffrn    3.632
+_exptl_crystal_density_method    'not measured'
+_exptl_crystal_description       irregular
+_exptl_crystal_F_000             2102.6
+_exptl_crystal_size_max          0.26
+_exptl_crystal_size_mid          0.18
+_exptl_crystal_size_min          0.17
+_refine_diff_density_max         1.106
+_refine_diff_density_min         -1.223
+_refine_ls_extinction_coef       0.00208(11)
+_refine_ls_extinction_method     SHELXL93
+_refine_ls_goodness_of_fit_all   0.959
+_refine_ls_goodness_of_fit_obs   1.090
+_refine_ls_matrix_type           full
+_refine_ls_number_parameters     37
+_refine_ls_number_reflns         1472
+_refine_ls_number_restraints     0
+_refine_ls_restrained_S_all      0.935
+_refine_ls_restrained_S_obs      1.090
+_refine_ls_R_factor_all          0.066
+_refine_ls_R_factor_obs          .031
+_refine_ls_shift/esd_max         0.000
+_refine_ls_shift/esd_mean        0.000
+_refine_ls_structure_factor_coef Fsqd
+_refine_ls_weighting_details     'w = 1/[\s^2^(Fo^2^)]'
+_refine_ls_weighting_scheme      calc
+_refine_ls_wR_factor_all         0.062
+_refine_ls_wR_factor_obs         .057
+_reflns_number_observed          1048
+_reflns_number_total             1659
+_reflns_observed_criterion       I>2\s(I)
+_cod_data_source_file            oh1107.cif
+_cod_data_source_block           ams
+_cod_depositor_comments
+;
+The following automatic conversions were performed:
+
+'_refine_ls_weighting_scheme' value 'calc w = 1/[\s^2^(Fo^2^)]' was
+changed to 'calc'. New tag '_refine_ls_weighting_details' was
+created. The value of the new tag was set to 'w = 1/[\s^2^(Fo^2^)]'.
+
+Automatic conversion script
+Id: cif_fix_values 3143 2015-03-26 13:38:13Z robertas 
+;
+_cod_database_code               2007194
+_cod_database_fobs_code          2007194
+loop_
+_symmetry_equiv_pos_as_xyz
+'x, y, z'
+'-x, -y, z'
+'x, -y, -z'
+'-x, y, -z'
+'z, x, y'
+'y, z, x'
+'-z, -x, y'
+'-y, z, -x'
+'z, -x, -y'
+'-y, -z, x'
+'-z, x, -y'
+'y, -z, -x'
+'-x, -y, -z'
+'x, y, -z'
+'-x, y, z'
+'x, -y, z'
+'-z, -x, -y'
+'-y, -z, -x'
+'z, x, -y'
+'y, -z, x'
+'-z, x, y'
+'y, z, -x'
+'z, -x, y'
+'-y, z, x'
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+_atom_site_U_iso_or_equiv
+_atom_site_thermal_displace_type
+_atom_site_calc_flag
+_atom_site_refinement_flags
+_atom_site_occupancy
+_atom_site_disorder_group
+_atom_site_type_symbol
+Mn(1) .32631(4) .19779(4) 0 .00780(11) Uiso d S 1 . Mn
+Mn(2) .17925(4) .30790(4) .5 .00720(11) Uiso d S 1 . Mn
+Al(1) .36784(13) 0 0 .0087(3) Uiso d S 1 . Al
+Al(2) .12429(13) .5 .5 .0096(3) Uiso d S 1 . Al
+Al(3) .28966(12) 0 .5 .0104(5) Uiso d SP .01(11) . Al
+Si(3) .28966(12) 0 .5 .0104(5) Uiso d SP .99(11) . Si
+Al(4) .16552(9) .10141(9) 0 .0077(3) Uiso d SP .65(6) . Al
+Si(4) .16552(9) .10141(9) 0 .0077(3) Uiso d SP .35(6) . Si
+Al(5) .33611(8) .40026(8) .5 .0079(3) Uiso d SP .37(6) . Al
+Si(5) .33611(8) .40026(8) .5 .0079(3) Uiso d SP .63(6) . Si
+Al(6) .33135(9) .40206(9) 0 .0103(2) Uiso d S 1 . Al
+Al(7) .12387(9) .11768(9) .5 .0104(2) Uiso d S 1 . Al
+Al(8) .11798(6) .18860(6) .29906(6) .0098(2) Uiso d . 1 . Al
+Al(9) .39074(6) .31291(6) .19617(6) .0099(2) Uiso d . 1 . Al
+loop_
+_atom_type_symbol
+_atom_type_description
+_atom_type_scat_dispersion_real
+_atom_type_scat_dispersion_imag
+_atom_type_scat_source
+Al Al 0.0645 0.0514 'International Tables Vol C Tables 4.2.6.8 and 6.1.1.4'
+Si Si 0.0817 0.0704 'International Tables Vol C Tables 4.2.6.8 and 6.1.1.4'
+Mn Mn 0.3368 0.7283 'International Tables Vol C Tables 4.2.6.8 and 6.1.1.4'
+loop_
+_geom_angle_atom_site_label_1
+_geom_angle_atom_site_label_2
+_geom_angle_atom_site_label_3
+_geom_angle_site_symmetry_1
+_geom_angle_site_symmetry_3
+_geom_angle
+Al/Si(4) Mn(1) Al/Si(3) . 5 176.94(5)
+Al/Si(4) Mn(1) Al(1) . . 70.92(5)
+Al/Si(3) Mn(1) Al(1) 5 . 106.02(5)
+Al/Si(4) Mn(1) Al(6) . . 122.35(4)
+Al/Si(3) Mn(1) Al(6) 5 . 60.71(4)
+Al(1) Mn(1) Al(6) . . 166.73(5)
+Al/Si(4) Mn(1) Al(8) . 19 71.84(2)
+Al/Si(3) Mn(1) Al(8) 5 19 107.29(2)
+Al(1) Mn(1) Al(8) . 19 69.45(2)
+Al(6) Mn(1) Al(8) . 19 112.92(2)
+Al/Si(4) Mn(1) Al(8) . 5 71.84(2)
+Al/Si(3) Mn(1) Al(8) 5 5 107.29(2)
+Al(1) Mn(1) Al(8) . 5 69.45(2)
+Al(6) Mn(1) Al(8) . 5 112.92(2)
+Al(8) Mn(1) Al(8) 19 5 131.82(4)
+Al/Si(4) Mn(1) Al(8) . 22 71.46(3)
+Al/Si(3) Mn(1) Al(8) 5 22 110.98(4)
+Al(1) Mn(1) Al(8) . 22 127.84(3)
+Al(6) Mn(1) Al(8) . 22 61.89(3)
+Al(8) Mn(1) Al(8) 19 22 65.32(3)
+Al(8) Mn(1) Al(8) 5 22 128.28(3)
+Al/Si(4) Mn(1) Al(8) . 6 71.46(3)
+Al/Si(3) Mn(1) Al(8) 5 6 110.98(4)
+Al(1) Mn(1) Al(8) . 6 127.84(3)
+Al(6) Mn(1) Al(8) . 6 61.89(3)
+Al(8) Mn(1) Al(8) 19 6 128.28(3)
+Al(8) Mn(1) Al(8) 5 6 65.32(3)
+Al(8) Mn(1) Al(8) 22 6 69.23(4)
+Al/Si(4) Mn(1) Al(7) . 5 119.93(3)
+Al/Si(3) Mn(1) Al(7) 5 5 57.66(3)
+Al(1) Mn(1) Al(7) . 5 60.94(4)
+Al(6) Mn(1) Al(7) . 5 108.24(4)
+Al(8) Mn(1) Al(7) 19 5 117.23(3)
+Al(8) Mn(1) Al(7) 5 5 59.45(3)
+Al(8) Mn(1) Al(7) 22 5 168.59(4)
+Al(8) Mn(1) Al(7) 6 5 112.29(3)
+Al/Si(4) Mn(1) Al(7) . 19 119.93(3)
+Al/Si(3) Mn(1) Al(7) 5 19 57.66(3)
+Al(1) Mn(1) Al(7) . 19 60.94(4)
+Al(6) Mn(1) Al(7) . 19 108.24(4)
+Al(8) Mn(1) Al(7) 19 19 59.45(3)
+Al(8) Mn(1) Al(7) 5 19 117.23(3)
+Al(8) Mn(1) Al(7) 22 19 112.29(3)
+Al(8) Mn(1) Al(7) 6 19 168.59(4)
+Al(7) Mn(1) Al(7) 5 19 63.88(4)
+Al/Si(4) Mn(1) Al(9) . . 118.96(2)
+Al/Si(3) Mn(1) Al(9) 5 . 62.06(2)
+Al(1) Mn(1) Al(9) . . 114.87(2)
+Al(6) Mn(1) Al(9) . . 60.43(2)
+Al(8) Mn(1) Al(9) 19 . 168.99(3)
+Al(8) Mn(1) Al(9) 5 . 57.76(2)
+Al(8) Mn(1) Al(9) 22 . 114.49(3)
+Al(8) Mn(1) Al(9) 6 . 58.12(2)
+Al(7) Mn(1) Al(9) 5 . 60.66(3)
+Al(7) Mn(1) Al(9) 19 . 112.83(3)
+Al/Si(4) Mn(1) Al(9) . 14 118.96(2)
+Al/Si(3) Mn(1) Al(9) 5 14 62.06(2)
+Al(1) Mn(1) Al(9) . 14 114.87(2)
+Al(6) Mn(1) Al(9) . 14 60.43(2)
+Al(8) Mn(1) Al(9) 19 14 57.76(2)
+Al(8) Mn(1) Al(9) 5 14 168.99(3)
+Al(8) Mn(1) Al(9) 22 14 58.12(2)
+Al(8) Mn(1) Al(9) 6 14 114.49(3)
+Al(7) Mn(1) Al(9) 5 14 112.83(3)
+Al(7) Mn(1) Al(9) 19 14 60.66(3)
+Al(9) Mn(1) Al(9) . 14 112.16(4)
+Al/Si(5) Mn(2) Al(7) . . 136.72(4)
+Al/Si(5) Mn(2) Al(2) . . 75.48(5)
+Al(7) Mn(2) Al(2) . . 147.80(5)
+Al/Si(5) Mn(2) Al(9) . 19_556 73.99(2)
+Al(7) Mn(2) Al(9) . 19_556 114.23(2)
+Al(2) Mn(2) Al(9) . 19_556 68.58(2)
+Al/Si(5) Mn(2) Al(9) . 5 73.99(2)
+Al(7) Mn(2) Al(9) . 5 114.23(2)
+Al(2) Mn(2) Al(9) . 5 68.58(2)
+Al(9) Mn(2) Al(9) 19_556 5 131.36(4)
+Al/Si(5) Mn(2) Al(6) . 5 133.90(4)
+Al(7) Mn(2) Al(6) . 5 82.29(4)
+Al(2) Mn(2) Al(6) . 5 69.55(4)
+Al(9) Mn(2) Al(6) 19_556 5 117.38(3)
+Al(9) Mn(2) Al(6) 5 5 65.90(3)
+Al/Si(5) Mn(2) Al(6) . 19_556 133.90(4)
+Al(7) Mn(2) Al(6) . 19_556 82.29(4)
+Al(2) Mn(2) Al(6) . 19_556 69.55(4)
+Al(9) Mn(2) Al(6) 19_556 19_556 65.90(3)
+Al(9) Mn(2) Al(6) 5 19_556 117.38(3)
+Al(6) Mn(2) Al(6) 5 19_556 56.90(5)
+Al/Si(5) Mn(2) Al(9) . 6 73.48(3)
+Al(7) Mn(2) Al(9) . 6 70.12(3)
+Al(2) Mn(2) Al(9) . 6 134.52(3)
+Al(9) Mn(2) Al(9) 19_556 6 130.53(3)
+Al(9) Mn(2) Al(9) 5 6 71.43(4)
+Al(6) Mn(2) Al(9) 5 6 112.06(3)
+Al(6) Mn(2) Al(9) 19_556 6 151.85(4)
+Al/Si(5) Mn(2) Al(9) . 22_556 73.48(3)
+Al(7) Mn(2) Al(9) . 22_556 70.12(3)
+Al(2) Mn(2) Al(9) . 22_556 134.52(3)
+Al(9) Mn(2) Al(9) 19_556 22_556 71.43(4)
+Al(9) Mn(2) Al(9) 5 22_556 130.53(3)
+Al(6) Mn(2) Al(9) 5 22_556 151.85(4)
+Al(6) Mn(2) Al(9) 19_556 22_556 112.06(3)
+Al(9) Mn(2) Al(9) 6 22_556 64.19(4)
+Al/Si(5) Mn(2) Al(8) . . 117.98(2)
+Al(7) Mn(2) Al(8) . . 56.97(2)
+Al(2) Mn(2) Al(8) . . 113.89(2)
+Al(9) Mn(2) Al(8) 19_556 . 167.99(3)
+Al(9) Mn(2) Al(8) 5 . 57.47(2)
+Al(6) Mn(2) Al(8) 5 . 55.87(3)
+Al(6) Mn(2) Al(8) 19_556 . 103.38(3)
+Al(9) Mn(2) Al(8) 6 . 56.95(2)
+Al(9) Mn(2) Al(8) 22_556 . 109.78(3)
+Al/Si(5) Mn(2) Al(8) . 14_556 117.98(2)
+Al(7) Mn(2) Al(8) . 14_556 56.97(2)
+Al(2) Mn(2) Al(8) . 14_556 113.89(2)
+Al(9) Mn(2) Al(8) 19_556 14_556 57.47(2)
+Al(9) Mn(2) Al(8) 5 14_556 167.99(3)
+Al(6) Mn(2) Al(8) 5 14_556 103.38(3)
+Al(6) Mn(2) Al(8) 19_556 14_556 55.87(3)
+Al(9) Mn(2) Al(8) 6 14_556 109.78(3)
+Al(9) Mn(2) Al(8) 22_556 14_556 56.95(2)
+Al(8) Mn(2) Al(8) . 14_556 112.56(3)
+Mn(1) Al(1) Mn(1) 3 . 156.28(7)
+Mn(1) Al(1) Al(7) 3 5 133.39(4)
+Mn(1) Al(1) Al(7) . 5 64.18(3)
+Mn(1) Al(1) Al(7) 3 7_655 64.18(3)
+Mn(1) Al(1) Al(7) . 7_655 133.39(4)
+Al(7) Al(1) Al(7) 5 7_655 69.98(5)
+Mn(1) Al(1) Al(7) 3 17_655 64.18(3)
+Mn(1) Al(1) Al(7) . 17_655 133.39(4)
+Al(7) Al(1) Al(7) 5 17_655 104.55(6)
+Al(7) Al(1) Al(7) 7_655 17_655 66.02(5)
+Mn(1) Al(1) Al(7) 3 19 133.39(4)
+Mn(1) Al(1) Al(7) . 19 64.18(3)
+Al(7) Al(1) Al(7) 5 19 66.02(5)
+Al(7) Al(1) Al(7) 7_655 19 104.55(6)
+Al(7) Al(1) Al(7) 17_655 19 69.98(5)
+Mn(1) Al(1) Al/Si(4) 3 3 51.52(3)
+Mn(1) Al(1) Al/Si(4) . 3 104.76(6)
+Al(7) Al(1) Al/Si(4) 5 3 143.51(3)
+Al(7) Al(1) Al/Si(4) 7_655 3 106.86(3)
+Al(7) Al(1) Al/Si(4) 17_655 3 106.86(3)
+Al(7) Al(1) Al/Si(4) 19 3 143.51(3)
+Mn(1) Al(1) Al/Si(4) 3 . 104.76(6)
+Mn(1) Al(1) Al/Si(4) . . 51.52(3)
+Al(7) Al(1) Al/Si(4) 5 . 106.86(3)
+Al(7) Al(1) Al/Si(4) 7_655 . 143.51(3)
+Al(7) Al(1) Al/Si(4) 17_655 . 143.51(3)
+Al(7) Al(1) Al/Si(4) 19 . 106.86(3)
+Al/Si(4) Al(1) Al/Si(4) 3 . 53.24(5)
+Mn(1) Al(1) Al(8) 3 9 56.18(2)
+Mn(1) Al(1) Al(8) . 9 115.80(3)
+Al(7) Al(1) Al(8) 5 9 155.86(5)
+Al(7) Al(1) Al(8) 7_655 9 109.35(3)
+Al(7) Al(1) Al(8) 17_655 9 56.56(2)
+Al(7) Al(1) Al(8) 19 9 91.72(3)
+Al/Si(4) Al(1) Al(8) 3 9 60.59(3)
+Al/Si(4) Al(1) Al(8) . 9 87.88(4)
+Mn(1) Al(1) Al(8) 3 5 115.80(3)
+Mn(1) Al(1) Al(8) . 5 56.18(2)
+Al(7) Al(1) Al(8) 5 5 56.56(2)
+Al(7) Al(1) Al(8) 7_655 5 91.72(3)
+Al(7) Al(1) Al(8) 17_655 5 155.86(5)
+Al(7) Al(1) Al(8) 19 5 109.35(3)
+Al/Si(4) Al(1) Al(8) 3 5 87.88(4)
+Al/Si(4) Al(1) Al(8) . 5 60.59(3)
+Al(8) Al(1) Al(8) 9 5 145.64(7)
+Mn(1) Al(1) Al(8) 3 19 115.80(3)
+Mn(1) Al(1) Al(8) . 19 56.18(2)
+Al(7) Al(1) Al(8) 5 19 109.35(3)
+Al(7) Al(1) Al(8) 7_655 19 155.86(5)
+Al(7) Al(1) Al(8) 17_655 19 91.72(3)
+Al(7) Al(1) Al(8) 19 19 56.56(2)
+Al/Si(4) Al(1) Al(8) 3 19 87.88(4)
+Al/Si(4) Al(1) Al(8) . 19 60.59(3)
+Al(8) Al(1) Al(8) 9 19 60.88(3)
+Al(8) Al(1) Al(8) 5 19 108.19(4)
+Mn(1) Al(1) Al(8) 3 23 56.18(2)
+Mn(1) Al(1) Al(8) . 23 115.80(3)
+Al(7) Al(1) Al(8) 5 23 91.72(3)
+Al(7) Al(1) Al(8) 7_655 23 56.56(2)
+Al(7) Al(1) Al(8) 17_655 23 109.36(3)
+Al(7) Al(1) Al(8) 19 23 155.86(5)
+Al/Si(4) Al(1) Al(8) 3 23 60.59(3)
+Al/Si(4) Al(1) Al(8) . 23 87.88(4)
+Al(8) Al(1) Al(8) 9 23 108.19(4)
+Al(8) Al(1) Al(8) 5 23 60.88(3)
+Al(8) Al(1) Al(8) 19 23 145.64(7)
+Mn(1) Al(1) Al(1) 3 13_655 101.86(4)
+Mn(1) Al(1) Al(1) . 13_655 101.86(4)
+Al(7) Al(1) Al(1) 5 13_655 52.28(3)
+Al(7) Al(1) Al(1) 7_655 13_655 52.28(3)
+Al(7) Al(1) Al(1) 17_655 13_655 52.28(3)
+Al(7) Al(1) Al(1) 19 13_655 52.28(3)
+Al/Si(4) Al(1) Al(1) 3 13_655 153.38(3)
+Al/Si(4) Al(1) Al(1) . 13_655 153.38(3)
+Al(8) Al(1) Al(1) 9 13_655 107.18(3)
+Al(8) Al(1) Al(1) 5 13_655 107.18(3)
+Al(8) Al(1) Al(1) 19 13_655 107.18(3)
+Al(8) Al(1) Al(1) 23 13_655 107.18(3)
+Mn(2) Al(2) Mn(2) 3_566 . 148.07(8)
+Mn(2) Al(2) Al(9) 3_566 9_566 56.85(2)
+Mn(2) Al(2) Al(9) . 9_566 111.93(4)
+Mn(2) Al(2) Al(9) 3_566 5 111.93(4)
+Mn(2) Al(2) Al(9) . 5 56.85(2)
+Al(9) Al(2) Al(9) 9_566 5 143.29(7)
+Mn(2) Al(2) Al(9) 3_566 19_556 111.93(4)
+Mn(2) Al(2) Al(9) . 19_556 56.85(2)
+Al(9) Al(2) Al(9) 9_566 19_556 57.19(3)
+Al(9) Al(2) Al(9) 5 19_556 110.09(4)
+Mn(2) Al(2) Al(9) 3_566 23_565 56.85(2)
+Mn(2) Al(2) Al(9) . 23_565 111.93(4)
+Al(9) Al(2) Al(9) 9_566 23_565 110.09(4)
+Al(9) Al(2) Al(9) 5 23_565 57.19(3)
+Al(9) Al(2) Al(9) 19_556 23_565 143.29(7)
+Mn(2) Al(2) Al(6) 3_566 5 148.10(4)
+Mn(2) Al(2) Al(6) . 5 56.41(2)
+Al(9) Al(2) Al(6) 9_566 5 149.93(4)
+Al(9) Al(2) Al(6) 5 5 58.20(2)
+Al(9) Al(2) Al(6) 19_556 5 99.63(3)
+Al(9) Al(2) Al(6) 23_565 5 99.86(3)
+Mn(2) Al(2) Al(6) 3_566 17_566 56.41(2)
+Mn(2) Al(2) Al(6) . 17_566 148.10(4)
+Al(9) Al(2) Al(6) 9_566 17_566 58.20(2)
+Al(9) Al(2) Al(6) 5 17_566 149.93(4)
+Al(9) Al(2) Al(6) 19_556 17_566 99.86(3)
+Al(9) Al(2) Al(6) 23_565 17_566 99.63(3)
+Al(6) Al(2) Al(6) 5 17_566 114.98(6)
+Mn(2) Al(2) Al(6) 3_566 7_565 56.41(2)
+Mn(2) Al(2) Al(6) . 7_565 148.10(4)
+Al(9) Al(2) Al(6) 9_566 7_565 99.63(3)
+Al(9) Al(2) Al(6) 5 7_565 99.86(3)
+Al(9) Al(2) Al(6) 19_556 7_565 149.93(4)
+Al(9) Al(2) Al(6) 23_565 7_565 58.20(2)
+Al(6) Al(2) Al(6) 5 7_565 93.65(5)
+Al(6) Al(2) Al(6) 17_566 7_565 50.11(5)
+Mn(2) Al(2) Al(6) 3_566 19_556 148.10(4)
+Mn(2) Al(2) Al(6) . 19_556 56.41(2)
+Al(9) Al(2) Al(6) 9_566 19_556 99.86(3)
+Al(9) Al(2) Al(6) 5 19_556 99.63(3)
+Al(9) Al(2) Al(6) 19_556 19_556 58.20(2)
+Al(9) Al(2) Al(6) 23_565 19_556 149.93(4)
+Al(6) Al(2) Al(6) 5 19_556 50.11(5)
+Al(6) Al(2) Al(6) 17_566 19_556 93.65(5)
+Al(6) Al(2) Al(6) 7_565 19_556 114.98(6)
+Mn(2) Al(2) Al/Si(5) 3_566 3_566 48.82(3)
+Mn(2) Al(2) Al/Si(5) . 3_566 99.25(6)
+Al(9) Al(2) Al/Si(5) 9_566 3_566 60.74(3)
+Al(9) Al(2) Al/Si(5) 5 3_566 85.35(4)
+Al(9) Al(2) Al/Si(5) 19_556 3_566 85.35(4)
+Al(9) Al(2) Al/Si(5) 23_565 3_566 60.74(3)
+Al(6) Al(2) Al/Si(5) 5 3_566 142.83(4)
+Al(6) Al(2) Al/Si(5) 17_566 3_566 100.11(3)
+Al(6) Al(2) Al/Si(5) 7_565 3_566 100.11(3)
+Al(6) Al(2) Al/Si(5) 19_556 3_566 142.83(4)
+Mn(2) Al(2) Al/Si(5) 3_566 . 99.25(6)
+Mn(2) Al(2) Al/Si(5) . . 48.82(3)
+Al(9) Al(2) Al/Si(5) 9_566 . 85.35(4)
+Al(9) Al(2) Al/Si(5) 5 . 60.74(3)
+Al(9) Al(2) Al/Si(5) 19_556 . 60.74(3)
+Al(9) Al(2) Al/Si(5) 23_565 . 85.35(4)
+Al(6) Al(2) Al/Si(5) 5 . 100.11(3)
+Al(6) Al(2) Al/Si(5) 17_566 . 142.83(4)
+Al(6) Al(2) Al/Si(5) 7_565 . 142.83(4)
+Al(6) Al(2) Al/Si(5) 19_556 . 100.11(3)
+Al/Si(5) Al(2) Al/Si(5) 3_566 . 50.43(5)
+Mn(2) Al(2) Al/Si(3) 3_566 6 98.044(13)
+Mn(2) Al(2) Al/Si(3) . 6 98.044(14)
+Al(9) Al(2) Al/Si(3) 9_566 6 149.98(3)
+Al(9) Al(2) Al/Si(3) 5 6 56.95(2)
+Al(9) Al(2) Al/Si(3) 19_556 6 149.98(3)
+Al(9) Al(2) Al/Si(3) 23_565 6 56.95(2)
+Al(6) Al(2) Al/Si(3) 5 6 50.36(3)
+Al(6) Al(2) Al/Si(3) 17_566 6 95.23(4)
+Al(6) Al(2) Al/Si(3) 7_565 6 50.36(3)
+Al(6) Al(2) Al/Si(3) 19_556 6 95.23(4)
+Al/Si(5) Al(2) Al/Si(3) 3_566 6 117.40(2)
+Al/Si(5) Al(2) Al/Si(3) . 6 117.40(2)
+Mn(2) Al(2) Al/Si(3) 3_566 18_566 98.044(13)
+Mn(2) Al(2) Al/Si(3) . 18_566 98.044(13)
+Al(9) Al(2) Al/Si(3) 9_566 18_566 56.95(2)
+Al(9) Al(2) Al/Si(3) 5 18_566 149.98(3)
+Al(9) Al(2) Al/Si(3) 19_556 18_566 56.95(2)
+Al(9) Al(2) Al/Si(3) 23_565 18_566 149.98(3)
+Al(6) Al(2) Al/Si(3) 5 18_566 95.23(4)
+Al(6) Al(2) Al/Si(3) 17_566 18_566 50.36(3)
+Al(6) Al(2) Al/Si(3) 7_565 18_566 95.23(4)
+Al(6) Al(2) Al/Si(3) 19_556 18_566 50.36(3)
+Al/Si(5) Al(2) Al/Si(3) 3_566 18_566 117.40(2)
+Al/Si(5) Al(2) Al/Si(3) . 18_566 117.40(2)
+Al/Si(3) Al(2) Al/Si(3) 6 18_566 118.84(6)
+Mn(2) Al(2) Al(2) 3_566 13_566 105.97(4)
+Mn(2) Al(2) Al(2) . 13_566 105.97(4)
+Al(9) Al(2) Al(2) 9_566 13_566 108.36(4)
+Al(9) Al(2) Al(2) 5 13_566 108.36(4)
+Al(9) Al(2) Al(2) 19_556 13_566 108.36(4)
+Al(9) Al(2) Al(2) 23_565 13_566 108.36(4)
+Al(6) Al(2) Al(2) 5 13_566 57.49(3)
+Al(6) Al(2) Al(2) 17_566 13_566 57.49(3)
+Al(6) Al(2) Al(2) 7_565 13_566 57.49(3)
+Al(6) Al(2) Al(2) 19_556 13_566 57.49(3)
+Al/Si(5) Al(2) Al(2) 3_566 13_566 154.78(2)
+Al/Si(5) Al(2) Al(2) . 13_566 154.78(3)
+Al/Si(3) Al(2) Al(2) 6 13_566 59.42(3)
+Al/Si(3) Al(2) Al(2) 18_566 13_566 59.42(3)
+Mn(1) Al/Si(3) Mn(1) 22_556 6 124.25(7)
+Mn(1) Al/Si(3) Al(6) 22_556 22_556 61.56(3)
+Mn(1) Al/Si(3) Al(6) 6 22_556 174.20(7)
+Mn(1) Al/Si(3) Al(6) 22_556 6 174.20(7)
+Mn(1) Al/Si(3) Al(6) 6 6 61.56(3)
+Al(6) Al/Si(3) Al(6) 22_556 6 112.64(8)
+Mn(1) Al/Si(3) Al(7) 22_556 3_556 67.59(3)
+Mn(1) Al/Si(3) Al(7) 6 3_556 67.59(3)
+Al(6) Al/Si(3) Al(7) 22_556 3_556 116.89(3)
+Al(6) Al/Si(3) Al(7) 6 3_556 116.89(3)
+Mn(1) Al/Si(3) Al(7) 22_556 . 67.59(3)
+Mn(1) Al/Si(3) Al(7) 6 . 67.59(3)
+Al(6) Al/Si(3) Al(7) 22_556 . 116.89(3)
+Al(6) Al/Si(3) Al(7) 6 . 116.89(3)
+Al(7) Al/Si(3) Al(7) 3_556 . 70.73(7)
+Mn(1) Al/Si(3) Al(9) 22_556 22_556 67.69(2)
+Mn(1) Al/Si(3) Al(9) 6 22_556 118.42(3)
+Al(6) Al/Si(3) Al(9) 22_556 22_556 62.62(2)
+Al(6) Al/Si(3) Al(9) 6 22_556 110.22(4)
+Al(7) Al/Si(3) Al(9) 3_556 22_556 125.94(5)
+Al(7) Al/Si(3) Al(9) . 22_556 65.23(3)
+Mn(1) Al/Si(3) Al(9) 22_556 6 118.42(3)
+Mn(1) Al/Si(3) Al(9) 6 6 67.69(2)
+Al(6) Al/Si(3) Al(9) 22_556 6 110.22(4)
+Al(6) Al/Si(3) Al(9) 6 6 62.62(2)
+Al(7) Al/Si(3) Al(9) 3_556 6 125.94(5)
+Al(7) Al/Si(3) Al(9) . 6 65.23(3)
+Al(9) Al/Si(3) Al(9) 22_556 6 57.89(3)
+Mn(1) Al/Si(3) Al(9) 22_556 20 118.42(3)
+Mn(1) Al/Si(3) Al(9) 6 20 67.69(2)
+Al(6) Al/Si(3) Al(9) 22_556 20 110.22(4)
+Al(6) Al/Si(3) Al(9) 6 20 62.62(2)
+Al(7) Al/Si(3) Al(9) 3_556 20 65.23(3)
+Al(7) Al/Si(3) Al(9) . 20 125.94(5)
+Al(9) Al/Si(3) Al(9) 22_556 20 168.18(7)
+Al(9) Al/Si(3) Al(9) 6 20 120.68(3)
+Mn(1) Al/Si(3) Al(9) 22_556 12_556 67.69(2)
+Mn(1) Al/Si(3) Al(9) 6 12_556 118.42(3)
+Al(6) Al/Si(3) Al(9) 22_556 12_556 62.62(2)
+Al(6) Al/Si(3) Al(9) 6 12_556 110.22(4)
+Al(7) Al/Si(3) Al(9) 3_556 12_556 65.23(3)
+Al(7) Al/Si(3) Al(9) . 12_556 125.94(5)
+Al(9) Al/Si(3) Al(9) 22_556 12_556 120.68(3)
+Al(9) Al/Si(3) Al(9) 6 12_556 168.18(7)
+Al(9) Al/Si(3) Al(9) 20 12_556 57.89(3)
+Mn(1) Al/Si(3) Al(2) 22_556 5 113.74(3)
+Mn(1) Al/Si(3) Al(2) 6 5 113.74(3)
+Al(6) Al/Si(3) Al(2) 22_556 5 61.48(4)
+Al(6) Al/Si(3) Al(2) 6 5 61.48(4)
+Al(7) Al/Si(3) Al(2) 3_556 5 175.21(5)
+Al(7) Al/Si(3) Al(2) . 5 114.05(3)
+Al(9) Al/Si(3) Al(2) 22_556 5 57.94(3)
+Al(9) Al/Si(3) Al(2) 6 5 57.94(3)
+Al(9) Al/Si(3) Al(2) 20 5 110.69(5)
+Al(9) Al/Si(3) Al(2) 12_556 5 110.69(5)
+Mn(1) Al/Si(3) Al(2) 22_556 17_656 113.74(3)
+Mn(1) Al/Si(3) Al(2) 6 17_656 113.74(3)
+Al(6) Al/Si(3) Al(2) 22_556 17_656 61.48(4)
+Al(6) Al/Si(3) Al(2) 6 17_656 61.48(4)
+Al(7) Al/Si(3) Al(2) 3_556 17_656 114.05(3)
+Al(7) Al/Si(3) Al(2) . 17_656 175.21(5)
+Al(9) Al/Si(3) Al(2) 22_556 17_656 110.69(5)
+Al(9) Al/Si(3) Al(2) 6 17_656 110.69(5)
+Al(9) Al/Si(3) Al(2) 20 17_656 57.94(3)
+Al(9) Al/Si(3) Al(2) 12_556 17_656 57.94(3)
+Al(2) Al/Si(3) Al(2) 5 17_656 61.16(6)
+Mn(1) Al/Si(4) Al/Si(4) . 3 120.94(3)
+Mn(1) Al/Si(4) Al/Si(4) . 22 121.60(2)
+Al/Si(4) Al/Si(4) Al/Si(4) 3 22 60.26(3)
+Mn(1) Al/Si(4) Al/Si(4) . 19 122.22(4)
+Al/Si(4) Al/Si(4) Al/Si(4) 3 19 108.28(3)
+Al/Si(4) Al/Si(4) Al/Si(4) 22 19 60.0
+Mn(1) Al/Si(4) Al/Si(4) . 6 121.60(2)
+Al/Si(4) Al/Si(4) Al/Si(4) 3 6 60.26(3)
+Al/Si(4) Al/Si(4) Al/Si(4) 22 6 108.128(14)
+Al/Si(4) Al/Si(4) Al/Si(4) 19 6 107.66(4)
+Mn(1) Al/Si(4) Al/Si(4) . 5 122.22(4)
+Al/Si(4) Al/Si(4) Al/Si(4) 3 5 108.28(3)
+Al/Si(4) Al/Si(4) Al/Si(4) 22 5 107.66(4)
+Al/Si(4) Al/Si(4) Al/Si(4) 19 5 59.48(6)
+Al/Si(4) Al/Si(4) Al/Si(4) 6 5 60.0
+Mn(1) Al/Si(4) Al(1) . . 57.56(3)
+Al/Si(4) Al/Si(4) Al(1) 3 . 63.38(3)
+Al/Si(4) Al/Si(4) Al(1) 22 . 93.33(5)
+Al/Si(4) Al/Si(4) Al(1) 19 . 149.81(4)
+Al/Si(4) Al/Si(4) Al(1) 6 . 93.33(5)
+Al/Si(4) Al/Si(4) Al(1) 5 . 149.81(4)
+Mn(1) Al/Si(4) Al(8) . 6 58.34(3)
+Al/Si(4) Al/Si(4) Al(8) 3 6 148.69(2)
+Al/Si(4) Al/Si(4) Al(8) 22 6 150.23(5)
+Al/Si(4) Al/Si(4) Al(8) 19 6 93.78(6)
+Al/Si(4) Al/Si(4) Al(8) 6 6 92.42(2)
+Al/Si(4) Al/Si(4) Al(8) 5 6 63.89(3)
+Al(1) Al/Si(4) Al(8) . 6 107.07(4)
+Mn(1) Al/Si(4) Al(8) . 22 58.34(3)
+Al/Si(4) Al/Si(4) Al(8) 3 22 148.69(2)
+Al/Si(4) Al/Si(4) Al(8) 22 22 92.42(2)
+Al/Si(4) Al/Si(4) Al(8) 19 22 63.89(3)
+Al/Si(4) Al/Si(4) Al(8) 6 22 150.23(5)
+Al/Si(4) Al/Si(4) Al(8) 5 22 93.78(6)
+Al(1) Al/Si(4) Al(8) . 22 107.07(4)
+Al(8) Al/Si(4) Al(8) 6 22 61.32(4)
+Mn(1) Al/Si(4) Al(8) . 5 57.92(3)
+Al/Si(4) Al/Si(4) Al(8) 3 5 94.10(3)
+Al/Si(4) Al/Si(4) Al(8) 22 5 151.09(6)
+Al/Si(4) Al/Si(4) Al(8) 19 5 148.00(6)
+Al/Si(4) Al/Si(4) Al(8) 6 5 63.71(3)
+Al/Si(4) Al/Si(4) Al(8) 5 5 92.32(2)
+Al(1) Al/Si(4) Al(8) . 5 61.10(2)
+Al(8) Al/Si(4) Al(8) 6 5 57.74(3)
+Al(8) Al/Si(4) Al(8) 22 5 107.25(4)
+Mn(1) Al/Si(4) Al(8) . 19 57.92(3)
+Al/Si(4) Al/Si(4) Al(8) 3 19 94.10(3)
+Al/Si(4) Al/Si(4) Al(8) 22 19 63.71(3)
+Al/Si(4) Al/Si(4) Al(8) 19 19 92.32(2)
+Al/Si(4) Al/Si(4) Al(8) 6 19 151.09(6)
+Al/Si(4) Al/Si(4) Al(8) 5 19 148.00(6)
+Al(1) Al/Si(4) Al(8) . 19 61.10(2)
+Al(8) Al/Si(4) Al(8) 6 19 107.25(4)
+Al(8) Al/Si(4) Al(8) 22 19 57.74(3)
+Al(8) Al/Si(4) Al(8) 5 19 108.98(5)
+Mn(2) Al/Si(5) Al/Si(5) . 3_566 120.49(3)
+Mn(2) Al/Si(5) Al/Si(5) . 22_556 121.56(2)
+Al/Si(5) Al/Si(5) Al/Si(5) 3_566 22_556 60.46(3)
+Mn(2) Al/Si(5) Al/Si(5) . 19_556 122.50(4)
+Al/Si(5) Al/Si(5) Al/Si(5) 3_566 19_556 108.49(3)
+Al/Si(5) Al/Si(5) Al/Si(5) 22_556 19_556 60.0
+Mn(2) Al/Si(5) Al/Si(5) . 6 121.56(2)
+Al/Si(5) Al/Si(5) Al/Si(5) 3_566 6 60.46(3)
+Al/Si(5) Al/Si(5) Al/Si(5) 22_556 6 108.222(13)
+Al/Si(5) Al/Si(5) Al/Si(5) 19_556 6 107.39(4)
+Mn(2) Al/Si(5) Al/Si(5) . 5 122.50(4)
+Al/Si(5) Al/Si(5) Al/Si(5) 3_566 5 108.49(3)
+Al/Si(5) Al/Si(5) Al/Si(5) 22_556 5 107.39(4)
+Al/Si(5) Al/Si(5) Al/Si(5) 19_556 5 59.08(6)
+Al/Si(5) Al/Si(5) Al/Si(5) 6 5 60.0
+Mn(2) Al/Si(5) Al(9) . 6 57.93(3)
+Al/Si(5) Al/Si(5) Al(9) 3_566 6 151.31(2)
+Al/Si(5) Al/Si(5) Al(9) 22_556 6 147.63(5)
+Al/Si(5) Al/Si(5) Al(9) 19_556 6 91.96(5)
+Al/Si(5) Al/Si(5) Al(9) 6 6 94.80(3)
+Al/Si(5) Al/Si(5) Al(9) 5 6 64.60(3)
+Mn(2) Al/Si(5) Al(9) . 22_556 57.93(3)
+Al/Si(5) Al/Si(5) Al(9) 3_566 22_556 151.31(2)
+Al/Si(5) Al/Si(5) Al(9) 22_556 22_556 94.80(3)
+Al/Si(5) Al/Si(5) Al(9) 19_556 22_556 64.60(3)
+Al/Si(5) Al/Si(5) Al(9) 6 22_556 147.63(5)
+Al/Si(5) Al/Si(5) Al(9) 5 22_556 91.96(5)
+Al(9) Al/Si(5) Al(9) 6 22_556 56.02(4)
+Mn(2) Al/Si(5) Al(9) . 5 57.56(3)
+Al/Si(5) Al/Si(5) Al(9) 3_566 5 92.33(3)
+Al/Si(5) Al/Si(5) Al(9) 22_556 5 149.10(6)
+Al/Si(5) Al/Si(5) Al(9) 19_556 5 150.05(6)
+Al/Si(5) Al/Si(5) Al(9) 6 5 64.00(3)
+Al/Si(5) Al/Si(5) Al(9) 5 5 94.44(2)
+Al(9) Al/Si(5) Al(9) 6 5 61.89(3)
+Al(9) Al/Si(5) Al(9) 22_556 5 106.28(3)
+Mn(2) Al/Si(5) Al(9) . 19_556 57.56(3)
+Al/Si(5) Al/Si(5) Al(9) 3_566 19_556 92.33(3)
+Al/Si(5) Al/Si(5) Al(9) 22_556 19_556 64.00(3)
+Al/Si(5) Al/Si(5) Al(9) 19_556 19_556 94.44(2)
+Al/Si(5) Al/Si(5) Al(9) 6 19_556 149.10(6)
+Al/Si(5) Al/Si(5) Al(9) 5 19_556 150.05(6)
+Al(9) Al/Si(5) Al(9) 6 19_556 106.28(3)
+Al(9) Al/Si(5) Al(9) 22_556 19_556 61.89(3)
+Al(9) Al/Si(5) Al(9) 5 19_556 106.28(5)
+Mn(2) Al/Si(5) Al(2) . . 55.70(3)
+Al/Si(5) Al/Si(5) Al(2) 3_566 . 64.78(2)
+Al/Si(5) Al/Si(5) Al(2) 22_556 . 94.41(5)
+Al/Si(5) Al/Si(5) Al(2) 19_556 . 150.23(3)
+Al/Si(5) Al/Si(5) Al(2) 6 . 94.41(5)
+Al/Si(5) Al/Si(5) Al(2) 5 . 150.23(3)
+Al(9) Al/Si(5) Al(2) 6 . 106.47(4)
+Al(9) Al/Si(5) Al(2) 22_556 . 106.47(4)
+Al(9) Al/Si(5) Al(2) 5 . 58.39(2)
+Al(9) Al/Si(5) Al(2) 19_556 . 58.39(2)
+Al(6) Al(6) Al/Si(3) 3_565 5 123.68(4)
+Al(6) Al(6) Mn(1) 3_565 . 178.59(3)
+Al/Si(3) Al(6) Mn(1) 5 . 57.73(4)
+Al(6) Al(6) Mn(2) 3_565 6 61.55(2)
+Al/Si(3) Al(6) Mn(2) 5 6 111.04(3)
+Mn(1) Al(6) Mn(2) . 6 118.26(2)
+Al(6) Al(6) Mn(2) 3_565 22 61.55(2)
+Al/Si(3) Al(6) Mn(2) 5 22 111.04(3)
+Mn(1) Al(6) Mn(2) . 22 118.26(2)
+Mn(2) Al(6) Mn(2) 6 22 121.34(5)
+Al(6) Al(6) Al(8) 3_565 22 119.08(3)
+Al/Si(3) Al(6) Al(8) 5 22 106.92(5)
+Mn(1) Al(6) Al(8) . 22 59.83(3)
+Mn(2) Al(6) Al(8) 6 22 129.80(5)
+Mn(2) Al(6) Al(8) 22 22 70.69(2)
+Al(6) Al(6) Al(8) 3_565 6 119.08(3)
+Al/Si(3) Al(6) Al(8) 5 6 106.92(5)
+Mn(1) Al(6) Al(8) . 6 59.83(3)
+Mn(2) Al(6) Al(8) 6 6 70.69(2)
+Mn(2) Al(6) Al(8) 22 6 129.80(5)
+Al(8) Al(6) Al(8) 22 6 67.66(4)
+Al(6) Al(6) Al(9) 3_565 . 113.51(3)
+Al/Si(3) Al(6) Al(9) 5 . 63.75(3)
+Mn(1) Al(6) Al(9) . . 66.91(3)
+Mn(2) Al(6) Al(9) 6 . 56.98(2)
+Mn(2) Al(6) Al(9) 22 . 170.22(5)
+Al(8) Al(6) Al(9) 22 . 118.28(5)
+Al(8) Al(6) Al(9) 6 . 59.77(3)
+Al(6) Al(6) Al(9) 3_565 14 113.51(3)
+Al/Si(3) Al(6) Al(9) 5 14 63.75(3)
+Mn(1) Al(6) Al(9) . 14 66.91(3)
+Mn(2) Al(6) Al(9) 6 14 170.22(5)
+Mn(2) Al(6) Al(9) 22 14 56.98(2)
+Al(8) Al(6) Al(9) 22 14 59.77(3)
+Al(8) Al(6) Al(9) 6 14 118.28(5)
+Al(9) Al(6) Al(9) . 14 122.73(5)
+Al(6) Al(6) Al(2) 3_565 6 64.94(2)
+Al/Si(3) Al(6) Al(2) 5 6 68.16(4)
+Mn(1) Al(6) Al(2) . 6 116.19(4)
+Mn(2) Al(6) Al(2) 6 6 54.05(3)
+Mn(2) Al(6) Al(2) 22 6 110.48(5)
+Al(8) Al(6) Al(2) 22 6 175.08(5)
+Al(8) Al(6) Al(2) 6 6 113.45(3)
+Al(9) Al(6) Al(2) . 6 60.23(3)
+Al(9) Al(6) Al(2) 14 6 116.54(5)
+Al(6) Al(6) Al(2) 3_565 18_665 64.94(2)
+Al/Si(3) Al(6) Al(2) 5 18_665 68.16(4)
+Mn(1) Al(6) Al(2) . 18_665 116.19(4)
+Mn(2) Al(6) Al(2) 6 18_665 110.48(5)
+Mn(2) Al(6) Al(2) 22 18_665 54.05(3)
+Al(8) Al(6) Al(2) 22 18_665 113.45(3)
+Al(8) Al(6) Al(2) 6 18_665 175.08(5)
+Al(9) Al(6) Al(2) . 18_665 116.54(5)
+Al(9) Al(6) Al(2) 14 18_665 60.23(3)
+Al(2) Al(6) Al(2) 6 18_665 65.02(6)
+Al(6) Al(6) Al(7) 3_565 22 68.37(2)
+Al/Si(3) Al(6) Al(7) 5 22 150.88(2)
+Mn(1) Al(6) Al(7) . 22 110.41(4)
+Mn(2) Al(6) Al(7) 6 22 98.00(4)
+Mn(2) Al(6) Al(7) 22 22 47.64(3)
+Al(8) Al(6) Al(7) 22 22 51.53(3)
+Al(8) Al(6) Al(7) 6 22 84.09(4)
+Al(9) Al(6) Al(7) . 22 140.35(4)
+Al(9) Al(6) Al(7) 14 22 87.22(3)
+Al(2) Al(6) Al(7) 6 22 132.91(4)
+Al(2) Al(6) Al(7) 18_665 22 100.36(3)
+Al(6) Al(6) Al(7) 3_565 6 68.37(2)
+Al/Si(3) Al(6) Al(7) 5 6 150.88(2)
+Mn(1) Al(6) Al(7) . 6 110.41(4)
+Mn(2) Al(6) Al(7) 6 6 47.64(3)
+Mn(2) Al(6) Al(7) 22 6 98.00(4)
+Al(8) Al(6) Al(7) 22 6 84.09(4)
+Al(8) Al(6) Al(7) 6 6 51.53(3)
+Al(9) Al(6) Al(7) . 6 87.22(3)
+Al(9) Al(6) Al(7) 14 6 140.35(4)
+Al(2) Al(6) Al(7) 6 6 100.36(3)
+Al(2) Al(6) Al(7) 18_665 6 132.91(4)
+Al(7) Al(6) Al(7) 22 6 55.58(4)
+Mn(2) Al(7) Al/Si(3) . . 109.14(5)
+Mn(2) Al(7) Al(8) . . 71.84(3)
+Al/Si(3) Al(7) Al(8) . . 102.42(3)
+Mn(2) Al(7) Al(8) . 14_556 71.84(3)
+Al/Si(3) Al(7) Al(8) . 14_556 102.42(3)
+Al(8) Al(7) Al(8) . 14_556 140.99(6)
+Mn(2) Al(7) Al(1) . 6 133.11(4)
+Al/Si(3) Al(7) Al(1) . 6 98.76(4)
+Al(8) Al(7) Al(1) . 6 65.71(3)
+Al(8) Al(7) Al(1) 14_556 6 137.91(5)
+Mn(2) Al(7) Al(1) . 18_556 133.11(4)
+Al/Si(3) Al(7) Al(1) . 18_556 98.76(4)
+Al(8) Al(7) Al(1) . 18_556 137.91(5)
+Al(8) Al(7) Al(1) 14_556 18_556 65.71(3)
+Al(1) Al(7) Al(1) 6 18_556 75.45(6)
+Mn(2) Al(7) Mn(1) . 22_556 114.52(3)
+Al/Si(3) Al(7) Mn(1) . 22_556 54.75(2)
+Al(8) Al(7) Mn(1) . 22_556 157.11(5)
+Al(8) Al(7) Mn(1) 14_556 22_556 56.58(2)
+Al(1) Al(7) Mn(1) 6 22_556 112.34(4)
+Al(1) Al(7) Mn(1) 18_556 22_556 54.87(3)
+Mn(2) Al(7) Mn(1) . 6 114.52(3)
+Al/Si(3) Al(7) Mn(1) . 6 54.75(2)
+Al(8) Al(7) Mn(1) . 6 56.58(2)
+Al(8) Al(7) Mn(1) 14_556 6 157.11(5)
+Al(1) Al(7) Mn(1) 6 6 54.87(3)
+Al(1) Al(7) Mn(1) 18_556 6 112.34(4)
+Mn(1) Al(7) Mn(1) 22_556 6 102.68(4)
+Mn(2) Al(7) Al(9) . 22_556 56.46(3)
+Al/Si(3) Al(7) Al(9) . 22_556 62.06(3)
+Al(8) Al(7) Al(9) . 22_556 110.72(4)
+Al(8) Al(7) Al(9) 14_556 22_556 57.73(3)
+Al(1) Al(7) Al(9) 6 22_556 159.99(5)
+Al(1) Al(7) Al(9) 18_556 22_556 111.31(3)
+Mn(1) Al(7) Al(9) 22_556 22_556 62.65(3)
+Mn(1) Al(7) Al(9) 6 22_556 106.02(4)
+Mn(2) Al(7) Al(9) . 6 56.46(3)
+Al/Si(3) Al(7) Al(9) . 6 62.06(3)
+Al(8) Al(7) Al(9) . 6 57.73(3)
+Al(8) Al(7) Al(9) 14_556 6 110.72(4)
+Al(1) Al(7) Al(9) 6 6 111.31(3)
+Al(1) Al(7) Al(9) 18_556 6 159.99(5)
+Mn(1) Al(7) Al(9) 22_556 6 106.02(4)
+Mn(1) Al(7) Al(9) 6 6 62.65(3)
+Al(9) Al(7) Al(9) 22_556 6 56.18(4)
+Mn(2) Al(7) Al(7) . 3_556 163.77(3)
+Al/Si(3) Al(7) Al(7) . 3_556 54.63(3)
+Al(8) Al(7) Al(7) . 3_556 109.43(3)
+Al(8) Al(7) Al(7) 14_556 3_556 109.43(3)
+Al(1) Al(7) Al(7) 6 3_556 56.99(3)
+Al(1) Al(7) Al(7) 18_556 3_556 56.99(3)
+Mn(1) Al(7) Al(7) 22_556 3_556 58.06(2)
+Mn(1) Al(7) Al(7) 6 3_556 58.06(2)
+Al(9) Al(7) Al(7) 22_556 3_556 109.77(3)
+Al(9) Al(7) Al(7) 6 3_556 109.77(3)
+Mn(2) Al(7) Al(7) . 15 106.23(3)
+Al/Si(3) Al(7) Al(7) . 15 144.63(3)
+Al(8) Al(7) Al(7) . 15 88.42(3)
+Al(8) Al(7) Al(7) 14_556 15 88.42(3)
+Al(1) Al(7) Al(7) 6 15 55.01(3)
+Al(1) Al(7) Al(7) 18_556 15 55.01(3)
+Mn(1) Al(7) Al(7) 22_556 15 109.41(3)
+Mn(1) Al(7) Al(7) 6 15 109.41(3)
+Al(9) Al(7) Al(7) 22_556 15 144.56(2)
+Al(9) Al(7) Al(7) 6 15 144.56(2)
+Al(7) Al(7) Al(7) 3_556 15 90.0
+Mn(2) Al(7) Al(6) . 19_556 50.07(3)
+Al/Si(3) Al(7) Al(6) . 19_556 147.74(4)
+Al(8) Al(7) Al(6) . 19_556 93.84(4)
+Al(8) Al(7) Al(6) 14_556 19_556 51.10(3)
+Al(1) Al(7) Al(6) 6 19_556 113.35(4)
+Al(1) Al(7) Al(6) 18_556 19_556 86.86(3)
+Mn(1) Al(7) Al(6) 22_556 19_556 107.01(2)
+Mn(1) Al(7) Al(6) 6 19_556 150.25(3)
+Al(9) Al(7) Al(6) 22_556 19_556 86.23(3)
+Al(9) Al(7) Al(6) 6 19_556 106.34(4)
+Al(7) Al(7) Al(6) 3_556 19_556 143.53(2)
+Al(7) Al(7) Al(6) 15 19_556 62.21(2)
+Mn(2) Al(7) Al(6) . 5 50.07(3)
+Al/Si(3) Al(7) Al(6) . 5 147.74(4)
+Al(8) Al(7) Al(6) . 5 51.10(3)
+Al(8) Al(7) Al(6) 14_556 5 93.84(4)
+Al(1) Al(7) Al(6) 6 5 86.86(3)
+Al(1) Al(7) Al(6) 18_556 5 113.35(4)
+Mn(1) Al(7) Al(6) 22_556 5 150.25(3)
+Mn(1) Al(7) Al(6) 6 5 107.01(2)
+Al(9) Al(7) Al(6) 22_556 5 106.34(4)
+Al(9) Al(7) Al(6) 6 5 86.23(3)
+Al(7) Al(7) Al(6) 3_556 5 143.53(2)
+Al(7) Al(7) Al(6) 15 5 62.21(2)
+Al(6) Al(7) Al(6) 19_556 5 43.26(4)
+Mn(1) Al(8) Mn(1) 6 5 152.75(4)
+Mn(1) Al(8) Al(6) 6 5 139.99(4)
+Mn(1) Al(8) Al(6) 5 5 58.27(3)
+Mn(1) Al(8) Al(7) 6 . 63.98(3)
+Mn(1) Al(8) Al(7) 5 . 134.10(4)
+Al(6) Al(8) Al(7) 5 . 77.37(4)
+Mn(1) Al(8) Al(9) 6 6 68.08(3)
+Mn(1) Al(8) Al(9) 5 6 134.25(4)
+Al(6) Al(8) Al(9) 5 6 105.85(3)
+Al(7) Al(8) Al(9) . 6 65.53(3)
+Mn(1) Al(8) Al(9) 6 5 134.60(4)
+Mn(1) Al(8) Al(9) 5 5 67.57(3)
+Al(6) Al(8) Al(9) 5 5 62.77(3)
+Al(7) Al(8) Al(9) . 5 103.86(4)
+Al(9) Al(8) Al(9) 6 5 67.33(4)
+Mn(1) Al(8) Al(8) 6 5 57.58(3)
+Mn(1) Al(8) Al(8) 5 5 115.38(3)
+Al(6) Al(8) Al(8) 5 5 154.68(3)
+Al(7) Al(8) Al(8) . 5 109.77(5)
+Al(9) Al(8) Al(8) 6 5 59.25(3)
+Al(9) Al(8) Al(8) 5 5 91.94(3)
+Mn(1) Al(8) Al(8) 6 6 115.84(3)
+Mn(1) Al(8) Al(8) 5 6 57.11(3)
+Al(6) Al(8) Al(8) 5 6 103.70(5)
+Al(7) Al(8) Al(8) . 6 156.81(3)
+Al(9) Al(8) Al(8) 6 6 92.38(2)
+Al(9) Al(8) Al(8) 5 6 58.54(3)
+Al(8) Al(8) Al(8) 5 6 60.0
+Mn(1) Al(8) Al/Si(4) 6 5 102.62(3)
+Mn(1) Al(8) Al/Si(4) 5 5 50.20(3)
+Al(6) Al(8) Al/Si(4) 5 5 101.45(3)
+Al(7) Al(8) Al/Si(4) . 5 141.84(4)
+Al(9) Al(8) Al/Si(4) 6 5 145.90(4)
+Al(9) Al(8) Al/Si(4) 5 5 109.33(4)
+Al(8) Al(8) Al/Si(4) 5 5 87.67(2)
+Al(8) Al(8) Al/Si(4) 6 5 61.21(3)
+Mn(1) Al(8) Al/Si(4) 6 6 50.25(3)
+Mn(1) Al(8) Al/Si(4) 5 6 102.59(3)
+Al(6) Al(8) Al/Si(4) 5 6 142.06(4)
+Al(7) Al(8) Al/Si(4) . 6 105.93(4)
+Al(9) Al(8) Al/Si(4) 6 6 109.78(4)
+Al(9) Al(8) Al/Si(4) 5 6 145.10(4)
+Al(8) Al(8) Al/Si(4) 5 6 61.05(3)
+Al(8) Al(8) Al/Si(4) 6 6 87.59(2)
+Al/Si(4) Al(8) Al/Si(4) 5 6 52.40(4)
+Mn(1) Al(8) Al(1) 6 6 54.36(2)
+Mn(1) Al(8) Al(1) 5 6 113.16(3)
+Al(6) Al(8) Al(1) 5 6 96.89(4)
+Al(7) Al(8) Al(1) . 6 57.73(4)
+Al(9) Al(8) Al(1) 6 6 111.16(4)
+Al(9) Al(8) Al(1) 5 6 156.56(5)
+Al(8) Al(8) Al(1) 5 6 107.48(4)
+Al(8) Al(8) Al(1) 6 6 143.08(3)
+Al/Si(4) Al(8) Al(1) 5 6 85.02(4)
+Al/Si(4) Al(8) Al(1) 6 6 58.31(4)
+Mn(1) Al(8) Al(8) 6 15 112.72(2)
+Mn(1) Al(8) Al(8) 5 15 55.39(2)
+Al(6) Al(8) Al(8) 5 15 56.17(2)
+Al(7) Al(8) Al(8) . 15 91.58(3)
+Al(9) Al(8) Al(8) 6 15 154.74(2)
+Al(9) Al(8) Al(8) 5 15 111.10(2)
+Al(8) Al(8) Al(8) 5 15 144.095(5)
+Al(8) Al(8) Al(8) 6 15 108.42(2)
+Al/Si(4) Al(8) Al(8) 5 15 59.34(2)
+Al/Si(4) Al(8) Al(8) 6 15 85.90(3)
+Al(1) Al(8) Al(8) 6 15 59.56(2)
+Mn(1) Al(8) Mn(2) 6 . 104.07(3)
+Mn(1) Al(8) Mn(2) 5 . 102.84(3)
+Al(6) Al(8) Mn(2) 5 . 53.44(2)
+Al(7) Al(8) Mn(2) . . 51.19(3)
+Al(9) Al(8) Mn(2) 6 . 53.10(2)
+Al(9) Al(8) Mn(2) 5 . 52.85(2)
+Al(8) Al(8) Mn(2) 5 . 111.19(2)
+Al(8) Al(8) Mn(2) 6 . 110.46(2)
+Al/Si(4) Al(8) Mn(2) 5 . 152.78(4)
+Al/Si(4) Al(8) Mn(2) 6 . 154.10(4)
+Al(1) Al(8) Mn(2) 6 . 106.43(4)
+Al(8) Al(8) Mn(2) 15 . 104.69(2)
+Mn(2) Al(9) Mn(2) 6 5 148.37(4)
+Mn(2) Al(9) Al(8) 6 5 130.51(4)
+Mn(2) Al(9) Al(8) 5 5 69.96(3)
+Mn(2) Al(9) Al(8) 6 6 69.69(3)
+Mn(2) Al(9) Al(8) 5 6 130.44(4)
+Al(8) Al(9) Al(8) 5 6 62.21(4)
+Mn(2) Al(9) Al(9) 6 15_655 113.80(2)
+Mn(2) Al(9) Al(9) 5 15_655 57.91(2)
+Al(8) Al(9) Al(9) 5 15_655 115.17(2)
+Al(8) Al(9) Al(9) 6 15_655 158.55(2)
+Mn(2) Al(9) Al(6) 6 . 57.11(3)
+Mn(2) Al(9) Al(6) 5 . 151.32(4)
+Al(8) Al(9) Al(6) 5 . 102.52(4)
+Al(8) Al(9) Al(6) 6 . 57.46(3)
+Al(9) Al(9) Al(6) 15_655 . 105.41(3)
+Mn(2) Al(9) Al/Si(3) 6 5 102.56(4)
+Mn(2) Al(9) Al/Si(3) 5 5 98.51(3)
+Al(8) Al(9) Al/Si(3) 5 5 94.72(4)
+Al(8) Al(9) Al/Si(3) 6 5 97.53(3)
+Al(9) Al(9) Al/Si(3) 15_655 5 61.05(2)
+Al(6) Al(9) Al/Si(3) . 5 53.63(3)
+Mn(2) Al(9) Al(2) 6 6 54.57(2)
+Mn(2) Al(9) Al(2) 5 6 116.71(3)
+Al(8) Al(9) Al(2) 5 6 159.02(5)
+Al(8) Al(9) Al(2) 6 6 112.60(4)
+Al(9) Al(9) Al(2) 15_655 6 61.40(2)
+Al(6) Al(9) Al(2) . 6 61.57(4)
+Al/Si(3) Al(9) Al(2) 5 6 65.11(4)
+Mn(2) Al(9) Al(7) 6 5 154.76(4)
+Mn(2) Al(9) Al(7) 5 5 53.42(3)
+Al(8) Al(9) Al(7) 5 5 56.74(3)
+Al(8) Al(9) Al(7) 6 5 105.34(3)
+Al(9) Al(9) Al(7) 15_655 5 61.91(2)
+Al(6) Al(9) Al(7) . 5 98.81(4)
+Al/Si(3) Al(9) Al(7) 5 5 52.71(4)
+Al(2) Al(9) Al(7) 6 5 109.62(4)
+Mn(2) Al(9) Al/Si(5) 6 5 99.84(3)
+Mn(2) Al(9) Al/Si(5) 5 5 48.60(3)
+Al(8) Al(9) Al/Si(5) 5 5 108.71(4)
+Al(8) Al(9) Al/Si(5) 6 5 139.40(4)
+Al(9) Al(9) Al/Si(5) 15_655 5 61.99(2)
+Al(6) Al(9) Al/Si(5) . 5 148.75(4)
+Al/Si(3) Al(9) Al/Si(5) 5 5 123.04(3)
+Al(2) Al(9) Al/Si(5) 6 5 88.27(4)
+Al(7) Al(9) Al/Si(5) 5 5 99.02(3)
+Mn(2) Al(9) Al/Si(5) 6 6 48.44(3)
+Mn(2) Al(9) Al/Si(5) 5 6 99.98(3)
+Al(8) Al(9) Al/Si(5) 5 6 139.63(4)
+Al(8) Al(9) Al/Si(5) 6 6 107.72(4)
+Al(9) Al(9) Al/Si(5) 15_655 6 87.67(3)
+Al(6) Al(9) Al/Si(5) . 6 102.53(4)
+Al/Si(3) Al(9) Al/Si(5) 5 6 125.65(4)
+Al(2) Al(9) Al/Si(5) 6 6 60.87(4)
+Al(7) Al(9) Al/Si(5) 5 6 146.64(4)
+Al/Si(5) Al(9) Al/Si(5) 5 6 51.40(4)
+Mn(2) Al(9) Mn(1) 6 . 105.39(3)
+Mn(2) Al(9) Mn(1) 5 . 106.21(3)
+Al(8) Al(9) Mn(1) 5 . 54.16(2)
+Al(8) Al(9) Mn(1) 6 . 54.30(2)
+Al(9) Al(9) Mn(1) 15_655 . 105.82(2)
+Al(6) Al(9) Mn(1) . . 52.66(3)
+Al/Si(3) Al(9) Mn(1) 5 . 50.26(2)
+Al(2) Al(9) Mn(1) 6 . 105.56(4)
+Al(7) Al(9) Mn(1) 5 . 56.69(3)
+Al/Si(5) Al(9) Mn(1) 5 . 154.75(4)
+Al/Si(5) Al(9) Mn(1) 6 . 153.81(4)
+Mn(2) Al(9) Al(9) 6 6 112.30(3)
+Mn(2) Al(9) Al(9) 5 6 54.22(3)
+Al(8) Al(9) Al(9) 5 6 56.66(3)
+Al(8) Al(9) Al(9) 6 6 87.65(2)
+Al(9) Al(9) Al(9) 15_655 6 108.93(2)
+Al(6) Al(9) Al(9) . 6 145.06(3)
+Al/Si(3) Al(9) Al(9) 5 6 144.27(5)
+Al(2) Al(9) Al(9) 6 6 144.06(4)
+Al(7) Al(9) Al(9) 5 6 91.76(4)
+Al/Si(5) Al(9) Al(9) 5 6 59.29(2)
+Al/Si(5) Al(9) Al(9) 6 6 85.25(2)
+Mn(1) Al(9) Al(9) . 6 110.34(2)
+Mn(2) Al(9) Al(9) 6 5 54.35(3)
+Mn(2) Al(9) Al(9) 5 5 112.18(3)
+Al(8) Al(9) Al(9) 5 5 88.02(3)
+Al(8) Al(9) Al(9) 6 5 56.01(3)
+Al(9) Al(9) Al(9) 15_655 5 144.204(4)
+Al(6) Al(9) Al(9) . 5 94.71(4)
+Al/Si(3) Al(9) Al(9) 5 5 148.09(4)
+Al(2) Al(9) Al(9) 6 5 105.99(4)
+Al(7) Al(9) Al(9) 5 5 144.19(3)
+Al/Si(5) Al(9) Al(9) 5 5 85.51(2)
+Al/Si(5) Al(9) Al(9) 6 5 58.81(3)
+Mn(1) Al(9) Al(9) . 5 109.92(2)
+Al(9) Al(9) Al(9) 6 5 60.0
+loop_
+_geom_bond_atom_site_label_1
+_geom_bond_atom_site_label_2
+_geom_bond_site_symmetry_2
+_geom_bond_distance
+_geom_bond_publ_flag
+Mn(1) Al/Si(4) . 2.3701(13) yes
+Mn(1) Al/Si(3) 5 2.4843(10) yes
+Mn(1) Al(1) . 2.5552(7) yes
+Mn(1) Al(6) . 2.5834(13) yes
+Mn(1) Al(8) 19 2.6121(9) yes
+Mn(1) Al(8) 5 2.6121(9) ?
+Mn(1) Al(8) 22 2.6260(10) yes
+Mn(1) Al(8) 6 2.6260(10) ?
+Mn(1) Al(7) 5 2.8124(9) yes
+Mn(1) Al(7) 19 2.8124(9) ?
+Mn(1) Al(9) . 2.9890(9) yes
+Mn(1) Al(9) 14 2.9890(9) ?
+Mn(2) Al/Si(5) . 2.3014(12) yes
+Mn(2) Al(7) . 2.5049(13) yes
+Mn(2) Al(2) . 2.5262(8) yes
+Mn(2) Al(9) 19_556 2.5958(9) yes
+Mn(2) Al(9) 5 2.5958(9) ?
+Mn(2) Al(6) 5 2.5995(8) yes
+Mn(2) Al(6) 19_556 2.5995(8) ?
+Mn(2) Al(9) 6 2.5999(10) yes
+Mn(2) Al(9) 22_556 2.5999(10) ?
+Mn(2) Al(8) . 3.0544(9) yes
+Mn(2) Al(8) 14_556 3.0544(9) ?
+Al(1) Mn(1) . 2.5552(7) ?
+Al(1) Mn(1) 3 2.5552(7) ?
+Al(1) Al(7) 5 2.7310(14) yes
+Al(1) Al(7) 7_655 2.7310(14) ?
+Al(1) Al(7) 17_655 2.7310(14) ?
+Al(1) Al(7) 19 2.7310(14) ?
+Al(1) Al/Si(4) 3 2.861(2) yes
+Al(1) Al/Si(4) . 2.861(2) ?
+Al(1) Al(8) 9 2.9440(10) yes
+Al(1) Al(8) 5 2.9440(10) ?
+Al(1) Al(8) 19 2.9440(10) ?
+Al(1) Al(8) 23 2.9440(10) ?
+Al(1) Al(1) 13_655 3.342(3) yes
+Al(2) Mn(2) . 2.5262(8) ?
+Al(2) Mn(2) 3_566 2.5262(8) ?
+Al(2) Al(9) 9_566 2.8861(10) yes
+Al(2) Al(9) 5 2.8861(10) ?
+Al(2) Al(9) 19_556 2.8861(10) ?
+Al(2) Al(9) 23_565 2.8861(10) ?
+Al(2) Al(6) 5 2.9240(14) yes
+Al(2) Al(6) 17_566 2.9240(14) ?
+Al(2) Al(6) 7_565 2.9240(14) ?
+Al(2) Al(6) 19_556 2.9240(14) ?
+Al(2) Al/Si(5) 3_566 2.960(2) yes
+Al(2) Al/Si(5) . 2.960(2) ?
+Al(2) Al/Si(3) 6 3.089(2) yes
+Al(2) Al/Si(3) 18_566 3.089(2) ?
+Al(2) Al(2) 13_566 3.143(3) yes
+Al/Si(3) Mn(1) 22_556 2.4843(10) ?
+Al/Si(3) Mn(1) 6 2.4843(10) ?
+Al/Si(3) Al(6) 22_556 2.5625(15) yes
+Al/Si(3) Al(6) 6 2.5625(15) ?
+Al/Si(3) Al(7) 3_556 2.570(2) yes
+Al/Si(3) Al(7) . 2.570(2) ?
+Al/Si(3) Al(9) 22_556 2.8542(9) yes
+Al/Si(3) Al(9) 6 2.8542(9) ?
+Al/Si(3) Al(9) 20 2.8542(9) ?
+Al/Si(3) Al(9) 12_556 2.8542(9) ?
+Al/Si(3) Al(2) 5 3.089(2) ?
+Al/Si(3) Al(2) 17_656 3.089(2) ?
+Al/Si(4) Mn(1) . 2.3701(13) ?
+Al/Si(4) Al/Si(4) 3 2.564(2) yes
+Al/Si(4) Al/Si(4) 22 2.5846(13) yes
+Al/Si(4) Al/Si(4) 19 2.5846(13) ?
+Al/Si(4) Al/Si(4) 6 2.5846(13) ?
+Al/Si(4) Al/Si(4) 5 2.5846(13) ?
+Al/Si(4) Al(1) . 2.861(2) ?
+Al/Si(4) Al(8) 6 2.9249(13) yes
+Al/Si(4) Al(8) 22 2.9249(13) ?
+Al/Si(4) Al(8) 5 2.9293(10) ?
+Al/Si(4) Al(8) 19 2.9293(10) ?
+Al/Si(5) Mn(2) . 2.3014(12) ?
+Al/Si(5) Al/Si(5) 3_566 2.522(2) yes
+Al/Si(5) Al/Si(5) 22_556 2.5577(13) yes
+Al/Si(5) Al/Si(5) 19_556 2.5577(12) ?
+Al/Si(5) Al/Si(5) 6 2.5577(12) ?
+Al/Si(5) Al/Si(5) 5 2.5577(12) ?
+Al/Si(5) Al(9) 6 2.9414(13) yes
+Al/Si(5) Al(9) 22_556 2.9414(13) ?
+Al/Si(5) Al(9) 5 2.9563(11) yes
+Al/Si(5) Al(9) 19_556 2.9563(11) ?
+Al/Si(5) Al(2) . 2.960(2) ?
+Al(6) Al(6) 3_565 2.477(2) yes
+Al(6) Al/Si(3) 5 2.5625(15) ?
+Al(6) Mn(1) . 2.5834(13) ?
+Al(6) Mn(2) 6 2.5995(8) ?
+Al(6) Mn(2) 22 2.5995(8) ?
+Al(6) Al(8) 22 2.6791(13) yes
+Al(6) Al(8) 6 2.6791(13) ?
+Al(6) Al(9) . 2.8259(10) yes
+Al(6) Al(9) 14 2.8259(10) ?
+Al(6) Al(2) 6 2.9240(14) ?
+Al(6) Al(2) 18_665 2.9240(14) ?
+Al(6) Al(7) 22 3.3592(15) yes
+Al(6) Al(7) 6 3.3592(15) ?
+Al(7) Mn(2) . 2.5049(13) ?
+Al(7) Al/Si(3) . 2.570(2) ?
+Al(7) Al(8) . 2.6952(9) yes
+Al(7) Al(8) 14_556 2.6952(9) ?
+Al(7) Al(1) 6 2.7310(14) ?
+Al(7) Al(1) 18_556 2.7310(14) ?
+Al(7) Mn(1) 22_556 2.8124(9) ?
+Al(7) Mn(1) 6 2.8124(9) ?
+Al(7) Al(9) 22_556 2.9335(13) yes
+Al(7) Al(9) 6 2.9335(13) ?
+Al(7) Al(7) 3_556 2.976(2) yes
+Al(7) Al(7) 15 3.132(2) yes
+Al(7) Al(6) 19_556 3.3592(15) ?
+Al(7) Al(6) 5 3.3592(15) ?
+Al(8) Mn(1) 6 2.6121(9) ?
+Al(8) Mn(1) 5 2.6260(10) ?
+Al(8) Al(6) 5 2.6791(13) ?
+Al(8) Al(7) . 2.6952(9) ?
+Al(8) Al(9) 6 2.7252(11) yes
+Al(8) Al(9) 5 2.7458(11) yes
+Al(8) Al(8) 5 2.8266(14) yes
+Al(8) Al(8) 6 2.8266(14) ?
+Al(8) Al/Si(4) 5 2.9249(13) ?
+Al(8) Al/Si(4) 6 2.9293(10) ?
+Al(8) Al(1) 6 2.9440(10) ?
+Al(8) Al(8) 15 2.983(2) yes
+Al(8) Al(2) . 3.0544(9) ?
+Al(9) Mn(2) 6 2.5958(9) ?
+Al(9) Mn(2) 5 2.5999(10) ?
+Al(9) Al(8) 5 2.7252(11) ?
+Al(9) Al(8) 6 2.7458(11) ?
+Al(9) Al(9) 15_655 2.763(2) yes
+Al(9) Al(6) . 2.8259(10) ?
+Al(9) Al/Si(3) 5 2.8542(9) ?
+Al(9) Al(2) 6 2.8861(10) ?
+Al(9) Al(7) 5 2.9335(13) ?
+Al(9) Al/Si(5) 5 2.9414(13) ?
+Al(9) Al/Si(5) 6 2.9563(11) ?
+Al(9) Mn(1) . 2.9890(9) ?
+Al(9) Al(9) 6 3.0329(14) yes
+Al(9) Al(9) 5 3.0329(14) ?
+
+_publ_section_references
+;
+Acta Crystallographica Section C (1998). Crystallography Open Database (COD) entry 2007194; data placed in the public domain (CC0).
+;

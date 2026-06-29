@@ -1,0 +1,78 @@
+{
+  "page": {
+    "title": "GPU Dictionary-Generator",
+    "description": "Ein Wörterbuch simulierter EBSD-Beugungsmuster auf der GPU aus einem EMsoft-Master-Pattern erzeugen. Eigenständiges Werkzeug — greift nicht in die Haupt-Indizierungs-Pipeline ein."
+  },
+  "generate": {
+    "button": "Erzeugen",
+    "generating": "Erzeuge…",
+    "taskLabel": "Task: {{taskId}}",
+    "tooltip": "GPU-Erzeugung eines simulierten EBSD-Beugungsmuster-Wörterbuchs aus dem Master-Pattern starten.",
+    "tooltipPickMaster": "Zuerst ein Master-Pattern auswählen",
+    "tooltipInProgress": "Erzeugung läuft"
+  },
+  "errors": {
+    "detectorIntegers": "Detektor H und W müssen ganze Zahlen sein.",
+    "resolutionPositive": "Auflösung muss eine positive Zahl sein.",
+    "noTaskId": "Backend hat keine task_id zurückgegeben.",
+    "generateFailed": "Erzeugung fehlgeschlagen: {{detail}}",
+    "deleteFailed": "Löschen fehlgeschlagen: {{detail}}",
+    "progressPollFailed": "Fortschritts-Abfrage fehlgeschlagen: {{message}}"
+  },
+  "master": {
+    "groupTitle": "Master-Pattern",
+    "fieldLabel": "Master .h5",
+    "placeholder": "C:\\Pfad\\zu\\Ni-master.h5",
+    "inputTooltip": "Vollständigen Dateipfad zu einer EMsoft-Master-Pattern HDF5-Datei (.h5) einfügen.",
+    "use": "Übernehmen",
+    "useTooltip": "Eingegebenen Master-Pattern-Pfad übernehmen (nur sichtbar, wenn Commit-Handler verbunden).",
+    "hint": "Vollständigen Pfad zu einer EMsoft-Master-Pattern HDF5-Datei einfügen. Das Wörterbuch wird auf der GPU aus diesem Master + den Detektor-Einstellungen unten erzeugt."
+  },
+  "detector": {
+    "groupTitle": "Detektor",
+    "patternSize": "Mustergröße",
+    "patternSizeUnit": "px",
+    "heightTooltip": "Höhe des Detektor-Beugungsmusters in Pixeln (Zeilen). Bereich 16–2048.",
+    "widthTooltip": "Breite des Detektor-Beugungsmusters in Pixeln (Spalten). Bereich 16–2048.",
+    "pcLabel": "PC (x, y, z)",
+    "pcxTooltip": "Musterzentrum x-Koordinate (PCx), als Bruchteil 0–1 über die Detektorbreite.",
+    "pcyTooltip": "Musterzentrum y-Koordinate (PCy), als Bruchteil 0–1 über die Detektorhöhe.",
+    "pczTooltip": "Musterzentrum z / Detektorabstand (PCz), als Bruchteil 0–1.",
+    "sampleTilt": "Probenkippung",
+    "sampleTiltUnit": "Grad",
+    "sampleTiltTooltip": "Probenkippwinkel in Grad (typisch 70 für EBSD). Bereich 0–90."
+  },
+  "orientation": {
+    "groupTitle": "Orientierungen",
+    "resolution": "Auflösung",
+    "resolutionUnit": "Grad",
+    "sliderTooltip": "SO(3)-Orientierungs-Schrittweite in Grad; kleiner = mehr Orientierungen, größeres Wörterbuch.",
+    "numberTooltip": "Exakte Orientierungs-Abtastauflösung in Grad. 5 Grad grob, 1–2 Grad für Produktionsläufe.",
+    "normalize": "Normieren",
+    "normalizeCheckboxLabel": "Mittelwert 0 / Varianz 1 je Beugungsmuster",
+    "normalizeTooltip": "Jedes erzeugte Beugungsmuster vor dem Speichern auf Mittelwert 0 / Varianz 1 normieren.",
+    "hint": "Niedrigere Auflösung → mehr Orientierungen → größeres Wörterbuch. 5° ist typisch für einen groben ersten Durchlauf; für Produktionsläufe auf 1–2° verringern."
+  },
+  "progress": {
+    "statusLabel": "Status: {{status}}",
+    "statusIdle": "inaktiv",
+    "submitting": "Wird übermittelt…",
+    "generatedPatterns": "<0>{{count}}</0> Beugungsmuster erzeugt",
+    "polling": "Abfrage alle 500 ms…"
+  },
+  "list": {
+    "groupTitle": "Vorhandene Wörterbücher",
+    "count_one": "{{count}} Wörterbuch auf der Festplatte",
+    "count_other": "{{count}} Wörterbücher auf der Festplatte",
+    "refresh": "Aktualisieren",
+    "refreshTooltip": "Liste der GPU-erzeugten Wörterbücher von der Festplatte neu laden.",
+    "empty": "Noch keine Wörterbücher. Oben eines erzeugen.",
+    "colName": "Name",
+    "colPatterns": "Beugungsmuster",
+    "colSize": "Größe",
+    "colCreated": "Erstellt",
+    "delete": "Löschen",
+    "deleteTooltip": "Diese Wörterbuch-Datei von der Festplatte löschen (mit Rückfrage; nicht rückgängig machbar).",
+    "deleteConfirm": "\"{{name}}\" löschen? Dies kann nicht rückgängig gemacht werden."
+  }
+}

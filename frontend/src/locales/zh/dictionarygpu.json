@@ -1,0 +1,78 @@
+{
+  "page": {
+    "title": "GPU Dictionary 生成器",
+    "description": "在 GPU 上从 EMsoft 主花样生成模拟 EBSD 花样的字典。独立工具——不影响主标定流程。"
+  },
+  "generate": {
+    "button": "生成",
+    "generating": "正在生成…",
+    "taskLabel": "任务: {{taskId}}",
+    "tooltip": "从主花样开始在 GPU 上生成模拟 EBSD 花样字典。",
+    "tooltipPickMaster": "请先选择一个主花样",
+    "tooltipInProgress": "正在生成"
+  },
+  "errors": {
+    "detectorIntegers": "探测器 H 和 W 必须为整数。",
+    "resolutionPositive": "分辨率必须为正数。",
+    "noTaskId": "Backend 未返回 task_id。",
+    "generateFailed": "生成失败: {{detail}}",
+    "deleteFailed": "删除失败: {{detail}}",
+    "progressPollFailed": "进度轮询失败: {{message}}"
+  },
+  "master": {
+    "groupTitle": "主花样",
+    "fieldLabel": "主花样 .h5",
+    "placeholder": "C:\\path\\to\\Ni-master.h5",
+    "inputTooltip": "粘贴 EMsoft 主花样 HDF5（.h5）文件的完整路径。",
+    "use": "使用",
+    "useTooltip": "确认所输入的主花样路径（仅在连接了提交处理器时显示）。",
+    "hint": "粘贴 EMsoft 主花样 HDF5 文件的完整路径。字典将在 GPU 上根据该主花样和下方的探测器设置生成。"
+  },
+  "detector": {
+    "groupTitle": "探测器",
+    "patternSize": "花样尺寸",
+    "patternSizeUnit": "px",
+    "heightTooltip": "探测器花样高度（像素，行数）。范围 16–2048。",
+    "widthTooltip": "探测器花样宽度（像素，列数）。范围 16–2048。",
+    "pcLabel": "PC (x, y, z)",
+    "pcxTooltip": "花样中心 x 坐标（PCx），沿探测器宽度方向的 0–1 比例。",
+    "pcyTooltip": "花样中心 y 坐标（PCy），沿探测器高度方向的 0–1 比例。",
+    "pczTooltip": "花样中心 z / 探测器距离（PCz），0–1 比例。",
+    "sampleTilt": "样品倾斜",
+    "sampleTiltUnit": "度",
+    "sampleTiltTooltip": "样品倾斜角（度），EBSD 通常为 70。范围 0–90。"
+  },
+  "orientation": {
+    "groupTitle": "取向",
+    "resolution": "分辨率",
+    "resolutionUnit": "度",
+    "sliderTooltip": "SO(3) 取向采样步长（度）；越小取向越多、字典越大。",
+    "numberTooltip": "精确的取向采样分辨率（度）。5 度较粗，1–2 度用于生产运行。",
+    "normalize": "归一化",
+    "normalizeCheckboxLabel": "将每个花样归一化为零均值 / 单位方差",
+    "normalizeTooltip": "在保存前将每个生成的花样归一化为零均值 / 单位方差。",
+    "hint": "分辨率越低 → 取向越多 → 字典越大。5° 适合粗略的首轮；生产运行时降至 1–2°。"
+  },
+  "progress": {
+    "statusLabel": "状态: {{status}}",
+    "statusIdle": "空闲",
+    "submitting": "正在提交…",
+    "generatedPatterns": "已生成 <0>{{count}}</0> 个花样",
+    "polling": "每 500 ms 轮询一次…"
+  },
+  "list": {
+    "groupTitle": "现有字典",
+    "count_one": "磁盘上有 {{count}} 个字典",
+    "count_other": "磁盘上有 {{count}} 个字典",
+    "refresh": "刷新",
+    "refreshTooltip": "从磁盘重新加载 GPU 生成的字典列表。",
+    "empty": "尚无字典。请在上方生成一个。",
+    "colName": "名称",
+    "colPatterns": "花样",
+    "colSize": "大小",
+    "colCreated": "创建时间",
+    "delete": "删除",
+    "deleteTooltip": "从磁盘删除此字典文件（会要求确认；无法撤销）。",
+    "deleteConfirm": "删除 \"{{name}}\"？此操作无法撤销。"
+  }
+}

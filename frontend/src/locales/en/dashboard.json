@@ -1,0 +1,98 @@
+{
+  "title": "Orienta",
+  "subtitle": "EBSD Pattern Analysis & Simulation Toolkit",
+  "sections": {
+    "dataCalibration": "Data & Calibration",
+    "indexAnalysis": "Indexing & Analysis"
+  },
+  "cards": {
+    "ebsdviewer": {
+      "title": "EBSD Viewer",
+      "description": "Load H5OINA/EDAX files. Process patterns, EDS overlay.",
+      "tooltip": "Open the EBSD Viewer: load H5OINA/EDAX files, process patterns, view EDS overlay."
+    },
+    "eds": {
+      "title": "EDS Analysis",
+      "description": "Element maps, quantification (Counts/Wt%/At%), phase suggestion.",
+      "tooltip": "Open EDS Analysis: element maps, quantification (Counts/Wt%/At%), phase suggestion."
+    },
+    "pcrefinement": {
+      "title": "PC Refinement",
+      "description": "Pattern Center calibration and pixel-wise drift correction.",
+      "tooltip": "Open PC Refinement: Pattern Center calibration and pixel-wise drift correction."
+    },
+    "crystal": {
+      "title": "Crystal DB",
+      "description": "Convert CIF to .xtal format. Manage crystal structure database.",
+      "tooltip": "Open Crystal DB: convert CIF to .xtal and manage the crystal structure database."
+    },
+    "indexing": {
+      "title": "Indexing",
+      "description": "Dictionary, Hough, and Spherical indexing with pixel selection.",
+      "tooltip": "Open Indexing: Dictionary, Hough, and Spherical indexing with pixel selection."
+    },
+    "phasemap": {
+      "title": "Phase Maps",
+      "description": "Visualize indexing results with configurable scalebar and export.",
+      "tooltip": "Open Phase Maps: visualize indexing results with configurable scalebar and export."
+    },
+    "analysis": {
+      "title": "EBSD Analysis",
+      "description": "Grain reconstruction, texture analysis, KAM/GOS maps, batch export.",
+      "tooltip": "Open EBSD Analysis: grain reconstruction, texture, KAM/GOS maps, batch export."
+    },
+    "mlhub": {
+      "title": "ML Predictor",
+      "description": "Train phase recognition model from indexing results.",
+      "tooltip": "Open ML Predictor: train a phase-recognition model from indexing results."
+    },
+    "batch": {
+      "title": "Multi-Phase Batch",
+      "description": "Batch index multiple files against multiple phases overnight.",
+      "tooltip": "Open Multi-Phase Batch: index many files against many phases overnight."
+    },
+    "refinement": {
+      "title": "Phase Refinement",
+      "description": "Review and refine multi-phase indexing results pixel by pixel.",
+      "tooltip": "Open Phase Refinement: review and refine multi-phase indexing results pixel by pixel."
+    }
+  },
+  "ready": {
+    "label": "Ready",
+    "tooltip": "Data loaded — ready to use"
+  },
+  "recent": {
+    "title": "Recent Files",
+    "empty": {
+      "title": "No recent files",
+      "hint": "Open an H5OINA/HDF5 file from the EBSD Viewer to get started"
+    },
+    "itemTooltip": "Click to load: {{path}}",
+    "quickLoad": "Quick Load Last File",
+    "quickLoadTooltip": "Load the most recently opened file with one click",
+    "clear": "Clear Recent Files",
+    "clearTooltip": "Clear the entire recent-files list (asks for confirmation)",
+    "confirm": {
+      "title": "Clear Recent Files",
+      "message": "Clear all recent files? This cannot be undone.",
+      "confirmLabel": "Clear"
+    }
+  },
+  "shortcuts": {
+    "hint": "Click a card, use the sidebar, or press Ctrl+1–9 to navigate.",
+    "toggleTooltip": "Show or hide the full keyboard-shortcut reference table",
+    "dashboard": "Dashboard",
+    "ebsdViewer": "EBSD Viewer",
+    "analysis": "Analysis",
+    "crystalDb": "Crystal DB",
+    "simulation": "Simulation",
+    "database": "Database",
+    "phaseMaps": "Phase Maps",
+    "indexing": "Indexing",
+    "mlPredictor": "ML Predictor",
+    "pcRefinement": "PC Refinement",
+    "hdf5Viewer": "HDF5 Viewer",
+    "edsAnalysis": "EDS Analysis",
+    "toggleSidebar": "Toggle Sidebar"
+  }
+}

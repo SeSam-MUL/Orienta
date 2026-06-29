@@ -1,0 +1,97 @@
+# Core scientific libraries
+kikuchipy>=0.11.3
+orix>=0.14
+diffsims>=0.7
+diffpy.structure>=3.3  # space-group symmetry orbits for forward_sim U_g table
+pyebsdindex>=0.3
+hyperspy>=2.4
+numpy
+scipy
+h5py
+matplotlib
+matplotlib-scalebar>=0.8
+spglib
+pymatgen
+
+# GUI (Legacy PyQt5 layer — Stage 1 of removal complete; Stage 2 needs to
+# detangle simulation/* QThread workers from backend lazy imports before
+# PyQt5 / pyqtdarktheme can be uninstalled. See tasks/pyqt5-removal-stage2-backlog.md)
+pyqt5>=5.15
+pyqtdarktheme
+
+# Web backend (FastAPI + Electron/React stack)
+fastapi
+starlette  # BaseHTTPMiddleware + Request imported directly in backend/api/main.py
+uvicorn[standard]
+pydantic
+httpx>=0.25
+requests  # Crystal Hint external phase lookup (COD / Materials Project / CIF downloaders)
+python-multipart
+websockets
+
+# Image processing
+Pillow
+
+# Data processing & analysis
+pandas
+dask[array]  # lazy EBSD arrays + dask.callbacks progress hook in backend/api/routes/ebsd_viewer.py
+openpyxl
+scikit-learn>=1.0
+xlsxwriter
+beautifulsoup4
+seaborn
+
+# System utilities
+watchdog
+psutil
+
+# Parallel Hough indexing (PyEBSDIndex uses Ray for multi-core band detection)
+ray
+
+# Machine Learning (EBSD AI phase classifier)
+# PyTorch with CUDA 12.1 support (install separately, see below)
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch>=2.0
+torchvision>=0.15
+scikit-image>=0.20
+faiss-cpu
+
+# torch.compile Inductor GPU codegen on Windows (community port; required for
+# torch.compile mode="default" on CUDA in the spherical-gpu indexer hot path).
+# Authorized 2026-05-09 for the GPU spherical-indexing perf loop. Windows-only;
+# Linux users get Triton via the official PyTorch wheel and don't need this line.
+triton-windows>=3.6,<3.7 ; sys_platform == "win32"
+
+# CuPy + CUDA 12 runtime packages — alternative kernel-fusion path that bypasses
+# Triton/Inductor (used by D5 / cupy.fuse mul+max kernels in the spherical-gpu
+# indexer). cupy-cuda12x 14.x stopped bundling CUDA libs and requires the
+# nvidia-* runtime wheels separately. Authorized 2026-05-09.
+cupy-cuda12x>=14.0
+nvidia-cuda-runtime-cu12
+nvidia-cublas-cu12
+nvidia-cufft-cu12
+nvidia-curand-cu12
+nvidia-cusolver-cu12
+nvidia-cusparse-cu12
+nvidia-cuda-nvrtc-cu12
+
+# Numba — CPU njit(parallel) one-electron-per-thread Monte Carlo engine
+# (LEVER 3: the no-GPU fallback for the EMsoft-free forward MC; standard
+# Windows/Linux wheel, CPU-only njit — numba-CUDA Windows DLL issues are
+# GPU-only and irrelevant here).
+numba>=0.59
+
+# Test infrastructure
+pytest
+pytest-asyncio
+pytest-timeout
+
+# -------------------------------------------------------
+# Installation:
+#   conda activate ebsd
+#   pip install -r requirements.txt
+#
+# CRITICAL: Install optimized BLAS (via conda, not pip!):
+#   conda install -c conda-forge "blas=*=openblas"
+#   Without this, NumPy uses Reference BLAS (~1000x slower).
+# -------------------------------------------------------

@@ -1,0 +1,141 @@
+{
+  "header": {
+    "title": "ML Hub",
+    "subtitle": "Verwaltung von Machine-Learning-Modellen und Mustervorhersage"
+  },
+  "hoverTips": {
+    "epochs": "Anzahl der Trainingsepochen (komplette Durchläufe über die Daten)",
+    "batch": "Anzahl der Muster pro Trainingsschritt",
+    "learningRate": "Lernrate — Schrittweite des Optimierers",
+    "ciThreshold": "Minimaler Konfidenzindex für Trainingsproben — höher = sauberere Daten, aber weniger Proben",
+    "patternIndices": "Durch Komma oder Leerzeichen getrennte Musterindizes zum Klassifizieren"
+  },
+  "tabs": {
+    "status": "Status",
+    "statusTip": "Modulverfügbarkeit, geladenes Modell und Trainingsspeicher-Statistik anzeigen",
+    "training": "Training",
+    "trainingTip": "Phasenklassifikator, Entrauscher oder Embedding-Encoder trainieren",
+    "prediction": "Vorhersage",
+    "predictionTip": "Phasenvorhersage für ausgewählte Musterindizes ausführen"
+  },
+  "modelCard": {
+    "unknownModel": "Unbekanntes Modell",
+    "loaded": "Geladen",
+    "accuracy": "{{value}} % Gen.",
+    "tooltip": "Dieses Modell als aktives Modell für die Vorhersage auswählen"
+  },
+  "results": {
+    "columns": {
+      "index": "Index",
+      "phase": "Phase",
+      "confidence": "Konfidenz",
+      "score": "Score"
+    },
+    "empty": "—"
+  },
+  "log": {
+    "title": "Trainingsprotokoll",
+    "titleWithCount": "Trainingsprotokoll ({{count}})",
+    "copyTooltip": "Protokoll in die Zwischenablage kopieren",
+    "copiedTooltip": "Kopiert!",
+    "copyAria": "Trainingsprotokoll in die Zwischenablage kopieren",
+    "placeholder": "Das Trainingsprotokoll erscheint hier..."
+  },
+  "status": {
+    "modelStatus": "Modellstatus",
+    "failedToLoad": "Status konnte nicht geladen werden",
+    "modelLoaded": "Modell geladen",
+    "modelLoadedPhases": "Modell geladen — {{count}} Phase(n): {{names}}",
+    "noModelLoaded": "Kein Modell geladen",
+    "mlModule": "ML-Modul",
+    "available": "Verfügbar",
+    "unavailable": "Nicht verfügbar",
+    "model": "Modell",
+    "loaded": "Geladen",
+    "notLoaded": "Nicht geladen",
+    "backend": "Backend",
+    "device": "Gerät",
+    "trainingStore": "Trainingsspeicher",
+    "storeTotal": "Gesamt: {{count}} Proben",
+    "storePhases": " | Phasen: {{phases}}",
+    "storeMeanCi": " | Mittlerer CI: {{value}}",
+    "noTrainingData": "Keine Trainingsdaten",
+    "goToTraining": "Zum Training",
+    "goToTrainingTooltip": "Zum Trainings-Tab wechseln, um Proben hinzuzufügen oder ein Modell zu trainieren",
+    "modelsLoading": "Modelle (lädt...)",
+    "modelsCount": "Modelle ({{count}})",
+    "noModels": "Keine Modelle verfügbar",
+    "noModelsHint": "Einen Phasenklassifikator aus Indizierungsergebnissen trainieren oder einen vorhandenen Modell-Checkpoint laden.",
+    "goToTrainingEmptyTooltip": "Zum Trainings-Tab wechseln, um einen Phasenklassifikator zu trainieren"
+  },
+  "training": {
+    "classifierTitle": "Phasenklassifikator-Training",
+    "classifierDesc": "Einen CNN-Klassifikator auf gesammelten Indizierungsergebnissen trainieren. Nutzt konfidenz-indizierte Daten aus dem Trainingsspeicher.",
+    "usesLastResult": "Das Training verwendet das jüngste Indizierungsergebnis.",
+    "epochs": "Epochen:",
+    "epochsTooltip": "Anzahl der Trainingsepochen (komplette Durchläufe über die Daten)",
+    "batch": "Batch:",
+    "batchTooltip": "Anzahl der Muster pro Trainingsschritt",
+    "lr": "LR:",
+    "lrTooltip": "Lernrate — Schrittweite des Optimierers",
+    "ciThreshold": "CI-Schwelle:",
+    "ciThresholdTooltip": "Minimaler Konfidenzindex für Trainingsproben — höher = sauberere Daten, aber weniger Proben",
+    "startTraining": "Training starten",
+    "trainingInProgress": "Training läuft...",
+    "startTrainingTooltip": "Einen CNN-Phasenklassifikator auf dem letzten Indizierungsergebnis trainieren (fügt Proben hinzu, dann Training)",
+    "stop": "Stopp",
+    "stopTooltip": "Beobachtung des Trainingslaufs beenden (Training läuft im Backend weiter)",
+    "clearStore": "Speicher leeren",
+    "clearStoreTooltip": "Alle Proben aus dem Trainingsspeicher löschen (entfernt veraltete/falsch markierte Daten)",
+    "epochProgress": "Epoche {{current}} / {{total}}",
+    "denoiserTitle": "Entrauschungs-Training (U-Net)",
+    "denoiserDesc": "Einen U-Net-Entrauscher auf gespeicherten Entrauschungs-Paaren trainieren. Reduziert Rauschen in EBSD-Mustern vor der Indizierung.",
+    "notWired": "In diesem Build nicht verfügbar — es ist noch kein Trainings-Endpunkt angebunden.",
+    "notWiredTooltip": "In diesem Build nicht verfügbar — kein Backend-Endpunkt",
+    "trainDenoiser": "Entrauscher trainieren",
+    "loadDenoiser": "Entrauscher laden",
+    "denoiserEpochsTooltip": "Trainingsepochen für den U-Net-Entrauscher (in diesem Build nicht aktiv)",
+    "embeddingTitle": "Embedding-Indizierung (FAISS)",
+    "embeddingDesc": "Einen Embedding-Encoder auf gesammelten Indizierungsergebnissen trainieren und dann einen FAISS-Index für schnelle, neuronale-Netz-basierte Indizierung erstellen.",
+    "embeddingNotWired": "In diesem Build nicht verfügbar — es ist noch kein Embedding-/FAISS-Endpunkt angebunden.",
+    "dim": "Dim:",
+    "embeddingDimTooltip": "Dimension des Embedding-Vektors für den FAISS-Encoder (deaktiviert)",
+    "trainEncoder": "Encoder trainieren",
+    "buildFaissIndex": "FAISS-Index erstellen",
+    "logTitle": "Trainingsprotokoll"
+  },
+  "trainLog": {
+    "starting": "Training startet: {{epochs}} Epochen, Batch={{batch}}, LR={{lr}}, CI>={{ci}}",
+    "addingSamples": "Proben aus dem letzten Indizierungsergebnis werden hinzugefügt, dann wird trainiert...",
+    "stoppedWatching": "Beobachtung beendet (Training läuft im Backend weiter).",
+    "taskExpired": "Aufgabe abgelaufen.",
+    "error": "FEHLER: {{message}}",
+    "clearCancelled": "Speicher-Leeren abgebrochen.",
+    "storeCleared": "Trainingsspeicher geleert ({{count}} Proben entfernt)."
+  },
+  "trainMsg": {
+    "complete": "Training abgeschlossen — {{count}} Phase(n): {{names}}, bester Validierungsverlust {{loss}}",
+    "failed": "Training fehlgeschlagen.",
+    "storeCleared": "Trainingsspeicher geleert.",
+    "clearFailed": "Leeren fehlgeschlagen."
+  },
+  "clearStorePrompt": "ALLE Proben aus dem Trainingsspeicher löschen? Dies kann nicht rückgängig gemacht werden (über \"Add from Indexing\" erneut hinzufügen). Zum Bestätigen \"clear\" eingeben:",
+  "prediction": {
+    "title": "Vorhersage",
+    "desc": "Musterindizes (durch Komma oder Leerzeichen getrennt) eingeben, um die Phasenvorhersage auszuführen.",
+    "model": "Modell:",
+    "unknownModel": "Unbekannt",
+    "patternIndices": "Musterindizes:",
+    "patternIndicesPlaceholder": "0, 1, 2, 100, 200",
+    "patternIndicesTooltip": "Durch Komma oder Leerzeichen getrennte Musterindizes zum Klassifizieren",
+    "predict": "Vorhersagen",
+    "predicting": "Vorhersage läuft...",
+    "predictTooltip": "Phasenvorhersage für die eingegebenen Musterindizes ausführen",
+    "mlUnavailable": "ML-Modul ist nicht verfügbar. Stellen Sie sicher, dass das ebsd-ai-Modul installiert ist.",
+    "noValidIndex": "Mindestens einen gültigen Musterindex eingeben.",
+    "predictionFailed": "Vorhersage fehlgeschlagen.",
+    "resultsTitle": "Ergebnisse ({{count}} Muster)",
+    "noPredictions": "Noch keine Vorhersagen",
+    "noPredictionsHint": "Musterindizes eingeben und auf Vorhersagen klicken"
+  }
+}

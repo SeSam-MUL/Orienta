@@ -1,0 +1,98 @@
+{
+  "title": "Orienta",
+  "subtitle": "EBSD-Beugungsmuster-Analyse- & Simulations-Toolkit",
+  "sections": {
+    "dataCalibration": "Daten & Kalibrierung",
+    "indexAnalysis": "Indizierung & Analyse"
+  },
+  "cards": {
+    "ebsdviewer": {
+      "title": "EBSD Viewer",
+      "description": "H5OINA/EDAX-Dateien laden. Beugungsmuster verarbeiten, EDS-Overlay.",
+      "tooltip": "EBSD Viewer öffnen: H5OINA/EDAX-Dateien laden, Beugungsmuster verarbeiten, EDS-Overlay anzeigen."
+    },
+    "eds": {
+      "title": "EDS-Analyse",
+      "description": "Elementverteilungskarten, Quantifizierung (Counts/Gew.-%/At.-%), Phasenvorschlag.",
+      "tooltip": "EDS-Analyse öffnen: Elementverteilungskarten, Quantifizierung (Counts/Gew.-%/At.-%), Phasenvorschlag."
+    },
+    "pcrefinement": {
+      "title": "PC-Verfeinerung",
+      "description": "Musterzentrum-Kalibrierung und pixelweise Driftkorrektur.",
+      "tooltip": "PC-Verfeinerung öffnen: Musterzentrum-Kalibrierung und pixelweise Driftkorrektur."
+    },
+    "crystal": {
+      "title": "Kristall-DB",
+      "description": "CIF in .xtal konvertieren. Kristallstruktur-Datenbank verwalten.",
+      "tooltip": "Kristall-DB öffnen: CIF in .xtal konvertieren und die Kristallstruktur-Datenbank verwalten."
+    },
+    "indexing": {
+      "title": "Indizierung",
+      "description": "Dictionary-, Hough- und Spherical-Indizierung mit Pixelauswahl.",
+      "tooltip": "Indizierung öffnen: Dictionary-, Hough- und Spherical-Indizierung mit Pixelauswahl."
+    },
+    "phasemap": {
+      "title": "Phasenkarten",
+      "description": "Indizierungsergebnisse mit konfigurierbarem Maßstab visualisieren und exportieren.",
+      "tooltip": "Phasenkarten öffnen: Indizierungsergebnisse mit konfigurierbarem Maßstab visualisieren und exportieren."
+    },
+    "analysis": {
+      "title": "EBSD-Analyse",
+      "description": "Kornrekonstruktion, Texturanalyse, KAM/GOS-Karten, Stapel-Export.",
+      "tooltip": "EBSD-Analyse öffnen: Kornrekonstruktion, Texturanalyse, KAM/GOS-Karten, Stapel-Export."
+    },
+    "mlhub": {
+      "title": "ML-Prädiktor",
+      "description": "Phasenerkennungsmodell aus Indizierungsergebnissen trainieren.",
+      "tooltip": "ML-Prädiktor öffnen: Phasenerkennungsmodell aus Indizierungsergebnissen trainieren."
+    },
+    "batch": {
+      "title": "Mehrphasen-Stapel",
+      "description": "Mehrere Dateien über Nacht gegen mehrere Phasen indizieren.",
+      "tooltip": "Mehrphasen-Stapel öffnen: viele Dateien über Nacht gegen mehrere Phasen indizieren."
+    },
+    "refinement": {
+      "title": "Phasenverfeinerung",
+      "description": "Mehrphasen-Indizierungsergebnisse pixelweise prüfen und verfeinern.",
+      "tooltip": "Phasenverfeinerung öffnen: Mehrphasen-Indizierungsergebnisse pixelweise prüfen und verfeinern."
+    }
+  },
+  "ready": {
+    "label": "Bereit",
+    "tooltip": "Daten geladen — einsatzbereit"
+  },
+  "recent": {
+    "title": "Zuletzt verwendete Dateien",
+    "empty": {
+      "title": "Keine zuletzt verwendeten Dateien",
+      "hint": "Öffne eine H5OINA/HDF5-Datei im EBSD Viewer, um zu beginnen"
+    },
+    "itemTooltip": "Zum Laden klicken: {{path}}",
+    "quickLoad": "Zuletzt geöffnete Datei laden",
+    "quickLoadTooltip": "Die zuletzt geöffnete Datei mit einem Klick laden",
+    "clear": "Liste leeren",
+    "clearTooltip": "Die gesamte Liste zuletzt geöffneter Dateien löschen (mit Bestätigung)",
+    "confirm": {
+      "title": "Zuletzt verwendete Dateien löschen",
+      "message": "Alle zuletzt verwendeten Dateien löschen? Dies kann nicht rückgängig gemacht werden.",
+      "confirmLabel": "Leeren"
+    }
+  },
+  "shortcuts": {
+    "hint": "Auf eine Karte klicken, die Seitenleiste nutzen oder Strg+1–9 drücken, um zu navigieren.",
+    "toggleTooltip": "Die vollständige Tastenkürzel-Übersicht ein- oder ausblenden",
+    "dashboard": "Dashboard",
+    "ebsdViewer": "EBSD Viewer",
+    "analysis": "Analyse",
+    "crystalDb": "Kristall-DB",
+    "simulation": "Simulation",
+    "database": "Datenbank",
+    "phaseMaps": "Phasenkarten",
+    "indexing": "Indizierung",
+    "mlPredictor": "ML-Prädiktor",
+    "pcRefinement": "PC-Verfeinerung",
+    "hdf5Viewer": "HDF5 Viewer",
+    "edsAnalysis": "EDS-Analyse",
+    "toggleSidebar": "Seitenleiste umschalten"
+  }
+}

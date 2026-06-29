@@ -1,0 +1,141 @@
+{
+  "header": {
+    "title": "ML Hub",
+    "subtitle": "機械学習モデルの管理とパターン予測"
+  },
+  "hoverTips": {
+    "epochs": "トレーニングのエポック数 (データ全体の反復回数)",
+    "batch": "1 トレーニングステップあたりに処理するパターン数",
+    "learningRate": "学習率 — オプティマイザーのステップサイズ",
+    "ciThreshold": "トレーニングサンプルの最小信頼度指数 — 高いほどデータは清浄だがサンプルは少ない",
+    "patternIndices": "分類するパターンインデックス (カンマまたはスペース区切り)"
+  },
+  "tabs": {
+    "status": "ステータス",
+    "statusTip": "モデルの利用可否、読み込み済みモデル情報、トレーニングストアの統計を表示",
+    "training": "トレーニング",
+    "trainingTip": "相分類器、デノイザー、または埋め込みエンコーダーをトレーニング",
+    "prediction": "予測",
+    "predictionTip": "選択したパターンインデックスに対して相予測を実行"
+  },
+  "modelCard": {
+    "unknownModel": "不明なモデル",
+    "loaded": "読み込み済み",
+    "accuracy": "{{value}}% 精度",
+    "tooltip": "このモデルを予測用のアクティブモデルとして選択"
+  },
+  "results": {
+    "columns": {
+      "index": "インデックス",
+      "phase": "相",
+      "confidence": "信頼度",
+      "score": "スコア"
+    },
+    "empty": "—"
+  },
+  "log": {
+    "title": "トレーニングログ",
+    "titleWithCount": "トレーニングログ ({{count}})",
+    "copyTooltip": "ログをクリップボードにコピー",
+    "copiedTooltip": "コピーしました！",
+    "copyAria": "トレーニングログをクリップボードにコピー",
+    "placeholder": "トレーニングログがここに表示されます..."
+  },
+  "status": {
+    "modelStatus": "モデルステータス",
+    "failedToLoad": "ステータスの読み込みに失敗しました",
+    "modelLoaded": "モデル読み込み済み",
+    "modelLoadedPhases": "モデル読み込み済み — {{count}} 相: {{names}}",
+    "noModelLoaded": "モデルが読み込まれていません",
+    "mlModule": "ML モジュール",
+    "available": "利用可能",
+    "unavailable": "利用不可",
+    "model": "モデル",
+    "loaded": "読み込み済み",
+    "notLoaded": "未読み込み",
+    "backend": "バックエンド",
+    "device": "デバイス",
+    "trainingStore": "トレーニングストア",
+    "storeTotal": "合計: {{count}} サンプル",
+    "storePhases": " | 相: {{phases}}",
+    "storeMeanCi": " | 平均 CI: {{value}}",
+    "noTrainingData": "トレーニングデータがありません",
+    "goToTraining": "トレーニングへ移動",
+    "goToTrainingTooltip": "トレーニングタブに切り替えてサンプルを追加するかモデルをトレーニング",
+    "modelsLoading": "モデル (読み込み中...)",
+    "modelsCount": "モデル ({{count}})",
+    "noModels": "利用可能なモデルがありません",
+    "noModelsHint": "指数付け結果から相分類器をトレーニングするか、既存のモデルチェックポイントを読み込んでください。",
+    "goToTrainingEmptyTooltip": "トレーニングタブに切り替えて相分類器をトレーニング"
+  },
+  "training": {
+    "classifierTitle": "相分類器トレーニング",
+    "classifierDesc": "収集した指数付け結果で CNN 分類器をトレーニングします。トレーニングストアの信頼度でインデックス化されたデータを使用します。",
+    "usesLastResult": "トレーニングには最新の指数付け結果を使用します。",
+    "epochs": "エポック:",
+    "epochsTooltip": "トレーニングのエポック数 (データ全体の反復回数)",
+    "batch": "バッチ:",
+    "batchTooltip": "1 トレーニングステップあたりに処理するパターン数",
+    "lr": "LR:",
+    "lrTooltip": "学習率 — オプティマイザーのステップサイズ",
+    "ciThreshold": "CI しきい値:",
+    "ciThresholdTooltip": "トレーニングサンプルの最小信頼度指数 — 高いほどデータは清浄だがサンプルは少ない",
+    "startTraining": "トレーニング開始",
+    "trainingInProgress": "トレーニング中...",
+    "startTrainingTooltip": "最新の指数付け結果で CNN 相分類器をトレーニング (サンプルを追加してからトレーニング)",
+    "stop": "停止",
+    "stopTooltip": "トレーニングの監視を停止 (トレーニングはバックエンドで継続)",
+    "clearStore": "ストアをクリア",
+    "clearStoreTooltip": "トレーニングストアのすべてのサンプルを削除 (古い/誤ラベルのデータを除去)",
+    "epochProgress": "エポック {{current}} / {{total}}",
+    "denoiserTitle": "デノイズトレーニング (U-Net)",
+    "denoiserDesc": "保存されたデノイズペアで U-Net デノイザーをトレーニングします。指数付け前に EBSD パターンのノイズを低減します。",
+    "notWired": "このビルドでは利用できません — トレーニングエンドポイントがまだ接続されていません。",
+    "notWiredTooltip": "このビルドでは利用できません — バックエンドエンドポイントがありません",
+    "trainDenoiser": "デノイザーをトレーニング",
+    "loadDenoiser": "デノイザーを読み込み",
+    "denoiserEpochsTooltip": "U-Net デノイザーのトレーニングエポック数 (このビルドでは未接続)",
+    "embeddingTitle": "埋め込み指数付け (FAISS)",
+    "embeddingDesc": "収集した指数付け結果で埋め込みエンコーダーをトレーニングし、高速なニューラルネットワークベースの指数付けのために FAISS インデックスを構築します。",
+    "embeddingNotWired": "このビルドでは利用できません — 埋め込み/FAISS エンドポイントがまだ接続されていません。",
+    "dim": "次元:",
+    "embeddingDimTooltip": "FAISS エンコーダーの埋め込みベクトルの次元数 (無効)",
+    "trainEncoder": "エンコーダーをトレーニング",
+    "buildFaissIndex": "FAISS インデックスを構築",
+    "logTitle": "トレーニングログ"
+  },
+  "trainLog": {
+    "starting": "トレーニング開始: {{epochs}} エポック, バッチ={{batch}}, LR={{lr}}, CI>={{ci}}",
+    "addingSamples": "最新の指数付け結果からサンプルを追加し、トレーニングします...",
+    "stoppedWatching": "監視を停止しました (トレーニングはバックエンドで継続)。",
+    "taskExpired": "タスクの有効期限が切れました。",
+    "error": "エラー: {{message}}",
+    "clearCancelled": "ストアのクリアをキャンセルしました。",
+    "storeCleared": "トレーニングストアをクリアしました ({{count}} サンプル削除)。"
+  },
+  "trainMsg": {
+    "complete": "トレーニング完了 — {{count}} 相: {{names}}, 最良の検証損失 {{loss}}",
+    "failed": "トレーニングに失敗しました。",
+    "storeCleared": "トレーニングストアをクリアしました。",
+    "clearFailed": "クリアに失敗しました。"
+  },
+  "clearStorePrompt": "トレーニングストアのすべてのサンプルを削除しますか？ この操作は元に戻せません (\"Add from Indexing\" で再追加可能)。確認するには \"clear\" と入力してください:",
+  "prediction": {
+    "title": "予測",
+    "desc": "相予測を実行するパターンインデックス (カンマまたはスペース区切り) を入力してください。",
+    "model": "モデル:",
+    "unknownModel": "不明",
+    "patternIndices": "パターンインデックス:",
+    "patternIndicesPlaceholder": "0, 1, 2, 100, 200",
+    "patternIndicesTooltip": "分類するパターンインデックス (カンマまたはスペース区切り)",
+    "predict": "予測",
+    "predicting": "予測中...",
+    "predictTooltip": "入力したパターンインデックスに対して相予測を実行",
+    "mlUnavailable": "ML モジュールが利用できません。ebsd-ai モジュールがインストールされていることを確認してください。",
+    "noValidIndex": "有効なパターンインデックスを 1 つ以上入力してください。",
+    "predictionFailed": "予測に失敗しました。",
+    "resultsTitle": "結果 ({{count}} パターン)",
+    "noPredictions": "まだ予測がありません",
+    "noPredictionsHint": "パターンインデックスを入力して「予測」をクリック"
+  }
+}

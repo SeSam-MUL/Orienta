@@ -1,0 +1,2506 @@
+/**
+ * EBSD Viewer — React port of gui/kikuchi_gui.py (KikuchiGuiUI)
+ *
+ * Layout (redesigned 2026-05-19):
+ *   Header: title + subtitle | FileSwitcher · HDF5/EDS nav links
+ *   Left panel (scroll): Datasets, Load, Pattern Processing,
+ *                        EDS Composition, PC Refinement
+ *   Right panel: Overview + Pattern (content-sized) | navigation bar
+ *                | pattern action footer | collapsible log footer
+ *   Status bar: file | grid | pattern | [row,col] | PC | memory
+ *
+ * Uses ONLY shared components from theme/components.jsx — no local primitives.
+ */
+
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { ebsdApi, edsApi, pcApi } from '../../services/api';
+import useDataStore from '../../stores/useDataStore';
+import useEdsColorStore from '../../stores/useEdsColorStore';
+import useLoadedFilesStore from '../../stores/useLoadedFilesStore';
+import { addRecentFile } from '../Dashboard/Dashboard';
+import FileSwitcher from '../common/FileSwitcher';
+import InfoTooltip from '../common/InfoTooltip';
+import LoadProgressModal from './LoadProgressModal';
+import {
+  colors, alpha, spacing,
+  Button, NumberInput, Select, Label,
+  GroupBox, ResizableSplitter,
+  FormRow, Separator, ScrollPanel, useConfirm, ConfirmDialog,
+  usePrompt, PromptDialog,
+} from '../../theme/components';
+
+// ---------------------------------------------------------------------------
+// Small local helpers that have no equivalent in shared components
+// ---------------------------------------------------------------------------
+
+/** Inline checkbox row matching PyQt5 QCheckBox */
+function CheckRow({ checked, onChange, label, title }) {
+  return (
+    <label
+      title={title}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: '10pt', color: colors.text, cursor: 'pointer',
+      }}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        style={{ accentColor: colors.purple, width: 13, height: 13, flexShrink: 0 }}
+      />
+      {label}
+    </label>
+  );
+}
+
+/** Compact range input (slider) matching QSlider */
+function Slider({ value, onChange, min, max, title, label, displayValue }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      {label && (
+        <span style={{ fontSize: '9pt', color: colors.textSecondary, whiteSpace: 'nowrap' }}>
+          {label}
+        </span>
+      )}
+      <input
+        type="range"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        title={title}
+        style={{ flex: 1, accentColor: colors.purple }}
+      />
+      {displayValue !== undefined && (
+        <span style={{ fontSize: '9pt', color: colors.text, minWidth: 32, textAlign: 'right' }}>
+          {displayValue}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/** Quick mode toggle button (compact, matching pyqt5 quick-switch row) */
+function QuickModeBtn({ label, active, onClick, title }) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: active ? colors.purple : 'transparent',
+        color: active ? colors.textOnAccent : colors.textSecondary,
+        border: `1px solid ${active ? colors.purple : colors.border}`,
+        borderRadius: 3,
+        padding: '1px 6px',
+        fontSize: '8pt',
+        fontWeight: 600,
+        cursor: 'pointer',
+        minWidth: 28,
+        textAlign: 'center',
+        lineHeight: 1.6,
+        transition: 'all 0.15s',
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EDS composition overlay rendered on top of the pattern image
+// ---------------------------------------------------------------------------
+
+function EdsOverlay({ composition, mode }) {
+  // Subscribe to the element→colour map so an "EDS Colors" edit re-renders the
+  // pills/labels. Reading via getState().getColor() (as before) is a
+  // non-reactive snapshot, so the colour never updated until some other prop
+  // forced a re-render. Must run before the early return (rules of hooks).
+  const elementColors = useEdsColorStore((s) => s.colors);
+  if (!composition?.data) return null;
+
+  const modeKey = { 'Counts': 'counts', 'Wt.%': 'wt_pct', 'At.%': 'at_pct' }[mode] || 'at_pct';
+  const unit = mode === 'Counts' ? '' : '%';
+
+  // Sort elements by value descending, take top 4
+  const entries = Object.entries(composition.data)
+    .map(([el, vals]) => ({ el, value: vals[modeKey] ?? vals.counts ?? 0 }))
+    .filter((e) => e.value > 0)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 4);
+
+  if (entries.length === 0) return null;
+
+  return (
+    <div style={{
+      position: 'absolute', bottom: 22, left: 6,
+      background: '#00000099', borderRadius: 4,
+      padding: '4px 6px', pointerEvents: 'none',
+      display: 'flex', flexDirection: 'column', gap: 3,
+      backdropFilter: 'blur(2px)',
+    }}>
+      {entries.map(({ el, value }) => {
+        const color = elementColors[el] || '#bd93f9';
+        const displayVal = mode === 'Counts'
+          ? Math.round(value).toLocaleString('en-US')
+          : value.toFixed(1);
+        return (
+          <div key={el} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <div style={{
+              width: 10, height: 10, borderRadius: 2,
+              background: color, flexShrink: 0,
+            }} />
+            <span style={{ fontSize: '8pt', color, fontWeight: 700, minWidth: 22 }}>{el}</span>
+            <span style={{ fontSize: '8pt', color: '#ffffff', minWidth: 46, textAlign: 'right' }}>
+              {displayVal}{unit}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+import { toast } from '../../stores/useToastStore';
+import { disambiguateNames } from './disambiguateNames';
+
+export default function EBSDViewer({ onNavigate, isActive }) {
+  const { t } = useTranslation(['ebsdviewer', 'common']);
+  const { ebsdLoaded, ebsdInfo, setEBSDLoaded, setFileData, setMetadata, setPendingChemMask } = useDataStore();
+  const [askConfirm, confirmProps] = useConfirm();
+  const [askPrompt, promptProps] = usePrompt();
+
+  // --- File loading ---
+  const [filePath, setFilePath] = useState('');
+  const [loadLoading, setLoadLoading] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  // Progress modal: opens immediately on Load click, advances through 4
+  // backend-driven stages (reading_metadata → building_signal →
+  // detecting_features → finalising), stays open on error until dismissed.
+  const [loadProgressOpen, setLoadProgressOpen] = useState(false);
+  const [loadProgressState, setLoadProgressState] = useState(null);
+
+  // --- Datasets ---
+  const [datasets, setDatasets] = useState([]);
+  const [activeDataset, setActiveDataset] = useState(null);
+  const [deepcopy, setDeepcopy] = useState(true);
+
+  // --- Loaded files (multi-file switcher in the left panel) ---
+  // Sourced from the shared useLoadedFilesStore so this panel, the header
+  // <FileSwitcher/>, and the Indexing dataset dropdown never disagree:
+  // pruning the list in any of them refreshes all of them. Clicking an entry
+  // calls /api/ebsd/switch-file (re-load from disk) and refetches the
+  // EBSDViewer state.
+  const loadedFiles = useLoadedFilesStore((s) => s.files);
+  const refreshLoadedFiles = useLoadedFilesStore((s) => s.refresh);
+  const pruneLoadedFile = useLoadedFilesStore((s) => s.remove);
+  const clearLoadedFilesKeepActive = useLoadedFilesStore((s) => s.clearKeepActive);
+  const clearAllLoadedFiles = useLoadedFilesStore((s) => s.clearAll);
+  const [fileSwitching, setFileSwitching] = useState(false);
+
+  // --- Pattern display ---
+  const [pattern, setPattern] = useState(null);
+  const [patternIsThumb, setPatternIsThumb] = useState(false); // true when showing atlas thumbnail
+  const [patternLoading, setPatternLoading] = useState(false);
+  const [row, setRow] = useState(0);
+  const [col, setCol] = useState(0);
+
+  // --- Overview ---
+  const [overviewImage, setOverviewImage] = useState(null);
+  // Band Contrast is sourced from Aztec's precomputed per-pixel array (read
+  // in ~ms regardless of file size). Mean Intensity, by contrast, has to read
+  // every pattern off a lazy multi-GB signal, so it must not be the default —
+  // it made the overview appear to hang on large files (session 2026-06-01).
+  const [overviewMode, setOverviewMode] = useState('Band Contrast');
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewError, setOverviewError] = useState(null);
+  const [overviewSampled, setOverviewSampled] = useState(false);
+  const [qualityMask, setQualityMask] = useState(false);
+  const [qualityThreshold, setQualityThreshold] = useState(25);
+  const overviewRef = useRef(null);
+  // Tracks the visible image rect inside the object-fit:contain element (for overlays)
+  const [ovImgRect, setOvImgRect] = useState(null); // { left, top, width, height } in %
+
+  // --- Processing ---
+  const [windowSize, setWindowSize] = useState(3);
+  const [gamma, setGamma] = useState(100);
+  const [filter, setFilter] = useState('None');
+  const [interpolation, setInterpolation] = useState('nearest');
+  const [processingBusy, setProcessingBusy] = useState(false);
+  const [processingLabel, setProcessingLabel] = useState('');
+  // Granular progress for long ops (CLAHE) — {fraction, done, total, elapsed,
+  // stage} or null when the op reports no chunk progress (→ plain spinner).
+  const [procProgress, setProcProgress] = useState(null);
+  const [claheKernel, setClaheKernel] = useState(8);
+
+  // --- Circular detector signal mask ---
+  // Local UI state; mirrored to backend via ebsdApi.setSignalMask. The mask
+  // only makes sense for vendors that store patterns with a circular detector
+  // aperture (EDAX, Bruker — the corners are zero in the raw data). Oxford
+  // H5OINA stores the full rectangular camera frame, so a circular mask
+  // would discard real diffraction data.
+  //
+  // Default is OFF for safety. After a file loads we auto-enable it for
+  // EDAX-style files (see post-load effect below); the user can still toggle
+  // either way and the choice is honoured until the next file load.
+  const [maskEnabled, setMaskEnabled] = useState(false);
+  const [maskRadius, setMaskRadius] = useState(100);  // percent of inscribed circle
+
+  // --- Detector ---
+  const [detector, setDetector] = useState(null);
+  const [pcPatternCount, setPcPatternCount] = useState(0);
+
+  // --- EDS ---
+  const [edsMode, setEdsMode] = useState('At.%');
+  const [edsComposition, setEdsComposition] = useState(null);
+  const [edsPhases, setEdsPhases] = useState(null);
+  const [showEdsOverlay, setShowEdsOverlay] = useState(false);
+
+  // --- Pattern zoom/pan ---
+  const [patZoom, setPatZoom] = useState(1);
+  const [patPan, setPatPan] = useState({ x: 0, y: 0 });
+  const patDragRef = useRef(null);
+
+  // --- Compare mode ---
+  const [compareOpen, setCompareOpen] = useState(false);
+  const [compareLeft, setCompareLeft] = useState(null);
+  const [compareRight, setCompareRight] = useState(null);
+  const [compareLeftImg, setCompareLeftImg] = useState(null);
+  const [compareRightImg, setCompareRightImg] = useState(null);
+
+  // --- ROI selection (Shift+Drag on overview) ---
+  const [roi, setRoi] = useState(null);
+  const roiStartRef = useRef(null);
+
+  // --- Pattern atlas (for instant drag navigation) ---
+  const [atlasInfo, setAtlasInfo] = useState(null); // {thumb_h, thumb_w, grid_rows, grid_cols}
+  const atlasCanvasRef = useRef(null); // offscreen canvas with atlas image
+  const fileInputRef = useRef(null);
+  const atlasImageRef = useRef(null); // HTMLImageElement of atlas
+
+  // --- Log ---
+  const [logLines, setLogLines] = useState([]);
+  const [logCopied, setLogCopied] = useState(false);
+  const [logExpanded, setLogExpanded] = useState(false);
+  const logRef = useRef(null);
+
+  // --- Drag and drop ---
+  const [dragOver, setDragOver] = useState(false);
+
+  // --- Recent files ---
+  const [recentFiles, setRecentFiles] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('kikuchipy_recent_files') || '[]'); } catch { return []; }
+  });
+  const [showRecent, setShowRecent] = useState(false);
+
+  // Derived
+  const gridShape = ebsdInfo?.grid_shape || null;
+  const maxRow = gridShape ? gridShape[0] - 1 : 0;
+  const maxCol = gridShape ? gridShape[1] - 1 : 0;
+
+  const log = useCallback((msg) => {
+    setLogLines((prev) => [
+      ...prev.slice(-200),
+      `[${new Date().toLocaleTimeString()}] ${msg}`,
+    ]);
+  }, []);
+
+  // --- Persist recent files ---
+  useEffect(() => {
+    try { localStorage.setItem('kikuchipy_recent_files', JSON.stringify(recentFiles)); } catch { /* storage unavailable */ }
+  }, [recentFiles]);
+
+  // --- Auto-scroll log ---
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logLines]);
+
+  // --- Auto-load from HDF5 Viewer (sessionStorage handoff) ---
+  // Re-check when isActive changes because all pages stay mounted (QStackedWidget pattern),
+  // so the initial [] effect fires before sessionStorage is set by HDF5 Viewer.
+  useEffect(() => {
+    try {
+      const preload = sessionStorage.getItem('ebsd_preload_path');
+      if (preload) {
+        sessionStorage.removeItem('ebsd_preload_path');
+        setFilePath(preload);
+        setTimeout(() => doLoadFile(preload), 100);
+      }
+    } catch { /* sessionStorage unavailable */ }
+  }, [isActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Sync datasets with backend when page becomes active ---
+  useEffect(() => {
+    if (!isActive || ebsdLoaded) return;
+    ebsdApi.datasets().then(res => {
+      const list = res.data?.datasets || [];
+      if (list.length > 0) {
+        const active = list.find(d => d.active) || list[0];
+        const gridShape = active.navigation_shape ? [active.navigation_shape[1], active.navigation_shape[0]] : [0, 0];
+        setEBSDLoaded({
+          grid_shape: gridShape,
+          signal_shape: active.signal_shape || [0, 0],
+          n_patterns: active.n_patterns || 0,
+        });
+        // Also set file data so other pages (EDS, etc.) see isFileOpen=true
+        setFileData({
+          file_path: active.name || '',
+          format_type: 'h5oina',
+          grid_shape: gridShape,
+          pattern_count: active.n_patterns || 0,
+          pattern_shape: active.signal_shape || [0, 0],
+          has_patterns: true,
+          has_raw_patterns: false,
+          has_eds: !!active.has_eds,
+          has_electron_images: false,
+          eds_elements: active.eds_elements || [],
+          electron_images: [],
+        });
+        setDatasets(list);
+        if (res.data?.active) setActiveDataset(res.data.active);
+        // Persist file path for Recent Files on Dashboard
+        const backendPath = res.data?.file_path;
+        if (backendPath) {
+          setFilePath(backendPath);
+          addRecentFile(backendPath);
+        }
+        const shape = active.navigation_shape || [0, 0];
+        log(t('logMessages.syncedBackend', { name: active.name || 'dataset', cols: shape[1], rows: shape[0] }));
+        fetchOverview(overviewMode);
+        loadPattern(row, col);
+        loadDetector();
+        fetchMetadata();
+        refreshLoadedFiles();
+        if (active.has_eds) fetchEds(row, col);
+      }
+    }).catch(() => {});
+  }, [isActive]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // -------------------------------------------------------------------------
+  // API helpers
+  // -------------------------------------------------------------------------
+  // AbortController ref to cancel stale pattern requests during drag
+  const patternAbortRef = useRef(null);
+
+  const loadPattern = useCallback(async (r, c, isDrag = false) => {
+    // Cancel any in-flight request
+    if (patternAbortRef.current) patternAbortRef.current.abort();
+    const controller = new AbortController();
+    patternAbortRef.current = controller;
+
+    if (!isDrag) setPatternLoading(true);
+    try {
+      const config = { signal: controller.signal };
+      if (filter && filter !== 'None') {
+        config.params = { display_filter: filter };
+      }
+      const res = await ebsdApi.getPattern(r, c, config);
+      if (controller.signal.aborted) return; // stale response
+      const img = res.data?.image || null;
+      setPattern(img);
+      setPatternIsThumb(false);
+    } catch (err) {
+      if (err.name === 'AbortError' || err.code === 'ERR_CANCELED' || controller.signal.aborted) return;
+      log(t('logMessages.loadError', { row: r, col: c, error: err.response?.data?.detail || err.message }));
+      setPattern(null);
+    } finally {
+      if (!controller.signal.aborted) setPatternLoading(false);
+    }
+  }, [log, filter, t]);
+
+  // Re-fetch pattern when display filter changes
+  const filterRef = useRef(filter);
+  useEffect(() => {
+    if (filterRef.current !== filter) {
+      filterRef.current = filter;
+      if (pattern !== null) loadPattern(row, col);
+    }
+  }, [filter, pattern, row, col, loadPattern]);
+
+  // Push circular signal mask state to the backend (debounced) and reload
+  // the pattern so the user sees the change live.
+  const maskPushDebounceRef = useRef(null);
+  useEffect(() => {
+    if (!ebsdLoaded) return;
+    if (maskPushDebounceRef.current) clearTimeout(maskPushDebounceRef.current);
+    maskPushDebounceRef.current = setTimeout(async () => {
+      try {
+        await ebsdApi.setSignalMask(maskEnabled, maskRadius / 100);
+        loadPattern(row, col);
+      } catch (err) {
+        log(t('logMessages.setMaskError', { error: err.response?.data?.detail || err.message }));
+      }
+    }, 120);
+    return () => {
+      if (maskPushDebounceRef.current) clearTimeout(maskPushDebounceRef.current);
+    };
+  }, [maskEnabled, maskRadius, ebsdLoaded, row, col, loadPattern, log, t]);
+
+  const loadDetector = useCallback(async () => {
+    try {
+      const res = await ebsdApi.getDetector();
+      setDetector(res.data || null);
+    } catch { setDetector(null); }
+  }, []);
+
+  const fetchMetadata = useCallback(async () => {
+    try {
+      const res = await ebsdApi.getMetadata();
+      if (res.data) setMetadata(res.data);
+    } catch {}
+  }, [setMetadata]);
+
+  // Load the pattern atlas — all patterns as one tiled image for instant navigation
+  const fetchAtlas = useCallback(async () => {
+    try {
+      const res = await ebsdApi.getPatternAtlas(2);
+      const d = res.data;
+      if (!d?.atlas) return;
+
+      // Create an Image from the atlas base64
+      const img = new window.Image();
+      img.src = `data:image/jpeg;base64,${d.atlas}`;
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+      atlasImageRef.current = img;
+
+      // Create an offscreen canvas for pixel extraction
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      atlasCanvasRef.current = canvas;
+
+      setAtlasInfo({
+        thumb_h: d.thumb_h,
+        thumb_w: d.thumb_w,
+        grid_rows: d.grid_rows,
+        grid_cols: d.grid_cols,
+      });
+      log(t('logMessages.atlasLoaded'));
+    } catch (err) {
+      console.warn('Atlas load failed (falling back to per-pattern API):', err.message);
+    }
+  }, [log, t]);
+
+  // Extract a pattern thumbnail from the atlas (instant, no API call)
+  const getPatternFromAtlas = useCallback((r, c) => {
+    if (!atlasCanvasRef.current || !atlasInfo) return null;
+    const { thumb_h, thumb_w } = atlasInfo;
+    const sx = c * thumb_w;
+    const sy = r * thumb_h;
+    // Create a small canvas for this tile
+    const tile = document.createElement('canvas');
+    tile.width = thumb_w;
+    tile.height = thumb_h;
+    const ctx = tile.getContext('2d');
+    ctx.drawImage(atlasCanvasRef.current, sx, sy, thumb_w, thumb_h, 0, 0, thumb_w, thumb_h);
+    return tile.toDataURL('image/png').replace('data:image/png;base64,', '');
+  }, [atlasInfo]);
+
+  const fetchOverview = useCallback(async (mode) => {
+    setOverviewLoading(true);
+    setOverviewError(null);
+    try {
+      const modeMap = {
+        'Mean Intensity': 'mean', 'Std Dev (Quality)': 'std', 'Max Intensity': 'max',
+        'Band Contrast': 'bc', 'Sharpness (Laplacian)': 'sharpness',
+        'SNR (MAD)': 'snr', 'Neighbor Correlation': 'ncc', 'Entropy': 'entropy',
+      };
+      const res = await ebsdApi.overview(modeMap[mode] || 'mean');
+      setOverviewImage(res.data?.image || null);
+      setOverviewSampled(!!res.data?.sampled);
+    } catch (e) {
+      // Surface the failure instead of silently leaving the empty placeholder —
+      // a swallowed error here looked identical to "loaded but no image".
+      setOverviewError(e?.response?.data?.detail || e?.message || 'Overview failed');
+    } finally {
+      setOverviewLoading(false);
+    }
+  }, []);
+
+  const fetchDatasets = useCallback(async () => {
+    try {
+      const res = await ebsdApi.datasets();
+      const list = res.data?.datasets || [];
+      setDatasets(Array.isArray(list) ? list : []);
+      if (res.data?.active) setActiveDataset(res.data.active);
+    } catch { /* endpoint may not exist */ }
+  }, []);
+
+
+  const fetchEds = useCallback(async (r, c) => {
+    try {
+      const modeMap = { 'Counts': 'counts', 'Wt.%': 'wt_pct', 'At.%': 'at_pct' };
+      const res = await edsApi.quantifyPixel(r, c, modeMap[edsMode] || 'at_pct');
+      setEdsComposition(res.data);
+    } catch { setEdsComposition(null); }
+    try {
+      const res = await edsApi.suggestPhases(r, c);
+      setEdsPhases(res.data);
+    } catch { setEdsPhases(null); }
+  }, [edsMode]);
+
+  const navigateTo = useCallback((r, c) => {
+    const nr = Math.max(0, Math.min(r, maxRow));
+    const nc = Math.max(0, Math.min(c, maxCol));
+    setRow(nr);
+    setCol(nc);
+    loadPattern(nr, nc);
+    fetchEds(nr, nc);
+  }, [maxRow, maxCol, loadPattern, fetchEds]);
+
+  const doLoadFile = useCallback(async (path) => {
+    if (!path?.trim()) { setLoadError(t('load.enterPath')); return; }
+    setLoadLoading(true);
+    setLoadError(null);
+    setPattern(null);
+    setDetector(null);
+    setOverviewImage(null);
+    log(t('logMessages.loadingFile', { name: path.split(/[\\/]/).pop() }));
+    // Open the progress modal immediately with an initial state so the
+    // user sees the breadcrumb before the first backend poll lands. The
+    // backend writes the real stage within ~100 ms; until then we show
+    // "Starting…" at stage 1/4.
+    setLoadProgressOpen(true);
+    setLoadProgressState({
+      stage: 'reading_metadata',
+      stage_idx: 1, stage_total: 4,
+      elapsed_seconds: 0, message: t('logMessages.starting'),
+    });
+    try {
+      const res = await ebsdApi.loadWithProgress(path.trim(), {
+        onProgress: (state) => setLoadProgressState(state),
+        pollIntervalMs: 250,
+      });
+      const info = res.data || {};
+      setEBSDLoaded(info);
+      setFileData({ ...info, file_path: path });
+      setRow(0);
+      setCol(0);
+      setFilePath(path);
+      // Vendor-dependent: EDAX-style files store patterns with a circular
+      // detector aperture (corners are 0 in raw data) → mask helps.
+      // Oxford H5OINA stores the full rectangular camera frame → mask
+      // would discard real data. Default is OFF; auto-enable for EDAX.
+      setMaskEnabled(info.format_type === 'EDAX');
+      // Reset the radius too, so a stale value (e.g. 25% from a prior EDAX
+      // session) can't leak onto the next file. The mask state is fully
+      // re-derived per file (see the comment block at the maskEnabled state).
+      setMaskRadius(100);
+      addRecentFile(path);
+      setRecentFiles((prev) => {
+        const filtered = prev.filter((f) => f !== path);
+        return [path, ...filtered].slice(0, 10);
+      });
+      // Await only the ESSENTIAL fetches — the ones the user needs before
+      // they can navigate patterns. fetchOverview is moved to the
+      // fire-and-forget bucket below because on a 25k-pattern dataset it
+      // reads every pattern from disk to compute mean intensity (3+ min
+      // on slow disks). Blocking the modal on it makes the load FEEL
+      // like it takes 3 minutes when in fact the file was ready after a
+      // few seconds. The overview pane shows its own loading state and
+      // fills in when the result lands; meanwhile the user can already
+      // click around the navigation grid (which uses the pattern atlas
+      // / direct pattern fetches, not the overview).
+      await Promise.allSettled([
+        loadPattern(0, 0),
+        loadDetector(),
+        fetchMetadata(),
+        fetchDatasets(),
+        refreshLoadedFiles(),
+      ]);
+      fetchOverview(overviewMode); // background — runs server-side in to_thread
+      fetchEds(0, 0);
+      fetchAtlas(); // load pattern atlas in background for instant drag
+      const fname = path.split(/[\\/]/).pop();
+      log(t('logMessages.loadedFile', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
+      toast.success(t('logMessages.loadedToast', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
+      // Success: close the modal. Essential fetches are awaited above —
+      // by here the viewer is interactive for navigation; overview and
+      // atlas fill in async without blocking the user.
+      setLoadProgressOpen(false);
+    } catch (err) {
+      // Modal stays open in error state — user clicks Close to dismiss.
+      // loadProgressState was set to {stage:'error', message: detail} by
+      // loadWithProgress's rejection path.
+      const msg = err.response?.data?.detail || err.message || t('load.loadFailed');
+      setLoadError(msg);
+      log(t('logMessages.errorPrefix', { error: msg }));
+      toast.error(t('logMessages.loadFailedToast', { error: msg }));
+    } finally {
+      setLoadLoading(false);
+    }
+  }, [log, t, setEBSDLoaded, setFileData, setMetadata, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+
+  // ---------------------------------------------------------------------------
+  // Switch active file from the left-panel Loaded Files list. Calls
+  // /api/ebsd/switch-file which re-loads the chosen file from disk, then
+  // refreshes the viewer's local state to match the new active file.
+  // ---------------------------------------------------------------------------
+  const handleSwitchFile = useCallback(async (path) => {
+    if (!path || fileSwitching) return;
+    if (path === filePath) return; // already active
+    setFileSwitching(true);
+    setPattern(null);
+    setDetector(null);
+    setOverviewImage(null);
+    const fname = path.split(/[\\/]/).pop();
+    log(t('logMessages.switchingFile', { name: fname }));
+    try {
+      const res = await ebsdApi.switchFile(path);
+      const info = res.data || {};
+      setEBSDLoaded(info);
+      setFileData({ ...info, file_path: path });
+      setRow(0);
+      setCol(0);
+      setFilePath(path);
+      // Re-detect vendor on switch — mask only applies to EDAX-style files.
+      setMaskEnabled(info.format_type === 'EDAX');
+      setMaskRadius(100);  // reset radius so a stale value can't leak across files
+      // Mirrors doLoadFile: fetchOverview is fire-and-forget to keep the
+      // switch responsive on large files. See the comment block in
+      // doLoadFile for the full rationale.
+      await Promise.allSettled([
+        loadPattern(0, 0),
+        loadDetector(),
+        fetchMetadata(),
+        fetchDatasets(),
+        refreshLoadedFiles(),
+      ]);
+      fetchOverview(overviewMode);
+      fetchEds(0, 0);
+      fetchAtlas();
+      log(t('logMessages.switchedFile', { name: fname }));
+      toast.success(t('logMessages.switchedToast', { name: fname }));
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || t('logMessages.switchFailedDefault');
+      log(t('logMessages.switchError', { error: msg }));
+      toast.error(t('logMessages.switchFailedToast', { error: msg }));
+    } finally {
+      setFileSwitching(false);
+    }
+  }, [filePath, fileSwitching, log, t, setEBSDLoaded, setFileData, setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+
+  // The header <FileSwitcher/> does the backend switch + global-store sync
+  // itself. This callback re-syncs the EBSD viewer's OWN local state
+  // (filePath, pattern, overview, datasets) to the now-active file. Without
+  // it, switching from the header left the viewer showing the PREVIOUS file's
+  // overview/pattern while a DIFFERENT file was actually active backend-side —
+  // the "I came back to the viewer and the patterns are wrong / out of bounds
+  // for the grid" symptom. No extra switch-file call here (FileSwitcher already
+  // did it), so no redundant disk re-load.
+  const handleHeaderSwitcherSwitched = useCallback(async (path) => {
+    if (!path) return;
+    setPattern(null);
+    setDetector(null);
+    setOverviewImage(null);
+    setRow(0);
+    setCol(0);
+    setFilePath(path);
+    // Mask only applies to EDAX-style files; the store was just synced.
+    setMaskEnabled(useDataStore.getState().formatType === 'EDAX');
+    setMaskRadius(100);  // reset radius so a stale value can't leak across files
+    await Promise.allSettled([
+      loadPattern(0, 0),
+      loadDetector(),
+      fetchMetadata(),
+      fetchDatasets(),
+      refreshLoadedFiles(),
+    ]);
+    fetchOverview(overviewMode);
+    fetchEds(0, 0);
+    fetchAtlas();
+  }, [setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+
+  // Remove a single file from the loaded-files registry (the backend refuses
+  // to remove the active file). The store action refreshes every consumer.
+  const handleRemoveFile = useCallback(async (path) => {
+    if (!path || fileSwitching) return;
+    try {
+      await pruneLoadedFile(path);
+      const fname = path.split(/[\\/]/).pop();
+      log(t('logMessages.removedFile', { name: fname }));
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || t('logMessages.removeFailedDefault');
+      toast.error(msg);
+    }
+  }, [fileSwitching, log, t, pruneLoadedFile]);
+
+  // Clear every entry except the active file.
+  const handleClearFiles = useCallback(async () => {
+    if (fileSwitching) return;
+    try {
+      await clearLoadedFilesKeepActive();
+      log(t('logMessages.clearedKeepActive'));
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || t('logMessages.clearFailedDefault');
+      toast.error(msg);
+    }
+  }, [fileSwitching, log, t, clearLoadedFilesKeepActive]);
+
+  // Clear EVERY entry, including the active file (full reset). The active file
+  // stays open in the viewer; it just disappears from the switcher list until
+  // re-loaded — the one-click "make it empty" the user expects after a restart.
+  const handleClearAllFiles = useCallback(async () => {
+    if (fileSwitching) return;
+    try {
+      await clearAllLoadedFiles();
+      log(t('logMessages.clearedAll'));
+    } catch (err) {
+      const msg = err.response?.data?.detail || err.message || t('logMessages.clearAllFailedDefault');
+      toast.error(msg);
+    }
+  }, [fileSwitching, log, t, clearAllLoadedFiles]);
+
+  // Run CLAHE while polling its backend chunk-progress so the overlay can
+  // show a real bar (+ %, count, it/s, ETA) instead of an indeterminate
+  // spinner. The backend runs CLAHE in a worker thread, so the poll is
+  // served while it computes.
+  const claheWithProgress = useCallback(async (kernel) => {
+    const rid = (window.crypto?.randomUUID?.() || `clahe-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+    let stopped = false;
+    setProcProgress({ fraction: 0, stage: 'running' });
+    (async () => {
+      while (!stopped) {
+        try {
+          const r = await ebsdApi.processingProgress(rid);
+          if (!stopped && r.data?.found) {
+            setProcProgress({
+              fraction: typeof r.data.fraction === 'number' ? r.data.fraction : 0,
+              done: r.data.done, total: r.data.total,
+              elapsed: r.data.elapsed_seconds, stage: r.data.stage,
+            });
+          }
+        } catch { /* poll best-effort */ }
+        await new Promise((f) => setTimeout(f, 400));
+      }
+    })();
+    try {
+      return await ebsdApi.clahe(kernel, rid);
+    } finally {
+      stopped = true;
+      setProcProgress(null);
+    }
+  }, []);
+
+  const doProcessing = useCallback(async (op, label) => {
+    setProcessingBusy(true);
+    setProcessingLabel(label);
+    log(`${label}...`);
+    // Helper: wrap any async step with start/done log lines + elapsed time
+    // shown in the bottom log. Backend also emits its own logger.info per
+    // step → these auto-stream to the DEV panel on the right via the
+    // WebSocketLogHandler. Two channels, two granularities.
+    const timed = async (name, fn) => {
+      const t0 = performance.now();
+      log(t('logMessages.stepArrow', { name }));
+      try {
+        const res = await fn();
+        const ms = performance.now() - t0;
+        const elapsed = res?.data?.elapsed_seconds;
+        const extra = (typeof elapsed === 'number')
+          ? ` (${elapsed.toFixed(1)}s backend, ${(ms / 1000).toFixed(1)}s total)`
+          : ` (${(ms / 1000).toFixed(1)}s)`;
+        log(t('logMessages.stepDone', { name, extra }));
+        return res;
+      } catch (err) {
+        log(t('logMessages.stepFailed', { name, error: err.response?.data?.detail || err.message }));
+        throw err;
+      }
+    };
+    try {
+      // Auto-deepcopy before destructive processing (matches PyQt5 _start_processing)
+      // Names follow PyQt5 pattern: {base}_{suffix} (e.g. dataset_bg_dyn, dataset_avg)
+      if (deepcopy) {
+        const suffix = op === 'batch' ? 'ac' : op;
+        const baseName = activeDataset || 'dataset';
+        const copyName = `${baseName}_${suffix}`;
+        const copyRes = await ebsdApi.deepcopy(copyName);
+        const newName = copyRes.data?.name;
+        if (newName) {
+          await ebsdApi.selectDataset(newName);
+          setActiveDataset(newName);
+          log(t('logMessages.copiedTo', { name: newName }));
+        }
+      }
+      if (op === 'bg_dyn') await timed(t('logMessages.stepBgDynamic'), () => ebsdApi.backgroundRemoval('dynamic'));
+      else if (op === 'bg_stat') await timed(t('logMessages.stepBgStatic'), () => ebsdApi.backgroundRemoval('static'));
+      else if (op === 'avg') await timed(t('logMessages.stepFrameAverage'), () => ebsdApi.frameAverage(windowSize));
+      else if (op === 'autocontrast') await timed(t('logMessages.stepAutoContrast'), () => ebsdApi.autocontrast());
+      else if (op === 'batch') await timed(t('logMessages.stepBatchAutoContrast'), () => ebsdApi.autocontrast());
+      else if (op === 'clahe') await timed(t('logMessages.stepClahe', { kernel: claheKernel }), () => claheWithProgress(claheKernel));
+      else if (op === 'pipeline') {
+        // Recommended: Static BG → Dynamic BG → CLAHE in one shot.
+        // Each step logs its own start/elapsed line; the user sees
+        // exactly where the pipeline is + how long each step took.
+        await timed(t('logMessages.stepPipeline1'), () => ebsdApi.backgroundRemoval('static'));
+        await timed(t('logMessages.stepPipeline2'), () => ebsdApi.backgroundRemoval('dynamic'));
+        await timed(t('logMessages.stepPipeline3', { kernel: claheKernel }), () => claheWithProgress(claheKernel));
+      }
+      log(t('logMessages.opComplete', { label }));
+      await fetchDatasets();
+      await loadPattern(row, col);
+      fetchOverview(overviewMode);
+      fetchAtlas();
+    } catch (err) {
+      // Per-step error is already logged by `timed`; this is the catch-all
+      // for the non-timed parts (deepcopy, dataset reload).
+      if (!err._loggedByTimed) {
+        log(t('logMessages.opError', { label, error: err.response?.data?.detail || err.message }));
+      }
+    } finally {
+      setProcessingBusy(false);
+    }
+  }, [log, t, windowSize, claheKernel, row, col, deepcopy, activeDataset, overviewMode, fetchDatasets, loadPattern, fetchOverview, fetchAtlas]);
+
+  // --- Keyboard shortcuts matching PyQt5 ---
+  useEffect(() => {
+    const handler = (e) => {
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      if (e.key === 'ArrowLeft') { e.preventDefault(); navigateTo(row, col - (e.shiftKey ? 10 : 1)); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); navigateTo(row, col + (e.shiftKey ? 10 : 1)); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); navigateTo(row - (e.shiftKey ? 10 : 1), col); }
+      if (e.key === 'ArrowDown') { e.preventDefault(); navigateTo(row + (e.shiftKey ? 10 : 1), col); }
+      if (e.key === 'Home') { e.preventDefault(); navigateTo(0, 0); }
+      if (e.key === 'End' && gridShape) { e.preventDefault(); navigateTo(gridShape[0] - 1, gridShape[1] - 1); }
+      if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.altKey) { setPatZoom(1); setPatPan({ x: 0, y: 0 }); }
+      if (e.ctrlKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setCompareOpen((v) => !v); }
+      if (e.altKey && e.key.toLowerCase() === 'd') { e.preventDefault(); doProcessing('bg_dyn', t('logMessages.labelBgDynamic')); }
+      if (e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); doProcessing('bg_stat', t('logMessages.labelBgStatic')); }
+      if (e.altKey && e.key.toLowerCase() === 'a') { e.preventDefault(); doProcessing('avg', t('logMessages.labelFrameAverage')); }
+      if (e.altKey && e.key.toLowerCase() === 'c') { e.preventDefault(); doProcessing('autocontrast', t('logMessages.labelAutoContrast')); }
+      if (e.altKey && e.key.toLowerCase() === 'r') { e.preventDefault(); setGamma(100); setFilter('None'); setInterpolation('nearest'); }
+      if (e.ctrlKey && e.key.toLowerCase() === 'l') { e.preventDefault(); fileInputRef.current?.focus(); fileInputRef.current?.select(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [row, col, navigateTo, gridShape, doProcessing, t]);
+
+  // --- Compute visible image bounds inside object-fit:contain element ---
+  const updateOvImgRect = useCallback(() => {
+    if (!overviewRef.current) return;
+    const img = overviewRef.current.querySelector('img');
+    if (!img || !img.naturalWidth) return;
+    const container = img.getBoundingClientRect();
+    const natW = img.naturalWidth;
+    const natH = img.naturalHeight;
+    const scale = Math.min(container.width / natW, container.height / natH);
+    const imgW = natW * scale;
+    const imgH = natH * scale;
+    const offsetX = (container.width - imgW) / 2;
+    const offsetY = (container.height - imgH) / 2;
+    setOvImgRect({
+      left: (offsetX / container.width) * 100,
+      top: (offsetY / container.height) * 100,
+      width: (imgW / container.width) * 100,
+      height: (imgH / container.height) * 100,
+    });
+  }, []);
+
+  // Recalculate on window resize AND container resize (e.g. sidebar toggle, layout shift)
+  useEffect(() => {
+    window.addEventListener('resize', updateOvImgRect);
+    const el = overviewRef.current;
+    let ro;
+    if (el) {
+      ro = new ResizeObserver(updateOvImgRect);
+      ro.observe(el);
+    }
+    return () => {
+      window.removeEventListener('resize', updateOvImgRect);
+      if (ro) ro.disconnect();
+    };
+  }, [updateOvImgRect]);
+
+  // --- Overview pointer interaction ---
+  const calcOverviewPos = (e) => {
+    if (!overviewRef.current || !gridShape) return null;
+    const img = overviewRef.current.querySelector('img');
+    if (!img) return null;
+    const rect = img.getBoundingClientRect();
+    // Account for object-fit: contain — the actual image may be smaller than the element
+    const natW = img.naturalWidth || gridShape[1];
+    const natH = img.naturalHeight || gridShape[0];
+    const scale = Math.min(rect.width / natW, rect.height / natH);
+    const imgW = natW * scale;
+    const imgH = natH * scale;
+    const offsetX = (rect.width - imgW) / 2;
+    const offsetY = (rect.height - imgH) / 2;
+    const rx = (e.clientX - rect.left - offsetX) / imgW;
+    const ry = (e.clientY - rect.top - offsetY) / imgH;
+    if (rx < 0 || rx > 1 || ry < 0 || ry > 1) return null;
+    return {
+      r: Math.max(0, Math.min(Math.round(ry * gridShape[0]), maxRow)),
+      c: Math.max(0, Math.min(Math.round(rx * gridShape[1]), maxCol)),
+      rx, ry,
+    };
+  };
+
+  const handleOverviewPointer = (e, isDrag = false) => {
+    const pos = calcOverviewPos(e);
+    if (!pos) return;
+    if (pos.r !== row || pos.c !== col) {
+      setRow(pos.r);
+      setCol(pos.c);
+
+      if (isDrag) {
+        // During drag: show atlas thumbnail instantly (no API call)
+        const thumb = getPatternFromAtlas(pos.r, pos.c);
+        if (thumb) {
+          setPattern(thumb);
+          setPatternIsThumb(true);
+          return; // atlas is enough during drag
+        }
+      }
+
+      // Not dragging or no atlas: fetch full-resolution pattern
+      clearTimeout(window._ebsdDragTimer);
+      window._ebsdDragTimer = setTimeout(() => {
+        loadPattern(pos.r, pos.c, isDrag);
+        if (!isDrag) fetchEds(pos.r, pos.c);
+      }, isDrag ? 80 : 50);
+    }
+  };
+
+  const handleOverviewMouseMove = (e) => {
+    if (e.buttons === 1 && e.shiftKey && gridShape) {
+      const pos = calcOverviewPos(e);
+      if (!pos || !roiStartRef.current) return;
+      setRoi({
+        startRow: Math.min(roiStartRef.current.row, pos.r),
+        startCol: Math.min(roiStartRef.current.col, pos.c),
+        endRow: Math.max(roiStartRef.current.row, pos.r),
+        endCol: Math.max(roiStartRef.current.col, pos.c),
+      });
+    } else if (e.buttons === 1 && !e.shiftKey) {
+      handleOverviewPointer(e, true);
+    }
+  };
+
+  const crosshair = gridShape
+    ? { x: ((col + 0.5) / gridShape[1]) * 100, y: ((row + 0.5) / gridShape[0]) * 100 }
+    : null;
+
+  const switchDataset = async (name) => {
+    try {
+      await ebsdApi.selectDataset(name);
+      setActiveDataset(name);
+      await loadPattern(row, col);
+      fetchOverview(overviewMode);
+      fetchAtlas(); // re-build atlas for new dataset
+      log(t('logMessages.switchedDataset', { name }));
+    } catch (err) {
+      log(t('logMessages.switchDatasetError', { error: err.response?.data?.detail || err.message }));
+    }
+  };
+
+  const handleBrowse = async () => {
+    if (window.electronAPI?.openFile) {
+      const selected = await window.electronAPI.openFile({
+        filters: [
+          { name: 'EBSD Files', extensions: ['h5oina', 'h5', 'hdf5'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      });
+      if (selected) doLoadFile(selected);
+    } else {
+      askPrompt({
+        title: t('load.promptTitle'),
+        message: t('load.promptMessage'),
+        placeholder: t('load.promptPlaceholder'),
+        submitLabel: t('load.promptSubmit'),
+        onSubmit: (path) => { if (path.trim()) doLoadFile(path.trim()); },
+      });
+    }
+  };
+
+  const handleExport = () => {
+    if (!pattern) return;
+    const a = document.createElement('a');
+    a.href = `data:image/png;base64,${pattern}`;
+    a.download = `ebsd_pattern_r${row}_c${col}.png`;
+    a.click();
+    log(t('logMessages.exportedPattern', { row, col }));
+  };
+
+  // Add the currently displayed pattern to the PC Refinement list (used by
+  // both the sidebar PC Refinement section and the pattern action footer).
+  const handleAddCurrentPattern = async () => {
+    try {
+      const res = await pcApi.addPattern(row, col);
+      if (res.data?.duplicate) {
+        log(t('logMessages.patternDuplicate', { row, col }));
+        return;
+      }
+      const n = res.data?.n_patterns || 0;
+      setPcPatternCount(n);
+      log(t('logMessages.addedPattern', { row, col, count: n }));
+      window.dispatchEvent(new CustomEvent('pc-patterns-updated'));
+      if (n === 1) onNavigate?.('pcrefinement');
+    } catch (err) {
+      log(t('logMessages.addPatternError', { error: err.response?.data?.detail || err.message }));
+    }
+  };
+
+  // Short, distinguishable labels for the loaded-files switcher (common
+  // prefix/suffix stripped — see disambiguateNames).
+  const loadedFileLabels = useMemo(
+    () => disambiguateNames(loadedFiles.map((f) => f.name || '')),
+    [loadedFiles]
+  );
+
+  const quickModes = [
+    { label: 'σ',   mode: 'Std Dev (Quality)',     tip: t('quickModes.stdDevTooltip') },
+    { label: 'BC',  mode: 'Band Contrast',          tip: t('quickModes.bandContrastTooltip') },
+    { label: '∇',   mode: 'Sharpness (Laplacian)',  tip: t('quickModes.sharpnessTooltip') },
+    { label: 'SNR', mode: 'SNR (MAD)',              tip: t('quickModes.snrTooltip') },
+    { label: 'NCC', mode: 'Neighbor Correlation',   tip: t('quickModes.neighborCorrelationTooltip') },
+    { label: 'H',   mode: 'Entropy',                tip: t('quickModes.entropyTooltip') },
+  ];
+
+  // =========================================================================
+  // Sub-panels
+  // =========================================================================
+
+  /** Left panel content — wrapped in ScrollPanel */
+  const leftPanel = (
+    <ScrollPanel style={{ background: colors.bgSecondary, padding: spacing.groupMargin }}>
+
+      {/* Loaded Files — multi-file switcher (only shown when more than 1 file loaded) */}
+      {loadedFiles.length > 1 && (
+        <GroupBox title={t('loadedFiles.title', { count: loadedFiles.length })}>
+          <div className="thin-scrollbar" style={{
+            maxHeight: 140, overflowY: 'auto',
+            border: `1px solid ${colors.border}`, borderRadius: 3,
+            background: colors.bg,
+          }}>
+            {loadedFiles.map((f, idx) => {
+              const isActive = !!f.active;
+              // Show only the part of the name that distinguishes this file
+              // from the others (common prefix/suffix stripped). Full path is
+              // in the title tooltip.
+              const label = loadedFileLabels[idx] || f.name;
+              return (
+                <div
+                  key={f.path}
+                  className="list-item-interactive"
+                  onClick={() => handleSwitchFile(f.path)}
+                  title={isActive ? t('loadedFiles.fileTooltipActive', { path: f.path }) : t('loadedFiles.fileTooltip', { path: f.path })}
+                  style={{
+                    padding: '5px 8px', cursor: fileSwitching ? 'wait' : 'pointer',
+                    fontSize: '9pt',
+                    background: isActive ? alpha(colors.purple, 13) : 'transparent',
+                    color: isActive ? colors.purple : colors.cyan,
+                    fontWeight: isActive ? 'bold' : 'normal',
+                    borderBottom: `1px solid ${colors.border}`,
+                    borderLeft: isActive ? `3px solid ${colors.purple}` : '3px solid transparent',
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6,
+                    transition: 'background 0.1s, border-left-color 0.15s',
+                    opacity: fileSwitching && !isActive ? 0.5 : 1,
+                  }}
+                >
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                    {isActive ? '● ' : '○ '}{label}
+                  </span>
+                  {fileSwitching && !isActive ? (
+                    <span style={{ fontSize: '8pt', color: colors.textSecondary }}>…</span>
+                  ) : !isActive ? (
+                    <button
+                      type="button"
+                      title={t('loadedFiles.removeTooltip')}
+                      onClick={(e) => { e.stopPropagation(); handleRemoveFile(f.path); }}
+                      style={{
+                        flex: '0 0 auto', border: 'none', background: 'transparent',
+                        color: colors.textSecondary, cursor: 'pointer', fontSize: '10pt',
+                        lineHeight: 1, padding: '0 2px',
+                      }}
+                    >✕</button>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+          {fileSwitching ? (
+            <div style={{ fontSize: '8.5pt', color: colors.cyan, marginTop: 4, paddingLeft: 4 }}>
+              {t('loadedFiles.switching')}
+            </div>
+          ) : loadedFiles.length > 1 && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
+              <button
+                type="button"
+                onClick={handleClearFiles}
+                title={t('loadedFiles.clearListTooltip')}
+                style={{
+                  border: `1px solid ${colors.border}`, background: 'transparent',
+                  color: colors.textSecondary, cursor: 'pointer', fontSize: '8.5pt',
+                  borderRadius: 3, padding: '2px 8px',
+                }}
+              >{t('loadedFiles.clearList')}</button>
+              <button
+                type="button"
+                onClick={handleClearAllFiles}
+                title={t('loadedFiles.clearAllTooltip')}
+                style={{
+                  border: `1px solid ${colors.border}`, background: 'transparent',
+                  color: colors.textSecondary, cursor: 'pointer', fontSize: '8.5pt',
+                  borderRadius: 3, padding: '2px 8px',
+                }}
+              >{t('loadedFiles.clearAll')}</button>
+            </div>
+          )}
+        </GroupBox>
+      )}
+
+      {/* Datasets (within active file — used by deepcopy / derived datasets) */}
+      <GroupBox title={datasets.length ? t('datasets.titleWithCount', { count: datasets.length }) : t('datasets.title')}>
+        {/* List */}
+        <div className="thin-scrollbar" style={{
+          maxHeight: 120, overflowY: 'auto', marginBottom: spacing.innerSpacing,
+          border: `1px solid ${colors.border}`, borderRadius: 3,
+          background: colors.bg,
+        }}>
+          {datasets.length === 0 ? (
+            <div style={{ padding: '10px 8px', fontSize: '9pt', color: colors.textSecondary, textAlign: 'center' }}>
+              <span style={{ opacity: 0.4, marginRight: 4 }}>{'\u25A2'}</span>
+              {t('datasets.empty')}
+            </div>
+          ) : datasets.map((ds) => {
+            // PyQt5 parity: originals cyan/bold, derivatives purple with └ prefix
+            const isDerivative = /_(?:bg_dyn|bg_stat|avg|autocontrast|ac)/.test(ds.name);
+            const isSelected = ds.name === activeDataset;
+            const sizeStr = ds.navigation_shape
+              ? `${ds.navigation_shape[1]}×${ds.navigation_shape[0]}`
+              : '';
+            return (
+              <div
+                key={ds.name}
+                className="list-item-interactive"
+                onClick={() => switchDataset(ds.name)}
+                title={isDerivative
+                  ? t('datasets.derivedTooltip', { name: ds.name })
+                  : (sizeStr
+                    ? t('datasets.datasetTooltipWithSize', { name: ds.name, size: sizeStr })
+                    : t('datasets.datasetTooltip', { name: ds.name }))}
+                style={{
+                  padding: '4px 8px', cursor: 'pointer', fontSize: '9pt',
+                  background: isSelected ? alpha(colors.purple, 13) : 'transparent',
+                  color: isDerivative ? colors.purple : colors.cyan,
+                  fontWeight: isDerivative ? 'normal' : 'bold',
+                  borderBottom: `1px solid ${colors.border}`,
+                  borderLeft: isSelected ? `3px solid ${colors.purple}` : '3px solid transparent',
+                  display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                  transition: 'background 0.1s, border-left-color 0.15s',
+                }}
+              >
+                <span>{isDerivative ? `  └ ${ds.name}` : ds.name}</span>
+                <span style={{ fontSize: '8pt', color: colors.textSecondary }}>
+                  {sizeStr}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Deepcopy checkbox + remove button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <CheckRow
+            checked={deepcopy}
+            onChange={setDeepcopy}
+            label={t('datasets.deepcopyLabel')}
+            title={t('datasets.deepcopyTooltip')}
+          />
+          <Button
+            variant="danger"
+            small
+            title={t('datasets.removeTooltip')}
+            style={{ marginLeft: 'auto', padding: '2px 6px', fontSize: '9pt', minWidth: 28 }}
+            onClick={() => {
+              if (!activeDataset) return;
+              askConfirm({
+                title: t('datasets.removeConfirmTitle'),
+                message: t('datasets.removeConfirmMessage', { name: activeDataset }),
+                confirmLabel: t('datasets.removeConfirmLabel'),
+                onConfirm: async () => {
+                  try {
+                    const res = await ebsdApi.deleteDataset(activeDataset);
+                    log(t('logMessages.removedDataset', { name: activeDataset }));
+                    const newActive = res.data?.active || '';
+                    setActiveDataset(newActive);
+                    await fetchDatasets();
+                    if (newActive) {
+                      await loadPattern(row, col);
+                      fetchOverview(overviewMode);
+                      fetchAtlas();
+                    }
+                  } catch (err) {
+                    log(t('logMessages.removeDatasetError', { error: err.response?.data?.detail || err.message }));
+                  }
+                },
+              });
+            }}
+          >
+            ✖
+          </Button>
+        </div>
+      </GroupBox>
+
+      {/* Load Data */}
+      <GroupBox title={t('load.title')}>
+        <input
+          ref={fileInputRef}
+          type="text"
+          value={filePath}
+          onChange={(e) => setFilePath(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') doLoadFile(filePath); }}
+          placeholder={t('load.pathPlaceholder')}
+          title={t('hoverTips.filePathInput')}
+          style={{
+            width: '100%', boxSizing: 'border-box',
+            background: colors.bg, border: `1px solid ${colors.border}`,
+            borderRadius: 4, color: colors.text, fontSize: '10pt',
+            padding: '4px 8px', height: spacing.buttonHeight, outline: 'none',
+            marginBottom: spacing.innerSpacing,
+          }}
+        />
+        <div style={{ display: 'flex', gap: spacing.innerSpacing, marginBottom: spacing.innerSpacing }}>
+          <Button
+            variant="primary"
+            onClick={() => doLoadFile(filePath)}
+            disabled={loadLoading || !filePath.trim()}
+            title={t('load.loadDataTooltip')}
+            style={{ flex: 1 }}
+          >
+            {loadLoading ? <span className="btn-loading">{t('load.loading')}</span> : t('load.loadData')}
+          </Button>
+          <Button
+            onClick={handleBrowse}
+            title={t('load.browseTooltip')}
+            style={{ padding: '5px 10px' }}
+          >
+            {t('load.browse')}
+          </Button>
+          <Button
+            onClick={() => setShowRecent(!showRecent)}
+            disabled={recentFiles.length === 0}
+            title={t('load.recentTooltip', { count: recentFiles.length })}
+            small
+          >
+            {t('load.recent')}
+          </Button>
+        </div>
+        {showRecent && recentFiles.length > 0 && (
+          <div style={{
+            background: colors.bg, border: `1px solid ${colors.border}`,
+            borderRadius: 4, marginBottom: spacing.innerSpacing,
+          }}>
+            {recentFiles.map((f, i) => (
+              <div
+                key={i}
+                onClick={() => { setShowRecent(false); doLoadFile(f); }}
+                title={f}
+                style={{
+                  padding: '4px 8px', fontSize: '9pt', cursor: 'pointer', color: colors.text,
+                  borderBottom: i < recentFiles.length - 1 ? `1px solid ${colors.border}` : 'none',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.background = colors.sidebarActive}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                {f.split(/[\\/]/).pop()}
+              </div>
+            ))}
+          </div>
+        )}
+        {loadError && (
+          <div role="alert" style={{ fontSize: '9pt', color: colors.red, marginTop: 4, display: 'flex', alignItems: 'flex-start', gap: 4, animation: 'fadeSlideIn 0.2s ease-out' }}>
+            <span style={{ flexShrink: 0, fontSize: '10pt', lineHeight: 1 }}>{'\u26A0'}</span>
+            <span>{loadError}</span>
+          </div>
+        )}
+      </GroupBox>
+
+      {/* Detector Signal Mask */}
+      <GroupBox title={t('mask.title')}>
+        <div style={{ marginBottom: spacing.innerSpacing }}>
+          <CheckRow
+            checked={maskEnabled}
+            onChange={(v) => setMaskEnabled(v)}
+            label={t('mask.circularLabel')}
+            title={t('mask.circularTooltip')}
+          />
+        </div>
+        {ebsdInfo?.format_type && (
+          <div style={{
+            fontSize: '8pt', color: colors.textSecondary,
+            marginBottom: spacing.innerSpacing,
+            padding: '2px 6px',
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 3,
+          }}>
+            {t('mask.fileVendor')} <span style={{
+              color: ebsdInfo.format_type === 'EDAX' ? colors.green : colors.yellow,
+              fontWeight: 600,
+            }}>{ebsdInfo.format_type}</span>
+            {' — '}
+            {ebsdInfo.format_type === 'EDAX'
+              ? t('mask.vendorRecommended')
+              : t('mask.vendorDiscard')}
+          </div>
+        )}
+        <FormRow label={t('mask.radiusLabel')}>
+          <Slider
+            value={maskRadius}
+            onChange={setMaskRadius}
+            min={50}
+            max={100}
+            step={1}
+            displayValue={`${maskRadius}%`}
+            title={t('mask.radiusTooltip')}
+            style={{ opacity: maskEnabled ? 1 : 0.4, pointerEvents: maskEnabled ? 'auto' : 'none' }}
+          />
+        </FormRow>
+      </GroupBox>
+
+      {/* Pattern Processing */}
+      <GroupBox title={t('processing.title')}>
+        {/* BG removal row */}
+        <div style={{ display: 'flex', gap: spacing.innerSpacing, marginBottom: spacing.innerSpacing }}>
+          <Button
+            onClick={() => doProcessing('bg_dyn', t('logMessages.labelBgDynamic'))}
+            disabled={!ebsdLoaded || processingBusy}
+            title={t('processing.bgDynamicTooltip')}
+            style={{ flex: 1 }}
+            small
+          >
+            {t('processing.bgDynamic')}
+          </Button>
+          <Button
+            onClick={() => doProcessing('bg_stat', t('logMessages.labelBgStatic'))}
+            disabled={!ebsdLoaded || processingBusy}
+            title={t('processing.bgStaticTooltip')}
+            style={{ flex: 1 }}
+            small
+          >
+            {t('processing.bgStatic')}
+          </Button>
+        </div>
+
+        {/* Frame average row */}
+        <FormRow label={t('processing.windowSizeLabel')}>
+          <div style={{ display: 'flex', gap: spacing.innerSpacing, alignItems: 'center' }}>
+            <NumberInput
+              value={windowSize}
+              onChange={(e) => setWindowSize(Number(e.target.value))}
+              min={1}
+              max={50}
+              title={t('processing.windowSizeTooltip')}
+              style={{ width: 60 }}
+            />
+            <Button
+              onClick={() => doProcessing('avg', t('logMessages.labelFrameAverage'))}
+              disabled={!ebsdLoaded || processingBusy}
+              title={t('processing.frameAverageTooltip')}
+              small
+              style={{ flex: 1 }}
+            >
+              {t('processing.frameAverage')}
+            </Button>
+          </div>
+        </FormRow>
+
+        {/* Autocontrast */}
+        <Button
+          onClick={() => doProcessing('autocontrast', t('logMessages.labelAutoContrast'))}
+          disabled={!ebsdLoaded || processingBusy}
+          title={t('processing.autoContrastTooltip')}
+          small
+          style={{ width: '100%', marginBottom: spacing.innerSpacing }}
+        >
+          {t('processing.autoContrast')}
+        </Button>
+
+        {/* CLAHE — Adaptive Histogram Equalization */}
+        <FormRow label={(
+          <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+            {t('processing.claheKernelLabel')}
+            <InfoTooltip>
+              <div style={{ fontWeight: 700, marginBottom: 4, color: colors.accent }}>
+                {t('processing.claheTooltipTitle')}
+              </div>
+              <p style={{ margin: '4px 0' }}>
+                {t('processing.claheTooltipP1')}
+              </p>
+              <p style={{ margin: '4px 0' }}>
+                {t('processing.claheTooltipP2')}
+              </p>
+              <div style={{ fontWeight: 700, marginTop: 6, marginBottom: 2 }}>
+                {t('processing.claheTooltipChooseTitle')}
+              </div>
+              <ul style={{ margin: 0, paddingLeft: 16 }}>
+                <li>{t('processing.claheTooltipChoose1')}</li>
+                <li>{t('processing.claheTooltipChoose2')}</li>
+                <li>{t('processing.claheTooltipChoose3')}</li>
+                <li>{t('processing.claheTooltipChoose4')}</li>
+              </ul>
+              <p style={{ margin: '6px 0 0 0', fontSize: 10,
+                color: colors.textSecondary }}>
+                {t('processing.claheTooltipRule')}
+              </p>
+            </InfoTooltip>
+          </span>
+        )}>
+          <div style={{ display: 'flex', gap: spacing.innerSpacing, alignItems: 'center' }}>
+            <NumberInput
+              value={claheKernel}
+              onChange={(e) => setClaheKernel(Number(e.target.value))}
+              min={2}
+              max={64}
+              title={t('hoverTips.claheKernel')}
+              style={{ width: 60 }}
+            />
+            <Button
+              onClick={() => doProcessing('clahe', t('logMessages.labelClahe'))}
+              disabled={!ebsdLoaded || processingBusy}
+              small
+              title={t('hoverTips.claheRun')}
+              style={{ flex: 1 }}
+            >
+              {t('processing.clahe')}
+            </Button>
+          </div>
+        </FormRow>
+
+        {/* One-click recommended pipeline */}
+        <div style={{
+          display: 'flex', gap: spacing.innerSpacing, alignItems: 'center',
+          marginBottom: spacing.innerSpacing,
+        }}>
+          <Button
+            onClick={() => doProcessing('pipeline', t('logMessages.labelRecommendedPipeline'))}
+            disabled={!ebsdLoaded || processingBusy}
+            small
+            title={t('hoverTips.pipelineRun')}
+            style={{ flex: 1 }}
+          >
+            {t('processing.recommendedPipeline')}
+          </Button>
+          <InfoTooltip>
+            <div style={{ fontWeight: 700, marginBottom: 4, color: colors.accent }}>
+              {t('processing.recommendedPipelineTooltipTitle')}
+            </div>
+            <p style={{ margin: '4px 0' }}>
+              {t('processing.recommendedPipelineTooltipP1')}
+            </p>
+            <ol style={{ margin: '4px 0', paddingLeft: 18 }}>
+              <li>{t('processing.recommendedPipelineTooltipStep1')}</li>
+              <li>{t('processing.recommendedPipelineTooltipStep2')}</li>
+              <li>{t('processing.recommendedPipelineTooltipStep3')}</li>
+            </ol>
+            <p style={{ margin: '4px 0', fontSize: 10,
+              color: colors.textSecondary }}>
+              {t('processing.recommendedPipelineTooltipNote')}
+            </p>
+          </InfoTooltip>
+        </div>
+
+        {/* Brightness slider (client-side CSS filter — not true gamma) */}
+        <FormRow label={t('processing.brightnessLabel')}>
+          <Slider
+            value={gamma}
+            onChange={setGamma}
+            min={10}
+            max={300}
+            title={t('processing.brightnessTooltip')}
+            displayValue={(gamma / 100).toFixed(1)}
+          />
+        </FormRow>
+
+        {/* Filter */}
+        <FormRow label={t('processing.filterLabel')}>
+          <Select
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            title={t('processing.filterTooltip')}
+            options={['None', 'Sobel', 'Canny', 'Difference', 'FFT Highpass', 'CLAHE', 'Sharpen', 'Denoise']}
+            style={{ width: '100%' }}
+          />
+        </FormRow>
+
+        {/* Interpolation */}
+        <FormRow label={t('processing.interpLabel')}>
+          <Select
+            value={interpolation}
+            onChange={(e) => setInterpolation(e.target.value)}
+            title={t('processing.interpTooltip')}
+            options={['nearest', 'bilinear', 'bicubic', 'lanczos']}
+            style={{ width: '100%' }}
+          />
+        </FormRow>
+
+        <Separator />
+
+        {/* Batch auto-contrast */}
+        <Button
+          onClick={() => {
+            askConfirm({
+              title: t('processing.batchConfirmTitle'),
+              message: t('processing.batchConfirmMessage'),
+              confirmLabel: t('processing.batchConfirmLabel'),
+              variant: 'warning',
+              onConfirm: () => doProcessing('batch', t('logMessages.labelBatchAutoContrast')),
+            });
+          }}
+          disabled={!ebsdLoaded || processingBusy}
+          title={t('processing.batchAutoContrastTooltip')}
+          style={{ width: '100%', marginBottom: spacing.innerSpacing }}
+          small
+        >
+          {t('processing.batchAutoContrast')}
+        </Button>
+
+        {/* Export pattern */}
+        <Button
+          onClick={handleExport}
+          disabled={!pattern}
+          title={t('processing.exportPatternTooltip')}
+          style={{ width: '100%', marginBottom: spacing.innerSpacing }}
+          small
+        >
+          {t('processing.exportPattern')}
+        </Button>
+
+        {/* Reset processing */}
+        {(gamma !== 100 || filter !== 'None' || interpolation !== 'nearest') && (
+          <Button
+            onClick={() => { setGamma(100); setFilter('None'); setInterpolation('nearest'); }}
+            title={t('processing.resetProcessingTooltip')}
+            style={{ width: '100%', marginBottom: spacing.innerSpacing }}
+            small
+          >
+            {t('processing.resetProcessing')}
+          </Button>
+        )}
+
+        {/* Compare datasets */}
+        {datasets.length >= 2 && (
+          <Button
+            onClick={() => setCompareOpen(!compareOpen)}
+            title={t('processing.compareDatasetsTooltip')}
+            style={{ width: '100%' }}
+            small
+          >
+            {compareOpen ? t('processing.hideCompare') : <>{`${t('processing.compareDatasets')} `}<span className="kbd">Ctrl+K</span></>}
+          </Button>
+        )}
+      </GroupBox>
+
+      {/* EDS Composition */}
+      <GroupBox title={t('eds.title')}>
+        <FormRow label={t('eds.modeLabel')}>
+          <Select
+            value={edsMode}
+            onChange={(e) => { setEdsMode(e.target.value); fetchEds(row, col); }}
+            title={t('eds.modeTooltip')}
+            options={['Counts', 'Wt.%', 'At.%']}
+            style={{ width: '100%' }}
+          />
+        </FormRow>
+        <div style={{ marginBottom: spacing.innerSpacing }}>
+          <CheckRow
+            checked={showEdsOverlay}
+            onChange={setShowEdsOverlay}
+            label={t('eds.showOverlay')}
+            title={t('eds.showOverlayTooltip')}
+          />
+        </div>
+
+        {/* Composition display */}
+        <div style={{
+          padding: '6px 8px', border: `1px solid ${colors.border}`, borderRadius: 3,
+          fontSize: '9pt', color: colors.textSecondary, marginBottom: spacing.innerSpacing,
+          minHeight: 28, wordBreak: 'break-word',
+        }}>
+          {edsComposition?.data
+            ? Object.entries(edsComposition.data).map(([el, vals]) => {
+                const modeKey = { 'Counts': 'counts', 'Wt.%': 'wt_pct', 'At.%': 'at_pct' }[edsMode] || 'at_pct';
+                const v = vals[modeKey] ?? vals.counts ?? 0;
+                return `${el}: ${typeof v === 'number' ? v.toFixed(1) : v}${edsMode !== 'Counts' ? '%' : ''}`;
+              }).join(' | ')
+            : t('eds.noData')}
+        </div>
+
+        {/* Phase suggestions */}
+        {(edsPhases?.suggestions || edsPhases?.phases) && (
+          <div style={{
+            padding: '4px 8px', fontSize: '9pt', color: colors.cyan,
+            fontStyle: 'italic', marginBottom: spacing.innerSpacing,
+            animation: 'fadeSlideIn 0.2s ease-out',
+          }}>
+            {t('eds.phasesLabel')} {(edsPhases.suggestions || edsPhases.phases || []).map((p) => {
+              const name = p.name || p.phase || t('eds.unknownPhase');
+              const score = p.score != null
+                ? `${(p.score * 100).toFixed(0)}%`
+                : (p.confidence != null ? `${p.confidence}%` : '');
+              return score ? `${name} (${score})` : name;
+            }).join(' | ')}
+          </div>
+        )}
+
+        {/* Send filter to indexing */}
+        <Button
+          disabled={!edsComposition?.data}
+          onClick={() => {
+            log(t('logMessages.phaseFilterSent'));
+            setPendingChemMask(true);
+            onNavigate?.('indexing');
+          }}
+          title={t('eds.sendFilterTooltip')}
+          style={{ width: '100%' }}
+        >
+          {t('eds.sendFilter')}
+        </Button>
+      </GroupBox>
+
+      {/* PC Refinement — highlighted workflow section */}
+      <div style={{
+        border: `1px solid ${alpha(colors.purple, 55)}`,
+        borderRadius: 6,
+        background: alpha(colors.purple, 8),
+        padding: spacing.innerMargin,
+      }}>
+        <div style={{
+          fontSize: '10pt', fontWeight: 700, color: colors.purple, marginBottom: 6,
+        }}>
+          {t('pcRefinement.title')}
+        </div>
+        <div style={{
+          fontSize: '8.5pt', color: colors.textSecondary, lineHeight: 1.5,
+          marginBottom: spacing.innerSpacing,
+        }}>
+          {t('pcRefinement.description')}
+        </div>
+        <Button
+          variant="purple"
+          onClick={handleAddCurrentPattern}
+          disabled={!ebsdLoaded}
+          title={t('pcRefinement.addCurrentPatternTooltip')}
+          style={{ width: '100%', marginBottom: spacing.innerSpacing }}
+        >
+          {t('pcRefinement.addCurrentPattern')}
+        </Button>
+        <Button
+          onClick={() => onNavigate?.('pcrefinement')}
+          title={t('pcRefinement.openPcRefinementTooltip')}
+          style={{ width: '100%' }}
+        >
+          {t('pcRefinement.openPcRefinement')}
+          {pcPatternCount > 0 && (
+            <span style={{
+              marginLeft: 6, background: colors.purple, color: colors.textOnAccent,
+              fontSize: '8pt', fontWeight: 700, borderRadius: 8, padding: '1px 6px',
+            }}>
+              {pcPatternCount}
+            </span>
+          )}
+        </Button>
+      </div>
+    </ScrollPanel>
+  );
+
+  // -------------------------------------------------------------------------
+  // Overview + Pattern panel (top of right vertical splitter)
+  // -------------------------------------------------------------------------
+  const plotPanel = (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      {/* Overview mode toolbar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: spacing.innerSpacing,
+        padding: `${spacing.compactMargin}px ${spacing.innerMargin}px`,
+        background: colors.bgSecondary, borderBottom: `1px solid ${colors.border}`,
+        flexShrink: 0, flexWrap: 'wrap',
+      }}>
+        <Label secondary small>{t('overview.label')}</Label>
+        <Select
+          value={overviewMode}
+          onChange={(e) => { setOverviewMode(e.target.value); fetchOverview(e.target.value); }}
+          options={[
+            'Mean Intensity', 'Std Dev (Quality)', 'Max Intensity',
+            'Band Contrast', 'Sharpness (Laplacian)', 'SNR (MAD)',
+            'Neighbor Correlation', 'Entropy',
+          ].map((m) => ({ value: m, label: t(`overview.modeNames.${m}`, { defaultValue: m }) }))}
+          title={t('overview.modeTooltip')}
+          style={{ width: 180 }}
+        />
+
+        {/* Quality mask */}
+        <CheckRow
+          checked={qualityMask}
+          onChange={(v) => setQualityMask(v)}
+          label={t('overview.maskLabel')}
+          title={t('overview.maskTooltip')}
+        />
+        <Slider
+          value={qualityThreshold}
+          onChange={setQualityThreshold}
+          min={0}
+          max={100}
+          title={t('overview.thresholdTooltip')}
+          displayValue={`${qualityThreshold}%`}
+          // disabled when mask is off
+          style={{ opacity: qualityMask ? 1 : 0.4, pointerEvents: qualityMask ? 'auto' : 'none', minWidth: 80, maxWidth: 80 }}
+        />
+
+        <div style={{ flex: 1 }} />
+      </div>
+
+      {/* Quick mode buttons row */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 3,
+        padding: `2px ${spacing.innerMargin}px`,
+        background: colors.bgSecondary, borderBottom: `1px solid ${colors.border}`,
+        flexShrink: 0,
+      }}>
+        {quickModes.map((qm) => (
+          <QuickModeBtn
+            key={qm.label}
+            label={qm.label}
+            active={overviewMode === qm.mode}
+            onClick={() => { setOverviewMode(qm.mode); fetchOverview(qm.mode); }}
+            title={qm.tip}
+          />
+        ))}
+        <div style={{ flex: 1 }} />
+      </div>
+
+      {/* Overview + Pattern side by side. Each column has a caption strip
+          ABOVE the image (outside the data area) and the image fills the
+          rest. Padding reduced from 14 → 4 so the data uses the space. */}
+      <div style={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+
+        {/* Overview column */}
+        <div style={{
+          flex: 1, minWidth: 0, minHeight: 0,
+          display: 'flex', flexDirection: 'column',
+          background: colors.bgSecondary,
+        }}>
+          {/* Caption strip — outside the image */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '2px 8px', fontSize: '8pt',
+            color: colors.textSecondary,
+            background: colors.bg, borderBottom: `1px solid ${colors.border}`,
+            flexShrink: 0, minHeight: 18, whiteSpace: 'nowrap', overflow: 'hidden',
+          }}>
+            <span style={{ color: colors.cyan, fontWeight: 600 }}>{t('overview.captionTitle')}</span>
+            <span>· {t(`overview.modeNames.${overviewMode}`, { defaultValue: overviewMode })}</span>
+            {gridShape && <span>· {gridShape[0]}×{gridShape[1]}</span>}
+            <span style={{ flex: 1 }} />
+            <span style={{ opacity: 0.7 }}>{t('overview.captionHint')}</span>
+          </div>
+
+        {/* Image container */}
+        <div
+          ref={overviewRef}
+          style={{
+            flex: 1, minHeight: 0, position: 'relative',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: ebsdLoaded ? 'crosshair' : 'default',
+            overflow: 'hidden', padding: 4,
+          }}
+          onClick={(e) => { if (!e.shiftKey) handleOverviewPointer(e); }}
+          onMouseDown={(e) => {
+            if (e.shiftKey && gridShape) {
+              const pos = calcOverviewPos(e);
+              if (pos) roiStartRef.current = { row: pos.r, col: pos.c };
+            } else {
+              handleOverviewPointer(e);
+            }
+          }}
+          onMouseUp={() => { roiStartRef.current = null; loadPattern(row, col); fetchEds(row, col); }}
+          onMouseMove={handleOverviewMouseMove}
+        >
+          <div style={{
+            position: 'relative',
+            width: '100%', height: '100%',
+            border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden',
+            background: '#000',
+          }}>
+          {overviewImage ? (
+            <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+              <img
+                className="image-reveal"
+                src={`data:image/png;base64,${overviewImage}`}
+                alt={t('overview.imageAlt')}
+                draggable={false}
+                onDragStart={(e) => e.preventDefault()}
+                onLoad={updateOvImgRect}
+                style={{ width: '100%', height: '100%', display: 'block', objectFit: 'contain', imageRendering: 'pixelated', userSelect: 'none' }}
+              />
+              {/* Overlay positioned exactly over the visible image area */}
+              {ovImgRect && (
+                <div style={{
+                  position: 'absolute', pointerEvents: 'none',
+                  left: `${ovImgRect.left}%`, top: `${ovImgRect.top}%`,
+                  width: `${ovImgRect.width}%`, height: `${ovImgRect.height}%`,
+                }}>
+                  {/* ROI selection rectangle */}
+                  {roi && gridShape && (
+                    <div style={{
+                      position: 'absolute',
+                      left: `${(roi.startCol / gridShape[1]) * 100}%`,
+                      top: `${(roi.startRow / gridShape[0]) * 100}%`,
+                      width: `${((roi.endCol - roi.startCol) / gridShape[1]) * 100}%`,
+                      height: `${((roi.endRow - roi.startRow) / gridShape[0]) * 100}%`,
+                      border: `2px solid ${colors.yellow}`,
+                      background: alpha(colors.yellow, 8),
+                    }}>
+                      <span style={{
+                        position: 'absolute', top: -14, left: 0,
+                        fontSize: '7pt', color: colors.yellow, whiteSpace: 'nowrap',
+                      }}>
+                        {t('overview.roiLabel', { startRow: roi.startRow, startCol: roi.startCol, endRow: roi.endRow, endCol: roi.endCol })}
+                      </span>
+                    </div>
+                  )}
+                  {/* Crosshair */}
+                  {crosshair && (
+                    <div style={{
+                      position: 'absolute', left: `${crosshair.x}%`, top: `${crosshair.y}%`,
+                      transform: 'translate(-50%, -50%)',
+                    }}>
+                      <div style={{ width: 14, height: 2, background: colors.red, position: 'absolute', top: -1, left: -7 }} />
+                      <div style={{ width: 2, height: 14, background: colors.red, position: 'absolute', top: -7, left: -1 }} />
+                    </div>
+                  )}
+                </div>
+              )}
+              {overviewSampled && (
+                <div style={{
+                  position: 'absolute', bottom: 4, right: 4, pointerEvents: 'none',
+                  fontSize: '7pt', color: colors.yellow,
+                  background: alpha('#000', 55), padding: '1px 4px', borderRadius: 3,
+                }}>
+                  {t('overview.sampledPreview')}
+                </div>
+              )}
+            </div>
+          ) : overviewError ? (
+            <div style={{ textAlign: 'center', color: colors.red, padding: 12 }}>
+              <div style={{ fontSize: 28, opacity: 0.5 }}>&#9888;</div>
+              <div style={{ fontSize: '9pt' }}>{t('overview.failed')}</div>
+              <div style={{ fontSize: '8pt', opacity: 0.8, marginTop: 4, maxWidth: 220 }}>{overviewError}</div>
+            </div>
+          ) : overviewLoading ? (
+            <div style={{ textAlign: 'center', color: colors.textSecondary }}>
+              <div className="spinner" style={{
+                width: 22, height: 22, margin: '0 auto 8px',
+                border: `2px solid ${colors.border}`, borderTopColor: colors.accent,
+                borderRadius: '50%', animation: 'spin 0.8s linear infinite',
+              }} />
+              <div style={{ fontSize: '10pt' }}>{t('overview.computing')}</div>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', color: colors.textSecondary }}>
+              <div style={{ fontSize: 28, opacity: 0.3 }}>&#9635;</div>
+              <div style={{ fontSize: '10pt' }}>{t('overview.emptyHint')}</div>
+            </div>
+          )}
+          </div>
+        </div>
+        </div>
+
+        {/* Pattern column */}
+        <div style={{
+          flex: 1, minWidth: 0, minHeight: 0,
+          display: 'flex', flexDirection: 'column',
+          background: colors.bgSecondary,
+          borderLeft: `1px solid ${colors.border}`,
+        }}>
+          {/* Caption strip — all status tags live here, outside the image */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8,
+            padding: '2px 8px', fontSize: '8pt',
+            color: colors.textSecondary,
+            background: colors.bg, borderBottom: `1px solid ${colors.border}`,
+            flexShrink: 0, minHeight: 18, whiteSpace: 'nowrap', overflow: 'hidden',
+          }}>
+            <span style={{ color: colors.cyan, fontWeight: 600 }}>{t('pattern.captionTitle')}</span>
+            <span>· [{row}, {col}]</span>
+            {ebsdInfo?.pattern_shape && (
+              <span>· {ebsdInfo.pattern_shape[0]}×{ebsdInfo.pattern_shape[1]}</span>
+            )}
+            {patZoom > 1.05 && <span style={{ color: colors.accent }}>· {patZoom.toFixed(1)}×</span>}
+            {filter !== 'None' && <span style={{ color: colors.orange }}>· {filter}</span>}
+            {gamma !== 100 && <span style={{ color: colors.yellow }}>· B {(gamma / 100).toFixed(1)}</span>}
+            {maskEnabled && <span style={{ color: colors.green }}>· mask {maskRadius}%</span>}
+            {patternIsThumb && <span style={{ color: colors.orange }}>· {t('pattern.preview')}</span>}
+            <span style={{ flex: 1 }} />
+            <span style={{ opacity: 0.7 }}>{t('pattern.captionHint')}</span>
+          </div>
+
+        {/* Image container */}
+        <div
+          style={{
+            flex: 1, minHeight: 0, position: 'relative',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            overflow: 'hidden', cursor: patZoom > 1 ? 'grab' : 'default',
+            padding: 4,
+          }}
+          onWheel={(e) => {
+            e.preventDefault();
+            setPatZoom((z) => Math.max(1, Math.min(8, z + (e.deltaY < 0 ? 0.3 : -0.3))));
+            if (patZoom <= 1.1) setPatPan({ x: 0, y: 0 });
+          }}
+          onMouseDown={(e) => {
+            if (patZoom > 1 && e.button === 0) {
+              patDragRef.current = { startX: e.clientX - patPan.x, startY: e.clientY - patPan.y };
+            }
+          }}
+          onMouseMove={(e) => {
+            if (patDragRef.current && e.buttons === 1) {
+              setPatPan({ x: e.clientX - patDragRef.current.startX, y: e.clientY - patDragRef.current.startY });
+            }
+          }}
+          onMouseUp={() => { patDragRef.current = null; }}
+          onMouseLeave={() => { patDragRef.current = null; }}
+          onDoubleClick={() => { setPatZoom(1); setPatPan({ x: 0, y: 0 }); }}
+        >
+          <div style={{
+            position: 'relative',
+            width: '100%', height: '100%',
+            border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden',
+            background: '#000',
+          }}>
+          {patternLoading ? (
+            <div style={{
+              position: 'absolute', inset: 0,
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              justifyContent: 'center', gap: 8,
+            }}>
+              <div style={{
+                width: 20, height: 20,
+                border: `2px solid ${colors.border}`,
+                borderTop: `2px solid ${colors.accent}`,
+                borderRadius: '50%',
+                animation: 'spin 0.8s linear infinite',
+              }} />
+              <Label secondary small>{t('pattern.loading')}</Label>
+            </div>
+          ) : pattern ? (
+            <>
+              <img
+                className="image-reveal"
+                src={`data:image/png;base64,${pattern}`}
+                alt={t('pattern.alt', { row, col })}
+                draggable={false}
+                style={{
+                  width: '100%', height: '100%', objectFit: 'contain',
+                  imageRendering: patternIsThumb ? 'auto' : (interpolation === 'nearest' ? 'pixelated' : 'auto'),
+                  transform: `scale(${patZoom}) translate(${patPan.x / patZoom}px, ${patPan.y / patZoom}px)`,
+                  transition: patDragRef.current ? 'none' : 'transform 0.15s',
+                  filter: gamma !== 100 ? `brightness(${gamma / 100})` : 'none',
+                }}
+              />
+              {showEdsOverlay && (
+                <EdsOverlay composition={edsComposition} mode={edsMode} />
+              )}
+            </>
+          ) : (
+            <div style={{
+              position: 'absolute', inset: 0,
+              display: 'flex', flexDirection: 'column', alignItems: 'center',
+              justifyContent: 'center', color: colors.textSecondary,
+            }}>
+              <div style={{ fontSize: 28, opacity: 0.3 }}>&#9634;</div>
+              <div style={{ fontSize: '10pt' }}>{t('pattern.emptyHint')}</div>
+            </div>
+          )}
+          </div>
+        </div>
+        </div>
+      </div>
+
+      {/* Navigation arrow bar */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: spacing.innerSpacing,
+        padding: `${spacing.compactMargin}px ${spacing.innerMargin}px`,
+        background: colors.bgSecondary, borderTop: `1px solid ${colors.border}`, flexShrink: 0,
+      }}>
+        <Button small onClick={() => navigateTo(row, col - 1)} disabled={!ebsdLoaded || col <= 0} title={t('hoverTips.navLeft')} aria-label={t('hoverTips.navLeft')}>←</Button>
+        <Button small onClick={() => navigateTo(row - 1, col)} disabled={!ebsdLoaded || row <= 0} title={t('hoverTips.navUp')} aria-label={t('hoverTips.navUp')}>↑</Button>
+        <Button small onClick={() => navigateTo(row + 1, col)} disabled={!ebsdLoaded || row >= maxRow} title={t('hoverTips.navDown')} aria-label={t('hoverTips.navDown')}>↓</Button>
+        <Button small onClick={() => navigateTo(row, col + 1)} disabled={!ebsdLoaded || col >= maxCol} title={t('hoverTips.navRight')} aria-label={t('hoverTips.navRight')}>→</Button>
+        {gridShape && (
+          <span style={{ fontSize: '8pt', color: colors.textSecondary, fontFamily: 'monospace' }}
+            title={t('navigation.patternCountTooltip', { current: row * gridShape[1] + col + 1, total: gridShape[0] * gridShape[1] })}>
+            #{row * gridShape[1] + col + 1}/{gridShape[0] * gridShape[1]}
+          </span>
+        )}
+        <div style={{ width: 1, height: 18, background: colors.border, margin: '0 4px' }} />
+        <Button
+          small
+          onClick={async () => {
+            try {
+              const modeMap = { 'Mean Intensity': 'mean', 'Std Dev (Quality)': 'std', 'Band Contrast': 'bc' };
+              const res = await ebsdApi.overview(modeMap[overviewMode] || 'std');
+              if (res.data?.best_pos) {
+                navigateTo(res.data.best_pos[0], res.data.best_pos[1]);
+                log(t('logMessages.bestPattern', { pos: res.data.best_pos }));
+              }
+            } catch { log(t('logMessages.noBestPattern')); }
+          }}
+          disabled={!ebsdLoaded}
+          title={t('navigation.bestTooltip')}
+        >
+          {t('navigation.best')}
+        </Button>
+        <Button
+          small
+          onClick={async () => {
+            try {
+              const modeMap = { 'Mean Intensity': 'mean', 'Std Dev (Quality)': 'std', 'Band Contrast': 'bc' };
+              const res = await ebsdApi.overview(modeMap[overviewMode] || 'std');
+              if (res.data?.worst_pos) {
+                navigateTo(res.data.worst_pos[0], res.data.worst_pos[1]);
+                log(t('logMessages.worstPattern', { pos: res.data.worst_pos }));
+              }
+            } catch { log(t('logMessages.noWorstPattern')); }
+          }}
+          disabled={!ebsdLoaded}
+          title={t('navigation.worstTooltip')}
+        >
+          {t('navigation.worst')}
+        </Button>
+        <Button
+          small
+          onClick={() => {
+            if (gridShape) {
+              navigateTo(
+                Math.floor(Math.random() * gridShape[0]),
+                Math.floor(Math.random() * gridShape[1]),
+              );
+            }
+          }}
+          disabled={!ebsdLoaded}
+          title={t('navigation.randomTooltip')}
+        >
+          {t('navigation.random')}
+        </Button>
+        <div style={{ flex: 1 }} />
+        <Label secondary small>{t('navigation.rowLabel')}</Label>
+        <NumberInput
+          value={row}
+          // Clamp typed values to the grid: NumberInput's max only limits the
+          // spinner arrows, not keyboard entry. An out-of-range row/col would
+          // be read by the filter/mask effects (loadPattern(row,col)) and fire
+          // an out-of-bounds /pattern/{r}/{c} request → 400. Clamp here so the
+          // state can never leave the grid.
+          onChange={(e) => setRow(Math.max(0, Math.min(Number(e.target.value) || 0, maxRow)))}
+          min={0}
+          max={maxRow}
+          title={t('hoverTips.rowInput')}
+          style={{ width: 60 }}
+        />
+        <Label secondary small>{t('navigation.colLabel')}</Label>
+        <NumberInput
+          value={col}
+          onChange={(e) => setCol(Math.max(0, Math.min(Number(e.target.value) || 0, maxCol)))}
+          min={0}
+          max={maxCol}
+          title={t('hoverTips.colInput')}
+          style={{ width: 60 }}
+        />
+        <Button onClick={() => navigateTo(row, col)} disabled={!ebsdLoaded} small title={t('hoverTips.goButton')}>
+          {t('navigation.go')}
+        </Button>
+      </div>
+
+      {/* Pattern action footer — PC-refinement quick action */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: spacing.innerSpacing,
+        padding: `${spacing.compactMargin}px ${spacing.innerMargin}px`,
+        background: colors.bgSecondary, borderTop: `1px solid ${colors.border}`,
+        flexShrink: 0,
+      }}>
+        <span style={{ fontSize: '8pt', color: colors.textSecondary }}>
+          {t('patternFooter.zoom', { percent: Math.round(patZoom * 100) })}
+        </span>
+        <div style={{ flex: 1 }} />
+        <CheckRow
+          checked={showEdsOverlay}
+          onChange={setShowEdsOverlay}
+          label={t('patternFooter.edsOverlay')}
+          title={t('patternFooter.edsOverlayTooltip')}
+        />
+        <Button
+          variant="purple"
+          small
+          onClick={handleAddCurrentPattern}
+          disabled={!ebsdLoaded}
+          title={t('pcRefinement.addToPcRefinementTooltip')}
+        >
+          {t('pcRefinement.addToPcRefinement')}
+          {pcPatternCount > 0 && (
+            <span style={{
+              marginLeft: 4, background: colors.textOnAccent, color: colors.purple,
+              fontSize: '8pt', fontWeight: 700, borderRadius: 8, padding: '1px 6px',
+            }}>
+              {pcPatternCount}
+            </span>
+          )}
+        </Button>
+      </div>
+    </div>
+  );
+
+  // -------------------------------------------------------------------------
+  // Log + Merge panel (bottom of right vertical splitter)
+  // -------------------------------------------------------------------------
+  const logPanel = (
+    <div style={{ display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+
+      {/* Compare panel (Ctrl+K) */}
+      {compareOpen && datasets.length >= 2 && (
+        <div style={{
+          display: 'flex', gap: spacing.innerSpacing, padding: spacing.innerMargin,
+          background: colors.bgSecondary, borderBottom: `1px solid ${alpha(colors.cyan, 27)}`, flexShrink: 0,
+        }}>
+          {[
+            { key: 'left', label: t('compare.left'), state: compareLeft, set: setCompareLeft, imgSet: setCompareLeftImg, img: compareLeftImg },
+            { key: 'right', label: t('compare.right'), state: compareRight, set: setCompareRight, imgSet: setCompareRightImg, img: compareRightImg },
+          ].map(({ key, label, state, set, imgSet, img }) => (
+            <div key={key} style={{ flex: 1 }}>
+              <Label secondary small>{label}</Label>
+              <select
+                value={state || ''}
+                title={t('hoverTips.compareSelect')}
+                onChange={async (e) => {
+                  const name = e.target.value;
+                  set(name);
+                  if (name) {
+                    try {
+                      await ebsdApi.selectDataset(name);
+                      const r = await ebsdApi.getPattern(row, col);
+                      imgSet(r.data?.image);
+                      await ebsdApi.selectDataset(activeDataset || datasets[0]?.name);
+                    } catch { imgSet(null); }
+                  }
+                }}
+                style={{
+                  width: '100%', background: colors.bg, border: `1px solid ${colors.border}`,
+                  borderRadius: 3, color: colors.text, fontSize: '9pt', padding: '3px 6px',
+                  marginTop: 2,
+                }}
+              >
+                <option value="">{t('compare.selectPlaceholder')}</option>
+                {datasets.map((d) => <option key={d.name} value={d.name}>{d.name}</option>)}
+              </select>
+              {img && (
+                <img
+                  className="image-reveal"
+                  src={`data:image/png;base64,${img}`}
+                  alt={label}
+                  style={{ width: '100%', marginTop: 4, imageRendering: 'pixelated' }}
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Collapsible log bar */}
+      <div
+        onClick={() => setLogExpanded((v) => !v)}
+        title={logExpanded ? t('hoverTips.logToggleCollapse') : t('hoverTips.logToggleExpand')}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: `2px ${spacing.innerMargin}px`, height: 26,
+          background: colors.bgSecondary, borderTop: `1px solid ${colors.border}`,
+          cursor: 'pointer', flexShrink: 0,
+        }}
+      >
+        <span style={{
+          fontSize: '9pt', color: colors.textSecondary,
+          transform: logExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s',
+        }}>{'\u25B6'}</span>
+        <span style={{ fontSize: '8pt', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          {t('log.label')}
+        </span>
+        <span style={{
+          flex: 1, fontFamily: "'Courier New', monospace", fontSize: '9pt',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          color: logLines.length
+            ? (logLines[logLines.length - 1].includes('ERROR') ? colors.red : colors.green)
+            : colors.textSecondary,
+        }}>
+          {logLines.length ? logLines[logLines.length - 1] : t('log.ready')}
+        </span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            if (logLines.length === 0) return;
+            navigator.clipboard.writeText(logLines.join('\n')).then(() => {
+              setLogCopied(true);
+              setTimeout(() => setLogCopied(false), 1200);
+            }).catch(() => {});
+          }}
+          disabled={logLines.length === 0}
+          title={logCopied ? t('log.copied') : t('log.copyTooltip')}
+          aria-label={t('log.copyAriaLabel')}
+          style={{
+            background: 'none', border: 'none',
+            cursor: logLines.length ? 'pointer' : 'default',
+            color: logCopied ? colors.green : colors.textSecondary,
+            fontSize: '9pt', padding: '1px 4px',
+            opacity: logLines.length ? 0.7 : 0.3,
+          }}
+        >
+          {logCopied ? '\u2713' : '\uD83D\uDCCB'}
+        </button>
+      </div>
+
+      {/* Expanded log body */}
+      {logExpanded && (
+        <div
+          ref={logRef}
+          aria-label={t('log.ariaLabel')}
+          className="thin-scrollbar"
+          style={{
+            maxHeight: 140, overflowY: 'auto',
+            padding: `${spacing.compactMargin}px ${spacing.innerMargin}px`,
+            background: colors.bg, fontFamily: "'Courier New', monospace",
+            fontSize: '9pt', color: colors.textSecondary,
+            borderTop: `1px solid ${colors.border}`,
+          }}
+        >
+          {logLines.length === 0 ? (
+            <span style={{ opacity: 0.5 }}>{t('log.ready')}</span>
+          ) : logLines.map((line, i) => {
+            const color = line.includes('ERROR') ? colors.red
+              : line.includes('complete') || line.includes('loaded') || line.includes('Loaded') ? colors.green
+              : line.includes('WARNING') ? colors.orange
+              : colors.textSecondary;
+            return (
+              <div key={i} style={{ color, display: 'flex', gap: 8 }}>
+                <span style={{ color: colors.textSecondary, opacity: 0.3, minWidth: 20, textAlign: 'right', userSelect: 'none' }}>{i + 1}</span>
+                <span>{line}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
+  // =========================================================================
+  // ROOT RENDER
+  // =========================================================================
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const file = e.dataTransfer?.files?.[0];
+        if (!file) return;
+        // Electron exposes .path on dropped files
+        const path = file.path || file.name;
+        if (path && /\.(h5oina|h5|hdf5)$/i.test(path)) {
+          doLoadFile(path);
+        }
+      }}
+      style={{
+        display: 'flex', flexDirection: 'column', height: '100%',
+        color: colors.text, fontFamily: "'Segoe UI', system-ui, sans-serif",
+        fontSize: '10pt', background: colors.bg,
+        position: 'relative',
+        outline: dragOver ? `2px dashed ${colors.accent}` : 'none',
+      }}
+    >
+
+      {/* Load progress modal — fixed-position overlay, position:fixed inset:0
+          so it always sits above all viewer chrome regardless of layout. */}
+      <LoadProgressModal
+        isOpen={loadProgressOpen}
+        progressState={loadProgressState}
+        onClose={() => setLoadProgressOpen(false)}
+      />
+
+      {/* Drag overlay */}
+      {dragOver && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 60,
+          background: `${colors.accent}15`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            fontSize: '14pt', color: colors.accent, fontWeight: 700,
+            padding: '16px 32px', borderRadius: 8,
+            background: `${colors.bg}ee`, border: `2px dashed ${colors.accent}`,
+          }}>
+            {t('drag.dropHint')}
+          </div>
+        </div>
+      )}
+
+      {/* Full-page loading overlay during file load */}
+      {loadLoading && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 50,
+          background: 'rgba(26,27,38,0.75)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          gap: 12,
+        }}>
+          <div style={{ fontSize: 28, animation: 'spin 1.2s linear infinite' }}>&#9676;</div>
+          <div style={{ fontSize: '12pt', color: colors.accent, fontWeight: 600 }}>{t('loadingOverlay.title')}</div>
+          <div style={{ fontSize: '9pt', color: colors.textSecondary }}>{t('loadingOverlay.subtitle')}</div>
+          <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
+      {/* Processing overlay for pattern operations */}
+      {processingBusy && !loadLoading && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 50,
+          background: 'rgba(26,27,38,0.65)',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          gap: 12,
+        }}>
+          <div style={{ fontSize: 28, animation: 'spin 1.2s linear infinite' }}>&#9881;</div>
+          <div style={{ fontSize: '12pt', color: colors.accent, fontWeight: 600 }}>{processingLabel}...</div>
+          {(() => {
+            const pp = procProgress;
+            const frac = typeof pp?.fraction === 'number' ? Math.max(0, Math.min(1, pp.fraction)) : null;
+            if (frac === null) {
+              return <div style={{ fontSize: '9pt', color: colors.textSecondary }}>{t('processingOverlay.subtitle')}</div>;
+            }
+            const pct = Math.round(frac * 100);
+            const el = typeof pp.elapsed === 'number' ? pp.elapsed : 0;
+            const rate = el > 0 && frac > 0 ? (frac / el) : 0;           // fraction/s
+            const etaS = rate > 0 ? Math.max(0, Math.round((1 - frac) / rate)) : null;
+            const itps = (pp.total && el > 0) ? (pp.done / el) : null;   // chunks/s
+            const elStr = el.toFixed(0);
+            let statsText;
+            if (itps && etaS != null) {
+              statsText = t('processingOverlay.statsRateEta', { elapsed: elStr, rate: itps.toFixed(1), eta: etaS });
+            } else if (itps) {
+              statsText = t('processingOverlay.statsRate', { elapsed: elStr, rate: itps.toFixed(1) });
+            } else if (etaS != null) {
+              statsText = t('processingOverlay.statsEta', { elapsed: elStr, eta: etaS });
+            } else {
+              statsText = t('processingOverlay.stats', { elapsed: elStr });
+            }
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, width: 320, maxWidth: '70%' }}>
+                <div style={{ width: '100%', height: 8, borderRadius: 4, background: alpha(colors.accent, 20), overflow: 'hidden' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: colors.accent, transition: 'width 0.3s ease' }} />
+                </div>
+                <div style={{ fontSize: '10pt', color: colors.text, fontVariantNumeric: 'tabular-nums' }}>
+                  {pp.total ? t('processingOverlay.chunks', { percent: pct, done: pp.done, total: pp.total }) : t('processingOverlay.percentOnly', { percent: pct })}
+                </div>
+                <div style={{ fontSize: '8.5pt', color: colors.textSecondary }}>
+                  {statsText}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Page header */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: `${spacing.compactMargin}px ${spacing.innerMargin}px`,
+        flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+          <h1 style={{ margin: 0, fontSize: '18pt', fontWeight: 700, color: colors.accent }}>{t('header.title')}</h1>
+          <span style={{ fontSize: '9pt', color: colors.textSecondary }}>
+            {t('header.subtitle')}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: spacing.innerSpacing }}>
+          <FileSwitcher onSwitched={handleHeaderSwitcherSwitched} />
+          <Button
+            variant="ghost" small
+            onClick={() => onNavigate?.('h5viewer')}
+            title={t('header.hdf5ViewerTooltip')}
+          >
+            {t('header.hdf5Viewer')}
+          </Button>
+          <Button
+            variant="ghost" small
+            onClick={() => onNavigate?.('eds')}
+            title={t('header.edsPageTooltip')}
+          >
+            {t('header.edsPage')}
+          </Button>
+        </div>
+      </div>
+
+      {/* Main area: horizontal splitter (left panel | right panel) */}
+      <ResizableSplitter
+        defaultLeftWidth={270}
+        minLeftWidth={200}
+        maxLeftWidth={480}
+        style={{ flex: 1, minHeight: 0 }}
+        left={leftPanel}
+        right={
+          <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+            <div style={{ flex: 1, minHeight: 0 }}>{plotPanel}</div>
+            {logPanel}
+          </div>
+        }
+      />
+
+      {/* Info bar */}
+      <div style={{
+        padding: `2px ${spacing.innerMargin}px`,
+        background: colors.bgSecondary, borderTop: `1px solid ${colors.border}`,
+        fontSize: '9pt', color: colors.textSecondary,
+        display: 'flex', gap: 16, flexShrink: 0, alignItems: 'center',
+      }}>
+        {ebsdInfo ? (
+          <>
+            <span style={{ fontWeight: 500, color: colors.text }} title={filePath}>{filePath.split(/[\\/]/).pop()}</span>
+            {gridShape && <span title={t('infoBar.gridTooltip', { rows: gridShape[0], cols: gridShape[1], pixels: (gridShape[0] * gridShape[1]).toLocaleString() })}>{t('infoBar.grid', { rows: gridShape[0], cols: gridShape[1] })}</span>}
+            {ebsdInfo.pattern_shape && (
+              <span>{t('infoBar.pattern', { rows: ebsdInfo.pattern_shape[0], cols: ebsdInfo.pattern_shape[1] })}</span>
+            )}
+            <span style={{ color: colors.accent }} title={t('infoBar.pixelTooltip')}>
+              [{row}, {col}]
+            </span>
+            {activeDataset && (datasets.length > 1 || /_/.test(activeDataset)) && (
+              <span style={{ color: colors.yellow }}>{activeDataset}</span>
+            )}
+            {detector?.has_detector && detector.pc?.length > 0 && (
+              <span title={t('infoBar.pcTooltip')}>{t('infoBar.pcLabel', { values: detector.pc.map((v) => v.toFixed(3)).join(', ') })}</span>
+            )}
+            {gridShape && ebsdInfo.pattern_shape && (() => {
+              const mb = (gridShape[0] * gridShape[1] * ebsdInfo.pattern_shape[0] * ebsdInfo.pattern_shape[1]) / (1024 * 1024);
+              return <span style={{ opacity: 0.6 }} title={t('infoBar.sizeTooltip', { gridRows: gridShape[0], gridCols: gridShape[1], patRows: ebsdInfo.pattern_shape[0], patCols: ebsdInfo.pattern_shape[1] })}>{mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(0)} MB`}</span>;
+            })()}
+          </>
+        ) : (
+          <span style={{ fontStyle: 'italic', opacity: 0.6 }}>
+            {'\u25A3'} {t('infoBar.noFile')}
+          </span>
+        )}
+      </div>
+      <ConfirmDialog {...confirmProps} />
+      <PromptDialog {...promptProps} />
+    </div>
+  );
+}

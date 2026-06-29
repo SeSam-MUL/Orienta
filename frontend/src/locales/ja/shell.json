@@ -1,0 +1,48 @@
+{
+  "appTitle": "Orienta",
+  "appSubtitle": "EBSD パターン解析",
+  "loadingModule": "モジュールを読み込み中…",
+  "toolbar": {
+    "edsColors": "EDS カラー",
+    "edsColorsTooltip": "EDS オーバーレイマップの元素カラーを設定",
+    "shortcutsTooltip": "キーボードショートカット (?)"
+  },
+  "disconnected": {
+    "message": "バックエンド未接続 — 次のコマンドでサーバーを起動してください"
+  },
+  "crash": {
+    "title": "このモジュールがクラッシュしました"
+  },
+  "sidebar": {
+    "expand": "サイドバーを展開",
+    "collapse": "サイドバーを折りたたむ",
+    "dataLoaded": "データ読み込み済み",
+    "themeTooltip": "テーマ：{{name}} — クリックで変更",
+    "backendTooltip": "バックエンド：{{status}}",
+    "connected": "接続済み",
+    "language": "言語"
+  },
+  "hdf5": {
+    "title": "HDF5 ビューア"
+  },
+  "shortcuts": {
+    "title": "キーボードショートカット",
+    "closeHint": "{{k1}} または {{k2}} で閉じる"
+  },
+  "hoverTips": {
+    "errorTryAgain": "エラーを解除し、アプリを再読み込みせずにこのモジュールを再マウントします",
+    "errorReload": "ブラウザでアプリケーション全体を再読み込みします",
+    "h5ViewerClose": "HDF5 ビューアパネルを閉じる (Ctrl+H)",
+    "shortcutHelpClose": "キーボードショートカットのヘルプを閉じる",
+    "devLogFilter": "このカテゴリでログエントリを絞り込みます",
+    "fileSwitcher": "アクティブな読み込み済みファイルを切り替えます — バックエンドで再読み込みし、全ページを更新します",
+    "openSettings": "クリックして設定を開く",
+    "appStatus": "アプリケーションの状態",
+    "moduleNav": "モジュールナビゲーション",
+    "dismissNotification": "通知を閉じる",
+    "devOpen": "開発パネルを開く (Ctrl+Shift+D)",
+    "copyLogs": "ログをコピー",
+    "clearLogs": "ログをクリア",
+    "closeDevPanel": "閉じる (Ctrl+Shift+D)"
+  }
+}

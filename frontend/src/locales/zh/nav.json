@@ -1,0 +1,27 @@
+{
+  "sections": {
+    "data": "数据",
+    "calibration": "校准",
+    "indexAnalyze": "标定与分析",
+    "tools": "工具",
+    "settings": "设置"
+  },
+  "pages": {
+    "dashboard": { "label": "仪表板", "tooltip": "显示模块概览和最近文件的主页" },
+    "ebsdviewer": { "label": "EBSD 查看器", "tooltip": "加载 H5OINA/HDF5 文件，查看花样和 EDS 成分" },
+    "eds": { "label": "EDS 分析", "tooltip": "元素分布图、定量、基于成分的相推荐" },
+    "pcrefinement": { "label": "PC 精修", "tooltip": "花样中心 (PC) 的校准与精修" },
+    "crystal": { "label": "晶体数据库", "tooltip": "CIF/XTAL 转换、晶体数据库、DWF 编辑器" },
+    "simulation": { "label": "模拟", "tooltip": "EMsoft 蒙特卡洛 + 主花样模拟" },
+    "database": { "label": "数据库浏览器", "tooltip": "浏览网络共享上的模拟结果" },
+    "indexing": { "label": "标定", "tooltip": "Hough、Dictionary 或 Spherical (EMSphinx) 标定" },
+    "phasemap": { "label": "相分布图", "tooltip": "用可配置比例尺可视化标定结果" },
+    "analysis": { "label": "分析", "tooltip": "等效于 MTEX 的后处理：晶粒分析、织构、RX 分类" },
+    "batch": { "label": "批处理", "tooltip": "带检查点恢复的多相批量标定" },
+    "refinement": { "label": "精修", "tooltip": "查看并精修多相标定结果" },
+    "crystalhint": { "label": "晶体提示", "tooltip": "从花样检测对称性和点阵。当库中无匹配时推荐候选相。" },
+    "mlhub": { "label": "ML 预测器", "tooltip": "从标定结果训练 ML 模型，预测相" },
+    "settings": { "label": "设置", "tooltip": "系统状态、服务器模式、EMsoft/EMSphinx 路径" }
+  },
+  "hdf5Viewer": { "label": "HDF5 查看器", "tooltip": "浏览 HDF5 文件结构、花样、EDS 图" }
+}

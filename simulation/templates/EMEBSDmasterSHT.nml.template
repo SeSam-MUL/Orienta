@@ -1,0 +1,29 @@
+&EBSDmasterSHTvars
+ ! kleinster d-Spacing [nm]
+ dmin = {dmin},
+ !
+ ! Anzahl OpenMP-Threads (0 = alle verfügbaren nutzen)
+ nthreads = {nthreads},
+ !
+ ! HDF5-Datei, die EMMCOpenCL erzeugt hat (relativ zu EMdatapathname)
+ energyfile = '{energyfile}',
+ !
+ ! Bethe-Parameter-Datei (liegt im selben Ordner wie diese NML)
+ BetheParametersFile = '{BetheParametersFile}',
+ !
+ ! Soll eine DOI/Referenz mit in die Master-Pattern-Datei?
+ useDOI = '{useDOI}',
+ !
+ ! Für Spherical Indexing wird der SHT-Dateiname so zusammengesetzt:
+ !   <Formel> (<Name>) [<Symbol>] {{<Volt> [<Tilt>deg]}}.sht
+ !
+ SHT_formula = '{SHT_formula}',
+ SHT_name = '{SHT_name}',
+ SHT_structuresymbol = '{SHT_structuresymbol}',
+ !
+ ! Ausgabeverzeichnis für .sht (unter EMdatapathname)
+ SHT_folder = '{SHT_folder}',
+ !
+ ! Soll eine Benachrichtigung verschickt werden?
+ Notify = '{Notify}',
+ /

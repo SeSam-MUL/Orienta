@@ -1,0 +1,50 @@
+# Citation File Format — https://citation-file-format.github.io/
+# GitHub reads this for the "Cite this repository" button; Zenodo imports it too.
+# FILL the <...> placeholders before the public release / DOI mint.
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "Orienta"
+abstract: >-
+  Desktop application for EBSD (electron backscatter diffraction) pattern
+  analysis: load Oxford H5OINA / EDAX H5 data, refine the pattern center, index
+  crystal phases (Hough / Dictionary / Spherical), integrate EDS chemistry, and
+  produce phase maps, grain/texture analyses, and publication figures.
+type: software
+authors:
+  - given-names: "Sebastian"
+    family-names: "Samberger"
+    orcid: "https://orcid.org/0009-0000-2559-0172"
+    affiliation: "Montanuniversität Leoben"
+  - given-names: "Stefan"
+    family-names: "Pogatscher"
+    orcid: "https://orcid.org/0000-0002-6500-9570"
+    affiliation: "Montanuniversität Leoben"
+  - given-names: "Equo"
+    family-names: "Kobayashi"
+    orcid: "https://orcid.org/0000-0001-8043-5044"
+    affiliation: "Tokyo Institute of Technology"
+  - given-names: "Irmgard"
+    family-names: "Weißensteiner"
+    orcid: "https://orcid.org/0000-0002-8917-5231"
+    affiliation: "Montanuniversität Leoben"
+version: "0.1.0"
+date-released: "2026-06-29"
+license: "GPL-3.0-or-later"
+url: "https://doi.org/10.5281/zenodo.21021938"
+# repository-code: add the public source repository URL here once it is created.
+keywords:
+  - EBSD
+  - electron backscatter diffraction
+  - crystallography
+  - indexing
+  - pattern center
+  - EDS
+  - phase mapping
+  - kikuchipy
+doi: "10.5281/zenodo.21021938"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.21021938"
+    description: "Zenodo archive of version 0.1.0"
+# After publishing, Zenodo also mints a concept DOI (always resolves to the
+# latest version); you may add it here as a second identifier.

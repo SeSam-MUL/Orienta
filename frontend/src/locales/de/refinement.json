@@ -1,0 +1,56 @@
+{
+  "page": {
+    "title": "Phasenverfeinerung",
+    "fileStemPlaceholder": "Dateistamm (z. B. sample_B)...",
+    "searchDirPlaceholder": "Suchverzeichnis (optional)...",
+    "clear": "Leeren",
+    "uncertaintyOverlay": "Unsicherheits-Overlay",
+    "loadingPhaseMap": "Phasenkarte wird geladen...",
+    "emptyPrompt": "Dateistamm eingeben und auf Laden klicken, um mit der Verfeinerung zu beginnen."
+  },
+  "hoverTips": {
+    "showUncertainty": "Pixel mit niedrigem CI (hohe Unsicherheit) auf der Karte ueberlagern"
+  },
+  "tooltips": {
+    "fileStem": "Dateistamm des Datensatzes (z. B. sample_B) des Multiphasen-Indizierungs-Checkpoints zum Laden eingeben.",
+    "searchDir": "Optionaler Ordner zum Suchen der Checkpoint-Datei; leer lassen fuer den Standardort.",
+    "load": "Indizierungs-Checkpoint fuer den angegebenen Dateistamm laden und dessen Phasenkarte anzeigen.",
+    "clear": "Geladenen Datensatz entfernen und alle Aenderungen sowie Pixelauswahl zuruecksetzen.",
+    "uncertaintyOverlay": "Abdunkeln unsicherer Pixel mit niedrigem CI auf der Phasenkarte ein-/ausschalten.",
+    "phaseMapCanvas": "Pixel anklicken, um seine Phasenkandidaten und den Konfidenzindex (CI) zu pruefen.",
+    "assign": "Diese Phase dem ausgewaehlten Pixel manuell zuweisen und das automatische Ergebnis ueberschreiben.",
+    "modePixel": "Klickmodus: einzelne Pixel auf der Karte auswaehlen, um ihre Phase neu zuzuweisen.",
+    "ciThreshold": "Konfidenzindex-Schwellenwert (CI) festlegen, unterhalb dessen Pixel als unsicher gelten.",
+    "export": "Verfeinerte Phasenkarte exportieren; oeffnet die Export-URL aus der Zusammenfassung."
+  },
+  "errors": {
+    "loadFailed": "Laden fehlgeschlagen",
+    "overrideFailed": "Aenderung fehlgeschlagen"
+  },
+  "inspector": {
+    "title": "Pixel-Inspektor",
+    "prompt": "Pixel auf der Karte anklicken, um seine Phasenkandidaten zu pruefen.",
+    "pixelCoords": "Pixel ({{row}}, {{col}})",
+    "noPhaseData": "Keine Phasendaten.",
+    "phaseFallback": "Phase {{id}}",
+    "ciLabel": "CI {{value}}",
+    "assign": "Zuweisen"
+  },
+  "stats": {
+    "title": "Statistik",
+    "totalPixels": "Pixel gesamt",
+    "overridden": "Geaendert",
+    "avgCi": "Mittl. CI",
+    "lowCi": "Niedriges CI (<0,1)"
+  },
+  "phaseMap": {
+    "noData": "Keine Phasenkartendaten geladen.",
+    "ariaLabel": "Phasenkarte — anklicken, um Pixel zu pruefen"
+  },
+  "tools": {
+    "modePixel": "Pixel",
+    "ciLessThan": "CI <",
+    "overrideCount_one": "{{count}} Aenderung",
+    "overrideCount_other": "{{count}} Aenderungen"
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "windowTitle": "极图 — Orienta",
+  "controls": {
+    "phaseLabel": "相",
+    "phaseTooltip": "选择要绘制极点的已标定晶体相。",
+    "phaseAria": "相",
+    "noPhases": "（无相）",
+    "hklLabel": "极点族（hkl，逗号分隔）",
+    "hklTooltip": "以逗号分隔的 hkl 指数输入极点族，例如 100,110,111。",
+    "hklAria": "hkl",
+    "styleLabel": "样式",
+    "styleTooltip": "选择绘图样式：密度图、散点或两者组合。",
+    "styleAria": "样式",
+    "styleBoth": "密度 + 散点",
+    "styleDensity": "密度（Aztec 样式）",
+    "styleScatter": "散点（MTEX 样式）"
+  },
+  "view": {
+    "rendering": "正在渲染极图…",
+    "imageAlt": "极图",
+    "noResult": "尚无标定结果。"
+  },
+  "hoverTips": {
+    "zIntoPlane": "将 Z 视为指向平面内（翻转坐标系的出平面方向）。",
+    "applyToExport": "同时将此旋转写入导出的 .ang/.h5（与厂商偏移组合）。"
+  },
+  "coordSys": {
+    "title": "坐标系",
+    "noDataset": "没有活动数据集。",
+    "rotationMode": "旋转模式",
+    "modeOpt": {
+      "preset": "预设",
+      "axis_angle": "轴–角",
+      "euler": "欧拉 (Bunge ZXZ)"
+    },
+    "preset": "预设",
+    "presetOpt": {
+      "identity": "恒等(原生)",
+      "mtex_default": "MTEX 默认",
+      "aztec_oxford": "Aztec / Oxford (Rz +90°)",
+      "edax": "EDAX / TSL"
+    },
+    "axis": "轴 {{ax}}",
+    "angle": "角度",
+    "xDirection": "X方向",
+    "xDirOpt": {
+      "east": "X → 东(右)",
+      "north": "X → 北(上)"
+    },
+    "projection": "投影",
+    "projOpt": {
+      "equal_area": "等面积(Schmidt)",
+      "stereographic": "立体投影(Wulff)"
+    },
+    "hemisphere": "半球",
+    "hemiOpt": {
+      "upper": "上半球",
+      "lower": "下半球"
+    },
+    "zIntoPlane": "Z 指向平面内",
+    "applyToExports": "应用于导出"
+  }
+}

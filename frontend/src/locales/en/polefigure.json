@@ -1,0 +1,63 @@
+{
+  "windowTitle": "Pole Figures — Orienta",
+  "controls": {
+    "phaseLabel": "Phase",
+    "phaseTooltip": "Select which indexed crystal phase to plot poles for.",
+    "phaseAria": "Phase",
+    "noPhases": "(no phases)",
+    "hklLabel": "Pole families (hkl, comma-sep)",
+    "hklTooltip": "Enter pole families as comma-separated hkl indices, e.g. 100,110,111.",
+    "hklAria": "hkl",
+    "styleLabel": "Style",
+    "styleTooltip": "Choose plot style: density map, scatter points, or both combined.",
+    "styleAria": "Style",
+    "styleBoth": "Density + points",
+    "styleDensity": "Density (Aztec style)",
+    "styleScatter": "Points (MTEX style)"
+  },
+  "view": {
+    "rendering": "Rendering pole figure…",
+    "imageAlt": "Pole figure",
+    "noResult": "No indexing result yet."
+  },
+  "hoverTips": {
+    "zIntoPlane": "Treat Z as pointing into the plane (flips the out-of-page sense of the coordinate frame).",
+    "applyToExport": "Also write this rotation into exported .ang/.h5 (composed with the vendor offset)."
+  },
+  "coordSys": {
+    "title": "Coordinate System",
+    "noDataset": "No active dataset.",
+    "rotationMode": "Rotation mode",
+    "modeOpt": {
+      "preset": "Preset",
+      "axis_angle": "Axis–angle",
+      "euler": "Euler (Bunge ZXZ)"
+    },
+    "preset": "Preset",
+    "presetOpt": {
+      "identity": "Identity (native)",
+      "mtex_default": "MTEX default",
+      "aztec_oxford": "Aztec / Oxford (Rz +90°)",
+      "edax": "EDAX / TSL"
+    },
+    "axis": "axis {{ax}}",
+    "angle": "angle",
+    "xDirection": "X direction",
+    "xDirOpt": {
+      "east": "X → East (right)",
+      "north": "X → North (up)"
+    },
+    "projection": "Projection",
+    "projOpt": {
+      "equal_area": "Equal-area (Schmidt)",
+      "stereographic": "Stereographic (Wulff)"
+    },
+    "hemisphere": "Hemisphere",
+    "hemiOpt": {
+      "upper": "Upper",
+      "lower": "Lower"
+    },
+    "zIntoPlane": "Z into plane",
+    "applyToExports": "Apply to exports"
+  }
+}

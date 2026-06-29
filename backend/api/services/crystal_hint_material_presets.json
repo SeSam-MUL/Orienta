@@ -1,0 +1,122 @@
+{
+  "presets": {
+    "AA226": {
+      "label": "AA226 / AlSi9Cu3(Fe)",
+      "description": "Aluminium-Silicon-Copper Druckgusslegierung (die casting)",
+      "elements": ["Al", "Si", "Cu", "Fe", "Mg", "Zn", "Mn"],
+      "expected_phases": [
+        {"name": "alpha-Al", "sg": "Fm-3m", "a_A": 4.05, "category": "matrix"},
+        {"name": "Si (eutectic)", "sg": "Fd-3m", "a_A": 5.43, "category": "eutectic"},
+        {"name": "Al2Cu (theta)", "sg": "I4/mcm", "a_A": 6.07, "c_A": 4.87, "category": "intermetallic"},
+        {"name": "alpha-Al(Fe,Mn)Si", "sg": "Im-3", "a_A": 12.56, "category": "intermetallic"},
+        {"name": "beta-Al5FeSi", "sg": "A2/a", "a_A": 6.16, "c_A": 20.81, "category": "intermetallic"},
+        {"name": "Q-Al5Cu2Mg8Si6", "sg": "P-62m", "a_A": 10.39, "c_A": 4.05, "category": "intermetallic"},
+        {"name": "Mg2Si", "sg": "Fm-3m", "a_A": 6.39, "category": "precipitate"},
+        {"name": "Al7Cu2Fe", "sg": "P4/mnc", "a_A": 6.34, "c_A": 14.7, "category": "intermetallic"}
+      ],
+      "heat_treatments": [
+        "480-540C solution treatment: dissolves Mg2Si and refines intermetallics",
+        "150-200C T6 aging: precipitates Mg2Si and beta'' needles"
+      ]
+    },
+    "AA6061": {
+      "label": "AA6061 / AlMg1SiCu",
+      "description": "Mg-Si hardenable extrusion alloy (general structural)",
+      "elements": ["Al", "Mg", "Si", "Cu", "Fe", "Mn", "Cr"],
+      "expected_phases": [
+        {"name": "alpha-Al", "sg": "Fm-3m", "a_A": 4.05, "category": "matrix"},
+        {"name": "Mg2Si", "sg": "Fm-3m", "a_A": 6.39, "category": "precipitate"},
+        {"name": "beta''-Mg5Si6", "sg": "C2/m", "a_A": 15.16, "category": "GP-zone"},
+        {"name": "alpha-Al(Fe,Mn)Si", "sg": "Im-3", "a_A": 12.56, "category": "intermetallic"},
+        {"name": "beta-Al5FeSi", "sg": "A2/a", "a_A": 6.16, "category": "intermetallic"}
+      ],
+      "heat_treatments": [
+        "530C solution treatment + water quench",
+        "175C T6 peak-age (~8h)"
+      ]
+    },
+    "AA6063": {
+      "label": "AA6063 / AlMg0.7Si",
+      "description": "Architectural extrusion (window frames, profiles)",
+      "elements": ["Al", "Mg", "Si", "Fe"],
+      "expected_phases": [
+        {"name": "alpha-Al", "sg": "Fm-3m", "a_A": 4.05, "category": "matrix"},
+        {"name": "Mg2Si", "sg": "Fm-3m", "a_A": 6.39, "category": "precipitate"},
+        {"name": "alpha-Al(Fe,Mn)Si", "sg": "Im-3", "a_A": 12.56, "category": "intermetallic"},
+        {"name": "beta-Al5FeSi", "sg": "A2/a", "a_A": 6.16, "category": "intermetallic"}
+      ],
+      "heat_treatments": [
+        "520C solution + air-quench",
+        "200C T5/T6 aging"
+      ]
+    },
+    "AA7075": {
+      "label": "AA7075 / AlZn5.5MgCu",
+      "description": "Aerospace high-strength alloy (Zn-Mg-Cu)",
+      "elements": ["Al", "Zn", "Mg", "Cu", "Cr", "Fe", "Si", "Mn"],
+      "expected_phases": [
+        {"name": "alpha-Al", "sg": "Fm-3m", "a_A": 4.05, "category": "matrix"},
+        {"name": "eta-MgZn2", "sg": "P6_3/mmc", "a_A": 5.22, "c_A": 8.57, "category": "precipitate"},
+        {"name": "T-Al2Mg3Zn3", "sg": "Im-3m", "a_A": 14.31, "category": "intermetallic"},
+        {"name": "S-Al2CuMg", "sg": "Cmcm", "a_A": 4.0, "category": "intermetallic"}
+      ],
+      "heat_treatments": [
+        "470C solution + water quench",
+        "120C T6 peak-age (~24h)",
+        "Two-step T73 over-aging"
+      ]
+    },
+    "AA2024": {
+      "label": "AA2024 / AlCu4Mg1",
+      "description": "Aircraft skin aerospace alloy (Cu-Mg system)",
+      "elements": ["Al", "Cu", "Mg", "Mn", "Fe", "Si"],
+      "expected_phases": [
+        {"name": "alpha-Al", "sg": "Fm-3m", "a_A": 4.05, "category": "matrix"},
+        {"name": "Al2Cu (theta)", "sg": "I4/mcm", "a_A": 6.07, "c_A": 4.87, "category": "intermetallic"},
+        {"name": "S-Al2CuMg", "sg": "Cmcm", "a_A": 4.0, "category": "intermetallic"},
+        {"name": "Al20Mn3Cu2", "sg": "Cmcm", "a_A": 24.1, "category": "dispersoid"}
+      ],
+      "heat_treatments": [
+        "495C solution + water quench",
+        "190C T6 aging or natural T4"
+      ]
+    },
+    "Pure_Al": {
+      "label": "Pure Al (1xxx series)",
+      "description": "Commercial purity aluminium, annealed reference",
+      "elements": ["Al", "Fe", "Si"],
+      "expected_phases": [
+        {"name": "alpha-Al", "sg": "Fm-3m", "a_A": 4.05, "category": "matrix"},
+        {"name": "Al3Fe (theta)", "sg": "C2/m", "a_A": 15.49, "category": "intermetallic-trace"},
+        {"name": "Al6Fe", "sg": "Cmcm", "a_A": 7.43, "category": "intermetallic-trace"}
+      ],
+      "heat_treatments": ["Annealed O-temper"]
+    },
+    "AlSi-cast_generic": {
+      "label": "AlSi-cast (generic Al-Si casting alloy)",
+      "description": "Open-ended Al-Si casting alloy template (AA319, AA356, AA413, etc.)",
+      "elements": ["Al", "Si", "Cu", "Fe", "Mg", "Mn"],
+      "expected_phases": [
+        {"name": "alpha-Al", "sg": "Fm-3m", "a_A": 4.05, "category": "matrix"},
+        {"name": "Si (eutectic)", "sg": "Fd-3m", "a_A": 5.43, "category": "eutectic"},
+        {"name": "alpha-Al(Fe,Mn)Si", "sg": "Im-3", "a_A": 12.56, "category": "intermetallic"},
+        {"name": "beta-Al5FeSi", "sg": "A2/a", "a_A": 6.16, "category": "intermetallic"},
+        {"name": "Al2Cu (theta)", "sg": "I4/mcm", "a_A": 6.07, "category": "intermetallic"},
+        {"name": "Mg2Si", "sg": "Fm-3m", "a_A": 6.39, "category": "precipitate"}
+      ],
+      "heat_treatments": [
+        "As-cast",
+        "T6 = 535C solution + 165C aging",
+        "T7 = 535C solution + 200C over-aging"
+      ]
+    },
+    "Custom": {
+      "label": "Custom (define your own)",
+      "description": "Empty template — fill in elements + expected phases manually",
+      "elements": [],
+      "expected_phases": [],
+      "heat_treatments": []
+    }
+  },
+  "schema_version": 1
+}

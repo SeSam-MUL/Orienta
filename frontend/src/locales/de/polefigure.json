@@ -1,0 +1,63 @@
+{
+  "windowTitle": "Polfiguren — Orienta",
+  "controls": {
+    "phaseLabel": "Phase",
+    "phaseTooltip": "Kristallphase auswählen, deren Pole dargestellt werden.",
+    "phaseAria": "Phase",
+    "noPhases": "(keine Phasen)",
+    "hklLabel": "Polfamilien (hkl, kommagetrennt)",
+    "hklTooltip": "Polfamilien als kommagetrennte hkl-Indizes eingeben, z. B. 100,110,111.",
+    "hklAria": "hkl",
+    "styleLabel": "Darstellung",
+    "styleTooltip": "Darstellungsart wählen: Dichtekarte, Streupunkte oder beides kombiniert.",
+    "styleAria": "Darstellung",
+    "styleBoth": "Dichte + Punkte",
+    "styleDensity": "Dichte (Aztec-Stil)",
+    "styleScatter": "Punkte (MTEX-Stil)"
+  },
+  "view": {
+    "rendering": "Polfigur wird gerendert…",
+    "imageAlt": "Polfigur",
+    "noResult": "Noch kein Indizierungsergebnis."
+  },
+  "hoverTips": {
+    "zIntoPlane": "Z als in die Ebene zeigend behandeln (kehrt die Aus-der-Ebene-Richtung des Koordinatensystems um).",
+    "applyToExport": "Diese Rotation auch in exportierte .ang/.h5 schreiben (mit dem Hersteller-Offset kombiniert)."
+  },
+  "coordSys": {
+    "title": "Koordinatensystem",
+    "noDataset": "Kein aktiver Datensatz.",
+    "rotationMode": "Rotationsmodus",
+    "modeOpt": {
+      "preset": "Voreinstellung",
+      "axis_angle": "Achse–Winkel",
+      "euler": "Euler (Bunge ZXZ)"
+    },
+    "preset": "Voreinstellung",
+    "presetOpt": {
+      "identity": "Identität (nativ)",
+      "mtex_default": "MTEX-Standard",
+      "aztec_oxford": "Aztec / Oxford (Rz +90°)",
+      "edax": "EDAX / TSL"
+    },
+    "axis": "Achse {{ax}}",
+    "angle": "Winkel",
+    "xDirection": "X-Richtung",
+    "xDirOpt": {
+      "east": "X → Ost (rechts)",
+      "north": "X → Nord (oben)"
+    },
+    "projection": "Projektion",
+    "projOpt": {
+      "equal_area": "Flächentreu (Schmidt)",
+      "stereographic": "Stereografisch (Wulff)"
+    },
+    "hemisphere": "Hemisphäre",
+    "hemiOpt": {
+      "upper": "Obere",
+      "lower": "Untere"
+    },
+    "zIntoPlane": "Z in die Ebene",
+    "applyToExports": "Auf Exporte anwenden"
+  }
+}
