@@ -139,6 +139,11 @@ function startBackend() {
   ], {
     cwd: projectRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // On macOS/Linux, start the backend as its own process-group leader so
+    // killBackend() can signal the whole group via process.kill(-pid) and not
+    // orphan uvicorn workers / leave port 8000 bound. On Windows `detached` has
+    // different semantics — taskkill /T already kills the whole tree there.
+    detached: process.platform !== 'win32',
     env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', KIKUCHIPY_WATCHDOG: '1' },
   });
 
