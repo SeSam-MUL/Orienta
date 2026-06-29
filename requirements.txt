@@ -66,14 +66,18 @@ triton-windows>=3.6,<3.7 ; sys_platform == "win32"
 # Triton/Inductor (used by D5 / cupy.fuse mul+max kernels in the spherical-gpu
 # indexer). cupy-cuda12x 14.x stopped bundling CUDA libs and requires the
 # nvidia-* runtime wheels separately. Authorized 2026-05-09.
-cupy-cuda12x>=14.0
-nvidia-cuda-runtime-cu12
-nvidia-cublas-cu12
-nvidia-cufft-cu12
-nvidia-curand-cu12
-nvidia-cusolver-cu12
-nvidia-cusparse-cu12
-nvidia-cuda-nvrtc-cu12
+# macOS has no CUDA and no cupy-cuda12x / nvidia-*-cu12 wheels, so these are
+# skipped there via an environment marker — otherwise `pip install -r
+# requirements.txt` fails on Mac. On Linux/Windows they install as before; GPU
+# code gates on torch.cuda.is_available() and falls back to CPU when no NVIDIA.
+cupy-cuda12x>=14.0 ; platform_system != "Darwin"
+nvidia-cuda-runtime-cu12 ; platform_system != "Darwin"
+nvidia-cublas-cu12 ; platform_system != "Darwin"
+nvidia-cufft-cu12 ; platform_system != "Darwin"
+nvidia-curand-cu12 ; platform_system != "Darwin"
+nvidia-cusolver-cu12 ; platform_system != "Darwin"
+nvidia-cusparse-cu12 ; platform_system != "Darwin"
+nvidia-cuda-nvrtc-cu12 ; platform_system != "Darwin"
 
 # Numba — CPU njit(parallel) one-electron-per-thread Monte Carlo engine
 # (LEVER 3: the no-GPU fallback for the EMsoft-free forward MC; standard

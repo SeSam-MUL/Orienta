@@ -33,7 +33,6 @@ def main():
         proc = subprocess.Popen(
             [npm_cmd, "run", "electron:dev"],
             cwd=str(FRONTEND_DIR),
-            shell=True,
         )
         print("  Desktop app is starting...")
         print("  Press Ctrl+C to stop")

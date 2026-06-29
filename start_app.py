@@ -23,6 +23,12 @@ PROJECT_ROOT = Path(__file__).parent
 BACKEND_PORT = 8000
 FRONTEND_PORT = 5173
 
+# npm is "npm.cmd" on Windows, "npm" on macOS/Linux. Always invoke it with the
+# resolved name and shell=False: combining a list with shell=True drops the
+# run/dev/build arguments on POSIX (they become $0/$1 of the shell), so the dev
+# server / build never actually start on macOS or Linux.
+NPM = "npm.cmd" if sys.platform == "win32" else "npm"
+
 
 def wait_for_server(port, timeout=15):
     """Wait for a server to respond on the given port."""
@@ -80,9 +86,8 @@ def main():
         # Start React dev server
         print("[2/3] Starting React dev server...")
         frontend_proc = subprocess.Popen(
-            ["npm", "run", "dev"],
+            [NPM, "run", "dev"],
             cwd=str(PROJECT_ROOT / "frontend"),
-            shell=True,
         )
         time.sleep(3)
         url = f"http://127.0.0.1:{FRONTEND_PORT}"
@@ -92,8 +97,8 @@ def main():
         dist_path = PROJECT_ROOT / "frontend" / "dist"
         if not dist_path.exists():
             print("  Building frontend...")
-            subprocess.run(["npm", "run", "build"], cwd=str(PROJECT_ROOT / "frontend"),
-                         shell=True, check=True)
+            subprocess.run([NPM, "run", "build"], cwd=str(PROJECT_ROOT / "frontend"),
+                         check=True)
 
         # FastAPI serves the React SPA at root
         url = f"http://127.0.0.1:{BACKEND_PORT}"
