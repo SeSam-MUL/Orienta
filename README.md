@@ -156,4 +156,3 @@ This work was supported by:
 > the European Research Council Executive Agency. Neither the European Union nor the
 > granting authority can be held responsible for them.
 
-(EU emblem + ERC logo to be added per the grant's visual-identity rules.)
