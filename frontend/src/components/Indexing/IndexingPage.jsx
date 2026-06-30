@@ -572,9 +572,11 @@ function PatternMatchesDialog({ open, onClose }) {
                 </div>
               )}
 
-              {/* Orientation provenance: pseudo-symmetric phases get the
-                  orientation from Hough (the spherical SO(3) correlation lands
-                  on a wrong pseudo-variant for cubic approximants). */}
+              {/* Orientation provenance: low-symmetry phases (z_rot==2 —
+                  orthorhombic mmm and the cubic approximants m-3/23) get the
+                  orientation from Hough, because the spherical SO(3) correlation
+                  can't form a sharp peak for them. The exact per-class reason is
+                  in orientation_source_reason (shown as the tooltip). */}
               {matchData.orientation_source === 'hough' && (
                 <div
                   style={{ fontSize: '8pt', color: '#ffb86c', textAlign: 'center', marginTop: 3, cursor: 'help' }}

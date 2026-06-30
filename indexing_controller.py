@@ -1955,6 +1955,10 @@ def spherical_gpu_index_patterns(
             {
                 "formula": getattr(ix.master, "formula", None),
                 "point_group": getattr(ix.master, "point_group", None),
+                # z_rot is the authoritative "spherical-unreliable" determinant
+                # (== 2 → flat cc); snapshot it so we never re-touch the GPU
+                # master after invalidate().
+                "z_rot": getattr(ix.master, "z_rot", None),
             }
             for ix in backend._indexers
         ]
@@ -1998,14 +2002,22 @@ def spherical_gpu_index_patterns(
     if (n_phases == 1 and _sp_patterns_for_resolve is not None):
         try:
             from backend.spherical_gpu.pipeline.resolution import resolve_eulers
-            from backend.spherical_gpu.pseudosym import is_pseudosymmetric
+            from backend.spherical_gpu.pseudosym import (
+                spherical_unreliable, is_pseudosymmetric)
             _pg = (masters_meta[0] or {}).get("point_group")
-            if _pg and is_pseudosymmetric(_pg):
+            _zrot = (masters_meta[0] or {}).get("z_rot")
+            # Fire for ALL z_rot==2 masters the spherical correlation can't index:
+            # the cubic approximants m-3/23, cubic -43m (Mg17Al12), and orthorhombic
+            # mmm/222/mm2 (the S-phase Al2CuMg / Al6Fe). Gate on the master's actual
+            # z_rot (the exact determinant, matching the per-pattern path), falling
+            # back to the point-group name. mmm is metrically unambiguous so Hough is
+            # the reliable orientation source for it too.
+            if _pg and spherical_unreliable(_zrot, _pg):
                 _cif = _resolve_cif_for_sht(files[0])
                 _raw_eul = result.euler_xyz.numpy().astype(np.float64)
                 _resolved_eulers, _sp_candidates = resolve_eulers(
                     _sp_patterns_for_resolve, _raw_eul, _cif,
-                    detector_params, _pg, progress=_progress)
+                    detector_params, _pg, z_rot=_zrot, progress=_progress)
                 if (_resolved_eulers is not None
                         and np.array_equal(_resolved_eulers, _raw_eul)):
                     _resolved_eulers = None  # unchanged → use raw downstream
@@ -2013,13 +2025,22 @@ def spherical_gpu_index_patterns(
                     _nfb = (_sp_candidates or {}).get("n_fallback", 0) \
                         if isinstance(_sp_candidates, dict) else 0
                     _orientation_source = "hough"
-                    _orientation_source_reason = (
-                        f"Pseudo-symmetry (point group {_pg}): the SHT-spherical "
-                        f"SO(3) correlation lands on a wrong pseudo-symmetric "
-                        f"variant for this cubic-approximant phase, so the "
-                        f"orientations are taken from Hough band-geometry indexing"
-                        + (f" ({_nfb} px kept spherical where Hough failed)"
-                           if _nfb else "") + ".")
+                    _fb_note = (f" ({_nfb} px kept spherical where Hough failed)"
+                                if _nfb else "")
+                    if is_pseudosymmetric(_pg):
+                        _orientation_source_reason = (
+                            f"Pseudo-symmetry (point group {_pg}): the SHT-spherical "
+                            f"SO(3) correlation lands on a wrong pseudo-symmetric "
+                            f"variant for this cubic-approximant phase, so the "
+                            f"orientations are taken from Hough band-geometry "
+                            f"indexing" + _fb_note + ".")
+                    else:
+                        _orientation_source_reason = (
+                            f"Point group {_pg} (z-rotational symmetry order 2): the "
+                            f"SHT-spherical SO(3) correlation cannot form a sharp "
+                            f"orientation peak for this class, so the orientations "
+                            f"are taken from Hough band-geometry indexing"
+                            + _fb_note + ".")
         except Exception:
             logger.warning(
                 "Pseudo-symmetry resolution failed; using raw spherical "
@@ -2075,6 +2096,7 @@ def spherical_gpu_index_patterns(
             masters_meta.append({
                 "formula": getattr(m, "formula", None),
                 "point_group": getattr(m, "point_group", None),
+                "z_rot": getattr(m, "z_rot", None),
             })
             del m
 
@@ -2091,24 +2113,24 @@ def spherical_gpu_index_patterns(
                 "space group, or fix the SHT loader to propagate point_group."
             )
         phase_objs.append(Phase(name=m.get("formula") or "Phase", point_group=pg))
-        # Low-symmetry point groups are mis-indexed by the SHT-spherical SO(3)
-        # correlation (it lands on a wrong pseudo-symmetric variant). Cubic-
-        # approximant classes (m-3, 23) are AUTO-CORRECTED above by the
-        # pseudo-symmetry resolver (orientations replaced with Hough). Other
-        # low-sym classes (e.g. mmm) are NOT auto-corrected — warn for those.
-        from backend.spherical_gpu.pseudosym import is_pseudosymmetric as _is_psym
-        pg_str = str(pg).strip()
-        if pg_str in ("m-3", "23") or _is_psym(pg_str):
-            pass  # handled by the resolver (Hough orientations)
-        elif pg_str in ("mmm",):
+        # The SHT-spherical SO(3) correlation can't index z_rot==2 masters
+        # (cubic m-3/23/-43m + orthorhombic mmm/222/mm2) — it lands in a wrong
+        # basin. The single-phase, in-memory path AUTO-CORRECTS these above by
+        # substituting Hough orientations (see the resolver block). Flag only the
+        # spherical-unreliable phases the resolver did NOT cover this run
+        # (multi-phase runs, or the index_h5 streaming path with no in-memory
+        # patterns) so the user knows to use Hough for them.
+        from backend.spherical_gpu.pseudosym import spherical_unreliable as _sph_unrel
+        if _sph_unrel(m.get("z_rot"), pg) and _orientation_source != "hough":
             _lowsym_broken.append(str(m.get("formula") or pg))
     if _lowsym_broken:
         logger.warning(
             "⚠ SPHERICAL INDEXING is UNRELIABLE for low-symmetry phase(s) %s "
-            "(e.g. point group mmm): the SHT-spherical correlation mis-indexes "
-            "them and this class is NOT auto-corrected by the pseudo-symmetry "
-            "resolver. Use HOUGH indexing for these phases — the spherical "
-            "orientations will be wrong.",
+            "(point group mmm / m-3 / 23, z_rot=2): the SHT-spherical correlation "
+            "mis-indexes them and the automatic Hough substitution did not run for "
+            "this run (multi-phase, or streamed from disk). Use HOUGH indexing for "
+            "these phases, or run them single-phase with in-memory patterns so the "
+            "orientations are auto-taken from Hough.",
             _lowsym_broken,
         )
     # Build PhaseList with EXPLICIT 1-indexed ids to match the CPU/.ang

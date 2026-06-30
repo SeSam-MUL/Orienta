@@ -206,6 +206,7 @@ def resolve_eulers(
     cif_path: str,
     det_params: dict,
     point_group: str,
+    z_rot=None,
     progress=None,
 ):
     """Integration wrapper: replace a spherical map's orientations for a pseudo-
@@ -230,9 +231,14 @@ def resolve_eulers(
         ``info`` carries the Hough/raw quaternions + per-pixel fit/nmatch +
         ``n_fallback`` (for diagnostics / a future manual-flip UI).
     """
-    from ..pseudosym import is_pseudosymmetric
+    from ..pseudosym import spherical_unreliable
 
-    if not is_pseudosymmetric(point_group):
+    # Fire for ALL masters the spherical correlation can't reliably index
+    # (z_rot==2): cubic approximants m-3/23, cubic -43m, and orthorhombic
+    # mmm/222/mm2. Prefer the master's actual z_rot; fall back to the point-group
+    # name. True-cubic/hex/tetragonal and the working low-sym classes (2/m, -1)
+    # stay a bit-identical passthrough.
+    if not spherical_unreliable(z_rot, point_group):
         return raw_eulers, None
     if not cif_path or patterns is None:
         return raw_eulers, None

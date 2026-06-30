@@ -70,6 +70,58 @@ def is_pseudosymmetric(point_group: str) -> bool:
     return point_group in _PSEUDO_HOLOHEDRY
 
 
+# Point groups whose master pattern has z-rotational symmetry order 2 (`z_rot==2`),
+# for which the SHT-spherical SO(3) cross-correlation CANNOT form a sharp
+# orientation peak — it lands in a wrong basin (root-caused 2026-06-27/28 over 16
+# diagnostic harnesses; the true orientation is not even among the top cc bins).
+#
+# THE AUTHORITATIVE DETERMINANT IS THE MASTER'S `z_rot == 2` (use
+# :func:`spherical_unreliable`). This name set is only a FALLBACK for when the
+# z_rot value is unavailable. It must list every point group the SHT loader can
+# emit (`sht_io._build_sg_to_pg_table` stores the crystal point group, NOT the
+# Laue class) whose master is z_rot=2 — verified by reading every library .sht:
+#   cubic        m-3, 23, -43m   (full m-3m band geometry, lower crystal symmetry)
+#   orthorhombic mmm, 222, mm2   (2-fold about c → z_rot=2)
+# Everything else is reliable: triclinic `-1` / monoclinic `2/m` are z_rot=1
+# (WORK); tetragonal `4/mmm`, trigonal `-3m`/`-6m2`, hexagonal `6/mmm` and
+# full-cubic `m-3m` / `432` are z_rot>=3 (WORK). For ALL z_rot=2 masters the
+# orientation is taken from Hough band-geometry indexing.
+# (`-43m` is z_rot=2 — e.g. Mg17Al12 — so it MUST be here, even though it is
+# excluded from `is_pseudosymmetric` for a separate reason: its coset under the
+# centrosymmetric holohedry is empty. The spherical correlation fails for it
+# regardless of coset emptiness.)
+_SPHERICAL_UNRELIABLE_PG: frozenset[str] = frozenset(
+    {"m-3", "23", "-43m", "mmm", "222", "mm2"})
+
+
+def spherical_unreliable_pointgroup(point_group) -> bool:
+    """Name-based fallback for :func:`spherical_unreliable` — True for the point
+    groups whose master is z_rot=2 (see :data:`_SPHERICAL_UNRELIABLE_PG`). Prefer
+    :func:`spherical_unreliable` with the master's actual ``z_rot`` when available.
+    Whitespace-tolerant because point-group strings arrive from file metadata."""
+    return str(point_group).strip() in _SPHERICAL_UNRELIABLE_PG
+
+
+def spherical_unreliable(z_rot=None, point_group=None) -> bool:
+    """True if the SHT-spherical SO(3) correlation cannot index this master (its
+    z-rotational symmetry order is 2 → flat cc volume, wrong basin) and the
+    AUTOMATIC map-indexing path should take orientations from Hough instead.
+
+    Prefers the master's actual ``z_rot`` (the EXACT determinant, identical to the
+    per-pattern phase-test path in ``backend/api/routes/indexing.py`` which gates on
+    ``z_rot == 2``); falls back to the point-group name (:func:`
+    spherical_unreliable_pointgroup`) only when ``z_rot`` is unavailable. A SUPERSET
+    of :func:`is_pseudosymmetric` (which is narrowly the cubic approximants m-3/23):
+    it also covers orthorhombic ``mmm``/``222``/``mm2`` and cubic ``-43m`` — all
+    z_rot=2, all defeating the capped spherical correlation."""
+    if z_rot is not None:
+        try:
+            return int(z_rot) == 2
+        except (TypeError, ValueError):
+            pass
+    return spherical_unreliable_pointgroup(point_group)
+
+
 # Crystal-system holohedry used to generate pseudo-symmetric *variant candidates*
 # for the USER-DRIVEN manual flip tool. This is broader than `_PSEUDO_HOLOHEDRY`
 # (which gates the automatic Hough substitution): for the manual tool we want to
