@@ -259,6 +259,84 @@ def resolve_eulers(
         return raw_eulers, None
 
 
+def resolve_eulers_multiphase(
+    patterns,
+    raw_eulers: np.ndarray,
+    phase_id,
+    masters_meta,
+    cif_paths,
+    det_params: dict,
+    progress=None,
+):
+    """Multi-phase generalisation of :func:`resolve_eulers`: for every phase whose
+    master the spherical correlation can't index (z_rot==2 — cubic m-3/23/-43m and
+    orthorhombic mmm/222/mm2), replace the orientations of THAT phase's assigned
+    pixels with Hough band-geometry orientations, leaving every other phase's
+    pixels untouched.
+
+    The single-phase case is just one phase covering all pixels, so the controller
+    calls this uniformly. High-symmetry phases (and z_rot==2 phases that won no
+    pixels or have no CIF) keep their raw spherical orientations. Fails safe per
+    phase: a Hough error on one phase never affects the others or the raw output.
+
+    Parameters
+    ----------
+    patterns : (N, H, W) experimental patterns, SAME order as `raw_eulers`/`phase_id`.
+    raw_eulers : (N, 3) Bunge-ZXZ radians from the spherical indexer.
+    phase_id : (N,) 1-indexed per-pixel phase (backend ``winner + 1``); phase ``i``
+        in `masters_meta`/`cif_paths` corresponds to id ``i + 1``.
+    masters_meta : list of dicts with at least ``point_group`` and ``z_rot``
+        (optionally ``formula``), one per phase, in phase-id order.
+    cif_paths : list of CIF paths (or None), one per phase, same order.
+    det_params : detector geometry dict (passed through to Hough).
+
+    Returns
+    -------
+    (eulers, info) : (np.ndarray (N,3) | None, dict)
+        ``eulers`` is None when NOTHING was resolved (all phases high-symmetry, or
+        no z_rot==2 phase had pixels/CIF) — the caller then keeps the raw output.
+        ``info``: ``resolved_phase_ids`` (set of 1-indexed ids), ``n_fallback``
+        (pixels where Hough failed and raw was kept), ``labels`` (list of
+        ``(formula, point_group)`` for the resolved phases, for provenance).
+    """
+    from ..pseudosym import spherical_unreliable
+
+    raw = np.asarray(raw_eulers, dtype=np.float64)
+    pid = np.asarray(phase_id).reshape(-1)
+    pats = np.asarray(patterns)
+    out = raw.copy()
+    info = {"resolved_phase_ids": set(), "n_fallback": 0, "labels": []}
+
+    for i, meta in enumerate(masters_meta or []):
+        pg = (meta or {}).get("point_group")
+        zr = (meta or {}).get("z_rot")
+        if not spherical_unreliable(zr, pg):
+            continue
+        cif = cif_paths[i] if (cif_paths and i < len(cif_paths)) else None
+        if not cif:
+            continue
+        mask = (pid == (i + 1))
+        if not mask.any():
+            continue
+        try:
+            res, sub = resolve_eulers(
+                pats[mask], raw[mask], cif, det_params, pg, z_rot=zr,
+                progress=progress)
+        except Exception:
+            continue  # fail safe: this phase keeps raw, others proceed
+        if res is None or np.array_equal(res, raw[mask]):
+            continue  # Hough produced nothing usable for this phase → keep raw
+        out[mask] = res
+        info["resolved_phase_ids"].add(i + 1)
+        info["labels"].append((str((meta or {}).get("formula") or pg), pg))
+        if isinstance(sub, dict):
+            info["n_fallback"] += int(sub.get("n_fallback", 0) or 0)
+
+    if not info["resolved_phase_ids"]:
+        return None, info
+    return out, info
+
+
 def resolve_map(
     patterns,
     cif_path: str,
