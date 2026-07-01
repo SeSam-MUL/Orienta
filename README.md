@@ -125,8 +125,7 @@ code (kikuchipy), so the combined work is GPL-3.0.
 
 If you use this software in your research, please cite the archived release (DOI):
 
-> Samberger, S., Pogatscher, S., Kobayashi, E., &amp; Weißensteiner, I. (2026). *Orienta* (v0.1.0) [Software].
-> Zenodo. https://doi.org/10.5281/zenodo.21021938
+> Samberger, S., Pogatscher, S., Kobayashi, E., & Weißensteiner, I. (2026). Orienta. Zenodo. https://doi.org/10.5281/zenodo.21021938
 
 Machine-readable citation metadata is in [CITATION.cff](CITATION.cff); GitHub's
 "Cite this repository" button reads it automatically.
