@@ -61,7 +61,10 @@
     },
     "phaseComparison": "この画素での相比較:",
     "euler": "オイラー: ({{values}})°",
-    "cornersMasked": " | 円形検出器アパーチャ — コーナーをマスク"
+    "cornersMasked": " | 円形検出器アパーチャ — コーナーをマスク",
+    "export": "エクスポート…",
+    "exportTip": "論文用図のエクスポートコンポーザーを開く",
+    "clearMarkers": "マーカーをクリア（{{count}}）"
   },
   "displayModes": {
     "phase": "相分布図",
@@ -558,6 +561,7 @@
     "annotTextColor": "スケールバーラベルテキストの色",
     "annotText": "マップに表示するタイトルテキスト",
     "annotColor": "この注釈の色",
-    "annotArrowLabel": "矢印の方向ラベル（ND/RD/TD/X/Y/Z）"
+    "annotArrowLabel": "矢印の方向ラベル（ND/RD/TD/X/Y/Z）",
+    "matchesClearMarkers": "比較パネルからすべての番号付きマーカーを削除します"
   }
 }

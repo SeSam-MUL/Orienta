@@ -61,7 +61,10 @@
     },
     "phaseComparison": "Phasenvergleich an diesem Pixel:",
     "euler": "Euler: ({{values}})°",
-    "cornersMasked": " | kreisförmige Detektorblende — Ecken maskiert"
+    "cornersMasked": " | kreisförmige Detektorblende — Ecken maskiert",
+    "export": "Exportieren…",
+    "exportTip": "Den Export-Composer für Publikationsfiguren öffnen",
+    "clearMarkers": "Marker löschen ({{count}})"
   },
   "displayModes": {
     "phase": "Phasenkarte",
@@ -558,6 +561,7 @@
     "annotTextColor": "Farbe der Maßstabsbeschriftung",
     "annotText": "Auf der Karte angezeigter Titeltext",
     "annotColor": "Farbe dieser Annotation",
-    "annotArrowLabel": "Richtungsbeschriftung für den Pfeil (ND/RD/TD/X/Y/Z)"
+    "annotArrowLabel": "Richtungsbeschriftung für den Pfeil (ND/RD/TD/X/Y/Z)",
+    "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen"
   }
 }

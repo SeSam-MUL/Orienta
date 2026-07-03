@@ -376,7 +376,10 @@
     "applyGrainTip": "Korn per Flood-Fill bestimmen (zusammenhängend, gleiche Phase, ähnliche Orientierung) und jedes Pixel auf die gewählte Variante umstellen.",
     "grainApplying": "Wird angewendet…",
     "grainApplied": "{{n}} Pixel im Korn korrigiert. Phase Map neu laden zum Ansehen.",
-    "dash": "—"
+    "dash": "—",
+    "export": "Exportieren…",
+    "exportTip": "Den Export-Composer für Publikationsfiguren öffnen",
+    "clearMarkers": "Marker löschen ({{count}})"
   },
   "phaseResultModal": {
     "title": "Mehrphasen-Ergebnisse",
@@ -584,6 +587,7 @@
     "phaseTestRun": "Den Phasentest am ausgewählten Pixel ausführen",
     "phaseTestCancel": "Den laufenden Phasentest abbrechen",
     "phaseTestClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
-    "phaseTestExcludedToggle": "Vom EDS-Chemie-Filter ausgeschlossene Phasen ein- oder ausblenden"
+    "phaseTestExcludedToggle": "Vom EDS-Chemie-Filter ausgeschlossene Phasen ein- oder ausblenden",
+    "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen"
   }
 }

@@ -376,7 +376,10 @@
     "applyGrainTip": "Flood-fill the grain (connected, same phase, similar orientation) and flip every pixel to the chosen variant.",
     "grainApplying": "Applying…",
     "grainApplied": "Corrected {{n}} pixels in the grain. Reload the Phase Map to see it.",
-    "dash": "—"
+    "dash": "—",
+    "export": "Export…",
+    "exportTip": "Open the publication figure export composer",
+    "clearMarkers": "Clear markers ({{count}})"
   },
   "phaseResultModal": {
     "title": "Multi-Phase Results",
@@ -584,6 +587,7 @@
     "phaseTestRun": "Run the phase test on the selected pixel",
     "phaseTestCancel": "Cancel the running phase test",
     "phaseTestClearMarkers": "Remove all numbered markers from the comparison panels",
-    "phaseTestExcludedToggle": "Show or hide phases excluded by the EDS chemistry filter"
+    "phaseTestExcludedToggle": "Show or hide phases excluded by the EDS chemistry filter",
+    "matchesClearMarkers": "Remove all numbered markers from the comparison panels"
   }
 }

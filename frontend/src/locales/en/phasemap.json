@@ -61,7 +61,10 @@
     },
     "phaseComparison": "Phase comparison at this pixel:",
     "euler": "Euler: ({{values}})°",
-    "cornersMasked": " | circular detector aperture — corners masked"
+    "cornersMasked": " | circular detector aperture — corners masked",
+    "export": "Export…",
+    "exportTip": "Open the publication figure export composer",
+    "clearMarkers": "Clear markers ({{count}})"
   },
   "displayModes": {
     "phase": "Phase Map",
@@ -558,6 +561,7 @@
     "annotTextColor": "Colour of the scalebar label text",
     "annotText": "Title text shown on the map",
     "annotColor": "Colour of this annotation",
-    "annotArrowLabel": "Direction label for the arrow (ND/RD/TD/X/Y/Z)"
+    "annotArrowLabel": "Direction label for the arrow (ND/RD/TD/X/Y/Z)",
+    "matchesClearMarkers": "Remove all numbered markers from the comparison panels"
   }
 }

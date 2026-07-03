@@ -28,6 +28,9 @@ import RefinementPanel from './RefinementPanel';
 import AnomalyBrowserDrawer from './AnomalyBrowser/AnomalyBrowserDrawer';
 import FileSwitcher from '../common/FileSwitcher';
 import CoordinateSystemPanel from '../common/CoordinateSystemPanel';
+import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
+import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
+import PatternExportDialog from '../PatternMatch/PatternExportDialog';
 import { openPoleFigureWindow } from '../PoleFigure/openPoleFigureWindow';
 import useFrameStore from '../../stores/useFrameStore';
 import { useLayerStack } from './hooks/useLayerStack';
@@ -74,6 +77,11 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
   const { t } = useTranslation('phasemap');
   const [heatmapClean, setHeatmapClean] = useState(null);
   const [gridDims, setGridDims] = useState({ rows: 0, cols: 0 });
+  // Shared crosshair + numbered red markers across the 3 comparison panels + the
+  // publication-figure export composer — the SAME shared components as the
+  // Indexing Pattern-Match view, so composer changes apply to both.
+  const markerCtl = useLinkedPatternMarkers();
+  const [exportOpen, setExportOpen] = useState(false);
   const [cropOffset, setCropOffset] = useState({ row: 0, col: 0 });
   const [matchData, setMatchData] = useState(null);
   const [selectedPixel, setSelectedPixel] = useState(null);
@@ -369,23 +377,32 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
               {/* 3 panels side by side */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 <div style={{ flex: 1, textAlign: 'center' }}>
-                  <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 4 }}>{t('phasemap:matches.experimental')}</div>
-                  {matchData.experimental ? <img src={`data:image/png;base64,${matchData.experimental}`} alt={t('phasemap:matches.expAlt')} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.notAvailable')}</div>}
+                  {/* Fixed-height header so all three images align vertically —
+                      the middle (simulated) panel has an extra phase-name line. */}
+                  <div style={{ height: 38, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', marginBottom: 4 }}>
+                    <div style={{ fontSize: '9pt', color: '#f8f8f2' }}>{t('phasemap:matches.experimental')}</div>
+                  </div>
+                  {matchData.experimental ? <LinkedPatternImage src={`data:image/png;base64,${matchData.experimental}`} alt={t('phasemap:matches.expAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.notAvailable')}</div>}
                 </div>
                 <div style={{ flex: 1, textAlign: 'center' }}>
-                  <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 2 }}>
-                    {phaseResults ? t('phasemap:matches.perPhaseSimulated') : t('phasemap:matches.bestMatchSimulated')}
-                  </div>
-                  <div style={{ fontSize: '10pt', fontWeight: 700, color: '#bd93f9', marginBottom: 4 }}>
-                    {t('phasemap:matches.phaseLabel', { name: displayed?.phase_name || '—' })}
-                    {phaseResults && selectedPhase && (
-                      <span style={{ fontSize: '8pt', color: '#6272a4', marginLeft: 6 }}>
-                        {t('phasemap:matches.phaseRank', { rank: selectedPhase.rank, total: phaseResults.length })}
-                      </span>
-                    )}
+                  {/* Same fixed-height header as the other two panels (label +
+                      the phase name) so the simulated image aligns with them. */}
+                  <div style={{ height: 38, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', marginBottom: 4 }}>
+                    <div style={{ fontSize: '9pt', color: '#f8f8f2' }}>
+                      {phaseResults ? t('phasemap:matches.perPhaseSimulated') : t('phasemap:matches.bestMatchSimulated')}
+                    </div>
+                    <div style={{ fontSize: '10pt', fontWeight: 700, color: '#bd93f9', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                         title={displayed?.phase_name || ''}>
+                      {t('phasemap:matches.phaseLabel', { name: displayed?.phase_name || '—' })}
+                      {phaseResults && selectedPhase && (
+                        <span style={{ fontSize: '8pt', color: '#6272a4', marginLeft: 6 }}>
+                          {t('phasemap:matches.phaseRank', { rank: selectedPhase.rank, total: phaseResults.length })}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {displayed?.simulated ? (
-                    <img src={`data:image/png;base64,${displayed.simulated}`} alt={t('phasemap:matches.simAlt')} style={{ ...patStyle, width: '100%' }} />
+                    <LinkedPatternImage src={`data:image/png;base64,${displayed.simulated}`} alt={t('phasemap:matches.simAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, width: '100%' }} />
                   ) : (
                     <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4', padding: 12, textAlign: 'center', fontSize: '9pt' }}>
                       {matchData.simulated_error
@@ -397,9 +414,11 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
                   )}
                 </div>
                 <div style={{ flex: 1, textAlign: 'center' }}>
-                  <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 4 }}>{t('phasemap:matches.nccImage')}</div>
+                  <div style={{ height: 38, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', marginBottom: 4 }}>
+                    <div style={{ fontSize: '9pt', color: '#f8f8f2' }}>{t('phasemap:matches.nccImage')}</div>
+                  </div>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'stretch' }}>
-                    {matchData.ncc_image ? <img src={`data:image/png;base64,${matchData.ncc_image}`} alt={t('phasemap:matches.nccAlt')} style={{ ...patStyle, flex: 1, minWidth: 0, background: '#1a1b26' }} /> : <div style={{ height: 240, flex: 1, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.bothPatternsNeeded')}</div>}
+                    {matchData.ncc_image ? <LinkedPatternImage src={`data:image/png;base64,${matchData.ncc_image}`} alt={t('phasemap:matches.nccAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, flex: 1, minWidth: 0, background: '#1a1b26' }} /> : <div style={{ height: 240, flex: 1, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.bothPatternsNeeded')}</div>}
                     {/* NCC Colorbar */}
                     {matchData.ncc_image && (
                       <div style={{ width: 18, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', fontSize: '6pt', color: '#6272a4' }}>
@@ -413,6 +432,21 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
                     )}
                   </div>
                 </div>
+              </div>
+
+              {/* Marker tools + publication-figure export (shared composer —
+                  changes here apply to the Indexing Pattern-Match export too). */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                {markerCtl.markers.length > 0 && (
+                  <button onClick={markerCtl.clearMarkers} title={t('phasemap:hoverTips.matchesClearMarkers')}
+                    style={{ fontSize: '8pt', background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 3, padding: '3px 8px', cursor: 'pointer' }}>
+                    {t('phasemap:matches.clearMarkers', { count: markerCtl.markers.length })}
+                  </button>
+                )}
+                <button onClick={() => setExportOpen(true)} title={t('phasemap:matches.exportTip')}
+                  style={{ fontSize: '8pt', fontWeight: 600, background: '#50fa7b', color: '#282a36', border: 'none', borderRadius: 3, padding: '3px 10px', cursor: 'pointer' }}>
+                  {t('phasemap:matches.export')}
+                </button>
               </div>
 
               {/* Rank browser — hidden in compare-phases mode (the
@@ -513,6 +547,19 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
           </div>
         </div>
       </div>
+      <PatternExportDialog
+        open={exportOpen} onClose={() => setExportOpen(false)}
+        sources={{
+          experimental: matchData?.experimental || null,
+          simulated: displayed?.simulated || null,
+          ncc: matchData?.ncc_image || null,
+          heatmap: heatmapClean || null,
+        }}
+        rNcc={{ r: displayed?.r_score, ncc: matchData?.ncc_score }}
+        stepUm={null}
+        mapCols={gridDims.cols || null}
+        markers={markerCtl.markers}
+      />
     </div>
   );
 }

@@ -376,7 +376,10 @@
     "applyGrainTip": "对晶粒进行洪水填充（连通、同相、取向相似），并将每个像素翻转到所选变体。",
     "grainApplying": "正在应用…",
     "grainApplied": "已修正晶粒中的 {{n}} 个像素。重新加载相图以查看。",
-    "dash": "—"
+    "dash": "—",
+    "export": "导出…",
+    "exportTip": "打开论文图导出编排器",
+    "clearMarkers": "清除标记（{{count}}）"
   },
   "phaseResultModal": {
     "title": "多相 结果",
@@ -584,6 +587,7 @@
     "phaseTestRun": "在所选像素上运行相测试",
     "phaseTestCancel": "取消正在运行的相测试",
     "phaseTestClearMarkers": "从比较面板中移除所有编号标记",
-    "phaseTestExcludedToggle": "显示或隐藏被 EDS 化学组成筛选排除的相"
+    "phaseTestExcludedToggle": "显示或隐藏被 EDS 化学组成筛选排除的相",
+    "matchesClearMarkers": "从比较面板中移除所有编号标记"
   }
 }

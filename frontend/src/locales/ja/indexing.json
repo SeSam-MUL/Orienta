@@ -376,7 +376,10 @@
     "applyGrainTip": "結晶をフラッドフィル（連結・同一相・類似方位）し、各ピクセルを選択したバリアントに反転します。",
     "grainApplying": "適用中…",
     "grainApplied": "結晶内の {{n}} ピクセルを修正しました。フェーズマップを再読み込みして確認してください。",
-    "dash": "—"
+    "dash": "—",
+    "export": "エクスポート…",
+    "exportTip": "論文用図のエクスポートコンポーザーを開く",
+    "clearMarkers": "マーカーをクリア（{{count}}）"
   },
   "phaseResultModal": {
     "title": "マルチ相 結果",
@@ -584,6 +587,7 @@
     "phaseTestRun": "選択したピクセルで相テストを実行します",
     "phaseTestCancel": "実行中の相テストをキャンセルします",
     "phaseTestClearMarkers": "比較パネルからすべての番号付きマーカーを削除します",
-    "phaseTestExcludedToggle": "EDS 化学組成フィルタで除外された相を表示/非表示します"
+    "phaseTestExcludedToggle": "EDS 化学組成フィルタで除外された相を表示/非表示します",
+    "matchesClearMarkers": "比較パネルからすべての番号付きマーカーを削除します"
   }
 }

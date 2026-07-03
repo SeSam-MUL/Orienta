@@ -61,7 +61,10 @@
     },
     "phaseComparison": "该像素处的相比较：",
     "euler": "欧拉角：({{values}})°",
-    "cornersMasked": " | 圆形探测器光阑——边角已掩膜"
+    "cornersMasked": " | 圆形探测器光阑——边角已掩膜",
+    "export": "导出…",
+    "exportTip": "打开论文图导出编排器",
+    "clearMarkers": "清除标记（{{count}}）"
   },
   "displayModes": {
     "phase": "相分布图",
@@ -558,6 +561,7 @@
     "annotTextColor": "比例尺标签文本的颜色",
     "annotText": "图上显示的标题文本",
     "annotColor": "此注释的颜色",
-    "annotArrowLabel": "箭头的方向标签（ND/RD/TD/X/Y/Z）"
+    "annotArrowLabel": "箭头的方向标签（ND/RD/TD/X/Y/Z）",
+    "matchesClearMarkers": "从比较面板中移除所有编号标记"
   }
 }

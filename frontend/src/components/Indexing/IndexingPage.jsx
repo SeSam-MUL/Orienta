@@ -28,6 +28,9 @@ import PhaseDropdown from './PhaseDropdown';
 import PhaseResultModal from './PhaseResultModal';
 import SinglePixelPhaseTestDialog from './SinglePixelPhaseTestDialog';
 import SelectedPhasesList from './SelectedPhasesList';
+import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
+import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
+import PatternExportDialog from '../PatternMatch/PatternExportDialog';
 import { detectPhaseDegeneracy } from './phaseDegeneracy';
 import FloatingPhasePanel from './FloatingPhasePanel';
 import useResultStore from '../../stores/useResultStore';
@@ -374,6 +377,11 @@ function PatternMatchesDialog({ open, onClose }) {
   const [grainBusy, setGrainBusy] = useState(false);
   const [grainMsg, setGrainMsg] = useState(null);
   const heatmapRef = useRef(null);
+  // Linked crosshair + numbered red markers shared across the 3 comparison
+  // panels, plus the publication-figure export composer — the SAME shared tools
+  // as the Phase Test dialog, so any export change applies to both.
+  const markerCtl = useLinkedPatternMarkers();
+  const [exportOpen, setExportOpen] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -497,16 +505,16 @@ function PatternMatchesDialog({ open, onClose }) {
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 <div style={{ flex: 1, textAlign: 'center' }}>
                   <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 4 }}>{t('matchesDialog.experimental')}</div>
-                  {matchData.experimental ? <img src={`data:image/png;base64,${matchData.experimental}`} alt={t('matchesDialog.experimental')} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.na')}</div>}
+                  {matchData.experimental ? <LinkedPatternImage src={`data:image/png;base64,${matchData.experimental}`} alt={t('matchesDialog.experimental')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.na')}</div>}
                 </div>
                 <div style={{ flex: 1, textAlign: 'center' }}>
                   <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 4 }}>{t('matchesDialog.bestMatch')}</div>
-                  {matchData.simulated ? <img src={`data:image/png;base64,${matchData.simulated}`} alt={t('matchesDialog.bestMatch')} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.dictNotInMemory')}</div>}
+                  {matchData.simulated ? <LinkedPatternImage src={`data:image/png;base64,${matchData.simulated}`} alt={t('matchesDialog.bestMatch')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.dictNotInMemory')}</div>}
                 </div>
                 <div style={{ flex: 1, textAlign: 'center' }}>
                   <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 4 }}>{t('matchesDialog.nccImage')}</div>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'stretch' }}>
-                    {matchData.ncc_image ? <img src={`data:image/png;base64,${matchData.ncc_image}`} alt={t('matchesDialog.nccImage')} style={{ ...patStyle, flex: 1, minWidth: 0, background: '#1a1b26' }} /> : <div style={{ height: 240, flex: 1, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.bothNeeded')}</div>}
+                    {matchData.ncc_image ? <LinkedPatternImage src={`data:image/png;base64,${matchData.ncc_image}`} alt={t('matchesDialog.nccImage')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, flex: 1, minWidth: 0, background: '#1a1b26' }} /> : <div style={{ height: 240, flex: 1, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.bothNeeded')}</div>}
                     {/* NCC Colorbar */}
                     {matchData.ncc_image && (
                       <div style={{ width: 18, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', fontSize: '6pt', color: '#6272a4' }}>
@@ -520,6 +528,21 @@ function PatternMatchesDialog({ open, onClose }) {
                     )}
                   </div>
                 </div>
+              </div>
+
+              {/* Marker tools + publication-figure export (shared composer —
+                  changes here apply to the Phase Test export too). */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+                {markerCtl.markers.length > 0 && (
+                  <button onClick={markerCtl.clearMarkers} title={t('hoverTips.matchesClearMarkers')}
+                    style={{ fontSize: '8pt', background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 3, padding: '3px 8px', cursor: 'pointer' }}>
+                    {t('matchesDialog.clearMarkers', { count: markerCtl.markers.length })}
+                  </button>
+                )}
+                <button onClick={() => setExportOpen(true)} title={t('matchesDialog.exportTip')}
+                  style={{ fontSize: '8pt', fontWeight: 600, background: C.green, color: C.bg, border: 'none', borderRadius: 3, padding: '3px 10px', cursor: 'pointer' }}>
+                  {t('matchesDialog.export')}
+                </button>
               </div>
 
               {/* Rank browser */}
@@ -638,6 +661,19 @@ function PatternMatchesDialog({ open, onClose }) {
           </div>
         </div>
       </div>
+      <PatternExportDialog
+        open={exportOpen} onClose={() => setExportOpen(false)}
+        sources={{
+          experimental: matchData?.experimental || null,
+          simulated: matchData?.simulated || null,
+          ncc: matchData?.ncc_image || null,
+          heatmap: heatmapClean || null,
+        }}
+        rNcc={{ r: matchData?.r_score, ncc: matchData?.ncc_score }}
+        stepUm={null}
+        mapCols={gridDims.cols || null}
+        markers={markerCtl.markers}
+      />
     </div>
   );
 }
