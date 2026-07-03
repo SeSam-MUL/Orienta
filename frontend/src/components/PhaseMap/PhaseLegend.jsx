@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { phaseMapApi } from '../../services/api';
 import { colors, spacing, CollapsibleGroup } from '../../theme/components';
+import usePhaseColorStore from '../../stores/usePhaseColorStore';
 
 /**
  * Phase Legend panel for the Phase Maps page (rebuilt 2026-05-26).
@@ -29,6 +30,10 @@ function PhaseLegend({ resultId }) {
   // with zero indexed pixels. Default off (the user's "I just want what
   // was identified" baseline).
   const [showEmpty, setShowEmpty] = useState(false);
+  // User colour picks (by phase name). Passed to /phase-stats so the legend
+  // swatches match the live map + swatch picker + export exactly. Re-fetches
+  // whenever the user changes a colour.
+  const colorOverrides = usePhaseColorStore((s) => s.overrides);
 
   useEffect(() => {
     if (resultId == null) {
@@ -41,7 +46,7 @@ function PhaseLegend({ resultId }) {
     setLoading(true);
     setError(null);
     phaseMapApi
-      .phaseStats(showEmpty)
+      .phaseStats(showEmpty, colorOverrides)
       .then((res) => {
         if (cancelled) return;
         setPhases(res.data?.phases || []);
@@ -63,7 +68,7 @@ function PhaseLegend({ resultId }) {
     return () => {
       cancelled = true;
     };
-  }, [resultId, showEmpty]);
+  }, [resultId, showEmpty, colorOverrides]);
 
   const Swatch = ({ hex }) => (
     <span

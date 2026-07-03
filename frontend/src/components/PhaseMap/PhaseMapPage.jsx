@@ -1011,6 +1011,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const annotState = useAnnotations(indexingResult?.result_id ?? null);
   const [selectedAnnotId, setSelectedAnnotId] = useState(null);
   const mapContainerRef = useRef(null);
+  // Phase color overrides — a flat { phaseName: '#rrggbb' } map persisted in
+  // localStorage. Passed as JSON to /render + /layer + /phase-stats and used
+  // for the inline legend swatches so the map, legend, swatches AND export
+  // all agree. Declared here (above the LegendAnnotation stats fetch) so that
+  // fetch can key off it.
+  const phaseColorOverrides = usePhaseColorStore((s) => s.overrides);
+  const setPhaseColor = usePhaseColorStore((s) => s.setColor);
+  const resetPhaseColor = usePhaseColorStore((s) => s.resetColor);
   // Phase stats for the LegendAnnotation body (lazy fetch, shared with
   // PhaseLegend panel). Reusing phaseStats keeps the on-canvas legend
   // in sync with the side-panel legend.
@@ -1022,12 +1030,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     }
     let cancelled = false;
     import('../../services/api').then(({ phaseMapApi }) => {
-      phaseMapApi.phaseStats()
+      phaseMapApi.phaseStats(false, phaseColorOverrides)
         .then((r) => { if (!cancelled) setPhaseStatsForAnnot(r.data); })
         .catch(() => { if (!cancelled) setPhaseStatsForAnnot(null); });
     });
     return () => { cancelled = true; };
-  }, [indexingResult?.result_id]);
+  }, [indexingResult?.result_id, phaseColorOverrides]);
 
   // Phase B: Original/Refined view toggle. The original result id is the
   // CrystalMap that came out of indexing; `refinementInfo` is populated
@@ -1047,12 +1055,6 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // and the layer fetchers so all derived layers reflow when the view
   // toggle flips. v1 keeps layers on the original result and uses the
   // RefinementPanel to display the refined CrystalMap.
-  // Phase color overrides — a flat { phaseName: '#rrggbb' } map persisted in
-  // localStorage. Passed as JSON to /render and used for the inline legend
-  // swatches so preview and legend never disagree.
-  const phaseColorOverrides = usePhaseColorStore((s) => s.overrides);
-  const setPhaseColor = usePhaseColorStore((s) => s.setColor);
-  const resetPhaseColor = usePhaseColorStore((s) => s.resetColor);
   const [askConfirm, confirmProps] = useConfirm();
   const [askPrompt, promptProps] = usePrompt();
   const [gallery, setGallery] = useState([]);
@@ -1157,7 +1159,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     modal_filter_size: cleanupModalSize,
   }), [cleanupCI, cleanupUnc, cleanupMinCluster, cleanupFillUnindexed, cleanupModalSize]);
 
-  const layerStack = useLayerStack({ cleanupParams, resetSignal, frameSig });
+  const layerStack = useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverrides: phaseColorOverrides });
 
   // ----- Tier-2 tooling state (new) -----
   const [view, setView] = useState('stack');           // 'stack' | 'grid'

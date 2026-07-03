@@ -513,9 +513,15 @@ export const phaseMapApi = {
   // ``includeEmpty=true`` also returns PhaseList entries with zero
   // indexed pixels (so the user can audit which input phases didn't
   // win anywhere). Default keeps the trimmed-down view from feature A.
-  phaseStats: (includeEmpty = false) =>
-    api.get('/api/phasemap/phase-stats',
-      { params: includeEmpty ? { include_empty: true } : {} }),
+  phaseStats: (includeEmpty = false, colorOverrides = null) =>
+    api.get('/api/phasemap/phase-stats', {
+      params: {
+        ...(includeEmpty ? { include_empty: true } : {}),
+        ...(colorOverrides && Object.keys(colorOverrides).length > 0
+          ? { color_overrides: JSON.stringify(colorOverrides) }
+          : {}),
+      },
+    }),
   // Phase-pair adjacency matrix: how often two phases share a 4-neighbour
   // border. Reveals chemical degeneracy hotspots (high counts between
   // similar phases = likely misindex, not a real interface).

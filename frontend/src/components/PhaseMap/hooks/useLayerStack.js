@@ -44,7 +44,7 @@ async function pngBase64ToBitmap(b64, { keyToAlpha = false } = {}) {
  *  Routes off `layer.source` (set by addLayer) and `layer.id`. Static catalog
  *  lookups happen at addLayer time, not here — so dynamic ids (ci_<phase>,
  *  eds:<el>, se:<name>) work without further registration. */
-async function fetchLayerImage({ layer, cleanupParams }) {
+async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
   switch (layer.source) {
     case 'result': {
       // Backend `kind` matches the layer id for all result-source entries
@@ -53,6 +53,13 @@ async function fetchLayerImage({ layer, cleanupParams }) {
       // on the layer object and are merged into the request alongside the
       // global cleanupParams. cleanupParams win conflicts (rare).
       const mergedParams = { ...(layer.params || {}), ...cleanupParams };
+      // Phase colouring is the only result layer that honours the user's
+      // colour picks. Thread the overrides through so the LIVE map matches
+      // the swatches, the legend and the /render export. Gated on a
+      // non-empty map so plain results don't carry a needless "{}" param.
+      if (layer.id === 'phase' && colorOverrides && Object.keys(colorOverrides).length > 0) {
+        mergedParams.color_overrides = JSON.stringify(colorOverrides);
+      }
       const res = await phaseMapApi.layer(layer.id, mergedParams);
       return { base64: res.data.image, keyToAlpha: false };
     }
@@ -98,7 +105,7 @@ async function fetchLayerImage({ layer, cleanupParams }) {
   }
 }
 
-export function useLayerStack({ cleanupParams, resetSignal, frameSig }) {
+export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverrides = null }) {
   const [state, dispatch] = useReducer(layerStackReducer, initialState);
   const cacheRef = useRef(new Map());           // layerId → ImageBitmap
   const cacheOrderRef = useRef([]);             // LRU order (most recent at end)
@@ -180,7 +187,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig }) {
     fetchingRef.current.add(layer.id);
     const epoch = epochRef.current;  // snapshot; a flush mid-flight bumps this
     try {
-      const { base64, keyToAlpha } = await fetchLayerImage({ layer, cleanupParams });
+      const { base64, keyToAlpha } = await fetchLayerImage({ layer, cleanupParams, colorOverrides });
       if (!base64) throw new Error('Empty image payload');
       const bitmap = await pngBase64ToBitmap(base64, { keyToAlpha });
       // Result/file switched while we were fetching → this bitmap belongs to
@@ -188,6 +195,13 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig }) {
       // the new result's render. The fetch effect re-fires for uncached layers.
       if (epoch !== epochRef.current) {
         try { bitmap.close(); } catch { /* ignore */ }
+        // A newer flush (rapid layer switching, colour edit, result switch)
+        // superseded this fetch. Ping a re-render so the fetch effect
+        // re-evaluates: if this layer is still visible + uncached it gets
+        // re-fetched. Without this, switching away-and-back to a layer while
+        // its first fetch is in flight strands it with no bitmap and no
+        // pending request (blank canvas until some later interaction).
+        force();
         return;
       }
       cacheSet(layer.id, bitmap);
@@ -198,16 +212,42 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig }) {
     } finally {
       fetchingRef.current.delete(layer.id);
     }
-  }, [cleanupParams, cacheSet, cacheTouch]);
+  }, [cleanupParams, colorOverrides, cacheSet, cacheTouch]);
 
-  // Whenever the layer list changes, ensure all visible layers have bitmaps.
+  // Colour overrides are a fetch input for the phase layer only. Track the
+  // last-seen signature so a colour edit drops the stale cached phase bitmap
+  // *inside this same effect* — before the fetch loop reads the cache. Doing
+  // the flush here (rather than in a separate effect) avoids relying on
+  // cross-effect ordering and guarantees the phase layer re-fetches with the
+  // new overrides. No-op when overrides are unchanged (identical signature).
+  const colorSignature = JSON.stringify(colorOverrides ?? {});
+  const prevColorSigRef = useRef(colorSignature);
+
+  // Whenever the layer list (or colour overrides) change, ensure all visible
+  // layers have bitmaps.
   useEffect(() => {
+    if (prevColorSigRef.current !== colorSignature) {
+      prevColorSigRef.current = colorSignature;
+      cacheFlush((id) => id === 'phase');
+    }
     Promise.all(
       state.layers
-        .filter((l) => l.visible && !cacheRef.current.has(l.id))
+        // Skip layers already cached, currently in flight, or in a known
+        // error state. Excluding errored layers is what keeps this safe to
+        // re-run on every cache mutation (bitmapVersion) — a persistently
+        // failing layer is retried only after a flush clears its error, not
+        // in a tight loop.
+        .filter((l) => l.visible
+          && !cacheRef.current.has(l.id)
+          && !fetchingRef.current.has(l.id)
+          && !errorRef.current.has(l.id))
         .map((l) => fetchLayer(l))
     );
-  }, [state.layers, fetchLayer]);
+    // bitmapVersion is in deps so the effect re-runs after ANY cache mutation
+    // (flush / set / dropped-fetch force()). That re-run is how a layer
+    // stranded by the rapid-switch race gets re-fetched, and how frame/cleanup
+    // flushes reliably reload their invalidated layers.
+  }, [state.layers, fetchLayer, colorSignature, cacheFlush, bitmapVersion]);
 
   // Cleanup-param change → invalidate result-source layers only.
   // (BC/IPF colour doesn't depend on cleanup, but phase/ci/uncertainty do.)
