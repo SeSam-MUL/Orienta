@@ -2045,13 +2045,51 @@ def spherical_gpu_index_patterns(
                 "spherical orientations", exc_info=True)
             _resolved_eulers = None
 
+    # --- Map-wide pseudo-symmetry variant unification ------------------------
+    # Hough is variant-blind (band geometry has the holohedral symmetry), so
+    # the substituted orientations can be per-pixel arbitrary pseudo-variants →
+    # IPF salt-and-pepper inside physical grains. Unify per phase: segment
+    # grains modulo the SUPERGROUP, decide the variant per grain by aggregated
+    # render-NCC with the spatial-coherence twin-protection policy, rescue
+    # Hough-failure orphans. Fail-safe: any problem keeps the resolver output.
+    eulers = (_resolved_eulers if _resolved_eulers is not None
+              else result.euler_xyz.numpy().astype(np.float64))
+    _vu_reports = None
+    if _resolved_phase_ids and _sp_patterns_for_resolve is not None:
+        try:
+            from backend.spherical_gpu.pipeline.variant_unification import (
+                unify_after_hough_resolve,
+            )
+            _progress("Pseudo-symmetry: unifying variant speckle per grain "
+                      "(render-NCC verified)...", 0.93)
+            _eul_u, _vu_reports = unify_after_hough_resolve(
+                eulers, result.phase_id.numpy().reshape(-1),
+                _sp_patterns_for_resolve, files, masters_meta,
+                detector_params, selection_mask, roi_mode,
+                _resolved_phase_ids, progress=lambda m: _progress(m, 0.95))
+            if _eul_u is not None:
+                eulers = _eul_u
+                _tot_flip = sum(r.get("n_flipped_units", 0)
+                                for r in _vu_reports.values() if isinstance(r, dict))
+                _tot_amb = sum(r.get("n_ambiguous", 0)
+                               for r in _vu_reports.values() if isinstance(r, dict))
+                _tot_resc = sum(r.get("n_rescued", 0)
+                                for r in _vu_reports.values() if isinstance(r, dict))
+                _progress(
+                    f"Pseudo-symmetry: variant unification done — "
+                    f"{_tot_flip} unit(s) unified/flipped, {_tot_amb} ambiguous, "
+                    f"{_tot_resc} px rescued", 0.96)
+                _orientation_source_reason += (
+                    " Variant speckle was unified per grain (supergroup "
+                    "segmentation + aggregated render-NCC; coherent twin "
+                    "domains only flipped on a clear margin).")
+        except Exception:
+            logger.warning("Variant unification failed; keeping resolver "
+                           "orientations", exc_info=True)
+
     _progress("Spherical-GPU: building CrystalMap...", 0.97)
 
     # --- Build CrystalMap (matches the EMSphInx-flow output shape) -----------
-    # Use the pseudo-symmetry-resolved orientations when the resolver fired
-    # (cubic-approximant phase); otherwise the raw spherical output verbatim.
-    eulers = (_resolved_eulers if _resolved_eulers is not None
-              else result.euler_xyz.numpy().astype(np.float64))
     n_points = eulers.shape[0]
     rotations = Rotation.from_euler(eulers)
 
@@ -2207,6 +2245,10 @@ def spherical_gpu_index_patterns(
             "device_name": backend.runtime.device_name,
             "orientation_source": _orientation_source,
             "orientation_source_reason": _orientation_source_reason,
+            # Map-wide variant unification provenance (per resolved phase):
+            # grain count, flipped/ambiguous/rescued totals + per-grain
+            # decisions (mode, margin, centroid) for the UI / diagnostics.
+            "variant_unification": _vu_reports,
         },
     )
 

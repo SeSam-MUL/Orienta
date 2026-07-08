@@ -452,3 +452,162 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
         report["n_rescued"] += int(pix.size)
 
     return new_q, report
+
+
+# ---------------------------------------------------------------------------
+# Wiring — render-NCC scorer + pipeline entry point (lazy heavy imports)
+# ---------------------------------------------------------------------------
+
+def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
+                          max_bandwidth: int = 128):
+    """Render-NCC scorer for :func:`unify_map`.
+
+    ``get_pattern(flat_idx) -> (H, W) float array | None`` supplies the
+    experimental pattern (in-memory batch for the pipeline; lazy per-pixel
+    fetch for the endpoint — only the few scored pixels per grain are read).
+
+    Renders through the cached SHT renderer service (bw=`max_bandwidth`),
+    removes the dynamic background from BOTH sides and compares inside the
+    inscribed detector disc — the same recipe as the validated SampleB
+    render-NCC ground-truth harness. Pixels without a pattern score -inf so
+    they never decide a class.
+    """
+    import torch
+    import kikuchipy as kp
+    from backend.api.services.sht_pattern_renderer import (
+        get_renderer, load_or_get_phase,
+    )
+    from .detector import convert_pc_to_emsoft
+
+    H = int(det_params["pat_height"])
+    W = int(det_params["pat_width"])
+    xpc, ypc, L_um = convert_pc_to_emsoft(
+        pc=(float(det_params["pc_x"]), float(det_params["pc_y"]),
+            float(det_params["pc_z"])),
+        vendor=str(det_params.get("vendor", "Bruker")),
+        pat_width=W, pat_height=H,
+        pixel_size=float(det_params.get("pixel_size", 70.0)),
+        binning=int(det_params.get("binning", 1)),
+    )
+    pc = (float(xpc), float(ypc), float(L_um))
+    pixel_size = float(det_params.get("pixel_size", 70.0))
+    sample_tilt = float(det_params.get("sample_tilt", 70.0))
+    det_tilt = float(det_params.get("tilt", 0.0))
+    rnd = get_renderer()
+    pgrid = load_or_get_phase(str(sht_path), max_bandwidth=int(max_bandwidth))
+
+    yy, xx = np.mgrid[0:H, 0:W]
+    cy, cx = (H - 1) / 2.0, (W - 1) / 2.0
+    disc = ((yy - cy) ** 2 + (xx - cx) ** 2) <= (min(cy, cx) * 0.96) ** 2
+
+    def _dynbg(im):
+        s = kp.signals.EBSD(np.asarray(im, dtype=np.float32)[None, None])
+        s.remove_dynamic_background(operation="subtract", filter_domain="frequency")
+        return s.data[0, 0].astype(np.float32)
+
+    def _ncc(a, b):
+        av = a[disc].astype(np.float64)
+        bv = b[disc].astype(np.float64)
+        av -= av.mean()
+        bv -= bv.mean()
+        den = np.linalg.norm(av) * np.linalg.norm(bv) + 1e-12
+        return float(np.dot(av, bv) / den)
+
+    exp_cache: dict[int, np.ndarray | None] = {}
+
+    def score(flat_idx, quats):
+        out = []
+        for f, q in zip(np.atleast_1d(flat_idx), np.atleast_2d(quats)):
+            f = int(f)
+            if f not in exp_cache:
+                p = get_pattern(f)
+                exp_cache[f] = None if p is None else _dynbg(p)
+            exp = exp_cache[f]
+            if exp is None:
+                out.append(float("-inf"))
+                continue
+            qt = torch.tensor(np.asarray(q, dtype=np.float64)[:4],
+                              dtype=torch.float64)
+            sim = rnd.render(pgrid, qt, pc, (H, W), pixel_size,
+                             tilt_deg=sample_tilt, det_tilt_deg=det_tilt)
+            out.append(_ncc(exp, _dynbg(np.asarray(sim.numpy(), dtype=np.float32))))
+        return np.asarray(out, dtype=np.float64)
+
+    return score
+
+
+def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
+                              masters_meta, det_params, selection_mask,
+                              roi_mode: bool, resolved_phase_ids,
+                              progress=None):
+    """Pipeline entry: run map-wide variant unification for every phase whose
+    orientations were just substituted from (variant-blind) Hough.
+
+    `eulers` (N,3) Bunge-ZXZ radians in result order; `patterns` (N,H,W) same
+    order; `phase_id` (N,) 1-indexed. Returns ``(eulers_new | None, reports)``
+    — None when nothing changed. Fail-safe per phase: an error leaves that
+    phase's orientations as delivered by the resolver.
+    """
+    from orix.quaternion import Rotation
+
+    n_rows = int(det_params.get("n_rows") or 0)
+    n_cols = int(det_params.get("n_cols") or 0)
+    N = int(np.asarray(eulers).shape[0])
+    reports: dict[int, dict] = {}
+
+    # Map result rows -> full-grid flat indices (same convention as the
+    # CrystalMap placement below the call site).
+    if roi_mode and selection_mask is not None:
+        sel = np.asarray(selection_mask, dtype=bool)
+        n_rows, n_cols = sel.shape
+        flat_of_row = np.flatnonzero(sel.ravel())
+        if flat_of_row.size != N:
+            return None, {"skipped": "selection mask does not match result size"}
+    else:
+        if n_rows * n_cols != N:
+            return None, {"skipped": "no 2D grid (streamed/1D result)"}
+        flat_of_row = np.arange(N)
+
+    row_of_flat = np.full(n_rows * n_cols, -1, dtype=np.int64)
+    row_of_flat[flat_of_row] = np.arange(N)
+
+    q_rows = np.asarray(Rotation.from_euler(np.asarray(eulers)).data,
+                        dtype=np.float64).reshape(N, 4)
+    full_q = np.full((n_rows * n_cols, 4), np.nan)
+    full_q[flat_of_row] = q_rows
+    phase_full = np.full(n_rows * n_cols, -1, dtype=np.int64)
+    phase_full[flat_of_row] = np.asarray(phase_id).reshape(-1)
+
+    pats = np.asarray(patterns)
+
+    def _get_pattern(flat):
+        r = int(row_of_flat[flat])
+        return None if r < 0 else pats[r]
+
+    changed = False
+    for pid in sorted(resolved_phase_ids):
+        meta = masters_meta[pid - 1] if 0 <= pid - 1 < len(masters_meta) else {}
+        pg = (meta or {}).get("point_group")
+        sht = sht_paths[pid - 1] if 0 <= pid - 1 < len(sht_paths) else None
+        if not pg or not sht:
+            continue
+        try:
+            score_fn = build_render_score_fn(sht, det_params, _get_pattern)
+            new_full, rep = unify_map(full_q, phase_full, n_rows, n_cols,
+                                      pid, pg, score_fn, progress=progress)
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning(
+                "variant unification failed for phase %s — keeping resolver "
+                "output for it", pid, exc_info=True)
+            continue
+        reports[pid] = rep
+        if new_full is not None and not np.allclose(new_full, full_q, equal_nan=True):
+            full_q = new_full
+            changed = True
+
+    if not changed:
+        return None, reports
+    eulers_new = np.asarray(
+        Rotation(full_q[flat_of_row]).to_euler(), dtype=np.float64)
+    return eulers_new, reports

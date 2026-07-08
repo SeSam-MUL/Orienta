@@ -2682,6 +2682,128 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
             "undo_available": isinstance(md, dict) and bool(undo_idx)}
 
 
+class UnifyVariantsRequest(BaseModel):
+    result_id: str | None = None
+    threshold_deg: float = 5.0
+
+
+@router.post("/pseudosym/unify")
+async def unify_pseudosym_variants(req: UnifyVariantsRequest):
+    """Map-wide pseudo-symmetry variant unification on an EXISTING spherical
+    result (post-processing twin of the automatic pipeline stage): per phase,
+    segment grains modulo the supergroup, unify variant speckle per grain by
+    aggregated render-NCC (coherent twin domains only flip on a clear margin),
+    rescue tiny orphans. Stores one-level undo (same slot as the grain flip,
+    so the existing Undo button works). Runs for EVERY phase with ≥2 variant
+    classes — verification semantics keep correctly-indexed phases safe."""
+    result = _get_result(req.result_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="No indexing result available")
+    md = getattr(result, "metadata", None) or {}
+    if md.get("indexing_method") != "spherical":
+        raise HTTPException(status_code=400,
+                            detail="Variant unification is only available for spherical results")
+    sht_map = md.get("sht_paths_by_phase") or {}
+    det = md.get("detector_geometry")
+    if not sht_map or not det:
+        raise HTTPException(status_code=400,
+                            detail="Result missing SHT/detector metadata; re-run indexing")
+
+    from backend.spherical_gpu.pipeline.variant_unification import (
+        build_render_score_fn, unify_map,
+    )
+    from tools.pattern_comparison import get_experimental_pattern
+    from orix.quaternion import Rotation as _R
+
+    xmap = result.xmap
+    n_rows, n_cols = result.original_shape
+    flat_mask = np.asarray(result.selection_mask, dtype=bool).ravel()
+    n_xmap = xmap.rotations.size
+    qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
+    pid = np.asarray(xmap.phase_id).reshape(-1)
+
+    if n_xmap == n_rows * n_cols:
+        flat_of_row = np.arange(n_xmap)
+    else:
+        flat_of_row = np.flatnonzero(flat_mask)
+        if flat_of_row.size != n_xmap:
+            raise HTTPException(status_code=409,
+                                detail="Selection mask does not match the result size")
+    full_q = np.full((n_rows * n_cols, 4), np.nan)
+    full_q[flat_of_row] = qdata
+    phase_full = np.full(n_rows * n_cols, -1, dtype=np.int64)
+    phase_full[flat_of_row] = pid
+
+    def _get_pattern(flat):
+        r, c = divmod(int(flat), n_cols)
+        p = get_experimental_pattern(result, r, c)
+        return None if p is None else np.asarray(p, dtype=np.float32)
+
+    def _work():
+        reports = {}
+        cur = full_q
+        changed = False
+        for phase_id_val in sorted({int(x) for x in np.unique(pid)}):
+            try:
+                pg = xmap.phases[phase_id_val].point_group.name
+            except Exception:
+                continue
+            sht = sht_map.get(phase_id_val) or sht_map.get(str(phase_id_val))
+            if not sht:
+                continue
+            try:
+                score_fn = build_render_score_fn(str(sht), det, _get_pattern)
+                new_full, rep = unify_map(cur, phase_full, n_rows, n_cols,
+                                          phase_id_val, pg, score_fn)
+            except Exception as e:  # fail safe per phase
+                logger.warning("[unify] phase %s failed: %s", phase_id_val, e,
+                               exc_info=True)
+                reports[phase_id_val] = {"error": str(e)[:200]}
+                continue
+            reports[phase_id_val] = rep
+            if new_full is not None:
+                cur = new_full
+                changed = True
+        return cur, changed, reports
+
+    new_full_q, changed, reports = await asyncio.to_thread(_work)
+
+    n_changed = 0
+    if changed:
+        new_rows = new_full_q[flat_of_row]
+        moved = ~np.all(np.isclose(new_rows, qdata, atol=1e-12), axis=1)
+        idxs = np.flatnonzero(moved)
+        if idxs.size:
+            if isinstance(md, dict):
+                md["grain_flip_undo"] = {
+                    "xmap_indices": [int(i) for i in idxs],
+                    "old_quats": [[float(v) for v in qdata[i]] for i in idxs],
+                }
+            xmap._rotations = _R(new_rows)
+            n_changed = int(idxs.size)
+
+    summary = {
+        "n_changed": n_changed,
+        "n_grains": sum(int(r.get("n_grains", 0)) for r in reports.values()
+                        if isinstance(r, dict)),
+        "n_flipped_units": sum(int(r.get("n_flipped_units", 0)) for r in reports.values()
+                               if isinstance(r, dict)),
+        "n_ambiguous": sum(int(r.get("n_ambiguous", 0)) for r in reports.values()
+                           if isinstance(r, dict)),
+        "n_rescued": sum(int(r.get("n_rescued", 0)) for r in reports.values()
+                         if isinstance(r, dict)),
+        "ambiguous_grains": [
+            {"phase_id": p, "centroid": g["centroid"], "margin": g["margin"]}
+            for p, r in reports.items() if isinstance(r, dict)
+            for g in r.get("grains", []) if "ambiguous" in g.get("decision", "")
+        ][:50],
+        "undo_available": n_changed > 0,
+    }
+    if isinstance(md, dict):
+        md["variant_unification"] = reports
+    return summary
+
+
 class GrainUndoRequest(BaseModel):
     result_id: str | None = None
 
