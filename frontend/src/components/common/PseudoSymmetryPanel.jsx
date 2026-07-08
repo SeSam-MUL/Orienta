@@ -53,7 +53,16 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
   const loadVariants = () => {
     setVariantsBusy(true); setGrainMsg(null);
     indexApi.patternMatchVariants(row, col)
-      .then(r => { setVariants(r.data); setChosenVariant(null); })
+      .then(r => {
+        setVariants(r.data);
+        // Auto-select the best NON-current candidate: applying 'current' is a
+        // no-op (it is the orientation already on the map), so pre-picking it
+        // would make the Apply button do nothing. Fall back to the best
+        // overall only if every candidate is 'current'.
+        const cands = r.data?.candidates || [];
+        const best = cands.find(c => c.label !== 'current') || cands[0] || null;
+        setChosenVariant(best);
+      })
       .catch(e => setGrainMsg({ err: true, text: e?.response?.data?.detail || String(e) }))
       .finally(() => setVariantsBusy(false));
   };
@@ -119,17 +128,44 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
         </div>
       ) : (
         <>
-          <div style={{ fontSize: '8pt', color: '#6272a4', marginBottom: 4 }}>
+          <div style={{ fontSize: '8pt', color: '#6272a4', marginBottom: 6 }}>
             {t('matchesDialog.variantsHint', { pg: variants.point_group || '?' })}
           </div>
+
+          {/* Large side-by-side: experimental vs the SELECTED candidate, so the
+              user can actually judge the match at size (the thumbnail row below
+              is only for picking). */}
+          {chosenVariant && (
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'center', marginBottom: 8, flexWrap: 'wrap' }}>
+              {matchData?.experimental && (
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontSize: '8pt', color: '#f8f8f2', marginBottom: 2 }}>{t('matchesDialog.expLabel')}</div>
+                  <img src={`data:image/png;base64,${matchData.experimental}`} alt="experimental"
+                    style={{ width: 200, height: 200, objectFit: 'contain', display: 'block', borderRadius: 4, border: `1px solid ${C.border}`, background: '#1a1b26' }} />
+                </div>
+              )}
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '8pt', color: '#50fa7b', marginBottom: 2 }}>
+                  {t('matchesDialog.selectedLabel', { label: chosenVariant.label })}
+                </div>
+                <img src={`data:image/png;base64,${chosenVariant.thumbnail}`} alt={chosenVariant.label}
+                  style={{ width: 200, height: 200, objectFit: 'contain', display: 'block', borderRadius: 4, border: '2px solid #50fa7b', background: '#1a1b26' }} />
+                <div style={{ fontSize: '8pt', fontWeight: 700, marginTop: 2, color: chosenVariant.r_score >= 0.3 ? '#50fa7b' : chosenVariant.r_score >= 0.15 ? '#ffb86c' : '#ff5555' }}>
+                  R={chosenVariant.r_score?.toFixed(3)}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Thumbnail picker row — larger tiles, best-first. */}
           <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
             {(variants.candidates || []).map((c, i) => (
               <div key={i} onClick={() => setChosenVariant(c)}
                 title={`${c.label} — Euler (${(c.euler || []).map(a => a?.toFixed(1)).join(', ')})°`}
-                style={{ border: chosenVariant === c ? '2px solid #50fa7b' : `1px solid ${C.border}`, borderRadius: 4, padding: 3, cursor: 'pointer', minWidth: 66, textAlign: 'center', flexShrink: 0 }}>
-                <img src={`data:image/png;base64,${c.thumbnail}`} alt={c.label} style={{ width: 60, height: 60, objectFit: 'contain', display: 'block' }} />
-                <div style={{ fontSize: '7pt', fontWeight: 700, color: c.r_score >= 0.3 ? '#50fa7b' : c.r_score >= 0.15 ? '#ffb86c' : '#ff5555' }}>R={c.r_score?.toFixed(2)}</div>
-                <div style={{ fontSize: '7pt', color: '#6272a4' }}>{c.label}</div>
+                style={{ border: chosenVariant === c ? '2px solid #50fa7b' : `1px solid ${C.border}`, borderRadius: 4, padding: 3, cursor: 'pointer', minWidth: 96, textAlign: 'center', flexShrink: 0 }}>
+                <img src={`data:image/png;base64,${c.thumbnail}`} alt={c.label} style={{ width: 90, height: 90, objectFit: 'contain', display: 'block' }} />
+                <div style={{ fontSize: '8pt', fontWeight: 700, color: c.r_score >= 0.3 ? '#50fa7b' : c.r_score >= 0.15 ? '#ffb86c' : '#ff5555' }}>R={c.r_score?.toFixed(2)}</div>
+                <div style={{ fontSize: '7pt', color: c.label === 'current' ? '#ffb86c' : '#6272a4' }}>{c.label}</div>
               </div>
             ))}
           </div>
@@ -146,11 +182,14 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
                 <input type="checkbox" checked={refine} onChange={e => setRefine(e.target.checked)} />
                 {t('matchesDialog.refineLabel')}
               </label>
-              <button onClick={applyToGrain} disabled={grainBusy}
-                title={t('matchesDialog.applyGrainTip')}
-                style={{ fontSize: '8pt', padding: '3px 10px', background: '#50fa7b22', border: '1px solid #50fa7b', borderRadius: 3, color: '#50fa7b', cursor: 'pointer', fontWeight: 700 }}>
+              <button onClick={applyToGrain} disabled={grainBusy || chosenVariant.label === 'current'}
+                title={chosenVariant.label === 'current' ? t('matchesDialog.currentNoop') : t('matchesDialog.applyGrainTip')}
+                style={{ fontSize: '8pt', padding: '3px 10px', background: chosenVariant.label === 'current' ? '#44475a' : '#50fa7b22', border: `1px solid ${chosenVariant.label === 'current' ? C.border : '#50fa7b'}`, borderRadius: 3, color: chosenVariant.label === 'current' ? '#6272a4' : '#50fa7b', cursor: chosenVariant.label === 'current' ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
                 {grainBusy ? t('matchesDialog.grainApplying') : t('matchesDialog.applyGrain', { label: chosenVariant.label })}
               </button>
+              {chosenVariant.label === 'current' && (
+                <span style={{ fontSize: '8pt', color: '#ffb86c' }}>{t('matchesDialog.currentNoop')}</span>
+              )}
             </div>
           )}
         </>

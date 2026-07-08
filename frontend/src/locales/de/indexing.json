@@ -388,7 +388,10 @@
     "undoDone": "{{n}} Pixel wiederhergestellt.",
     "refineApplied": "{{n}} px verfeinert (Render-Match +{{delta}}).",
     "refineRejected": "Verfeinerung verworfen (keine Render-Match-Verbesserung).",
-    "refineSkipped": "Verfeinerung übersprungen ({{reason}})."
+    "refineSkipped": "Verfeinerung übersprungen ({{reason}}).",
+    "expLabel": "Experimentell",
+    "selectedLabel": "Gewählt: {{label}}",
+    "currentNoop": "'current' ist die bereits auf der Karte liegende Orientierung — wähle eine andere Variante."
   },
   "phaseResultModal": {
     "title": "Mehrphasen-Ergebnisse",

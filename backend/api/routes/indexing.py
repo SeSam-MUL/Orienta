@@ -2453,6 +2453,13 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
                      det_tilt, pixel_size)
         backend = _get_phase_compare_backend(cache_key)
         if backend is None:
+            # Reclaim VRAM before allocating a fresh backend. The main indexing
+            # run + variant renders often leave the GPU near-full (reserved but
+            # unallocated); without this the refine backend build OOMs and the
+            # whole polish is skipped. empty_cache() returns the reserved pool
+            # to the driver so the ~tens-of-MiB refine build fits.
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             from backend.spherical_gpu.backend import (
                 BackendConfig, PhaseConfig, SphericalGPUBackend,
             )
@@ -2533,7 +2540,22 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
     except Exception as e:  # noqa: BLE001 — refine must never break the apply
         logger.warning("[grain-flip] refine failed (snap results kept): %s",
                        e, exc_info=True)
-        return None, {"status": "error", "reason": str(e)}
+        msg = str(e)
+        if "out of memory" in msg.lower() or "CUDA out of memory" in msg:
+            # GPU is full from the indexing run / variant renders. Try once
+            # more to reclaim it so the NEXT apply can refine, and give the
+            # user an actionable message instead of the raw torch dump.
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
+            return None, {"status": "skipped", "reason": (
+                "GPU out of memory — click 'Release GPU' on the Indexing page, "
+                "then re-apply (or uncheck 'Refine'). The variant flip itself "
+                "was applied.")}
+        return None, {"status": "error", "reason": msg[:200]}
 
 
 MAX_REFINE_GRAIN_PX = 1500

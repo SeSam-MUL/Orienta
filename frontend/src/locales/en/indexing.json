@@ -388,7 +388,10 @@
     "undoDone": "Restored {{n}} pixels.",
     "refineApplied": "Refined {{n}} px (render match +{{delta}}).",
     "refineRejected": "Refinement discarded (no render-match improvement).",
-    "refineSkipped": "Refinement skipped ({{reason}})."
+    "refineSkipped": "Refinement skipped ({{reason}}).",
+    "expLabel": "Experimental",
+    "selectedLabel": "Selected: {{label}}",
+    "currentNoop": "'current' is the orientation already on the map — pick a different variant."
   },
   "phaseResultModal": {
     "title": "Multi-Phase Results",

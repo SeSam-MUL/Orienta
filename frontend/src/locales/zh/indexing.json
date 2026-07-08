@@ -388,7 +388,10 @@
     "undoDone": "已恢复 {{n}} 个像素。",
     "refineApplied": "已微调 {{n}} 个像素（渲染匹配 +{{delta}}）。",
     "refineRejected": "微调已放弃（渲染匹配无改善）。",
-    "refineSkipped": "已跳过微调（{{reason}}）。"
+    "refineSkipped": "已跳过微调（{{reason}}）。",
+    "expLabel": "实验",
+    "selectedLabel": "已选：{{label}}",
+    "currentNoop": "'current' 是地图上已有的取向 — 请选择其他变体。"
   },
   "phaseResultModal": {
     "title": "多相 结果",

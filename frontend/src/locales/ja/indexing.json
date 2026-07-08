@@ -388,7 +388,10 @@
     "undoDone": "{{n}} ピクセルを復元しました。",
     "refineApplied": "{{n}} ピクセルを微調整（レンダーマッチ +{{delta}}）。",
     "refineRejected": "微調整は破棄されました（レンダーマッチの改善なし）。",
-    "refineSkipped": "微調整をスキップしました（{{reason}}）。"
+    "refineSkipped": "微調整をスキップしました（{{reason}}）。",
+    "expLabel": "実験",
+    "selectedLabel": "選択: {{label}}",
+    "currentNoop": "'current' はすでにマップ上にある方位です — 別のバリアントを選んでください。"
   },
   "phaseResultModal": {
     "title": "マルチ相 結果",
