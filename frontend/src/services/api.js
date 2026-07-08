@@ -445,10 +445,12 @@ export const indexApi = {
     api.get('/api/indexing/pattern-match/variants', { params: {
       row, col, max_bandwidth: maxBandwidth, aperture, aperture_radius: apertureRadius,
     } }),
-  applyVariantToGrain: ({ row, col, quat, thresholdDeg = 5.0 }) =>
+  applyVariantToGrain: ({ row, col, quat, thresholdDeg = 5.0, maxTotalDeg = 15.0, refine = false }) =>
     api.post('/api/indexing/pattern-match/apply-to-grain', {
-      row, col, quat, threshold_deg: thresholdDeg,
+      row, col, quat, threshold_deg: thresholdDeg, max_total_deg: maxTotalDeg, refine,
     }),
+  undoGrainFlip: () =>
+    api.post('/api/indexing/pattern-match/undo-grain', {}),
   // Phase B — Forward-NCC quality map
   forwardNccStatus: () => api.get('/api/indexing/forward-ncc/status'),
   forwardNccCompute: (maxBandwidth = 256, force = false) => api.post(

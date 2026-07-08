@@ -28,6 +28,7 @@ import RefinementPanel from './RefinementPanel';
 import AnomalyBrowserDrawer from './AnomalyBrowser/AnomalyBrowserDrawer';
 import FileSwitcher from '../common/FileSwitcher';
 import CoordinateSystemPanel from '../common/CoordinateSystemPanel';
+import PseudoSymmetryPanel from '../common/PseudoSymmetryPanel';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
@@ -73,7 +74,7 @@ const SHT_QUALITY_OPTIONS = [
 ];
 
 
-function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
+function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientationsChanged = null }) {
   const { t } = useTranslation('phasemap');
   const [heatmapClean, setHeatmapClean] = useState(null);
   const [gridDims, setGridDims] = useState({ rows: 0, cols: 0 });
@@ -100,6 +101,9 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
   // a new result pays a ~6 s × N_phases warmup cost.
   const [comparePhases, setComparePhases] = useState(false);
   const [selectedPhaseIdx, setSelectedPhaseIdx] = useState(0);
+  // Bumped after a grain flip/undo so the match refetches and shows the
+  // corrected orientation + simulated pattern immediately.
+  const [matchRefresh, setMatchRefresh] = useState(0);
   const heatmapRef = useRef(null);
 
   // First-time-open effect: fetch the heatmap. Runs ONLY when ``open``
@@ -186,7 +190,7 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
       })
       .catch(() => { if (!cancelled) setMatchData(null); });
     return () => { cancelled = true; };
-  }, [selectedPixel, rank, shtQuality, aperture, apertureRadius, comparePhases]);
+  }, [selectedPixel, rank, shtQuality, aperture, apertureRadius, comparePhases, matchRefresh]);
 
   const handleHeatmapClick = (e) => {
     const img = heatmapRef.current;
@@ -511,6 +515,18 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null }) {
                   <div style={{ fontSize: '10pt', color: '#bd93f9' }}>{rLabel}</div>
                 </div>
               )}
+
+              {/* Universal manual pseudo-symmetry flip — shared panel (same as
+                  the Indexing Pattern-Match view). Placed right under the
+                  R-score, NOT at the bottom of the scroll area: the Phase Map
+                  is where wrong grains are spotted. onApplied refetches the
+                  match AND flushes the IPF layer bitmaps so the map itself
+                  updates immediately. */}
+              <PseudoSymmetryPanel
+                selectedPixel={selectedPixel}
+                matchData={matchData}
+                onApplied={() => { setMatchRefresh(x => x + 1); onOrientationsChanged?.(); }}
+              />
 
               {/* Multi-phase score comparison */}
               {matchData.phase_scores?.length > 1 && (
@@ -3414,6 +3430,11 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           open={showMatchesDialog}
           onClose={() => setShowMatchesDialog(false)}
           initialPixel={matchesInitialPixel}
+          onOrientationsChanged={() =>
+            // Grain flip changed orientations in place → refetch the
+            // orientation-coloured layers (IPF); phase/CI/BC are unaffected.
+            layerStack.cacheFlush((id) => ['ipf-x', 'ipf-y', 'ipf-z'].includes(id))
+          }
         />
         <AnomalyBrowserDrawer
           open={browserOpen}

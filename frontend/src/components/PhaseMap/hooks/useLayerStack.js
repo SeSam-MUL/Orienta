@@ -415,5 +415,9 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     errors: errorRef.current,
     addLayer, removeLayer, setOpacity, setBlend, setVisibility, setThreshold, setLayerParams, reorder,
     usePreset, setSingleLayer, clear,
+    // Targeted invalidation for callers that mutate the backend result in
+    // place (e.g. the pseudo-symmetry grain flip changes orientations →
+    // IPF layers must refetch, same pattern as the frameSig effect above).
+    cacheFlush,
   };
 }

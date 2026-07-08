@@ -31,6 +31,7 @@ import SelectedPhasesList from './SelectedPhasesList';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
+import PseudoSymmetryPanel from '../common/PseudoSymmetryPanel';
 import { detectPhaseDegeneracy } from './phaseDegeneracy';
 import FloatingPhasePanel from './FloatingPhasePanel';
 import useResultStore from '../../stores/useResultStore';
@@ -369,13 +370,6 @@ function PatternMatchesDialog({ open, onClose }) {
   const [rank, setRank] = useState(0);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState(null);
-  // Universal manual pseudo-symmetry flip
-  const [variants, setVariants] = useState(null);     // {candidates:[...], point_group} | null
-  const [variantsBusy, setVariantsBusy] = useState(false);
-  const [chosenVariant, setChosenVariant] = useState(null);
-  const [grainThreshold, setGrainThreshold] = useState(5);
-  const [grainBusy, setGrainBusy] = useState(false);
-  const [grainMsg, setGrainMsg] = useState(null);
   const heatmapRef = useRef(null);
   // Linked crosshair + numbered red markers shared across the 3 comparison
   // panels, plus the publication-figure export composer — the SAME shared tools
@@ -401,37 +395,18 @@ function PatternMatchesDialog({ open, onClose }) {
     // or rank changes can otherwise show response data for a stale (pixel,
     // rank) pair while the controls display the current one.
     let cancelled = false;
-    setVariants(null); setChosenVariant(null); setGrainMsg(null);  // reset flip UI on pixel change
     indexApi.patternMatch(selectedPixel.row, selectedPixel.col, rank)
       .then(r => { if (!cancelled) setMatchData(r.data); })
       .catch(() => { if (!cancelled) setMatchData(null); });
     return () => { cancelled = true; };
   }, [selectedPixel, rank]);
 
-  const loadVariants = () => {
+  // Refresh the match view after a grain flip/undo so the corrected
+  // orientation (and its simulated pattern) shows immediately.
+  const refetchMatch = () => {
     if (!selectedPixel) return;
-    setVariantsBusy(true); setGrainMsg(null);
-    indexApi.patternMatchVariants(selectedPixel.row, selectedPixel.col)
-      .then(r => { setVariants(r.data); setChosenVariant(null); })
-      .catch(e => setGrainMsg({ err: true, text: e?.response?.data?.detail || String(e) }))
-      .finally(() => setVariantsBusy(false));
-  };
-
-  const applyToGrain = () => {
-    if (!selectedPixel || !chosenVariant) return;
-    setGrainBusy(true);
-    indexApi.applyVariantToGrain({
-      row: selectedPixel.row, col: selectedPixel.col,
-      quat: chosenVariant.quat, thresholdDeg: grainThreshold,
-    })
-      .then(r => {
-        setGrainMsg({ err: false, text: t('matchesDialog.grainApplied', { n: r.data.n_changed }) });
-        // refresh the match view to show the corrected orientation
-        return indexApi.patternMatch(selectedPixel.row, selectedPixel.col, rank)
-          .then(rr => setMatchData(rr.data)).catch(() => {});
-      })
-      .catch(e => setGrainMsg({ err: true, text: e?.response?.data?.detail || String(e) }))
-      .finally(() => setGrainBusy(false));
+    indexApi.patternMatch(selectedPixel.row, selectedPixel.col, rank)
+      .then(rr => setMatchData(rr.data)).catch(() => {});
   };
 
   const handleHeatmapClick = (e) => {
@@ -609,54 +584,13 @@ function PatternMatchesDialog({ open, onClose }) {
                 </div>
               )}
 
-              {/* Universal manual pseudo-symmetry flip: pick the variant whose
-                  simulated pattern matches, then apply to the whole grain. */}
-              {matchData.indexing_method === 'spherical' && (
-                <div style={{ marginTop: 8, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
-                  {!variants ? (
-                    <button onClick={loadVariants} disabled={variantsBusy}
-                      title={t('matchesDialog.tryVariantsTip')}
-                      style={{ fontSize: '8pt', padding: '3px 10px', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, cursor: 'pointer' }}>
-                      {variantsBusy ? t('matchesDialog.variantsLoading') : `⬡ ${t('matchesDialog.tryVariants')}`}
-                    </button>
-                  ) : (
-                    <>
-                      <div style={{ fontSize: '8pt', color: '#6272a4', marginBottom: 4 }}>
-                        {t('matchesDialog.variantsHint', { pg: variants.point_group || '?' })}
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
-                        {(variants.candidates || []).map((c, i) => (
-                          <div key={i} onClick={() => setChosenVariant(c)}
-                            title={`${c.label} — Euler (${(c.euler || []).map(a => a?.toFixed(1)).join(', ')})°`}
-                            style={{ border: chosenVariant === c ? '2px solid #50fa7b' : `1px solid ${C.border}`, borderRadius: 4, padding: 3, cursor: 'pointer', minWidth: 66, textAlign: 'center', flexShrink: 0 }}>
-                            <img src={`data:image/png;base64,${c.thumbnail}`} alt={c.label} style={{ width: 60, height: 60, objectFit: 'contain', display: 'block' }} />
-                            <div style={{ fontSize: '7pt', fontWeight: 700, color: c.r_score >= 0.3 ? '#50fa7b' : c.r_score >= 0.15 ? '#ffb86c' : '#ff5555' }}>R={c.r_score?.toFixed(2)}</div>
-                            <div style={{ fontSize: '7pt', color: '#6272a4' }}>{c.label}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {chosenVariant && (
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
-                          <label style={{ fontSize: '8pt', color: C.text }}>
-                            {t('matchesDialog.grainThreshold')}:
-                            <input type="number" min={1} max={20} step={0.5} value={grainThreshold}
-                              onChange={e => setGrainThreshold(Number(e.target.value))}
-                              style={{ width: 50, marginLeft: 4, background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text }} />°
-                          </label>
-                          <button onClick={applyToGrain} disabled={grainBusy}
-                            title={t('matchesDialog.applyGrainTip')}
-                            style={{ fontSize: '8pt', padding: '3px 10px', background: '#50fa7b22', border: '1px solid #50fa7b', borderRadius: 3, color: '#50fa7b', cursor: 'pointer', fontWeight: 700 }}>
-                            {grainBusy ? t('matchesDialog.grainApplying') : t('matchesDialog.applyGrain', { label: chosenVariant.label })}
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  )}
-                  {grainMsg && (
-                    <div style={{ fontSize: '8pt', marginTop: 4, color: grainMsg.err ? '#ff5555' : '#50fa7b' }}>{grainMsg.text}</div>
-                  )}
-                </div>
-              )}
+              {/* Universal manual pseudo-symmetry flip — shared panel (also
+                  mounted in the Phase Maps pattern-match dialog). */}
+              <PseudoSymmetryPanel
+                selectedPixel={selectedPixel}
+                matchData={matchData}
+                onApplied={refetchMatch}
+              />
             </>)}
           </div>
         </div>
