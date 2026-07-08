@@ -190,6 +190,177 @@ def pseudosym_variant_quats(q, point_group: str, min_sep_deg: float = 3.0,
     return np.asarray(kept, dtype=np.float64)
 
 
+@lru_cache(maxsize=None)
+def _snap_ops(point_group: str):
+    """Crystal-frame snap operators for :func:`grain_snap_floodfill`.
+
+    Returns ``(H (M,4) holohedry quaternions, in_group (M,) bool)`` where
+    ``in_group[i]`` marks operators already in the crystal point group (those
+    candidates are symmetry-equivalent to the pixel's current orientation —
+    "no flip"); the rest are the pseudo-variant coset. ``None`` when the phase
+    is holohedral / unknown (no variants — rigid C carries the fill alone).
+
+    Only LEFT composition ``h·q`` is used for snapping. In the Bunge/orix
+    convention used throughout this project (g maps SAMPLE → CRYSTAL frame)
+    crystal symmetry acts by LEFT multiplication, so the physical
+    pseudo-variant relationship of the SHT mis-indexing is ``q_meas =
+    v·q_true`` (the master pattern is invariant under the holohedry acting on
+    the crystal side). The RIGHT-composed form ``q·h`` (still offered in the
+    manual gallery via :func:`pseudosym_variant_quats`, where render-NCC
+    disambiguates) is deliberately EXCLUDED here: on a bent grain it yields
+    candidates with a CONJUGATED deviation axis (``h⁻¹·t·h``) at exactly the
+    same distance to the BFS reference as the true variant, so a pure argmin
+    picks arbitrarily and corrupts the intra-grain texture (caught by
+    ``test_fill_preserves_intra_grain_distortion``).
+    """
+    holo = pseudosym_holohedry(point_group)
+    if holo is None or holo == point_group:
+        return None
+    H = _sym_quats(holo)
+    grp_keys = {_qkey(g) for g in _sym_quats(point_group)}
+    in_group = np.array([_qkey(h) in grp_keys for h in H], dtype=bool)
+    return H, in_group
+
+
+def grain_snap_floodfill(full_q, phase_full, n_rows: int, n_cols: int,
+                         start_rc, phase_id, point_group: str, q_target,
+                         threshold_deg: float = 5.0,
+                         max_total_deg: float = 15.0):
+    """Grain flood fill with per-pixel pseudo-variant snapping (grain-flip v2).
+
+    4-connected BFS from ``start_rc`` over same-phase pixels. For every
+    candidate pixel the possible corrected orientations are ITS OWN
+    pseudo-variants ``h·q`` (LEFT composition — see :func:`_snap_ops` for why
+    the right-composed form is excluded here) plus the rigid fallback ``C·q``
+    (``C = q_target·q_click⁻¹`` — covers a target, e.g. from Hough, that is
+    not a coset variant of the clicked orientation, a genuinely sample-frame
+    correction, and holohedral phases with no variants at all). A pixel joins
+    the grain when its best candidate is within ``threshold_deg`` of the
+    orientation of the pixel it was REACHED FROM (gradient tracking — follows
+    intra-grain bends instead of comparing everything to the click pixel) AND
+    within ``max_total_deg`` of ``q_target`` (anti-drift cap so the walk cannot
+    leak through a low-angle boundary into the next grain).
+
+    Because each pixel keeps its OWN measured orientation — merely flipped to
+    the correct variant — intra-grain distortions and sub-grain rotations are
+    preserved by construction. This is what lets ONE apply fix a grain whose
+    pixels were scattered across DIFFERENT wrong variants (the case the v1
+    rigid-C fill could not cross). Pure function (no I/O) — unit-testable.
+
+    Parameters
+    ----------
+    full_q : (n_rows*n_cols, 4) float — orientation per pixel, NaN rows for
+        unindexed pixels.
+    phase_full : (n_rows*n_cols,) int — phase id per pixel (or -1).
+    start_rc : (row, col) clicked pixel.
+    q_target : (4,) — user-chosen corrected orientation AT the clicked pixel.
+
+    Returns
+    -------
+    (grain, new_q_map, stats)
+        grain : list[(row, col)] — pixels in the grain (click first).
+        new_q_map : dict[flat_index -> (4,) ndarray] — corrected orientation
+            per grain pixel (click pixel maps to ``q_target`` exactly).
+        stats : dict — ``n_current`` (already right variant), ``n_variant``
+            (coset-snapped), ``n_rigid`` (rigid-C fallback),
+            ``max_residual_deg`` (largest disorientation to target kept).
+    """
+    from collections import deque
+    pg = point_group or "1"
+    q_target = np.asarray(q_target, dtype=np.float64).reshape(4)
+    q_target = q_target / (np.linalg.norm(q_target) + 1e-12)
+    sr, sc = start_rc
+    sflat = sr * n_cols + sc
+    stats = {"n_current": 0, "n_variant": 0, "n_rigid": 0,
+             "max_residual_deg": 0.0}
+    q_click = np.asarray(full_q[sflat], dtype=np.float64)
+    if np.isnan(q_click[0]):
+        return [tuple(start_rc)], {sflat: q_target}, stats
+    rigid_C = _qmul(q_target[None, :], _qconj(q_click[None, :]))[0]
+    thr = float(threshold_deg)
+    cap = float(max_total_deg)
+    ops = _snap_ops(pg)                       # (H, in_group) or None
+    # Near-tie window for the parent-operator preference. Distinct variants are
+    # 40-70 deg apart, intra-grain steps a few deg — 0.25 deg only ever
+    # separates genuinely ambiguous candidates (conjugate-deviation ties).
+    TIE_DEG = 0.25
+    RIGID = -1                                # op index of the rigid-C candidate
+
+    def _candidates(qn):
+        """(cands (M,4), op_idx (M,) int) for one pixel: H·q + rigid C·q."""
+        if ops is None:
+            return (np.vstack([qn[None, :],
+                               _qmul(rigid_C[None, :], qn[None, :])]),
+                    np.array([0, RIGID]))     # op 0 stands in for "identity"
+        H, _ = ops
+        cands = np.vstack([_qmul(H, qn[None, :]),
+                           _qmul(rigid_C[None, :], qn[None, :])])
+        return cands, np.concatenate([np.arange(H.shape[0]), [RIGID]])
+
+    def _bump(op_i):
+        if op_i == RIGID:
+            stats["n_rigid"] += 1
+        elif ops is not None and not ops[1][op_i]:
+            stats["n_variant"] += 1
+        else:
+            stats["n_current"] += 1
+
+    # Start pixel: q_target exactly. Its snap operator (for the continuity
+    # preference) is the holohedry op that maps q_click onto q_target, if the
+    # target IS a variant of the click pixel; otherwise the rigid op.
+    start_op = RIGID
+    if ops is not None:
+        c0, o0 = _candidates(q_click)
+        d0 = same_orientation_angle_deg(c0, q_target, pg)
+        i0 = int(np.argmin(d0))
+        if float(d0[i0]) < 1e-3:
+            start_op = int(o0[i0])
+    new_q = {sflat: q_target}
+    op_of = {sflat: start_op}
+    seen = {tuple(start_rc)}
+    grain = [tuple(start_rc)]
+    dq = deque([tuple(start_rc)])
+    while dq:
+        r, c = dq.popleft()
+        pflat = r * n_cols + c
+        q_ref = new_q[pflat]
+        parent_op = op_of[pflat]
+        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nr, nc_ = r + dr, c + dc
+            if not (0 <= nr < n_rows and 0 <= nc_ < n_cols) or (nr, nc_) in seen:
+                continue
+            fi = nr * n_cols + nc_
+            qn = np.asarray(full_q[fi], dtype=np.float64)
+            if np.isnan(qn[0]) or int(phase_full[fi]) != int(phase_id):
+                continue
+            cands, op_idx = _candidates(qn)
+            d_ref = same_orientation_angle_deg(cands, q_ref, pg)
+            i = int(np.argmin(d_ref))
+            if d_ref[i] >= thr:
+                continue           # rejected via THIS path; other parents may retry
+            # Operator continuity: inside one variant domain the flip operator
+            # is constant. Among near-tied candidates (conjugate-deviation
+            # ambiguity on bent grains) prefer the parent's operator so the
+            # per-pixel deviation is carried over instead of conjugated.
+            tie = np.flatnonzero(d_ref <= d_ref[i] + TIE_DEG)
+            same_as_parent = tie[op_idx[tie] == parent_op]
+            if same_as_parent.size:
+                i = int(same_as_parent[0])
+            d_tot = float(same_orientation_angle_deg(
+                cands[i][None, :], q_target, pg)[0])
+            if d_tot >= cap:
+                continue
+            seen.add((nr, nc_))
+            grain.append((nr, nc_))
+            dq.append((nr, nc_))
+            best = cands[i]
+            new_q[fi] = best / (np.linalg.norm(best) + 1e-12)
+            op_of[fi] = int(op_idx[i])
+            _bump(int(op_idx[i]))
+            stats["max_residual_deg"] = max(stats["max_residual_deg"], d_tot)
+    return grain, new_q, stats
+
+
 def _qkey(q: np.ndarray, ndigits: int = 4, tol: float = 1e-4) -> tuple:
     """Sign-canonical hashable key for a quaternion (q and -q are the same rotation)."""
     q = np.asarray(q, dtype=np.float64)
