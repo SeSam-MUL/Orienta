@@ -2223,6 +2223,8 @@ class GrainApplyRequest(BaseModel):
     col: int
     quat: list           # chosen corrected orientation [w,x,y,z] at the clicked pixel
     threshold_deg: float = 5.0
+    max_total_deg: float = 15.0   # anti-drift cap of the snap flood fill
+    refine: bool = False          # guarded Newton polish after the snap
     result_id: str | None = None
 
 
@@ -2263,38 +2265,13 @@ def _spherical_pixel_ctx(result, row: int, col: int):
     return xmap, px_idx, phase_id, str(sht_path), det, pg
 
 
-def _grain_floodfill(full_q, phase_full, n_rows, n_cols, start_rc, phase_id,
-                     point_group, threshold_deg):
-    """4-connected flood fill from `start_rc` over same-phase pixels whose
-    orientation is within `threshold_deg` disorientation of the start pixel.
-    Returns a list of (row, col). Pure function (no I/O) — unit-testable.
-
-    `full_q` is (n_rows*n_cols, 4) with NaN rows for unindexed pixels;
-    `phase_full` is (n_rows*n_cols,) phase ids (or -1)."""
-    from collections import deque
-    from backend.spherical_gpu.pseudosym import disorientation_deg
-    sr, sc = start_rc
-    q_start = full_q[sr * n_cols + sc]
-    if np.isnan(q_start[0]):
-        return [start_rc]
-    pg = point_group or "1"
-    thr = float(threshold_deg)
-    seen = {start_rc}
-    grain = [start_rc]
-    dq = deque([start_rc])
-    while dq:
-        r, c = dq.popleft()
-        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            nr, nc = r + dr, c + dc
-            if 0 <= nr < n_rows and 0 <= nc < n_cols and (nr, nc) not in seen:
-                fi = nr * n_cols + nc
-                qn = full_q[fi]
-                if (not np.isnan(qn[0]) and int(phase_full[fi]) == int(phase_id)
-                        and disorientation_deg(qn, q_start, pg) < thr):
-                    seen.add((nr, nc))
-                    grain.append((nr, nc))
-                    dq.append((nr, nc))
-    return grain
+# The v1 rigid-C flood fill (`_grain_floodfill`) lived here; grain-flip v2
+# replaced it with the per-pixel coset-snap fill
+# `backend.spherical_gpu.pseudosym.grain_snap_floodfill` (pure, unit-tested in
+# tests/test_grain_flip.py) — one apply now also fixes grains whose pixels are
+# scattered across DIFFERENT wrong variants, while preserving intra-grain
+# distortion (each pixel keeps its own measured orientation, flipped to the
+# correct variant).
 
 
 @router.get("/pattern-match/variants")
@@ -2388,18 +2365,194 @@ async def get_pattern_match_variants(
     }
 
 
+def _render_sim_for_ncc(sht_path, quat, det, max_bandwidth: int = 128):
+    """Render the SHT forward pattern at `quat` and return it as a float32
+    array shaped like the detector — for render-NCC checks (refine gate)."""
+    import torch as _torch
+    import io as _io
+    import base64 as _b64
+    from PIL import Image as _Img
+    from backend.api.services.sht_pattern_renderer import (
+        render_pattern_to_png_b64 as _render_sht_b64,
+    )
+    from backend.spherical_gpu.pipeline.detector import convert_pc_to_emsoft as _conv
+
+    xpc, ypc, L_um = _conv(
+        pc=(float(det["pc_x"]), float(det["pc_y"]), float(det["pc_z"])),
+        vendor=str(det.get("vendor", "Bruker")),
+        pat_width=int(det["pat_width"]), pat_height=int(det["pat_height"]),
+        pixel_size=float(det.get("pixel_size", 70.0)), binning=int(det.get("binning", 1)),
+    )
+    b64 = _render_sht_b64(
+        sht_path=sht_path,
+        orientation_quat=_torch.tensor(np.asarray(quat, dtype=np.float64)[:4],
+                                       dtype=_torch.float64),
+        pc_emsoft=(float(xpc), float(ypc), float(L_um)),
+        detector_shape=(int(det["pat_height"]), int(det["pat_width"])),
+        pixel_size_um=float(det.get("pixel_size", 70.0)),
+        tilt_deg=float(det.get("sample_tilt", 70.0)),
+        det_tilt_deg=float(det.get("tilt", 0.0)),
+        max_bandwidth=int(max_bandwidth),
+    )
+    return np.asarray(_Img.open(_io.BytesIO(_b64.b64decode(b64))), dtype=np.float32)
+
+
+def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
+                         *, max_move_deg: float = 2.0, sample_n: int = 8,
+                         bandwidth: int = 128):
+    """Guarded per-pixel Newton polish of the snapped grain orientations.
+
+    PHYSICS CAUTION: for the z_rot==2 phases this tool exists for, the SHT
+    SO(3) cc surface is exactly what is unreliable (2026-06-27 root cause), so
+    refinement is accept-only-if-provably-safe:
+
+    - per pixel: accepted only if Newton CONVERGED, moved <= `max_move_deg`
+      (stays inside the ~2 deg render-NCC basin) AND the cc value improved;
+    - globally: a render-NCC spot check on up to `sample_n` accepted pixels
+      (snapped vs refined, through the SHT forward renderer vs the
+      experimental pattern). If the median does NOT improve, ALL refinements
+      are DISCARDED and the summary says so — the snap result stands.
+
+    Returns ``(refined_by_flat | None, summary dict)`` — `refined_by_flat`
+    maps flat grid index -> (4,) quaternion for ACCEPTED pixels only. Never
+    raises: any failure returns ``(None, {"status": "error", ...})``.
+    """
+    import torch
+    from orix.quaternion import Rotation as _R
+    from tools.pattern_comparison import (
+        get_experimental_pattern, compute_ncc_scalar,
+    )
+    from backend.spherical_gpu._math.sht_newton import (
+        newton_refine, cc_at_rotation, _zxz_to_zyz,
+    )
+    try:
+        n_cols = int(result.original_shape[1])
+        pairs = []                      # (flat_idx, exp_pattern, quat)
+        for (r, c) in coords:
+            fi = r * n_cols + c
+            if fi not in quats:
+                continue
+            exp = get_experimental_pattern(result, r, c)
+            if exp is None:
+                continue
+            pairs.append((fi, np.asarray(exp, dtype=np.float32), quats[fi]))
+        if not pairs:
+            return None, {"status": "skipped", "reason": "no experimental patterns"}
+
+        # Cached single-phase backend (same key shape as the Phase Test /
+        # forward-sim preview so geometries share the Wigner/Legendre tables).
+        def _sht_sig(p):
+            try:
+                return (p, Path(p).stat().st_mtime_ns)
+            except OSError:
+                return (p, 0)
+        sample_tilt = float(det.get("sample_tilt", 70.0))
+        det_tilt = float(det.get("tilt", 0.0))
+        pixel_size = float(det.get("pixel_size", 70.0))
+        cache_key = ((_sht_sig(sht_path),), int(bandwidth), sample_tilt,
+                     det_tilt, pixel_size)
+        backend = _get_phase_compare_backend(cache_key)
+        if backend is None:
+            from backend.spherical_gpu.backend import (
+                BackendConfig, PhaseConfig, SphericalGPUBackend,
+            )
+            cfg = PhaseConfig(
+                sht_file=sht_path, bandwidth=int(bandwidth), normed=True,
+                refine=True, circmask=0, gausbckg=True, nregions=10,
+                sample_tilt_deg=sample_tilt,
+            )
+            backend = SphericalGPUBackend(BackendConfig(phases=[cfg]))
+            _put_phase_compare_backend(cache_key, backend)
+        backend._ensure_built(det)
+        indexer = backend._indexers[0]
+        L = indexer.bandwidth
+
+        pats = np.stack([p for (_fi, p, _q) in pairs]).astype(np.float32)
+        pats_t = torch.as_tensor(pats, device=indexer.device)
+        prep = indexer._run_preprocessing(pats_t)
+        gln = indexer._direct_sht_coefs(prep).to(torch.complex128)
+        flm = indexer._master_coefs.to(torch.complex128)
+        if flm.dim() == 3:
+            flm = flm.squeeze(0)
+
+        seed_q = np.stack([q for (_fi, _p, q) in pairs])
+        eu_seed = torch.as_tensor(
+            np.asarray(_R(seed_q).to_euler(), dtype=np.float64),
+            device=indexer.device)
+
+        refined_by_flat: dict[int, np.ndarray] = {}
+        moves, n_guard = [], 0
+        for i, (fi, _p, q0) in enumerate(pairs):
+            cc0 = float(cc_at_rotation(flm, gln[i], _zxz_to_zyz(eu_seed[i]), L))
+            eu_i, cc_i, converged = newton_refine(flm, gln[i], eu_seed[i], L)
+            move = None
+            if converged and float(cc_i) > cc0:
+                q_i = np.asarray(
+                    _R.from_euler(eu_i.cpu().numpy().reshape(1, 3)).data
+                ).reshape(4)
+                dot = abs(float(np.dot(q_i, q0)))
+                move = float(np.degrees(2.0 * np.arccos(min(dot, 1.0))))
+            if move is not None and move <= max_move_deg:
+                refined_by_flat[fi] = q_i
+                moves.append(move)
+            else:
+                n_guard += 1
+        if not refined_by_flat:
+            return None, {"status": "rejected", "reason": "guards",
+                          "n_refined": 0, "n_guard_rejected": n_guard}
+
+        # Render-NCC spot check — the honest gate. Median must improve.
+        acc = sorted(refined_by_flat.keys())
+        step = max(1, len(acc) // int(sample_n))
+        sample = acc[::step][: int(sample_n)]
+        exp_by_flat = {fi: p for (fi, p, _q) in pairs}
+        deltas = []
+        for fi in sample:
+            exp = exp_by_flat[fi]
+            n_before = compute_ncc_scalar(
+                exp, _render_sim_for_ncc(sht_path, quats[fi], det, bandwidth))
+            n_after = compute_ncc_scalar(
+                exp, _render_sim_for_ncc(sht_path, refined_by_flat[fi], det, bandwidth))
+            deltas.append(float(n_after) - float(n_before))
+        median_delta = float(np.median(deltas)) if deltas else 0.0
+        if median_delta <= 0.0:
+            return None, {
+                "status": "rejected", "reason": "render_ncc_gate",
+                "n_refined": 0, "n_guard_rejected": n_guard,
+                "median_render_ncc_delta": median_delta,
+                "n_sampled": len(deltas),
+            }
+        return refined_by_flat, {
+            "status": "applied",
+            "n_refined": len(refined_by_flat),
+            "n_guard_rejected": n_guard,
+            "median_render_ncc_delta": median_delta,
+            "mean_move_deg": float(np.mean(moves)) if moves else 0.0,
+            "n_sampled": len(deltas),
+        }
+    except Exception as e:  # noqa: BLE001 — refine must never break the apply
+        logger.warning("[grain-flip] refine failed (snap results kept): %s",
+                       e, exc_info=True)
+        return None, {"status": "error", "reason": str(e)}
+
+
+MAX_REFINE_GRAIN_PX = 1500
+
+
 @router.post("/pattern-match/apply-to-grain")
 async def apply_variant_to_grain(req: GrainApplyRequest):
     """Propagate the chosen orientation correction from the clicked pixel to its
-    whole grain: the rigid rotation C = q_target · q_clicked⁻¹ is applied to every
-    grain pixel (the grain = spatially-connected, same-phase, orientation-similar
-    pixels). Within a grain the spherical orientations are near-uniform, so this
-    flips the entire grain to the correct variant. Modifies the stored CrystalMap."""
+    whole grain (v2). Every grain pixel is snapped to ITS OWN best pseudo-variant
+    (gradient-tracking flood fill, `pseudosym.grain_snap_floodfill`), so one apply
+    also fixes grains scattered across DIFFERENT wrong variants and intra-grain
+    distortion is preserved. Optionally runs the guarded Newton refine
+    (`req.refine`). Stores a one-level undo in the result metadata. Modifies the
+    stored CrystalMap."""
     result = _get_result(req.result_id)
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
     xmap, px_idx, phase_id, sht_path, det, pg = _spherical_pixel_ctx(result, req.row, req.col)
-    from backend.spherical_gpu.pseudosym import _qmul, _qconj
+    from backend.spherical_gpu.pseudosym import grain_snap_floodfill
     from orix.quaternion import Rotation as _R
 
     n_rows, n_cols = result.original_shape
@@ -2424,27 +2577,84 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
         raise HTTPException(status_code=400, detail="Clicked pixel was not indexed")
     q_target = np.asarray(req.quat, dtype=np.float64).reshape(-1)[:4]
     q_target = q_target / (np.linalg.norm(q_target) + 1e-12)
-    C = _qmul(q_target[None, :], _qconj(q_click[None, :]))[0]   # q_target = C · q_click
 
-    grain = _grain_floodfill(full_q, phase_full, n_rows, n_cols,
-                             (req.row, req.col), phase_id, pg, req.threshold_deg)
+    grain, new_q_map, snap_stats = grain_snap_floodfill(
+        full_q, phase_full, n_rows, n_cols, (req.row, req.col), phase_id, pg,
+        q_target, threshold_deg=float(req.threshold_deg),
+        max_total_deg=float(req.max_total_deg))
 
-    def _xmap_index(fi):
-        if n_xmap == n_rows * n_cols:
-            return fi
-        return int(flat_mask[:fi].sum()) if flat_mask[fi] else None
+    # Optional guarded Newton polish (fail-safe: snap results kept on any issue).
+    refine_summary = None
+    if req.refine:
+        if len(grain) > MAX_REFINE_GRAIN_PX:
+            refine_summary = {"status": "skipped",
+                              "reason": f"grain > {MAX_REFINE_GRAIN_PX} px"}
+        else:
+            refined, refine_summary = _grain_newton_refine(
+                result, det, sht_path, pg, grain, new_q_map)
+            if refined:
+                new_q_map.update(refined)
+
+    # Precompute flat -> xmap index once (the old per-pixel flat_mask[:fi].sum()
+    # was O(N) per lookup — quadratic on big ROI grains).
+    if n_xmap == n_rows * n_cols:
+        xmap_index_of = None                      # identity mapping
+    else:
+        xmap_index_of = np.full(n_rows * n_cols, -1, dtype=np.int64)
+        xmap_index_of[np.where(flat_mask)[0]] = np.arange(n_xmap)
 
     new_q = qdata.copy()
+    undo_idx, undo_old = [], []
     changed = 0
     for (r, c) in grain:
-        xi = _xmap_index(r * n_cols + c)
-        if xi is not None:
-            nq = _qmul(C[None, :], qdata[xi][None, :])[0]
-            new_q[xi] = nq / (np.linalg.norm(nq) + 1e-12)
-            changed += 1
+        fi = r * n_cols + c
+        xi = fi if xmap_index_of is None else int(xmap_index_of[fi])
+        if xi < 0 or fi not in new_q_map:
+            continue
+        undo_idx.append(int(xi))
+        undo_old.append([float(v) for v in qdata[xi]])
+        new_q[xi] = new_q_map[fi]
+        changed += 1
     xmap._rotations = _R(new_q)   # write back (same pattern as the frame-correction step)
+
+    # One-level undo, stored on the result (in-memory registry — survives until
+    # re-index / backend restart, same lifetime as the correction itself).
+    md = getattr(result, "metadata", None)
+    if isinstance(md, dict):
+        md["grain_flip_undo"] = {"xmap_indices": undo_idx, "old_quats": undo_old}
+
     return {"n_changed": changed, "grain_size": len(grain),
-            "threshold_deg": float(req.threshold_deg)}
+            "threshold_deg": float(req.threshold_deg),
+            "max_total_deg": float(req.max_total_deg),
+            "snap": snap_stats, "refine": refine_summary,
+            "undo_available": isinstance(md, dict) and bool(undo_idx)}
+
+
+class GrainUndoRequest(BaseModel):
+    result_id: str | None = None
+
+
+@router.post("/pattern-match/undo-grain")
+async def undo_grain_flip(req: GrainUndoRequest):
+    """Restore the orientations changed by the LAST apply-to-grain (one level)."""
+    result = _get_result(req.result_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="No indexing result available")
+    md = getattr(result, "metadata", None)
+    undo = (md or {}).get("grain_flip_undo") if isinstance(md, dict) else None
+    if not undo or not undo.get("xmap_indices"):
+        raise HTTPException(status_code=400, detail="Nothing to undo")
+    from orix.quaternion import Rotation as _R
+    xmap = result.xmap
+    qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
+    idxs = np.asarray(undo["xmap_indices"], dtype=np.int64)
+    olds = np.asarray(undo["old_quats"], dtype=np.float64).reshape(-1, 4)
+    if idxs.size != olds.shape[0] or idxs.size == 0 or idxs.max() >= qdata.shape[0]:
+        raise HTTPException(status_code=409, detail="Undo data no longer matches the result")
+    qdata[idxs] = olds
+    xmap._rotations = _R(qdata)
+    md.pop("grain_flip_undo", None)
+    return {"n_restored": int(idxs.size)}
 
 
 # Cache of (sht_paths tuple, bandwidth) -> SphericalGPUBackend. First call
