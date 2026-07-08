@@ -563,5 +563,13 @@
     "annotColor": "此注释的颜色",
     "annotArrowLabel": "箭头的方向标签（ND/RD/TD/X/Y/Z）",
     "matchesClearMarkers": "从比较面板中移除所有编号标记"
+  },
+  "pseudosym": {
+    "title": "伪对称",
+    "button": "统一变体（整幅地图）",
+    "running": "统一中…",
+    "tip": "修复整幅地图的伪对称变体斑点：按超群分割晶粒，每个晶粒的变体由其最佳像素的聚合渲染匹配决定；连贯的孪晶域仅在边际明确时翻转。可通过图案匹配对话框一级撤销。",
+    "hint": "逐晶粒去除 IPF 变体斑点（经渲染验证）。孪晶受保护。",
+    "done": "已在 {{grains}} 个晶粒中统一 {{changed}} 个像素（{{ambiguous}} 个不确定，{{rescued}} 个已救回）。"
   }
 }

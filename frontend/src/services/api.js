@@ -451,6 +451,10 @@ export const indexApi = {
     }),
   undoGrainFlip: () =>
     api.post('/api/indexing/pattern-match/undo-grain', {}),
+  // Map-wide pseudo-symmetry variant unification (per-grain render-NCC
+  // verified; one-level undo shares the grain-flip undo slot).
+  unifyPseudosymVariants: () =>
+    api.post('/api/indexing/pseudosym/unify', {}),
   // Phase B — Forward-NCC quality map
   forwardNccStatus: () => api.get('/api/indexing/forward-ncc/status'),
   forwardNccCompute: (maxBandwidth = 256, force = false) => api.post(

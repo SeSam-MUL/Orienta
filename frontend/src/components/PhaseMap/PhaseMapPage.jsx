@@ -1081,6 +1081,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [matchesInitialPixel, setMatchesInitialPixel] = useState(null);
   // Forward Diagnostics anomaly browser drawer (drawer component built in Task 22).
   const [browserOpen, setBrowserOpen] = useState(false);
+  // Map-wide pseudo-symmetry variant unification (busy flag for the button).
+  const [unifyBusy, setUnifyBusy] = useState(false);
   // Transient hover marker driven by the AnomalyBrowserDrawer. Rendered as
   // an absolutely-positioned div on top of the LayeredCanvas. Cleared on
   // mouse leave.
@@ -2852,6 +2854,46 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         resultId={originalResultId}
         onSwitchToRefined={() => setResultView('refined')}
       />
+
+      {/* Map-wide pseudo-symmetry variant unification: fixes IPF variant
+          speckle for the WHOLE map in one click (per-grain render-NCC
+          verified; coherent twin domains are protected). Only meaningful for
+          spherical results — the backend rejects others with a clear error. */}
+      <GroupBox title={t('phasemap:pseudosym.title')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            onClick={async () => {
+              setUnifyBusy(true);
+              try {
+                const r = await indexApi.unifyPseudosymVariants();
+                const d = r.data;
+                toast.success(t('phasemap:pseudosym.done', {
+                  changed: d.n_changed, grains: d.n_grains,
+                  ambiguous: d.n_ambiguous, rescued: d.n_rescued,
+                }));
+                layerStack.cacheFlush((id) => ['ipf-x', 'ipf-y', 'ipf-z'].includes(id));
+              } catch (e) {
+                toast.error(e?.response?.data?.detail || String(e));
+              } finally {
+                setUnifyBusy(false);
+              }
+            }}
+            disabled={unifyBusy || !indexingResult}
+            title={t('phasemap:pseudosym.tip')}
+            style={{
+              fontSize: '9pt', fontWeight: 600, padding: '6px 14px',
+              background: unifyBusy ? colors.bgTertiary : '#8be9fd22',
+              border: '1px solid #8be9fd', borderRadius: 4,
+              color: '#8be9fd', cursor: unifyBusy ? 'wait' : 'pointer',
+            }}
+          >
+            {unifyBusy ? t('phasemap:pseudosym.running') : `⬡ ${t('phasemap:pseudosym.button')}`}
+          </button>
+          <span style={{ fontSize: '8pt', color: colors.textSecondary }}>
+            {t('phasemap:pseudosym.hint')}
+          </span>
+        </div>
+      </GroupBox>
 
       {layerStackPanel}
 

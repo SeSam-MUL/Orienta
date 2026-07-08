@@ -563,5 +563,13 @@
     "annotColor": "Farbe dieser Annotation",
     "annotArrowLabel": "Richtungsbeschriftung für den Pfeil (ND/RD/TD/X/Y/Z)",
     "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen"
+  },
+  "pseudosym": {
+    "title": "Pseudo-Symmetrie",
+    "button": "Varianten vereinheitlichen (ganze Karte)",
+    "running": "Vereinheitliche…",
+    "tip": "Behebt Pseudo-Symmetrie-Varianten-Speckle für die GANZE Karte: Körner werden modulo der Supergruppe segmentiert, die Variante pro Korn per aggregiertem Render-Match über die besten Pixel entschieden, kohärente Zwillings-Domänen nur bei klarer Marge geflippt. Eine Stufe Undo über den Pattern-Match-Dialog.",
+    "hint": "Entfernt IPF-Varianten-Speckle pro Korn, render-verifiziert. Zwillinge sind geschützt.",
+    "done": "{{changed}} px in {{grains}} Körnern vereinheitlicht ({{ambiguous}} unsicher, {{rescued}} gerettet)."
   }
 }

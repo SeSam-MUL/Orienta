@@ -563,5 +563,13 @@
     "annotColor": "Colour of this annotation",
     "annotArrowLabel": "Direction label for the arrow (ND/RD/TD/X/Y/Z)",
     "matchesClearMarkers": "Remove all numbered markers from the comparison panels"
+  },
+  "pseudosym": {
+    "title": "Pseudo-Symmetry",
+    "button": "Unify variants (whole map)",
+    "running": "Unifying…",
+    "tip": "Fix pseudo-symmetry variant speckle for the WHOLE map: grains are segmented modulo the supergroup, each grain's variant is decided by aggregated render match over its best pixels, coherent twin domains are only flipped on a clear margin. One-level undo via the Pattern-Match dialog.",
+    "hint": "Removes IPF variant speckle per grain, render-verified. Twins are protected.",
+    "done": "Unified {{changed}} px across {{grains}} grains ({{ambiguous}} ambiguous, {{rescued}} rescued)."
   }
 }
