@@ -393,12 +393,11 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
             cur = int(unit["current_class"])
             decision = "keep"
             if mode == "speckle":
-                # unify ALWAYS (speckle is unphysical). Target = the score
-                # winner, EXCEPT when it beats the dominant current class by
-                # less than the ambiguity margin — then unify onto the
-                # DOMINANT class (least change, no arbitrary tie-break flip)
-                # and flag the grain as ambiguous.
-                if float(medians[best] - medians[cur]) < margin_ambiguous:
+                # unify ALWAYS (speckle is unphysical). Trust in the winner is
+                # the BEST-vs-SECOND margin: a clear margin → the score winner;
+                # a flat signal → the DOMINANT current class (least change, no
+                # arbitrary tie-break flip) and flag the grain as ambiguous.
+                if margin < margin_ambiguous:
                     target = cur
                     report["n_ambiguous"] += 1
                     decision = "unified_ambiguous"
