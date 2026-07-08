@@ -2561,6 +2561,32 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
 MAX_REFINE_GRAIN_PX = 1500
 
 
+def _free_interactive_gpu_caches() -> None:
+    """Free the VRAM held by the interactive Pattern-Match / variant-render
+    caches so a following allocation (the refine backend) fits, WITHOUT the user
+    having to press 'Release GPU'.
+
+    The SHT renderer's per-phase LambertGrid (used for the variant thumbnails)
+    is several GB and is the dominant holder; clearing it + empty_cache()
+    reclaims the room the refine build needs. This is self-healing: the only
+    cost is that the next variant render / pattern-match click rebuilds its grid
+    once (~a few seconds). The already-displayed thumbnails are unaffected (they
+    are decoded client-side). Best-effort — never raises."""
+    try:
+        from backend.api.services.sht_pattern_renderer import release_gpu_caches
+        release_gpu_caches()
+    except Exception:
+        logger.debug("refine pre-free: renderer cache clear failed", exc_info=True)
+    try:
+        import torch
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        logger.debug("refine pre-free: empty_cache failed", exc_info=True)
+
+
 @router.post("/pattern-match/apply-to-grain")
 async def apply_variant_to_grain(req: GrainApplyRequest):
     """Propagate the chosen orientation correction from the clicked pixel to its
@@ -2612,6 +2638,10 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
             refine_summary = {"status": "skipped",
                               "reason": f"grain > {MAX_REFINE_GRAIN_PX} px"}
         else:
+            # Self-heal the OOM: free the interactive variant-render VRAM right
+            # before the refine allocates, so the user never has to press
+            # 'Release GPU' first. Cost is one grid rebuild on the next render.
+            _free_interactive_gpu_caches()
             refined, refine_summary = _grain_newton_refine(
                 result, det, sht_path, pg, grain, new_q_map)
             if refined:
