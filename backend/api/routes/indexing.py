@@ -2766,6 +2766,13 @@ async def unify_pseudosym_variants(req: UnifyVariantsRequest):
                 changed = True
         return cur, changed, reports
 
+    # Free the interactive Pattern-Match / variant-render VRAM ONCE before the
+    # unification renders (each phase's build_render_score_fn allocates its own
+    # SHT grid). On a GPU left near-full by earlier interactive use this is what
+    # keeps the whole run from OOM-ing away with no visible effect — the same
+    # self-heal the refine path (apply-to-grain) uses. Not per phase.
+    _free_interactive_gpu_caches()
+
     new_full_q, changed, reports = await asyncio.to_thread(_work)
 
     n_changed = 0

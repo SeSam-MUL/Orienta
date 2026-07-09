@@ -324,6 +324,7 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
               margin_ambiguous: float = 0.01,
               rescue_max_px: int = 2,
               min_grain_px: int = 3,
+              adopt_max_px: int = 128,
               progress=None):
     """Unify pseudo-variant speckle for ONE phase across the whole map.
 
@@ -389,10 +390,23 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
                 medians[k] = float(np.median(s)) if s.size else float("-inf")
             order = np.argsort(medians)[::-1]
             best, second = int(order[0]), int(order[1])
-            margin = float(medians[best] - medians[second])
+            with np.errstate(invalid="ignore"):
+                # -inf − -inf == NaN when every candidate failed to render;
+                # the not-finite guard below handles it (margin is reset there).
+                margin = float(medians[best] - medians[second])
             cur = int(unit["current_class"])
             decision = "keep"
-            if mode == "speckle":
+            if not np.isfinite(medians[best]):
+                # Every scored candidate failed to render (e.g. persistent GPU
+                # OOM → score_fn returned -inf; -inf − -inf is also NaN, which
+                # would slip past the margin comparisons below). A -inf score
+                # must NEVER pick a winner: keep the current/dominant variant
+                # and flag the grain ambiguous.
+                target = cur
+                margin = 0.0
+                report["n_ambiguous"] += 1
+                decision = "keep_ambiguous"
+            elif mode == "speckle":
                 # unify ALWAYS (speckle is unphysical). Trust in the winner is
                 # the BEST-vs-SECOND margin: a clear margin → the score winner;
                 # a flat signal → the DOMINANT current class (least change, no
@@ -429,6 +443,82 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
             })
         _emit(f"Variant unification: grain {gi + 1}/{len(grain_ids)} "
               f"({pix.size} px, {mode})")
+
+    # Stage 2.5 — render-verified SMALL-GRAIN ADOPTION. Observed on real data
+    # (Scan1 alpha-AlFeMnSi): ~20 small "grains" all sitting at the IDENTICAL
+    # misorientation (71.9° under m-3) to the surrounding big grain — a
+    # systematic second Hough basin (band-coincidence rotation) that is NOT in
+    # the holohedry coset, so the class machinery above correctly leaves it
+    # alone. Generic remedy that needs no knowledge of the specific operator:
+    # for each small grain g adjacent to a much bigger grain G, build the
+    # constant map C = mean(G)·mean(g)⁻¹ (left — preserves g's internal
+    # texture) and let render-NCC decide: adopt G's branch only on a CLEAR
+    # margin. A REAL small grain renders better in its own orientation and is
+    # kept bit-identical — same primum-non-nocere policy as the twin domains.
+    grain_pix = {int(g): np.flatnonzero(labels == g) for g in grain_ids}
+    grain_size = {g: p.size for g, p in grain_pix.items()}
+    holo_sym = _sym_quats(pseudosym_holohedry(point_group) or point_group)
+
+    def _branch_mean(pix):
+        ref = new_q[pix[0]]
+        qs = np.empty((pix.size, 4))
+        for k, i in enumerate(pix):
+            cands = _qmul(holo_sym, new_q[i][None, :])
+            b = cands[int(np.argmax(np.abs(cands @ ref)))]
+            qs[k] = -b if float(np.dot(b, ref)) < 0 else b
+        m = qs.mean(axis=0)
+        return m / max(float(np.linalg.norm(m)), 1e-12)
+
+    adopted_grains: set[int] = set()
+    for g, pix in grain_pix.items():
+        if pix.size <= rescue_max_px or pix.size > adopt_max_px:
+            continue
+        # boundary-adjacency census → the dominant, much-bigger neighbour grain
+        contact: dict[int, int] = {}
+        for f in pix:
+            r, c = divmod(int(f), n_cols)
+            for nb in (f - n_cols, f + n_cols,
+                       f - 1 if c > 0 else -1, f + 1 if c < n_cols - 1 else -1):
+                nb = int(nb)
+                if 0 <= nb < n and labels[nb] >= 0 and labels[nb] != g:
+                    contact[int(labels[nb])] = contact.get(int(labels[nb]), 0) + 1
+        donors = [G for G in contact if grain_size.get(G, 0) >= max(
+            3 * pix.size, domain_min_px)]
+        if not donors:
+            continue
+        G = max(donors, key=lambda d: contact[d])
+        C = _qmul(_branch_mean(grain_pix[G])[None, :],
+                  _qconj(_branch_mean(pix)[None, :]))[0]
+        ns = int(min(score_pixels_max, pix.size))
+        step = max(1, pix.size // ns)
+        sample = pix[::step][:ns]
+        s_own = np.asarray(score_fn(sample, new_q[sample]), dtype=np.float64)
+        mapped = _qmul(C[None, :], new_q[sample])
+        s_map = np.asarray(score_fn(sample, mapped), dtype=np.float64)
+        med_own = float(np.median(s_own)) if s_own.size else float("-inf")
+        med_map = float(np.median(s_map)) if s_map.size else float("-inf")
+        rr, cc = np.divmod(pix, n_cols)
+        entry = {"pixels": int(pix.size), "mode": "adoption",
+                 "class": -1, "centroid": [int(round(rr.mean())), int(round(cc.mean()))]}
+        if np.isfinite(med_map) and (med_map - (med_own if np.isfinite(med_own)
+                                                else float("-inf"))) >= margin_clear:
+            allq = _qmul(C[None, :], new_q[pix])
+            new_q[pix] = allq / np.maximum(
+                np.linalg.norm(allq, axis=1, keepdims=True), 1e-12)
+            adopted_grains.add(g)
+            report["n_flipped_units"] += 1
+            entry["decision"] = "adopted"
+            entry["margin"] = round(med_map - med_own, 4) if np.isfinite(med_own) else None
+        else:
+            entry["decision"] = "kept"
+            entry["margin"] = (round(med_map - med_own, 4)
+                               if np.isfinite(med_map) and np.isfinite(med_own) else None)
+            if np.isfinite(med_map) and np.isfinite(med_own) and \
+                    abs(med_map - med_own) < margin_ambiguous:
+                report["n_ambiguous"] += 1
+                entry["decision"] = "kept_ambiguous"
+        report["grains"].append(entry)
+    report["n_adopted"] = len(adopted_grains)
 
     # Stage 3 — rescue tiny orphans (Hough total failures): adopt the
     # orientation of the adjacent unified grain (majority neighbour).
@@ -470,13 +560,24 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
     inscribed detector disc — the same recipe as the validated SampleB
     render-NCC ground-truth harness. Pixels without a pattern score -inf so
     they never decide a class.
+
+    GPU-OOM resilience: all torch work runs under ``torch.no_grad()`` (scoring
+    never needs autograd graphs), and a per-pixel render that raises a CUDA
+    out-of-memory error triggers a ONE-TIME cache release + renderer rebuild
+    (shared across every scored pixel via a small mutable closure state) and a
+    single retry. If the retry still OOMs the pixel scores -inf — it never
+    decides a class (see :func:`unify_map`'s -inf guard).
     """
+    import logging
     import torch
     import kikuchipy as kp
-    from backend.api.services.sht_pattern_renderer import (
-        get_renderer, load_or_get_phase,
-    )
+    # Reference the renderer service through the MODULE (not `from ... import`)
+    # so get_renderer / load_or_get_phase / release_gpu_caches stay patchable
+    # seams and the OOM rebuild picks up a freshly-cleared singleton.
+    from backend.api.services import sht_pattern_renderer as _sht_service
     from .detector import convert_pc_to_emsoft
+
+    log = logging.getLogger(__name__)
 
     H = int(det_params["pat_height"])
     W = int(det_params["pat_width"])
@@ -492,8 +593,15 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
     pixel_size = float(det_params.get("pixel_size", 70.0))
     sample_tilt = float(det_params.get("sample_tilt", 70.0))
     det_tilt = float(det_params.get("tilt", 0.0))
-    rnd = get_renderer()
-    pgrid = load_or_get_phase(str(sht_path), max_bandwidth=int(max_bandwidth))
+
+    # Renderer + phase grid live in a small mutable closure state so an OOM
+    # recovery rebuilds them ONCE, shared across every scored pixel/call, rather
+    # than per pixel.
+    state = {
+        "rnd": _sht_service.get_renderer(),
+        "pgrid": _sht_service.load_or_get_phase(
+            str(sht_path), max_bandwidth=int(max_bandwidth)),
+    }
 
     yy, xx = np.mgrid[0:H, 0:W]
     cy, cx = (H - 1) / 2.0, (W - 1) / 2.0
@@ -512,24 +620,68 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
         den = np.linalg.norm(av) * np.linalg.norm(bv) + 1e-12
         return float(np.dot(av, bv) / den)
 
+    def _is_oom(exc):
+        return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+
+    def _reacquire_renderer():
+        """Free GPU caches and rebuild the renderer + phase grid in-place after
+        a CUDA OOM, so the retry (and every later pixel) uses fresh handles."""
+        try:
+            _sht_service.release_gpu_caches()
+        except Exception:
+            log.debug("variant-unify OOM recovery: cache release failed",
+                      exc_info=True)
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            log.debug("variant-unify OOM recovery: empty_cache failed",
+                      exc_info=True)
+        state["rnd"] = _sht_service.get_renderer()
+        state["pgrid"] = _sht_service.load_or_get_phase(
+            str(sht_path), max_bandwidth=int(max_bandwidth))
+
+    def _render(qt):
+        sim = state["rnd"].render(state["pgrid"], qt, pc, (H, W), pixel_size,
+                                  tilt_deg=sample_tilt, det_tilt_deg=det_tilt)
+        return _dynbg(np.asarray(sim.numpy(), dtype=np.float32))
+
     exp_cache: dict[int, np.ndarray | None] = {}
 
     def score(flat_idx, quats):
         out = []
-        for f, q in zip(np.atleast_1d(flat_idx), np.atleast_2d(quats)):
-            f = int(f)
-            if f not in exp_cache:
-                p = get_pattern(f)
-                exp_cache[f] = None if p is None else _dynbg(p)
-            exp = exp_cache[f]
-            if exp is None:
-                out.append(float("-inf"))
-                continue
-            qt = torch.tensor(np.asarray(q, dtype=np.float64)[:4],
-                              dtype=torch.float64)
-            sim = rnd.render(pgrid, qt, pc, (H, W), pixel_size,
-                             tilt_deg=sample_tilt, det_tilt_deg=det_tilt)
-            out.append(_ncc(exp, _dynbg(np.asarray(sim.numpy(), dtype=np.float32))))
+        with torch.no_grad():
+            for f, q in zip(np.atleast_1d(flat_idx), np.atleast_2d(quats)):
+                f = int(f)
+                if f not in exp_cache:
+                    p = get_pattern(f)
+                    exp_cache[f] = None if p is None else _dynbg(p)
+                exp = exp_cache[f]
+                if exp is None:
+                    out.append(float("-inf"))
+                    continue
+                qt = torch.tensor(np.asarray(q, dtype=np.float64)[:4],
+                                  dtype=torch.float64)
+                try:
+                    rendered = _render(qt)
+                except RuntimeError as e:
+                    if not _is_oom(e):
+                        raise
+                    # First OOM for this pixel: free the interactive VRAM,
+                    # rebuild the renderer once, retry ONCE. Persistent OOM →
+                    # -inf so this pixel never decides a variant class.
+                    try:
+                        _reacquire_renderer()
+                        rendered = _render(qt)
+                    except RuntimeError as e2:
+                        if _is_oom(e2):
+                            log.warning(
+                                "variant-unify render OOM persisted after cache "
+                                "release for pixel %d — scoring it -inf", f)
+                            out.append(float("-inf"))
+                            continue
+                        raise
+                out.append(_ncc(exp, rendered))
         return np.asarray(out, dtype=np.float64)
 
     return score
