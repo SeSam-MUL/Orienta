@@ -24,7 +24,38 @@ import { useRef, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BLEND_MAP } from './layerSources';
 import { buildMaskCanvas } from './maskCanvas';
+import { bboxContentRect } from '../EDS/mapCoords';
 import { colors } from '../../theme/components';
+
+// Structural equality for content bboxes (or null). Used to gate the
+// onContentBbox callback / local state update so we don't churn every frame.
+function bboxEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+}
+
+// CSS left/top percentages for the hover marker inside the canvas wrapper
+// (which is sized to the full-shape aspect). Without a bbox the marker sits at
+// the native-pixel centre as a fraction of the full grid. With a bbox the
+// content is drawn object-fit:contain inside the buffer, so map the pixel
+// through that inner letterbox (letterbox 2) — the wrapper already handles
+// letterbox 1 by being sized to fitSize.
+function markerPercent(row, col, nativeSize, contentBbox) {
+  const { w: natW, h: natH } = nativeSize;
+  let leftFrac, topFrac;
+  if (contentBbox) {
+    const dst = bboxContentRect(natW, natH, contentBbox);
+    const fx = (col + 0.5 - contentBbox.x) / contentBbox.w;
+    const fy = (row + 0.5 - contentBbox.y) / contentBbox.h;
+    leftFrac = (dst.x + fx * dst.w) / natW;
+    topFrac = (dst.y + fy * dst.h) / natH;
+  } else {
+    leftFrac = (col + 0.5) / natW;
+    topFrac = (row + 0.5) / natH;
+  }
+  return { left: `${leftFrac * 100}%`, top: `${topFrac * 100}%` };
+}
 
 // Compute the bounding box of non-transparent pixels in the canvas.
 // Returns null when the canvas is entirely transparent or full. Used to
@@ -198,13 +229,19 @@ export default function LayeredCanvas({
   loading, error, perLayerErrors = null,
   scalebar = null, title = null, stepX = 1.0,
   ipfKeyImage = null, showIpfKey = false,
-  hoverPixel = null,
+  hoverPixel = null, onContentBbox = null,
 }) {
   const { t } = useTranslation('phasemap');
   const visibleRef = useRef(null);
   const offscreenRef = useRef(null);
   const rafRef = useRef(null);
   const containerRef = useRef(null);
+  // Auto-zoom bbox (native map pixels) or null when the full frame is drawn.
+  // Computed inside the draw effect; kept in state so the hover marker can
+  // map through it, and mirrored to the parent via onContentBbox so pointer
+  // hit-testing uses the same bbox.
+  const [contentBbox, setContentBbox] = useState(null);
+  const lastBboxRef = useRef(null);
   // JS-measured fit size: width/height in CSS pixels at which we render
   // the canvas + overlays. Recomputed on container resize via ResizeObserver.
   const [fitSize, setFitSize] = useState(null);
@@ -386,6 +423,15 @@ export default function LayeredCanvas({
       } else {
         visCtx.drawImage(off, 0, 0);
       }
+
+      // Publish the bbox (or null) so pointer/overlay mapping in the parent
+      // and the local hover marker account for the auto-zoom. Gate on real
+      // change (incl. null transitions) to avoid per-frame churn.
+      if (!bboxEqual(bbox, lastBboxRef.current)) {
+        lastBboxRef.current = bbox;
+        setContentBbox(bbox);
+        if (onContentBbox) onContentBbox(bbox);
+      }
     });
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -437,8 +483,7 @@ export default function LayeredCanvas({
             <div
               style={{
                 position: 'absolute',
-                left:  `${((hoverPixel.col + 0.5) / nativeSize.w) * 100}%`,
-                top:   `${((hoverPixel.row + 0.5) / nativeSize.h) * 100}%`,
+                ...markerPercent(hoverPixel.row, hoverPixel.col, nativeSize, contentBbox),
                 width: 12,
                 height: 12,
                 transform: 'translate(-50%, -50%)',

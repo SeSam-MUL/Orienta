@@ -9,16 +9,20 @@ import { pointerToRowCol } from '../mapCoords';
  * Plain (non-shift) drags are ignored — caller's regular click handler still
  * fires for pixel-quantify.
  */
-export function useRectangleDrag({ shape, onRegion }) {
+export function useRectangleDrag({ shape, onRegion, contentBbox = null }) {
   const startRef = useRef(null);
   const rectRef = useRef(null);
   const [overlay, setOverlay] = useState(null);
+  // Keep the latest bbox in a ref so the memoised callbacks always read the
+  // current auto-zoom without needing to re-create on every bbox change.
+  const bboxRef = useRef(contentBbox);
+  bboxRef.current = contentBbox;
 
   const onPointerDown = useCallback((e) => {
     if (!e.shiftKey || !shape) return;
     const r = e.currentTarget.getBoundingClientRect();
     rectRef.current = r;
-    const out = pointerToRowCol(e, r, shape);
+    const out = pointerToRowCol(e, r, shape, bboxRef.current);
     if (!out) return;
     startRef.current = { ...out, clientX: e.clientX, clientY: e.clientY };
     setOverlay({
@@ -43,7 +47,7 @@ export function useRectangleDrag({ shape, onRegion }) {
       startRef.current = null; rectRef.current = null; setOverlay(null);
       return;
     }
-    const end = pointerToRowCol(e, rectRef.current, shape);
+    const end = pointerToRowCol(e, rectRef.current, shape, bboxRef.current);
     if (end) {
       const start = startRef.current;
       onRegion?.({
