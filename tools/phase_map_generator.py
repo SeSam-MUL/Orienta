@@ -207,6 +207,193 @@ def compute_ipf_colors(xmap, direction_str: str = "Z", r_user=None,
     return rgb.reshape((n_rows, n_cols, 3))
 
 
+def compute_ipf_colors_grain_consistent(
+    xmap,
+    direction_str: str = "Z",
+    r_user=None,
+    n_rows: Optional[int] = None,
+    n_cols: Optional[int] = None,
+    mask=None,
+    fallback_deg: float = 10.0,
+) -> np.ndarray:
+    """Grain-consistent IPF colouring (v2) — de-jitters low-symmetry IPF maps
+    WITHOUT flattening intra-grain gradients.
+
+    Problem: for low-symmetry Laue groups (e.g. ``m-3`` cubic approximants) the
+    IPF colour key is DISCONTINUOUS across its fundamental-sector boundary, so
+    symmetry-equivalent directions on either side get maximally different
+    colours and ~1° orientation noise renders smooth data as colour speckle.
+    v1 (``rotations_override`` = grain mean) killed the speckle but also hid
+    every real gradient. v2 keeps EACH pixel's own direction and only routes a
+    whole grain through the SAME side of the key discontinuity:
+
+    1. Segment grains per phase modulo the supergroup holohedry (5°) — variant
+       splits collapse, so a physical grain is one label.
+    2. Per grain: branch-consistent mean orientation → grain-mean DIRECTION
+       (same ``O * direction`` convention as :func:`compute_ipf_colors`),
+       reduced into the fundamental sector by the standard orix call.
+    3. Per pixel: among its symmetry-equivalent directions pick the one closest
+       (max dot) to the reduced grain-mean direction, and colour it with the
+       key's in-sector TSL colour math applied WITHOUT re-reduction (the maths
+       extrapolates continuously for points slightly outside the sector). RGB
+       is clipped to ``[0, 1]``.
+    4. Fallback: if any pixel's chosen representative sits > ``fallback_deg``
+       (default 10°) from the reduced grain mean — genuinely bent grain,
+       outside the validated extrapolation range — that grain falls back to the
+       standard per-pixel reduction (i.e. the :func:`compute_ipf_colors` path).
+    5. Grains with < 2 px, phase pixels not assigned to any grain, and
+       unindexed pixels all keep the standard-path / grey baseline.
+
+    Display-only: the stored xmap is never mutated. Returns an RGB image of
+    shape ``(n_rows, n_cols, 3)``, float64 in ``[0, 1]``.
+
+    Parameters mirror :func:`compute_ipf_colors`; ``n_rows``/``n_cols``/``mask``
+    describe the full display grid (ROI results carry a boolean ``mask`` whose
+    ``sum()`` equals ``xmap.size``).
+    """
+    from orix.vector import Vector3d
+    from orix.quaternion import Rotation
+    from orix.plot.direction_color_keys._util import (
+        polar_coordinates_in_sector,
+        rgb_from_polar_coordinates,
+    )
+    from backend.spherical_gpu.pipeline.variant_unification import (
+        segment_supergroup_grains,
+    )
+    from backend.spherical_gpu.pseudosym import _qmul, _sym_quats
+
+    directions = {
+        "Z": Vector3d.zvector(),
+        "X": Vector3d.xvector(),
+        "Y": Vector3d.yvector(),
+    }
+    direction = directions.get(direction_str, Vector3d.zvector())
+
+    if n_rows is None or n_cols is None:
+        shape = xmap.shape
+        if len(shape) == 2:
+            n_rows, n_cols = shape
+        elif len(shape) == 1:
+            n_rows, n_cols = shape[0], 1
+        else:
+            n_rows, n_cols = xmap.size, 1
+    n = int(n_rows) * int(n_cols)
+
+    # Baseline = STANDARD per-pixel colouring. It handles r_user, the grey
+    # default for unindexed pixels, and the missing-symmetry ValueError exactly
+    # as before. v2 only OVERRIDES the pixels of grains where it applies.
+    baseline_flat = np.asarray(
+        compute_ipf_colors(xmap, direction_str, r_user=r_user)
+    ).reshape(-1, 3)
+
+    qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
+    pid = np.asarray(xmap.phase_id).reshape(-1)
+    n_src = qdata.shape[0]
+
+    # Grey default for unindexed pixels (matches compute_ipf_colors).
+    rgb_full = np.full((n, 3), [0.267, 0.278, 0.353], dtype=np.float64)
+
+    # Map xmap rows -> full-grid flat indices (same layout logic as the v1
+    # grain-stabiliser). Two known layouts: full grid, or ROI (mask.sum()).
+    if n_src == n:
+        flat_of_row = np.arange(n)
+    elif mask is not None and int(np.asarray(mask).sum()) == n_src:
+        flat_of_row = np.flatnonzero(np.asarray(mask, dtype=bool).ravel())
+    else:
+        # Unknown layout — cannot place on a 2D grid for grain segmentation.
+        # Fail soft: return the standard baseline best-effort (display helper).
+        m = min(n_src, n)
+        rgb_full[:m] = baseline_flat[:m]
+        return rgb_full.reshape(int(n_rows), int(n_cols), 3)
+
+    rgb_full[flat_of_row] = baseline_flat
+
+    full_q = np.full((n, 4), np.nan)
+    full_q[flat_of_row] = qdata
+    phase_full = np.full(n, -1, dtype=np.int64)
+    phase_full[flat_of_row] = pid
+
+    r_user_active = (
+        r_user is not None
+        and not np.allclose(
+            np.asarray(r_user.data), np.asarray(Rotation.identity().data)
+        )
+    )
+
+    for phase_id in np.unique(pid):
+        if phase_id == -1:
+            continue
+        try:
+            pg = xmap.phases[int(phase_id)].point_group
+            pg_name = pg.name
+            laue = pg.laue
+            sector = laue.fundamental_sector
+        except Exception:
+            continue  # baseline already coloured / errored for this phase
+        try:
+            S_sym = _sym_quats(pg_name)
+            labels = segment_supergroup_grains(
+                full_q, phase_full, int(n_rows), int(n_cols),
+                int(phase_id), pg_name, 5.0,
+            )
+        except Exception:
+            continue  # display helper: fail soft, keep baseline
+
+        for g in np.unique(labels[labels >= 0]):
+            pix = np.flatnonzero(labels == g)
+            if pix.size < 2:
+                continue  # standard baseline stays
+
+            # Branch-consistent grain-mean orientation (each pixel snapped to
+            # the symmetry equivalent nearest the grain seed before averaging).
+            ref = full_q[pix[0]]
+            qs = np.empty((pix.size, 4))
+            for k, i in enumerate(pix):
+                cands = _qmul(S_sym, full_q[i][None, :])
+                best = cands[int(np.argmax(np.abs(cands @ ref)))]
+                qs[k] = -best if float(np.dot(best, ref)) < 0 else best
+            mean_q = qs.mean(axis=0)
+            mean_q /= max(float(np.linalg.norm(mean_q)), 1e-12)
+
+            # Grain-mean DIRECTION (display convention O * direction, incl.
+            # r_user), reduced into the fundamental sector by the standard call.
+            mean_rot = Rotation(mean_q[None, :])
+            if r_user_active:
+                mean_rot = mean_rot * r_user
+            mean_dir_red = (mean_rot * direction).in_fundamental_sector(laue)
+            mref = np.asarray(mean_dir_red.unit.data).reshape(3)
+
+            # Per-pixel directions and their symmetry equivalents.
+            rot_pix = Rotation(full_q[pix])
+            if r_user_active:
+                rot_pix = rot_pix * r_user
+            dir_pix = rot_pix * direction
+            eq = laue.outer(dir_pix)                      # Vector3d (n_sym, m)
+            eq_data = np.asarray(eq.unit.data)            # (n_sym, m, 3)
+            dots = (eq_data * mref[None, None, :]).sum(-1)  # (n_sym, m)
+            best_k = np.argmax(dots, axis=0)              # (m,)
+            chosen = np.take_along_axis(
+                eq_data, best_k[None, :, None], axis=0)[0]   # (m, 3)
+            chosen_dot = np.take_along_axis(dots, best_k[None, :], axis=0)[0]
+            worst_angle = float(
+                np.degrees(np.arccos(np.clip(chosen_dot.min(), -1.0, 1.0)))
+            )
+            if worst_angle > fallback_deg:
+                # Genuinely bent grain — outside validated extrapolation range.
+                # Keep the honest standard per-pixel baseline for this grain.
+                continue
+
+            az, pol = polar_coordinates_in_sector(sector, Vector3d(chosen).unit)
+            pol = 0.5 + pol / 2
+            rgb_grain = np.clip(
+                np.asarray(rgb_from_polar_coordinates(az, pol)).reshape(-1, 3),
+                0.0, 1.0,
+            )
+            rgb_full[pix] = rgb_grain
+
+    return rgb_full.reshape(int(n_rows), int(n_cols), 3)
+
+
 def extract_phase_map_from_xmap(xmap) -> PhaseMapData:
     """Extract a PhaseMapData from an orix CrystalMap object.
 

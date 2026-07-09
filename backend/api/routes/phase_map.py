@@ -1104,77 +1104,6 @@ def _diag_rgba(kind: str, n_rows: int, n_cols: int) -> "np.ndarray":
     return rgba
 
 
-def _grain_stabilized_quats(xmap, n_rows: int, n_cols: int, mask):
-    """(xmap.size, 4) quaternions where every pixel carries its GRAIN-MEAN
-    orientation — display-only input for ``compute_ipf_colors``.
-
-    Why: for low-symmetry Laue groups (e.g. m-3 cubic approximants) the IPF
-    colour key is DISCONTINUOUS across its fundamental-sector boundary, so
-    ~1° orientation noise flips pixel colours between distant hues — the map
-    shows salt-and-pepper colour speckle on perfectly smooth orientation data
-    (verified quantitatively on real Scan1: 6.7%% of sub-3° neighbour pairs
-    jumped by >0.3 in RGB). Colouring by the grain mean removes the artefact
-    without touching the stored orientations.
-
-    Grains are segmented per phase modulo the supergroup (5°, variants
-    collapse — post-unification data is variant-free anyway); the mean is the
-    branch-consistent quaternion mean (each pixel snapped to the symmetry
-    equivalent nearest the grain seed before averaging).
-    """
-    import numpy as np
-    from backend.spherical_gpu.pipeline.variant_unification import (
-        segment_supergroup_grains,
-    )
-    from backend.spherical_gpu.pseudosym import _qmul, _sym_quats
-
-    qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
-    pid = np.asarray(xmap.phase_id).reshape(-1)
-    out = qdata.copy()
-
-    n = n_rows * n_cols
-    if qdata.shape[0] == n:
-        flat_of_row = np.arange(n)
-    elif mask is not None and int(np.asarray(mask).sum()) == qdata.shape[0]:
-        flat_of_row = np.flatnonzero(np.asarray(mask, dtype=bool).ravel())
-    else:
-        return out                                   # unknown layout — no-op
-
-    full_q = np.full((n, 4), np.nan)
-    full_q[flat_of_row] = qdata
-    phase_full = np.full(n, -1, dtype=np.int64)
-    phase_full[flat_of_row] = pid
-    row_of_flat = np.full(n, -1, dtype=np.int64)
-    row_of_flat[flat_of_row] = np.arange(qdata.shape[0])
-
-    for phase_id in np.unique(pid):
-        if phase_id == -1:
-            continue
-        try:
-            pg_name = xmap.phases[int(phase_id)].point_group.name
-        except Exception:
-            continue
-        try:
-            S = _sym_quats(pg_name)
-            labels = segment_supergroup_grains(
-                full_q, phase_full, n_rows, n_cols, int(phase_id), pg_name, 5.0)
-        except Exception:
-            continue                                 # display helper: fail soft
-        for g in np.unique(labels[labels >= 0]):
-            pix = np.flatnonzero(labels == g)
-            if pix.size < 2:
-                continue
-            ref = full_q[pix[0]]
-            qs = np.empty((pix.size, 4))
-            for k, i in enumerate(pix):
-                cands = _qmul(S, full_q[i][None, :])
-                best = cands[int(np.argmax(np.abs(cands @ ref)))]
-                qs[k] = -best if float(np.dot(best, ref)) < 0 else best
-            m = qs.mean(axis=0)
-            m /= max(float(np.linalg.norm(m)), 1e-12)
-            out[row_of_flat[pix]] = m
-    return out
-
-
 def _compute_layer_rgba(
     *,
     kind: str,
@@ -1289,27 +1218,36 @@ def _compute_layer_rgba(
                 status_code=400,
                 detail="No orientation data — IPF layers require indexing rotations.",
             )
-        rot_override = None
-        if grain_stabilized:
-            # Display-only de-jitter: colour every pixel by its grain-mean
-            # orientation (see _grain_stabilized_quats docstring).
-            rot_override = _grain_stabilized_quats(xmap, n_rows, n_cols, mask)
         try:
-            ipf_raw = compute_ipf_colors(xmap, direction, r_user=_active_r_user(),
-                                         rotations_override=rot_override)
+            if grain_stabilized:
+                # Grain-consistent IPF (v2): each pixel keeps its OWN direction,
+                # but every pixel of a grain is routed through the same side of
+                # the colour-key discontinuity, so gradients survive and only the
+                # low-symmetry speckle is removed (see
+                # compute_ipf_colors_grain_consistent). Returns the full grid.
+                from tools.phase_map_generator import (
+                    compute_ipf_colors_grain_consistent,
+                )
+                ipf_3d = compute_ipf_colors_grain_consistent(
+                    xmap, direction, r_user=_active_r_user(),
+                    n_rows=n_rows, n_cols=n_cols, mask=mask,
+                )
+            else:
+                ipf_raw = compute_ipf_colors(
+                    xmap, direction, r_user=_active_r_user())
+                ipf = np.asarray(ipf_raw).reshape(-1, 3)
+                if ipf.shape[0] == n_rows * n_cols:
+                    ipf_3d = ipf.reshape(n_rows, n_cols, 3)
+                elif mask is not None and ipf.shape[0] == int(mask.sum()):
+                    ipf_3d = np.zeros((n_rows, n_cols, 3), dtype=np.float32)
+                    ipf_3d[mask] = ipf
+                else:
+                    raise HTTPException(
+                        status_code=500, detail="IPF shape mismatch.")
         except ValueError as e:
-            # Phase has no usable symmetry — compute_ipf_colors used to
-            # silently render grey, now it raises so we can surface a
-            # useful error to the user.
+            # Phase has no usable symmetry — compute_ipf_colors raises so we can
+            # surface a useful error instead of silently rendering grey.
             raise HTTPException(status_code=400, detail=str(e))
-        ipf = np.asarray(ipf_raw).reshape(-1, 3)
-        if ipf.shape[0] == n_rows * n_cols:
-            ipf_3d = ipf.reshape(n_rows, n_cols, 3)
-        elif mask is not None and ipf.shape[0] == int(mask.sum()):
-            ipf_3d = np.zeros((n_rows, n_cols, 3), dtype=np.float32)
-            ipf_3d[mask] = ipf
-        else:
-            raise HTTPException(status_code=500, detail="IPF shape mismatch.")
         rgba[..., :3] = (np.asarray(ipf_3d) * 255.0).clip(0, 255).astype(np.uint8)
         alpha[:] = (effective_pid_2d >= 0)
         if ipf_valid_2d is not None:

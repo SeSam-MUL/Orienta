@@ -574,6 +574,6 @@
   },
   "ipfStabilize": {
     "label": "Farben pro Korn stabilisieren",
-    "tip": "Färbt jedes Pixel mit der mittleren Orientierung seines Korns. Bei niedersymmetrischen Phasen (z. B. m-3-Approximanten) ist der IPF-Farbschlüssel unstetig — ~1° Orientierungsrauschen lässt Pixelfarben springen, glatte Daten wirken wie Farb-Speckle. Nur Anzeige; die gespeicherten Orientierungen bleiben unverändert."
+    "tip": "Führt alle Pixel eines Korns über dieselbe Seite der Unstetigkeit des IPF-Farbschlüssels. Die Farben bleiben pro Pixel, Gradienten innerhalb eines Korns bleiben also erhalten — nur der Zweig des Farbschlüssels wird pro Korn einheitlich gewählt. Bei niedersymmetrischen Phasen (z. B. m-3-Approximanten) ist der Schlüssel unstetig, sodass ~1° Orientierungsrauschen sonst Pixelfarben springen ließe und glatte Daten wie Farb-Speckle wirken. Nur Anzeige; die gespeicherten Orientierungen bleiben unverändert."
   }
 }

@@ -574,6 +574,6 @@
   },
   "ipfStabilize": {
     "label": "Stabilize colors per grain",
-    "tip": "Color each pixel by its grain's mean orientation. For low-symmetry phases (e.g. m-3 approximants) the IPF color key is discontinuous, so ~1° orientation noise flips pixel colors — smooth data looks like color speckle. Display-only; the stored orientations are untouched."
+    "tip": "Route every pixel of a grain through the same side of the IPF color-key discontinuity. Colors stay per-pixel, so intra-grain gradients are preserved — only the color-key branch is chosen consistently per grain. For low-symmetry phases (e.g. m-3 approximants) the key is discontinuous, so ~1° orientation noise would otherwise flip pixel colors and make smooth data look like color speckle. Display-only; the stored orientations are untouched."
   }
 }
