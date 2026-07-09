@@ -571,5 +571,9 @@
     "tip": "Fix pseudo-symmetry variant speckle for the WHOLE map: grains are segmented modulo the supergroup, each grain's variant is decided by aggregated render match over its best pixels, coherent twin domains are only flipped on a clear margin. One-level undo via the Pattern-Match dialog.",
     "hint": "Removes IPF variant speckle per grain, render-verified. Twins are protected.",
     "done": "Unified {{changed}} px across {{grains}} grains ({{ambiguous}} ambiguous, {{rescued}} rescued)."
+  },
+  "ipfStabilize": {
+    "label": "Stabilize colors per grain",
+    "tip": "Color each pixel by its grain's mean orientation. For low-symmetry phases (e.g. m-3 approximants) the IPF color key is discontinuous, so ~1° orientation noise flips pixel colors — smooth data looks like color speckle. Display-only; the stored orientations are untouched."
   }
 }

@@ -76,7 +76,8 @@ DEFAULT_PHASE_COLORS = [
 ]
 
 
-def compute_ipf_colors(xmap, direction_str: str = "Z", r_user=None) -> np.ndarray:
+def compute_ipf_colors(xmap, direction_str: str = "Z", r_user=None,
+                       rotations_override=None) -> np.ndarray:
     """Compute IPF (Inverse Pole Figure) colors from a CrystalMap.
 
     Each pixel is colored according to its crystallographic orientation
@@ -95,6 +96,14 @@ def compute_ipf_colors(xmap, direction_str: str = "Z", r_user=None) -> np.ndarra
         xmap. ``None`` or identity leaves the colouring byte-identical to the
         native frame. Same convention as
         ``orientation_frame.to_vendor_export_frame``.
+    rotations_override : np.ndarray, optional
+        (xmap.size, 4) quaternion array (w,x,y,z) used INSTEAD of the stored
+        rotations, display-only (the xmap is never mutated). Used by the
+        grain-stabilised IPF option: for low-symmetry Laue groups (e.g. m-3)
+        the IPF colour key is discontinuous across its fundamental-sector
+        boundary, so ~1° orientation noise flips pixel colours drastically
+        (orange↔blue↔green speckle on perfectly smooth data). Colouring each
+        pixel by its GRAIN-MEAN orientation removes that display artefact.
 
     Returns
     -------
@@ -170,6 +179,8 @@ def compute_ipf_colors(xmap, direction_str: str = "Z", r_user=None) -> np.ndarra
         # orix raises "command that only permits one phase". The boolean
         # phase_id mask isolates exactly one phase.
         subset = xmap[mask]
+        base_rot = (Rotation(np.asarray(rotations_override)[mask])
+                    if rotations_override is not None else subset.rotations)
         if r_user is not None and not np.allclose(
             np.asarray(r_user.data), np.asarray(Rotation.identity().data)
         ):
@@ -177,10 +188,10 @@ def compute_ipf_colors(xmap, direction_str: str = "Z", r_user=None) -> np.ndarra
             # as orientation_frame.to_vendor_export_frame) WITHOUT mutating the
             # stored xmap. Re-wrap as Orientation with the phase symmetry so the
             # colour key reduces into the fundamental zone correctly.
-            rot_disp = subset.rotations * r_user
+            rot_disp = base_rot * r_user
             oris = Orientation(rot_disp, symmetry=pg)
         else:
-            oris = subset.orientations
+            oris = Orientation(base_rot, symmetry=pg)
         ipf_colors = color_key.orientation2color(oris)
         rgb[mask] = ipf_colors.reshape(-1, 3)
 

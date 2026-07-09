@@ -731,20 +731,27 @@ function CanvasInteractionLayer({
   const [linePts, setLinePts] = useState(null);
   const lineStartRef = useRef(null);
   const [lensPos, setLensPos] = useState(null);
+  // Auto-zoom bbox reported by LayeredCanvas (native map pixels) or null. Every
+  // pointer/overlay coordinate mapping must go through this so clicks land on
+  // the visually-zoomed pixel, not the full-grid pixel. Only the stack view has
+  // a LayeredCanvas (and thus a bbox); grid view keeps its legacy full-shape
+  // mapping untouched.
+  const [contentBbox, setContentBbox] = useState(null);
+  const activeBbox = view === 'stack' ? contentBbox : null;
 
   useCursorSync((pos) => {
     if (!shape || !pos.hovering || !hostRef.current) { setCrosshair(null); return; }
     const rect = hostRef.current.getBoundingClientRect();
-    const out = rowColToContainerPx(pos.row, pos.col, rect, shape);
+    const out = rowColToContainerPx(pos.row, pos.col, rect, shape, activeBbox);
     if (out) setCrosshair({ x: out.x, y: out.y });
   });
 
-  const drag = useRectangleDrag({ shape, onRegion: onRegionSelected });
+  const drag = useRectangleDrag({ shape, onRegion: onRegionSelected, contentBbox: activeBbox });
 
   const onMouseMove = (e) => {
     if (!shape || !hostRef.current) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, rect, shape);
+    const out = pointerToRowCol(e, rect, shape, activeBbox);
     if (out) publish({ row: out.row, col: out.col, hovering: true, screenX: e.clientX, screenY: e.clientY });
     setLensPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     if (linescanMode && lineStartRef.current) {
@@ -765,7 +772,7 @@ function CanvasInteractionLayer({
   const onMouseDown = (e) => {
     if (linescanMode && shape && hostRef.current) {
       const rect = hostRef.current.getBoundingClientRect();
-      const out = pointerToRowCol(e, rect, shape);
+      const out = pointerToRowCol(e, rect, shape, activeBbox);
       if (out) {
         lineStartRef.current = { row: out.row, col: out.col, x: e.clientX - rect.left, y: e.clientY - rect.top };
         setLinePts({
@@ -780,7 +787,7 @@ function CanvasInteractionLayer({
   const onMouseUp = (e) => {
     if (linescanMode && lineStartRef.current && hostRef.current && shape) {
       const rect = hostRef.current.getBoundingClientRect();
-      const end = pointerToRowCol(e, rect, shape);
+      const end = pointerToRowCol(e, rect, shape, activeBbox);
       if (end) onLineComplete?.({ start: { row: lineStartRef.current.row, col: lineStartRef.current.col }, end });
       lineStartRef.current = null;
       return;
@@ -791,7 +798,7 @@ function CanvasInteractionLayer({
     if (linescanMode) return;  // never trigger click-to-quantify in linescan mode
     if (!shape || !hostRef.current || !onPixelClick) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, rect, shape);
+    const out = pointerToRowCol(e, rect, shape, activeBbox);
     if (out) onPixelClick(out.row, out.col);
   };
 
@@ -830,6 +837,7 @@ function CanvasInteractionLayer({
           ipfKeyImage={ipfKeyImage}
           showIpfKey={showIpfKey}
           hoverPixel={hoverPixel}
+          onContentBbox={setContentBbox}
         />
       )}
       {view === 'stack' && crosshair && (
@@ -1235,6 +1243,29 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   ]), []);
 
   const renderLayerExtras = useCallback((layer) => {
+    // IPF layers: optional grain-stabilised colouring. For low-symmetry Laue
+    // groups (e.g. m-3 approximants) the IPF colour key is discontinuous at
+    // its sector boundary, so ~1° orientation noise flips pixel colours —
+    // smooth data renders as colour speckle. The backend then colours each
+    // pixel by its grain-mean orientation (display-only, data untouched).
+    if (layer.id === 'ipf-x' || layer.id === 'ipf-y' || layer.id === 'ipf-z') {
+      const on = !!(layer.params || {}).grain_stabilized;
+      return (
+        <div style={{ padding: '4px 2px' }}>
+          <label
+            style={{ fontSize: '8.5pt', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+            title={t('phasemap:ipfStabilize.tip')}
+          >
+            <input
+              type="checkbox"
+              checked={on}
+              onChange={(e) => layerStack.setLayerParams(layer.id, { grain_stabilized: e.target.checked })}
+            />
+            {t('phasemap:ipfStabilize.label')}
+          </label>
+        </div>
+      );
+    }
     // Misindex-diagnose helper (2026-05-26): ci-threshold layer gets two
     // number inputs for the band [min, max]. Pixels with CI outside this
     // window are painted in `out_color` (default red) by the backend.
