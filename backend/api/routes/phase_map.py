@@ -120,7 +120,7 @@ def _is_unindexed_phase(name) -> bool:
     return str(name).strip().lower() in _UNINDEXED_NAMES
 
 
-def _group_phases_by_symmetry(xmap):
+def _group_phases_by_symmetry(xmap, only_phase_id: int | None = None):
     """Group real phases by point-group symmetry.
 
     Returns an ordered ``{point_group_name: {"symmetry": obj, "phases": [names...]}}``
@@ -129,6 +129,9 @@ def _group_phases_by_symmetry(xmap):
     three different cubic phases. Phases without a point_group are skipped so
     a triclinic fallback doesn't sneak an IPF key in for data we can't
     meaningfully colour anyway.
+
+    ``only_phase_id`` restricts the grouping to a single phase (used by the
+    per-phase IPF view so the colour key matches the filtered map).
     """
     groups: dict = {}
     try:
@@ -141,12 +144,17 @@ def _group_phases_by_symmetry(xmap):
             try:
                 if int(pid) < 0:
                     continue
+                if only_phase_id is not None and int(pid) != int(only_phase_id):
+                    continue
             except Exception:
                 pass
         else:
             phase_obj = entry
             try:
-                if int(getattr(entry, "id", 0)) < 0:
+                pid = int(getattr(entry, "id", 0))
+                if pid < 0:
+                    continue
+                if only_phase_id is not None and pid != int(only_phase_id):
                     continue
             except Exception:
                 pass
@@ -171,7 +179,8 @@ def _group_phases_by_symmetry(xmap):
 
 def _draw_ipf_color_keys(fig, gs_cell, xmap, direction: str,
                          color_overrides: dict | None = None,
-                         orientation: str = "vertical"):
+                         orientation: str = "vertical",
+                         only_phase_id: int | None = None):
     """Render one IPF stereographic triangle per unique Laue class into the
     given gridspec cell. ``direction`` is 'X', 'Y' or 'Z' — the reference
     vector used when reducing orientations for colour. Skips silently if
@@ -202,7 +211,7 @@ def _draw_ipf_color_keys(fig, gs_cell, xmap, direction: str,
     }
     ref_vec = dir_map.get(direction.upper(), Vector3d.zvector())
 
-    groups = _group_phases_by_symmetry(xmap)
+    groups = _group_phases_by_symmetry(xmap, only_phase_id=only_phase_id)
     if not groups:
         return
 
@@ -1118,6 +1127,7 @@ def _compute_layer_rgba(
     out_color: str = "ff3333",
     out_alpha: int = 153,
     grain_stabilized: bool = False,
+    phase_filter: int | None = None,
 ) -> "np.ndarray":
     """Render a single layer as a raw (H, W, 4) uint8 RGBA array.
 
@@ -1252,6 +1262,13 @@ def _compute_layer_rgba(
         alpha[:] = (effective_pid_2d >= 0)
         if ipf_valid_2d is not None:
             alpha &= ipf_valid_2d
+        if phase_filter is not None:
+            # Per-phase IPF view (community standard): only the selected
+            # phase keeps its IPF colours; every other phase goes transparent
+            # so it can't be confused with same-RGB directions of a different
+            # colour key. Colour math is untouched — this is an alpha mask,
+            # so it composes with BOTH the standard and grain-stabilised path.
+            alpha &= (effective_pid_2d == int(phase_filter))
 
     elif kind == "bc":
         # Primary source: xmap.prop['bc'] propagated through the indexing
@@ -1773,6 +1790,7 @@ async def get_layer(
     out_color: str = "ff3333",
     out_alpha: int = 153,
     grain_stabilized: bool = False,
+    phase_filter: int = -1,
 ):
     """Return a single layer as base64 RGBA PNG with transparent background.
 
@@ -1810,6 +1828,7 @@ async def get_layer(
                     out_color=out_color,
                     out_alpha=out_alpha,
                     grain_stabilized=grain_stabilized,
+                    phase_filter=None if phase_filter < 0 else int(phase_filter),
                 )
                 img = Image.fromarray(rgba)  # mode inferred from uint8 HxWx4 → RGBA
                 buf = _io.BytesIO()
@@ -1830,11 +1849,14 @@ async def get_layer(
 
 
 @router.get("/ipf-key")
-async def get_ipf_key(direction: str = "Z"):
+async def get_ipf_key(direction: str = "Z", phase_filter: int = -1):
     """Render only the IPF colour key(s) on a transparent background.
 
     One stereographic triangle per Laue class in the active xmap. Used by
     the LayeredCanvas as a floating overlay when an IPF layer is shown.
+    ``phase_filter`` (a phase id, -1 = all) restricts the key to a single
+    phase — used when the IPF layer itself is phase-filtered so the key on
+    screen always matches the colours on the map.
 
     Returns a base64 PNG. 400 if no result/dataset, or no orientation data.
     """
@@ -1866,7 +1888,8 @@ async def get_ipf_key(direction: str = "Z"):
         if not has_rot:
             raise HTTPException(status_code=400, detail="No orientation data — IPF keys require indexing rotations.")
 
-        groups = _group_phases_by_symmetry(xmap)
+        only_pid = None if phase_filter < 0 else int(phase_filter)
+        groups = _group_phases_by_symmetry(xmap, only_phase_id=only_pid)
         if not groups:
             raise HTTPException(status_code=400, detail="No phases with usable symmetry information.")
 
@@ -1884,7 +1907,8 @@ async def get_ipf_key(direction: str = "Z"):
                 gs = fig.add_gridspec(1, 1)
                 _draw_ipf_color_keys(fig, gs[0, 0], xmap, direction,
                                       color_overrides=None,
-                                      orientation="horizontal")
+                                      orientation="horizontal",
+                                      only_phase_id=only_pid)
                 buf = _io.BytesIO()
                 fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.05,
                             dpi=120, transparent=True)

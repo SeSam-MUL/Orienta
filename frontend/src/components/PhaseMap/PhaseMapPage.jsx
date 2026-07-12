@@ -1250,8 +1250,15 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     // pixel by its grain-mean orientation (display-only, data untouched).
     if (layer.id === 'ipf-x' || layer.id === 'ipf-y' || layer.id === 'ipf-z') {
       const on = !!(layer.params || {}).grain_stabilized;
+      const pf = (layer.params || {}).phase_filter ?? -1;
+      // Per-phase IPF view: community standard is one IPF map per phase —
+      // mixing phases with identical RGB codes makes them inseparable by
+      // eye. Options come from the same phaseStats the legend uses, so the
+      // names always match. Hidden for single-phase results (pointless).
+      const phaseOpts = (phaseStatsForAnnot?.phases || [])
+        .filter((p) => Number.isFinite(p?.phase_id) && p.phase_id >= 0);
       return (
-        <div style={{ padding: '4px 2px' }}>
+        <div style={{ padding: '4px 2px', display: 'flex', flexDirection: 'column', gap: 5 }}>
           <label
             style={{ fontSize: '8.5pt', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
             title={t('phasemap:ipfStabilize.tip')}
@@ -1263,6 +1270,28 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             />
             {t('phasemap:ipfStabilize.label')}
           </label>
+          {phaseOpts.length >= 2 && (
+            <label
+              style={{ fontSize: '8.5pt', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 6 }}
+              title={t('phasemap:ipfPhaseFilter.tip')}
+            >
+              {t('phasemap:ipfPhaseFilter.label')}
+              <select
+                value={pf}
+                onChange={(e) => layerStack.setLayerParams(layer.id, { phase_filter: parseInt(e.target.value, 10) })}
+                style={{
+                  fontSize: '8.5pt', background: '#1f2937', color: '#e5e7eb',
+                  border: '1px solid #374151', borderRadius: 3, padding: '1px 4px',
+                  maxWidth: 150,
+                }}
+              >
+                <option value={-1}>{t('phasemap:ipfPhaseFilter.all')}</option>
+                {phaseOpts.map((p) => (
+                  <option key={p.phase_id} value={p.phase_id}>{p.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
       );
     }
@@ -1320,7 +1349,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         onThresholdChange={(t) => layerStack.setThreshold(layer.id, t)}
       />
     );
-  }, [layerStack, SCALAR_THRESHOLD_KINDS]);
+  }, [layerStack, SCALAR_THRESHOLD_KINDS, phaseStatsForAnnot, t]);
 
   const activeEntry = gallery[selectedGalleryIdx] ?? null;
   const resultShape = activeEntry?.data?.shape ?? null;
@@ -1418,16 +1447,20 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   );
   const hasIpfLayer = !!ipfLayer;
   const ipfDirection = ipfLayer ? ipfLayer.id.slice(4).toUpperCase() : 'Z';
+  // When the IPF layer is phase-filtered, the on-canvas key must show ONLY
+  // that phase's triangle — a key for a different Laue class than the map
+  // would be scientifically misleading.
+  const ipfPhaseFilter = ipfLayer?.params?.phase_filter ?? -1;
   const [ipfKeyImage, setIpfKeyImage] = useState(null);
-  const ipfKeyCacheRef = useRef(new Map()); // key: `${resultId}|${direction}` -> base64
+  const ipfKeyCacheRef = useRef(new Map()); // key: `${resultId}|${direction}|${phaseFilter}` -> base64
 
   useEffect(() => {
     if (!hasIpfLayer || !resetSignal) { setIpfKeyImage(null); return; }
-    const cacheKey = `${resetSignal}|${ipfDirection}`;
+    const cacheKey = `${resetSignal}|${ipfDirection}|${ipfPhaseFilter}`;
     const cached = ipfKeyCacheRef.current.get(cacheKey);
     if (cached) { setIpfKeyImage(cached); return; }
     let cancelled = false;
-    phaseMapApi.ipfKey(ipfDirection).then((res) => {
+    phaseMapApi.ipfKey(ipfDirection, ipfPhaseFilter).then((res) => {
       if (cancelled) return;
       const img = res.data?.image ?? null;
       if (img) ipfKeyCacheRef.current.set(cacheKey, img);
@@ -1436,7 +1469,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       if (!cancelled) setIpfKeyImage(null);
     });
     return () => { cancelled = true; };
-  }, [hasIpfLayer, ipfDirection, resetSignal]);
+  }, [hasIpfLayer, ipfDirection, ipfPhaseFilter, resetSignal]);
 
   // Flush IPF key cache on result change
   useEffect(() => {

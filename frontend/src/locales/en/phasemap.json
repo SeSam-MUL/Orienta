@@ -575,5 +575,10 @@
   "ipfStabilize": {
     "label": "Stabilize colors per grain",
     "tip": "Route every pixel of a grain through the same side of the IPF color-key discontinuity. Colors stay per-pixel, so intra-grain gradients are preserved — only the color-key branch is chosen consistently per grain. For low-symmetry phases (e.g. m-3 approximants) the key is discontinuous, so ~1° orientation noise would otherwise flip pixel colors and make smooth data look like color speckle. Display-only; the stored orientations are untouched."
+  },
+  "ipfPhaseFilter": {
+    "label": "Phase:",
+    "all": "All phases",
+    "tip": "Show only the selected phase as an IPF map; all other phases become transparent. Each phase has its own color key (fundamental sector), so mixed IPF maps with identical RGB codes are ambiguous — the community standard is one IPF map per phase. The on-canvas color key follows this selection. Display/export only; the data is untouched."
   }
 }

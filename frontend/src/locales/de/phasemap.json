@@ -575,5 +575,10 @@
   "ipfStabilize": {
     "label": "Farben pro Korn stabilisieren",
     "tip": "Führt alle Pixel eines Korns über dieselbe Seite der Unstetigkeit des IPF-Farbschlüssels. Die Farben bleiben pro Pixel, Gradienten innerhalb eines Korns bleiben also erhalten — nur der Zweig des Farbschlüssels wird pro Korn einheitlich gewählt. Bei niedersymmetrischen Phasen (z. B. m-3-Approximanten) ist der Schlüssel unstetig, sodass ~1° Orientierungsrauschen sonst Pixelfarben springen ließe und glatte Daten wie Farb-Speckle wirken. Nur Anzeige; die gespeicherten Orientierungen bleiben unverändert."
+  },
+  "ipfPhaseFilter": {
+    "label": "Phase:",
+    "all": "Alle Phasen",
+    "tip": "Zeigt nur die gewählte Phase als IPF-Karte; alle anderen Phasen werden transparent. Jede Phase hat ihren eigenen Farbschlüssel (Fundamentalsektor), gemischte IPF-Karten mit identischen RGB-Codes sind daher mehrdeutig — der Community-Standard ist eine IPF-Karte pro Phase. Der eingeblendete Farbschlüssel folgt der Auswahl. Nur Anzeige/Export; die Daten bleiben unverändert."
   }
 }
