@@ -3019,6 +3019,30 @@ class PhaseCheckRequest(BaseModel):
     sample_px_max: int = 16
 
 
+# Single-flight guard: the check is a long synchronous run (per-grain renders
+# + Hough batches); a second click while one is running must not stack a
+# second full pass on top (the user-visible symptom was "it started again").
+_phase_check_busy = False
+
+
+import contextlib as _contextlib
+import os as _os
+
+
+@_contextlib.contextmanager
+def _silence_console():
+    """Mute stdout/stderr for the duration of a heavy scientific batch.
+
+    kikuchipy/hyperspy per-pattern operations and PyEBSDIndex print a tqdm
+    bar / info block PER CALL — a whole-map phase check floods the console
+    with thousands of one-line progress bars. Loggers are unaffected: their
+    StreamHandlers hold a reference to the ORIGINAL stderr, so warnings and
+    errors still reach the console."""
+    with open(_os.devnull, "w") as _null, \
+            _contextlib.redirect_stdout(_null), _contextlib.redirect_stderr(_null):
+        yield
+
+
 @router.post("/phase-check")
 async def phase_check(req: PhaseCheckRequest):
     """Stage A — render-verified phase check (read-only).
@@ -3028,6 +3052,10 @@ async def phase_check(req: PhaseCheckRequest):
     spherical re-index — that underestimates z_rot==2 phases). Stores a
     per-grain report + per-pixel margin map in result.metadata["phase_check"]
     (drives the 'Phase Check' diagnostic layer) and returns a summary."""
+    global _phase_check_busy
+    if _phase_check_busy:
+        raise HTTPException(status_code=409,
+                            detail="A phase check is already running — wait for it to finish")
     result = _get_result(req.result_id)
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
@@ -3035,16 +3063,21 @@ async def phase_check(req: PhaseCheckRequest):
     from backend.spherical_gpu.pipeline.phase_reassignment import check_map
 
     def _work():
-        return check_map(
-            ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
-            ctx["phases"], ctx["score_fns"], ctx["hough_quats_fn"],
-            sample_px_max=int(req.sample_px_max),
-            score_floor=float(req.score_floor),
-            margin_clear=float(req.margin_clear),
-        )
+        with _silence_console():
+            return check_map(
+                ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
+                ctx["phases"], ctx["score_fns"], ctx["hough_quats_fn"],
+                sample_px_max=int(req.sample_px_max),
+                score_floor=float(req.score_floor),
+                margin_clear=float(req.margin_clear),
+            )
 
     _free_interactive_gpu_caches()
-    report, margin_full = await asyncio.to_thread(_work)
+    _phase_check_busy = True
+    try:
+        report, margin_full = await asyncio.to_thread(_work)
+    finally:
+        _phase_check_busy = False
 
     ctx["md"]["phase_check"] = {"report": report, "margin_map": margin_full}
     xmap = ctx["xmap"]
@@ -3098,10 +3131,11 @@ async def phase_reassign(req: PhaseReassignRequest):
     report = pc["report"]
 
     def _work():
-        return apply_reassignment(
-            ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
-            report, ctx["phases"], ctx["hough_quats_fn"],
-        )
+        with _silence_console():
+            return apply_reassignment(
+                ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
+                report, ctx["phases"], ctx["hough_quats_fn"],
+            )
 
     _free_interactive_gpu_caches()
     new_pf, new_q, applied, skipped = await asyncio.to_thread(_work)

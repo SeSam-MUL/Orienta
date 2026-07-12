@@ -1097,6 +1097,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [phaseCheckBusy, setPhaseCheckBusy] = useState(false);
   const [reassignBusy, setReassignBusy] = useState(false);
   const [phaseCheckInfo, setPhaseCheckInfo] = useState(null);
+  // UX restore (2026-07-12): the map is the product. Clean view hides all
+  // canvas overlays (title/scalebar); the IPF colour key lives in a
+  // collapsible panel BELOW the canvas (never on top of the map); the four
+  // compute-heavy tool boxes collapse into one "Advanced tools" accordion.
+  const [cleanView, setCleanView] = useState(false);
+  const [ipfKeyOpen, setIpfKeyOpen] = useState(false);
   // Transient hover marker driven by the AnomalyBrowserDrawer. Rendered as
   // an absolutely-positioned div on top of the LayeredCanvas. Cleared on
   // mouse leave.
@@ -1481,6 +1487,17 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   useEffect(() => {
     ipfKeyCacheRef.current.clear();
   }, [resetSignal]);
+
+  // First-use nudge: the key panel below the canvas starts collapsed, but
+  // opens ONCE when an IPF layer first becomes active so users discover it
+  // (after that their manual open/close choice wins).
+  const ipfKeyNudgedRef = useRef(false);
+  useEffect(() => {
+    if (hasIpfLayer && ipfKeyImage && !ipfKeyNudgedRef.current) {
+      ipfKeyNudgedRef.current = true;
+      setIpfKeyOpen(true);
+    }
+  }, [hasIpfLayer, ipfKeyImage]);
 
   // Pattern Center of the active dataset/detector (the PC the indexing ran
   // with). Surfaced on the phase map so the user can see it without going
@@ -2637,6 +2654,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         onExport={onExportPng}
         swipe={swipe} setSwipe={onSwipeChange}
         layers={layerStack.layers}
+        cleanView={cleanView} setCleanView={setCleanView}
       />
 
       {/* Canvas area */}
@@ -2669,7 +2687,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             tileMinWidth={tileMinWidth}
             bitmapVersion={layerStack.bitmapVersion}
             scalebar={{
-              enabled: showScalebar,
+              enabled: showScalebar && !cleanView,
               position: sbPosition,
               length: sbLength,
               fontSize: sbFontSize,
@@ -2677,10 +2695,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
               boxColor: sbBoxColor,
               boxAlpha: sbBoxAlpha,
             }}
-            title={effectiveTitle}
+            title={cleanView ? null : effectiveTitle}
             stepX={stepX}
-            ipfKeyImage={ipfKeyImage}
-            showIpfKey={hasIpfLayer}
             hoverPixel={hoverPixel}
             onPixelClick={(r, c) => {
               // Drive the existing Pattern Matches dialog flow when a user
@@ -2811,6 +2827,37 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         )}
       </div>
 
+      {/* IPF colour key — BELOW the canvas, collapsible (default collapsed).
+          Deliberately no longer an overlay ON the map: with several Laue
+          classes the key PNG is wide and was covering the data. */}
+      {hasIpfLayer && ipfKeyImage && (
+        <div style={{ flexShrink: 0, marginTop: 6 }}>
+          <button
+            onClick={() => setIpfKeyOpen((o) => !o)}
+            title={t('phasemap:ipfKeyPanel.tip')}
+            style={{
+              background: 'transparent', border: `1px solid ${colors.border}`,
+              borderRadius: 3, color: colors.textSecondary, cursor: 'pointer',
+              padding: '2px 10px', fontSize: '8.5pt', fontWeight: 600,
+            }}
+          >
+            {ipfKeyOpen ? '▾' : '▸'} {t('phasemap:ipfKeyPanel.title')}
+          </button>
+          {ipfKeyOpen && (
+            <div style={{
+              marginTop: 4, display: 'inline-block', maxWidth: '100%',
+              background: 'rgba(255,255,255,0.95)', borderRadius: 4, padding: 4,
+            }}>
+              <img
+                src={`data:image/png;base64,${ipfKeyImage}`}
+                alt={t('phasemap:ipfKeyPanel.title')}
+                style={{ display: 'block', maxHeight: 160, maxWidth: '100%' }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Linescan profile (renders below the canvas when a line has been drawn) */}
       {linescan.data && (
         <GroupBox title={t('phasemap:linescan.title')} style={{ marginTop: 8, flexShrink: 0 }}>
@@ -2914,6 +2961,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           )}
         </div>
       </GroupBox>
+
+      {layerStackPanel}
+
+      {/* Advanced analysis tools — collapsed by default (UX restore
+          2026-07-12): everything in here is compute-heavy and occasional-
+          use; the map + layer stack are the page's centre. Uses the shared
+          CollapsibleGroup so it matches the Annotation & Calibration box. */}
+      <CollapsibleGroup title={t('phasemap:advanced.title')} defaultCollapsed>
 
       <ComputeDiagnosticsPanel
         resultId={indexingResult?.result_id}
@@ -3083,7 +3138,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         </div>
       </GroupBox>
 
-      {layerStackPanel}
+      </CollapsibleGroup>
+      {/* end Advanced tools accordion */}
 
       {/* Pattern Center of the active detector (the PC indexing ran with). */}
       {pcValue && (
@@ -3644,9 +3700,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         <ResizableSplitter
           left={leftPanel}
           right={rightPanel}
-          defaultLeftWidth={580}
-          minLeftWidth={300}
-          maxLeftWidth={900}
+          // UX restore 2026-07-12: the MAP is the flex column now. Before,
+          // the map was capped at 900 px while the tool sidebar took every
+          // remaining pixel of a wide window — backwards for a map page.
+          // With fixedSide="right" the width props size the SIDEBAR.
+          fixedSide="right"
+          defaultLeftWidth={340}
+          minLeftWidth={280}
+          maxLeftWidth={460}
           style={{ flex: 1 }}
         />
         <ConfirmDialog {...confirmProps} />

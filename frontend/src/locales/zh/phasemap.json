@@ -326,7 +326,10 @@
     "lensOff": "放大镜 关",
     "lensTooltip": "切换放大镜（跟随光标的 4 倍缩放）",
     "exportPng": "导出 PNG",
-    "exportPngTooltip": "将当前合成图下载为 PNG"
+    "exportPngTooltip": "将当前合成图下载为 PNG",
+    "cleanOn": "简洁 ✓",
+    "cleanOff": "简洁视图",
+    "cleanTooltip": "隐藏画布上的所有叠加元素（标题、比例尺），只显示地图。适合演示和截图。"
   },
   "layers": {
     "title": "图层",
@@ -595,5 +598,12 @@
     "undoTip": "恢复上次重新指派更改的相 ID 和方位。",
     "undoDone": "已恢复 {{n}} 个像素。",
     "hint": "查找被存为错误相的晶粒（化学简并相）。经渲染验证，仅整晶粒操作，可撤销。"
+  },
+  "ipfKeyPanel": {
+    "title": "IPF 颜色键",
+    "tip": "显示/隐藏 IPF 颜色键（每个 Laue 类一个立体三角形；IPF 图层按相过滤时显示所选相的键）。位于地图下方，绝不遮挡数据。"
+  },
+  "advanced": {
+    "title": "高级工具"
   }
 }

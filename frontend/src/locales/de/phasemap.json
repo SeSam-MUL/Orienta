@@ -326,7 +326,10 @@
     "lensOff": "Lupe AUS",
     "lensTooltip": "Lupe umschalten (4×-Zoom, folgt dem Cursor)",
     "exportPng": "PNG exportieren",
-    "exportPngTooltip": "Das aktuelle Komposit als PNG herunterladen"
+    "exportPngTooltip": "Das aktuelle Komposit als PNG herunterladen",
+    "cleanOn": "Clean ✓",
+    "cleanOff": "Clean View",
+    "cleanTooltip": "Alle Canvas-Overlays ausblenden (Titel, Maßstabsbalken) — nur die Karte. Für Präsentationen und Screenshots."
   },
   "layers": {
     "title": "Ebenen",
@@ -595,5 +598,12 @@
     "undoTip": "Stellt die Phasen-IDs und Orientierungen der letzten Umwidmung wieder her.",
     "undoDone": "{{n}} Pixel wiederhergestellt.",
     "hint": "Findet Körner mit falsch gespeicherter Phase (chemisch degenerierte Phasen). Render-verifiziert, nur ganze Körner, Undo verfügbar."
+  },
+  "ipfKeyPanel": {
+    "title": "IPF-Farbschlüssel",
+    "tip": "IPF-Farbschlüssel ein-/ausblenden (ein stereographisches Dreieck pro Laue-Klasse, bzw. der Schlüssel der gewählten Phase bei gefiltertem IPF-Layer). Sitzt unter der Karte und verdeckt nie die Daten."
+  },
+  "advanced": {
+    "title": "Erweiterte Werkzeuge"
   }
 }

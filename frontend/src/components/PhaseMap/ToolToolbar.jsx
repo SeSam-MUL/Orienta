@@ -21,6 +21,7 @@ export default function ToolToolbar({
   onExport,
   swipe, setSwipe,
   layers,
+  cleanView = false, setCleanView = null,
 }) {
   const { t } = useTranslation('phasemap');
   return (
@@ -77,6 +78,16 @@ export default function ToolToolbar({
       >
         {magnifierEnabled ? t('phasemap:tools.lensOn') : t('phasemap:tools.lensOff')}
       </ToggleButton>
+
+      {setCleanView && (
+        <ToggleButton
+          on={cleanView}
+          onClick={() => setCleanView(!cleanView)}
+          title={t('phasemap:tools.cleanTooltip')}
+        >
+          {cleanView ? t('phasemap:tools.cleanOn') : t('phasemap:tools.cleanOff')}
+        </ToggleButton>
+      )}
 
       <button
         onClick={onExport}

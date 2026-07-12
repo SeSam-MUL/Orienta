@@ -326,7 +326,10 @@
     "lensOff": "Lens OFF",
     "lensTooltip": "Toggle magnifier lens (4x zoom following the cursor)",
     "exportPng": "Export PNG",
-    "exportPngTooltip": "Download the current composite as PNG"
+    "exportPngTooltip": "Download the current composite as PNG",
+    "cleanOn": "Clean ✓",
+    "cleanOff": "Clean view",
+    "cleanTooltip": "Hide all canvas overlays (title, scale bar) — just the map. For presenting and screenshots."
   },
   "layers": {
     "title": "Layers",
@@ -595,5 +598,12 @@
     "undoTip": "Restore the phase ids and orientations changed by the last reassignment.",
     "undoDone": "Restored {{n}} pixels.",
     "hint": "Finds grains stored as the wrong phase (chemically degenerate phases). Render-verified, whole grains only, undo available."
+  },
+  "ipfKeyPanel": {
+    "title": "IPF colour key",
+    "tip": "Show/hide the IPF colour key (one stereographic triangle per Laue class, or the selected phase's key when the IPF layer is phase-filtered). Lives below the map so it never covers your data."
+  },
+  "advanced": {
+    "title": "Advanced tools"
   }
 }

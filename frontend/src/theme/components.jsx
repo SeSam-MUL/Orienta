@@ -416,9 +416,17 @@ export function CollapsibleGroup({ title, defaultCollapsed = false, children }) 
 export function ResizableSplitter({
   left, right, defaultLeftWidth = 300,
   minLeftWidth = 150, maxLeftWidth = 600,
+  fixedSide = 'left',
   style: extra = {},
 }) {
-  const [leftWidth, setLeftWidth] = useState(defaultLeftWidth);
+  // `fixedSide` picks which panel carries the fixed, drag-resizable width;
+  // the other panel becomes flex:1. Default 'left' preserves the historic
+  // behaviour of every existing call site. With 'right', the width props
+  // (defaultLeftWidth/minLeftWidth/maxLeftWidth — names kept for backward
+  // compatibility) apply to the RIGHT panel, and the LEFT panel gets the
+  // remaining space. Map-centric pages want 'right': the map must never be
+  // the capped column while a tool sidebar eats the rest of a wide window.
+  const [fixedWidth, setFixedWidth] = useState(defaultLeftWidth);
   const dragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -426,15 +434,17 @@ export function ResizableSplitter({
   const onMouseDown = useCallback((e) => {
     dragging.current = true;
     startX.current = e.clientX;
-    startWidth.current = leftWidth;
+    startWidth.current = fixedWidth;
     document.body.style.cursor = 'col-resize';
     document.body.style.userSelect = 'none';
 
     const onMouseMove = (e) => {
       if (!dragging.current) return;
       const delta = e.clientX - startX.current;
-      const newWidth = Math.min(maxLeftWidth, Math.max(minLeftWidth, startWidth.current + delta));
-      setLeftWidth(newWidth);
+      // Dragging right grows a left-fixed panel but SHRINKS a right-fixed one.
+      const signed = fixedSide === 'left' ? delta : -delta;
+      const newWidth = Math.min(maxLeftWidth, Math.max(minLeftWidth, startWidth.current + signed));
+      setFixedWidth(newWidth);
     };
 
     const onMouseUp = () => {
@@ -447,36 +457,48 @@ export function ResizableSplitter({
 
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
-  }, [leftWidth, minLeftWidth, maxLeftWidth]);
+  }, [fixedWidth, minLeftWidth, maxLeftWidth, fixedSide]);
+
+  const fixedPanel = (
+    <div style={{ width: fixedWidth, minWidth: minLeftWidth, flexShrink: 0, overflow: 'auto' }}>
+      {fixedSide === 'left' ? left : right}
+    </div>
+  );
+  const flexPanel = (
+    <div style={fixedSide === 'left'
+      ? { flex: 1, overflow: 'auto' }                 // byte-identical legacy style
+      : { flex: 1, minWidth: 0, overflow: 'auto' }}
+    >
+      {fixedSide === 'left' ? right : left}
+    </div>
+  );
+  const handle = (
+    <div
+      onMouseDown={onMouseDown}
+      style={{
+        width: 6,
+        cursor: 'col-resize',
+        background: colors.border,
+        flexShrink: 0,
+        transition: 'background 0.15s, width 0.15s',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = colors.accent; e.currentTarget.style.width = '7px'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = colors.border; e.currentTarget.style.width = '6px'; }}
+    >
+      <div style={{ width: 2, height: 20, display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'center' }}>
+        {[0,1,2].map(i => <div key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: 'currentColor', opacity: 0.4 }} />)}
+      </div>
+    </div>
+  );
 
   return (
     <div style={{ display: 'flex', flex: 1, overflow: 'hidden', ...extra }}>
-      <div style={{ width: leftWidth, minWidth: minLeftWidth, flexShrink: 0, overflow: 'auto' }}>
-        {left}
-      </div>
-      {/* Drag handle with grip dots */}
-      <div
-        onMouseDown={onMouseDown}
-        style={{
-          width: 6,
-          cursor: 'col-resize',
-          background: colors.border,
-          flexShrink: 0,
-          transition: 'background 0.15s, width 0.15s',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = colors.accent; e.currentTarget.style.width = '7px'; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = colors.border; e.currentTarget.style.width = '6px'; }}
-      >
-        <div style={{ width: 2, height: 20, display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'center' }}>
-          {[0,1,2].map(i => <div key={i} style={{ width: 2, height: 2, borderRadius: '50%', background: 'currentColor', opacity: 0.4 }} />)}
-        </div>
-      </div>
-      <div style={{ flex: 1, overflow: 'auto' }}>
-        {right}
-      </div>
+      {fixedSide === 'left' ? fixedPanel : flexPanel}
+      {handle}
+      {fixedSide === 'left' ? flexPanel : fixedPanel}
     </div>
   );
 }
