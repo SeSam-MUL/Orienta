@@ -23,6 +23,7 @@ data-format reports). For day-to-day code orientation, the project root
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | Developer-oriented map of the whole system: the Electron → React → FastAPI → scientific-stack layers, how a typical action flows through them, and what each root-level Python module does. |
 | [`h5oina_structure_report.md`](h5oina_structure_report.md) | Annotated map of the Oxford Instruments Aztec **`.h5oina`** HDF5 layout — EBSD data/header groups, pattern arrays, pattern-center fields, phase table, and the EDS spectra — with notes on what each field means for a kikuchipy import. |
 | [`light_h5_format.md`](light_h5_format.md) | Full specification of the compact **light `.h5`** indexing export (`result_<stem>_light.h5`): the group/dataset tree, the `phase_id` convention, the single-phase vs. multi-phase layouts, the version history, and how to read it back in this app, in MATLAB/MTEX, or in Python/orix. |
+| [`ipf-colour-maps.md`](ipf-colour-maps.md) | The complete IPF colour-map story: pseudo-symmetry variant handling (Hough substitution, map-wide render-verified unification, manual grain flip), the low-symmetry colour-key discontinuity and the grain-consistent v2 colouring, the per-phase IPF view — with measured evidence, literature grounding, and a what-to-use-when recipe. |
 
 ## Per-directory READMEs across the repo
 
