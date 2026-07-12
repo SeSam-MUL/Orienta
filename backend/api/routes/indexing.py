@@ -2674,6 +2674,11 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
     md = getattr(result, "metadata", None)
     if isinstance(md, dict):
         md["grain_flip_undo"] = {"xmap_indices": undo_idx, "old_quats": undo_old}
+        # Orientation edit → any earlier phase check is stale (grain ids are
+        # re-derived from orientations at apply time and would remap onto the
+        # WRONG grains). Force a fresh check before a reassign.
+        md.pop("phase_check", None)
+        md.pop("phase_reassign_undo", None)
 
     return {"n_changed": changed, "grain_size": len(grain),
             "threshold_deg": float(req.threshold_deg),
@@ -2786,6 +2791,10 @@ async def unify_pseudosym_variants(req: UnifyVariantsRequest):
                     "xmap_indices": [int(i) for i in idxs],
                     "old_quats": [[float(v) for v in qdata[i]] for i in idxs],
                 }
+                # Orientation edit → stale phase check would remap grain ids
+                # onto the wrong grains at reassign time. Force a re-check.
+                md.pop("phase_check", None)
+                md.pop("phase_reassign_undo", None)
             xmap._rotations = _R(new_rows)
             n_changed = int(idxs.size)
 
@@ -2835,6 +2844,9 @@ async def undo_grain_flip(req: GrainUndoRequest):
     qdata[idxs] = olds
     xmap._rotations = _R(qdata)
     md.pop("grain_flip_undo", None)
+    # Orientation edit (restore) → stale phase check must not drive a reassign.
+    md.pop("phase_check", None)
+    md.pop("phase_reassign_undo", None)
     return {"n_restored": int(idxs.size)}
 
 
@@ -2894,9 +2906,11 @@ def _hough_quats_for_phase_batch(patterns, cif_path, det_params):
     return out
 
 
-def _phase_check_ctx(result):
+def _phase_check_ctx(result, build_scorers: bool = True):
     """Shared setup for the phase-check / reassign routes: full-grid arrays,
     per-phase point groups, render scorers, and the Hough candidate fn.
+    ``build_scorers=False`` skips the (GPU-costly) render-scorer construction —
+    the reassign path only needs the Hough candidate fn.
     Raises HTTPException on missing metadata."""
     md = getattr(result, "metadata", None) or {}
     if md.get("indexing_method") != "spherical":
@@ -2949,12 +2963,13 @@ def _phase_check_ctx(result):
         sht = sht_map.get(p) or sht_map.get(str(p))
         if not sht:
             continue
-        try:
-            score_fns[p] = build_render_score_fn(str(sht), det, _get_pattern)
-        except Exception:
-            logger.warning("[phase-check] scorer for phase %s failed", p,
-                           exc_info=True)
-            continue
+        if build_scorers:
+            try:
+                score_fns[p] = build_render_score_fn(str(sht), det, _get_pattern)
+            except Exception:
+                logger.warning("[phase-check] scorer for phase %s failed", p,
+                               exc_info=True)
+                continue
         try:
             cif = _resolve_cif_for_sht(str(sht))
         except Exception:
@@ -3078,7 +3093,7 @@ async def phase_reassign(req: PhaseReassignRequest):
     if not pc or not isinstance(pc.get("report"), dict):
         raise HTTPException(status_code=400,
                             detail="Run the phase check first")
-    ctx = _phase_check_ctx(result)
+    ctx = _phase_check_ctx(result, build_scorers=False)
     from backend.spherical_gpu.pipeline.phase_reassignment import apply_reassignment
     report = pc["report"]
 
@@ -3121,10 +3136,10 @@ async def phase_reassign(req: PhaseReassignRequest):
         new_rows_pid[xidx] = new_pf[changed_flat]
         _R = ctx["Rotation"]
         xmap._rotations = _R(new_rows_q)
-        try:
-            xmap.phase_id = new_rows_pid
-        except Exception:
-            xmap._phase_id[...] = new_rows_pid
+        # orix's phase_id setter persists the write but then raises on array
+        # values (its `value == -1` check is scalar-minded) — write via the
+        # in-data mask directly, which is what the setter's first line does.
+        xmap._phase_id[np.asarray(xmap.is_in_data, dtype=bool)] = new_rows_pid
         # The margin layer answered its question for these pixels — blank
         # them so a stale "reassign me" red doesn't linger after the fix.
         mm = pc.get("margin_map")
@@ -3193,10 +3208,8 @@ async def phase_reassign_undo(req: PhaseReassignRequest):
     qdata[idxs] = olds
     pdata[idxs] = oldp
     xmap._rotations = _R(qdata)
-    try:
-        xmap.phase_id = pdata
-    except Exception:
-        xmap._phase_id[...] = pdata
+    # Same in-data-mask write as the reassign path (orix setter raises on arrays).
+    xmap._phase_id[np.asarray(xmap.is_in_data, dtype=bool)] = pdata
     md.pop("phase_reassign_undo", None)
     # The check ran against the pre-undo map — force a fresh one.
     md.pop("phase_check", None)

@@ -2942,6 +2942,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                   ambiguous: d.n_ambiguous, rescued: d.n_rescued,
                 }));
                 layerStack.cacheFlush((id) => ['ipf-x', 'ipf-y', 'ipf-z'].includes(id));
+                // Orientation edit invalidates the phase check server-side.
+                setPhaseCheckInfo(null);
               } catch (e) {
                 toast.error(e?.response?.data?.detail || String(e));
               } finally {
@@ -3020,7 +3022,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 }
                 setPhaseCheckInfo((p) => p ? { ...p, n_reassign: 0, undo: d.undo_available } : p);
                 layerStack.cacheFlush((id) => (
-                  ['phase', 'ipf-x', 'ipf-y', 'ipf-z', 'phase-margin'].includes(id)
+                  ['phase', 'ipf-x', 'ipf-y', 'ipf-z', 'phase-margin', 'kam', 'gos'].includes(id)
                   || id.startsWith('ci')
                 ));
               } catch (e) {
@@ -3052,8 +3054,13 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                   const r = await indexApi.phaseReassignUndo();
                   toast.success(t('phasemap:phaseCheck.undoDone', { n: r.data.n_restored }));
                   setPhaseCheckInfo(null);
+                  // Undo drops phase_check server-side — the margin layer
+                  // would only 404 now, so remove it instead of flushing it.
+                  if (layerStack.layers.some((l) => l.id === 'phase-margin')) {
+                    layerStack.removeLayer('phase-margin');
+                  }
                   layerStack.cacheFlush((id) => (
-                    ['phase', 'ipf-x', 'ipf-y', 'ipf-z', 'phase-margin'].includes(id)
+                    ['phase', 'ipf-x', 'ipf-y', 'ipf-z', 'kam', 'gos'].includes(id)
                     || id.startsWith('ci')
                   ));
                 } catch (e) {
@@ -3653,11 +3660,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           open={showMatchesDialog}
           onClose={() => setShowMatchesDialog(false)}
           initialPixel={matchesInitialPixel}
-          onOrientationsChanged={() =>
+          onOrientationsChanged={() => {
             // Grain flip changed orientations in place → refetch the
             // orientation-coloured layers (IPF); phase/CI/BC are unaffected.
-            layerStack.cacheFlush((id) => ['ipf-x', 'ipf-y', 'ipf-z'].includes(id))
-          }
+            layerStack.cacheFlush((id) => ['ipf-x', 'ipf-y', 'ipf-z'].includes(id));
+            // The backend invalidates phase_check on orientation edits —
+            // drop the stale Reassign count so the button can't fire on it.
+            setPhaseCheckInfo(null);
+          }}
         />
         <AnomalyBrowserDrawer
           open={browserOpen}

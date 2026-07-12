@@ -171,7 +171,14 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
                 except Exception:
                     pass
 
-            if np.isfinite(stored) and stored >= score_floor:
+            if not np.isfinite(stored):
+                # The STORED phase's render failed (e.g. transient GPU OOM) —
+                # that is a scoring failure, not evidence against the phase.
+                # Never let a candidate win by default: fail-safe = keep.
+                entry["decision"] = "no-score"
+                entries.append(entry)
+                continue
+            if stored >= score_floor:
                 entry["decision"] = "ok"
                 entries.append(entry)
                 continue
@@ -190,7 +197,10 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
                                    cand, exc_info=True)
                     continue
                 ok = np.isfinite(cq[:, 0])
-                if not ok.any():
+                # A candidate scored on a tiny Hough-lucky subset would be
+                # compared against the stored phase's FULL-sample median —
+                # asymmetric and biased. Require a minimum successful count.
+                if int(ok.sum()) < min(3, sample.size):
                     continue
                 s = _agg(score_fns[cand](sample[ok], cq[ok]))
                 if np.isfinite(s):
@@ -245,10 +255,13 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
     successful pixel; if Hough fails for the WHOLE grain the grain is left
     untouched (fail-safe = stored phase survives).
 
-    Grain identity is re-derived from the stored report's pixel sets — the
-    caller must not have mutated the map between check and apply (routes
-    enforce this by invalidating ``phase_check`` metadata on any orientation
-    edit / re-index).
+    Grain identity is re-derived by re-segmenting the CURRENT orientations,
+    and grain ids are only stable while the map is unchanged. Two layers of
+    protection: the routes invalidate ``phase_check`` metadata on every
+    orientation edit (grain flip / unify / undo), AND each re-derived grain
+    is verified against the report entry's pixel count + centroid — a
+    mismatch skips the grain (``grain changed since check``) instead of
+    flipping whatever now happens to carry that id.
 
     Returns ``(new_phase_full, new_full_q, applied, skipped)`` where
     ``applied`` / ``skipped`` are lists of grain entries (with
@@ -270,10 +283,9 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
         pid = int(e["phase_id"])
         if pid not in labels_by_phase:
             pg = phases.get(pid)
-            if pg is None:
-                skipped.append({**e, "skip_reason": "phase symmetry missing"})
-                continue
-            labels_by_phase[pid] = segment_supergroup_grains(
+            # pg missing → store None; the apply loop below skips the grain
+            # exactly once (appending to `skipped` here too would duplicate it).
+            labels_by_phase[pid] = None if pg is None else segment_supergroup_grains(
                 q, pf, n_rows, n_cols, pid, pg,
                 threshold_deg=float(report.get("params", {}).get("threshold_deg", 5.0)))
 
@@ -282,11 +294,23 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
         target = int(e.get("best_alt_phase", -1))
         labels = labels_by_phase.get(pid)
         if labels is None or target < 0:
-            skipped.append({**e, "skip_reason": "no target phase"})
+            skipped.append({**e, "skip_reason": (
+                "phase symmetry missing" if labels is None else "no target phase")})
             continue
         pix = np.flatnonzero(labels == int(e["grain_id"]))
         if pix.size == 0:
             skipped.append({**e, "skip_reason": "grain no longer found"})
+            continue
+        # Identity guard: grain ids are first-encounter ordinals of the
+        # segmentation — after ANY orientation edit the same id can point at
+        # a DIFFERENT physical grain. Verify count + centroid against what
+        # the check saw; on mismatch skip rather than corrupt a good grain.
+        rr, cc = np.divmod(pix, n_cols)
+        cen = e.get("centroid") or [np.nan, np.nan]
+        if (pix.size != int(e.get("pixels", -1))
+                or abs(float(rr.mean()) - float(cen[0])) > 0.5
+                or abs(float(cc.mean()) - float(cen[1])) > 0.5):
+            skipped.append({**e, "skip_reason": "grain changed since check"})
             continue
         try:
             cq = np.asarray(hough_quats_fn(target, pix),
