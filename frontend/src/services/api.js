@@ -455,6 +455,15 @@ export const indexApi = {
   // verified; one-level undo shares the grain-flip undo slot).
   unifyPseudosymVariants: () =>
     api.post('/api/indexing/pseudosym/unify', {}),
+  // Render-verified phase check (Stage A, read-only) + grain-based phase
+  // reassignment (Stage B) + one-level undo. Fixes chemically-degenerate
+  // phases stealing pixels of another phase (judge by render-NCC).
+  phaseCheck: () =>
+    api.post('/api/indexing/phase-check', {}),
+  phaseReassign: () =>
+    api.post('/api/indexing/phase-reassign', {}),
+  phaseReassignUndo: () =>
+    api.post('/api/indexing/phase-reassign/undo', {}),
   // Phase B — Forward-NCC quality map
   forwardNccStatus: () => api.get('/api/indexing/forward-ncc/status'),
   forwardNccCompute: (maxBandwidth = 256, force = false) => api.post(

@@ -580,5 +580,20 @@
     "label": "Phase:",
     "all": "Alle Phasen",
     "tip": "Zeigt nur die gewählte Phase als IPF-Karte; alle anderen Phasen werden transparent. Jede Phase hat ihren eigenen Farbschlüssel (Fundamentalsektor), gemischte IPF-Karten mit identischen RGB-Codes sind daher mehrdeutig — der Community-Standard ist eine IPF-Karte pro Phase. Der eingeblendete Farbschlüssel folgt der Auswahl. Nur Anzeige/Export; die Daten bleiben unverändert."
+  },
+  "phaseCheck": {
+    "title": "Phasen-Verifikation (Render)",
+    "checkButton": "Phasen prüfen",
+    "checkTip": "Nur-Lese-Prüfung: pro Korn wird die GESPEICHERTE Phase mit ihrer gespeicherten Orientierung und jede andere Phase mit einer Hough-verankerten Orientierung gerendert und mit dem gemessenen Muster verglichen (Render-NCC). Interne Indexing-Scores sind zwischen Phasen nicht vergleichbar — der Vorwärts-Render schon. Fügt einen 'Phase Check'-Layer hinzu: grün = gespeicherte Phase gewinnt, rot = eine andere Phase rendert deutlich besser, transparent = unauffällig.",
+    "checkDone": "{{grains}} Körner geprüft: {{suspect}} verdächtig, {{reassign}} zur Umwidmung empfohlen.",
+    "running": "Läuft…",
+    "reassignButton": "{{n}} Körner umwidmen",
+    "reassignTip": "Wendet die Empfehlungen der Prüfung an: ganze Körner wechseln zu der Phase, die deutlich besser rendert (Vorsprung ≥ 0.05); jedes Pixel erhält seine eigene Hough-Orientierung der Gewinner-Phase. Körner werden nie geteilt; unklare Körner bleiben unangetastet. Einstufiges Undo.",
+    "reassignDone": "{{grains}} Körner umgewidmet ({{pixels}} px).",
+    "unifyHint": "Umgewidmete Phase(n) {{phases}} sind pseudo-symmetrisch — anschließend 'Varianten vereinheitlichen' ausführen.",
+    "undoButton": "Rückgängig",
+    "undoTip": "Stellt die Phasen-IDs und Orientierungen der letzten Umwidmung wieder her.",
+    "undoDone": "{{n}} Pixel wiederhergestellt.",
+    "hint": "Findet Körner mit falsch gespeicherter Phase (chemisch degenerierte Phasen). Render-verifiziert, nur ganze Körner, Undo verfügbar."
   }
 }

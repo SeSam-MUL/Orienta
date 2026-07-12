@@ -1091,6 +1091,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [browserOpen, setBrowserOpen] = useState(false);
   // Map-wide pseudo-symmetry variant unification (busy flag for the button).
   const [unifyBusy, setUnifyBusy] = useState(false);
+  // Render-verified phase check / reassignment (Stage A/B). `phaseCheckInfo`
+  // holds the last check summary so the Reassign button can show the count
+  // and stay disabled when there is nothing to do.
+  const [phaseCheckBusy, setPhaseCheckBusy] = useState(false);
+  const [reassignBusy, setReassignBusy] = useState(false);
+  const [phaseCheckInfo, setPhaseCheckInfo] = useState(null);
   // Transient hover marker driven by the AnomalyBrowserDrawer. Rendered as
   // an absolutely-positioned div on top of the LayeredCanvas. Cleared on
   // mouse leave.
@@ -2955,6 +2961,117 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           </button>
           <span style={{ fontSize: '8pt', color: colors.textSecondary }}>
             {t('phasemap:pseudosym.hint')}
+          </span>
+        </div>
+      </GroupBox>
+
+      {/* Render-verified phase check + reassignment: chemically-degenerate
+          phases (e.g. a cubic approximant on an Al matrix) can steal pixels
+          of another phase — internal per-phase scores are not comparable
+          across phases, only the forward render is. Check = read-only margin
+          layer; Reassign = flips only grains where another phase renders
+          clearly better (whole grain, per-pixel Hough orientation, undo). */}
+      <GroupBox title={t('phasemap:phaseCheck.title')}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <button
+            onClick={async () => {
+              setPhaseCheckBusy(true);
+              try {
+                const r = await indexApi.phaseCheck();
+                const d = r.data;
+                setPhaseCheckInfo(d);
+                toast.success(t('phasemap:phaseCheck.checkDone', {
+                  grains: d.n_checked, suspect: d.n_suspect, reassign: d.n_reassign,
+                }));
+                if (!layerStack.layers.some((l) => l.id === 'phase-margin')) {
+                  layerStack.addLayer('phase-margin');
+                }
+                layerStack.cacheFlush((id) => id === 'phase-margin');
+              } catch (e) {
+                toast.error(e?.response?.data?.detail || String(e));
+              } finally {
+                setPhaseCheckBusy(false);
+              }
+            }}
+            disabled={phaseCheckBusy || reassignBusy || !indexingResult}
+            title={t('phasemap:phaseCheck.checkTip')}
+            style={{
+              fontSize: '9pt', fontWeight: 600, padding: '6px 14px',
+              background: phaseCheckBusy ? colors.bgTertiary : '#50fa7b22',
+              border: '1px solid #50fa7b', borderRadius: 4,
+              color: '#50fa7b', cursor: phaseCheckBusy ? 'wait' : 'pointer',
+            }}
+          >
+            {phaseCheckBusy ? t('phasemap:phaseCheck.running') : `✓ ${t('phasemap:phaseCheck.checkButton')}`}
+          </button>
+          <button
+            onClick={async () => {
+              setReassignBusy(true);
+              try {
+                const r = await indexApi.phaseReassign();
+                const d = r.data;
+                toast.success(t('phasemap:phaseCheck.reassignDone', {
+                  grains: d.n_grains_applied, pixels: d.n_pixels_changed,
+                }));
+                if (d.unify_recommended?.length) {
+                  toast(t('phasemap:phaseCheck.unifyHint', {
+                    phases: d.unify_recommended.join(', '),
+                  }), { icon: '⬡' });
+                }
+                setPhaseCheckInfo((p) => p ? { ...p, n_reassign: 0, undo: d.undo_available } : p);
+                layerStack.cacheFlush((id) => (
+                  ['phase', 'ipf-x', 'ipf-y', 'ipf-z', 'phase-margin'].includes(id)
+                  || id.startsWith('ci')
+                ));
+              } catch (e) {
+                toast.error(e?.response?.data?.detail || String(e));
+              } finally {
+                setReassignBusy(false);
+              }
+            }}
+            disabled={reassignBusy || phaseCheckBusy || !indexingResult
+              || !(phaseCheckInfo?.n_reassign > 0)}
+            title={t('phasemap:phaseCheck.reassignTip')}
+            style={{
+              fontSize: '9pt', fontWeight: 600, padding: '6px 14px',
+              background: reassignBusy ? colors.bgTertiary : '#ffb86c22',
+              border: '1px solid #ffb86c', borderRadius: 4,
+              color: '#ffb86c',
+              cursor: reassignBusy ? 'wait'
+                : (phaseCheckInfo?.n_reassign > 0 ? 'pointer' : 'not-allowed'),
+              opacity: phaseCheckInfo?.n_reassign > 0 || reassignBusy ? 1 : 0.5,
+            }}
+          >
+            {reassignBusy ? t('phasemap:phaseCheck.running')
+              : t('phasemap:phaseCheck.reassignButton', { n: phaseCheckInfo?.n_reassign ?? 0 })}
+          </button>
+          {phaseCheckInfo?.undo && (
+            <button
+              onClick={async () => {
+                try {
+                  const r = await indexApi.phaseReassignUndo();
+                  toast.success(t('phasemap:phaseCheck.undoDone', { n: r.data.n_restored }));
+                  setPhaseCheckInfo(null);
+                  layerStack.cacheFlush((id) => (
+                    ['phase', 'ipf-x', 'ipf-y', 'ipf-z', 'phase-margin'].includes(id)
+                    || id.startsWith('ci')
+                  ));
+                } catch (e) {
+                  toast.error(e?.response?.data?.detail || String(e));
+                }
+              }}
+              title={t('phasemap:phaseCheck.undoTip')}
+              style={{
+                fontSize: '9pt', padding: '6px 10px',
+                background: 'transparent', border: `1px solid ${colors.textSecondary}`,
+                borderRadius: 4, color: colors.textSecondary, cursor: 'pointer',
+              }}
+            >
+              {t('phasemap:phaseCheck.undoButton')}
+            </button>
+          )}
+          <span style={{ fontSize: '8pt', color: colors.textSecondary }}>
+            {t('phasemap:phaseCheck.hint')}
           </span>
         </div>
       </GroupBox>

@@ -580,5 +580,20 @@
     "label": "Phase:",
     "all": "All phases",
     "tip": "Show only the selected phase as an IPF map; all other phases become transparent. Each phase has its own color key (fundamental sector), so mixed IPF maps with identical RGB codes are ambiguous — the community standard is one IPF map per phase. The on-canvas color key follows this selection. Display/export only; the data is untouched."
+  },
+  "phaseCheck": {
+    "title": "Phase Verification (render)",
+    "checkButton": "Check phases",
+    "checkTip": "Read-only check: per grain, render the STORED phase at its stored orientation and every other phase at a Hough-anchored orientation, and compare against the measured pattern (render-NCC). Internal indexing scores are not comparable across phases — the forward render is. Adds a 'Phase Check' layer: green = stored phase wins, red = another phase renders clearly better, transparent = healthy.",
+    "checkDone": "Checked {{grains}} grains: {{suspect}} suspect, {{reassign}} recommended for reassignment.",
+    "running": "Working…",
+    "reassignButton": "Reassign {{n}} grains",
+    "reassignTip": "Apply the check's recommendations: whole grains flip to the phase that renders clearly better (margin ≥ 0.05); every pixel gets its own Hough orientation from the winning phase. Grains are never split; ambiguous grains are left untouched. One-level undo.",
+    "reassignDone": "Reassigned {{grains}} grains ({{pixels}} px).",
+    "unifyHint": "Reassigned phase(s) {{phases}} are pseudo-symmetric — run 'Unify variants' next.",
+    "undoButton": "Undo",
+    "undoTip": "Restore the phase ids and orientations changed by the last reassignment.",
+    "undoDone": "Restored {{n}} pixels.",
+    "hint": "Finds grains stored as the wrong phase (chemically degenerate phases). Render-verified, whole grains only, undo available."
   }
 }

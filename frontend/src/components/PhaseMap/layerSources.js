@@ -52,6 +52,12 @@ export const LAYER_SOURCES = {
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresCompute: true },
       { id: 'pattern-residual', label: 'Pattern Residual', kind: 'pattern_residual',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresCompute: true },
+      // Render-verified phase check (Stage A): per-grain margin of the
+      // stored phase vs the best alternative phase. Computed by the
+      // "Check phases" button (POST /api/indexing/phase-check); 404s until
+      // then (per-layer failure isolation shows the error chip).
+      { id: 'phase-margin',     label: 'Phase Check',      kind: 'phase_margin',
+        defaultBlend: 'normal', defaultOpacity: 0.85 },
     ],
   },
   refinement: {

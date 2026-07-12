@@ -2838,6 +2838,371 @@ async def undo_grain_flip(req: GrainUndoRequest):
     return {"n_restored": int(idxs.size)}
 
 
+# ---------------------------------------------------------------------------
+# Render-verified phase check + reassignment (Stage A / Stage B).
+# Core algorithm in backend/spherical_gpu/pipeline/phase_reassignment.py;
+# these routes only wire the result's patterns / SHTs / CIFs into it.
+# ---------------------------------------------------------------------------
+
+def _hough_quats_for_phase_batch(patterns, cif_path, det_params):
+    """Batch Hough: (N, H, W) patterns + one phase's CIF → (N, 4) quaternions.
+
+    Rows where Hough fails its own quality gate (fit > 3° or nmatch < 4 —
+    the same rule the pipeline uses for the z_rot==2 fallback) come back as
+    NaN. Returns an all-NaN array on a hard failure (fail-soft: the caller
+    keeps the stored phase). One `hough_indexing` call for the whole stack —
+    per-pattern calls would pay the indexer setup N times.
+    """
+    import numpy as _np
+    N = int(_np.asarray(patterns).shape[0])
+    out = _np.full((N, 4), _np.nan, dtype=_np.float64)
+    try:
+        from orix.crystal_map import Phase, PhaseList
+        from ebsd_utils import sanitize_cif, prepare_reflectors, create_indexer
+        from kikuchipy.detectors import EBSDDetector
+        from kikuchipy.signals import EBSD
+        phase = Phase.from_cif(sanitize_cif(str(cif_path)))
+        try:
+            phase.name = Path(cif_path).stem
+        except Exception:
+            pass
+        pl = PhaseList(phase)
+        H = int(det_params["pat_height"]); W = int(det_params["pat_width"])
+        det = EBSDDetector(
+            shape=(H, W),
+            sample_tilt=float(det_params.get("sample_tilt", 70.0)),
+            tilt=float(det_params.get("tilt", 0.0)),
+            pc=(float(det_params["pc_x"]), float(det_params["pc_y"]), float(det_params["pc_z"])),
+            convention="bruker",
+            binning=int(det_params.get("binning", 1)),
+        )
+        refl = prepare_reflectors(pl)
+        indexer = create_indexer(det, pl, refl, nBands=12)
+        sig = EBSD(_np.ascontiguousarray(
+            _np.asarray(patterns, dtype=_np.float32))[:, None], detector=det)
+        xm, _idx, _bands = sig.hough_indexing(
+            pl, indexer, return_index_data=True, return_band_data=True, verbose=0)
+        quats = _np.asarray(xm.rotations.data, dtype=_np.float64).reshape(-1, 4)
+        fit = _np.asarray(xm.prop.get("fit", _np.zeros(N)), dtype=_np.float64).reshape(-1)
+        nmatch = _np.asarray(xm.prop.get("nmatch", _np.full(N, 99)),
+                             dtype=_np.float64).reshape(-1)
+        ok = (fit <= 3.0) & (nmatch >= 4)
+        m = min(quats.shape[0], N)
+        out[:m][ok[:m]] = quats[:m][ok[:m]]
+    except Exception as e:  # noqa: BLE001 — fail-soft, caller keeps stored phase
+        logger.warning("batch hough for phase failed (%s): %s", cif_path, e)
+    return out
+
+
+def _phase_check_ctx(result):
+    """Shared setup for the phase-check / reassign routes: full-grid arrays,
+    per-phase point groups, render scorers, and the Hough candidate fn.
+    Raises HTTPException on missing metadata."""
+    md = getattr(result, "metadata", None) or {}
+    if md.get("indexing_method") != "spherical":
+        raise HTTPException(status_code=400,
+                            detail="Phase check is only available for spherical results")
+    sht_map = md.get("sht_paths_by_phase") or {}
+    det = md.get("detector_geometry")
+    if not sht_map or not det:
+        raise HTTPException(status_code=400,
+                            detail="Result missing SHT/detector metadata; re-run indexing")
+
+    from backend.spherical_gpu.pipeline.variant_unification import build_render_score_fn
+    from tools.pattern_comparison import get_experimental_pattern
+    from indexing_controller import _resolve_cif_for_sht
+    from orix.quaternion import Rotation as _R
+
+    xmap = result.xmap
+    n_rows, n_cols = result.original_shape
+    n_xmap = xmap.rotations.size
+    qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
+    pid = np.asarray(xmap.phase_id).reshape(-1)
+    if n_xmap == n_rows * n_cols:
+        flat_of_row = np.arange(n_xmap)
+    else:
+        flat_of_row = np.flatnonzero(
+            np.asarray(result.selection_mask, dtype=bool).ravel())
+        if flat_of_row.size != n_xmap:
+            raise HTTPException(status_code=409,
+                                detail="Selection mask does not match the result size")
+    full_q = np.full((n_rows * n_cols, 4), np.nan)
+    full_q[flat_of_row] = qdata
+    phase_full = np.full(n_rows * n_cols, -1, dtype=np.int64)
+    phase_full[flat_of_row] = pid
+
+    phases: dict[int, str] = {}
+    for p in sorted({int(x) for x in np.unique(pid)}):
+        try:
+            phases[p] = xmap.phases[p].point_group.name
+        except Exception:
+            continue
+
+    def _get_pattern(flat):
+        r, c = divmod(int(flat), n_cols)
+        p = get_experimental_pattern(result, r, c)
+        return None if p is None else np.asarray(p, dtype=np.float32)
+
+    score_fns: dict[int, object] = {}
+    cifs: dict[int, str] = {}
+    for p in phases:
+        sht = sht_map.get(p) or sht_map.get(str(p))
+        if not sht:
+            continue
+        try:
+            score_fns[p] = build_render_score_fn(str(sht), det, _get_pattern)
+        except Exception:
+            logger.warning("[phase-check] scorer for phase %s failed", p,
+                           exc_info=True)
+            continue
+        try:
+            cif = _resolve_cif_for_sht(str(sht))
+        except Exception:
+            cif = ""
+        if cif:
+            cifs[p] = cif
+
+    def _hough_quats_fn(cand_pid, flats):
+        """(n,4) quats for candidate phase at the given flat pixels; NaN rows
+        where the pattern is missing or Hough fails. Candidates without a CIF
+        raise so check_map skips them cleanly."""
+        cif = cifs.get(int(cand_pid))
+        if not cif:
+            raise RuntimeError(f"no CIF for phase {cand_pid}")
+        flats = np.asarray(flats, dtype=np.int64).reshape(-1)
+        pats, have = [], []
+        for i, f in enumerate(flats):
+            p = _get_pattern(int(f))
+            if p is not None:
+                pats.append(p); have.append(i)
+        out = np.full((flats.size, 4), np.nan, dtype=np.float64)
+        if pats:
+            got = _hough_quats_for_phase_batch(np.stack(pats), cif, det)
+            out[np.asarray(have, dtype=np.int64)] = got
+        return out
+
+    return {
+        "md": md, "xmap": xmap, "n_rows": n_rows, "n_cols": n_cols,
+        "flat_of_row": flat_of_row, "full_q": full_q, "phase_full": phase_full,
+        "qdata": qdata, "pid": pid, "phases": phases,
+        "score_fns": score_fns, "hough_quats_fn": _hough_quats_fn,
+        "Rotation": _R,
+    }
+
+
+def _phase_name_of(xmap, pid: int) -> str:
+    try:
+        return str(xmap.phases[int(pid)].name)
+    except Exception:
+        return f"phase {pid}"
+
+
+class PhaseCheckRequest(BaseModel):
+    result_id: str | None = None
+    score_floor: float = 0.25
+    margin_clear: float = 0.05
+    sample_px_max: int = 16
+
+
+@router.post("/phase-check")
+async def phase_check(req: PhaseCheckRequest):
+    """Stage A — render-verified phase check (read-only).
+
+    Per grain: render-NCC of the STORED phase at its stored orientations vs
+    every candidate phase at a Hough-anchored orientation (never a per-phase
+    spherical re-index — that underestimates z_rot==2 phases). Stores a
+    per-grain report + per-pixel margin map in result.metadata["phase_check"]
+    (drives the 'Phase Check' diagnostic layer) and returns a summary."""
+    result = _get_result(req.result_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="No indexing result available")
+    ctx = _phase_check_ctx(result)
+    from backend.spherical_gpu.pipeline.phase_reassignment import check_map
+
+    def _work():
+        return check_map(
+            ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
+            ctx["phases"], ctx["score_fns"], ctx["hough_quats_fn"],
+            sample_px_max=int(req.sample_px_max),
+            score_floor=float(req.score_floor),
+            margin_clear=float(req.margin_clear),
+        )
+
+    _free_interactive_gpu_caches()
+    report, margin_full = await asyncio.to_thread(_work)
+
+    ctx["md"]["phase_check"] = {"report": report, "margin_map": margin_full}
+    xmap = ctx["xmap"]
+    suspects = [
+        {
+            "phase_id": int(e["phase_id"]),
+            "phase_name": _phase_name_of(xmap, e["phase_id"]),
+            "pixels": int(e["pixels"]),
+            "centroid": e["centroid"],
+            "stored_score": e.get("stored_score"),
+            "best_alt_phase": e.get("best_alt_phase"),
+            "best_alt_name": (_phase_name_of(xmap, e["best_alt_phase"])
+                              if e.get("best_alt_phase") is not None else None),
+            "best_alt_score": e.get("best_alt_score"),
+            "margin": e.get("margin"),
+            "decision": e.get("decision"),
+        }
+        for e in report["grains"] if e.get("decision") in ("reassign", "keep")
+        and e.get("best_alt_phase") is not None
+    ][:50]
+    return {
+        "n_grains": report["n_grains"],
+        "n_checked": report["n_checked"],
+        "n_suspect": report["n_suspect"],
+        "n_reassign": report["n_reassign"],
+        "suspects": suspects,
+    }
+
+
+class PhaseReassignRequest(BaseModel):
+    result_id: str | None = None
+
+
+@router.post("/phase-reassign")
+async def phase_reassign(req: PhaseReassignRequest):
+    """Stage B — apply the 'reassign' decisions of the last phase check:
+    whole grains flip to the phase that renders clearly better (margin
+    hysteresis was enforced at check time); each pixel gets its own Hough
+    orientation from the winning phase. One-level undo via
+    /phase-reassign/undo."""
+    result = _get_result(req.result_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="No indexing result available")
+    md = getattr(result, "metadata", None) or {}
+    pc = md.get("phase_check")
+    if not pc or not isinstance(pc.get("report"), dict):
+        raise HTTPException(status_code=400,
+                            detail="Run the phase check first")
+    ctx = _phase_check_ctx(result)
+    from backend.spherical_gpu.pipeline.phase_reassignment import apply_reassignment
+    report = pc["report"]
+
+    def _work():
+        return apply_reassignment(
+            ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
+            report, ctx["phases"], ctx["hough_quats_fn"],
+        )
+
+    _free_interactive_gpu_caches()
+    new_pf, new_q, applied, skipped = await asyncio.to_thread(_work)
+
+    n = ctx["n_rows"] * ctx["n_cols"]
+    changed_flat = np.flatnonzero(
+        (new_pf != ctx["phase_full"])
+        | ~np.all(np.isclose(np.nan_to_num(new_q, nan=-9.0),
+                             np.nan_to_num(ctx["full_q"], nan=-9.0),
+                             atol=1e-12), axis=1)
+    )
+    n_changed = int(changed_flat.size)
+    unify_hint: list[str] = []
+    xmap = ctx["xmap"]
+    if n_changed:
+        inv = np.full(n, -1, dtype=np.int64)
+        inv[ctx["flat_of_row"]] = np.arange(ctx["flat_of_row"].size)
+        xidx = inv[changed_flat]
+        if (xidx < 0).any():
+            raise HTTPException(status_code=409,
+                                detail="Reassigned pixels fall outside the result")
+        old_pid = np.asarray(xmap.phase_id).reshape(-1).copy()
+        old_q = ctx["qdata"]
+        md["phase_reassign_undo"] = {
+            "xmap_indices": [int(i) for i in xidx],
+            "old_quats": [[float(v) for v in old_q[i]] for i in xidx],
+            "old_phase_ids": [int(old_pid[i]) for i in xidx],
+        }
+        new_rows_q = old_q.copy()
+        new_rows_q[xidx] = new_q[changed_flat]
+        new_rows_pid = old_pid.copy()
+        new_rows_pid[xidx] = new_pf[changed_flat]
+        _R = ctx["Rotation"]
+        xmap._rotations = _R(new_rows_q)
+        try:
+            xmap.phase_id = new_rows_pid
+        except Exception:
+            xmap._phase_id[...] = new_rows_pid
+        # The margin layer answered its question for these pixels — blank
+        # them so a stale "reassign me" red doesn't linger after the fix.
+        mm = pc.get("margin_map")
+        if mm is not None:
+            np.asarray(mm)[changed_flat] = np.nan
+        for a in applied:
+            for e in report.get("grains", []):
+                if (e.get("grain_id") == a.get("grain_id")
+                        and e.get("phase_id") == a.get("phase_id")):
+                    e["decision"] = "applied"
+        # If a receiving phase is itself pseudo-symmetric (≥2 variant
+        # classes), its fresh Hough orientations are variant-blind — advise
+        # a unify pass.
+        try:
+            from backend.spherical_gpu.pipeline.variant_unification import (
+                class_reps_for_phase,
+            )
+            for tpid in sorted({int(a["best_alt_phase"]) for a in applied}):
+                pg = ctx["phases"].get(tpid)
+                if pg and class_reps_for_phase(pg).shape[0] >= 2:
+                    unify_hint.append(_phase_name_of(xmap, tpid))
+        except Exception:
+            pass
+
+    return {
+        "n_grains_applied": len(applied),
+        "n_grains_skipped": len(skipped),
+        "n_pixels_changed": n_changed,
+        "applied": [
+            {"phase_from": _phase_name_of(xmap, a["phase_id"]),
+             "phase_to": _phase_name_of(xmap, a["best_alt_phase"]),
+             "pixels": int(a["pixels"]), "centroid": a["centroid"],
+             "margin": a.get("margin")}
+            for a in applied[:50]
+        ],
+        "skipped": [
+            {"centroid": s.get("centroid"), "reason": s.get("skip_reason")}
+            for s in skipped[:20]
+        ],
+        "unify_recommended": unify_hint,
+        "undo_available": n_changed > 0,
+    }
+
+
+@router.post("/phase-reassign/undo")
+async def phase_reassign_undo(req: PhaseReassignRequest):
+    """Restore phase ids + orientations changed by the LAST reassignment."""
+    result = _get_result(req.result_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="No indexing result available")
+    md = getattr(result, "metadata", None)
+    undo = (md or {}).get("phase_reassign_undo") if isinstance(md, dict) else None
+    if not undo or not undo.get("xmap_indices"):
+        raise HTTPException(status_code=400, detail="Nothing to undo")
+    from orix.quaternion import Rotation as _R
+    xmap = result.xmap
+    qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
+    pdata = np.asarray(xmap.phase_id).reshape(-1).copy()
+    idxs = np.asarray(undo["xmap_indices"], dtype=np.int64)
+    olds = np.asarray(undo["old_quats"], dtype=np.float64).reshape(-1, 4)
+    oldp = np.asarray(undo["old_phase_ids"], dtype=np.int64)
+    if (idxs.size != olds.shape[0] or idxs.size != oldp.size or idxs.size == 0
+            or idxs.max() >= qdata.shape[0]):
+        raise HTTPException(status_code=409,
+                            detail="Undo data no longer matches the result")
+    qdata[idxs] = olds
+    pdata[idxs] = oldp
+    xmap._rotations = _R(qdata)
+    try:
+        xmap.phase_id = pdata
+    except Exception:
+        xmap._phase_id[...] = pdata
+    md.pop("phase_reassign_undo", None)
+    # The check ran against the pre-undo map — force a fresh one.
+    md.pop("phase_check", None)
+    return {"n_restored": int(idxs.size)}
+
+
 # Cache of (sht_paths tuple, bandwidth) -> SphericalGPUBackend. First call
 # pays the ~6s wigner-d / SHT setup; subsequent per-pixel re-index calls
 # are ~30-50 ms per phase. Keyed by the SORTED tuple so phase ordering

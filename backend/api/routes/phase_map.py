@@ -1161,6 +1161,30 @@ def _compute_layer_rgba(
         n_rows, n_cols = result.original_shape
         return _ref_rgba(kind, n_rows, n_cols)
 
+    # Render-verified phase check (Stage A) — per-grain margin of the stored
+    # phase vs the best alternative (stored − best alt). Positive/green =
+    # stored phase wins, negative/red = another phase renders clearly better,
+    # transparent = healthy grain (never questioned) or unindexed. Data comes
+    # from POST /api/indexing/phase-check.
+    if kind == "phase_margin":
+        result = get_last_indexing_result()
+        if result is None:
+            raise HTTPException(status_code=404, detail={"error": "no active indexing result"})
+        pc = (getattr(result, "metadata", None) or {}).get("phase_check")
+        if not pc or pc.get("margin_map") is None:
+            raise HTTPException(status_code=404,
+                                detail={"error": "phase check not yet computed"})
+        import matplotlib
+        n_rows, n_cols = result.original_shape
+        arr = np.asarray(pc["margin_map"], dtype=np.float64).reshape(n_rows, n_cols)
+        finite = arr[np.isfinite(arr)]
+        vmax = max(0.15, float(np.percentile(np.abs(finite), 99))) if finite.size else 0.15
+        cmap = matplotlib.colormaps["RdYlGn"]
+        norm = np.clip((arr + vmax) / (2 * vmax), 0.0, 1.0)
+        rgba = (cmap(norm) * 255).astype(np.uint8)
+        rgba[..., 3] = np.where(np.isfinite(arr), 255, 0).astype(np.uint8)
+        return rgba
+
     valid_kinds = {"phase", "ipf-x", "ipf-y", "ipf-z", "bc", "ci", "uncertainty", "ci-threshold"}
     if kind not in valid_kinds and not kind.startswith("ci_"):
         raise HTTPException(
