@@ -1,10 +1,13 @@
 /**
  * Phase Map Viewer — React port of gui/phase_map_gui.py (PhaseMapPage).
  *
- * Layout: ResizableSplitter
- *   Left:  Results Gallery list + canvas image area
- *   Right: Settings sidebar (260-320 px) — Data Source, Scalebar, Display,
- *          Confidence Overlay, Spatial Calibration, action buttons
+ * Layout (UX restore 2026-07-13): ResizableSplitter with fixedSide="right" —
+ * the MAP is the flex column, the sidebar a real sidebar (280-460 px).
+ *   Left:  results tab strip + tool toolbar + canvas (dominant) + IPF-key panel
+ *   Right: Layer stack, Advanced-tools accordion (diagnostics / refinement /
+ *          pseudo-symmetry / phase verification), legend, cleanup, export.
+ * File loading lives in the results strip ("Add file…" — .ang/.ctf/.h5/.npy);
+ * the old separate Data Source box was redundant and removed.
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -681,44 +684,6 @@ function directionFromMode(modeId) {
 // ---------------------------------------------------------------------------
 // Gallery item row
 // ---------------------------------------------------------------------------
-function GalleryItem({ entry, selected, onClick }) {
-  const { t } = useTranslation('phasemap');
-  const [hovered, setHovered] = useState(false);
-  return (
-    <div
-      role="option"
-      aria-selected={selected}
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick?.(); } }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      title={t('phasemap:hoverTips.galleryEntry')}
-      style={{
-        padding: '4px 8px',
-        fontSize: '9pt',
-        cursor: 'pointer',
-        background: selected
-          ? colors.sidebarActive
-          : hovered ? colors.bgTertiary : 'transparent',
-        color: selected ? colors.accent : colors.text,
-        borderLeft: selected ? `3px solid ${colors.accent}` : '3px solid transparent',
-        userSelect: 'none',
-        transition: 'background 0.1s, border-left-color 0.15s',
-      }}
-    >
-      {entry.label || entry.name || t('phasemap:gallery.resultFallback', { id: entry.id })}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Tier-2 helper components
-// ---------------------------------------------------------------------------
-// CanvasInteractionLayer wraps the LayeredCanvas (or TileGrid in grid view)
-// with pointer handlers that drive the CursorSyncContext, plus ROI / linescan
-// overlays and the optional magnifier lens. All tool state is owned by the
-// parent — this leaf does pure event-routing + visual overlays.
 function CanvasInteractionLayer({
   view, layers, bitmaps, errors, shape, tileMinWidth,
   bitmapVersion, scalebar, title, stepX, ipfKeyImage, showIpfKey, hoverPixel,
@@ -1130,12 +1095,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [infoText, setInfoText] = useState(t('phasemap:info.noPhaseMapLoaded'));
 
   // Data source
-  const [crystalMapPath, setCrystalMapPath] = useState('');
-  const [phaseArrayPath, setPhaseArrayPath] = useState('');
-  const [loadingCrystal, setLoadingCrystal] = useState(false);
-  const [loadingPhase, setLoadingPhase] = useState(false);
-  const [dataMsg, setDataMsg] = useState(null);
-  const [dataMsgErr, setDataMsgErr] = useState(false);
+  // Data Source box removed 2026-07-13 (user-verified redundant): the
+  // gallery's "Add file…" calls the SAME analysisApi.load for .ang/.ctf/.npy
+  // and the richer /api/indexing/import-h5 for .h5 — plus it creates a
+  // gallery entry. The .npy filter moved into the Add-file dialog.
 
   // Scalebar settings
   const [showScalebar, setShowScalebar] = useState(true);
@@ -1756,10 +1719,6 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           const msg = err.response?.data?.detail || err.message || 'Handoff load failed';
           setInfoText(t('phasemap:info.batchHandoffFailed', { msg }));
           setMapError(msg);
-          // Surface in the Data Source box too — user can then fix the path
-          // in the input and click Load without retyping.
-          setDataMsg(t('phasemap:data.batchHandoffFailedHint', { msg }));
-          setDataMsgErr(true);
           console.warn('[PhaseMap] batch handoff load failed:', err);
         });
     });
@@ -1926,145 +1885,6 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive, handleRefreshPreview, gallery.length, selectedGalleryIdx]);
-
-  const handleLoadCrystalMap = async () => {
-    if (!crystalMapPath.trim()) return;
-    setLoadingCrystal(true);
-    setDataMsg(null);
-    try {
-      await analysisApi.load(crystalMapPath.trim());
-      setDataMsg(t('phasemap:data.crystalMapLoaded'));
-      setDataMsgErr(false);
-      setSendToAnalysisEnabled(true);
-      await handleRefreshPreview();
-    } catch (err) {
-      setDataMsg(err.response?.data?.detail || err.message || t('phasemap:data.crystalMapLoadFailed'));
-      setDataMsgErr(true);
-    } finally {
-      setLoadingCrystal(false);
-    }
-  };
-
-  const handleImportArray = async () => {
-    if (!phaseArrayPath.trim()) return;
-    setLoadingPhase(true);
-    setDataMsg(null);
-    try {
-      await analysisApi.load(phaseArrayPath.trim());
-      setDataMsg(t('phasemap:data.phaseArrayImported'));
-      setDataMsgErr(false);
-      await handleRefreshPreview();
-    } catch (err) {
-      setDataMsg(err.response?.data?.detail || err.message || t('phasemap:data.phaseArrayImportFailed'));
-      setDataMsgErr(true);
-    } finally {
-      setLoadingPhase(false);
-    }
-  };
-
-  const handleBrowseCrystalMap = async () => {
-    let p = null;
-    if (window.electronAPI?.openFile) {
-      p = await window.electronAPI.openFile({
-        filters: [{ name: 'CrystalMap', extensions: ['ang', 'ctf', 'h5', 'hdf5'] }],
-      });
-    } else {
-      askPrompt({
-        title: t('phasemap:data.loadCrystalMapTitle'),
-        message: t('phasemap:data.loadCrystalMapMessage'),
-        defaultValue: crystalMapPath,
-        placeholder: '/path/to/map.ang',
-        submitLabel: t('common:load'),
-        onSubmit: async (val) => {
-          if (!val.trim()) return;
-          setCrystalMapPath(val.trim());
-          setLoadingCrystal(true);
-          setDataMsg(null);
-          try {
-            await analysisApi.load(val.trim());
-            setDataMsg(t('phasemap:data.crystalMapLoaded'));
-            setDataMsgErr(false);
-            setSendToAnalysisEnabled(true);
-            await handleRefreshPreview();
-          } catch (err) {
-            setDataMsg(err.response?.data?.detail || err.message || t('phasemap:data.crystalMapLoadFailed'));
-            setDataMsgErr(true);
-          } finally { setLoadingCrystal(false); }
-        },
-      });
-      return;
-    }
-    if (p && p.trim()) {
-      setCrystalMapPath(p.trim());
-      // Auto-load immediately after browse
-      setLoadingCrystal(true);
-      setDataMsg(null);
-      try {
-        await analysisApi.load(p.trim());
-        setDataMsg(t('phasemap:data.crystalMapLoaded'));
-        setDataMsgErr(false);
-        setSendToAnalysisEnabled(true);
-        await handleRefreshPreview();
-      } catch (err) {
-        setDataMsg(err.response?.data?.detail || err.message || t('phasemap:data.crystalMapLoadFailed'));
-        setDataMsgErr(true);
-      } finally {
-        setLoadingCrystal(false);
-      }
-    }
-  };
-
-  const handleBrowsePhaseArray = async () => {
-    let p = null;
-    if (window.electronAPI?.openFile) {
-      p = await window.electronAPI.openFile({
-        filters: [{ name: 'Numpy Array', extensions: ['npy'] }],
-      });
-    } else {
-      askPrompt({
-        title: t('phasemap:data.importPhaseArrayTitle'),
-        message: t('phasemap:data.importPhaseArrayMessage'),
-        defaultValue: phaseArrayPath,
-        placeholder: '/path/to/phases.npy',
-        submitLabel: t('common:import'),
-        onSubmit: async (val) => {
-          if (!val.trim()) return;
-          setPhaseArrayPath(val.trim());
-          setLoadingPhase(true);
-          setDataMsg(null);
-          try {
-            await analysisApi.load(val.trim());
-            setDataMsg(t('phasemap:data.phaseArrayImported'));
-            setDataMsgErr(false);
-            await handleRefreshPreview();
-          } catch (err) {
-            setDataMsg(err.response?.data?.detail || err.message || t('phasemap:data.phaseArrayImportFailed'));
-            setDataMsgErr(true);
-          } finally {
-            setLoadingPhase(false);
-          }
-        },
-      });
-      return;
-    }
-    if (p && p.trim()) {
-      setPhaseArrayPath(p.trim());
-      // Auto-load immediately after browse
-      setLoadingPhase(true);
-      setDataMsg(null);
-      try {
-        await analysisApi.load(p.trim());
-        setDataMsg(t('phasemap:data.phaseArrayImported'));
-        setDataMsgErr(false);
-        await handleRefreshPreview();
-      } catch (err) {
-        setDataMsg(err.response?.data?.detail || err.message || t('phasemap:data.phaseArrayImportFailed'));
-        setDataMsgErr(true);
-      } finally {
-        setLoadingPhase(false);
-      }
-    }
-  };
 
   // Build the exact view-params object both /render and /export consume.
   // Centralised so we never ship a preview that disagrees with the saved file.
@@ -2356,6 +2176,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       path = await window.electronAPI.openFile({
         filters: [
           { name: 'CrystalMap (MTEX / GUI export)', extensions: ['ang', 'ctf', 'h5', 'hdf5'] },
+          // .npy phase arrays used to have their own "Data Source" box; that
+          // box was redundant (same analysisApi.load call) and was removed —
+          // this filter is the surviving entry point.
+          { name: 'Phase Array (NumPy)',             extensions: ['npy']                      },
           { name: 'All Files',                       extensions: ['*']                        },
         ],
       });
@@ -2486,69 +2310,69 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     }}>
 
       {/* Results Gallery */}
-      <GroupBox title={t('phasemap:gallery.title')} style={{ flexShrink: 0 }}>
-        {/* Phase B: Original/Refined view toggle. Only shown when a refined
-            result has been computed for the active indexing result. Kept
-            inline (not a refactor of the gallery layout) per v1 scope. */}
-        {refinementInfo && (
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            marginBottom: 6, fontSize: '9pt',
-          }}>
-            <span style={{ color: colors.textSecondary }}>{t('phasemap:gallery.view')}</span>
-            <Button
-              small
-              variant={resultView === 'original' ? 'primary' : 'default'}
-              onClick={() => setResultView('original')}
-              disabled={resultView === 'original'}
-              title={t('phasemap:gallery.originalTooltip')}
-            >
-              {t('phasemap:gallery.original')}
-            </Button>
-            <Button
-              small
-              variant={resultView === 'refined' ? 'primary' : 'default'}
-              onClick={() => setResultView('refined')}
-              disabled={resultView === 'refined'}
-              title={t('phasemap:gallery.refinedTooltip')}
-            >
-              {t('phasemap:gallery.refined')}
-            </Button>
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: spacing.innerSpacing }}>
-          {/* Gallery list */}
-          <div className="thin-scrollbar"
-            role="listbox"
-            aria-label={t('phasemap:gallery.listAria')}
-            style={{
-              flex: 1,
-              background: colors.bgSecondary,
-              border: `1px solid ${colors.border}`,
-              borderRadius: 4,
-              // Enough for 5–6 entries before scrolling — fits the typical
-              // batch comparison flow (one reference + several runs).
-              maxHeight: 190,
-              overflowY: 'auto',
-              fontSize: '9pt',
-            }}>
-            {gallery.length === 0 ? (
-              <div style={{ padding: '12px 8px', color: colors.textSecondary, fontSize: '9pt', textAlign: 'center' }}>
-                <span style={{ opacity: 0.3, marginRight: 4 }}>{'\u25A2'}</span>
-                {t('phasemap:gallery.empty')}
-              </div>
-            ) : gallery.map((entry, i) => (
-              <GalleryItem
+      {/* Results strip (2026-07-13): the old Results Gallery GroupBox was a
+          ~250 px tall box competing with the map for vertical space. Now one
+          slim row: result TABS (click to activate — the familiar view-tabs
+          pattern) + compact management buttons, with the phase-colour
+          swatches on a second row. Same handlers, same functionality. */}
+      <div style={{
+        flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 4,
+        padding: '6px 8px', background: colors.bgSecondary,
+        border: `1px solid ${colors.border}`, borderRadius: 4,
+      }}>
+        <div role="tablist" aria-label={t('phasemap:gallery.listAria')}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+        >
+          <span style={{ fontSize: '8.5pt', color: colors.textSecondary, fontWeight: 600 }}>
+            {t('phasemap:gallery.title')}:
+          </span>
+          {gallery.length === 0 ? (
+            <span style={{ fontSize: '8.5pt', color: colors.textSecondary, opacity: 0.7 }}>
+              {t('phasemap:gallery.empty')}
+            </span>
+          ) : gallery.map((entry, i) => {
+            const selected = i === selectedGalleryIdx;
+            return (
+              <button
                 key={entry.id}
-                entry={entry}
-                selected={i === selectedGalleryIdx}
+                role="tab"
+                aria-selected={selected}
                 onClick={() => handleGallerySelect(i)}
-              />
-            ))}
-          </div>
-
-          {/* Gallery buttons */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                title={entry.label}
+                style={{
+                  background: selected ? colors.purple : 'transparent',
+                  color: selected ? colors.bg : colors.text,
+                  border: `1px solid ${selected ? colors.purple : colors.border}`,
+                  borderRadius: 3, padding: '2px 10px', fontSize: '8.5pt',
+                  fontWeight: selected ? 700 : 500, cursor: 'pointer',
+                  maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {entry.label}
+              </button>
+            );
+          })}
+          {/* Phase B: Original/Refined view toggle — only when a refined
+              result exists for the active indexing result. */}
+          {refinementInfo && (
+            <>
+              <span style={{ color: colors.textSecondary, fontSize: '8.5pt', marginLeft: 6 }}>
+                {t('phasemap:gallery.view')}
+              </span>
+              <Button small variant={resultView === 'original' ? 'primary' : 'default'}
+                onClick={() => setResultView('original')} disabled={resultView === 'original'}
+                title={t('phasemap:gallery.originalTooltip')}>
+                {t('phasemap:gallery.original')}
+              </Button>
+              <Button small variant={resultView === 'refined' ? 'primary' : 'default'}
+                onClick={() => setResultView('refined')} disabled={resultView === 'refined'}
+                title={t('phasemap:gallery.refinedTooltip')}>
+                {t('phasemap:gallery.refined')}
+              </Button>
+            </>
+          )}
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 3, flexWrap: 'wrap' }}>
             <Button small onClick={handleGalleryRename} disabled={selectedGalleryIdx < 0}
               title={t('phasemap:gallery.renameTooltip')}>
               {t('phasemap:gallery.rename')}
@@ -2595,14 +2419,17 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             .filter((p) => !isUnindexedPhase(p.name));
           if (selectedGalleryIdx < 0 || realPhases.length === 0) return null;
           return (
-            <div style={{ marginTop: 6, padding: '5px 8px', background: colors.bg, borderRadius: 4, border: `1px solid ${colors.border}` }}>
+            <div style={{ padding: '3px 8px', background: colors.bg, borderRadius: 4, border: `1px solid ${colors.border}` }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 3 }}>
                 <div style={{ fontSize: '8pt', fontWeight: 600, color: colors.cyan || '#89ddff' }}>{t('phasemap:phases.heading')}</div>
                 <div style={{ fontSize: '7pt', color: colors.textSecondary }}>
                   {t('phasemap:phases.swatchHint')}
                 </div>
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px' }}>
+              {/* Cap the swatch rows — a many-phase result must not push the
+                  map down (the strip stays ~2 rows, then scrolls). */}
+              <div className="thin-scrollbar"
+                style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 12px', maxHeight: 46, overflowY: 'auto' }}>
                 {realPhases.map((p) => {
                   const currentColor = colorForPhaseName(p.name, phaseColorOverrides);
                   const hasOverride = !!phaseColorOverrides[p.name];
@@ -2643,7 +2470,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             </div>
           );
         })()}
-      </GroupBox>
+      </div>
 
       {/* Tier-2 Tool Toolbar \u2014 sits directly above the canvas area. */}
       <ToolToolbar
@@ -2655,6 +2482,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         swipe={swipe} setSwipe={onSwipeChange}
         layers={layerStack.layers}
         cleanView={cleanView} setCleanView={setCleanView}
+        onViewMatches={() => { setMatchesInitialPixel(null); setShowMatchesDialog(true); }}
       />
 
       {/* Canvas area */}
@@ -2890,78 +2718,6 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   );
   const rightPanel = (
     <ScrollPanel style={{ padding: spacing.outerMargin }}>
-      {/* Data Source */}
-      <GroupBox title={t('phasemap:dataSource.title')}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.innerSpacing }}>
-          <div>
-            <Label small secondary style={{ display: 'block', marginBottom: 2 }}>
-              {t('phasemap:dataSource.loadCrystalMapLabel')}
-            </Label>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <input
-                type="text"
-                value={crystalMapPath}
-                onChange={(e) => setCrystalMapPath(e.target.value)}
-                placeholder={t('phasemap:dataSource.crystalMapPlaceholder')}
-                title={t('phasemap:hoverTips.crystalMapPath')}
-                style={{ ...inputStyle }}
-              />
-              <Button
-                small variant="default" onClick={handleBrowseCrystalMap}
-                style={{
-                  border: `1px solid ${colors.accent}`,
-                  color: colors.accent,
-                  background: 'transparent',
-                }}
-                title={t('phasemap:dataSource.browseCrystalMapTooltip')}
-              >{t('common:browse')}</Button>
-              <Button small variant="primary" onClick={handleLoadCrystalMap} disabled={loadingCrystal || !crystalMapPath.trim()}>
-                {loadingCrystal ? t('phasemap:dataSource.loading') : t('common:load')}
-              </Button>
-            </div>
-          </div>
-          <div>
-            <Label small secondary style={{ display: 'block', marginBottom: 2 }}>
-              {t('phasemap:dataSource.importPhaseArrayLabel')}
-            </Label>
-            <div style={{ display: 'flex', gap: 4 }}>
-              <input
-                type="text"
-                value={phaseArrayPath}
-                onChange={(e) => setPhaseArrayPath(e.target.value)}
-                placeholder={t('phasemap:dataSource.phaseArrayPlaceholder')}
-                title={t('phasemap:hoverTips.phaseArrayPath')}
-                style={{ ...inputStyle }}
-              />
-              <Button
-                small variant="default" onClick={handleBrowsePhaseArray}
-                style={{
-                  border: `1px solid ${colors.accent}`,
-                  color: colors.accent,
-                  background: 'transparent',
-                }}
-                title={t('phasemap:dataSource.browsePhaseArrayTooltip')}
-              >{t('common:browse')}</Button>
-              <Button small variant="primary" onClick={handleImportArray} disabled={loadingPhase || !phaseArrayPath.trim()}>
-                {loadingPhase ? t('phasemap:dataSource.loading') : t('common:import')}
-              </Button>
-            </div>
-          </div>
-          {dataMsg && (
-            <div style={{
-              fontSize: '9pt',
-              color: dataMsgErr ? colors.red : colors.green,
-              padding: '4px 6px',
-              border: `1px solid ${dataMsgErr ? colors.red : colors.green}`,
-              borderRadius: 4,
-              animation: 'fadeSlideIn 0.2s ease-out',
-            }}>
-              {dataMsg}
-            </div>
-          )}
-        </div>
-      </GroupBox>
-
       {layerStackPanel}
 
       {/* Advanced analysis tools — collapsed by default (UX restore
@@ -3663,16 +3419,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           </div>
         )}
       </GroupBox>
-
-      {/* Secondary action — inspector dialog for dictionary indexing */}
-      <Button
-        variant="default"
-        onClick={() => { setMatchesInitialPixel(null); setShowMatchesDialog(true); }}
-        title={t('phasemap:viewMatches.tooltip')}
-        style={{ width: '100%', marginTop: spacing.innerSpacing }}
-      >
-        {t('phasemap:viewMatches.button')}
-      </Button>
+      {/* "View Matches" moved into the toolbar above the map (2026-07-13):
+          it is a central affordance now and was drowning at the end of the
+          scroll area. */}
     </ScrollPanel>
   );
 

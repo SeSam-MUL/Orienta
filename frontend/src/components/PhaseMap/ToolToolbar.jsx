@@ -22,6 +22,7 @@ export default function ToolToolbar({
   swipe, setSwipe,
   layers,
   cleanView = false, setCleanView = null,
+  onViewMatches = null,
 }) {
   const { t } = useTranslation('phasemap');
   return (
@@ -105,6 +106,27 @@ export default function ToolToolbar({
       >
         {t('phasemap:tools.exportPng')}
       </button>
+
+      {/* Central affordance: pixel-level pattern-match inspector. Lives in
+          the toolbar (was buried at the end of the sidebar scroll area). */}
+      {onViewMatches && (
+        <button
+          onClick={onViewMatches}
+          title={t('phasemap:viewMatches.tooltip')}
+          style={{
+            background: 'transparent',
+            border: `1px solid ${colors.accent}`,
+            color: colors.accent,
+            borderRadius: 3,
+            padding: '2px 8px',
+            fontSize: '8.5pt',
+            cursor: 'pointer',
+            fontWeight: 600,
+          }}
+        >
+          {t('phasemap:viewMatches.button')}
+        </button>
+      )}
 
       <div style={{ marginLeft: 'auto' }}>
         <SwipeCompareController
