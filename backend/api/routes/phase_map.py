@@ -1873,7 +1873,8 @@ async def get_layer(
 
 
 @router.get("/ipf-key")
-async def get_ipf_key(direction: str = "Z", phase_filter: int = -1):
+async def get_ipf_key(direction: str = "Z", phase_filter: int = -1,
+                      orientation: str = "horizontal"):
     """Render only the IPF colour key(s) on a transparent background.
 
     One stereographic triangle per Laue class in the active xmap. Used by
@@ -1921,9 +1922,15 @@ async def get_ipf_key(direction: str = "Z", phase_filter: int = -1):
 
         def _work():
             with _mpl_lock:
-                # Compact one-row layout — wider per key for legible vertex labels
-                fig_w = max(2.2, 2.0 * n_keys)
-                fig_h = 2.4
+                # Layout: one row (wider per key for legible vertex labels)
+                # or one column ("vertical") — the side panel next to the map
+                # wants a column so the key costs width, not map height.
+                if orientation == "vertical":
+                    fig_w = 2.4
+                    fig_h = max(2.4, 2.2 * n_keys)
+                else:
+                    fig_w = max(2.2, 2.0 * n_keys)
+                    fig_h = 2.4
                 fig = plt.figure(figsize=(fig_w, fig_h), dpi=120)
                 # Transparent figure / axes background — frontend composites on
                 # top of the map canvas.
@@ -1931,7 +1938,8 @@ async def get_ipf_key(direction: str = "Z", phase_filter: int = -1):
                 gs = fig.add_gridspec(1, 1)
                 _draw_ipf_color_keys(fig, gs[0, 0], xmap, direction,
                                       color_overrides=None,
-                                      orientation="horizontal",
+                                      orientation=("vertical" if orientation == "vertical"
+                                                   else "horizontal"),
                                       only_phase_id=only_pid)
                 buf = _io.BytesIO()
                 fig.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.05,

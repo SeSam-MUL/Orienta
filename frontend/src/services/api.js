@@ -511,9 +511,10 @@ export const phaseMapApi = {
     api.get('/api/phasemap/layer', { params: { kind, ...cleanupParams } }),
   /** Fetch the IPF colour key triangles for the active xmap (transparent BG PNG).
    *  phaseFilter (phase id, -1 = all) restricts the key to one phase so it
-   *  matches a phase-filtered IPF layer. */
-  ipfKey: (direction = 'Z', phaseFilter = -1) =>
-    api.get('/api/phasemap/ipf-key', { params: { direction, phase_filter: phaseFilter } }),
+   *  matches a phase-filtered IPF layer. orientation 'vertical' stacks the
+   *  triangles in a column (for the side panel next to the map). */
+  ipfKey: (direction = 'Z', phaseFilter = -1, orientation = 'horizontal') =>
+    api.get('/api/phasemap/ipf-key', { params: { direction, phase_filter: phaseFilter, orientation } }),
   // Export takes the full render-params object so the file on disk matches the
   // live preview (direction, cleanup, scalebar, title, confidence overlay…).
   export: (outputPath, format = 'png', dpi = 300, viewParams = {}) =>

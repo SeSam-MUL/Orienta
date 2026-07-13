@@ -1431,11 +1431,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
 
   useEffect(() => {
     if (!hasIpfLayer || !resetSignal) { setIpfKeyImage(null); return; }
-    const cacheKey = `${resetSignal}|${ipfDirection}|${ipfPhaseFilter}`;
+    // 'vertical': the key opens as a COLUMN beside the map, so it costs
+    // spare width instead of map height (the below-map version squeezed the
+    // canvas).
+    const cacheKey = `${resetSignal}|${ipfDirection}|${ipfPhaseFilter}|v`;
     const cached = ipfKeyCacheRef.current.get(cacheKey);
     if (cached) { setIpfKeyImage(cached); return; }
     let cancelled = false;
-    phaseMapApi.ipfKey(ipfDirection, ipfPhaseFilter).then((res) => {
+    phaseMapApi.ipfKey(ipfDirection, ipfPhaseFilter, 'vertical').then((res) => {
       if (cancelled) return;
       const img = res.data?.image ?? null;
       if (img) ipfKeyCacheRef.current.set(cacheKey, img);
@@ -2485,7 +2488,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         onViewMatches={() => { setMatchesInitialPixel(null); setShowMatchesDialog(true); }}
       />
 
-      {/* Canvas area */}
+      {/* Canvas area + optional IPF-key side column. The key opens BESIDE
+          the map (vertical triangle column): maps are usually letterboxed
+          horizontally, so the key costs spare width — never map height. */}
+      <div style={{ flex: 1, minHeight: 200, display: 'flex', gap: 6 }}>
       <div ref={mapContainerRef} className="map-container" style={{
         flex: 1,
         background: colors.bgSecondary,
@@ -2655,9 +2661,25 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         )}
       </div>
 
-      {/* IPF colour key — BELOW the canvas, collapsible (default collapsed).
-          Deliberately no longer an overlay ON the map: with several Laue
-          classes the key PNG is wide and was covering the data. */}
+      {/* IPF-key side column (inside the canvas row): vertical triangle
+          stack, scrolls if many Laue classes. Never overlays the data. */}
+      {hasIpfLayer && ipfKeyImage && ipfKeyOpen && (
+        <div className="thin-scrollbar" style={{
+          flexShrink: 0, width: 200, overflowY: 'auto', alignSelf: 'stretch',
+          background: 'rgba(255,255,255,0.95)', borderRadius: 4, padding: 4,
+          border: `1px solid ${colors.border}`,
+        }}>
+          <img
+            src={`data:image/png;base64,${ipfKeyImage}`}
+            alt={t('phasemap:ipfKeyPanel.title')}
+            style={{ width: '100%', display: 'block' }}
+          />
+        </div>
+      )}
+      </div>
+      {/* end canvas row */}
+
+      {/* IPF colour key toggle chip (below the canvas row) */}
       {hasIpfLayer && ipfKeyImage && (
         <div style={{ flexShrink: 0, marginTop: 6 }}>
           <button
@@ -2671,18 +2693,6 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           >
             {ipfKeyOpen ? '▾' : '▸'} {t('phasemap:ipfKeyPanel.title')}
           </button>
-          {ipfKeyOpen && (
-            <div style={{
-              marginTop: 4, display: 'inline-block', maxWidth: '100%',
-              background: 'rgba(255,255,255,0.95)', borderRadius: 4, padding: 4,
-            }}>
-              <img
-                src={`data:image/png;base64,${ipfKeyImage}`}
-                alt={t('phasemap:ipfKeyPanel.title')}
-                style={{ display: 'block', maxHeight: 160, maxWidth: '100%' }}
-              />
-            </div>
-          )}
         </div>
       )}
 
