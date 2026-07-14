@@ -441,9 +441,12 @@ export const indexApi = {
   // Universal manual pseudo-symmetry flip: candidate orientations (current +
   // crystallographic pseudo-variants + Hough) rendered + render-NCC, and grain
   // propagation of the chosen correction.
-  patternMatchVariants: (row, col, { maxBandwidth = 128, aperture = 'auto', apertureRadius = 1.0 } = {}) =>
+  // refRow/refCol: optional free reference pixel — its stored orientation
+  // joins the gallery as a rendered candidate (foreign-basin fixes).
+  patternMatchVariants: (row, col, { maxBandwidth = 128, aperture = 'auto', apertureRadius = 1.0, refRow = null, refCol = null } = {}) =>
     api.get('/api/indexing/pattern-match/variants', { params: {
       row, col, max_bandwidth: maxBandwidth, aperture, aperture_radius: apertureRadius,
+      ...(refRow != null && refCol != null ? { ref_row: refRow, ref_col: refCol } : {}),
     } }),
   applyVariantToGrain: ({ row, col, quat, thresholdDeg = 5.0, maxTotalDeg = 15.0, refine = false }) =>
     api.post('/api/indexing/pattern-match/apply-to-grain', {

@@ -2274,15 +2274,101 @@ def _spherical_pixel_ctx(result, row: int, col: int):
 # correct variant).
 
 
+def _neighbour_grain_candidates(result, xmap, phase_id, pg, row, col, max_n=4):
+    """Mean orientations of the same-phase grains ADJACENT to the clicked
+    pixel's grain — extra candidate sources for the variant gallery.
+
+    A wrongly indexed grain often sits in a FOREIGN orientation basin: its
+    correct orientation is neither a pseudo-variant of its own stored
+    orientation nor the Hough solution (e.g. a band-coincidence basin), so
+    the classic candidates all render badly. The correct orientation is then
+    usually right next door — offer each adjacent grain's branch-consistent
+    mean orientation, to be rendered and ranked like every other candidate.
+
+    Returns ``[(label, quat (4,), n_px), ...]`` sorted by shared boundary
+    length, at most ``max_n``, contacts under 3 px ignored. Fail-soft: []
+    on any problem (the gallery then simply shows the classic candidates).
+    """
+    try:
+        from backend.spherical_gpu.pipeline.variant_unification import (
+            segment_supergroup_grains,
+        )
+        from backend.spherical_gpu.pseudosym import (
+            _qmul, _sym_quats, pseudosym_holohedry,
+        )
+        n_rows, n_cols = result.original_shape
+        n = n_rows * n_cols
+        qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
+        pid_arr = np.asarray(xmap.phase_id).reshape(-1)
+        if qdata.shape[0] == n:
+            flat_of_row = np.arange(n)
+        else:
+            flat_of_row = np.flatnonzero(
+                np.asarray(result.selection_mask, dtype=bool).ravel())
+            if flat_of_row.size != qdata.shape[0]:
+                return []
+        full_q = np.full((n, 4), np.nan)
+        full_q[flat_of_row] = qdata
+        phase_full = np.full(n, -1, dtype=np.int64)
+        phase_full[flat_of_row] = pid_arr
+
+        labels = segment_supergroup_grains(
+            full_q, phase_full, n_rows, n_cols, int(phase_id), pg or "1",
+            threshold_deg=5.0)
+        g0 = int(labels[row * n_cols + col])
+        if g0 < 0:
+            return []
+        contact: dict[int, int] = {}
+        for f in np.flatnonzero(labels == g0):
+            r, c = divmod(int(f), n_cols)
+            for nb in ((f - n_cols) if r > 0 else -1,
+                       (f + n_cols) if r < n_rows - 1 else -1,
+                       (f - 1) if c > 0 else -1,
+                       (f + 1) if c < n_cols - 1 else -1):
+                if nb >= 0 and labels[nb] >= 0 and labels[nb] != g0:
+                    contact[int(labels[nb])] = contact.get(int(labels[nb]), 0) + 1
+
+        holo = pseudosym_holohedry(pg or "1") or (pg or "1")
+        sym = _sym_quats(holo)
+        out = []
+        for g in sorted(contact, key=lambda k: -contact[k])[:max_n]:
+            if contact[g] < 3:
+                continue
+            pix = np.flatnonzero(labels == g)
+            # Branch-consistent mean (same math as variant_unification's
+            # _branch_mean); subsample big grains — the mean doesn't need
+            # every pixel and the python loop shouldn't either.
+            pix_s = pix[:: max(1, pix.size // 256)][:256]
+            ref = full_q[pix_s[0]]
+            qs = np.empty((pix_s.size, 4))
+            for k, i in enumerate(pix_s):
+                cands_ = _qmul(sym, full_q[int(i)][None, :])
+                b = cands_[int(np.argmax(np.abs(cands_ @ ref)))]
+                qs[k] = -b if float(np.dot(b, ref)) < 0 else b
+            m = qs.mean(axis=0)
+            m = m / max(float(np.linalg.norm(m)), 1e-12)
+            out.append((f"neighbour ({int(pix.size)} px)", m, int(pix.size)))
+        return out
+    except Exception:
+        logger.debug("[variants] neighbour candidates failed", exc_info=True)
+        return []
+
+
 @router.get("/pattern-match/variants")
 async def get_pattern_match_variants(
     row: int, col: int, result_id: str = None,
     max_bandwidth: int = 128, aperture: str = "auto", aperture_radius: float = 1.0,
+    ref_row: int = None, ref_col: int = None,
 ):
     """Candidate orientations for the clicked pixel — current + crystallographic
-    pseudo-variants + Hough — each rendered through the SHT forward model with its
-    render-NCC vs the experimental pattern, sorted best-first. The user picks the
-    one whose simulated pattern matches, then applies it to the grain."""
+    pseudo-variants + Hough + ADJACENT same-phase grains (+ an optional free
+    reference pixel via ref_row/ref_col) — each rendered through the SHT
+    forward model with its render-NCC vs the experimental pattern, sorted
+    best-first. The user picks the one whose simulated pattern matches, then
+    applies it to the grain. Neighbour/reference candidates cover foreign
+    orientation basins that are neither pseudo-variants nor the Hough
+    solution; per-candidate ``disorientation_deg`` (to current, under the
+    crystal symmetry) lets the client scale the apply-time anti-drift cap."""
     result = _get_result(result_id)
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
@@ -2296,7 +2382,9 @@ async def get_pattern_match_variants(
         render_pattern_to_png_b64 as _render_sht_b64,
     )
     from backend.spherical_gpu.pipeline.detector import convert_pc_to_emsoft as _conv_emsoft
-    from backend.spherical_gpu.pseudosym import pseudosym_variant_quats
+    from backend.spherical_gpu.pseudosym import (
+        pseudosym_variant_quats, same_orientation_angle_deg,
+    )
     from orix.quaternion import Rotation as _R
     import torch as _torch
     from PIL import Image as _Img
@@ -2309,8 +2397,10 @@ async def get_pattern_match_variants(
 
     q_cur = np.asarray(xmap.rotations[px_idx].data).reshape(-1)[:4].astype(np.float64)
     variants = pseudosym_variant_quats(q_cur, pg or "1")     # (K,4), current first
-    labels = (["current"] + [f"variant {i}" for i in range(1, len(variants))])
-    quats = [np.asarray(v, dtype=np.float64) for v in variants]
+    # (label, kind, quat) — kind drives the client-side badge + cap logic.
+    cand_defs = [("current", "current", np.asarray(variants[0], dtype=np.float64))]
+    cand_defs += [(f"variant {i}", "variant", np.asarray(variants[i], dtype=np.float64))
+                  for i in range(1, len(variants))]
     # Hough candidate (band geometry — the universal correct orientation)
     try:
         from indexing_controller import _resolve_cif_for_sht
@@ -2319,10 +2409,34 @@ async def get_pattern_match_variants(
         if eu_h is not None:
             qh = np.asarray(_R.from_euler(np.asarray(eu_h, float).reshape(1, 3)).data
                             ).reshape(-1)[:4].astype(np.float64)
-            quats.append(qh)
-            labels.append("Hough")
+            cand_defs.append(("Hough", "hough", qh))
     except Exception:
         logger.debug("[variants] Hough candidate unavailable", exc_info=True)
+    # Adjacent same-phase grains — covers foreign basins (building block A).
+    for lab, qn, _npx in _neighbour_grain_candidates(result, xmap, phase_id, pg,
+                                                     row, col):
+        cand_defs.append((lab, "neighbour", np.asarray(qn, dtype=np.float64)))
+    # Free reference pixel (building block B): the user names any indexed
+    # pixel; its stored orientation joins the gallery. Rendered with the
+    # CLICKED pixel's phase SHT — the reference only contributes a quat.
+    if ref_row is not None and ref_col is not None:
+        try:
+            nr, nc = result.original_shape
+            flat = int(ref_row) * nc + int(ref_col)
+            qd = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
+            if qd.shape[0] == nr * nc:
+                ridx = flat if 0 <= flat < qd.shape[0] else None
+            else:
+                fofr = np.flatnonzero(
+                    np.asarray(result.selection_mask, dtype=bool).ravel())
+                pos = np.flatnonzero(fofr == flat)
+                ridx = int(pos[0]) if pos.size else None
+            if ridx is None:
+                raise ValueError("reference pixel is not part of the result")
+            cand_defs.append((f"reference ({int(ref_row)},{int(ref_col)})",
+                              "reference", qd[ridx]))
+        except Exception as e:
+            logger.info("[variants] reference pixel unusable: %s", e)
 
     xpc, ypc, L_um = _conv_emsoft(
         pc=(float(det["pc_x"]), float(det["pc_y"]), float(det["pc_z"])),
@@ -2337,9 +2451,21 @@ async def get_pattern_match_variants(
         mask = circular_mask(ds, radius_frac=min(max(float(aperture_radius), 0.3), 1.0))
 
     cands = []
-    for lab, q in zip(labels, quats):
+    seen_quats: list[np.ndarray] = []
+    for lab, kind, q in cand_defs:
+        q = np.asarray(q, dtype=np.float64).reshape(-1)[:4]
         try:
-            qt = _torch.tensor(np.asarray(q)[:4], dtype=_torch.float64)
+            # Dedupe BEFORE the expensive render: a neighbour/reference can
+            # coincide with a variant or Hough (then the classic tile already
+            # covers it). 'current' is always kept as the anchor tile.
+            dis_cur = float(same_orientation_angle_deg(
+                q[None, :], q_cur, pg or "1")[0])
+            if kind != "current" and any(
+                float(same_orientation_angle_deg(q[None, :], s, pg or "1")[0]) < 0.5
+                for s in seen_quats
+            ):
+                continue
+            qt = _torch.tensor(q, dtype=_torch.float64)
             b64 = _render_sht_b64(
                 sht_path=sht_path, orientation_quat=qt,
                 pc_emsoft=(float(xpc), float(ypc), float(L_um)), detector_shape=ds,
@@ -2353,9 +2479,12 @@ async def get_pattern_match_variants(
             else:
                 r_val = compute_ncc_scalar(exp, sim)
             eu = list(map(float, np.degrees(
-                _R(np.asarray(q)[:4]).to_euler().reshape(-1)[:3])))
-            cands.append({"label": lab, "r_score": float(r_val), "thumbnail": b64,
-                          "quat": [float(x) for x in np.asarray(q)[:4]], "euler": eu})
+                _R(q).to_euler().reshape(-1)[:3])))
+            cands.append({"label": lab, "kind": kind,
+                          "r_score": float(r_val), "thumbnail": b64,
+                          "quat": [float(x) for x in q], "euler": eu,
+                          "disorientation_deg": round(dis_cur, 2)})
+            seen_quats.append(q)
         except Exception as e:
             logger.warning("[variants] render failed for %s: %s", lab, e)
     cands.sort(key=lambda d: -(d["r_score"] if d["r_score"] is not None else -1.0))

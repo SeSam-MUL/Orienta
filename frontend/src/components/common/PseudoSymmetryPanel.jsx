@@ -36,6 +36,10 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
   const [grainBusy, setGrainBusy] = useState(false);
   const [grainMsg, setGrainMsg] = useState(null);
   const [undoAvailable, setUndoAvailable] = useState(false);
+  // Free reference pixel (foreign-basin fixes): the user names any indexed
+  // pixel whose orientation should join the gallery as a candidate.
+  const [refRowIn, setRefRowIn] = useState('');
+  const [refColIn, setRefColIn] = useState('');
 
   const row = selectedPixel?.row;
   const col = selectedPixel?.col;
@@ -50,9 +54,9 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
   const suspicious = matchData?.orientation_source === 'hough'
     || matchData?.r_quality === 'poor';
 
-  const loadVariants = () => {
+  const loadVariants = (ref = null) => {
     setVariantsBusy(true); setGrainMsg(null);
-    indexApi.patternMatchVariants(row, col)
+    indexApi.patternMatchVariants(row, col, ref ? { refRow: ref.row, refCol: ref.col } : {})
       .then(r => {
         setVariants(r.data);
         // Auto-select the best NON-current candidate: applying 'current' is a
@@ -60,7 +64,8 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
         // would make the Apply button do nothing. Fall back to the best
         // overall only if every candidate is 'current'.
         const cands = r.data?.candidates || [];
-        const best = cands.find(c => c.label !== 'current') || cands[0] || null;
+        const best = cands.find(c => c.kind !== 'current' && c.label !== 'current')
+          || cands[0] || null;
         setChosenVariant(best);
       })
       .catch(e => setGrainMsg({ err: true, text: e?.response?.data?.detail || String(e) }))
@@ -70,6 +75,10 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
   const applyToGrain = () => {
     if (!chosenVariant) return;
     setGrainBusy(true);
+    // No cap override needed even for foreign-basin candidates (neighbour
+    // grain / reference pixel): the backend's anti-drift cap is measured
+    // relative to the TARGET, and the rigid-C fill lands every coherent
+    // grain pixel near the target by construction.
     indexApi.applyVariantToGrain({
       row, col, quat: chosenVariant.quat, thresholdDeg: grainThreshold, refine,
     })
@@ -109,7 +118,7 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
     <div style={{ marginTop: 8, borderTop: `1px solid ${C.border}`, paddingTop: 6 }}>
       {!variants ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <button onClick={loadVariants} disabled={variantsBusy}
+          <button onClick={() => loadVariants()} disabled={variantsBusy}
             title={t('matchesDialog.tryVariantsTip')}
             style={{
               fontSize: suspicious ? '9pt' : '8pt', padding: suspicious ? '5px 12px' : '3px 10px',
@@ -157,17 +166,54 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
             </div>
           )}
 
-          {/* Thumbnail picker row — larger tiles, best-first. */}
+          {/* Thumbnail picker row — larger tiles, best-first. Neighbour-grain
+              and reference-pixel candidates get a coloured badge: they cover
+              foreign basins the classic variants/Hough can't reach. */}
           <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
-            {(variants.candidates || []).map((c, i) => (
-              <div key={i} onClick={() => setChosenVariant(c)}
-                title={`${c.label} — Euler (${(c.euler || []).map(a => a?.toFixed(1)).join(', ')})°`}
-                style={{ border: chosenVariant === c ? '2px solid #50fa7b' : `1px solid ${C.border}`, borderRadius: 4, padding: 3, cursor: 'pointer', minWidth: 96, textAlign: 'center', flexShrink: 0 }}>
-                <img src={`data:image/png;base64,${c.thumbnail}`} alt={c.label} style={{ width: 90, height: 90, objectFit: 'contain', display: 'block' }} />
-                <div style={{ fontSize: '8pt', fontWeight: 700, color: c.r_score >= 0.3 ? '#50fa7b' : c.r_score >= 0.15 ? '#ffb86c' : '#ff5555' }}>R={c.r_score?.toFixed(2)}</div>
-                <div style={{ fontSize: '7pt', color: c.label === 'current' ? '#ffb86c' : '#6272a4' }}>{c.label}</div>
-              </div>
-            ))}
+            {(variants.candidates || []).map((c, i) => {
+              const kindText = c.kind === 'neighbour'
+                ? `↖ ${t('matchesDialog.kindNeighbour')}`
+                : c.kind === 'reference'
+                  ? `⌖ ${t('matchesDialog.kindReference')}`
+                  : c.label;
+              const kindColor = c.kind === 'neighbour' ? '#8be9fd'
+                : c.kind === 'reference' ? '#bd93f9'
+                  : (c.label === 'current' ? '#ffb86c' : '#6272a4');
+              return (
+                <div key={i} onClick={() => setChosenVariant(c)}
+                  title={`${c.label} — Euler (${(c.euler || []).map(a => a?.toFixed(1)).join(', ')})°`
+                    + (c.disorientation_deg != null ? ` — Δ ${c.disorientation_deg}°` : '')}
+                  style={{ border: chosenVariant === c ? '2px solid #50fa7b' : `1px solid ${C.border}`, borderRadius: 4, padding: 3, cursor: 'pointer', minWidth: 96, textAlign: 'center', flexShrink: 0 }}>
+                  <img src={`data:image/png;base64,${c.thumbnail}`} alt={c.label} style={{ width: 90, height: 90, objectFit: 'contain', display: 'block' }} />
+                  <div style={{ fontSize: '8pt', fontWeight: 700, color: c.r_score >= 0.3 ? '#50fa7b' : c.r_score >= 0.15 ? '#ffb86c' : '#ff5555' }}>R={c.r_score?.toFixed(2)}</div>
+                  <div style={{ fontSize: '7pt', color: kindColor }}>{kindText}</div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Free reference pixel: fetch the gallery again with any indexed
+              pixel's stored orientation as an extra candidate — for cases
+              where the correct grain does NOT touch the wrong one. */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}
+            title={t('matchesDialog.refPickTip')}>
+            <span style={{ fontSize: '8pt', color: '#6272a4' }}>{t('matchesDialog.refPickLabel')}</span>
+            <input type="number" min={0} placeholder={t('matchesDialog.refPickRow')} value={refRowIn}
+              onChange={e => setRefRowIn(e.target.value)}
+              style={{ width: 58, fontSize: '8pt', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, padding: '2px 4px' }} />
+            <input type="number" min={0} placeholder={t('matchesDialog.refPickCol')} value={refColIn}
+              onChange={e => setRefColIn(e.target.value)}
+              style={{ width: 58, fontSize: '8pt', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, padding: '2px 4px' }} />
+            <button
+              onClick={() => {
+                const rr = parseInt(refRowIn, 10);
+                const rc = parseInt(refColIn, 10);
+                if (Number.isFinite(rr) && Number.isFinite(rc)) loadVariants({ row: rr, col: rc });
+              }}
+              disabled={variantsBusy || refRowIn === '' || refColIn === ''}
+              style={{ fontSize: '8pt', padding: '2px 8px', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, cursor: 'pointer' }}>
+              {variantsBusy ? t('matchesDialog.variantsLoading') : t('matchesDialog.refPickAdd')}
+            </button>
           </div>
           {chosenVariant && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
@@ -182,14 +228,21 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
                 <input type="checkbox" checked={refine} onChange={e => setRefine(e.target.checked)} />
                 {t('matchesDialog.refineLabel')}
               </label>
-              <button onClick={applyToGrain} disabled={grainBusy || chosenVariant.label === 'current'}
-                title={chosenVariant.label === 'current' ? t('matchesDialog.currentNoop') : t('matchesDialog.applyGrainTip')}
-                style={{ fontSize: '8pt', padding: '3px 10px', background: chosenVariant.label === 'current' ? '#44475a' : '#50fa7b22', border: `1px solid ${chosenVariant.label === 'current' ? C.border : '#50fa7b'}`, borderRadius: 3, color: chosenVariant.label === 'current' ? '#6272a4' : '#50fa7b', cursor: chosenVariant.label === 'current' ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
-                {grainBusy ? t('matchesDialog.grainApplying') : t('matchesDialog.applyGrain', { label: chosenVariant.label })}
-              </button>
-              {chosenVariant.label === 'current' && (
-                <span style={{ fontSize: '8pt', color: '#ffb86c' }}>{t('matchesDialog.currentNoop')}</span>
-              )}
+              {(() => {
+                const isCur = chosenVariant.kind === 'current' || chosenVariant.label === 'current';
+                return (
+                  <>
+                    <button onClick={applyToGrain} disabled={grainBusy || isCur}
+                      title={isCur ? t('matchesDialog.currentNoop') : t('matchesDialog.applyGrainTip')}
+                      style={{ fontSize: '8pt', padding: '3px 10px', background: isCur ? '#44475a' : '#50fa7b22', border: `1px solid ${isCur ? C.border : '#50fa7b'}`, borderRadius: 3, color: isCur ? '#6272a4' : '#50fa7b', cursor: isCur ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
+                      {grainBusy ? t('matchesDialog.grainApplying') : t('matchesDialog.applyGrain', { label: chosenVariant.label })}
+                    </button>
+                    {isCur && (
+                      <span style={{ fontSize: '8pt', color: '#ffb86c' }}>{t('matchesDialog.currentNoop')}</span>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
         </>

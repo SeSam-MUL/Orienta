@@ -57,7 +57,8 @@ describe('PseudoSymmetryPanel', () => {
       <PseudoSymmetryPanel selectedPixel={PIXEL} matchData={SPHERICAL} />);
     fireEvent.click(getByText(/matchesDialog\.tryVariants/));
     await waitFor(() => getByText('variant 1'));
-    expect(indexApi.patternMatchVariants).toHaveBeenCalledWith(3, 5);
+    // third arg = reference-pick options ({} when no reference is set)
+    expect(indexApi.patternMatchVariants).toHaveBeenCalledWith(3, 5, {});
   });
 
   it('applies to grain with the refine flag, reports refine outcome, offers undo', async () => {

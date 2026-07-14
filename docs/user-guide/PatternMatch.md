@@ -73,19 +73,31 @@ Use Pattern Match **after indexing**, to:
    chemically similar phase. The first click warms a per-phase cache (slower);
    later clicks are fast.
 
-### Fix pseudo-symmetry (grain flip)
+### Fix pseudo-symmetry / wrong orientation (grain flip)
 
 8. For spherical results a **Try variants ⬡** button loads candidate orientations
-   for the pixel — the current one, crystallographic pseudo-symmetry variants, and
-   a Hough candidate — each rendered with its render-NCC and sorted best-first.
-9. Click the variant whose simulated pattern matches the experimental one, set a
-   **grain threshold** (degrees) and click **Apply to grain**. The chosen rigid
-   correction is flood-filled across the connected, same-phase, similar-orientation
-   pixels (the grain) and the stored CrystalMap is updated.
+   for the pixel — the current one, crystallographic pseudo-symmetry variants, a
+   Hough candidate, and the **adjacent same-phase grains'** mean orientations
+   (badge "↖ neighbour grain") — each rendered with its render-NCC and sorted
+   best-first. The neighbour candidates cover *foreign orientation basins*:
+   grains whose correct orientation is neither a pseudo-variant of their own
+   stored orientation nor the Hough solution — typically the correct
+   orientation sits right next door.
+9. If the correctly-indexed grain does **not** touch the wrong one, use the
+   **Reference pixel** row/col inputs + **Add candidate**: any indexed pixel's
+   stored orientation joins the gallery as a rendered, scored candidate
+   (badge "⌖ reference").
+10. Click the candidate whose simulated pattern matches the experimental one,
+    set a **grain threshold** (degrees) and click **Apply to grain**. The
+    correction is flood-filled across the connected, same-phase,
+    similar-orientation pixels (the grain); each pixel keeps its own measured
+    deviation (per-pixel snap / rigid transfer — no single Euler triple is
+    stamped onto the grain), and the stored CrystalMap is updated. One-level
+    **Undo** is available.
 
 ### Export a figure
 
-10. In the **Phase Test** dialog (Indexing → *Phase Test*), the figure composer
+11. In the **Phase Test** dialog (Indexing → *Phase Test*), the figure composer
     opens with the experimental / simulated / NCC panels for the selected
     candidate. Drag, resize, align and distribute panels, toggle linked markers and
     a scalebar, save/load layout presets, then **export** as PNG/JPEG (with a

@@ -391,7 +391,14 @@
     "refineSkipped": "Verfeinerung übersprungen ({{reason}}).",
     "expLabel": "Experimentell",
     "selectedLabel": "Gewählt: {{label}}",
-    "currentNoop": "'current' ist die bereits auf der Karte liegende Orientierung — wähle eine andere Variante."
+    "currentNoop": "'current' ist die bereits auf der Karte liegende Orientierung — wähle eine andere Variante.",
+    "kindNeighbour": "Nachbarkorn",
+    "kindReference": "Referenz",
+    "refPickLabel": "Referenzpixel:",
+    "refPickRow": "Zeile",
+    "refPickCol": "Spalte",
+    "refPickAdd": "Kandidat holen",
+    "refPickTip": "Fügt die gespeicherte Orientierung eines beliebigen indexierten Pixels als Kandidaten zur Galerie hinzu (gerendert + bewertet wie alle anderen). Nutzen, wenn das korrekt indexierte Korn das falsche NICHT berührt — bei angrenzenden Körnern erscheinen die Nachbarkorn-Kandidaten automatisch."
   },
   "phaseResultModal": {
     "title": "Mehrphasen-Ergebnisse",

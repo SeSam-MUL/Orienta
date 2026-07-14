@@ -391,7 +391,14 @@
     "refineSkipped": "Refinement skipped ({{reason}}).",
     "expLabel": "Experimental",
     "selectedLabel": "Selected: {{label}}",
-    "currentNoop": "'current' is the orientation already on the map — pick a different variant."
+    "currentNoop": "'current' is the orientation already on the map — pick a different variant.",
+    "kindNeighbour": "neighbour grain",
+    "kindReference": "reference",
+    "refPickLabel": "Reference pixel:",
+    "refPickRow": "row",
+    "refPickCol": "col",
+    "refPickAdd": "Add candidate",
+    "refPickTip": "Add any indexed pixel's stored orientation to the gallery as a candidate (rendered + scored like the others). Use this when the correctly-indexed grain does NOT touch the wrong one — for touching grains the neighbour-grain candidates appear automatically."
   },
   "phaseResultModal": {
     "title": "Multi-Phase Results",

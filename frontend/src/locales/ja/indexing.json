@@ -391,7 +391,14 @@
     "refineSkipped": "微調整をスキップしました（{{reason}}）。",
     "expLabel": "実験",
     "selectedLabel": "選択: {{label}}",
-    "currentNoop": "'current' はすでにマップ上にある方位です — 別のバリアントを選んでください。"
+    "currentNoop": "'current' はすでにマップ上にある方位です — 別のバリアントを選んでください。",
+    "kindNeighbour": "隣接粒",
+    "kindReference": "参照",
+    "refPickLabel": "参照ピクセル:",
+    "refPickRow": "行",
+    "refPickCol": "列",
+    "refPickAdd": "候補を追加",
+    "refPickTip": "任意の指数付け済みピクセルの保存方位を候補としてギャラリーに追加します（他と同様にレンダリング＋スコア付け）。正しい粒が誤った粒に接していない場合に使用してください — 接している場合は隣接粒候補が自動的に表示されます。"
   },
   "phaseResultModal": {
     "title": "マルチ相 結果",

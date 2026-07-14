@@ -391,7 +391,14 @@
     "refineSkipped": "已跳过微调（{{reason}}）。",
     "expLabel": "实验",
     "selectedLabel": "已选：{{label}}",
-    "currentNoop": "'current' 是地图上已有的取向 — 请选择其他变体。"
+    "currentNoop": "'current' 是地图上已有的取向 — 请选择其他变体。",
+    "kindNeighbour": "相邻晶粒",
+    "kindReference": "参考",
+    "refPickLabel": "参考像素:",
+    "refPickRow": "行",
+    "refPickCol": "列",
+    "refPickAdd": "添加候选",
+    "refPickTip": "将任意已标定像素的存储取向作为候选加入图库（与其他候选一样渲染+评分）。当正确晶粒与错误晶粒不相邻时使用 — 相邻时会自动出现相邻晶粒候选。"
   },
   "phaseResultModal": {
     "title": "多相 结果",
