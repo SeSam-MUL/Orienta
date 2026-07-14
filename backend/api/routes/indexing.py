@@ -2583,6 +2583,10 @@ async def get_pattern_match_variants(
     if ref_row is not None and ref_col is not None:
         try:
             nr, nc = result.original_shape
+            if not (0 <= int(ref_row) < nr and 0 <= int(ref_col) < nc):
+                # explicit bounds check — a flat index would silently WRAP an
+                # oversized column onto the next row's pixel
+                raise ValueError("reference pixel outside the map")
             flat = int(ref_row) * nc + int(ref_col)
             qd = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
             if qd.shape[0] == nr * nc:
@@ -3270,12 +3274,27 @@ def _phase_check_ctx(result, build_scorers: bool = True):
     phase_full = np.full(n_rows * n_cols, -1, dtype=np.int64)
     phase_full[flat_of_row] = pid
 
+    # Known phases = every phase that currently owns pixels PLUS every phase
+    # with an SHT in the result metadata. The union matters for assign-phase:
+    # a systematically mis-indexed phase may own ZERO pixels right now — the
+    # compare-phases dropdown still offers it (it has an SHT), and assigning
+    # it is exactly the hard case the tool exists for.
+    present = {int(x) for x in np.unique(pid)}
+    known = set(present)
+    for k in sht_map.keys():
+        try:
+            known.add(int(k))
+        except Exception:
+            continue
     phases: dict[int, str] = {}
-    for p in sorted({int(x) for x in np.unique(pid)}):
+    for p in sorted(known):
         try:
             phases[p] = xmap.phases[p].point_group.name
         except Exception:
-            continue
+            # orix prunes zero-pixel phases from the xmap's PhaseList — keep
+            # the id known (it has an SHT and is a legitimate assign target);
+            # its point group is resolved from the CIF at assign time.
+            phases[p] = None
 
     def _get_pattern(flat):
         r, c = divmod(int(flat), n_cols)
@@ -3288,7 +3307,9 @@ def _phase_check_ctx(result, build_scorers: bool = True):
         sht = sht_map.get(p) or sht_map.get(str(p))
         if not sht:
             continue
-        if build_scorers:
+        # Scorers only for phases that own pixels — check_map never scores a
+        # zero-pixel phase, and each scorer allocates an SHT grid.
+        if build_scorers and p in present:
             try:
                 score_fns[p] = build_render_score_fn(str(sht), det, _get_pattern)
             except Exception:
@@ -3324,7 +3345,7 @@ def _phase_check_ctx(result, build_scorers: bool = True):
     return {
         "md": md, "xmap": xmap, "n_rows": n_rows, "n_cols": n_cols,
         "flat_of_row": flat_of_row, "full_q": full_q, "phase_full": phase_full,
-        "qdata": qdata, "pid": pid, "phases": phases,
+        "qdata": qdata, "pid": pid, "phases": phases, "cifs": cifs,
         "score_fns": score_fns, "hough_quats_fn": _hough_quats_fn,
         "Rotation": _R,
     }
@@ -3614,6 +3635,48 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
     if not pg:
         raise HTTPException(status_code=400,
                             detail="Clicked pixel's phase has no symmetry information")
+    # Zero-pixel target (review M1): orix prunes phases without pixels from
+    # the xmap's PhaseList. Re-add the Phase from its CIF BEFORE pixels start
+    # pointing at its id, or every downstream lookup (names, colours, IPF
+    # keys) breaks. This is exactly the hard intended case: a systematically
+    # mis-indexed phase that never won a pixel anywhere.
+    try:
+        ctx["xmap"].phases[tpid]          # raises KeyError when pruned
+    except Exception:
+        cif = ctx["cifs"].get(tpid)
+        if not cif:
+            raise HTTPException(
+                status_code=409,
+                detail="Target phase owns no pixels and has no CIF — cannot "
+                       "reconstruct it for assignment")
+        try:
+            from ebsd_utils import sanitize_cif
+            from orix.crystal_map import Phase, PhaseList
+            ph = Phase.from_cif(sanitize_cif(str(cif)))
+            try:
+                ph.name = Path(str(cif)).stem
+            except Exception:
+                pass
+            ids, objs = [], []
+            for pid_, pobj in ctx["xmap"].phases:
+                ids.append(int(pid_))
+                objs.append(pobj)
+            new_pl = PhaseList(phases=objs + [ph], ids=ids + [tpid])
+            try:
+                ctx["xmap"].phases = new_pl
+            except Exception:
+                ctx["xmap"]._phases = new_pl
+            if ctx["phases"].get(tpid) is None:
+                try:
+                    ctx["phases"][tpid] = ph.point_group.name
+                except Exception:
+                    pass
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Could not reconstruct the target phase from its CIF: {e}")
 
     from backend.spherical_gpu.pipeline.variant_unification import (
         segment_supergroup_grains,

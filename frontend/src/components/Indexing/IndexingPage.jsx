@@ -372,7 +372,9 @@ function PatternMatchesDialog({ open, onClose }) {
   const [loading, setLoading] = useState(false);
   // Neighbourhood-zoom source: full-grid IPF-Z layer PNG (tiny mis-indexed
   // nests read as colour breaks there). Fail-soft: no layer → nudge only.
+  // zoomBump refetches after a grain flip (the IPF colours changed).
   const [zoomLayer, setZoomLayer] = useState(null);
+  const [zoomBump, setZoomBump] = useState(0);
   useEffect(() => {
     if (!open) { setZoomLayer(null); return undefined; }
     let cancelled = false;
@@ -380,7 +382,7 @@ function PatternMatchesDialog({ open, onClose }) {
       .then(r => { if (!cancelled) setZoomLayer(r.data); })
       .catch(() => { if (!cancelled) setZoomLayer(null); });
     return () => { cancelled = true; };
-  }, [open]);
+  }, [open, zoomBump]);
   const nudgePixel = useCallback((dr, dc) => {
     setSelectedPixel(p => {
       if (!p) return p;
@@ -427,9 +429,11 @@ function PatternMatchesDialog({ open, onClose }) {
   }, [selectedPixel, rank]);
 
   // Refresh the match view after a grain flip/undo so the corrected
-  // orientation (and its simulated pattern) shows immediately.
+  // orientation (and its simulated pattern) shows immediately. Also bumps
+  // the neighbourhood-zoom layer (its IPF colours changed too).
   const refetchMatch = () => {
     if (!selectedPixel) return;
+    setZoomBump(x => x + 1);
     indexApi.patternMatch(selectedPixel.row, selectedPixel.col, rank)
       .then(rr => setMatchData(rr.data)).catch(() => {});
   };

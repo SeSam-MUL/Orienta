@@ -668,7 +668,13 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                 key={`psp-${assignBump}`}
                 selectedPixel={selectedPixel}
                 matchData={matchData}
-                onApplied={() => { setMatchRefresh(x => x + 1); onOrientationsChanged?.(); }}
+                onApplied={() => {
+                  setMatchRefresh(x => x + 1);
+                  // A grain flip pops the phase_reassign_undo slot server-side
+                  // — a still-visible assign "Undo" would 400. Clear it.
+                  setAssignMsg(null);
+                  onOrientationsChanged?.();
+                }}
               />
 
               {/* Multi-phase score comparison */}
