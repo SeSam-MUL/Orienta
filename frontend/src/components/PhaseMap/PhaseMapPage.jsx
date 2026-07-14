@@ -32,6 +32,7 @@ import AnomalyBrowserDrawer from './AnomalyBrowser/AnomalyBrowserDrawer';
 import FileSwitcher from '../common/FileSwitcher';
 import CoordinateSystemPanel from '../common/CoordinateSystemPanel';
 import PseudoSymmetryPanel from '../common/PseudoSymmetryPanel';
+import NeighbourhoodZoom from '../common/NeighbourhoodZoom';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
@@ -107,6 +108,37 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
   // Bumped after a grain flip/undo so the match refetches and shows the
   // corrected orientation + simulated pattern immediately.
   const [matchRefresh, setMatchRefresh] = useState(0);
+  // Assign-phase (compare mode): busy/result state + a bump that remounts
+  // the PseudoSymmetryPanel after a phase change — its variant gallery and
+  // local undo state are stale once the grain belongs to another phase.
+  const [assignBusy, setAssignBusy] = useState(false);
+  const [assignMsg, setAssignMsg] = useState(null);
+  const [assignBump, setAssignBump] = useState(0);
+  useEffect(() => { setAssignMsg(null); }, [selectedPixel?.row, selectedPixel?.col]);
+  // Neighbourhood-zoom source: the full-grid IPF-Z layer PNG (tiny nests
+  // read as colour breaks there). Refetched after any orientation/phase edit.
+  const [zoomLayer, setZoomLayer] = useState(null);
+  useEffect(() => {
+    if (!open) { setZoomLayer(null); return undefined; }
+    let cancelled = false;
+    phaseMapApi.layer('ipf-z')
+      .then(r => { if (!cancelled) setZoomLayer(r.data); })
+      .catch(() => { if (!cancelled) setZoomLayer(null); });
+    return () => { cancelled = true; };
+  }, [open, matchRefresh, assignBump]);
+  const nudgePixel = useCallback((dr, dc) => {
+    setSelectedPixel(p => {
+      if (!p) return p;
+      const or = cropOffset.row || 0;
+      const oc = cropOffset.col || 0;
+      const lr = Math.max(0, Math.min((gridDims.rows || 1) - 1,
+        (p.localRow ?? (p.row - or)) + dr));
+      const lc = Math.max(0, Math.min((gridDims.cols || 1) - 1,
+        (p.localCol ?? (p.col - oc)) + dc));
+      return { row: lr + or, col: lc + oc, localRow: lr, localCol: lc };
+    });
+    setRank(0);
+  }, [gridDims.rows, gridDims.cols, cropOffset.row, cropOffset.col]);
   const heatmapRef = useRef(null);
 
   // First-time-open effect: fetch the heatmap. Runs ONLY when ``open``
@@ -366,6 +398,20 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                 {t('phasemap:matches.pixelScore', { col: selectedPixel.col, row: selectedPixel.row, score: matchData.ncc_score?.toFixed(4) ?? '—' })}
               </div>
             )}
+            {/* Neighbourhood zoom + 1-px nudge: tiny nests are hard to hit
+                by clicking; step onto them and SEE where you stand. */}
+            <NeighbourhoodZoom
+              imageB64={zoomLayer?.image}
+              shape={zoomLayer?.shape}
+              pixel={selectedPixel}
+              onNudge={nudgePixel}
+              caption={t('phasemap:matches.zoomCaption')}
+              labels={{
+                up: t('phasemap:matches.nudgeUp'), down: t('phasemap:matches.nudgeDown'),
+                left: t('phasemap:matches.nudgeLeft'), right: t('phasemap:matches.nudgeRight'),
+                tip: t('phasemap:matches.nudgeTip'),
+              }}
+            />
           </div>
 
           {/* Right: 3-panel comparison (70%) */}
@@ -519,13 +565,107 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                 </div>
               )}
 
+              {/* Assign-phase (compare mode only): when the viewed phase's
+                  simulated pattern clearly beats the stored phase, reassign
+                  the clicked pixel's grain to it — phase_id + per-pixel
+                  Hough orientation, one-level undo. The button label carries
+                  the phase name: the label IS the confirmation. */}
+              {comparePhases && selectedPhase && matchData && (() => {
+                const samePhase = (selectedPhase.phase_id != null && matchData.phase_id != null)
+                  ? selectedPhase.phase_id === matchData.phase_id
+                  : selectedPhase.phase_name === matchData.phase_name;
+                return (
+                  <div style={{ textAlign: 'center', marginTop: 6 }}>
+                    <div style={{ fontSize: '8pt', color: '#6272a4', marginBottom: 3 }}>
+                      {samePhase
+                        ? t('phasemap:matches.assignIsCurrent')
+                        : t('phasemap:matches.assignStoredCaption', {
+                            phase: matchData.phase_name ?? '—',
+                            r: matchData.r_score != null ? matchData.r_score.toFixed(3) : '—',
+                          })}
+                    </div>
+                    <button
+                      onClick={async () => {
+                        setAssignBusy(true); setAssignMsg(null);
+                        try {
+                          const r = await indexApi.assignPhaseToGrain({
+                            row: selectedPixel.row, col: selectedPixel.col,
+                            targetPhaseId: selectedPhase.phase_id,
+                          });
+                          const d = r.data;
+                          setAssignMsg({ err: false, undo: !!d.undo_available,
+                            text: t('phasemap:matches.assignDone', {
+                              n: d.n_pixels_changed, from: d.phase_from, to: d.phase_to }) });
+                          if (d.unify_recommended?.length) {
+                            toast(t('phasemap:phaseCheck.unifyHint', {
+                              phases: d.unify_recommended.join(', ') }), { icon: '⬡' });
+                          }
+                          setAssignBump(x => x + 1);
+                          setMatchRefresh(x => x + 1);
+                          onOrientationsChanged?.();
+                        } catch (e) {
+                          setAssignMsg({ err: true, undo: false,
+                            text: e?.response?.data?.detail || String(e) });
+                        } finally {
+                          setAssignBusy(false);
+                        }
+                      }}
+                      disabled={assignBusy || samePhase || selectedPhase.phase_id == null}
+                      title={samePhase
+                        ? t('phasemap:matches.assignIsCurrent')
+                        : t('phasemap:matches.assignTip')}
+                      style={{
+                        fontSize: '9pt', fontWeight: 700, padding: '4px 14px',
+                        background: samePhase ? '#44475a' : '#ffb86c22',
+                        border: `1px solid ${samePhase ? C.border : '#ffb86c'}`,
+                        borderRadius: 3, color: samePhase ? '#6272a4' : '#ffb86c',
+                        cursor: (assignBusy || samePhase) ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      {assignBusy
+                        ? t('phasemap:matches.assignBusy')
+                        : t('phasemap:matches.assignBtn', { phase: selectedPhase.phase_name })}
+                    </button>
+                    {assignMsg && (
+                      <div style={{ marginTop: 4, display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '8pt', color: assignMsg.err ? '#ff5555' : '#50fa7b' }}>
+                          {assignMsg.text}
+                        </span>
+                        {assignMsg.undo && (
+                          <button
+                            onClick={async () => {
+                              try {
+                                const r = await indexApi.phaseReassignUndo();
+                                setAssignMsg({ err: false, undo: false,
+                                  text: t('phasemap:phaseCheck.undoDone', { n: r.data.n_restored }) });
+                                setAssignBump(x => x + 1);
+                                setMatchRefresh(x => x + 1);
+                                onOrientationsChanged?.();
+                              } catch (e) {
+                                setAssignMsg({ err: true, undo: false,
+                                  text: e?.response?.data?.detail || String(e) });
+                              }
+                            }}
+                            style={{ fontSize: '8pt', padding: '2px 8px', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, cursor: 'pointer' }}
+                          >
+                            ↩ {t('phasemap:phaseCheck.undoButton')}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Universal manual pseudo-symmetry flip — shared panel (same as
                   the Indexing Pattern-Match view). Placed right under the
                   R-score, NOT at the bottom of the scroll area: the Phase Map
                   is where wrong grains are spotted. onApplied refetches the
                   match AND flushes the IPF layer bitmaps so the map itself
-                  updates immediately. */}
+                  updates immediately. Keyed on assignBump: after a phase
+                  change its gallery + local undo state are stale. */}
               <PseudoSymmetryPanel
+                key={`psp-${assignBump}`}
                 selectedPixel={selectedPixel}
                 matchData={matchData}
                 onApplied={() => { setMatchRefresh(x => x + 1); onOrientationsChanged?.(); }}
@@ -3481,9 +3621,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           onClose={() => setShowMatchesDialog(false)}
           initialPixel={matchesInitialPixel}
           onOrientationsChanged={() => {
-            // Grain flip changed orientations in place → refetch the
-            // orientation-coloured layers (IPF); phase/CI/BC are unaffected.
-            layerStack.cacheFlush((id) => ['ipf-x', 'ipf-y', 'ipf-z'].includes(id));
+            // Grain flip / assign-phase changed orientations (and possibly
+            // phase ids) in place → refetch every affected layer kind.
+            layerStack.cacheFlush((id) => (
+              ['phase', 'ipf-x', 'ipf-y', 'ipf-z', 'kam', 'gos'].includes(id)
+              || id.startsWith('ci')
+            ));
             // The backend invalidates phase_check on orientation edits —
             // drop the stale Reassign count so the button can't fire on it.
             setPhaseCheckInfo(null);

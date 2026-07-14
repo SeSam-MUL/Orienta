@@ -64,7 +64,19 @@
     "cornersMasked": " | circular detector aperture — corners masked",
     "export": "Export…",
     "exportTip": "Open the publication figure export composer",
-    "clearMarkers": "Clear markers ({{count}})"
+    "clearMarkers": "Clear markers ({{count}})",
+    "assignBtn": "Assign \"{{phase}}\" to this grain",
+    "assignBusy": "Assigning…",
+    "assignTip": "Reassign the clicked pixel's connected grain to this phase. Every pixel gets its own Hough orientation of the new phase; one-level undo.",
+    "assignDone": "Reassigned {{n}} px from {{from}} to {{to}}.",
+    "assignIsCurrent": "This is the currently assigned phase",
+    "assignStoredCaption": "currently indexed as {{phase}}, R={{r}}",
+    "zoomCaption": "Neighbourhood (±7 px) · IPF-Z",
+    "nudgeUp": "Move selection up one pixel",
+    "nudgeDown": "Move selection down one pixel",
+    "nudgeLeft": "Move selection left one pixel",
+    "nudgeRight": "Move selection right one pixel",
+    "nudgeTip": "Nudge by 1 px (arrow keys work too)"
   },
   "displayModes": {
     "phase": "Phase Map",

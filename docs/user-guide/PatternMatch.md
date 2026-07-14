@@ -94,6 +94,29 @@ Use Pattern Match **after indexing**, to:
     deviation (per-pixel snap / rigid transfer — no single Euler triple is
     stamped onto the grain), and the stored CrystalMap is updated. One-level
     **Undo** is available.
+    **Apply to all similar grains** does the same AND fixes every other
+    same-phase grain map-wide that sits at the same wrong orientation —
+    each sibling is adopted only if its own render-NCC clearly improves
+    (genuinely different small grains stay untouched); one Undo restores
+    everything. Use it for scattered mis-indexed nests that are painful to
+    click one by one.
+
+### Navigate precisely (nudge + neighbourhood zoom)
+
+Tiny nests (2–5 px) are hard to hit by clicking the map. Below the NCC
+mini-map both dialogs show a **neighbourhood zoom** (±7 px IPF-Z crop with a
+crosshair on the selected pixel) and **arrow buttons** — arrow keys work too —
+to step the selection pixel by pixel.
+
+### Assign a different phase (Compare-phases mode, Phase Maps dialog)
+
+When **Compare phases** shows that another phase's simulated pattern clearly
+beats the stored one (e.g. an Al line present in the experiment that the
+stored phase misses), click **Assign "<phase>" to this grain**: the connected
+grain is reassigned to that phase with per-pixel Hough orientations of the
+new phase, with one-level **Undo**. The caption above the button shows what
+is currently stored. (This is the surgical sibling of the map-wide Phase
+Verification tool.)
 
 ### Export a figure
 

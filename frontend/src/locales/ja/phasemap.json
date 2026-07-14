@@ -64,7 +64,19 @@
     "cornersMasked": " | 円形検出器アパーチャ — コーナーをマスク",
     "export": "エクスポート…",
     "exportTip": "論文用図のエクスポートコンポーザーを開く",
-    "clearMarkers": "マーカーをクリア（{{count}}）"
+    "clearMarkers": "マーカーをクリア（{{count}}）",
+    "assignBtn": "この粒に \"{{phase}}\" を割り当て",
+    "assignBusy": "割り当て中…",
+    "assignTip": "クリックしたピクセルの連結粒をこの相に再割り当てします。各ピクセルは新しい相の Hough 方位を個別に取得します。1 段階の取り消しが可能。",
+    "assignDone": "{{n}} px を {{from}} から {{to}} に再割り当てしました。",
+    "assignIsCurrent": "これは現在割り当てられている相です",
+    "assignStoredCaption": "現在の指数付け: {{phase}}、R={{r}}",
+    "zoomCaption": "近傍 (±7 px) · IPF-Z",
+    "nudgeUp": "選択を 1 ピクセル上へ",
+    "nudgeDown": "選択を 1 ピクセル下へ",
+    "nudgeLeft": "選択を 1 ピクセル左へ",
+    "nudgeRight": "選択を 1 ピクセル右へ",
+    "nudgeTip": "1 px ずつ移動（矢印キーも使えます）"
   },
   "displayModes": {
     "phase": "相分布図",

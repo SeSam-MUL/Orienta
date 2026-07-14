@@ -64,7 +64,19 @@
     "cornersMasked": " | kreisförmige Detektorblende — Ecken maskiert",
     "export": "Exportieren…",
     "exportTip": "Den Export-Composer für Publikationsfiguren öffnen",
-    "clearMarkers": "Marker löschen ({{count}})"
+    "clearMarkers": "Marker löschen ({{count}})",
+    "assignBtn": "\"{{phase}}\" diesem Korn zuweisen",
+    "assignBusy": "Wird zugewiesen…",
+    "assignTip": "Widmet das zusammenhängende Korn am angeklickten Pixel auf diese Phase um. Jedes Pixel erhält seine eigene Hough-Orientierung der neuen Phase; einstufiges Undo.",
+    "assignDone": "{{n}} px von {{from}} auf {{to}} umgewidmet.",
+    "assignIsCurrent": "Das ist die aktuell zugewiesene Phase",
+    "assignStoredCaption": "aktuell indexiert als {{phase}}, R={{r}}",
+    "zoomCaption": "Umgebung (±7 px) · IPF-Z",
+    "nudgeUp": "Auswahl ein Pixel nach oben",
+    "nudgeDown": "Auswahl ein Pixel nach unten",
+    "nudgeLeft": "Auswahl ein Pixel nach links",
+    "nudgeRight": "Auswahl ein Pixel nach rechts",
+    "nudgeTip": "Um 1 px verschieben (Pfeiltasten funktionieren auch)"
   },
   "displayModes": {
     "phase": "Phasenkarte",

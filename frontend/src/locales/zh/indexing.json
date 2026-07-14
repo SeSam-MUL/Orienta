@@ -398,7 +398,19 @@
     "refPickRow": "行",
     "refPickCol": "列",
     "refPickAdd": "添加候选",
-    "refPickTip": "将任意已标定像素的存储取向作为候选加入图库（与其他候选一样渲染+评分）。当正确晶粒与错误晶粒不相邻时使用 — 相邻时会自动出现相邻晶粒候选。"
+    "refPickTip": "将任意已标定像素的存储取向作为候选加入图库（与其他候选一样渲染+评分）。当正确晶粒与错误晶粒不相邻时使用 — 相邻时会自动出现相邻晶粒候选。",
+    "applyAllBtn": "应用到所有相似晶粒",
+    "applyAllBusy": "正在扫描地图…",
+    "applyAllTip": "修正所点击的晶粒，以及全图中相同相、相同错误取向的所有其他晶粒。每个晶粒仅在其自身渲染 NCC 明显改善时才被采纳——真正取向不同的小晶粒保持不变。一次撤销即可全部恢复。",
+    "propagateDone": "全图扫描：{{found}} 个相似晶粒 → {{adopted}} 个已采纳（渲染验证），{{rejected}} 个被拒绝 — {{px}} px。",
+    "propagateNone": "全图扫描：未找到具有此取向的其他晶粒。",
+    "propagateTruncated": "（上限 32 个晶粒 — 其余请再次运行）",
+    "zoomCaption": "邻域 (±7 px) · IPF-Z",
+    "nudgeUp": "选区上移一个像素",
+    "nudgeDown": "选区下移一个像素",
+    "nudgeLeft": "选区左移一个像素",
+    "nudgeRight": "选区右移一个像素",
+    "nudgeTip": "每次移动 1 px（也可使用方向键）"
   },
   "phaseResultModal": {
     "title": "多相 结果",

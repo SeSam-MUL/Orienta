@@ -448,9 +448,19 @@ export const indexApi = {
       row, col, max_bandwidth: maxBandwidth, aperture, aperture_radius: apertureRadius,
       ...(refRow != null && refCol != null ? { ref_row: refRow, ref_col: refCol } : {}),
     } }),
-  applyVariantToGrain: ({ row, col, quat, thresholdDeg = 5.0, maxTotalDeg = 15.0, refine = false }) =>
+  // propagateSimilar: ALSO fix every other same-phase grain map-wide that
+  // sits at the same wrong orientation — each sibling render-verified.
+  applyVariantToGrain: ({ row, col, quat, thresholdDeg = 5.0, maxTotalDeg = 15.0, refine = false, propagateSimilar = false }) =>
     api.post('/api/indexing/pattern-match/apply-to-grain', {
       row, col, quat, threshold_deg: thresholdDeg, max_total_deg: maxTotalDeg, refine,
+      propagate_similar: propagateSimilar,
+    }),
+  // Manual per-grain PHASE reassignment from the Compare-phases view (the
+  // surgical sibling of the map-wide Phase Verification). Undo shares
+  // /phase-reassign/undo.
+  assignPhaseToGrain: ({ row, col, targetPhaseId, thresholdDeg = 5.0 }) =>
+    api.post('/api/indexing/pattern-match/assign-phase', {
+      row, col, target_phase_id: targetPhaseId, threshold_deg: thresholdDeg,
     }),
   undoGrainFlip: () =>
     api.post('/api/indexing/pattern-match/undo-grain', {}),

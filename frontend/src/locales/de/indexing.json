@@ -398,7 +398,19 @@
     "refPickRow": "Zeile",
     "refPickCol": "Spalte",
     "refPickAdd": "Kandidat holen",
-    "refPickTip": "Fügt die gespeicherte Orientierung eines beliebigen indexierten Pixels als Kandidaten zur Galerie hinzu (gerendert + bewertet wie alle anderen). Nutzen, wenn das korrekt indexierte Korn das falsche NICHT berührt — bei angrenzenden Körnern erscheinen die Nachbarkorn-Kandidaten automatisch."
+    "refPickTip": "Fügt die gespeicherte Orientierung eines beliebigen indexierten Pixels als Kandidaten zur Galerie hinzu (gerendert + bewertet wie alle anderen). Nutzen, wenn das korrekt indexierte Korn das falsche NICHT berührt — bei angrenzenden Körnern erscheinen die Nachbarkorn-Kandidaten automatisch.",
+    "applyAllBtn": "Auf alle ähnlichen Körner anwenden",
+    "applyAllBusy": "Karte wird durchsucht…",
+    "applyAllTip": "Korrigiert das angeklickte Korn UND map-weit jedes weitere Korn derselben Phase mit derselben falschen Orientierung. Jedes Geschwisterkorn wird nur übernommen, wenn sich sein eigener Render-NCC klar verbessert — wirklich anders orientierte kleine Körner bleiben unangetastet. Ein Undo stellt alles wieder her.",
+    "propagateDone": "Karten-Scan: {{found}} ähnliche Körner → {{adopted}} übernommen (render-verifiziert), {{rejected}} abgelehnt — {{px}} px.",
+    "propagateNone": "Karten-Scan: keine weiteren Körner mit dieser Orientierung gefunden.",
+    "propagateTruncated": "(auf 32 Körner begrenzt — für den Rest erneut ausführen)",
+    "zoomCaption": "Umgebung (±7 px) · IPF-Z",
+    "nudgeUp": "Auswahl ein Pixel nach oben",
+    "nudgeDown": "Auswahl ein Pixel nach unten",
+    "nudgeLeft": "Auswahl ein Pixel nach links",
+    "nudgeRight": "Auswahl ein Pixel nach rechts",
+    "nudgeTip": "Um 1 px verschieben (Pfeiltasten funktionieren auch)"
   },
   "phaseResultModal": {
     "title": "Mehrphasen-Ergebnisse",

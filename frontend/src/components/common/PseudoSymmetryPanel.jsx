@@ -72,7 +72,7 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
       .finally(() => setVariantsBusy(false));
   };
 
-  const applyToGrain = () => {
+  const applyToGrain = (propagate = false) => {
     if (!chosenVariant) return;
     setGrainBusy(true);
     // No cap override needed even for foreign-basin candidates (neighbour
@@ -81,6 +81,7 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
     // grain pixel near the target by construction.
     indexApi.applyVariantToGrain({
       row, col, quat: chosenVariant.quat, thresholdDeg: grainThreshold, refine,
+      propagateSimilar: propagate,
     })
       .then(r => {
         const d = r.data;
@@ -93,6 +94,16 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
           text += ' ' + t('matchesDialog.refineRejected');
         } else if (rf?.status === 'skipped' || rf?.status === 'error') {
           text += ' ' + t('matchesDialog.refineSkipped', { reason: rf.reason || '' });
+        }
+        const p = d.propagate;
+        if (p) {
+          text += ' ' + (p.n_candidates === 0
+            ? t('matchesDialog.propagateNone')
+            : t('matchesDialog.propagateDone', {
+                found: p.n_candidates, adopted: p.n_adopted,
+                rejected: p.n_rejected, px: p.n_pixels,
+              }));
+          if (p.truncated) text += ' ' + t('matchesDialog.propagateTruncated');
         }
         setGrainMsg({ err: false, text });
         setUndoAvailable(!!d.undo_available);
@@ -232,10 +243,19 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
                 const isCur = chosenVariant.kind === 'current' || chosenVariant.label === 'current';
                 return (
                   <>
-                    <button onClick={applyToGrain} disabled={grainBusy || isCur}
+                    <button onClick={() => applyToGrain(false)} disabled={grainBusy || isCur}
                       title={isCur ? t('matchesDialog.currentNoop') : t('matchesDialog.applyGrainTip')}
                       style={{ fontSize: '8pt', padding: '3px 10px', background: isCur ? '#44475a' : '#50fa7b22', border: `1px solid ${isCur ? C.border : '#50fa7b'}`, borderRadius: 3, color: isCur ? '#6272a4' : '#50fa7b', cursor: isCur ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
                       {grainBusy ? t('matchesDialog.grainApplying') : t('matchesDialog.applyGrain', { label: chosenVariant.label })}
+                    </button>
+                    {/* Second BUTTON (not a hidden checkbox mode): scope is
+                        part of what's clicked. Map-wide siblings of the same
+                        wrong orientation get the same fix, each render-
+                        verified server-side. */}
+                    <button onClick={() => applyToGrain(true)} disabled={grainBusy || isCur}
+                      title={t('matchesDialog.applyAllTip')}
+                      style={{ fontSize: '8pt', padding: '3px 10px', background: 'transparent', border: `1px solid ${isCur ? C.border : '#8be9fd'}`, borderRadius: 3, color: isCur ? '#6272a4' : '#8be9fd', cursor: isCur ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
+                      {grainBusy ? t('matchesDialog.applyAllBusy') : t('matchesDialog.applyAllBtn')}
                     </button>
                     {isCur && (
                       <span style={{ fontSize: '8pt', color: '#ffb86c' }}>{t('matchesDialog.currentNoop')}</span>

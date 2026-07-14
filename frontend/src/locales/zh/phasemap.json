@@ -64,7 +64,19 @@
     "cornersMasked": " | 圆形探测器光阑——边角已掩膜",
     "export": "导出…",
     "exportTip": "打开论文图导出编排器",
-    "clearMarkers": "清除标记（{{count}}）"
+    "clearMarkers": "清除标记（{{count}}）",
+    "assignBtn": "将 \"{{phase}}\" 指派给该晶粒",
+    "assignBusy": "指派中…",
+    "assignTip": "将所点击像素的连通晶粒重新指派为该相。每个像素单独获得新相的 Hough 取向；支持一级撤销。",
+    "assignDone": "已将 {{n}} px 从 {{from}} 重新指派为 {{to}}。",
+    "assignIsCurrent": "这是当前指派的相",
+    "assignStoredCaption": "当前标定为 {{phase}}，R={{r}}",
+    "zoomCaption": "邻域 (±7 px) · IPF-Z",
+    "nudgeUp": "选区上移一个像素",
+    "nudgeDown": "选区下移一个像素",
+    "nudgeLeft": "选区左移一个像素",
+    "nudgeRight": "选区右移一个像素",
+    "nudgeTip": "每次移动 1 px（也可使用方向键）"
   },
   "displayModes": {
     "phase": "相分布图",

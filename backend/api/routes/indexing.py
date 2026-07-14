@@ -2005,6 +2005,7 @@ async def get_pattern_match(
     xmap = result.xmap
     ncc_score = None
     phase_name = None
+    stored_phase_id = None
     euler_angles = None
     total_ranks = 1
 
@@ -2038,6 +2039,7 @@ async def get_pattern_match(
             # Phase name — direct lookup via phase_id
             try:
                 phase_id = int(xmap.phase_id[px_idx])
+                stored_phase_id = phase_id
                 phase_name = xmap.phases[phase_id].name
             except Exception:
                 # Fallback: first phase name
@@ -2183,6 +2185,10 @@ async def get_pattern_match(
         "r_score": r_score,
         "r_quality": r_quality,
         "phase_name": phase_name,
+        # Stored phase id of the clicked pixel — lets the compare-phases UI
+        # gate its "Assign phase to grain" button by ID, not by name (names
+        # can collide across library entries).
+        "phase_id": stored_phase_id,
         "euler_angles": euler_angles,
         "total_ranks": total_ranks,
         "rank": rank,
@@ -2225,6 +2231,12 @@ class GrainApplyRequest(BaseModel):
     threshold_deg: float = 5.0
     max_total_deg: float = 15.0   # anti-drift cap of the snap flood fill
     refine: bool = False          # guarded Newton polish after the snap
+    # V2 propagation: ALSO fix every other same-phase grain sitting at the
+    # SAME (wrong) orientation as the clicked pixel — each sibling is
+    # render-verified (adopt only if its render-NCC clearly improves), so one
+    # click on one nest fixes all its map-wide siblings.
+    propagate_similar: bool = False
+    propagate_tol_deg: float = 5.0
     result_id: str | None = None
 
 
@@ -2352,6 +2364,155 @@ def _neighbour_grain_candidates(result, xmap, phase_id, pg, row, col, max_n=4):
     except Exception:
         logger.debug("[variants] neighbour candidates failed", exc_info=True)
         return []
+
+
+# Hard cap for V2 propagation — nests are small and few; a run-away match
+# list must not turn one click into an unbounded render batch.
+MAX_PROPAGATE_SIBLINGS = 32
+
+
+def _propagate_to_similar_grains(*, result, det, sht_path, pg, phase_id,
+                                 full_q, phase_full, n_rows, n_cols,
+                                 q_click, q_target, clicked_flat,
+                                 threshold_deg, max_total_deg, tol_deg,
+                                 xmap_index_of, qdata, new_q, undo_idx, undo_old):
+    """Render-verified map-wide propagation of a grain-flip correction.
+
+    Finds every OTHER same-phase grain whose seed orientation matches the
+    clicked pixel's (wrong) orientation within ``tol_deg`` (crystal-symmetry
+    misorientation) and is NOT already at the target, applies the SAME
+    correction (rigid C carried through the per-pixel snap fill), and adopts
+    each sibling only if its median render-NCC over sample pixels improves by
+    a clear margin (0.03 — the validated unification hysteresis). Real small
+    grains that merely resemble the wrong basin render worse under the
+    correction and stay bit-identical.
+
+    Mutates ``new_q`` / ``undo_idx`` / ``undo_old`` in place (they already
+    carry the clicked grain's changes; ONE undo restores everything).
+    Returns a summary dict for the UI toast.
+    """
+    from backend.spherical_gpu.pipeline.variant_unification import (
+        segment_supergroup_grains, build_render_score_fn,
+    )
+    from backend.spherical_gpu.pseudosym import (
+        grain_snap_floodfill, same_orientation_angle_deg, _qmul, _qconj,
+    )
+    from tools.pattern_comparison import get_experimental_pattern
+
+    summary = {"n_candidates": 0, "n_adopted": 0, "n_rejected": 0,
+               "n_pixels": 0, "truncated": False}
+    labels = segment_supergroup_grains(
+        full_q, phase_full, n_rows, n_cols, int(phase_id), pg or "1",
+        threshold_deg=float(threshold_deg))
+    g0 = int(labels[int(clicked_flat)])
+    q_click = np.asarray(q_click, dtype=np.float64).reshape(4)
+    q_target = np.asarray(q_target, dtype=np.float64).reshape(4)
+    rigid_C = _qmul(q_target[None, :], _qconj(q_click[None, :]))[0]
+
+    cands = []
+    for g in np.unique(labels):
+        if g < 0 or int(g) == g0:
+            continue
+        pix = np.flatnonzero(labels == g)
+        q_seed = np.asarray(full_q[pix[0]], dtype=np.float64)
+        if not np.isfinite(q_seed[0]):
+            continue
+        # Same wrong basin as the clicked pixel...
+        if float(same_orientation_angle_deg(
+                q_seed[None, :], q_click, pg or "1")[0]) > tol_deg:
+            continue
+        # ...and not already at the target (nothing to fix).
+        if float(same_orientation_angle_deg(
+                q_seed[None, :], q_target, pg or "1")[0]) <= tol_deg:
+            continue
+        cands.append((int(pix[0]), pix))
+    summary["n_candidates"] = len(cands)
+    if not cands:
+        return summary
+    if len(cands) > MAX_PROPAGATE_SIBLINGS:
+        summary["truncated"] = True
+        cands = cands[:MAX_PROPAGATE_SIBLINGS]
+
+    def _get_pattern(flat):
+        r, c = divmod(int(flat), n_cols)
+        p = get_experimental_pattern(result, r, c)
+        return None if p is None else np.asarray(p, dtype=np.float32)
+
+    # The scorer allocates an SHT grid — free the interactive render VRAM
+    # once up front (same self-heal as refine / unify).
+    _free_interactive_gpu_caches()
+    score_fn = build_render_score_fn(str(sht_path), det, _get_pattern)
+    written = set(int(i) for i in undo_idx)
+
+    with _silence_console():
+        for seed_flat, sib_pix in cands:
+            sr, sc = divmod(int(seed_flat), n_cols)
+            q_seed = np.asarray(full_q[seed_flat], dtype=np.float64)
+            sib_target = _qmul(rigid_C[None, :], q_seed[None, :])[0]
+            grain_s, q_map_s, _stats = grain_snap_floodfill(
+                full_q, phase_full, n_rows, n_cols, (sr, sc), int(phase_id),
+                pg, sib_target, threshold_deg=float(threshold_deg),
+                max_total_deg=float(max_total_deg))
+            # Constrain everything to THIS sibling's own segmentation label:
+            # the snap fill legitimately walks through correct territory and
+            # could reach the NEXT nest — but each candidate must be judged
+            # and written independently on its own pixels (the next nest is
+            # its own candidate with its own render verdict).
+            pix_set = {int(p) for p in sib_pix}
+            # Judge on the pixels the correction actually MOVES (physical
+            # no-ops — possibly re-expressed as symmetry-equivalent
+            # quaternions — would dilute the comparison toward "no change").
+            flats = [f for f in (r * n_cols + c for (r, c) in grain_s)
+                     if f in pix_set and f in q_map_s
+                     and float(same_orientation_angle_deg(
+                         np.asarray(q_map_s[f])[None, :], full_q[f],
+                         pg or "1")[0]) >= 1e-3]
+            if not flats:
+                summary["n_rejected"] += 1
+                continue
+            # Render gate: median over up to 4 evenly-spread sample pixels,
+            # old orientation vs corrected. Fail-safe: any scoring failure
+            # (non-finite median) keeps the sibling untouched.
+            ns = min(4, len(flats))
+            sample = np.asarray(
+                flats[:: max(1, len(flats) // ns)][:ns], dtype=np.int64)
+            old_s = np.asarray(score_fn(
+                sample, np.asarray([full_q[f] for f in sample])), dtype=float)
+            new_s = np.asarray(score_fn(
+                sample, np.asarray([q_map_s[int(f)] for f in sample])), dtype=float)
+            old_fin = old_s[np.isfinite(old_s)]
+            new_fin = new_s[np.isfinite(new_s)]
+            old_m = float(np.median(old_fin)) if old_fin.size else float("nan")
+            new_m = float(np.median(new_fin)) if new_fin.size else float("nan")
+            if not (np.isfinite(old_m) and np.isfinite(new_m)
+                    and new_m >= old_m + 0.03):
+                summary["n_rejected"] += 1
+                continue
+            n_px = 0
+            for (r, c) in grain_s:
+                fi = r * n_cols + c
+                if fi not in pix_set or fi not in q_map_s:
+                    continue
+                xi = fi if xmap_index_of is None else int(xmap_index_of[fi])
+                if xi < 0 or xi in written:
+                    continue
+                # Same no-op filter as the clicked grain (orientation-level:
+                # fills walk into already-correct territory by design).
+                if float(same_orientation_angle_deg(
+                        np.asarray(q_map_s[fi])[None, :], qdata[xi],
+                        pg or "1")[0]) < 1e-3:
+                    continue
+                written.add(xi)
+                undo_idx.append(int(xi))
+                undo_old.append([float(v) for v in qdata[xi]])
+                new_q[xi] = q_map_s[fi]
+                n_px += 1
+            if n_px:
+                summary["n_adopted"] += 1
+                summary["n_pixels"] += n_px
+            else:
+                summary["n_rejected"] += 1
+    return summary
 
 
 @router.get("/pattern-match/variants")
@@ -2729,7 +2890,9 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
     xmap, px_idx, phase_id, sht_path, det, pg = _spherical_pixel_ctx(result, req.row, req.col)
-    from backend.spherical_gpu.pseudosym import grain_snap_floodfill
+    from backend.spherical_gpu.pseudosym import (
+        grain_snap_floodfill, same_orientation_angle_deg,
+    )
     from orix.quaternion import Rotation as _R
 
     n_rows, n_cols = result.original_shape
@@ -2792,10 +2955,42 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
         xi = fi if xmap_index_of is None else int(xmap_index_of[fi])
         if xi < 0 or fi not in new_q_map:
             continue
+        # The snap fill legitimately WALKS INTO already-correct territory —
+        # those pixels keep their orientation (possibly re-expressed as a
+        # symmetry-equivalent quaternion h·q). Compare ORIENTATIONS under the
+        # crystal symmetry, not raw quaternions: physical no-ops are neither
+        # counted nor undo-stored nor rewritten.
+        if float(same_orientation_angle_deg(
+                np.asarray(new_q_map[fi])[None, :], qdata[xi], pg or "1")[0]) < 1e-3:
+            continue
         undo_idx.append(int(xi))
         undo_old.append([float(v) for v in qdata[xi]])
         new_q[xi] = new_q_map[fi]
         changed += 1
+
+    # ---- V2: propagate to all similar grains (render-verified) -----------
+    # Small mis-indexed nests all sit in the SAME wrong basin (verified on
+    # real data: dozens of blobs at one exact misorientation) but are painful
+    # to click one by one. Find every OTHER same-phase grain whose seed
+    # orientation matches the clicked pixel's (wrong) orientation, apply the
+    # SAME correction, and adopt each sibling only if its render-NCC clearly
+    # improves — real small grains stay untouched. Works on the PRE-fix
+    # arrays (full_q was never mutated above).
+    propagate_summary = None
+    if req.propagate_similar:
+        propagate_summary = _propagate_to_similar_grains(
+            result=result, det=det, sht_path=sht_path, pg=pg,
+            phase_id=phase_id, full_q=full_q, phase_full=phase_full,
+            n_rows=n_rows, n_cols=n_cols, q_click=q_click, q_target=q_target,
+            clicked_flat=req.row * n_cols + req.col,
+            threshold_deg=float(req.threshold_deg),
+            max_total_deg=float(req.max_total_deg),
+            tol_deg=float(req.propagate_tol_deg),
+            xmap_index_of=xmap_index_of, qdata=qdata,
+            new_q=new_q, undo_idx=undo_idx, undo_old=undo_old,
+        )
+        changed += int(propagate_summary.get("n_pixels", 0))
+
     xmap._rotations = _R(new_q)   # write back (same pattern as the frame-correction step)
 
     # One-level undo, stored on the result (in-memory registry — survives until
@@ -2810,6 +3005,7 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
         md.pop("phase_reassign_undo", None)
 
     return {"n_changed": changed, "grain_size": len(grain),
+            "propagate": propagate_summary,
             "threshold_deg": float(req.threshold_deg),
             "max_total_deg": float(req.max_total_deg),
             "snap": snap_stats, "refine": refine_summary,
@@ -3377,6 +3573,133 @@ async def phase_reassign_undo(req: PhaseReassignRequest):
     # The check ran against the pre-undo map — force a fresh one.
     md.pop("phase_check", None)
     return {"n_restored": int(idxs.size)}
+
+
+class AssignPhaseRequest(BaseModel):
+    row: int
+    col: int
+    target_phase_id: int
+    threshold_deg: float = 5.0
+    result_id: str | None = None
+
+
+@router.post("/pattern-match/assign-phase")
+async def assign_phase_to_grain(req: AssignPhaseRequest):
+    """Manual per-grain PHASE reassignment from the Compare-phases view — the
+    surgical sibling of the map-wide Phase Verification: the user sees that a
+    compared phase's simulated pattern matches better than the stored phase
+    and assigns THAT phase to the clicked pixel's connected grain. Pixels get
+    per-pixel Hough orientations of the target phase (nearest-fill for
+    failures — same machinery as /phase-reassign); one-level undo shares the
+    /phase-reassign/undo slot. Modifies the stored CrystalMap."""
+    result = _get_result(req.result_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="No indexing result available")
+    ctx = _phase_check_ctx(result, build_scorers=False)
+    n_rows, n_cols = ctx["n_rows"], ctx["n_cols"]
+    if not (0 <= req.row < n_rows and 0 <= req.col < n_cols):
+        raise HTTPException(status_code=400, detail="Pixel outside the map")
+    flat = req.row * n_cols + req.col
+    cur_pid = int(ctx["phase_full"][flat])
+    if cur_pid < 0:
+        raise HTTPException(status_code=400, detail="Clicked pixel was not indexed")
+    tpid = int(req.target_phase_id)
+    if tpid == cur_pid:
+        raise HTTPException(status_code=400,
+                            detail="Pixel already belongs to that phase")
+    if tpid not in ctx["phases"]:
+        raise HTTPException(status_code=400,
+                            detail=f"Unknown target phase id {tpid}")
+    pg = ctx["phases"].get(cur_pid)
+    if not pg:
+        raise HTTPException(status_code=400,
+                            detail="Clicked pixel's phase has no symmetry information")
+
+    from backend.spherical_gpu.pipeline.variant_unification import (
+        segment_supergroup_grains,
+    )
+    from backend.spherical_gpu.pipeline.phase_reassignment import apply_reassignment
+
+    labels = segment_supergroup_grains(
+        ctx["full_q"], ctx["phase_full"], n_rows, n_cols, cur_pid, pg,
+        threshold_deg=float(req.threshold_deg))
+    g0 = int(labels[flat])
+    if g0 < 0:
+        raise HTTPException(status_code=400, detail="No grain at the clicked pixel")
+    pix = np.flatnonzero(labels == g0)
+    rr, cc = np.divmod(pix, n_cols)
+    report = {
+        "grains": [{
+            "grain_id": g0, "phase_id": cur_pid, "pixels": int(pix.size),
+            "centroid": [float(rr.mean()), float(cc.mean())],
+            "best_alt_phase": tpid, "decision": "reassign",
+        }],
+        "params": {"threshold_deg": float(req.threshold_deg)},
+    }
+
+    def _work():
+        with _silence_console():
+            return apply_reassignment(
+                ctx["full_q"], ctx["phase_full"], n_rows, n_cols,
+                report, ctx["phases"], ctx["hough_quats_fn"])
+
+    new_pf, new_q, applied, skipped = await asyncio.to_thread(_work)
+    if not applied:
+        reason = (skipped[0].get("skip_reason") if skipped else "nothing to change")
+        raise HTTPException(status_code=409,
+                            detail=f"Could not assign phase: {reason}")
+
+    md = ctx["md"]
+    xmap = ctx["xmap"]
+    n = n_rows * n_cols
+    changed_flat = np.flatnonzero(new_pf != ctx["phase_full"])
+    if changed_flat.size == 0:
+        raise HTTPException(status_code=409, detail="Nothing changed")
+    inv = np.full(n, -1, dtype=np.int64)
+    inv[ctx["flat_of_row"]] = np.arange(ctx["flat_of_row"].size)
+    xidx = inv[changed_flat]
+    if (xidx < 0).any():
+        raise HTTPException(status_code=409,
+                            detail="Reassigned pixels fall outside the result")
+    old_pid_arr = np.asarray(xmap.phase_id).reshape(-1).copy()
+    old_q_arr = ctx["qdata"]
+    md["phase_reassign_undo"] = {
+        "xmap_indices": [int(i) for i in xidx],
+        "old_quats": [[float(v) for v in old_q_arr[i]] for i in xidx],
+        "old_phase_ids": [int(old_pid_arr[i]) for i in xidx],
+    }
+    new_rows_q = old_q_arr.copy()
+    new_rows_q[xidx] = new_q[changed_flat]
+    new_rows_pid = old_pid_arr.copy()
+    new_rows_pid[xidx] = new_pf[changed_flat]
+    _R = ctx["Rotation"]
+    xmap._rotations = _R(new_rows_q)
+    xmap._phase_id[np.asarray(xmap.is_in_data, dtype=bool)] = new_rows_pid
+    # Phase + orientation edit → any earlier phase check / grain-flip undo is
+    # stale for these pixels; force a fresh check and keep ONE undo semantic.
+    md.pop("phase_check", None)
+    md.pop("grain_flip_undo", None)
+
+    unify_hint: list[str] = []
+    try:
+        from backend.spherical_gpu.pipeline.variant_unification import (
+            class_reps_for_phase,
+        )
+        tpg = ctx["phases"].get(tpid)
+        if tpg and class_reps_for_phase(tpg).shape[0] >= 2:
+            unify_hint.append(_phase_name_of(xmap, tpid))
+    except Exception:
+        pass
+
+    return {
+        "n_pixels_changed": int(changed_flat.size),
+        "grain_size": int(pix.size),
+        "phase_from": _phase_name_of(xmap, cur_pid),
+        "phase_to": _phase_name_of(xmap, tpid),
+        "n_hough_filled": int(applied[0].get("n_hough_filled", 0)),
+        "unify_recommended": unify_hint,
+        "undo_available": True,
+    }
 
 
 # Cache of (sht_paths tuple, bandwidth) -> SphericalGPUBackend. First call

@@ -398,7 +398,19 @@
     "refPickRow": "row",
     "refPickCol": "col",
     "refPickAdd": "Add candidate",
-    "refPickTip": "Add any indexed pixel's stored orientation to the gallery as a candidate (rendered + scored like the others). Use this when the correctly-indexed grain does NOT touch the wrong one — for touching grains the neighbour-grain candidates appear automatically."
+    "refPickTip": "Add any indexed pixel's stored orientation to the gallery as a candidate (rendered + scored like the others). Use this when the correctly-indexed grain does NOT touch the wrong one — for touching grains the neighbour-grain candidates appear automatically.",
+    "applyAllBtn": "Apply to all similar grains",
+    "applyAllBusy": "Scanning map…",
+    "applyAllTip": "Fix the clicked grain AND every other grain map-wide with the same phase and the same wrong orientation. Each sibling is adopted only if its own render-NCC clearly improves — genuinely different small grains stay untouched. One Undo restores everything.",
+    "propagateDone": "Map scan: {{found}} similar grains → {{adopted}} adopted (render-verified), {{rejected}} rejected — {{px}} px.",
+    "propagateNone": "Map scan: no other grains with this orientation found.",
+    "propagateTruncated": "(capped at 32 grains — run again for the rest)",
+    "zoomCaption": "Neighbourhood (±7 px) · IPF-Z",
+    "nudgeUp": "Move selection up one pixel",
+    "nudgeDown": "Move selection down one pixel",
+    "nudgeLeft": "Move selection left one pixel",
+    "nudgeRight": "Move selection right one pixel",
+    "nudgeTip": "Nudge by 1 px (arrow keys work too)"
   },
   "phaseResultModal": {
     "title": "Multi-Phase Results",

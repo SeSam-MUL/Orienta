@@ -19,7 +19,7 @@
 
 import { useState, useEffect, useCallback, useRef, useReducer, useMemo, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
-import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus } from '../../services/api';
+import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phaseMapApi } from '../../services/api';
 import NavigationCanvas from './NavigationCanvas';
 import EdsOverlayPanel from './EdsOverlayPanel';
 import BatchIndexingDialog from './BatchIndexingDialog';
@@ -32,6 +32,7 @@ import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
 import PseudoSymmetryPanel from '../common/PseudoSymmetryPanel';
+import NeighbourhoodZoom from '../common/NeighbourhoodZoom';
 import { detectPhaseDegeneracy } from './phaseDegeneracy';
 import FloatingPhasePanel from './FloatingPhasePanel';
 import useResultStore from '../../stores/useResultStore';
@@ -369,6 +370,30 @@ function PatternMatchesDialog({ open, onClose }) {
   const [selectedPixel, setSelectedPixel] = useState(null);
   const [rank, setRank] = useState(0);
   const [loading, setLoading] = useState(false);
+  // Neighbourhood-zoom source: full-grid IPF-Z layer PNG (tiny mis-indexed
+  // nests read as colour breaks there). Fail-soft: no layer → nudge only.
+  const [zoomLayer, setZoomLayer] = useState(null);
+  useEffect(() => {
+    if (!open) { setZoomLayer(null); return undefined; }
+    let cancelled = false;
+    phaseMapApi.layer('ipf-z')
+      .then(r => { if (!cancelled) setZoomLayer(r.data); })
+      .catch(() => { if (!cancelled) setZoomLayer(null); });
+    return () => { cancelled = true; };
+  }, [open]);
+  const nudgePixel = useCallback((dr, dc) => {
+    setSelectedPixel(p => {
+      if (!p) return p;
+      const or = cropOffset.row || 0;
+      const oc = cropOffset.col || 0;
+      const lr = Math.max(0, Math.min((gridDims.rows || 1) - 1,
+        (p.localRow ?? (p.row - or)) + dr));
+      const lc = Math.max(0, Math.min((gridDims.cols || 1) - 1,
+        (p.localCol ?? (p.col - oc)) + dc));
+      return { row: lr + or, col: lc + oc, localRow: lr, localCol: lc };
+    });
+    setRank(0);
+  }, [gridDims.rows, gridDims.cols, cropOffset.row, cropOffset.col]);
   const [stats, setStats] = useState(null);
   const heatmapRef = useRef(null);
   // Linked crosshair + numbered red markers shared across the 3 comparison
@@ -470,6 +495,20 @@ function PatternMatchesDialog({ open, onClose }) {
                 {t('matchesDialog.pixelScore', { col: selectedPixel.col, row: selectedPixel.row, score: matchData.ncc_score?.toFixed(4) ?? t('matchesDialog.dash') })}
               </div>
             )}
+            {/* Neighbourhood zoom + 1-px nudge: tiny nests are hard to hit
+                by clicking; step onto them and SEE where you stand. */}
+            <NeighbourhoodZoom
+              imageB64={zoomLayer?.image}
+              shape={zoomLayer?.shape}
+              pixel={selectedPixel}
+              onNudge={nudgePixel}
+              caption={t('matchesDialog.zoomCaption')}
+              labels={{
+                up: t('matchesDialog.nudgeUp'), down: t('matchesDialog.nudgeDown'),
+                left: t('matchesDialog.nudgeLeft'), right: t('matchesDialog.nudgeRight'),
+                tip: t('matchesDialog.nudgeTip'),
+              }}
+            />
           </div>
 
           {/* Right: 3-panel comparison (70%) */}
