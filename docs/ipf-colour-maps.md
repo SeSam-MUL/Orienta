@@ -270,7 +270,8 @@ IPF map per phase.
   **alpha-only mask applied AFTER colour computation** — the colour math is
   untouched, so it composes identically with the standard and the
   grain-stabilized path (`-1` = all phases, legacy behaviour, byte-identical).
-- `GET /api/phasemap/ipf-key?...&phase_filter=<pid>`: the floating colour key
+- `GET /api/phasemap/ipf-key?...&phase_filter=<pid>`: the colour key (a
+  collapsible vertical panel BESIDE the map — it never overlays the data)
   shows **only that phase's triangle** — key and map always agree.
 - UI: **"Phase:" dropdown** on every IPF layer (next to the stabilize
   checkbox), options from the same phase stats the legend uses; hidden for
@@ -315,7 +316,11 @@ Note: colour toggles need no re-indexing — they re-render display layers only.
 
 - Chemically/structurally degenerate phases can win pixels of the wrong phase
   (e.g. a cubic approximant claiming matrix pixels). This is a *phase*-level
-  problem, out of scope for the orientation work above; a render-verified
-  phase-check feature is planned.
+  problem, out of scope for the orientation work above — addressed by the
+  render-verified **Phase Verification** tool (Phase Maps → Advanced tools):
+  a read-only "Check phases" margin layer plus grain-based "Reassign" with
+  Hough-anchored candidates, a 0.05 margin hysteresis and one-level undo.
+  v1 limitation: the check runs synchronously (no progress/cancel yet) and
+  can take minutes on large multi-phase maps.
 - `-43m` / `4mm` / `mm2` variants are pattern-identical (Laue-degenerate) —
   no method can or needs to resolve them.
