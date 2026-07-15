@@ -76,7 +76,8 @@
     "nudgeDown": "選択を 1 ピクセル下へ",
     "nudgeLeft": "選択を 1 ピクセル左へ",
     "nudgeRight": "選択を 1 ピクセル右へ",
-    "nudgeTip": "1 px ずつ移動（矢印キーも使えます）"
+    "nudgeTip": "1 px ずつ移動（矢印キーも使えます）",
+    "nudgeClickTip": "セルをクリックすると選択がそこへ移動します（矢印キーで 1 px 移動）"
   },
   "displayModes": {
     "phase": "相分布図",

@@ -44,9 +44,13 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
   const row = selectedPixel?.row;
   const col = selectedPixel?.col;
   useEffect(() => {
-    // reset the flip UI when the user clicks another pixel
+    // reset the flip UI when the user clicks another pixel; prefill the
+    // reference inputs with the CURRENT pixel so the (col, row) order is
+    // unmistakable — empty placeholders let the user type them swapped.
     setVariants(null); setChosenVariant(null); setGrainMsg(null);
     setUndoAvailable(false);
+    setRefColIn(col != null ? String(col) : '');
+    setRefRowIn(row != null ? String(row) : '');
   }, [row, col]);
 
   if (!selectedPixel || matchData?.indexing_method !== 'spherical') return null;
@@ -54,11 +58,21 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
   const suspicious = matchData?.orientation_source === 'hough'
     || matchData?.r_quality === 'poor';
 
-  const loadVariants = (ref = null) => {
+  const loadVariants = (opts = {}) => {
+    const { ref = null, reindex = false } = opts;
     setVariantsBusy(true); setGrainMsg(null);
-    indexApi.patternMatchVariants(row, col, ref ? { refRow: ref.row, refCol: ref.col } : {})
+    indexApi.patternMatchVariants(row, col, {
+      ...(ref ? { refRow: ref.row, refCol: ref.col } : {}),
+      ...(reindex ? { reindex: true } : {}),
+    })
       .then(r => {
         setVariants(r.data);
+        // A silently missing reference tile cost the user a debugging
+        // session — surface the backend's reason loudly.
+        if (r.data?.reference_error) {
+          setGrainMsg({ err: true,
+            text: t('matchesDialog.refPickFailed', { msg: r.data.reference_error }) });
+        }
         // Auto-select the best NON-current candidate: applying 'current' is a
         // no-op (it is the orientation already on the map), so pre-picking it
         // would make the Apply button do nothing. Fall back to the best
@@ -186,10 +200,13 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
                 ? `↖ ${t('matchesDialog.kindNeighbour')}`
                 : c.kind === 'reference'
                   ? `⌖ ${t('matchesDialog.kindReference')}`
-                  : c.label;
+                  : c.kind === 'reindex'
+                    ? `↻ ${t('matchesDialog.kindReindex')}`
+                    : c.label;
               const kindColor = c.kind === 'neighbour' ? '#8be9fd'
                 : c.kind === 'reference' ? '#bd93f9'
-                  : (c.label === 'current' ? '#ffb86c' : '#6272a4');
+                  : c.kind === 'reindex' ? '#f1fa8c'
+                    : (c.label === 'current' ? '#ffb86c' : '#6272a4');
               return (
                 <div key={i} onClick={() => setChosenVariant(c)}
                   title={`${c.label} — Euler (${(c.euler || []).map(a => a?.toFixed(1)).join(', ')})°`
@@ -203,23 +220,43 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
             })}
           </div>
 
+          {/* Escalation ladder below the gallery (top→bottom): re-index this
+              pixel (full search, same location) → reference another pixel
+              (cross-grain, last resort). */}
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 6, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => loadVariants({ reindex: true })}
+              disabled={variantsBusy}
+              title={t('matchesDialog.reindexTip')}
+              style={{ fontSize: '8pt', padding: '2px 10px', background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, cursor: variantsBusy ? 'wait' : 'pointer' }}>
+              {variantsBusy ? t('matchesDialog.reindexBusy') : `↻ ${t('matchesDialog.reindexBtn')}`}
+            </button>
+          </div>
+
           {/* Free reference pixel: fetch the gallery again with any indexed
               pixel's stored orientation as an extra candidate — for cases
-              where the correct grain does NOT touch the wrong one. */}
+              where the correct grain does NOT touch the wrong one. Order
+              matches the dialog's "Pixel (col, row)" display; inputs are
+              prefilled with the current pixel so the order is unmistakable. */}
           <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}
             title={t('matchesDialog.refPickTip')}>
-            <span style={{ fontSize: '8pt', color: '#6272a4' }}>{t('matchesDialog.refPickLabel')}</span>
-            <input type="number" min={0} placeholder={t('matchesDialog.refPickRow')} value={refRowIn}
-              onChange={e => setRefRowIn(e.target.value)}
-              style={{ width: 58, fontSize: '8pt', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, padding: '2px 4px' }} />
+            <span style={{ fontSize: '8pt', color: '#6272a4' }}>
+              {t('matchesDialog.refPickLabel')}{' '}
+              <span style={{ color: '#8be9fd' }}>(col, row)</span>
+            </span>
             <input type="number" min={0} placeholder={t('matchesDialog.refPickCol')} value={refColIn}
               onChange={e => setRefColIn(e.target.value)}
+              aria-label={t('matchesDialog.refPickCol')}
+              style={{ width: 58, fontSize: '8pt', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, padding: '2px 4px' }} />
+            <input type="number" min={0} placeholder={t('matchesDialog.refPickRow')} value={refRowIn}
+              onChange={e => setRefRowIn(e.target.value)}
+              aria-label={t('matchesDialog.refPickRow')}
               style={{ width: 58, fontSize: '8pt', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, padding: '2px 4px' }} />
             <button
               onClick={() => {
                 const rr = parseInt(refRowIn, 10);
                 const rc = parseInt(refColIn, 10);
-                if (Number.isFinite(rr) && Number.isFinite(rc)) loadVariants({ row: rr, col: rc });
+                if (Number.isFinite(rr) && Number.isFinite(rc)) loadVariants({ ref: { row: rr, col: rc } });
               }}
               disabled={variantsBusy || refRowIn === '' || refColIn === ''}
               style={{ fontSize: '8pt', padding: '2px 8px', background: C.bg, border: `1px solid ${C.border}`, borderRadius: 3, color: C.text, cursor: 'pointer' }}>

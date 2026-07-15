@@ -2519,7 +2519,7 @@ def _propagate_to_similar_grains(*, result, det, sht_path, pg, phase_id,
 async def get_pattern_match_variants(
     row: int, col: int, result_id: str = None,
     max_bandwidth: int = 128, aperture: str = "auto", aperture_radius: float = 1.0,
-    ref_row: int = None, ref_col: int = None,
+    ref_row: int = None, ref_col: int = None, reindex: bool = False,
 ):
     """Candidate orientations for the clicked pixel — current + crystallographic
     pseudo-variants + Hough + ADJACENT same-phase grains (+ an optional free
@@ -2562,6 +2562,8 @@ async def get_pattern_match_variants(
     cand_defs = [("current", "current", np.asarray(variants[0], dtype=np.float64))]
     cand_defs += [(f"variant {i}", "variant", np.asarray(variants[i], dtype=np.float64))
                   for i in range(1, len(variants))]
+    reference_error = None
+    _cif = None
     # Hough candidate (band geometry — the universal correct orientation)
     try:
         from indexing_controller import _resolve_cif_for_sht
@@ -2601,6 +2603,10 @@ async def get_pattern_match_variants(
             cand_defs.append((f"reference ({int(ref_row)},{int(ref_col)})",
                               "reference", qd[ridx]))
         except Exception as e:
+            # FAIL LOUD to the panel — a silently missing tile cost the user
+            # a debugging session (typed coords in the displayed (col,row)
+            # order / outside the ROI).
+            reference_error = str(e)
             logger.info("[variants] reference pixel unusable: %s", e)
 
     xpc, ypc, L_um = _conv_emsoft(
@@ -2614,6 +2620,30 @@ async def get_pattern_match_variants(
     ap = str(aperture).lower()
     if ap == "circular" or (ap == "auto" and detect_circular_aperture(exp)):
         mask = circular_mask(ds, radius_frac=min(max(float(aperture_radius), 0.3), 1.0))
+
+    # Optional single-pixel RE-INDEX (user request 2026-07-15): fresh full
+    # orientation search for the pixel's OWN phase (z_rot==2 phases get the
+    # Hough override inside the compare engine). Covers wrong-basin pixels
+    # where variants + Hough + neighbours all fail. Opt-in: the first call
+    # per result pays the ~6 s per-phase backend warmup.
+    if reindex:
+        try:
+            with _silence_console():
+                rows_ri = _compute_phase_compare_results(
+                    exp_pattern=exp, detector_geometry=det,
+                    sht_paths_by_phase={phase_id: sht_path},
+                    phase_names={phase_id: _phase_name_of(xmap, phase_id)},
+                    cif_paths_by_phase=({phase_id: _cif} if _cif else None),
+                    aperture_mask=mask, max_bandwidth=int(max_bandwidth),
+                )
+            if rows_ri and rows_ri[0].get("euler_deg") is not None:
+                eu_ri = np.radians(np.asarray(
+                    rows_ri[0]["euler_deg"], dtype=float)).reshape(1, 3)
+                q_ri = np.asarray(_R.from_euler(eu_ri).data
+                                  ).reshape(-1)[:4].astype(np.float64)
+                cand_defs.append(("re-index", "reindex", q_ri))
+        except Exception:
+            logger.warning("[variants] re-index candidate failed", exc_info=True)
 
     cands = []
     seen_quats: list[np.ndarray] = []
@@ -2656,6 +2686,7 @@ async def get_pattern_match_variants(
     return {
         "pixel_row": row, "pixel_col": col, "phase_id": phase_id, "point_group": pg,
         "current_quat": [float(x) for x in q_cur], "candidates": cands,
+        "reference_error": reference_error,
     }
 
 

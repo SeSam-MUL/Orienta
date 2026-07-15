@@ -76,7 +76,8 @@
     "nudgeDown": "选区下移一个像素",
     "nudgeLeft": "选区左移一个像素",
     "nudgeRight": "选区右移一个像素",
-    "nudgeTip": "每次移动 1 px（也可使用方向键）"
+    "nudgeTip": "每次移动 1 px（也可使用方向键）",
+    "nudgeClickTip": "点击单元格可将选区跳转到该处（方向键每次移动 1 px）"
   },
   "displayModes": {
     "phase": "相分布图",

@@ -410,7 +410,13 @@
     "nudgeDown": "Auswahl ein Pixel nach unten",
     "nudgeLeft": "Auswahl ein Pixel nach links",
     "nudgeRight": "Auswahl ein Pixel nach rechts",
-    "nudgeTip": "Um 1 px verschieben (Pfeiltasten funktionieren auch)"
+    "nudgeTip": "Um 1 px verschieben (Pfeiltasten funktionieren auch)",
+    "reindexBtn": "Diesen Pixel neu indexieren",
+    "reindexBusy": "Indexiert neu…",
+    "reindexTip": "Führt eine frische, vollständige Orientierungssuche für die Phase dieses Pixels aus und bietet das Ergebnis als Kandidat an. Für Pixel, bei denen Varianten, Hough und Nachbarkörner alle versagen. Erster Klick pro Ergebnis dauert ~6 s (Backend-Warmup), danach schnell.",
+    "kindReindex": "Re-Index",
+    "refPickFailed": "Referenzpixel abgelehnt: {{msg}}",
+    "nudgeClickTip": "Zelle anklicken, um die Auswahl dorthin zu springen (Pfeiltasten: 1 px)"
   },
   "phaseResultModal": {
     "title": "Mehrphasen-Ergebnisse",

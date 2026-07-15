@@ -76,7 +76,8 @@
     "nudgeDown": "Auswahl ein Pixel nach unten",
     "nudgeLeft": "Auswahl ein Pixel nach links",
     "nudgeRight": "Auswahl ein Pixel nach rechts",
-    "nudgeTip": "Um 1 px verschieben (Pfeiltasten funktionieren auch)"
+    "nudgeTip": "Um 1 px verschieben (Pfeiltasten funktionieren auch)",
+    "nudgeClickTip": "Zelle anklicken, um die Auswahl dorthin zu springen (Pfeiltasten: 1 px)"
   },
   "displayModes": {
     "phase": "Phasenkarte",

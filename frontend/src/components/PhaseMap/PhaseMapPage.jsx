@@ -410,6 +410,7 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                 up: t('phasemap:matches.nudgeUp'), down: t('phasemap:matches.nudgeDown'),
                 left: t('phasemap:matches.nudgeLeft'), right: t('phasemap:matches.nudgeRight'),
                 tip: t('phasemap:matches.nudgeTip'),
+                clickTip: t('phasemap:matches.nudgeClickTip'),
               }}
             />
           </div>

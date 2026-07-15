@@ -410,7 +410,13 @@
     "nudgeDown": "Move selection down one pixel",
     "nudgeLeft": "Move selection left one pixel",
     "nudgeRight": "Move selection right one pixel",
-    "nudgeTip": "Nudge by 1 px (arrow keys work too)"
+    "nudgeTip": "Nudge by 1 px (arrow keys work too)",
+    "reindexBtn": "Re-index this pixel",
+    "reindexBusy": "Re-indexing…",
+    "reindexTip": "Run a fresh full orientation search for this pixel's own phase and add the result as a candidate. Covers pixels where variants, Hough and neighbour grains all fail. First click per result takes ~6 s (backend warmup), then fast.",
+    "kindReindex": "re-index",
+    "refPickFailed": "Reference pixel rejected: {{msg}}",
+    "nudgeClickTip": "Click a cell to jump the selection there (arrow keys nudge by 1 px)"
   },
   "phaseResultModal": {
     "title": "Multi-Phase Results",

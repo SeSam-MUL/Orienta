@@ -443,10 +443,13 @@ export const indexApi = {
   // propagation of the chosen correction.
   // refRow/refCol: optional free reference pixel — its stored orientation
   // joins the gallery as a rendered candidate (foreign-basin fixes).
-  patternMatchVariants: (row, col, { maxBandwidth = 128, aperture = 'auto', apertureRadius = 1.0, refRow = null, refCol = null } = {}) =>
+  // reindex: fresh full orientation search for the pixel's own phase
+  // (first call per result pays a ~6 s backend warmup).
+  patternMatchVariants: (row, col, { maxBandwidth = 128, aperture = 'auto', apertureRadius = 1.0, refRow = null, refCol = null, reindex = false } = {}) =>
     api.get('/api/indexing/pattern-match/variants', { params: {
       row, col, max_bandwidth: maxBandwidth, aperture, aperture_radius: apertureRadius,
       ...(refRow != null && refCol != null ? { ref_row: refRow, ref_col: refCol } : {}),
+      ...(reindex ? { reindex: true } : {}),
     } }),
   // propagateSimilar: ALSO fix every other same-phase grain map-wide that
   // sits at the same wrong orientation — each sibling render-verified.

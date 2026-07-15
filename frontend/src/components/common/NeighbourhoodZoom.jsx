@@ -76,6 +76,18 @@ export default function NeighbourhoodZoom({ imageB64, shape, pixel, onNudge,
   const rows = shape?.[0] ?? Infinity;
   const cols = shape?.[1] ?? Infinity;
   const n = 2 * HALF + 1;
+  // Click-to-jump: a click on a zoom cell moves the MAIN selection there
+  // (same semantics as clicking the parent map, but pixel-precise). The
+  // dialog's nudge handler clamps, so multi-cell deltas are safe.
+  const onCanvasClick = (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const cx = Math.min(n - 1, Math.max(0,
+      Math.floor((e.clientX - rect.left) / rect.width * n)));
+    const cy = Math.min(n - 1, Math.max(0,
+      Math.floor((e.clientY - rect.top) / rect.height * n)));
+    if (cx === HALF && cy === HALF) return;      // clicked the current pixel
+    onNudge?.(cy - HALF, cx - HALF);
+  };
   const btn = (glyph, label, dr, dc, disabled) => (
     <button key={glyph} onClick={() => onNudge?.(dr, dc)} disabled={disabled}
       aria-label={label} title={labels.tip || label}
@@ -92,9 +104,12 @@ export default function NeighbourhoodZoom({ imageB64, shape, pixel, onNudge,
     <div style={{ marginTop: 6, textAlign: 'center' }}>
       {img && (
         <canvas ref={canvasRef} width={n * SCALE} height={n * SCALE}
+          onClick={onCanvasClick}
+          title={labels.clickTip || labels.tip || ''}
           style={{
             width: n * SCALE, height: n * SCALE, borderRadius: 3,
             border: `1px solid ${C.border}`, display: 'block', margin: '0 auto',
+            cursor: 'crosshair',
           }} />
       )}
       <div style={{ display: 'flex', gap: 4, justifyContent: 'center', marginTop: 4 }}>

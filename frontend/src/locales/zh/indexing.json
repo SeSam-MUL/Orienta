@@ -410,7 +410,13 @@
     "nudgeDown": "选区下移一个像素",
     "nudgeLeft": "选区左移一个像素",
     "nudgeRight": "选区右移一个像素",
-    "nudgeTip": "每次移动 1 px（也可使用方向键）"
+    "nudgeTip": "每次移动 1 px（也可使用方向键）",
+    "reindexBtn": "重新标定此像素",
+    "reindexBusy": "正在重新标定…",
+    "reindexTip": "对该像素自身的相重新执行完整的取向搜索，并将结果作为候选加入。适用于变体、Hough 和相邻晶粒全部失败的像素。每个结果的首次点击约需 6 秒（后端预热），之后很快。",
+    "kindReindex": "重新标定",
+    "refPickFailed": "参考像素被拒绝：{{msg}}",
+    "nudgeClickTip": "点击单元格可将选区跳转到该处（方向键每次移动 1 px）"
   },
   "phaseResultModal": {
     "title": "多相 结果",

@@ -511,6 +511,7 @@ function PatternMatchesDialog({ open, onClose }) {
                 up: t('matchesDialog.nudgeUp'), down: t('matchesDialog.nudgeDown'),
                 left: t('matchesDialog.nudgeLeft'), right: t('matchesDialog.nudgeRight'),
                 tip: t('matchesDialog.nudgeTip'),
+                clickTip: t('matchesDialog.nudgeClickTip'),
               }}
             />
           </div>
