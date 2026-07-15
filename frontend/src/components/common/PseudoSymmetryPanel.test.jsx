@@ -117,3 +117,28 @@ describe('PseudoSymmetryPanel', () => {
     await waitFor(() => getByText(/refineRejected/));
   });
 });
+
+describe('refine-only suspicion hint (compare-phases evidence)', () => {
+  it('switches to the refinement hint when the top compare row is the own phase within <2°', () => {
+    const { getByText, queryByText } = render(
+      <PseudoSymmetryPanel selectedPixel={PIXEL} matchData={{
+        ...SPHERICAL, r_quality: 'poor', phase_id: 0,
+        phase_results: [{ phase_id: 0, r_score: 0.16, disorientation_deg: 0.66 }],
+      }} />);
+    getByText(/matchesDialog\.suspicionHintRefine\|.*0\.66/);
+    expect(queryByText('matchesDialog.suspicionHint')).toBeNull();
+  });
+
+  it('keeps the variant hint when Δ is large or absent', () => {
+    const { getByText, rerender } = render(
+      <PseudoSymmetryPanel selectedPixel={PIXEL} matchData={{
+        ...SPHERICAL, r_quality: 'poor',
+        phase_results: [{ phase_id: 0, r_score: 0.3, disorientation_deg: 41.2 }],
+      }} />);
+    getByText('matchesDialog.suspicionHint');
+    // No compare data at all (normal mode) → unchanged generic hint.
+    rerender(<PseudoSymmetryPanel selectedPixel={PIXEL}
+      matchData={{ ...SPHERICAL, r_quality: 'poor' }} />);
+    getByText('matchesDialog.suspicionHint');
+  });
+});

@@ -419,7 +419,8 @@
     "nudgeClickTip": "セルをクリックすると選択がそこへ移動します（矢印キーで 1 px 移動）",
     "zoomKindPhase": "相",
     "zoomLayerGroup": "ズームマップレイヤー",
-    "zoomLayerTip": "レンズに表示するマップを選択: IPF方位 (Z/Y/X) または相カラー"
+    "zoomLayerTip": "レンズに表示するマップを選択: IPF方位 (Z/Y/X) または相カラー",
+    "suspicionHintRefine": "{{delta}}° 以内で同じ方位 — 必要なのは1°未満の微調整で、バリアント反転ではありません。「このピクセルを再指数付け」を使い結晶粒に適用してください。"
   },
   "phaseResultModal": {
     "title": "マルチ相 結果",

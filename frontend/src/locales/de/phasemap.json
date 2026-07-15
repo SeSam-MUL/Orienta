@@ -80,7 +80,15 @@
     "nudgeClickTip": "Zelle anklicken, um die Auswahl dorthin zu springen (Pfeiltasten: 1 px)",
     "zoomKindPhase": "Phase",
     "zoomLayerGroup": "Zoom-Kartenebene",
-    "zoomLayerTip": "Wählt, welche Karte die Lupe zeigt: IPF-Richtung (Z/Y/X) oder Phasenfarben"
+    "zoomLayerTip": "Wählt, welche Karte die Lupe zeigt: IPF-Richtung (Z/Y/X) oder Phasenfarben",
+    "deltaToStored": "Δ zur gespeicherten Orientierung: {{delta}}°",
+    "deltaRefineNote": "gleiche Orientierung — nur Feinjustierung nötig",
+    "deltaDifferentNote": "wirklich andere Orientierung (anderes Basin)",
+    "adoptCaption": "Gleiche Phase — re-indexierte Orientierung liegt {{delta}}° neben der gespeicherten",
+    "adoptBtn": "Diese Orientierung aufs Korn anwenden (Δ{{delta}}°)",
+    "adoptBusy": "Wird angewendet…",
+    "adoptDone": "Orientierung auf {{n}} px angewendet (Δ{{delta}}°).",
+    "adoptTip": "Ersetzt die gespeicherte Orientierung des Korns durch die frisch re-indexierte (Flood-Fill übers Korn, einstufiges Undo). Sinnvoll, wenn R besser wird, obwohl die Phase schon stimmt — die gespeicherte Orientierung liegt dann nur knapp neben dem scharfen Render-NCC-Optimum."
   },
   "displayModes": {
     "phase": "Phasenkarte",

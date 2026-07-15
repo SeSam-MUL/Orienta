@@ -260,6 +260,10 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
         phase_name:   selectedPhase.phase_name,
         euler_angles: selectedPhase.euler_deg,
         ncc_score:    selectedPhase.ncc_score,
+        // Same-phase rows only: Δ° between this freshly re-indexed
+        // orientation and the STORED one, plus the adoptable quaternion.
+        disorientation_deg: selectedPhase.disorientation_deg ?? null,
+        quat_wxyz:    selectedPhase.quat_wxyz ?? null,
         // r_quality derives from R-score (same buckets the backend uses):
         r_quality:    selectedPhase.r_score == null ? 'poor'
                        : selectedPhase.r_score >= 0.30 ? 'good'
@@ -554,6 +558,8 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                     {phaseResults.map((pr, i) => (
                       <option key={pr.phase_id} value={i}>
                         {pr.rank}. {pr.phase_name} — R={pr.r_score != null ? pr.r_score.toFixed(3) : '—'}
+                        {pr.disorientation_deg != null && pr.disorientation_deg > 0.05
+                          ? ` · Δ${pr.disorientation_deg.toFixed(1)}°` : ''}
                       </option>
                     ))}
                   </select>
@@ -576,6 +582,23 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                     {t('phasemap:matches.rValue', { value: displayed.r_score.toFixed(4) })}
                   </div>
                   <div style={{ fontSize: '10pt', color: '#bd93f9' }}>{rLabel}</div>
+                  {/* Compare mode, same phase: Δ° between this re-indexed and
+                      the STORED orientation. <2° = same orientation, just off
+                      the sharp render-NCC optimum (refinement, not a variant
+                      flip); larger = genuinely different basin. */}
+                  {displayed.disorientation_deg != null && (
+                    <div style={{
+                      fontSize: '8.5pt', marginTop: 2,
+                      color: displayed.disorientation_deg < 2 ? '#8be9fd' : '#ffb86c',
+                    }}>
+                      {t('phasemap:matches.deltaToStored', {
+                        delta: displayed.disorientation_deg.toFixed(2) })}
+                      {' — '}
+                      {displayed.disorientation_deg < 2
+                        ? t('phasemap:matches.deltaRefineNote')
+                        : t('phasemap:matches.deltaDifferentNote')}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -588,16 +611,68 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                 const samePhase = (selectedPhase.phase_id != null && matchData.phase_id != null)
                   ? selectedPhase.phase_id === matchData.phase_id
                   : selectedPhase.phase_name === matchData.phase_name;
+                // Same phase but the re-indexed orientation is measurably off
+                // the stored one → offer to ADOPT it (grain flood-fill, undo).
+                // Replaces the dead disabled Assign button in the same slot
+                // (per ui-designer consult: one actionable verb per slot).
+                const canAdopt = samePhase
+                  && Array.isArray(selectedPhase.quat_wxyz)
+                  && (selectedPhase.disorientation_deg ?? 0) > 0.05;
                 return (
                   <div style={{ textAlign: 'center', marginTop: 6 }}>
                     <div style={{ fontSize: '8pt', color: '#6272a4', marginBottom: 3 }}>
                       {samePhase
-                        ? t('phasemap:matches.assignIsCurrent')
+                        ? (canAdopt
+                            ? t('phasemap:matches.adoptCaption', {
+                                delta: selectedPhase.disorientation_deg.toFixed(2) })
+                            : t('phasemap:matches.assignIsCurrent'))
                         : t('phasemap:matches.assignStoredCaption', {
                             phase: matchData.phase_name ?? '—',
                             r: matchData.r_score != null ? matchData.r_score.toFixed(3) : '—',
                           })}
                     </div>
+                    {canAdopt ? (
+                      <button
+                        onClick={async () => {
+                          setAssignBusy(true); setAssignMsg(null);
+                          try {
+                            const r = await indexApi.applyVariantToGrain({
+                              row: selectedPixel.row, col: selectedPixel.col,
+                              quat: selectedPhase.quat_wxyz,
+                              thresholdDeg: 5, refine: false,
+                            });
+                            const d = r.data;
+                            setAssignMsg({ err: false,
+                              undo: d.undo_available ? 'grain' : false,
+                              text: t('phasemap:matches.adoptDone', {
+                                n: d.n_changed,
+                                delta: selectedPhase.disorientation_deg.toFixed(2) }) });
+                            setAssignBump(x => x + 1);
+                            setMatchRefresh(x => x + 1);
+                            onOrientationsChanged?.();
+                          } catch (e) {
+                            setAssignMsg({ err: true, undo: false,
+                              text: e?.response?.data?.detail || String(e) });
+                          } finally {
+                            setAssignBusy(false);
+                          }
+                        }}
+                        disabled={assignBusy}
+                        title={t('phasemap:matches.adoptTip')}
+                        style={{
+                          fontSize: '9pt', fontWeight: 700, padding: '4px 14px',
+                          background: '#8be9fd22',
+                          border: '1px solid #8be9fd',
+                          borderRadius: 3, color: '#8be9fd',
+                          cursor: assignBusy ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {assignBusy
+                          ? t('phasemap:matches.adoptBusy')
+                          : t('phasemap:matches.adoptBtn', {
+                              delta: selectedPhase.disorientation_deg.toFixed(2) })}
+                      </button>
+                    ) : (
                     <button
                       onClick={async () => {
                         setAssignBusy(true); setAssignMsg(null);
@@ -607,7 +682,8 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                             targetPhaseId: selectedPhase.phase_id,
                           });
                           const d = r.data;
-                          setAssignMsg({ err: false, undo: !!d.undo_available,
+                          setAssignMsg({ err: false,
+                            undo: d.undo_available ? 'assign' : false,
                             text: t('phasemap:matches.assignDone', {
                               n: d.n_pixels_changed, from: d.phase_from, to: d.phase_to }) });
                           if (d.unify_recommended?.length) {
@@ -640,6 +716,7 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                         ? t('phasemap:matches.assignBusy')
                         : t('phasemap:matches.assignBtn', { phase: selectedPhase.phase_name })}
                     </button>
+                    )}
                     {assignMsg && (
                       <div style={{ marginTop: 4, display: 'flex', gap: 8, justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '8pt', color: assignMsg.err ? '#ff5555' : '#50fa7b' }}>
@@ -649,7 +726,11 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                           <button
                             onClick={async () => {
                               try {
-                                const r = await indexApi.phaseReassignUndo();
+                                // 'grain' = orientation adopt (grain-flip undo);
+                                // 'assign' = phase reassignment undo.
+                                const r = assignMsg.undo === 'grain'
+                                  ? await indexApi.undoGrainFlip()
+                                  : await indexApi.phaseReassignUndo();
                                 setAssignMsg({ err: false, undo: false,
                                   text: t('phasemap:phaseCheck.undoDone', { n: r.data.n_restored }) });
                                 setAssignBump(x => x + 1);

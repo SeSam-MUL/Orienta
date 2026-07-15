@@ -80,7 +80,15 @@
     "nudgeClickTip": "セルをクリックすると選択がそこへ移動します（矢印キーで 1 px 移動）",
     "zoomKindPhase": "相",
     "zoomLayerGroup": "ズームマップレイヤー",
-    "zoomLayerTip": "レンズに表示するマップを選択: IPF方位 (Z/Y/X) または相カラー"
+    "zoomLayerTip": "レンズに表示するマップを選択: IPF方位 (Z/Y/X) または相カラー",
+    "deltaToStored": "保存された方位とのΔ: {{delta}}°",
+    "deltaRefineNote": "同じ方位 — 1°未満の微調整のみ必要",
+    "deltaDifferentNote": "本当に異なる方位(別のベイスン)",
+    "adoptCaption": "同じ相 — 再指数付けした方位は保存値から {{delta}}° ずれています",
+    "adoptBtn": "この方位を結晶粒に適用 (Δ{{delta}}°)",
+    "adoptBusy": "適用中…",
+    "adoptDone": "{{n}} px に方位を適用しました (Δ{{delta}}°)。",
+    "adoptTip": "結晶粒の保存方位を再指数付けした方位に置き換えます(結晶粒全体にフラッドフィル、1段階の取り消し可)。相は正しいのに R が改善する場合に使用 — 保存方位が鋭いレンダーNCC最適点からわずかにずれているだけです。"
   },
   "displayModes": {
     "phase": "相分布図",

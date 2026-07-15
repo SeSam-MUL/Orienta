@@ -419,7 +419,8 @@
     "nudgeClickTip": "Zelle anklicken, um die Auswahl dorthin zu springen (Pfeiltasten: 1 px)",
     "zoomKindPhase": "Phase",
     "zoomLayerGroup": "Zoom-Kartenebene",
-    "zoomLayerTip": "Wählt, welche Karte die Lupe zeigt: IPF-Richtung (Z/Y/X) oder Phasenfarben"
+    "zoomLayerTip": "Wählt, welche Karte die Lupe zeigt: IPF-Richtung (Z/Y/X) oder Phasenfarben",
+    "suspicionHintRefine": "Gleiche Orientierung bis auf {{delta}}° — hier fehlt nur Feinjustierung, kein Varianten-Flip. „Re-index this pixel“ nutzen und aufs Korn anwenden."
   },
   "phaseResultModal": {
     "title": "Mehrphasen-Ergebnisse",

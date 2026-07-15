@@ -57,6 +57,15 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
 
   const suspicious = matchData?.orientation_source === 'hough'
     || matchData?.r_quality === 'poor';
+  // Compare-phases evidence (when the user has it on): if the top re-indexed
+  // result is the pixel's OWN phase within <2° of the stored orientation,
+  // the poor R is a sub-degree refinement problem, NOT a wrong variant —
+  // point the user at the re-index candidate instead of variant flipping.
+  // (disorientation_deg is only ever set on same-phase rows.)
+  const compareTop = matchData?.phase_results?.[0];
+  const refineOnly = suspicious
+    && compareTop?.disorientation_deg != null
+    && compareTop.disorientation_deg < 2;
 
   const loadVariants = (opts = {}) => {
     const { ref = null, reindex = false } = opts;
@@ -155,8 +164,11 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
             {variantsBusy ? t('matchesDialog.variantsLoading') : `⬡ ${t('matchesDialog.tryVariants')}`}
           </button>
           {suspicious && (
-            <span style={{ fontSize: '8pt', color: '#ffb86c' }}>
-              {t('matchesDialog.suspicionHint')}
+            <span style={{ fontSize: '8pt', color: refineOnly ? '#8be9fd' : '#ffb86c' }}>
+              {refineOnly
+                ? t('matchesDialog.suspicionHintRefine', {
+                    delta: compareTop.disorientation_deg.toFixed(2) })
+                : t('matchesDialog.suspicionHint')}
             </span>
           )}
         </div>

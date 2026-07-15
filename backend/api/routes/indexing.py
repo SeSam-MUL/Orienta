@@ -2061,6 +2061,8 @@ async def get_pattern_match(
     phase_name = None
     stored_phase_id = None
     euler_angles = None
+    stored_quat = None
+    stored_pg_name = None
     total_ranks = 1
 
     try:
@@ -2104,6 +2106,14 @@ async def get_pattern_match(
 
             rot = xmap.rotations[px_idx]
             euler_angles = list(map(float, np.degrees(rot.to_euler()[0])))
+            # Stored quaternion + point group — the compare-phases block below
+            # reports each same-phase row's Δ° to THIS orientation.
+            stored_quat = np.asarray(rot.data).reshape(4).astype(np.float64)
+            try:
+                _pg = xmap.phases[stored_phase_id].point_group
+                stored_pg_name = getattr(_pg, "name", None)
+            except Exception:
+                stored_pg_name = None
     except Exception as e:
         logger.warning(f"[pattern-match] metadata extraction failed for ({row},{col}): {e}")
 
@@ -2230,6 +2240,11 @@ async def get_pattern_match(
                 row, col, e,
             )
             phase_results = None
+        # Same-phase rows: Δ° to the stored orientation + adoptable quat —
+        # distinguishes "needs sub-degree refinement" from "wrong variant".
+        if phase_results:
+            _annotate_compare_rows_with_delta(
+                phase_results, stored_quat, stored_phase_id, stored_pg_name)
 
     return {
         "experimental": _pattern_to_b64(exp_display),
@@ -4029,6 +4044,47 @@ def _hough_euler_for_phase(exp_pattern, cif_path, det_params):
     except Exception as e:  # noqa: BLE001 — fail-soft, caller keeps spherical
         logger.warning("hough orientation for phase failed (%s): %s", cif_path, e)
         return None
+
+
+def _annotate_compare_rows_with_delta(rows, stored_quat, stored_phase_id,
+                                      point_group: str | None) -> None:
+    """Annotate compare-phases rows IN PLACE: every row for the pixel's OWN
+    phase gets
+
+      - ``disorientation_deg`` — Δ° between the freshly re-indexed and the
+        STORED orientation (symmetry-reduced under the phase point group),
+      - ``quat_wxyz``          — the re-indexed orientation, ready to feed
+        ``/pattern-match/apply-to-grain``.
+
+    Rationale (user-hit 2026-07-15): "stored R=0.09 poor, compare R=0.16
+    acceptable, same phase" almost always means the stored orientation is a
+    fraction of a degree off the very sharp render-NCC optimum (~1-2° FWHM),
+    NOT a wrong pseudo-symmetry variant. Surfacing the Δ° lets the user see
+    that instantly, and the quat lets them adopt the refined orientation.
+    Fail-soft: annotation errors leave the rows untouched."""
+    if not rows or stored_quat is None or stored_phase_id is None:
+        return
+    try:
+        from backend.spherical_gpu.pseudosym import same_orientation_angle_deg
+        from orix.quaternion import Rotation as _Rot
+        for row_ in rows:
+            try:
+                if int(row_.get("phase_id")) != int(stored_phase_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            eu = row_.get("euler_deg") or []
+            if len(eu) != 3:
+                continue
+            q_row = np.asarray(_Rot.from_euler(
+                np.deg2rad(np.asarray(eu, dtype=float))[None, :]).data
+            ).reshape(1, 4).astype(np.float64)
+            row_["disorientation_deg"] = float(same_orientation_angle_deg(
+                q_row, np.asarray(stored_quat, dtype=np.float64).reshape(4),
+                point_group or "1")[0])
+            row_["quat_wxyz"] = [float(v) for v in q_row.reshape(4)]
+    except Exception:
+        logger.debug("compare-rows Δ° annotation failed", exc_info=True)
 
 
 def _compute_phase_compare_results(

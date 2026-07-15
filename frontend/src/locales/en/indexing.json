@@ -419,7 +419,8 @@
     "nudgeClickTip": "Click a cell to jump the selection there (arrow keys nudge by 1 px)",
     "zoomKindPhase": "Phase",
     "zoomLayerGroup": "Zoom map layer",
-    "zoomLayerTip": "Choose which map the lens shows: IPF direction (Z/Y/X) or phase colours"
+    "zoomLayerTip": "Choose which map the lens shows: IPF direction (Z/Y/X) or phase colours",
+    "suspicionHintRefine": "Same orientation to within {{delta}}° — this needs sub-degree refinement, not a variant flip. Use “Re-index this pixel” and apply it to the grain."
   },
   "phaseResultModal": {
     "title": "Multi-Phase Results",

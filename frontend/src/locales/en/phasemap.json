@@ -80,7 +80,15 @@
     "nudgeClickTip": "Click a cell to jump the selection there (arrow keys nudge by 1 px)",
     "zoomKindPhase": "Phase",
     "zoomLayerGroup": "Zoom map layer",
-    "zoomLayerTip": "Choose which map the lens shows: IPF direction (Z/Y/X) or phase colours"
+    "zoomLayerTip": "Choose which map the lens shows: IPF direction (Z/Y/X) or phase colours",
+    "deltaToStored": "Δ to stored orientation: {{delta}}°",
+    "deltaRefineNote": "same orientation — needs only sub-degree refinement",
+    "deltaDifferentNote": "genuinely different orientation (other basin)",
+    "adoptCaption": "Same phase — re-indexed orientation is {{delta}}° off the stored one",
+    "adoptBtn": "Apply this orientation to the grain (Δ{{delta}}°)",
+    "adoptBusy": "Applying…",
+    "adoptDone": "Orientation applied to {{n}} px (Δ{{delta}}°).",
+    "adoptTip": "Replace the grain's stored orientation with this freshly re-indexed one (flood fill over the grain, one-level undo). Use when R improves although the phase is already correct — the stored orientation is just off the sharp render-NCC optimum."
   },
   "displayModes": {
     "phase": "Phase Map",

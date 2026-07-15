@@ -80,7 +80,15 @@
     "nudgeClickTip": "点击单元格可将选区跳转到该处（方向键每次移动 1 px）",
     "zoomKindPhase": "相",
     "zoomLayerGroup": "缩放图层",
-    "zoomLayerTip": "选择放大镜显示的图层:IPF 取向 (Z/Y/X) 或相颜色"
+    "zoomLayerTip": "选择放大镜显示的图层:IPF 取向 (Z/Y/X) 或相颜色",
+    "deltaToStored": "与已存取向的Δ: {{delta}}°",
+    "deltaRefineNote": "相同取向 — 仅需亚度级微调",
+    "deltaDifferentNote": "确实不同的取向(另一个盆地)",
+    "adoptCaption": "相同相 — 重新标定的取向与已存取向偏差 {{delta}}°",
+    "adoptBtn": "将此取向应用到晶粒 (Δ{{delta}}°)",
+    "adoptBusy": "应用中…",
+    "adoptDone": "已将取向应用到 {{n}} px (Δ{{delta}}°)。",
+    "adoptTip": "用重新标定的取向替换晶粒的已存取向(晶粒范围洪水填充,支持一级撤销)。当相已正确但 R 有改善时使用 — 说明已存取向只是稍微偏离尖锐的渲染 NCC 最优点。"
   },
   "displayModes": {
     "phase": "相分布图",
