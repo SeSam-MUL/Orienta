@@ -405,7 +405,7 @@
     "propagateDone": "マップ走査: 類似粒 {{found}} → {{adopted}} 採用（レンダー検証済み）、{{rejected}} 却下 — {{px}} px。",
     "propagateNone": "マップ走査: この方位を持つ他の粒は見つかりませんでした。",
     "propagateTruncated": "（32 粒で打ち切り — 残りは再実行してください）",
-    "zoomCaption": "近傍 (±7 px) · IPF-Z",
+    "zoomCaption": "近傍 (±7 px)",
     "nudgeUp": "選択を 1 ピクセル上へ",
     "nudgeDown": "選択を 1 ピクセル下へ",
     "nudgeLeft": "選択を 1 ピクセル左へ",
@@ -416,7 +416,10 @@
     "reindexTip": "このピクセルの相に対して完全な方位探索を新たに実行し、結果を候補として追加します。バリアント・Hough・隣接粒がすべて失敗する場合に有効です。結果ごとの初回クリックは約 6 秒（バックエンドのウォームアップ）、以降は高速です。",
     "kindReindex": "再指数付け",
     "refPickFailed": "参照ピクセルが拒否されました: {{msg}}",
-    "nudgeClickTip": "セルをクリックすると選択がそこへ移動します（矢印キーで 1 px 移動）"
+    "nudgeClickTip": "セルをクリックすると選択がそこへ移動します（矢印キーで 1 px 移動）",
+    "zoomKindPhase": "相",
+    "zoomLayerGroup": "ズームマップレイヤー",
+    "zoomLayerTip": "レンズに表示するマップを選択: IPF方位 (Z/Y/X) または相カラー"
   },
   "phaseResultModal": {
     "title": "マルチ相 結果",

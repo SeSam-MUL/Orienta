@@ -71,13 +71,16 @@
     "assignDone": "已将 {{n}} px 从 {{from}} 重新指派为 {{to}}。",
     "assignIsCurrent": "这是当前指派的相",
     "assignStoredCaption": "当前标定为 {{phase}}，R={{r}}",
-    "zoomCaption": "邻域 (±7 px) · IPF-Z",
+    "zoomCaption": "邻域 (±7 px)",
     "nudgeUp": "选区上移一个像素",
     "nudgeDown": "选区下移一个像素",
     "nudgeLeft": "选区左移一个像素",
     "nudgeRight": "选区右移一个像素",
     "nudgeTip": "每次移动 1 px（也可使用方向键）",
-    "nudgeClickTip": "点击单元格可将选区跳转到该处（方向键每次移动 1 px）"
+    "nudgeClickTip": "点击单元格可将选区跳转到该处（方向键每次移动 1 px）",
+    "zoomKindPhase": "相",
+    "zoomLayerGroup": "缩放图层",
+    "zoomLayerTip": "选择放大镜显示的图层:IPF 取向 (Z/Y/X) 或相颜色"
   },
   "displayModes": {
     "phase": "相分布图",

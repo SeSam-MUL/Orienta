@@ -115,17 +115,19 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
   const [assignMsg, setAssignMsg] = useState(null);
   const [assignBump, setAssignBump] = useState(0);
   useEffect(() => { setAssignMsg(null); }, [selectedPixel?.row, selectedPixel?.col]);
-  // Neighbourhood-zoom source: the full-grid IPF-Z layer PNG (tiny nests
-  // read as colour breaks there). Refetched after any orientation/phase edit.
+  // Neighbourhood-zoom source: a full-grid layer PNG (tiny nests read as
+  // colour breaks there). User-switchable IPF-Z/Y/X/phase — some nests only
+  // show in ONE of those maps. Refetched after any orientation/phase edit.
   const [zoomLayer, setZoomLayer] = useState(null);
+  const [zoomKind, setZoomKind] = useState('ipf-z');
   useEffect(() => {
     if (!open) { setZoomLayer(null); return undefined; }
     let cancelled = false;
-    phaseMapApi.layer('ipf-z')
+    phaseMapApi.layer(zoomKind)
       .then(r => { if (!cancelled) setZoomLayer(r.data); })
       .catch(() => { if (!cancelled) setZoomLayer(null); });
     return () => { cancelled = true; };
-  }, [open, matchRefresh, assignBump]);
+  }, [open, matchRefresh, assignBump, zoomKind]);
   const nudgePixel = useCallback((dr, dc) => {
     setSelectedPixel(p => {
       if (!p) return p;
@@ -406,11 +408,22 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
               pixel={selectedPixel}
               onNudge={nudgePixel}
               caption={t('phasemap:matches.zoomCaption')}
+              kind={zoomKind}
+              onKindChange={setZoomKind}
+              kinds={[
+                { id: 'ipf-z', label: 'Z' },
+                { id: 'ipf-y', label: 'Y' },
+                { id: 'ipf-x', label: 'X' },
+                { id: 'phase', label: t('phasemap:matches.zoomKindPhase'), sep: true },
+              ]}
               labels={{
                 up: t('phasemap:matches.nudgeUp'), down: t('phasemap:matches.nudgeDown'),
                 left: t('phasemap:matches.nudgeLeft'), right: t('phasemap:matches.nudgeRight'),
                 tip: t('phasemap:matches.nudgeTip'),
                 clickTip: t('phasemap:matches.nudgeClickTip'),
+                layerLead: 'IPF',
+                layerGroup: t('phasemap:matches.zoomLayerGroup'),
+                layerTip: t('phasemap:matches.zoomLayerTip'),
               }}
             />
           </div>

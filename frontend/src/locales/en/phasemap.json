@@ -71,13 +71,16 @@
     "assignDone": "Reassigned {{n}} px from {{from}} to {{to}}.",
     "assignIsCurrent": "This is the currently assigned phase",
     "assignStoredCaption": "currently indexed as {{phase}}, R={{r}}",
-    "zoomCaption": "Neighbourhood (±7 px) · IPF-Z",
+    "zoomCaption": "Neighbourhood (±7 px)",
     "nudgeUp": "Move selection up one pixel",
     "nudgeDown": "Move selection down one pixel",
     "nudgeLeft": "Move selection left one pixel",
     "nudgeRight": "Move selection right one pixel",
     "nudgeTip": "Nudge by 1 px (arrow keys work too)",
-    "nudgeClickTip": "Click a cell to jump the selection there (arrow keys nudge by 1 px)"
+    "nudgeClickTip": "Click a cell to jump the selection there (arrow keys nudge by 1 px)",
+    "zoomKindPhase": "Phase",
+    "zoomLayerGroup": "Zoom map layer",
+    "zoomLayerTip": "Choose which map the lens shows: IPF direction (Z/Y/X) or phase colours"
   },
   "displayModes": {
     "phase": "Phase Map",

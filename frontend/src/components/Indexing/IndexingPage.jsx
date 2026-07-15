@@ -370,19 +370,21 @@ function PatternMatchesDialog({ open, onClose }) {
   const [selectedPixel, setSelectedPixel] = useState(null);
   const [rank, setRank] = useState(0);
   const [loading, setLoading] = useState(false);
-  // Neighbourhood-zoom source: full-grid IPF-Z layer PNG (tiny mis-indexed
-  // nests read as colour breaks there). Fail-soft: no layer → nudge only.
-  // zoomBump refetches after a grain flip (the IPF colours changed).
+  // Neighbourhood-zoom source: a full-grid layer PNG (tiny mis-indexed
+  // nests read as colour breaks there). User-switchable IPF-Z/Y/X/phase —
+  // some nests only show in ONE of those maps. Fail-soft: no layer → nudge
+  // only. zoomBump refetches after a grain flip (the colours changed).
   const [zoomLayer, setZoomLayer] = useState(null);
   const [zoomBump, setZoomBump] = useState(0);
+  const [zoomKind, setZoomKind] = useState('ipf-z');
   useEffect(() => {
     if (!open) { setZoomLayer(null); return undefined; }
     let cancelled = false;
-    phaseMapApi.layer('ipf-z')
+    phaseMapApi.layer(zoomKind)
       .then(r => { if (!cancelled) setZoomLayer(r.data); })
       .catch(() => { if (!cancelled) setZoomLayer(null); });
     return () => { cancelled = true; };
-  }, [open, zoomBump]);
+  }, [open, zoomBump, zoomKind]);
   const nudgePixel = useCallback((dr, dc) => {
     setSelectedPixel(p => {
       if (!p) return p;
@@ -507,11 +509,22 @@ function PatternMatchesDialog({ open, onClose }) {
               pixel={selectedPixel}
               onNudge={nudgePixel}
               caption={t('matchesDialog.zoomCaption')}
+              kind={zoomKind}
+              onKindChange={setZoomKind}
+              kinds={[
+                { id: 'ipf-z', label: 'Z' },
+                { id: 'ipf-y', label: 'Y' },
+                { id: 'ipf-x', label: 'X' },
+                { id: 'phase', label: t('matchesDialog.zoomKindPhase'), sep: true },
+              ]}
               labels={{
                 up: t('matchesDialog.nudgeUp'), down: t('matchesDialog.nudgeDown'),
                 left: t('matchesDialog.nudgeLeft'), right: t('matchesDialog.nudgeRight'),
                 tip: t('matchesDialog.nudgeTip'),
                 clickTip: t('matchesDialog.nudgeClickTip'),
+                layerLead: 'IPF',
+                layerGroup: t('matchesDialog.zoomLayerGroup'),
+                layerTip: t('matchesDialog.zoomLayerTip'),
               }}
             />
           </div>

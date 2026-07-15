@@ -71,13 +71,16 @@
     "assignDone": "{{n}} px von {{from}} auf {{to}} umgewidmet.",
     "assignIsCurrent": "Das ist die aktuell zugewiesene Phase",
     "assignStoredCaption": "aktuell indexiert als {{phase}}, R={{r}}",
-    "zoomCaption": "Umgebung (±7 px) · IPF-Z",
+    "zoomCaption": "Umgebung (±7 px)",
     "nudgeUp": "Auswahl ein Pixel nach oben",
     "nudgeDown": "Auswahl ein Pixel nach unten",
     "nudgeLeft": "Auswahl ein Pixel nach links",
     "nudgeRight": "Auswahl ein Pixel nach rechts",
     "nudgeTip": "Um 1 px verschieben (Pfeiltasten funktionieren auch)",
-    "nudgeClickTip": "Zelle anklicken, um die Auswahl dorthin zu springen (Pfeiltasten: 1 px)"
+    "nudgeClickTip": "Zelle anklicken, um die Auswahl dorthin zu springen (Pfeiltasten: 1 px)",
+    "zoomKindPhase": "Phase",
+    "zoomLayerGroup": "Zoom-Kartenebene",
+    "zoomLayerTip": "Wählt, welche Karte die Lupe zeigt: IPF-Richtung (Z/Y/X) oder Phasenfarben"
   },
   "displayModes": {
     "phase": "Phasenkarte",

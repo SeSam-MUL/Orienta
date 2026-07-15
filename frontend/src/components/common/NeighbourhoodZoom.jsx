@@ -19,12 +19,17 @@ import { colors as C } from '../../theme/tokens';
  *   onNudge  — (dRow, dCol) => void
  *   caption  — translated caption string
  *   labels   — {up, down, left, right, tip} translated aria/tooltip strings
+ *   kind / kinds / onKindChange — optional source-layer switch (radio
+ *     semantics): kinds = [{id, label}], active id = kind. Lets the user
+ *     flip the lens between IPF-Z/Y/X and phase colours — some nests only
+ *     read as breaks in ONE of those maps.
  */
 const HALF = 7;               // crop = (2*HALF+1)^2 data pixels
 const SCALE = 9;              // canvas px per data px
 
 export default function NeighbourhoodZoom({ imageB64, shape, pixel, onNudge,
-                                            caption, labels = {} }) {
+                                            caption, labels = {},
+                                            kind, kinds, onKindChange }) {
   const canvasRef = useRef(null);
   const [img, setImg] = useState(null);
 
@@ -62,6 +67,8 @@ export default function NeighbourhoodZoom({ imageB64, shape, pixel, onNudge,
     const onKey = (e) => {
       const tag = document.activeElement?.tagName;
       if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      // A focused layer-radio must not double-drive the anchor.
+      if (document.activeElement?.getAttribute?.('role') === 'radio') return;
       const d = { ArrowUp: [-1, 0], ArrowDown: [1, 0],
                   ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
       if (!d) return;
@@ -118,6 +125,35 @@ export default function NeighbourhoodZoom({ imageB64, shape, pixel, onNudge,
         {btn('▼', labels.down || 'down', 1, 0, pixel.row >= rows - 1)}
         {btn('▶', labels.right || 'right', 0, 1, pixel.col >= cols - 1)}
       </div>
+      {Array.isArray(kinds) && kinds.length > 1 && (
+        <div role="radiogroup" aria-label={labels.layerGroup || 'Zoom map layer'}
+          style={{ display: 'flex', gap: 3, justifyContent: 'center',
+                   alignItems: 'center', marginTop: 6 }}>
+          {labels.layerLead && (
+            <span style={{ fontSize: '7pt', color: '#6272a4', marginRight: 1 }}>
+              {labels.layerLead}
+            </span>
+          )}
+          {kinds.map((k) => {
+            const active = k.id === kind;
+            return (
+              <button key={k.id} role="radio" aria-checked={active}
+                onClick={() => onKindChange?.(k.id)}
+                title={labels.layerTip || ''}
+                style={{
+                  height: 18, fontSize: '7.5pt', padding: '0 6px',
+                  marginLeft: k.sep ? 6 : 0,
+                  background: active ? 'rgba(139, 233, 253, 0.12)' : 'transparent',
+                  border: `1px solid ${active ? C.accent : C.border}`,
+                  borderRadius: 3, color: active ? C.accent : '#6272a4',
+                  fontWeight: active ? 600 : 400, cursor: 'pointer',
+                }}>
+                {k.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {caption && (
         <div style={{ fontSize: '7pt', color: '#6272a4', marginTop: 2 }}>{caption}</div>
       )}

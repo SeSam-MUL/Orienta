@@ -405,7 +405,7 @@
     "propagateDone": "Map scan: {{found}} similar grains → {{adopted}} adopted (render-verified), {{rejected}} rejected — {{px}} px.",
     "propagateNone": "Map scan: no other grains with this orientation found.",
     "propagateTruncated": "(capped at 32 grains — run again for the rest)",
-    "zoomCaption": "Neighbourhood (±7 px) · IPF-Z",
+    "zoomCaption": "Neighbourhood (±7 px)",
     "nudgeUp": "Move selection up one pixel",
     "nudgeDown": "Move selection down one pixel",
     "nudgeLeft": "Move selection left one pixel",
@@ -416,7 +416,10 @@
     "reindexTip": "Run a fresh full orientation search for this pixel's own phase and add the result as a candidate. Covers pixels where variants, Hough and neighbour grains all fail. First click per result takes ~6 s (backend warmup), then fast.",
     "kindReindex": "re-index",
     "refPickFailed": "Reference pixel rejected: {{msg}}",
-    "nudgeClickTip": "Click a cell to jump the selection there (arrow keys nudge by 1 px)"
+    "nudgeClickTip": "Click a cell to jump the selection there (arrow keys nudge by 1 px)",
+    "zoomKindPhase": "Phase",
+    "zoomLayerGroup": "Zoom map layer",
+    "zoomLayerTip": "Choose which map the lens shows: IPF direction (Z/Y/X) or phase colours"
   },
   "phaseResultModal": {
     "title": "Multi-Phase Results",

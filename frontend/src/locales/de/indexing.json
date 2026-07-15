@@ -405,7 +405,7 @@
     "propagateDone": "Karten-Scan: {{found}} ähnliche Körner → {{adopted}} übernommen (render-verifiziert), {{rejected}} abgelehnt — {{px}} px.",
     "propagateNone": "Karten-Scan: keine weiteren Körner mit dieser Orientierung gefunden.",
     "propagateTruncated": "(auf 32 Körner begrenzt — für den Rest erneut ausführen)",
-    "zoomCaption": "Umgebung (±7 px) · IPF-Z",
+    "zoomCaption": "Umgebung (±7 px)",
     "nudgeUp": "Auswahl ein Pixel nach oben",
     "nudgeDown": "Auswahl ein Pixel nach unten",
     "nudgeLeft": "Auswahl ein Pixel nach links",
@@ -416,7 +416,10 @@
     "reindexTip": "Führt eine frische, vollständige Orientierungssuche für die Phase dieses Pixels aus und bietet das Ergebnis als Kandidat an. Für Pixel, bei denen Varianten, Hough und Nachbarkörner alle versagen. Erster Klick pro Ergebnis dauert ~6 s (Backend-Warmup), danach schnell.",
     "kindReindex": "Re-Index",
     "refPickFailed": "Referenzpixel abgelehnt: {{msg}}",
-    "nudgeClickTip": "Zelle anklicken, um die Auswahl dorthin zu springen (Pfeiltasten: 1 px)"
+    "nudgeClickTip": "Zelle anklicken, um die Auswahl dorthin zu springen (Pfeiltasten: 1 px)",
+    "zoomKindPhase": "Phase",
+    "zoomLayerGroup": "Zoom-Kartenebene",
+    "zoomLayerTip": "Wählt, welche Karte die Lupe zeigt: IPF-Richtung (Z/Y/X) oder Phasenfarben"
   },
   "phaseResultModal": {
     "title": "Mehrphasen-Ergebnisse",

@@ -405,7 +405,7 @@
     "propagateDone": "全图扫描：{{found}} 个相似晶粒 → {{adopted}} 个已采纳（渲染验证），{{rejected}} 个被拒绝 — {{px}} px。",
     "propagateNone": "全图扫描：未找到具有此取向的其他晶粒。",
     "propagateTruncated": "（上限 32 个晶粒 — 其余请再次运行）",
-    "zoomCaption": "邻域 (±7 px) · IPF-Z",
+    "zoomCaption": "邻域 (±7 px)",
     "nudgeUp": "选区上移一个像素",
     "nudgeDown": "选区下移一个像素",
     "nudgeLeft": "选区左移一个像素",
@@ -416,7 +416,10 @@
     "reindexTip": "对该像素自身的相重新执行完整的取向搜索，并将结果作为候选加入。适用于变体、Hough 和相邻晶粒全部失败的像素。每个结果的首次点击约需 6 秒（后端预热），之后很快。",
     "kindReindex": "重新标定",
     "refPickFailed": "参考像素被拒绝：{{msg}}",
-    "nudgeClickTip": "点击单元格可将选区跳转到该处（方向键每次移动 1 px）"
+    "nudgeClickTip": "点击单元格可将选区跳转到该处（方向键每次移动 1 px）",
+    "zoomKindPhase": "相",
+    "zoomLayerGroup": "缩放图层",
+    "zoomLayerTip": "选择放大镜显示的图层:IPF 取向 (Z/Y/X) 或相颜色"
   },
   "phaseResultModal": {
     "title": "多相 结果",
