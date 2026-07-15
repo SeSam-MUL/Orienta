@@ -5169,6 +5169,73 @@ class ImportH5Request(BaseModel):
     path: str
 
 
+def _h5_any_pattern_dataset(f) -> bool:
+    """True when any top-level scan group carries an EBSD pattern stack.
+
+    Oxford h5oina stores them at /1/EBSD/Data/{Processed Patterns,Patterns};
+    EDAX (APEX/OIM) at /<ScanName>/EBSD/Data/Pattern. Rich exports inherit
+    whichever layout the source had — the old Oxford-only check reported
+    'no patterns' for every EDAX-sourced rich file (user-hit 2026-07-15)."""
+    try:
+        for key in f.keys():
+            grp = f.get(f"{key}/EBSD/Data")
+            if grp is None:
+                continue
+            for dn in ("Pattern", "Patterns", "Processed Patterns"):
+                ds = grp.get(dn)
+                if getattr(ds, "ndim", 0) == 3:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _match_library_shts_for_xmap(xmap) -> dict:
+    """{phase_id: sht_path} by matching phase NAMES against the SHT library
+    (the same smart-name rule the indexing page derives display names with).
+
+    Used on rich/light import: sht_paths_by_phase lives only in backend
+    memory during a session, so re-imports must reconstruct it for the
+    pattern-match / variants / phase tools to work. Unmatched phases are
+    simply omitted — the tools then fail per-phase with a clear message
+    instead of blocking the whole import."""
+    from indexing_controller import (
+        discover_files_for_method, IndexingMethod as _IM,
+    )
+    res = discover_files_for_method(_IM.SPHERICAL) or {}
+    files = res.get("files", []) if isinstance(res, dict) else res
+    by_name: dict[str, str] = {}
+    for entry in files:
+        try:
+            path = Path(str(entry.get("path") if isinstance(entry, dict) else entry))
+        except Exception:
+            continue
+        if path.suffix.lower() != ".sht":
+            continue
+        by_name.setdefault(_smart_phase_name_from_path(path), str(path.resolve()))
+    out: dict[int, str] = {}
+    try:
+        entries = list(xmap.phases) if xmap is not None else []
+    except Exception:
+        entries = []
+    for entry in entries:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            pid_, phase = entry
+        else:
+            phase = entry
+            pid_ = getattr(entry, "id", None)
+        try:
+            pid_i = int(pid_)
+        except Exception:
+            continue
+        if pid_i < 0:
+            continue
+        hit = by_name.get(str(getattr(phase, "name", "") or ""))
+        if hit:
+            out[pid_i] = hit
+    return out
+
+
 @router.post("/import-h5")
 async def import_h5_result(req: ImportH5Request):
     """Import a rich/light .h5 export back into the active indexing session.
@@ -5206,12 +5273,12 @@ async def import_h5_result(req: ImportH5Request):
     try:
         with h5py.File(str(p), "r") as f:
             capabilities["indexing"] = "Indexing" in f
-            # Either name is valid — h5oina uses "Processed Patterns",
-            # raw kikuchipy datasets use "Patterns". Rich h5 inherits
-            # whatever the source had.
+            # Vendor-agnostic pattern detection: Oxford h5oina layout OR any
+            # <scan>/EBSD/Data pattern stack (EDAX APEX/OIM etc.).
             capabilities["patterns"] = (
                 "1/EBSD/Data/Processed Patterns" in f
                 or "1/EBSD/Data/Patterns" in f
+                or _h5_any_pattern_dataset(f)
             )
             capabilities["eds"] = "1/EDS" in f
             capabilities["electron_image"] = "1/Electron Image" in f
@@ -5291,7 +5358,13 @@ async def import_h5_result(req: ImportH5Request):
         original_shape=grid_shape,
         method=method,
         confidence_scores=ci_raw.astype(np.float32),
-        metadata={"source_file": str(p), "imported_from_h5": True},
+        # indexing_method MUST be in metadata — the pattern-match dialog and
+        # every spherical tool key off metadata["indexing_method"], not the
+        # enum. Without it an imported spherical result rendered as
+        # "Dictionary Indexing" with all SHT tools disabled (user-hit
+        # 2026-07-15).
+        metadata={"source_file": str(p), "imported_from_h5": True,
+                  "indexing_method": method.value},
     )
 
     # Carry per-phase CI maps over from the xmap (loader stashes them) so
@@ -5352,6 +5425,42 @@ async def import_h5_result(req: ImportH5Request):
                 "may need manual re-entry",
                 e,
             )
+
+    # Restore the SPHERICAL session metadata so pattern-match / variants /
+    # phase tools work on an imported result exactly like on a fresh run.
+    # sht_paths_by_phase + detector_geometry live only in backend memory
+    # during a session; reconstruct them from the SHT library (matched by
+    # phase name) and the freshly loaded signal. Fail-soft per part — the
+    # import itself never blocks on this.
+    if method == IndexingMethod.SPHERICAL:
+        try:
+            sht_map = _match_library_shts_for_xmap(xmap)
+            if sht_map:
+                result.metadata["sht_paths_by_phase"] = sht_map
+            missing = [nm for pid_, nm in (
+                (int(e[0]), getattr(e[1], "name", "?")) if isinstance(e, tuple)
+                else (int(getattr(e, "id", -1)), getattr(e, "name", "?"))
+                for e in xmap.phases
+            ) if pid_ >= 0 and pid_ not in sht_map]
+            if missing:
+                logger.warning(
+                    "import-h5: no library SHT matched for phase(s) %s — "
+                    "pattern-match rendering unavailable for them", missing)
+        except Exception:
+            logger.warning("import-h5: SHT library matching failed",
+                           exc_info=True)
+        if ebsd_signal_loaded:
+            try:
+                from backend.api.routes.ebsd_viewer import _get_active_signal
+                signal = _get_active_signal()
+                detector = getattr(signal, "detector", None)
+                if signal is not None and detector is not None:
+                    result.metadata["detector_geometry"] = dict(
+                        build_spherical_det_params(signal, detector, str(p)))
+            except Exception:
+                logger.warning(
+                    "import-h5: detector geometry reconstruction failed",
+                    exc_info=True)
 
     try:
         ci_for_mean = ci_raw[selection_mask] if selection_mask.any() else ci_raw
