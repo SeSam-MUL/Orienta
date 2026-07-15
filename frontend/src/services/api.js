@@ -691,6 +691,11 @@ export const dbApi = {
   sphere: (filename, params = {}) =>
     api.get(`/api/database/sphere/${encodeURIComponent(filename)}`, { params }),
 
+  // Full-unit-cell crystal structure of a local .cif/.xtal (3D ball-and-stick viewer).
+  // Returns { source, lattice, cell_vectors, space_group, atoms[], bonds[], polyhedra[], meta }.
+  structure: (filename) =>
+    api.get(`/api/database/structure/${encodeURIComponent(filename)}`),
+
   // Provenance + simulation parameters for a .sht (File Info panel).
   shtInfo: (filename) => api.get(`/api/database/sht/${encodeURIComponent(filename)}/info`),
 

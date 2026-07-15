@@ -206,5 +206,26 @@
     "resConflicts": "conflict(s) (enable overwrite to pull them)",
     "resErrors": "error(s)",
     "resCancelled": "— cancelled"
+  },
+  "crystalStructure": {
+    "downloadFirst": "Download this file first to view its structure.",
+    "parsing": "Parsing structure…",
+    "selectLocal": "Select a local CIF/XTAL file.",
+    "loadingViewer": "Loading 3D viewer…",
+    "loadError": "Could not load structure: {{error}}",
+    "loadErrorFallback": "Could not load structure.",
+    "bonds": "Bonds",
+    "cellBox": "Cell box",
+    "bondsTooltip": "Show/hide interatomic bonds (distance-based connectivity)",
+    "cellTooltip": "Show/hide the unit-cell box",
+    "disordered": "disordered",
+    "atomsCount": "{{count}} atoms",
+    "hint": "Drag to rotate · scroll to zoom · hover an atom for details · click a legend entry to hide an element",
+    "polyhedra": "Polyhedra",
+    "polyhedraTooltip": "Show/hide coordination polyhedra around the minority atoms",
+    "reset": "Reset",
+    "resetTooltip": "Reset the camera view",
+    "screenshotTooltip": "Export the view as a PNG image",
+    "legendTooltip": "Click to hide/show this element"
   }
 }

@@ -206,5 +206,26 @@
     "resConflicts": "Konflikt(e) (Überschreiben aktivieren zum Herunterladen)",
     "resErrors": "Fehler",
     "resCancelled": "— abgebrochen"
+  },
+  "crystalStructure": {
+    "downloadFirst": "Lade die Datei zuerst herunter, um die Struktur zu sehen.",
+    "parsing": "Struktur wird geparst…",
+    "selectLocal": "Wähle eine lokale CIF/XTAL-Datei.",
+    "loadingViewer": "3D-Viewer wird geladen…",
+    "loadError": "Struktur konnte nicht geladen werden: {{error}}",
+    "loadErrorFallback": "Struktur konnte nicht geladen werden.",
+    "bonds": "Bindungen",
+    "cellBox": "Zellbox",
+    "bondsTooltip": "Interatomare Bindungen ein-/ausblenden (distanzbasierte Konnektivität)",
+    "cellTooltip": "Zellbox ein-/ausblenden",
+    "disordered": "fehlgeordnet",
+    "atomsCount": "{{count}} Atome",
+    "hint": "Ziehen zum Drehen · Scrollen zum Zoomen · Atom für Details überfahren · Legendeneintrag klicken blendet ein Element aus",
+    "polyhedra": "Polyeder",
+    "polyhedraTooltip": "Koordinationspolyeder um die Minderheitsatome ein-/ausblenden",
+    "reset": "Zurücksetzen",
+    "resetTooltip": "Kameraansicht zurücksetzen",
+    "screenshotTooltip": "Ansicht als PNG exportieren",
+    "legendTooltip": "Klicken, um dieses Element aus-/einzublenden"
   }
 }

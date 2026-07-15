@@ -1711,6 +1711,45 @@ async def sphere_file(filename: str, max_bandwidth: int = 128, target_size: int 
         raise HTTPException(status_code=422, detail=f"sphere reconstruction failed: {e}")
 
 
+@router.get("/structure/{filename:path}")
+async def structure_file(filename: str):
+    """Return the full-unit-cell crystal structure of a local .cif/.xtal.
+
+    Used by the Database Browser's interactive 3D crystal-structure viewer.
+    Returns ``{source, lattice, cell_vectors, space_group, atoms[], bonds[],
+    polyhedra[], meta}``. 404 if the file is absent; 422 if it cannot be parsed.
+    """
+    import asyncio  # noqa: PLC0415
+    import glob as _glob  # noqa: PLC0415
+
+    from backend.api.services.crystal_structure import structure_payload  # noqa: PLC0415
+
+    name = Path(filename).name
+    suffix = Path(name).suffix.lower()
+    if suffix == ".cif":
+        base = _db_dir("cif")
+    elif suffix == ".xtal":
+        base = _db_dir("xtal")
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail=f"unsupported type: {suffix!r} (need .cif/.xtal)",
+        )
+
+    # Escape glob metacharacters so a crafted name (e.g. "*.cif") is matched
+    # literally, not as a wildcard against arbitrary library files.
+    matches = list(base.rglob(_glob.escape(name)))
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"structure file not found: {name}")
+    try:
+        return await asyncio.to_thread(structure_payload, str(matches[0]))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:  # fail loud with an actionable message
+        logger.exception("structure_file: failed for %s", filename)
+        raise HTTPException(status_code=422, detail=f"structure parse failed: {e}")
+
+
 @router.get("/sht/{filename:path}/info")
 async def sht_info(filename: str):
     """Provenance + simulation parameters for a local .sht (File Info panel)."""

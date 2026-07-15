@@ -206,5 +206,26 @@
     "resConflicts": "个冲突（启用覆盖以拉取）",
     "resErrors": "个错误",
     "resCancelled": "— 已取消"
+  },
+  "crystalStructure": {
+    "downloadFirst": "请先下载此文件以查看其结构。",
+    "parsing": "正在解析结构…",
+    "selectLocal": "请选择本地 CIF/XTAL 文件。",
+    "loadingViewer": "正在加载 3D 查看器…",
+    "loadError": "无法加载结构：{{error}}",
+    "loadErrorFallback": "无法加载结构。",
+    "bonds": "键",
+    "cellBox": "晶胞框",
+    "bondsTooltip": "显示/隐藏原子间的键（基于距离的连接）",
+    "cellTooltip": "显示/隐藏晶胞框",
+    "disordered": "无序",
+    "atomsCount": "{{count}} 个原子",
+    "hint": "拖动旋转 · 滚动缩放 · 悬停原子查看详情 · 点击图例隐藏元素",
+    "polyhedra": "多面体",
+    "polyhedraTooltip": "显示/隐藏少数原子周围的配位多面体",
+    "reset": "重置",
+    "resetTooltip": "重置相机视角",
+    "screenshotTooltip": "将视图导出为 PNG 图像",
+    "legendTooltip": "点击以隐藏/显示该元素"
   }
 }

@@ -206,5 +206,26 @@
     "resConflicts": "件の競合（上書きを有効にすると取得されます）",
     "resErrors": "件のエラー",
     "resCancelled": "— キャンセルされました"
+  },
+  "crystalStructure": {
+    "downloadFirst": "構造を表示するには、まずこのファイルをダウンロードしてください。",
+    "parsing": "構造を解析中…",
+    "selectLocal": "ローカルの CIF/XTAL ファイルを選択してください。",
+    "loadingViewer": "3D ビューアを読み込み中…",
+    "loadError": "構造を読み込めませんでした: {{error}}",
+    "loadErrorFallback": "構造を読み込めませんでした。",
+    "bonds": "結合",
+    "cellBox": "単位格子",
+    "bondsTooltip": "原子間の結合を表示/非表示（距離ベースの接続）",
+    "cellTooltip": "単位格子の枠を表示/非表示",
+    "disordered": "不規則",
+    "atomsCount": "{{count}} 原子",
+    "hint": "ドラッグで回転・スクロールでズーム・原子にホバーで詳細・凡例をクリックで元素を非表示",
+    "polyhedra": "多面体",
+    "polyhedraTooltip": "少数原子まわりの配位多面体を表示/非表示",
+    "reset": "リセット",
+    "resetTooltip": "カメラ視点をリセット",
+    "screenshotTooltip": "ビューを PNG 画像としてエクスポート",
+    "legendTooltip": "クリックでこの元素を表示/非表示"
   }
 }

@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { dbApi, h5Api } from '../../services/api';
 import CascadeDeleteDialog from './CascadeDeleteDialog';
 import MasterSphereViewer from './MasterSphereViewer';
+import CrystalStructureViewer from './CrystalStructureViewer';
 import SyncDialog from '../CrystalDatabase/SyncDialog';
 import SyncUploadDialog from './SyncUploadDialog';
 import {
@@ -515,11 +516,14 @@ function PreviewPanel({ entry, onOpenViewer }) {
     }}>
       <div style={{ fontSize: '12pt', fontWeight: 'bold', color: colors.accent }}>{t('databasebrowser:preview.title')}</div>
 
-      {/* SHT → interactive rotatable master-pattern sphere; everything else →
-          the existing async 2D thumbnail (SHT has no working 2D thumbnail anyway:
-          the preview endpoint opens files with h5py and .sht is not HDF5). */}
+      {/* SHT → interactive rotatable master-pattern sphere; CIF/XTAL →
+          interactive 3D crystal structure; everything else → the existing async
+          2D thumbnail (SHT has no working 2D thumbnail anyway: the preview
+          endpoint opens files with h5py and .sht is not HDF5). */}
       {ft === 'SHT' ? (
         <MasterSphereViewer filename={entry.filename || entry.name} isLocal={isLocal} />
+      ) : (ft === 'CIF' || ft === 'XTAL') ? (
+        <CrystalStructureViewer filename={entry.filename || entry.name} isLocal={isLocal} fileType={ft} />
       ) : (
         <ThumbnailPreview
           filename={entry.filename || entry.name}
