@@ -267,11 +267,65 @@ import re as _re
 
 # Match EMsoft-convention SHT filenames: "Name (Formula) [Pearson] {kV}"
 # Example: "Ni (Ni) [cF4] {20kV}" -> prefix "Ni"
-# We only strip the trailing "(...) [...] {...}" block so legitimate names
+# The [Pearson] block is OPTIONAL — the library contains files like
+# "Al7FeCu2 (Al7FeCu2) {20kV}.sht" without it (user-hit 2026-07-15: those
+# phases never matched an SHT on re-import because the tail survived).
+# We only strip the trailing "(...) [...]? {...}" block so legitimate names
 # containing parentheses (like "alpha-(AlFeSi) (Fe23Al81Si15)") are preserved.
 _SHT_SUFFIX_RE = _re.compile(
-    r"\s*\([^)]+\)\s*\[[^\]]+\]\s*\{[^}]+\}\s*$"
+    r"\s*\([^)]+\)\s*(?:\[[^\]]+\]\s*)?\{[^}]+\}\s*$"
 )
+
+# All IUPAC element symbols — used to decide whether a phase-name string is a
+# chemical formula (element+count tokens only) before ratio-matching it.
+_ELEMENT_SYMBOLS = frozenset(
+    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co "
+    "Ni Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb "
+    "Te I Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re "
+    "Os Ir Pt Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es "
+    "Fm Md No Lr Rf Db Sg Bh Hs Mt Ds Rg Cn Nh Fl Mc Lv Ts Og".split()
+)
+_FORMULA_TOKEN_RE = _re.compile(r"([A-Z][a-z]?)(\d+(?:\.\d+)?)?")
+# Characters allowed BETWEEN element tokens in a formula-ish string: grouping,
+# whitespace and bare numbers (outer multipliers like "(...)5.31").
+_FORMULA_FILLER = " \t()[]{}.,·*×x+-0123456789"
+
+
+def _formula_ratio_key(text: str):
+    """Element-RATIO fingerprint of a formula-ish string, or None.
+
+    "(Al19 Fe4 Mn Si2)5.31" and "Al100.89Fe21.24Mn5.31Si10.62" are the SAME
+    phase written with different normalisations (the second is the first
+    ×5.31) — dividing every count by the smallest one cancels multipliers
+    and formatting, so both yield (("Al",19.0),("Fe",4.0),("Mn",1.0),
+    ("Si",2.0)).
+
+    Strict on purpose: any capital-letter token that is not an element
+    symbol, or leftover alphabetic characters (e.g. "alpha-AlFeSi_ICSD-52623",
+    "T-phase_…"), disqualifies the string entirely — free-text names must
+    never ratio-match a formula by accident.
+    """
+    if not text:
+        return None
+    counts: dict[str, float] = {}
+    pos = 0
+    leftover_parts = []
+    for m in _FORMULA_TOKEN_RE.finditer(text):
+        el = m.group(1)
+        if el not in _ELEMENT_SYMBOLS:
+            return None
+        leftover_parts.append(text[pos:m.start()])
+        pos = m.end()
+        counts[el] = counts.get(el, 0.0) + float(m.group(2) or 1.0)
+    leftover_parts.append(text[pos:])
+    if any(ch not in _FORMULA_FILLER for ch in "".join(leftover_parts)):
+        return None
+    if not counts:
+        return None
+    smallest = min(counts.values())
+    if smallest <= 0:
+        return None
+    return tuple(sorted((el, round(v / smallest, 2)) for el, v in counts.items()))
 
 
 def _smart_phase_name_from_path(path: Path) -> str:
@@ -5190,9 +5244,57 @@ def _h5_any_pattern_dataset(f) -> bool:
     return False
 
 
-def _match_library_shts_for_xmap(xmap) -> dict:
-    """{phase_id: sht_path} by matching phase NAMES against the SHT library
-    (the same smart-name rule the indexing page derives display names with).
+def _subset_xmap_to_roi(xmap, sel2d):
+    """ROI CrystalMap from a full-grid one: keep the mask rows (row-major),
+    preserving phases, x/y units, props and the loader's _per_phase_data
+    stash.
+
+    Re-imported ROI exports must have the SAME shape the live session had
+    (xmap.size == mask.sum() < grid size) — every consumer places xmap rows
+    onto the grid via the selection mask in that case, and score/NCC maps
+    embed as NaN outside the ROI so displays crop to the ROI instead of
+    padding a red zero-score frame around it (user-hit 2026-07-15)."""
+    from orix.crystal_map import CrystalMap
+    from orix.quaternion import Rotation
+
+    flat = np.asarray(sel2d, dtype=bool).ravel()
+    rot = Rotation(np.asarray(xmap.rotations.data)[flat])
+    pid = np.asarray(xmap.phase_id)[flat]
+    props = {}
+    for k in list(xmap.prop.keys()):
+        v = np.asarray(xmap.prop[k])
+        if v.shape[0] == flat.size:
+            props[k] = v[flat]
+    roi = CrystalMap(
+        rotations=rot,
+        phase_id=pid,
+        x=np.asarray(xmap.x)[flat],
+        y=np.asarray(xmap.y)[flat],
+        phase_list=xmap.phases,
+        prop=props or None,
+        scan_unit=getattr(xmap, "scan_unit", None) or "um",
+    )
+    stash = getattr(xmap, "_per_phase_data", None)
+    if stash is not None:
+        try:
+            roi._per_phase_data = stash
+        except Exception:
+            pass
+    return roi
+
+
+def _match_library_shts_for_xmap(xmap, stored_hints: dict | None = None) -> dict:
+    """{phase_id: sht_path} for a re-imported result, best hint first:
+
+    1. ``sht_path`` attr stored in the file by the export (exact file, same
+       machine) — authoritative when it still exists.
+    2. ``sht_file`` attr (basename) found in the current SHT library —
+       survives moving the library or the result file between machines.
+    3. Phase NAME == library smart name (the display-name heuristic).
+    4. Element-RATIO match: phase names carry the CIF formula (e.g.
+       "(Al19 Fe4 Mn Si2)5.31") while SHT stems carry a renormalised one
+       ("Al100.89Fe21.24Mn5.31Si10.62" = ×5.31) — same stoichiometry, so
+       compare normalised ratios (user-hit 2026-07-15: alpha never matched).
 
     Used on rich/light import: sht_paths_by_phase lives only in backend
     memory during a session, so re-imports must reconstruct it for the
@@ -5205,6 +5307,8 @@ def _match_library_shts_for_xmap(xmap) -> dict:
     res = discover_files_for_method(_IM.SPHERICAL) or {}
     files = res.get("files", []) if isinstance(res, dict) else res
     by_name: dict[str, str] = {}
+    by_base: dict[str, str] = {}
+    by_formula: dict[tuple, str] = {}
     for entry in files:
         try:
             path = Path(str(entry.get("path") if isinstance(entry, dict) else entry))
@@ -5212,7 +5316,13 @@ def _match_library_shts_for_xmap(xmap) -> dict:
             continue
         if path.suffix.lower() != ".sht":
             continue
-        by_name.setdefault(_smart_phase_name_from_path(path), str(path.resolve()))
+        resolved = str(path.resolve())
+        by_base.setdefault(path.name.lower(), resolved)
+        smart = _smart_phase_name_from_path(path)
+        by_name.setdefault(smart, resolved)
+        fkey = _formula_ratio_key(smart)
+        if fkey is not None:
+            by_formula.setdefault(fkey, resolved)
     out: dict[int, str] = {}
     try:
         entries = list(xmap.phases) if xmap is not None else []
@@ -5230,7 +5340,21 @@ def _match_library_shts_for_xmap(xmap) -> dict:
             continue
         if pid_i < 0:
             continue
-        hit = by_name.get(str(getattr(phase, "name", "") or ""))
+        hint = (stored_hints or {}).get(pid_i) or {}
+        stored_path = hint.get("sht_path")
+        if stored_path and Path(stored_path).is_file():
+            out[pid_i] = str(Path(stored_path).resolve())
+            continue
+        stored_base = str(hint.get("sht_file") or "").lower()
+        if stored_base and stored_base in by_base:
+            out[pid_i] = by_base[stored_base]
+            continue
+        name = str(getattr(phase, "name", "") or "")
+        hit = by_name.get(name)
+        if hit is None:
+            fkey = _formula_ratio_key(name)
+            if fkey is not None:
+                hit = by_formula.get(fkey)
         if hit:
             out[pid_i] = hit
     return out
@@ -5322,16 +5446,24 @@ async def import_h5_result(req: ImportH5Request):
 
         n_pix = int(np.prod(grid_shape))
 
-        # Selection mask — try flat first, then Assignment, then default-all.
+        # Selection mask — stored dataset first (authoritative), else derive
+        # it from the indexed pixels (files without the dataset; the loader
+        # marks unindexed as phase -1). ROI exports MUST come back as ROI
+        # results — wrapping them in a full grid padded the NCC map with a
+        # huge red zero-score frame (user-hit 2026-07-15).
         if "selection_mask" in idx:
             sel = np.asarray(idx["selection_mask"]).astype(bool)
         elif "Assignment" in idx and "selection_mask" in idx["Assignment"]:
             sel = np.asarray(idx["Assignment/selection_mask"]).astype(bool)
         else:
-            sel = np.ones(grid_shape, dtype=bool)
-        if sel.size != n_pix:
-            sel = np.ones(grid_shape, dtype=bool)
-        selection_mask = sel.flatten()
+            sel = None
+        if sel is None or sel.size != n_pix:
+            pid_flat = np.asarray(xmap.phase_id).ravel()
+            if pid_flat.size == n_pix and bool((pid_flat >= 0).any()):
+                sel = pid_flat >= 0
+            else:
+                sel = np.ones(n_pix, dtype=bool)
+        selection_mask = sel.reshape(grid_shape)
 
         # Confidence — same precedence (Assignment first since that's the
         # canonical multi-phase location, then flat single-phase fallback).
@@ -5344,6 +5476,31 @@ async def import_h5_result(req: ImportH5Request):
         if ci_raw.size != n_pix:
             ci_raw = np.zeros(n_pix, dtype=np.float32)
 
+        # Per-phase SHT hints written by newer exports (sht_path/sht_file
+        # attrs on /Indexing/Phases/<id>) — exact-file restoration beats any
+        # name heuristic. Older files simply have none. Group keys are the
+        # WRITTEN ids (1..N); the loader shifts pixel ids to orix 0..N-1
+        # (0 on disk = unindexed = -1), so hints shift by -1 to line up
+        # with xmap.phases ids.
+        sht_hints: dict[int, dict] = {}
+        if "Phases" in idx:
+            for key_ in idx["Phases"]:
+                try:
+                    pid_hint = int(key_) - 1
+                except (TypeError, ValueError):
+                    continue
+                if pid_hint < 0:
+                    continue
+                hint = {}
+                for attr in ("sht_path", "sht_file"):
+                    v = idx["Phases"][key_].attrs.get(attr)
+                    if isinstance(v, bytes):
+                        v = v.decode("utf-8", errors="replace")
+                    if v:
+                        hint[attr] = str(v)
+                if hint:
+                    sht_hints[pid_hint] = hint
+
     from indexing_controller import IndexingMethod, IndexingResult
     method_map = {
         "spherical": IndexingMethod.SPHERICAL,
@@ -5351,6 +5508,21 @@ async def import_h5_result(req: ImportH5Request):
         "hough": IndexingMethod.HOUGH,
     }
     method = method_map.get(method_str, IndexingMethod.SPHERICAL)
+
+    # ROI restore: shrink the loader's full-grid xmap down to the mask rows
+    # so the imported result is shape-identical to the original live run
+    # (xmap.size == mask.sum()); confidence rows shrink with it. Fail-soft:
+    # on any surprise keep the previous full-grid wrap.
+    n_sel = int(selection_mask.sum())
+    if n_sel < n_pix and int(xmap.size) == n_pix:
+        try:
+            xmap = _subset_xmap_to_roi(xmap, selection_mask)
+            if ci_raw.size == n_pix:
+                ci_raw = ci_raw[np.asarray(selection_mask, dtype=bool).ravel()]
+        except Exception as e:
+            logger.warning(
+                "import-h5: ROI subset failed (%s) — keeping full-grid wrap", e
+            )
 
     result = IndexingResult(
         xmap=xmap,
@@ -5434,7 +5606,7 @@ async def import_h5_result(req: ImportH5Request):
     # import itself never blocks on this.
     if method == IndexingMethod.SPHERICAL:
         try:
-            sht_map = _match_library_shts_for_xmap(xmap)
+            sht_map = _match_library_shts_for_xmap(xmap, sht_hints)
             if sht_map:
                 result.metadata["sht_paths_by_phase"] = sht_map
             missing = [nm for pid_, nm in (
@@ -5463,7 +5635,12 @@ async def import_h5_result(req: ImportH5Request):
                     exc_info=True)
 
     try:
-        ci_for_mean = ci_raw[selection_mask] if selection_mask.any() else ci_raw
+        if ci_raw.size == int(selection_mask.sum()):
+            ci_for_mean = ci_raw  # ROI result: rows ARE the selected pixels
+        elif selection_mask.any():
+            ci_for_mean = ci_raw[np.asarray(selection_mask, bool).ravel()]
+        else:
+            ci_for_mean = ci_raw
         ci_mean = float(np.mean(ci_for_mean)) if ci_for_mean.size else 0.0
     except Exception:
         ci_mean = 0.0
@@ -5849,7 +6026,11 @@ async def export_indexing_result(req: ExportRequest):
                     phases_tbl = idx.create_group("Phases")
                     # Ordered by the SAME helper that maps the per-pixel ids —
                     # table entry <n> and written phase_id n stay in lockstep.
-                    for i_counter, phase_obj in _phase_table(active.xmap)[0]:
+                    tbl_entries, id_map = _phase_table(active.xmap)
+                    written_to_actual = {w: a for a, w in id_map.items()}
+                    sht_meta = (getattr(active, "metadata", None) or {}).get(
+                        "sht_paths_by_phase") or {}
+                    for i_counter, phase_obj in tbl_entries:
                         pg = phases_tbl.create_group(str(i_counter))
                         name = getattr(phase_obj, "name", "") or f"phase_{i_counter}"
                         pg.attrs["name"] = str(name)
@@ -5865,6 +6046,15 @@ async def export_indexing_result(req: ExportRequest):
                                 pg.attrs["point_group"] = str(getattr(pgrp, "name", pgrp))
                             except Exception:
                                 pass
+                        # SHT provenance — lets re-import restore the exact
+                        # simulation file instead of guessing by name.
+                        actual_id = written_to_actual.get(i_counter)
+                        sht_p = sht_meta.get(actual_id)
+                        if sht_p is None and actual_id is not None:
+                            sht_p = sht_meta.get(str(actual_id))
+                        if sht_p:
+                            pg.attrs["sht_file"] = Path(str(sht_p)).name
+                            pg.attrs["sht_path"] = str(sht_p)
                 except Exception as e:
                     logger.warning("Export: failed to write /Indexing/Phases: %s", e)
 
@@ -6138,7 +6328,11 @@ async def export_indexing_result(req: ExportRequest):
                 try:
                     phases_tbl = idx.create_group("Phases")
                     # Same ordered helper as the per-pixel id mapping.
-                    for i_counter, phase_obj in _phase_table(active.xmap)[0]:
+                    tbl_entries, id_map = _phase_table(active.xmap)
+                    written_to_actual = {w: a for a, w in id_map.items()}
+                    sht_meta = (getattr(active, "metadata", None) or {}).get(
+                        "sht_paths_by_phase") or {}
+                    for i_counter, phase_obj in tbl_entries:
                         pg = phases_tbl.create_group(str(i_counter))
                         name = getattr(phase_obj, "name", "") or f"phase_{i_counter}"
                         pg.attrs["name"] = str(name)
@@ -6158,6 +6352,14 @@ async def export_indexing_result(req: ExportRequest):
                                 )
                             except Exception:
                                 pass
+                        # SHT provenance for exact re-import restoration.
+                        actual_id = written_to_actual.get(i_counter)
+                        sht_p = sht_meta.get(actual_id)
+                        if sht_p is None and actual_id is not None:
+                            sht_p = sht_meta.get(str(actual_id))
+                        if sht_p:
+                            pg.attrs["sht_file"] = Path(str(sht_p)).name
+                            pg.attrs["sht_path"] = str(sht_p)
                 except Exception as e:
                     logger.warning(
                         "Light export: /Indexing/Phases write failed: %s", e
