@@ -5451,6 +5451,17 @@ async def export_indexing_result(req: ExportRequest):
     if active is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
 
+    # Grid-placement + phase-id-convention helpers (ROI-export fix 2026-07-15):
+    # ROI results have FEWER rows than grid pixels — a blind reshape raised
+    # "cannot reshape array of size N"; and spherical xmaps carry 1-based
+    # phase ids — the blind `raw+1` shifted phases on re-import.
+    from backend.api.services.result_exporter import (
+        place_rows_on_grid as _place_rows,
+        map_phase_ids_for_export as _map_pids,
+        confidence_rows_for_export as _ci_rows,
+        xmap_phase_write_table as _phase_table,
+    )
+
     # Opt-in per-file coordinate-system rotation. When the file's FrameSpec has
     # apply_to_export set, compose R_user into the exported orientation frame;
     # otherwise _r_user stays None and the export is byte-identical to today.
@@ -5623,7 +5634,10 @@ async def export_indexing_result(req: ExportRequest):
                         euler = _to_vendor_frame(
                             active.xmap.rotations, _export_vendor, r_user=_r_user
                         ).to_euler(degrees=False)
-                        euler_arr = np.array(euler).reshape((*active.original_shape, 3)).astype(np.float32)
+                        euler_arr = _place_rows(
+                            np.asarray(euler).reshape(-1, 3),
+                            active.original_shape, active.selection_mask,
+                        ).astype(np.float32)
                         ds = aa_grp.create_dataset("euler_angles", data=euler_arr, dtype=np.float32, compression="gzip")
                         ds.attrs["unit"] = "radians"
                         ds.attrs["convention"] = "Bunge (ZXZ)"
@@ -5634,13 +5648,21 @@ async def export_indexing_result(req: ExportRequest):
                         # (0=unindexed, 1..N=phase). Writing the raw orix values
                         # made load_xmap treat Al (orix id 0) as unindexed and
                         # dropped one full phase on re-import.
-                        raw_pid = np.array(active.xmap.phase_id).reshape(active.original_shape)
-                        written_pid = np.where(raw_pid < 0, 0, raw_pid + 1).astype(np.uint8)
+                        written_pid = _place_rows(
+                            _map_pids(active.xmap.phase_id, active.xmap),
+                            active.original_shape, active.selection_mask,
+                            fill=0, dtype=np.uint8)
                         ds = aa_grp.create_dataset("phase_id", data=written_pid, compression="gzip")
                         ds.attrs["phase_names"] = phase_names
 
                     if active.confidence_scores is not None:
-                        ds = aa_grp.create_dataset("confidence_index", data=active.confidence_scores.reshape(active.original_shape).astype(np.float32), compression="gzip")
+                        ds = aa_grp.create_dataset(
+                            "confidence_index",
+                            data=_place_rows(
+                                _ci_rows(active.confidence_scores, active.original_shape),
+                                active.original_shape, active.selection_mask,
+                            ).astype(np.float32),
+                            compression="gzip")
 
                 else:
                     # Single-phase: write directly
@@ -5648,18 +5670,32 @@ async def export_indexing_result(req: ExportRequest):
                         euler = _to_vendor_frame(
                             active.xmap.rotations, _export_vendor, r_user=_r_user
                         ).to_euler(degrees=False)
-                        ds = idx.create_dataset("euler_angles", data=np.array(euler).reshape((*active.original_shape, 3)).astype(np.float32), compression="gzip")
+                        ds = idx.create_dataset(
+                            "euler_angles",
+                            data=_place_rows(
+                                np.asarray(euler).reshape(-1, 3),
+                                active.original_shape, active.selection_mask,
+                            ).astype(np.float32),
+                            compression="gzip")
                         ds.attrs["unit"] = "radians"
                         ds.attrs["convention"] = "Bunge (ZXZ)"
 
                     if hasattr(active.xmap, "phase_id"):
-                        # Same convention shift as multi-phase — see comment above.
-                        raw_pid = np.array(active.xmap.phase_id).reshape(active.original_shape)
-                        written_pid = np.where(raw_pid < 0, 0, raw_pid + 1).astype(np.uint8)
+                        # Same id-mapping convention as multi-phase (see helper).
+                        written_pid = _place_rows(
+                            _map_pids(active.xmap.phase_id, active.xmap),
+                            active.original_shape, active.selection_mask,
+                            fill=0, dtype=np.uint8)
                         idx.create_dataset("phase_id", data=written_pid, compression="gzip")
 
                     if active.confidence_scores is not None:
-                        idx.create_dataset("confidence_index", data=active.confidence_scores.reshape(active.original_shape).astype(np.float32), compression="gzip")
+                        idx.create_dataset(
+                            "confidence_index",
+                            data=_place_rows(
+                                _ci_rows(active.confidence_scores, active.original_shape),
+                                active.original_shape, active.selection_mask,
+                            ).astype(np.float32),
+                            compression="gzip")
 
                 # Selection mask
                 idx.create_dataset("selection_mask", data=active.selection_mask.astype(np.uint8), compression="gzip")
@@ -5671,26 +5707,9 @@ async def export_indexing_result(req: ExportRequest):
                 # breaks the legend and IPF colouring.
                 try:
                     phases_tbl = idx.create_group("Phases")
-                    xmap_phases = list(active.xmap.phases) if active.xmap is not None else []
-                    i_counter = 0
-                    for entry in xmap_phases:
-                        # orix 0.12+ yields (id, Phase); older versions yield a Phase
-                        if isinstance(entry, tuple) and len(entry) == 2:
-                            pid, phase_obj = entry
-                            try:
-                                if int(pid) < 0:
-                                    continue
-                            except Exception:
-                                pass
-                        else:
-                            phase_obj = entry
-                            pid = getattr(entry, "id", None)
-                            try:
-                                if pid is not None and int(pid) < 0:
-                                    continue
-                            except Exception:
-                                pass
-                        i_counter += 1
+                    # Ordered by the SAME helper that maps the per-pixel ids —
+                    # table entry <n> and written phase_id n stay in lockstep.
+                    for i_counter, phase_obj in _phase_table(active.xmap)[0]:
                         pg = phases_tbl.create_group(str(i_counter))
                         name = getattr(phase_obj, "name", "") or f"phase_{i_counter}"
                         pg.attrs["name"] = str(name)
@@ -5903,8 +5922,9 @@ async def export_indexing_result(req: ExportRequest):
                         euler = _to_vendor_frame(
                             active.xmap.rotations, _export_vendor, r_user=_r_user
                         ).to_euler(degrees=False)
-                        euler_arr = np.array(euler).reshape(
-                            (*active.original_shape, 3)
+                        euler_arr = _place_rows(
+                            np.asarray(euler).reshape(-1, 3),
+                            active.original_shape, active.selection_mask,
                         ).astype(np.float32)
                         ds = aa_grp.create_dataset(
                             "euler_angles", data=euler_arr,
@@ -5913,13 +5933,11 @@ async def export_indexing_result(req: ExportRequest):
                         ds.attrs["unit"] = "radians"
                         ds.attrs["convention"] = "Bunge (ZXZ)"
                     if hasattr(active.xmap, "phase_id"):
-                        # Same 0-based → 1-based shift as the rich branch.
-                        raw_pid = np.array(active.xmap.phase_id).reshape(
-                            active.original_shape
-                        )
-                        written_pid = np.where(
-                            raw_pid < 0, 0, raw_pid + 1
-                        ).astype(np.uint8)
+                        # Same id-mapping convention as the rich branch.
+                        written_pid = _place_rows(
+                            _map_pids(active.xmap.phase_id, active.xmap),
+                            active.original_shape, active.selection_mask,
+                            fill=0, dtype=np.uint8)
                         ds = aa_grp.create_dataset(
                             "phase_id", data=written_pid, compression="gzip",
                         )
@@ -5927,8 +5945,9 @@ async def export_indexing_result(req: ExportRequest):
                     if active.confidence_scores is not None:
                         aa_grp.create_dataset(
                             "confidence_index",
-                            data=active.confidence_scores.reshape(
-                                active.original_shape
+                            data=_place_rows(
+                                _ci_rows(active.confidence_scores, active.original_shape),
+                                active.original_shape, active.selection_mask,
                             ).astype(np.float32),
                             dtype=np.float32, compression="gzip",
                         )
@@ -5940,28 +5959,28 @@ async def export_indexing_result(req: ExportRequest):
                         ).to_euler(degrees=False)
                         ds = idx.create_dataset(
                             "euler_angles",
-                            data=np.array(euler).reshape(
-                                (*active.original_shape, 3)
+                            data=_place_rows(
+                                np.asarray(euler).reshape(-1, 3),
+                                active.original_shape, active.selection_mask,
                             ).astype(np.float32),
                             compression="gzip",
                         )
                         ds.attrs["unit"] = "radians"
                         ds.attrs["convention"] = "Bunge (ZXZ)"
                     if hasattr(active.xmap, "phase_id"):
-                        raw_pid = np.array(active.xmap.phase_id).reshape(
-                            active.original_shape
-                        )
-                        written_pid = np.where(
-                            raw_pid < 0, 0, raw_pid + 1
-                        ).astype(np.uint8)
+                        written_pid = _place_rows(
+                            _map_pids(active.xmap.phase_id, active.xmap),
+                            active.original_shape, active.selection_mask,
+                            fill=0, dtype=np.uint8)
                         idx.create_dataset(
                             "phase_id", data=written_pid, compression="gzip",
                         )
                     if active.confidence_scores is not None:
                         idx.create_dataset(
                             "confidence_index",
-                            data=active.confidence_scores.reshape(
-                                active.original_shape
+                            data=_place_rows(
+                                _ci_rows(active.confidence_scores, active.original_shape),
+                                active.original_shape, active.selection_mask,
                             ).astype(np.float32),
                             compression="gzip",
                         )
@@ -5978,29 +5997,8 @@ async def export_indexing_result(req: ExportRequest):
                 # IPF map becomes colour noise.
                 try:
                     phases_tbl = idx.create_group("Phases")
-                    xmap_phases = (
-                        list(active.xmap.phases)
-                        if active.xmap is not None
-                        else []
-                    )
-                    i_counter = 0
-                    for entry in xmap_phases:
-                        if isinstance(entry, tuple) and len(entry) == 2:
-                            pid, phase_obj = entry
-                            try:
-                                if int(pid) < 0:
-                                    continue
-                            except Exception:
-                                pass
-                        else:
-                            phase_obj = entry
-                            pid = getattr(entry, "id", None)
-                            try:
-                                if pid is not None and int(pid) < 0:
-                                    continue
-                            except Exception:
-                                pass
-                        i_counter += 1
+                    # Same ordered helper as the per-pixel id mapping.
+                    for i_counter, phase_obj in _phase_table(active.xmap)[0]:
                         pg = phases_tbl.create_group(str(i_counter))
                         name = getattr(phase_obj, "name", "") or f"phase_{i_counter}"
                         pg.attrs["name"] = str(name)

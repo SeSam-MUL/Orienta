@@ -39,6 +39,101 @@ logger = logging.getLogger(__name__)
 FORMAT_VERSION = "1.3"
 
 
+def place_rows_on_grid(rows, original_shape, selection_mask=None,
+                       fill=0.0, dtype=None):
+    """Reshape per-pixel result ROWS to the full ``(n_rows, n_cols[, k])`` grid.
+
+    Full-coverage results are a plain reshape. ROI/masked results (fewer rows
+    than grid pixels) are PLACED via the selection mask — the old blind
+    ``.reshape(original_shape)`` raised ``cannot reshape array of size N``
+    on every ROI export (user-hit 2026-07-15). Pixels outside the ROI get
+    ``fill``.
+    """
+    import numpy as np
+    a = np.asarray(rows)
+    n_rows, n_cols = int(original_shape[0]), int(original_shape[1])
+    n = n_rows * n_cols
+    tail = a.shape[1:]
+    if a.shape[0] == n:
+        return a.reshape((n_rows, n_cols) + tail)
+    if selection_mask is None:
+        raise ValueError(
+            f"result has {a.shape[0]} rows for a {n_rows}x{n_cols} grid and "
+            "no selection mask — cannot place ROI rows")
+    flat = np.flatnonzero(np.asarray(selection_mask, dtype=bool).ravel())
+    if flat.size != a.shape[0]:
+        raise ValueError(
+            f"selection mask covers {flat.size} px but the result has "
+            f"{a.shape[0]} rows")
+    out = np.full((n,) + tail, fill, dtype=dtype if dtype is not None else a.dtype)
+    out[flat] = a
+    return out.reshape((n_rows, n_cols) + tail)
+
+
+def xmap_phase_write_table(xmap):
+    """(ordered_table, id_mapping) for the on-disk phase convention.
+
+    On disk: ``phase_id`` 0 = unindexed, 1..N ↔ ``/Indexing/Phases/<n>`` in
+    written order (the reader maps written id n → the n-th Phases entry).
+    xmap ids are NOT reliably 0-based — Hough xmaps use orix-native 0..N-1,
+    spherical PhaseLists carry explicit 1-based ids. The old blind
+    ``raw_pid + 1`` therefore shifted every spherical export onto the WRONG
+    phase name on re-import. Returns ``[(written_id, phase_obj), ...]`` and
+    ``{actual_xmap_id: written_id}``.
+    """
+    table = []
+    mapping = {}
+    counter = 0
+    try:
+        entries = list(xmap.phases) if xmap is not None else []
+    except Exception:
+        entries = []
+    for entry in entries:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            pid, phase_obj = entry
+        else:
+            phase_obj = entry
+            pid = getattr(entry, "id", None)
+        try:
+            if pid is not None and int(pid) < 0:
+                continue
+        except Exception:
+            pass
+        counter += 1
+        table.append((counter, phase_obj))
+        if pid is not None:
+            try:
+                mapping[int(pid)] = counter
+            except Exception:
+                pass
+    return table, mapping
+
+
+def map_phase_ids_for_export(raw_rows, xmap):
+    """Per-row xmap phase ids → on-disk 1..N convention (0 = unindexed)."""
+    import numpy as np
+    raw = np.asarray(raw_rows).reshape(-1).astype(int)
+    _table, mapping = xmap_phase_write_table(xmap)
+    out = np.zeros(raw.shape, dtype=np.uint8)
+    for actual, written in mapping.items():
+        out[raw == actual] = written
+    return out
+
+
+def confidence_rows_for_export(confidence_scores, original_shape):
+    """Flatten a result's confidence scores to one value per RESULT ROW.
+
+    Handles: 1D per-row scores, a full (rows, cols) grid, and (n, ranks)
+    top-k stacks (top-1 taken, matching extract_score_map)."""
+    import numpy as np
+    cs = np.asarray(confidence_scores)
+    if cs.ndim == 2 and cs.shape == tuple(original_shape):
+        return cs.reshape(-1)
+    if cs.ndim == 2:
+        return cs[:, 0].reshape(-1)
+    return cs.reshape(-1)
+
+
 def _read_step_size_from_checkpoint(checkpoint_path: str) -> float:
     """Read step_size_um from /metadata in a multiphase checkpoint.
 
