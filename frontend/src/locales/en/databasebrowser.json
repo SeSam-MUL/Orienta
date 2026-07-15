@@ -19,6 +19,8 @@
     "syncAllTooltip": "Bidirectional sync: download server files to local cache AND upload local files to server",
     "uploadAll": "Upload…",
     "uploadAllTooltip": "Open the upload dialog: choose which categories (SHT, MC h5, Master, CIF, XTAL) to push to the server, with a progress bar.",
+    "downloadAll": "Download…",
+    "downloadAllTooltip": "Open the download dialog: choose which categories (SHT, Master, CIF, XTAL, …) to pull from the server into your local cache, with a progress bar.",
     "uploadSelected": "Upload to server ({{count}})",
     "uploadSelectedTooltip": "Copy the selected local files (any type — SHT, MC h5, Master, CIF, XTAL) to the server. Differing server copies are kept unless you confirm overwrite.",
     "deleteSelected": "Delete Selected ({{count}})",
@@ -184,6 +186,24 @@
     "resUploaded": "uploaded",
     "resUpToDate": "up-to-date",
     "resConflicts": "conflict(s) (enable overwrite to push them)",
+    "resErrors": "error(s)",
+    "resCancelled": "— cancelled",
+    "resTransferred": "uploaded"
+  },
+  "syncDownload": {
+    "title": "Download from server",
+    "subtitle": "Choose which categories to pull from the server into your local cache. Each row shows how many server files would be downloaded (and how many you already have locally).",
+    "catCounts": "{{download}} to download · {{onLocal}} already local",
+    "optIn": "(off by default)",
+    "nothingInCategory": "No server files in this category",
+    "overwrite": "Overwrite local files that already exist with a different version",
+    "progress": "Downloading {{current}}/{{total}} — {{name}}",
+    "selectedSummary": "{{count}} file(s) selected",
+    "start": "Download {{count}} file(s)",
+    "cancel": "Cancel",
+    "resTransferred": "downloaded",
+    "resUpToDate": "up-to-date",
+    "resConflicts": "conflict(s) (enable overwrite to pull them)",
     "resErrors": "error(s)",
     "resCancelled": "— cancelled"
   }

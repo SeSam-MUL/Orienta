@@ -19,6 +19,8 @@
     "syncAllTooltip": "双向同步：将服务器文件下载到本地缓存，并将本地文件上传到服务器",
     "uploadAll": "上传…",
     "uploadAllTooltip": "打开上传对话框：选择要推送到服务器的类别（SHT、MC h5、Master、CIF、XTAL），并带进度条。",
+    "downloadAll": "下载…",
+    "downloadAllTooltip": "打开下载对话框：选择要从服务器拉取到本地缓存的类别（SHT、Master、CIF、XTAL……），并带进度条。",
     "uploadSelected": "上传到服务器（{{count}}）",
     "uploadSelectedTooltip": "将所选本地文件（任意类型 — SHT、MC h5、Master、CIF、XTAL）复制到服务器。除非您确认覆盖，否则内容不同的服务器副本将被保留。",
     "deleteSelected": "删除所选（{{count}}）",
@@ -184,6 +186,24 @@
     "resUploaded": "已上传",
     "resUpToDate": "最新",
     "resConflicts": "个冲突（启用覆盖以推送）",
+    "resErrors": "个错误",
+    "resCancelled": "— 已取消",
+    "resTransferred": "已上传"
+  },
+  "syncDownload": {
+    "title": "从服务器下载",
+    "subtitle": "选择要从服务器拉取到本地缓存的类别。每行显示将下载的服务器文件数量（以及您本地已有的数量）。",
+    "catCounts": "{{download}} 个待下载 · {{onLocal}} 个已在本地",
+    "optIn": "（默认关闭）",
+    "nothingInCategory": "此类别没有服务器文件",
+    "overwrite": "覆盖本地已存在但版本不同的文件",
+    "progress": "正在下载 {{current}}/{{total}} — {{name}}",
+    "selectedSummary": "已选择 {{count}} 个文件",
+    "start": "下载 {{count}} 个文件",
+    "cancel": "取消",
+    "resTransferred": "已下载",
+    "resUpToDate": "最新",
+    "resConflicts": "个冲突（启用覆盖以拉取）",
     "resErrors": "个错误",
     "resCancelled": "— 已取消"
   }

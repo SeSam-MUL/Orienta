@@ -586,6 +586,7 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
   const [syncResult, setSyncResult] = useState(null);   // null = conflict dialog closed
   const [resolving, setResolving] = useState(false);
   const [showSyncUpload, setShowSyncUpload] = useState(false);
+  const [syncMode, setSyncMode] = useState('upload');   // 'upload' (local->server) | 'download' (server->local)
   const [syncRunning, setSyncRunning] = useState(false);
   const [syncProgress, setSyncProgress] = useState(null);     // { current, total, name }
   const [syncSummary, setSyncSummary] = useState(null);       // { uploaded, upToDate, conflicts, errors, cancelled }
@@ -785,11 +786,13 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
   // they also exist on the server (only changed if differing + overwrite).
   const buildSyncCategories = () => {
     // Labels are file-format acronyms — identical in every language (match TAB_DEFS).
-    // Dictionaries are offered but OFF by default: includable on demand, never
-    // auto-pushed to the shared server.
+    // Dictionaries are OFF by default in BOTH directions (defaultOff): includable
+    // on demand, never auto-pushed to / pulled from the shared server. MC h5 is
+    // OFF by default only for DOWNLOAD (downloadOff) — it's a large intermediate a
+    // fresh user rarely needs; SHT/Master/CIF/XTAL are what indexing consumes.
     const defs = [
       { id: 'sht',        label: 'SHT' },
-      { id: 'h5',         label: 'MC h5' },
+      { id: 'h5',         label: 'MC h5', downloadOff: true },
       { id: 'master',     label: 'Master H5' },
       { id: 'cif',        label: 'CIF' },
       { id: 'xtal',       label: 'XTAL' },
@@ -798,12 +801,29 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
     return defs.map(d => {
       const inCat = allEntries.filter(e => (e.file_type || e.type || e.category || '').toLowerCase() === d.id);
       const local = inCat.filter(e => (e.location || '').toLowerCase() === 'local');
+      const server = inCat.filter(e => (e.location || '').toLowerCase() === 'server');
       const both = inCat.filter(e => (e.location || '').toLowerCase() === 'both');
-      return { ...d, uploadable: local.length + both.length, both: both.length };
+      // uploadable = files present locally (local|both); downloadable = files
+      // present on the server (server|both). 'both' files are counted on both
+      // sides but resolve to "up-to-date" no-ops unless they differ + overwrite.
+      return {
+        ...d,
+        uploadable: local.length + both.length,
+        downloadable: server.length + both.length,
+        both: both.length,
+      };
     });
   };
 
   const handleOpenSyncUpload = () => {
+    setSyncMode('upload');
+    setSyncSummary(null);
+    setSyncProgress(null);
+    setShowSyncUpload(true);
+  };
+
+  const handleOpenSyncDownload = () => {
+    setSyncMode('download');
     setSyncSummary(null);
     setSyncProgress(null);
     setShowSyncUpload(true);
@@ -823,13 +843,19 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
     setSyncProgress(null);
   };
 
-  // Upload all local files in the chosen categories, one request per file so the
+  // Transfer all files in the chosen categories, one request per file so the
   // progress bar advances per file (the big master .h5 are ~32 MB each).
-  const handleStartCategorySync = async (catIds, overwrite) => {
+  // direction 'upload' pushes local|both files to the server; 'download' pulls
+  // server|both files to the local cache. The dialog's onStart routes here with
+  // the active syncMode. Totals use a neutral `transferred` count (the dialog
+  // labels it "uploaded"/"downloaded" via its mode-aware i18n namespace).
+  const runCategoryTransfer = async (catIds, overwrite, direction) => {
+    const isDownload = direction === 'download';
+    const locWanted = isDownload ? ['server', 'both'] : ['local', 'both'];
     const wanted = new Set(catIds);
     const files = allEntries
       .filter(e => wanted.has((e.file_type || e.type || e.category || '').toLowerCase()))
-      .filter(e => ['local', 'both'].includes((e.location || '').toLowerCase()))
+      .filter(e => locWanted.includes((e.location || '').toLowerCase()))
       .map(e => ({
         name: e.name || e.filename,
         category: (e.file_type || e.type || e.category || '').toLowerCase(),
@@ -840,7 +866,7 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
     syncCancelRef.current = false;
     setSyncRunning(true);
     setSyncSummary(null);
-    const totals = { uploaded: 0, upToDate: 0, conflicts: 0, errors: 0, cancelled: false };
+    const totals = { transferred: 0, upToDate: 0, conflicts: 0, errors: 0, cancelled: false };
     setSyncProgress({ current: 0, total: files.length, name: '' });
 
     for (let i = 0; i < files.length; i++) {
@@ -850,8 +876,10 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
       const controller = new AbortController();
       syncAbortRef.current = controller;
       try {
-        const { data } = await dbApi.upload([f], { overwrite, signal: controller.signal });
-        totals.uploaded += (data?.uploaded || []).length;
+        const { data } = isDownload
+          ? await dbApi.download([f], { overwrite, signal: controller.signal })
+          : await dbApi.upload([f], { overwrite, signal: controller.signal });
+        totals.transferred += ((isDownload ? data?.downloaded : data?.uploaded) || []).length;
         totals.upToDate += (data?.up_to_date || []).length;
         totals.conflicts += (data?.conflicts || []).length;
         totals.errors += (data?.errors || []).length;
@@ -873,6 +901,10 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
     await loadData();
     await loadCacheStats();
   };
+
+  // Dialog onStart — runs in the currently active direction (syncMode).
+  const handleStartCategorySync = (catIds, overwrite) =>
+    runCategoryTransfer(catIds, overwrite, syncMode);
 
   const handleClearCache = () => {
     // Honest behaviour: there is NO separate cache directory — the "cache"
@@ -1025,6 +1057,12 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
             title={t('databasebrowser:controls.syncAllTooltip')}
           >
             {t('databasebrowser:controls.syncAll')}
+          </Button>
+          <Button
+            onClick={handleOpenSyncDownload}
+            title={t('databasebrowser:controls.downloadAllTooltip')}
+          >
+            {'⬇'} {t('databasebrowser:controls.downloadAll')}
           </Button>
           <Button
             onClick={handleOpenSyncUpload}
@@ -1186,6 +1224,7 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
       )}
       <SyncUploadDialog
         open={showSyncUpload}
+        mode={syncMode}
         categories={showSyncUpload ? buildSyncCategories() : []}
         running={syncRunning}
         progress={syncProgress}

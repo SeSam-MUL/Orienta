@@ -95,11 +95,66 @@ describe('SyncUploadDialog', () => {
     render(
       <SyncUploadDialog
         open categories={CATEGORIES}
-        result={{ uploaded: 70, upToDate: 0, conflicts: 0, errors: 0 }}
+        result={{ transferred: 70, upToDate: 0, conflicts: 0, errors: 0 }}
         onStart={() => {}} onCancel={() => {}} onClose={() => {}}
       />,
     );
     expect(screen.getByText('70')).toBeInTheDocument();
     expect(screen.getByText(/uploaded/)).toBeInTheDocument();
+  });
+});
+
+// --- Download mode (server -> local) -------------------------------------
+const DL_CATEGORIES = [
+  { id: 'sht',        label: 'SHT',        downloadable: 10, both: 2, uploadable: 0 },
+  { id: 'h5',         label: 'MC h5',      downloadable: 5,  both: 0, uploadable: 0, downloadOff: true },
+  { id: 'master',     label: 'Master H5',  downloadable: 8,  both: 1, uploadable: 0 },
+  { id: 'cif',        label: 'CIF',        downloadable: 30, both: 0, uploadable: 0 },
+  { id: 'xtal',       label: 'XTAL',       downloadable: 30, both: 0, uploadable: 0 },
+  { id: 'dictionary', label: 'Dictionary', downloadable: 6,  both: 0, uploadable: 0, defaultOff: true },
+];
+
+describe('SyncUploadDialog (download mode)', () => {
+  it('lists categories with download/already-local counts', () => {
+    render(<SyncUploadDialog open mode="download" categories={DL_CATEGORIES} onStart={() => {}} onCancel={() => {}} onClose={() => {}} />);
+    // SHT row: 10 to download · 2 already local
+    expect(screen.getByText(/10 to download/)).toBeInTheDocument();
+    expect(screen.getByText(/2 already local/)).toBeInTheDocument();
+  });
+
+  it('default-selects SHT+Master+CIF+XTAL but NOT MC h5 (downloadOff) or Dictionary (defaultOff)', () => {
+    const onStart = vi.fn();
+    render(<SyncUploadDialog open mode="download" categories={DL_CATEGORIES} onStart={onStart} onCancel={() => {}} onClose={() => {}} />);
+    // 10 (sht) + 8 (master) + 30 (cif) + 30 (xtal) = 78; h5 & dictionary excluded
+    fireEvent.click(screen.getByRole('button', { name: /Download 78 file/ }));
+    expect(new Set(onStart.mock.calls[0][0])).toEqual(new Set(['sht', 'master', 'cif', 'xtal']));
+  });
+
+  it('can opt-in MC h5, adding it to the download set', () => {
+    const onStart = vi.fn();
+    render(<SyncUploadDialog open mode="download" categories={DL_CATEGORIES} onStart={onStart} onCancel={() => {}} onClose={() => {}} />);
+    // MC h5 is the 2nd category checkbox
+    const checkboxes = screen.getAllByRole('checkbox');
+    fireEvent.click(checkboxes[1]);
+    fireEvent.click(screen.getByRole('button', { name: /Download 83 file/ }));
+    expect(new Set(onStart.mock.calls[0][0])).toEqual(new Set(['sht', 'master', 'cif', 'xtal', 'h5']));
+  });
+
+  it('shows a download progress label + download result summary', () => {
+    const { rerender } = render(
+      <SyncUploadDialog open mode="download" categories={DL_CATEGORIES}
+        running progress={{ current: 3, total: 78, name: 'Al.sht' }}
+        onStart={() => {}} onCancel={() => {}} onClose={() => {}} />,
+    );
+    expect(screen.getByText(/Downloading 3\/78/)).toBeInTheDocument();
+    rerender(
+      <SyncUploadDialog open mode="download" categories={DL_CATEGORIES}
+        result={{ transferred: 78, upToDate: 0, conflicts: 0, errors: 0 }}
+        onStart={() => {}} onCancel={() => {}} onClose={() => {}} />,
+    );
+    const countEl = screen.getByText('78');
+    expect(countEl).toBeInTheDocument();
+    // "downloaded" also appears in the subtitle, so scope to the result label.
+    expect(countEl.parentElement).toHaveTextContent('downloaded');
   });
 });

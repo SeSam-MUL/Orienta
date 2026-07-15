@@ -1,9 +1,12 @@
 /**
- * SyncUploadDialog — pick which categories to upload to the server, then push
- * them with a live progress bar. "Sync All" only moved CIF/XTAL; this uploads
- * any chosen categories (SHT / MC h5 / Master / CIF / XTAL).
+ * SyncUploadDialog — pick which categories to transfer between local and server,
+ * then run it with a live progress bar. Works in two directions via `mode`:
+ *   - mode="upload"   : local -> server  (counts uploadable = local|both)
+ *   - mode="download" : server -> local  (counts downloadable = server|both)
+ * "Sync All" only moves CIF/XTAL; this covers any chosen categories
+ * (SHT / MC h5 / Master / CIF / XTAL / Dictionary) in EITHER direction.
  *
- * Selection + overwrite are owned here; the actual upload loop (with progress)
+ * Selection + overwrite are owned here; the actual transfer loop (with progress)
  * runs in the parent, which feeds `running` / `progress` / `result` back in.
  */
 import { useState, useEffect } from 'react';
@@ -11,23 +14,31 @@ import { useTranslation } from 'react-i18next';
 import { colors, alpha, Button } from '../../theme/components';
 
 export default function SyncUploadDialog({
-  open, categories = [], running = false, progress = null, result = null,
+  open, categories = [], mode = 'upload', running = false, progress = null, result = null,
   onStart, onCancel, onClose,
 }) {
   const { t } = useTranslation(['databasebrowser', 'common']);
   const [selected, setSelected] = useState(() => new Set());
   const [overwrite, setOverwrite] = useState(false);
 
-  // Default-select every category that has something to upload — EXCEPT those
-  // flagged defaultOff (dictionaries): still checkable, just not auto-included.
+  // Namespace + per-direction helpers. Upload counts local|both files;
+  // download counts server|both files.
+  const ns = mode === 'download' ? 'syncDownload' : 'syncUpload';
+  const countOf = (c) => (mode === 'download' ? (c.downloadable || 0) : (c.uploadable || 0));
+  // A category is "off by default" if flagged defaultOff (both directions, e.g.
+  // dictionaries) OR downloadOff in download mode (e.g. MC h5 — big intermediate).
+  const isOff = (c) => c.defaultOff || (mode === 'download' && c.downloadOff);
+
+  // Default-select every category that has something to transfer — EXCEPT the
+  // off-by-default ones (still checkable, just not auto-included).
   useEffect(() => {
     if (open) {
       setSelected(new Set(
-        categories.filter(c => c.uploadable > 0 && !c.defaultOff).map(c => c.id),
+        categories.filter(c => countOf(c) > 0 && !isOff(c)).map(c => c.id),
       ));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
+  }, [open, mode]);
 
   if (!open) return null;
 
@@ -39,7 +50,7 @@ export default function SyncUploadDialog({
 
   const totalSelected = categories
     .filter(c => selected.has(c.id))
-    .reduce((s, c) => s + c.uploadable, 0);
+    .reduce((s, c) => s + countOf(c), 0);
 
   const pct = progress && progress.total
     ? Math.round((progress.current / progress.total) * 100) : 0;
@@ -64,7 +75,7 @@ export default function SyncUploadDialog({
           display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
         }}>
           <div style={{ flex: 1, fontSize: 13, fontWeight: 700, color: colors.accent }}>
-            {t('databasebrowser:syncUpload.title')}
+            {t(`databasebrowser:${ns}.title`)}
           </div>
           <Button onClick={onClose} disabled={running} style={{ fontSize: 11 }}>
             {t('common:close')}
@@ -74,24 +85,25 @@ export default function SyncUploadDialog({
         {/* Body */}
         <div className="thin-scrollbar" style={{ flex: 1, overflowY: 'auto', padding: '14px 16px' }}>
           <div style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 12 }}>
-            {t('databasebrowser:syncUpload.subtitle')}
+            {t(`databasebrowser:${ns}.subtitle`)}
           </div>
 
           {/* Category rows */}
           {categories.map(cat => {
             const isOn = selected.has(cat.id);
-            const disabled = running || cat.uploadable === 0;
+            const count = countOf(cat);
+            const disabled = running || count === 0;
             return (
               <label
                 key={cat.id}
-                title={cat.uploadable === 0 ? t('databasebrowser:syncUpload.nothingInCategory') : ''}
+                title={count === 0 ? t(`databasebrowser:${ns}.nothingInCategory`) : ''}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 10,
                   padding: '8px 10px', marginBottom: 6, borderRadius: 6,
                   border: `1px solid ${isOn ? alpha(colors.cyan, 0.35) : colors.border}`,
                   background: isOn ? alpha(colors.cyan, 0.06) : colors.bgSecondary,
                   cursor: disabled ? 'default' : 'pointer',
-                  opacity: cat.uploadable === 0 ? 0.5 : 1,
+                  opacity: count === 0 ? 0.5 : 1,
                 }}
               >
                 <input
@@ -102,16 +114,16 @@ export default function SyncUploadDialog({
                 />
                 <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: colors.text }}>
                   {cat.label}
-                  {cat.defaultOff && (
+                  {isOff(cat) && (
                     <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 400, color: colors.textSecondary }}>
-                      {t('databasebrowser:syncUpload.optIn')}
+                      {t(`databasebrowser:${ns}.optIn`)}
                     </span>
                   )}
                 </span>
                 <span style={{ fontSize: 11, color: colors.textSecondary }}>
-                  {t('databasebrowser:syncUpload.catCounts', {
-                    upload: cat.uploadable, onServer: cat.both,
-                  })}
+                  {mode === 'download'
+                    ? t('databasebrowser:syncDownload.catCounts', { download: count, onLocal: cat.both })
+                    : t('databasebrowser:syncUpload.catCounts', { upload: count, onServer: cat.both })}
                 </span>
               </label>
             );
@@ -128,14 +140,14 @@ export default function SyncUploadDialog({
               disabled={running}
               onChange={(e) => setOverwrite(e.target.checked)}
             />
-            {t('databasebrowser:syncUpload.overwrite')}
+            {t(`databasebrowser:${ns}.overwrite`)}
           </label>
 
           {/* Progress */}
           {running && progress && (
             <div style={{ marginTop: 16 }}>
               <div style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 6 }}>
-                {t('databasebrowser:syncUpload.progress', {
+                {t(`databasebrowser:${ns}.progress`, {
                   current: progress.current, total: progress.total, name: progress.name || '',
                 })}
               </div>
@@ -162,24 +174,24 @@ export default function SyncUploadDialog({
               display: 'flex', flexWrap: 'wrap', gap: 14, fontSize: 12,
             }}>
               <span style={{ color: colors.green }}>
-                <strong>{result.uploaded}</strong> {t('databasebrowser:syncUpload.resUploaded')}
+                <strong>{result.transferred}</strong> {t(`databasebrowser:${ns}.resTransferred`)}
               </span>
               <span style={{ color: colors.textSecondary }}>
-                <strong>{result.upToDate}</strong> {t('databasebrowser:syncUpload.resUpToDate')}
+                <strong>{result.upToDate}</strong> {t(`databasebrowser:${ns}.resUpToDate`)}
               </span>
               {result.conflicts > 0 && (
                 <span style={{ color: colors.yellow }}>
-                  <strong>{result.conflicts}</strong> {t('databasebrowser:syncUpload.resConflicts')}
+                  <strong>{result.conflicts}</strong> {t(`databasebrowser:${ns}.resConflicts`)}
                 </span>
               )}
               {result.errors > 0 && (
                 <span style={{ color: colors.red }}>
-                  <strong>{result.errors}</strong> {t('databasebrowser:syncUpload.resErrors')}
+                  <strong>{result.errors}</strong> {t(`databasebrowser:${ns}.resErrors`)}
                 </span>
               )}
               {result.cancelled && (
                 <span style={{ color: colors.textSecondary }}>
-                  {t('databasebrowser:syncUpload.resCancelled')}
+                  {t(`databasebrowser:${ns}.resCancelled`)}
                 </span>
               )}
             </div>
@@ -192,11 +204,11 @@ export default function SyncUploadDialog({
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
         }}>
           <span style={{ fontSize: 11, color: colors.textSecondary }}>
-            {t('databasebrowser:syncUpload.selectedSummary', { count: totalSelected })}
+            {t(`databasebrowser:${ns}.selectedSummary`, { count: totalSelected })}
           </span>
           {running ? (
             <Button variant="danger" onClick={onCancel} style={{ fontSize: 11 }}>
-              {t('databasebrowser:syncUpload.cancel')}
+              {t(`databasebrowser:${ns}.cancel`)}
             </Button>
           ) : (
             <Button
@@ -205,7 +217,7 @@ export default function SyncUploadDialog({
               disabled={totalSelected === 0}
               style={{ fontSize: 11, background: totalSelected > 0 ? colors.cyan : undefined }}
             >
-              {t('databasebrowser:syncUpload.start', { count: totalSelected })}
+              {t(`databasebrowser:${ns}.start`, { count: totalSelected })}
             </Button>
           )}
         </div>

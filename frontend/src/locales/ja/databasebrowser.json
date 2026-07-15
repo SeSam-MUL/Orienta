@@ -19,6 +19,8 @@
     "syncAllTooltip": "双方向同期: サーバーのファイルをローカルキャッシュにダウンロードし、ローカルのファイルをサーバーにアップロードします",
     "uploadAll": "アップロード…",
     "uploadAllTooltip": "アップロードダイアログを開きます: どのカテゴリ（SHT, MC h5, Master, CIF, XTAL）をサーバーへ送るかを選択でき、進捗バーが表示されます。",
+    "downloadAll": "ダウンロード…",
+    "downloadAllTooltip": "ダウンロードダイアログを開きます: どのカテゴリ（SHT, Master, CIF, XTAL, …）をサーバーからローカルキャッシュへ取得するかを選択でき、進捗バーが表示されます。",
     "uploadSelected": "サーバーへアップロード（{{count}}）",
     "uploadSelectedTooltip": "選択したローカルファイル（SHT, MC h5, Master, CIF, XTAL のいずれの種類でも）をサーバーへコピーします。内容が異なるサーバー側のコピーは、上書きを確認しない限り保持されます。",
     "deleteSelected": "選択を削除（{{count}}）",
@@ -184,6 +186,24 @@
     "resUploaded": "アップロード",
     "resUpToDate": "最新",
     "resConflicts": "件の競合（上書きを有効にすると送信されます）",
+    "resErrors": "件のエラー",
+    "resCancelled": "— キャンセルされました",
+    "resTransferred": "アップロード"
+  },
+  "syncDownload": {
+    "title": "サーバーからダウンロード",
+    "subtitle": "サーバーからローカルキャッシュへ取得するカテゴリを選択してください。各行にはダウンロードされるサーバーファイル数（および既にローカルにある数）が表示されます。",
+    "catCounts": "{{download}} 件をダウンロード · {{onLocal}} 件が既にローカル",
+    "optIn": "（既定でオフ）",
+    "nothingInCategory": "このカテゴリにサーバーファイルがありません",
+    "overwrite": "別バージョンで既に存在するローカルファイルを上書きする",
+    "progress": "ダウンロード中 {{current}}/{{total}} — {{name}}",
+    "selectedSummary": "{{count}} 件のファイルを選択",
+    "start": "{{count}} 件をダウンロード",
+    "cancel": "キャンセル",
+    "resTransferred": "ダウンロード",
+    "resUpToDate": "最新",
+    "resConflicts": "件の競合（上書きを有効にすると取得されます）",
     "resErrors": "件のエラー",
     "resCancelled": "— キャンセルされました"
   }

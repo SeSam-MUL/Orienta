@@ -19,6 +19,8 @@
     "syncAllTooltip": "Bidirektionale Synchronisierung: Serverdateien in den lokalen Cache herunterladen UND lokale Dateien auf den Server hochladen",
     "uploadAll": "Hochladen…",
     "uploadAllTooltip": "Öffnet den Upload-Dialog: auswählen, welche Kategorien (SHT, MC h5, Master, CIF, XTAL) auf den Server geschoben werden — mit Fortschrittsbalken.",
+    "downloadAll": "Herunterladen…",
+    "downloadAllTooltip": "Öffnet den Download-Dialog: auswählen, welche Kategorien (SHT, Master, CIF, XTAL, …) vom Server in den lokalen Cache geholt werden — mit Fortschrittsbalken.",
     "uploadSelected": "Auf Server hochladen ({{count}})",
     "uploadSelectedTooltip": "Die ausgewählten lokalen Dateien (jeder Typ — SHT, MC h5, Master, CIF, XTAL) auf den Server kopieren. Abweichende Serverkopien bleiben erhalten, sofern Sie das Überschreiben nicht bestätigen.",
     "deleteSelected": "Ausgewählte löschen ({{count}})",
@@ -184,6 +186,24 @@
     "resUploaded": "hochgeladen",
     "resUpToDate": "aktuell",
     "resConflicts": "Konflikt(e) (Überschreiben aktivieren zum Hochladen)",
+    "resErrors": "Fehler",
+    "resCancelled": "— abgebrochen",
+    "resTransferred": "hochgeladen"
+  },
+  "syncDownload": {
+    "title": "Vom Server herunterladen",
+    "subtitle": "Wählen Sie, welche Kategorien vom Server in den lokalen Cache geholt werden. Jede Zeile zeigt, wie viele Server-Dateien heruntergeladen würden (und wie viele Sie bereits lokal haben).",
+    "catCounts": "{{download}} herunterzuladen · {{onLocal}} bereits lokal",
+    "optIn": "(standardmäßig aus)",
+    "nothingInCategory": "Keine Server-Dateien in dieser Kategorie",
+    "overwrite": "Lokale Dateien überschreiben, die bereits in anderer Version vorliegen",
+    "progress": "Lade herunter {{current}}/{{total}} — {{name}}",
+    "selectedSummary": "{{count}} Datei(en) ausgewählt",
+    "start": "{{count}} Datei(en) herunterladen",
+    "cancel": "Abbrechen",
+    "resTransferred": "heruntergeladen",
+    "resUpToDate": "aktuell",
+    "resConflicts": "Konflikt(e) (Überschreiben aktivieren zum Herunterladen)",
     "resErrors": "Fehler",
     "resCancelled": "— abgebrochen"
   }
