@@ -153,6 +153,14 @@ All of these live in the collapsed **Advanced tools** group in the sidebar:
 - **Loading files.** Use the tab strip's **Add file…** — it accepts `.ang` /
   `.ctf` (orientations only), GUI-exported rich/light `.h5` (full result,
   optionally with patterns/EDS wired back in), and `.npy` phase arrays.
+  Re-importing a rich/light `.h5` restores the **complete session**: the
+  indexing method, experimental patterns (Oxford and EDAX layouts), the
+  detector geometry, and the per-phase `.sht` simulations — matched via the
+  provenance stored in newer exports, or by phase name / element-ratio
+  against your SHT library for older files — so Pattern Match, Compare
+  phases and the grain-flip tools work exactly as on a fresh run. Results
+  saved from a region-of-interest come back as that ROI (maps and the NCC
+  heatmap crop to it).
 - **Source linking.** EDS/BC/electron-image layers require the original file to be
   loaded and shape-aligned with the result. If shapes differ, alignment falls back
   to crop or is disabled per layer rather than mis-registering.
@@ -164,4 +172,6 @@ All of these live in the collapsed **Advanced tools** group in the sidebar:
   PC gradient path is incomplete), so PC deltas may be near zero. Use the
   convergence-status diagnostic layer to see where it did/didn't converge.
 - **Restarting the backend clears the result.** Reloading the file re-activates its
-  most recent result automatically; a fresh backend start needs re-indexing.
+  most recent result automatically; a fresh backend start needs re-indexing — or
+  simply **Save as… → Rich .h5** before the restart and **Add file…** it back
+  afterwards: the full session (patterns, simulations, edits) is restored.

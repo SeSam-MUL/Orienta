@@ -84,9 +84,14 @@ Use Pattern Match **after indexing**, to:
    stored orientation nor the Hough solution — typically the correct
    orientation sits right next door.
 9. If the correctly-indexed grain does **not** touch the wrong one, use the
-   **Reference pixel** row/col inputs + **Add candidate**: any indexed pixel's
+   **Reference pixel** col/row inputs + **Add candidate**: any indexed pixel's
    stored orientation joins the gallery as a rendered, scored candidate
-   (badge "⌖ reference").
+   (badge "⌖ reference"). If nothing in the gallery fits, **Re-index this
+   pixel** (badge "↻ re-index") runs a fresh full orientation search for the
+   pixel's own phase and adds the result as a candidate — it covers pixels
+   where variants, Hough and neighbours all fail. Each candidate shows its
+   **Δ°** to the stored orientation, so you can tell a sub-degree refinement
+   from a genuine variant flip at a glance.
 10. Click the candidate whose simulated pattern matches the experimental one,
     set a **grain threshold** (degrees) and click **Apply to grain**. The
     correction is flood-filled across the connected, same-phase,
@@ -104,9 +109,13 @@ Use Pattern Match **after indexing**, to:
 ### Navigate precisely (nudge + neighbourhood zoom)
 
 Tiny nests (2–5 px) are hard to hit by clicking the map. Below the NCC
-mini-map both dialogs show a **neighbourhood zoom** (±7 px IPF-Z crop with a
-crosshair on the selected pixel) and **arrow buttons** — arrow keys work too —
-to step the selection pixel by pixel.
+mini-map both dialogs show a **neighbourhood zoom** (±7 px crop with a
+crosshair on the selected pixel). **Click any cell in the zoom** to jump the
+selection there, or use the **arrow buttons** / arrow keys to step pixel by
+pixel. The small **IPF Z | Y | X · Phase** switch under the arrows changes
+which map the lens shows — some nests only read as a colour break in one of
+the IPF projections or in the phase colours, so flip through them when a
+nest seems invisible.
 
 ### Assign a different phase (Compare-phases mode, Phase Maps dialog)
 
@@ -117,6 +126,22 @@ grain is reassigned to that phase with per-pixel Hough orientations of the
 new phase, with one-level **Undo**. The caption above the button shows what
 is currently stored. (This is the surgical sibling of the map-wide Phase
 Verification tool.)
+
+### Same phase, better orientation (Δ° + adopt)
+
+In Compare-phases mode the row for the pixel's **own** phase also shows
+**Δ — the angular difference between the freshly re-indexed orientation and
+the stored one** (symmetry-reduced, so pseudo-variants don't inflate it),
+both in the phase dropdown (" · Δ0.7°") and as a line under the R value:
+
+- **Δ < 2° (cyan)** — same orientation; the stored one merely sits slightly
+  off the sharp render-NCC optimum. This is normal indexing quantisation,
+  *not* a wrong variant. The slot below offers **Apply this orientation to
+  the grain (Δx°)** — one click flood-fills the refined orientation over the
+  grain, with one-level **Undo**. The pseudo-symmetry hint also switches to
+  a cyan "needs sub-degree refinement, not a variant flip" message.
+- **Δ ≥ 2° (orange)** — genuinely different orientation (another basin);
+  use the grain-flip gallery to pick the right variant instead.
 
 ### Export a figure
 
@@ -145,6 +170,14 @@ Verification tool.)
 - **Judge by R, not just CI.** The confidence index from indexing is a within-phase
   peak measure; the forward render-NCC / R here directly compares simulated vs.
   measured bands and is the more honest correctness check.
+- **Normal mode and Compare mode answer different questions.** The normal view
+  renders the orientation **stored** in your result; Compare-phases re-indexes
+  the pixel and shows each phase's **best case**. The two R values can differ
+  even for the same phase: the render-NCC peak is very sharp (~1–2° wide), and
+  every indexer carries ~0.5–2° of absolute orientation uncertainty — so a
+  stored orientation only a fraction of a degree off the optimum can read
+  "poor" while the fresh best case reads "acceptable". The Δ° line tells you
+  which situation you are in.
 - **EDAX patterns:** if the simulated and experimental panels look misaligned at the
   corners, force **Circular** aperture — auto-detection misses the dark-grey EDAX
   phosphor corners.
