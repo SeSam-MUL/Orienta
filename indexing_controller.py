@@ -80,6 +80,9 @@ class IndexingConfig:
     metric: str = 'ncc'     # 'ncc' or 'ndp'
     keep_n: int = 20        # Top N matches to keep
     n_per_iteration: Optional[int] = None  # Memory control
+    # Orientation sampling step (deg) when a raw master must be projected into
+    # a dictionary. Used by the CPU path (and matches the GPU Path-A default).
+    angular_step_deg: float = 1.5
 
     # GPU compute mode for dictionary indexing — see backend/dict_gpu/
     # "auto" → use GPU if a CUDA device is detected, else CPU
@@ -642,15 +645,23 @@ def hough_index_patterns(
 
     # PyEBSDIndex's indexers (both index_pats_distributed and index_pats) only
     # accept a real numpy array / EBSDPatterns / h5py.Dataset — NOT a lazy dask
-    # array. On a lazy-loaded signal (large files) `patterns` is a dask array,
-    # which index_pats_distributed silently rejects ("Unrecognized input data
-    # type" → returns None → "cannot unpack non-iterable NoneType object").
-    # Materialise it here. This is the same memory footprint eager loading used
-    # before lazy-load existed, and indexing every pattern needs them in RAM.
-    if hasattr(patterns, "compute"):
+    # array and NOT a np.memmap. Both are silently rejected ("Unrecognized input
+    # data type" → returns None → "cannot unpack non-iterable NoneType object").
+    #   * Lazy-loaded signals (large files) give a dask array.
+    #   * EDAX UP1/UP2 (and other eager kikuchipy readers) give a np.memmap
+    #     backed by the file — reshaping keeps it a memmap, so it reaches the
+    #     Ray path and returns None (the "Hough broke on .up1" bug).
+    # Materialise either into a plain contiguous in-RAM ndarray. This is the
+    # same footprint eager loading always used, and indexing every pattern needs
+    # them in RAM anyway.
+    if hasattr(patterns, "compute") or isinstance(patterns, np.memmap):
         _progress(f"Hough: loading {n_selected} patterns into memory...", 0.38)
-        with timed_step(f"Hough: materialise {n_selected} lazy patterns"):
-            patterns = np.ascontiguousarray(patterns)
+        with timed_step(f"Hough: materialise {n_selected} patterns"):
+            # np.array (copy=True) forces a genuine in-RAM buffer, decoupled
+            # from the memory-mapped file — ascontiguousarray would leave an
+            # already-contiguous memmap file-backed, and the mmap file handle
+            # is not valid inside spawned Ray worker processes.
+            patterns = np.ascontiguousarray(np.array(patterns))
 
     # --- Step 4: Run Hough transform (40% -> 85%) ---
     _progress(f"Hough: indexing {n_selected} patterns...", 0.40)
@@ -743,6 +754,42 @@ def hough_index_patterns(
         confidence_scores=confidence,
         metadata={'band_data': band_data},
     )
+
+
+def _dictionary_signal_from_master(master, detector, angular_step_deg, *,
+                                   energy: float = 20.0, progress=None):
+    """Project a master pattern into a detector-geometry dictionary (CPU path).
+
+    kikuchipy's ``dictionary_indexing`` needs a *simulated dictionary* whose
+    pattern shape matches the experimental detector — NOT a raw master. The
+    indexing route hands us a master (``kp.load(path)``), so project it here.
+    ``get_patterns`` (like the GPU projection) requires the square-Lambert,
+    both-hemisphere master, so reload from the source file if the master was
+    loaded otherwise (the plain ``kp.load`` default is stereographic/upper).
+    """
+    import kikuchipy as kp
+    from backend.dict_gpu._pcadi.master_to_dict import _recover_master_path
+    from backend.dict_gpu.pipeline.grid import sample_orientations
+
+    m = master
+    if (getattr(m, "hemisphere", None) != "both"
+            or getattr(m, "projection", None) != "lambert"):
+        path = _recover_master_path(m)
+        if path is None:
+            raise ValueError(
+                "Dictionary indexing needs the master in the square-Lambert "
+                "projection with both hemispheres, but it was loaded as "
+                f"{getattr(m, 'projection', None)!r}/{getattr(m, 'hemisphere', None)!r} "
+                "and its source file could not be located to reload."
+            )
+        m = kp.load(path, projection="lambert", hemisphere="both")
+
+    rotations = sample_orientations(m.phase.point_group, angular_step_deg)
+    if progress:
+        progress(f"Dictionary: projecting {rotations.size} simulated patterns "
+                 f"from master at {angular_step_deg}° (CPU)...")
+    return m.get_patterns(rotations=rotations, detector=detector,
+                          energy=energy, compute=True)
 
 
 def dictionary_index_patterns(
@@ -870,6 +917,23 @@ def dictionary_index_patterns(
                       f"({int((~sig_mask_kp).sum())}/{sig_mask_kp.size} px used)")
     except Exception:
         logger.debug("Could not fetch active signal mask", exc_info=True)
+
+    # kikuchipy's dictionary_indexing needs a simulated DICTIONARY whose pattern
+    # shape matches the experimental detector. The indexing route loads a raw
+    # MASTER (kp.load), so project it into a dictionary here when needed. A
+    # master pattern exposes get_patterns(); a pre-generated dictionary signal
+    # does not — that's how we tell them apart. (The GPU path does the
+    # equivalent on-device; this is the CPU counterpart so compute_mode='cpu'
+    # works with the same master input instead of raising a shape-mismatch.)
+    if hasattr(dictionary, "get_patterns"):
+        det_for_dict = detector if detector is not None else getattr(signal, "detector", None)
+        if det_for_dict is None:
+            raise ValueError("Dictionary indexing from a master needs a detector "
+                             "(PC + geometry); none was available.")
+        _check_cancel()
+        dictionary = _dictionary_signal_from_master(
+            dictionary, det_for_dict, config.angular_step_deg, progress=_progress)
+        _check_cancel()
 
     old_stdout = sys.stdout
     sys.stdout = _StdoutCapture(old_stdout)
