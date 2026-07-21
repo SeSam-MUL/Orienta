@@ -491,13 +491,56 @@ def compute_ncc_scalar_masked(
 # Experimental pattern retrieval
 # ---------------------------------------------------------------------------
 
+# Small cache of source-file signals, keyed by absolute path. Lets the Pattern
+# Match dialog read a result's OWN experimental patterns even when a DIFFERENT
+# file is currently active (e.g. two results from two files in the gallery),
+# without re-opening the (possibly multi-GB) file on every pixel click. Lazy
+# signals, so the open handle + a few chunks are the only cost. Capped small.
+_source_signal_cache: "dict[str, object]" = {}
+_SOURCE_CACHE_MAX = 3
+
+
+def _get_source_signal(source_file):
+    """Lazily load (and cache) the EBSD signal for a result's source file."""
+    import os
+    if not source_file:
+        return None
+    key = os.path.abspath(str(source_file))
+    cached = _source_signal_cache.get(key)
+    if cached is not None:
+        return cached
+    if not os.path.isfile(key):
+        logger.warning("Result source file not found on disk: %s", key)
+        return None
+    try:
+        from safe_loader import load_ebsd_safe
+        sig = load_ebsd_safe(key, verbose=False)
+    except Exception:
+        logger.warning("Could not load result source file %s for experimental "
+                       "pattern", key, exc_info=True)
+        return None
+    # Bounded FIFO eviction — this dialog only ever compares a handful of files.
+    if len(_source_signal_cache) >= _SOURCE_CACHE_MAX:
+        _source_signal_cache.pop(next(iter(_source_signal_cache)))
+    _source_signal_cache[key] = sig
+    return sig
+
+
 def get_experimental_pattern(result, row: int, col: int) -> Optional[np.ndarray]:
     """Return experimental pattern at (row, col) from the indexed signal.
 
-    Only Dictionary indexing stores signal in result.metadata['signal'].
-    Hough and Spherical results don't, so we fall back to the currently
-    loaded active EBSD signal — the Pattern Match dialog then still shows
-    the experimental pattern even for Hough runs instead of empty.
+    Resolution order:
+      1. ``result.metadata['signal']`` — Dictionary indexing stores the exact
+         signal it matched against.
+      2. The result's OWN ``source_file`` — when it differs from the currently
+         active file, read the pattern from there (cached lazy load). This is
+         the fix for the cross-file bug: with two results from two files in the
+         gallery, the Pattern Match dialog used to show whichever file was
+         *active* (wrong patterns + aperture-shape mismatch → unmasked/garbage
+         match) instead of the result's real patterns.
+      3. The currently-active EBSD signal — the correct source when the result
+         WAS indexed on the loaded file (and the only option for older results
+         with no ``source_file`` tag).
 
     Parameters
     ----------
@@ -509,17 +552,42 @@ def get_experimental_pattern(result, row: int, col: int) -> Optional[np.ndarray]
     np.ndarray or None
         2D float32 pattern, or None if signal not available.
     """
-    signal = result.metadata.get('signal') if result.metadata else None
+    md = result.metadata if result.metadata else {}
+    signal = md.get('signal')
     if signal is None:
-        # Fallback: the currently-loaded EBSD signal in the viewer.
-        # User-visible symptom before this fallback: after Hough indexing,
-        # Pattern Match Quality dialog showed empty panels because only
-        # Dictionary indexing stored 'signal' in metadata.
+        source_file = md.get('source_file')
+        active_signal = active_path = None
         try:
-            from backend.api.routes.ebsd_viewer import _get_active_signal
-            signal = _get_active_signal()
+            from backend.api.routes.ebsd_viewer import (
+                _get_active_signal, _ebsd_file_path)
+            active_signal = _get_active_signal()
+            active_path = _ebsd_file_path
         except Exception:
-            signal = None
+            pass
+
+        import os
+        differs = bool(
+            source_file and active_path
+            and os.path.abspath(str(source_file)) != os.path.abspath(str(active_path))
+        )
+        if differs:
+            # This result belongs to a file that is NOT the one on screen.
+            # Read its patterns from its own source so we never show a
+            # different file's patterns under this result. If the source can't
+            # be loaded (deleted/moved/unreadable) we return None — NOT the
+            # active signal: showing the wrong file's patterns is exactly the
+            # bug this method fixes, and a silent wrong pattern is worse than an
+            # empty panel. Fail loud so the reason is visible in the log.
+            signal = _get_source_signal(source_file)
+            if signal is None:
+                logger.warning(
+                    "Pattern Match: result's source file %r is not the active "
+                    "file and could not be loaded — returning no experimental "
+                    "pattern instead of the active file's (wrong) patterns.",
+                    source_file)
+                return None
+        else:
+            signal = active_signal
     if signal is None:
         return None
     try:

@@ -178,7 +178,17 @@ def _store_result(result, method_name: str) -> str:
             except Exception:
                 pass
         if hasattr(result, "metadata") and result.metadata is not None:
-            result.metadata["source_file"] = str(_ebsd_file_path) if _ebsd_file_path else None
+            # Do NOT clobber a source_file the caller already set. Results
+            # imported from a saved .h5 ("Add file…") tag themselves with the
+            # imported file's path BEFORE calling _store_result; overwriting it
+            # with whatever file happens to be active at import time made the
+            # Pattern Match dialog read the wrong file's patterns (user-hit
+            # 2026-07-20). Only a freshly-indexed result (no source_file yet)
+            # gets tagged with the active file.
+            result.metadata.setdefault(
+                "source_file",
+                str(_ebsd_file_path) if _ebsd_file_path else None,
+            )
     except Exception:
         logger.debug("could not tag result with source_file", exc_info=True)
     # Result is now registered + active → tell polling clients to refetch.
@@ -600,6 +610,12 @@ def build_spherical_det_params(signal, detector, ebsd_file_path: str, pixel_rc=N
         )
 
     def _detect_source_vendor(h5_path):
+        # EDAX UP1/UP2 raw-pattern files are not HDF5, so the h5py probe below
+        # would fail and fall through to "unknown" (→ reference-frame correction
+        # raises "unknown vendor"). They are EDAX by definition — detect by
+        # extension before trying to open as HDF5.
+        if str(h5_path).lower().endswith((".up1", ".up2")):
+            return "edax"
         try:
             import h5py as _h5
             with _h5.File(h5_path, 'r') as f:
@@ -5808,6 +5824,118 @@ class ExportRequest(BaseModel):
     include_detector: bool = True
 
 
+def _is_hdf5_file(path) -> bool:
+    """True if *path* is a readable HDF5 file (EDAX .up1/.up2 are NOT)."""
+    try:
+        import h5py
+        return bool(h5py.is_hdf5(str(path)))
+    except Exception:
+        return False
+
+
+def _signal_patterns_3d(signal):
+    """(n_patterns, sy, sx) uint8/uint16 array from an EBSD signal.
+
+    Materialises lazy/memmap data. Returns (patterns, (ny, nx, sy, sx)).
+    """
+    nav = signal.axes_manager.navigation_shape          # (nx, ny)
+    sig = signal.axes_manager.signal_shape              # (sx, sy)
+    nx = int(nav[0]); ny = int(nav[1]) if len(nav) > 1 else 1
+    sx = int(sig[0]); sy = int(sig[1]) if len(sig) > 1 else int(sig[0])
+    data = np.ascontiguousarray(np.asarray(signal.data))
+    pats = data.reshape(ny * nx, sy, sx)
+    if pats.dtype not in (np.uint8, np.uint16):
+        pats = pats.astype(np.uint8)
+    return np.ascontiguousarray(pats), (ny, nx, sy, sx)
+
+
+def _overwrite_patterns_with_processed(out_path: str, signal) -> bool:
+    """Overwrite the pattern dataset of an HDF5 export with the (processed)
+    signal patterns, so the saved patterns match what was indexed.
+
+    Preserves the whole source structure (header, EDS, electron images) and only
+    swaps the pixel values in the existing ``.../EBSD/Data/Pattern[s]`` dataset.
+    Returns True on success; on any mismatch/failure it leaves the raw copy in
+    place and logs (fail-soft — a raw pattern is still a valid pattern).
+    """
+    import h5py
+    try:
+        pats, (ny, nx, sy, sx) = _signal_patterns_3d(signal)
+    except Exception:
+        logger.warning("export: could not materialise processed patterns — "
+                       "keeping raw source patterns", exc_info=True)
+        return False
+    try:
+        with h5py.File(out_path, "a") as f:
+            # Find the pattern dataset (EDAX: /Scan1/EBSD/Data/Pattern;
+            # Oxford: /1/EBSD/Data/Processed Patterns or Pattern).
+            hits = []
+            f.visititems(lambda n, o: hits.append(n) if (
+                isinstance(o, h5py.Dataset) and o.ndim == 3
+                and n.rsplit("/", 1)[-1].lower().startswith("pattern")
+                and "/ebsd/data/" in n.lower()
+            ) else None)
+            if not hits:
+                logger.warning("export: no pattern dataset found in %s — cannot "
+                               "write processed patterns", out_path)
+                return False
+            ds_path = hits[0]
+            old = f[ds_path]
+            if tuple(old.shape) != tuple(pats.shape):
+                logger.warning(
+                    "export: processed patterns %s != source dataset %s at %s — "
+                    "keeping raw patterns", pats.shape, tuple(old.shape), ds_path)
+                return False
+            dtype = old.dtype
+            del f[ds_path]
+            new = f.create_dataset(ds_path, data=pats.astype(dtype),
+                                   compression="gzip", chunks=(1, sy, sx))
+            new.attrs["patterns_processed"] = True
+            new.attrs["processed_note"] = (
+                "Pixel values are the viewer-processed patterns (BG removal / "
+                "CLAHE / frame-average) that indexing used, not the raw source.")
+        logger.info("export: wrote processed patterns to %s (%s)", ds_path, out_path)
+        return True
+    except Exception:
+        logger.warning("export: overwriting patterns failed — keeping raw source "
+                       "patterns", exc_info=True)
+        return False
+
+
+def _write_fresh_edax_h5(out_path: str, signal) -> None:
+    """Write a minimal EDAX-format h5 (Manufacturer='EDAX', /Scan1/EBSD/...) from
+    an EBSD signal, so a non-HDF5 source (EDAX .up1/.up2) can still be rich-
+    exported and re-loaded by kikuchipy. Writes whatever the signal currently
+    holds — the viewer-processed patterns when the user processed them.
+    """
+    import h5py
+    pats, (ny, nx, sy, sx) = _signal_patterns_3d(signal)
+    nav = signal.axes_manager.navigation_axes
+    step_x = float(nav[0].scale) if len(nav) >= 1 else 1.0
+    step_y = float(nav[1].scale) if len(nav) >= 2 else step_x
+    sample_tilt = 70.0
+    try:
+        sample_tilt = float(getattr(signal.detector, "sample_tilt", 70.0))
+    except Exception:
+        pass
+    with h5py.File(out_path, "w") as f:
+        f.create_dataset("Manufacturer", data=np.bytes_("EDAX"))
+        f.create_dataset("Version", data=np.bytes_("Orienta rich export"))
+        hdr = f.create_group("Scan1/EBSD/Header")
+        hdr.create_dataset("Grid Type", data=np.bytes_("SqrGrid"))
+        hdr.create_dataset("Pattern Height", data=np.array([sy], np.int32))
+        hdr.create_dataset("Pattern Width", data=np.array([sx], np.int32))
+        hdr.create_dataset("Pattern Bit Depth", data=np.array([8], np.int32))
+        hdr.create_dataset("Sample Tilt", data=np.array([sample_tilt], np.float32))
+        hdr.create_dataset("Step X", data=np.array([step_x], np.float32))
+        hdr.create_dataset("Step Y", data=np.array([step_y], np.float32))
+        hdr.create_dataset("nColumns", data=np.array([nx], np.int32))
+        hdr.create_dataset("nRows", data=np.array([ny], np.int32))
+        d = f.create_dataset("Scan1/EBSD/Data/Pattern", data=pats,
+                             compression="gzip", chunks=(1, sy, sx))
+        d.attrs["patterns_processed"] = True
+
+
 @router.post("/export")
 async def export_indexing_result(req: ExportRequest):
     """Export indexing result as .ang, rich .h5, or light .h5.
@@ -5927,14 +6055,39 @@ async def export_indexing_result(req: ExportRequest):
             except Exception:
                 pass
 
-            if source_path and Path(source_path).is_file():
-                # Copy original h5oina as base
+            # Are the patterns the user indexed the RAW source ones, or did they
+            # process them (BG removal / CLAHE / frame-average) in the viewer?
+            # When processed, store those processed patterns so the saved file
+            # matches what indexing actually used (user choice 2026-07-20).
+            from backend.api.routes.ebsd_viewer import _get_active_signal as _gas
+            try:
+                from indexing_controller import is_active_signal_dirty as _dirty_fn
+                _patterns_dirty = bool(_dirty_fn())
+            except Exception:
+                _patterns_dirty = False
+
+            if source_path and Path(source_path).is_file() and _is_hdf5_file(source_path):
+                # HDF5 source (h5oina / EDAX .h5): copy it for its full structure
+                # (header, EDS, electron images), then swap in the processed
+                # patterns when the signal was processed.
                 import shutil
                 shutil.copy2(str(source_path), str(out_path))
+                if _patterns_dirty:
+                    _sig = _gas()
+                    if _sig is not None:
+                        _overwrite_patterns_with_processed(str(out_path), _sig)
             else:
-                # No source file — create empty H5
-                with h5py.File(str(out_path), "w") as f:
-                    pass
+                # Non-HDF5 source (EDAX .up1/.up2) or none: shutil.copy2 of a
+                # .up1 would corrupt the .h5, so build a fresh EDAX-format file
+                # from the signal instead (writes the processed patterns when
+                # the signal is processed). Fixes the previously-broken up1 rich
+                # export as a side effect.
+                _sig = _gas()
+                if _sig is not None:
+                    _write_fresh_edax_h5(str(out_path), _sig)
+                else:
+                    with h5py.File(str(out_path), "w") as f:
+                        pass
 
             # Write indexing results
             with h5py.File(str(out_path), "a") as f:
