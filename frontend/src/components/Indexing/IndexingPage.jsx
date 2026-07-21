@@ -2365,6 +2365,17 @@ export default function IndexingPage({ isActive }) {
   const showEmbedding  = method === 'embedding';
   const canStart       = dataLoaded && !running;
 
+  // Master to seed the "Generate Dictionary" dialog: the single file field, or
+  // a master (.h5 that is not a pre-generated _dict_) already in the Selected
+  // Phases list — prefer a true master, fall back to any .h5. Without this the
+  // Generate button greys out the moment the master is moved into the phase
+  // list (which clears fileInput), even though a master is clearly selected.
+  const genDictMaster =
+    fileInput ||
+    phaseFiles.find(f => /\.(h5|hdf5)$/i.test(f) && !/_dict_/i.test(f)) ||
+    phaseFiles.find(f => /\.(h5|hdf5)$/i.test(f)) ||
+    '';
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -2623,8 +2634,8 @@ export default function IndexingPage({ isActive }) {
             />
             <InlineLabel>{t('dict.kv')}</InlineLabel>
             <button
-              style={btnSmall(C.border, C.text, !fileInput)}
-              disabled={!fileInput}
+              style={btnSmall(C.border, C.text, !genDictMaster)}
+              disabled={!genDictMaster}
               onClick={() => setShowGenDictDialog(true)}
               title={t('dict.generateDictionaryTip')}
             >
@@ -3169,6 +3180,7 @@ export default function IndexingPage({ isActive }) {
       <GenerateDictionaryDialog
         isOpen={showGenDictDialog}
         onClose={() => setShowGenDictDialog(false)}
+        initialMasterPath={genDictMaster}
         taskId={genDictTaskId}
         setTaskId={setGenDictTaskId}
         progress={genDictProgress}

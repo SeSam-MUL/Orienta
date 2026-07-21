@@ -51,9 +51,19 @@ export default function GenerateDictionaryDialog({
   setProgress,
   // Called on done so the parent can refresh file discovery:
   onGenerationDone,
+  // Master path to pre-fill from (the master selected on the Indexing page,
+  // either in the top file field or the Selected Phases list). Optional.
+  initialMasterPath = '',
 }) {
   const { t } = useTranslation('indexing');
   const [masterPath, setMasterPath] = useState('');
+
+  // Seed the master from the page's selection when the dialog opens, so the
+  // user doesn't have to re-pick a master that's already chosen on the page.
+  // Only fills an empty field (never clobbers a master the user typed here).
+  useEffect(() => {
+    if (isOpen && initialMasterPath && !masterPath) setMasterPath(initialMasterPath);
+  }, [isOpen, initialMasterPath]);  // eslint-disable-line react-hooks/exhaustive-deps
   const [detector, setDetector] = useState(DEFAULT_DETECTOR);
   const [orientation, setOrientation] = useState(DEFAULT_ORIENTATION);
   const [submitError, setSubmitError] = useState(null);
