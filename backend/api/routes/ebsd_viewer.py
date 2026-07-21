@@ -677,27 +677,45 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     has_electron = False
     eds_elements = []
     electron_images = []
-    try:
-        from backend.api.services.h5_session import (
-            open_file as h5_open, is_open as h5_is_open,
-            get_extractor, close_file as h5_close, get_current_path,
-        )
-        # Reopen h5_session if it's pointing at a different file — otherwise
-        # EDS / element / electron-image queries keep returning data for
-        # the PREVIOUSLY loaded file. User-visible: load file A with EDS,
-        # load file B, EDS page shows A's elements (BUG, 2026-04-21).
-        if h5_is_open() and get_current_path() != path:
-            h5_close()
-        if not h5_is_open():
-            h5_open(path)
-        ext = get_extractor()
-        features = ext.detect_available_features()
-        has_eds = features.get('has_eds', False)
-        has_electron = features.get('has_electron_images', False)
-        eds_elements = [str(e) for e in features.get('eds_elements', [])]
-        electron_images = [str(e) for e in features.get('electron_images', [])]
-    except Exception:
-        logger.exception("h5_session setup for %s failed — EDS/electron features may be unavailable", path)
+    # EDAX UP1/UP2 are raw-pattern-only files (no HDF5 container, so no EDS or
+    # electron images by definition). Skip the h5_session probe for them — it
+    # would only fail on a non-HDF5 file and log an alarming traceback.
+    _is_hdf5 = Path(path).suffix.lower() in (".h5", ".hdf5", ".h5oina")
+    if _is_hdf5:
+        try:
+            from backend.api.services.h5_session import (
+                open_file as h5_open, is_open as h5_is_open,
+                get_extractor, close_file as h5_close, get_current_path,
+            )
+            # Reopen h5_session if it's pointing at a different file — otherwise
+            # EDS / element / electron-image queries keep returning data for
+            # the PREVIOUSLY loaded file. User-visible: load file A with EDS,
+            # load file B, EDS page shows A's elements (BUG, 2026-04-21).
+            if h5_is_open() and get_current_path() != path:
+                h5_close()
+            if not h5_is_open():
+                h5_open(path)
+            ext = get_extractor()
+            features = ext.detect_available_features()
+            has_eds = features.get('has_eds', False)
+            has_electron = features.get('has_electron_images', False)
+            eds_elements = [str(e) for e in features.get('eds_elements', [])]
+            electron_images = [str(e) for e in features.get('electron_images', [])]
+        except Exception:
+            logger.exception("h5_session setup for %s failed — EDS/electron features may be unavailable", path)
+    else:
+        # Non-HDF5 (EDAX UP1/UP2): also make sure any h5_session left open by a
+        # previously-loaded HDF5 file is closed, so stale EDS/element queries
+        # don't return the old file's data after switching to a UP file.
+        try:
+            from backend.api.services.h5_session import (
+                is_open as h5_is_open, close_file as h5_close,
+                get_current_path,
+            )
+            if h5_is_open() and get_current_path() != path:
+                h5_close()
+        except Exception:
+            logger.warning("Could not close stale h5_session on UP-file load", exc_info=True)
 
     _update_progress(request_id, stage="finalising", stage_idx=4,
                      stage_total=4, started_at=started_at,
@@ -705,11 +723,24 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
 
     _register_loaded_file(path)
 
+    # Pattern-centre provenance: EDAX UP1/UP2 files carry no PC, so we either
+    # recovered the real one from the .osc sidecar ('osc') or fell back to
+    # kikuchipy's placeholder (0.5,0.5,0.5) ('default'). The UI warns loudly on
+    # 'default' so the user knows indexing is uncalibrated. HDF5 files carry
+    # their own PC, so pc_source stays None (no banner).
+    pc_source = None
+    try:
+        pc_source = signal.metadata.get_item("Signal.pc_source")
+    except Exception:
+        pc_source = None
+
     response = {
         "success": True,
         "dataset_name": dataset_name,
         "file_path": path,
         "format_type": "Oxford" if 'h5oina' in path.lower() else "EDAX",
+        "pc_source": pc_source,
+        "pc_defaulted": pc_source == "default",
         "data_shape": list(shape),
         "navigation_shape": list(nav_shape),
         "signal_shape": list(sig_shape),

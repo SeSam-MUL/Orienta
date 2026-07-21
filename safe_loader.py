@@ -238,6 +238,17 @@ def load_ebsd_safe(
         lazy_threshold = 2 * 1024**3
     use_lazy = size_bytes is None or size_bytes >= lazy_threshold
 
+    # EDAX UP1/UP2 raw-pattern files take a dedicated path: kikuchipy reads the
+    # patterns natively, but a version-1 header carries no map grid (so the
+    # signal would come back as a flat 1-D navigation) and neither v1 nor v3
+    # carries the real µm step size. We recover both the grid and the step from
+    # the companion .osc sidecar and hand them to kikuchipy. There is no
+    # unified_loader fallback for this format, so failures are raised directly
+    # with a clear message rather than falling through to a confusing HDF5 error.
+    from edax_up1 import is_edax_up_file
+    if is_edax_up_file(file_path):
+        return _load_edax_up(file_path, use_lazy, verbose)
+
     # Strategy 1: Try kikuchipy's native loader (fast path).
     # Wrapped in a context manager that monkey-patches kikuchipy's broken
     # Oxford H5OINA reader for the duration of this call. See
@@ -308,6 +319,101 @@ def load_ebsd_safe(
                 f"File may be corrupted or in an unsupported format."
             )
             raise RuntimeError(error_msg) from e_unified
+
+
+def _load_edax_up(file_path: str, use_lazy: bool, verbose: bool):
+    """Load an EDAX UP1/UP2 file, using its .osc sidecar for grid + step.
+
+    See ``load_ebsd_safe`` for why this is a separate path. Returns a
+    kikuchipy EBSD signal with a correct 2-D navigation (v1 files reshaped from
+    the .osc grid) and, where the .osc provides it, the real µm step size on
+    the navigation axes so the map scale bar is correct.
+    """
+    from edax_up1 import resolve_up1_geometry
+
+    geom = resolve_up1_geometry(file_path)
+    file_name = Path(file_path).name
+
+    if geom.version == 1 and geom.nav_shape is None:
+        raise RuntimeError(
+            f"Cannot determine the scan grid for {file_name}: it is a "
+            f"version-1 UP file (no grid in its header) and no usable .osc "
+            f"sidecar with matching point count was found next to it. Place "
+            f"the matching .osc file in the same folder and try again."
+        )
+
+    load_kwargs = {"lazy": use_lazy}
+    if geom.nav_shape is not None:
+        load_kwargs["nav_shape"] = geom.nav_shape
+
+    if verbose:
+        logger.info(
+            "Loading EDAX %s (v%d, %s) with grid %s, step %s µm",
+            file_name, geom.version, "lazy" if use_lazy else "eager",
+            geom.nav_shape or "from-header", geom.step_yx,
+        )
+
+    sig = _kp().load(file_path, **load_kwargs)
+
+    # Apply the real pattern centre from the .osc (EDAX/TSL xstar/ystar/zstar).
+    # A UP1/UP2 file carries NO PC, so kikuchipy attaches a placeholder
+    # (0.5, 0.5, 0.5) — which makes indexing badly wrong (the PC is what
+    # indexing stands or falls on). The .osc has the real PC; a joint
+    # orientation+PC refinement confirmed these values (~2.5x the match NCC vs
+    # the default). When the .osc has no usable PC we KEEP the default but tag
+    # the signal so the UI can warn the user loudly. See tasks/up1-osc-format-facts.md.
+    pc_source = "default"
+    if geom.pc_edax is not None:
+        try:
+            from kikuchipy.detectors import EBSDDetector
+            old = sig.detector
+            sig.detector = EBSDDetector(
+                shape=old.shape,
+                pc=geom.pc_edax,
+                sample_tilt=getattr(old, "sample_tilt", 70.0),
+                convention="tsl",
+            )
+            pc_source = "osc"
+            if verbose:
+                logger.info("Applied .osc pattern centre (TSL) %s to %s",
+                            tuple(round(v, 4) for v in geom.pc_edax), file_name)
+        except Exception:
+            logger.warning("Could not apply .osc PC to %s — keeping default PC",
+                           file_name, exc_info=True)
+    if pc_source == "default":
+        logger.warning(
+            "No pattern centre found for %s — indexing will use kikuchipy's "
+            "placeholder PC (0.5, 0.5, 0.5), which is almost certainly wrong. "
+            "Calibrate the PC (PC refinement) before trusting the indexing.",
+            file_name)
+    try:
+        sig.metadata.set_item("Signal.pc_source", pc_source)
+    except Exception:
+        logger.debug("Could not tag pc_source on %s metadata", file_name, exc_info=True)
+
+    # Override the navigation-axis scale with the real .osc step so the map
+    # scale bar reads correctly. kikuchipy orders navigation axes as [y, x];
+    # geom.step_yx is (dy, dx) to match. Guarded so a signal with an
+    # unexpected axis layout never breaks the load.
+    if geom.step_yx is not None:
+        dy, dx = geom.step_yx
+        try:
+            nav_axes = sig.axes_manager.navigation_axes
+            if len(nav_axes) == 2:
+                # navigation_axes is (x, y) in hyperspy's fast-index-first order
+                for ax in nav_axes:
+                    ax.scale = dx if ax.name == "x" else dy
+                    ax.units = "um"
+            elif len(nav_axes) == 1:
+                nav_axes[0].scale = dx
+                nav_axes[0].units = "um"
+        except Exception:
+            logger.warning("Could not apply .osc step to %s navigation axes",
+                           file_name, exc_info=True)
+
+    if verbose:
+        logger.info("  Success with EDAX UP reader")
+    return sig
 
 
 def get_loader_info(file_path: str) -> dict:

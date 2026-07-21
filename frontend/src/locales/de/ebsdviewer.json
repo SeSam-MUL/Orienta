@@ -280,6 +280,8 @@
     "starting": "Starte…",
     "loadedFile": "'{{name}}' geladen — {{rows}}×{{cols}} Raster",
     "loadedToast": "{{name}} geladen — {{rows}}×{{cols}} Raster",
+    "pcDefaultWarning": "⚠ Kein Pattern Center gefunden (.osc fehlt/unlesbar) — Indexing nutzt den Default-PC (0,5/0,5/0,5), der fast sicher falsch ist. Kalibriere den PC, bevor du dem Indexing traust.",
+    "pcFromOsc": "Pattern Center aus der .osc-Datei geladen (EDAX/TSL).",
     "errorPrefix": "FEHLER: {{error}}",
     "loadFailedToast": "Laden fehlgeschlagen: {{error}}",
     "switchingFile": "Wechsle zu '{{name}}'...",

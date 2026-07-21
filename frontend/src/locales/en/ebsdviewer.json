@@ -280,6 +280,8 @@
     "starting": "Starting…",
     "loadedFile": "Loaded '{{name}}' — {{rows}}×{{cols}} grid",
     "loadedToast": "Loaded {{name}} — {{rows}}×{{cols}} grid",
+    "pcDefaultWarning": "⚠ No pattern centre found (.osc missing/unreadable) — indexing uses the default PC (0.5, 0.5, 0.5), which is almost certainly wrong. Calibrate the PC before trusting any indexing.",
+    "pcFromOsc": "Pattern centre loaded from .osc sidecar (EDAX/TSL).",
     "errorPrefix": "ERROR: {{error}}",
     "loadFailedToast": "Load failed: {{error}}",
     "switchingFile": "Switching to '{{name}}'...",

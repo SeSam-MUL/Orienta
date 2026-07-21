@@ -586,6 +586,17 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       setRow(0);
       setCol(0);
       setFilePath(path);
+      // EDAX UP1/UP2 carry no pattern centre. If we couldn't recover it from
+      // the .osc sidecar, indexing runs on kikuchipy's placeholder PC
+      // (0.5,0.5,0.5) — almost certainly wrong. Warn loudly + persistently so
+      // the user calibrates the PC before trusting any indexing result.
+      if (info.pc_defaulted) {
+        const warnMsg = t('logMessages.pcDefaultWarning');
+        toast.warning(warnMsg, 15000);
+        log(warnMsg);
+      } else if (info.pc_source === 'osc') {
+        log(t('logMessages.pcFromOsc'));
+      }
       // Vendor-dependent: EDAX-style files store patterns with a circular
       // detector aperture (corners are 0 in raw data) → mask helps.
       // Oxford H5OINA stores the full rectangular camera frame → mask
@@ -1008,7 +1019,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     if (window.electronAPI?.openFile) {
       const selected = await window.electronAPI.openFile({
         filters: [
-          { name: 'EBSD Files', extensions: ['h5oina', 'h5', 'hdf5'] },
+          { name: 'EBSD Files', extensions: ['h5oina', 'h5', 'hdf5', 'up1', 'up2'] },
+          { name: 'EDAX Patterns', extensions: ['up1', 'up2'] },
           { name: 'All Files', extensions: ['*'] },
         ],
       });
@@ -2316,7 +2328,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         if (!file) return;
         // Electron exposes .path on dropped files
         const path = file.path || file.name;
-        if (path && /\.(h5oina|h5|hdf5)$/i.test(path)) {
+        if (path && /\.(h5oina|h5|hdf5|up1|up2)$/i.test(path)) {
           doLoadFile(path);
         }
       }}

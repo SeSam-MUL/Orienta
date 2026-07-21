@@ -280,6 +280,8 @@
     "starting": "開始中…",
     "loadedFile": "'{{name}}' を読み込みました — {{rows}}×{{cols}} グリッド",
     "loadedToast": "{{name}} を読み込みました — {{rows}}×{{cols}} グリッド",
+    "pcDefaultWarning": "⚠ パターンセンターが見つかりません（.osc が無い/読み取り不可）— インデックスはデフォルト PC (0.5, 0.5, 0.5) を使用しますが、ほぼ確実に誤りです。インデックス結果を信頼する前に PC を較正してください。",
+    "pcFromOsc": ".osc サイドカーからパターンセンターを読み込みました（EDAX/TSL）。",
     "errorPrefix": "エラー: {{error}}",
     "loadFailedToast": "読み込みに失敗しました: {{error}}",
     "switchingFile": "'{{name}}' に切り替え中...",

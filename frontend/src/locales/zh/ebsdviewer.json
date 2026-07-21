@@ -280,6 +280,8 @@
     "starting": "正在启动…",
     "loadedFile": "已加载 '{{name}}' — {{rows}}×{{cols}} 网格",
     "loadedToast": "已加载 {{name}} — {{rows}}×{{cols}} 网格",
+    "pcDefaultWarning": "⚠ 未找到花样中心（.osc 缺失/无法读取）——索引将使用默认 PC (0.5, 0.5, 0.5)，几乎肯定是错误的。在信任任何索引结果之前请先标定 PC。",
+    "pcFromOsc": "已从 .osc 附属文件加载花样中心（EDAX/TSL）。",
     "errorPrefix": "错误: {{error}}",
     "loadFailedToast": "加载失败: {{error}}",
     "switchingFile": "正在切换到 '{{name}}'...",
