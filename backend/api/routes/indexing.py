@@ -5867,18 +5867,34 @@ def _overwrite_patterns_with_processed(out_path: str, signal) -> bool:
         return False
     try:
         with h5py.File(out_path, "a") as f:
-            # Find the pattern dataset (EDAX: /Scan1/EBSD/Data/Pattern;
-            # Oxford: /1/EBSD/Data/Processed Patterns or Pattern).
+            # Find the experimental pattern dataset. Names vary by vendor:
+            #   EDAX:   /Scan1/EBSD/Data/Pattern
+            #   Oxford: /1/EBSD/Data/Processed Patterns  (+ Unprocessed Patterns)
+            # Match any 3-D dataset under .../EBSD/Data/ whose name CONTAINS
+            # "pattern" — but NEVER the raw "Unprocessed Patterns" (leave the
+            # true raw intact; it is also a different dtype). "startswith" was
+            # the earlier bug: it missed Oxford's "Processed Patterns".
             hits = []
-            f.visititems(lambda n, o: hits.append(n) if (
-                isinstance(o, h5py.Dataset) and o.ndim == 3
-                and n.rsplit("/", 1)[-1].lower().startswith("pattern")
-                and "/ebsd/data/" in n.lower()
-            ) else None)
+
+            def _collect(n, o):
+                if not (isinstance(o, h5py.Dataset) and o.ndim == 3):
+                    return
+                leaf = n.rsplit("/", 1)[-1].lower()
+                if "pattern" not in leaf or "unprocessed" in leaf:
+                    return
+                if "/ebsd/data/" not in n.lower():
+                    return
+                hits.append(n)
+
+            f.visititems(_collect)
             if not hits:
                 logger.warning("export: no pattern dataset found in %s — cannot "
                                "write processed patterns", out_path)
                 return False
+            # Prefer a shape-matching dataset, then a "processed"-named one.
+            hits.sort(key=lambda n: (tuple(f[n].shape) == tuple(pats.shape),
+                                     "processed" in n.rsplit("/", 1)[-1].lower()),
+                      reverse=True)
             ds_path = hits[0]
             old = f[ds_path]
             if tuple(old.shape) != tuple(pats.shape):
@@ -6059,12 +6075,16 @@ async def export_indexing_result(req: ExportRequest):
             # process them (BG removal / CLAHE / frame-average) in the viewer?
             # When processed, store those processed patterns so the saved file
             # matches what indexing actually used (user choice 2026-07-20).
-            from backend.api.routes.ebsd_viewer import _get_active_signal as _gas
+            from backend.api.routes.ebsd_viewer import (
+                _get_active_signal as _gas, is_active_signal_dirty as _dirty_fn,
+            )
             try:
-                from indexing_controller import is_active_signal_dirty as _dirty_fn
                 _patterns_dirty = bool(_dirty_fn())
             except Exception:
-                _patterns_dirty = False
+                logger.warning("export: could not read signal-dirty state — "
+                               "assuming processed so corrections aren't lost",
+                               exc_info=True)
+                _patterns_dirty = True
 
             if source_path and Path(source_path).is_file() and _is_hdf5_file(source_path):
                 # HDF5 source (h5oina / EDAX .h5): copy it for its full structure

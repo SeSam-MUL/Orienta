@@ -95,3 +95,47 @@ def test_is_hdf5_file(tmp_path):
     if RICH.exists():
         assert _is_hdf5_file(str(RICH)) is True
     assert _is_hdf5_file(str(tmp_path / "nope.h5")) is False
+
+
+def test_dirty_flag_importable_from_ebsd_viewer():
+    """The export wired is_active_signal_dirty from the wrong module
+    (indexing_controller) → ImportError → it silently never wrote processed
+    patterns. Guard the correct import location."""
+    from backend.api.routes.ebsd_viewer import is_active_signal_dirty
+    assert callable(is_active_signal_dirty)
+
+
+OXFORD_INSERT = ROOT / "Test_data" / "Insert_Test_PatternSafe.h5"
+
+
+@pytest.mark.skipif(not OXFORD_INSERT.exists(),
+                    reason="Oxford insert test file not present")
+def test_overwrite_targets_oxford_processed_patterns(tmp_path):
+    """Oxford files name the dataset 'Processed Patterns' (+ 'Unprocessed
+    Patterns'). The finder must hit 'Processed Patterns' (startswith('pattern')
+    missed it) and leave the raw 'Unprocessed Patterns' untouched."""
+    import h5py
+    from backend.api.routes.indexing import _overwrite_patterns_with_processed
+    from safe_loader import load_ebsd_safe
+
+    out = tmp_path / "ox.h5"
+    shutil.copy2(str(OXFORD_INSERT), str(out))
+
+    raw = load_ebsd_safe(str(OXFORD_INSERT), verbose=False)
+    raw_pat = np.asarray(raw.data[10, 10]).copy()
+    proc = _bg_removed(OXFORD_INSERT)
+    proc_pat = np.asarray(proc.data[10, 10]).copy()
+
+    with h5py.File(str(out), "r") as h:
+        unproc_before = np.asarray(h["1/EBSD/Data/Unprocessed Patterns"][0]).copy()
+
+    assert _overwrite_patterns_with_processed(str(out), proc) is True
+
+    back = load_ebsd_safe(str(out), verbose=False)
+    assert np.array_equal(np.asarray(back.data[10, 10]), proc_pat)
+    assert not np.array_equal(np.asarray(back.data[10, 10]), raw_pat)
+    with h5py.File(str(out), "r") as h:
+        assert h["1/EBSD/Data/Processed Patterns"].attrs.get("patterns_processed")
+        # raw 'Unprocessed Patterns' left intact
+        assert np.array_equal(
+            np.asarray(h["1/EBSD/Data/Unprocessed Patterns"][0]), unproc_before)
