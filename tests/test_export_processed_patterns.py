@@ -105,37 +105,51 @@ def test_dirty_flag_importable_from_ebsd_viewer():
     assert callable(is_active_signal_dirty)
 
 
-OXFORD_INSERT = ROOT / "Test_data" / "Insert_Test_PatternSafe.h5"
-
-
-@pytest.mark.skipif(not OXFORD_INSERT.exists(),
-                    reason="Oxford insert test file not present")
 def test_overwrite_targets_oxford_processed_patterns(tmp_path):
     """Oxford files name the dataset 'Processed Patterns' (+ 'Unprocessed
     Patterns'). The finder must hit 'Processed Patterns' (startswith('pattern')
-    missed it) and leave the raw 'Unprocessed Patterns' untouched."""
+    missed it) and leave the raw 'Unprocessed Patterns' untouched. Synthetic so
+    it never depends on a real file that a user might overwrite."""
     import h5py
+    import kikuchipy as kp
     from backend.api.routes.indexing import _overwrite_patterns_with_processed
-    from safe_loader import load_ebsd_safe
+
+    ny, nx, sy, sx = 4, 5, 8, 10          # 20 patterns
+    proc = kp.signals.EBSD(np.random.default_rng(1).integers(
+        0, 255, size=(ny, nx, sy, sx), dtype=np.uint8))
 
     out = tmp_path / "ox.h5"
-    shutil.copy2(str(OXFORD_INSERT), str(out))
-
-    raw = load_ebsd_safe(str(OXFORD_INSERT), verbose=False)
-    raw_pat = np.asarray(raw.data[10, 10]).copy()
-    proc = _bg_removed(OXFORD_INSERT)
-    proc_pat = np.asarray(proc.data[10, 10]).copy()
-
-    with h5py.File(str(out), "r") as h:
-        unproc_before = np.asarray(h["1/EBSD/Data/Unprocessed Patterns"][0]).copy()
+    unproc_raw = np.arange(ny * nx * sy * sx, dtype=np.int16).reshape(ny * nx, sy, sx)
+    with h5py.File(str(out), "w") as h:
+        d = h.create_group("1/EBSD/Data")
+        d.create_dataset("Processed Patterns",
+                         data=np.zeros((ny * nx, sy, sx), np.uint8))
+        d.create_dataset("Unprocessed Patterns", data=unproc_raw)  # raw, int16
 
     assert _overwrite_patterns_with_processed(str(out), proc) is True
 
-    back = load_ebsd_safe(str(out), verbose=False)
-    assert np.array_equal(np.asarray(back.data[10, 10]), proc_pat)
-    assert not np.array_equal(np.asarray(back.data[10, 10]), raw_pat)
+    want = np.asarray(proc.data).reshape(ny * nx, sy, sx)
     with h5py.File(str(out), "r") as h:
-        assert h["1/EBSD/Data/Processed Patterns"].attrs.get("patterns_processed")
-        # raw 'Unprocessed Patterns' left intact
-        assert np.array_equal(
-            np.asarray(h["1/EBSD/Data/Unprocessed Patterns"][0]), unproc_before)
+        pp = h["1/EBSD/Data/Processed Patterns"]
+        assert pp.attrs.get("patterns_processed")
+        assert np.array_equal(np.asarray(pp), want)         # processed written
+        # raw 'Unprocessed Patterns' untouched (and still int16)
+        up = h["1/EBSD/Data/Unprocessed Patterns"]
+        assert up.dtype == np.int16
+        assert np.array_equal(np.asarray(up), unproc_raw)
+
+
+INSERT = ROOT / "Test_data" / "Insert_Test_PatternSafe.h5"
+
+
+@pytest.mark.skipif(not INSERT.exists(), reason="insert export file not present")
+def test_safe_loader_reads_export_with_extra_root_groups():
+    """A rich .h5 export adds /Detector, /Documentation, /Indexing at root.
+    kikuchipy's EDAX reader picks the alphabetically-first non-metadata group
+    ('Detector') as the scan → KeyError. safe_loader must retry with the real
+    EBSD scan group and load the patterns."""
+    from safe_loader import load_ebsd_safe
+    s = load_ebsd_safe(str(INSERT), verbose=False)
+    assert len(s.axes_manager.navigation_shape) == 2
+    assert s.data.dtype in (np.uint8, np.uint16)
+    _ = np.asarray(s.data[0, 0])  # a pattern actually reads

@@ -275,6 +275,31 @@ def load_ebsd_safe(
                 error_msg = error_msg[:150] + "..."
             logger.info("  kikuchipy failed: %s: %s", type(e_kp).__name__, error_msg)
 
+        # Strategy 1b: retry with an explicit scan-group name.
+        # kikuchipy's EDAX h5ebsd reader picks the alphabetically-first
+        # non-metadata top group as "the scan", which breaks on our rich .h5
+        # exports (they add /Detector, /Documentation, /Indexing at root, all
+        # sorting before /Scan1) -> KeyError on EBSD/Header. Detect the real
+        # EBSD scan group(s) (those with EBSD/Data + EBSD/Header) and name them
+        # explicitly. Fixes re-loading any file we've already exported.
+        try:
+            import h5py
+            with h5py.File(file_path, "r") as _f:
+                scans = [k for k in _f.keys()
+                         if isinstance(_f[k], h5py.Group)
+                         and "EBSD/Data" in _f[k] and "EBSD/Header" in _f[k]]
+            if scans:
+                if verbose:
+                    logger.info("  Retrying kikuchipy with explicit scan group(s) %s", scans)
+                with _kikuchipy_oxford_camera_binning_workaround():
+                    sig = _kp().load(file_path, lazy=use_lazy,
+                                     scan_group_names=scans[0] if len(scans) == 1 else scans)
+                if verbose:
+                    logger.info("  Success with kikuchipy (explicit scan group)")
+                return sig
+        except Exception:
+            logger.debug("explicit-scan-group retry failed for %s", file_name, exc_info=True)
+
         # Strategy 2: Try unified_loader with adapter (robust fallback)
         try:
             if verbose:
