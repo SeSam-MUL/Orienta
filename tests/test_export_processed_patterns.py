@@ -142,6 +142,48 @@ def test_overwrite_targets_oxford_processed_patterns(tmp_path):
 INSERT = ROOT / "Test_data" / "Insert_Test_PatternSafe.h5"
 
 
+def test_render_geometry_roundtrips(tmp_path):
+    """A re-imported spherical result must carry detector_geometry +
+    sht_paths_by_phase so the Pattern Match dialog can render simulated
+    patterns. Export writes them as JSON on /Indexing; import reads them back
+    (with int phase-id keys, and numpy scalars coerced to plain floats)."""
+    import h5py
+    import numpy as np
+    from backend.api.routes.indexing import (
+        _write_render_geometry_attrs, _restore_render_geometry)
+
+    md = {
+        "detector_geometry": {
+            "pc_x": 0.55, "pc_y": np.float32(0.497), "pc_z": 0.702,
+            "pat_width": 79, "pat_height": 79, "sample_tilt": 70.0,
+            "tilt": 0.0, "vendor": "EDAX", "source_vendor": "edax",
+            "pixel_size": 70.0, "binning": 1,
+        },
+        "sht_paths_by_phase": {1: "E:/x/Al (Al) [cF4] {20kV}.sht"},
+    }
+    out = tmp_path / "geom.h5"
+    with h5py.File(str(out), "w") as f:
+        _write_render_geometry_attrs(f.create_group("Indexing"), md)
+
+    got = _restore_render_geometry(str(out))
+    assert got["detector_geometry"]["pc_x"] == 0.55
+    assert abs(got["detector_geometry"]["pc_y"] - 0.497) < 1e-4
+    assert got["detector_geometry"]["vendor"] == "EDAX"
+    assert got["sht_paths_by_phase"] == {1: "E:/x/Al (Al) [cF4] {20kV}.sht"}
+    assert list(got["sht_paths_by_phase"].keys())[0] == 1  # int key, not "1"
+
+
+def test_restore_render_geometry_missing_is_empty(tmp_path):
+    """Older files without the attrs restore to {} (no crash)."""
+    import h5py
+    from backend.api.routes.indexing import _restore_render_geometry
+    out = tmp_path / "noattr.h5"
+    with h5py.File(str(out), "w") as f:
+        f.create_group("Indexing")
+    assert _restore_render_geometry(str(out)) == {}
+    assert _restore_render_geometry(str(tmp_path / "nope.h5")) == {}
+
+
 @pytest.mark.skipif(not INSERT.exists(), reason="insert export file not present")
 def test_safe_loader_reads_export_with_extra_root_groups():
     """A rich .h5 export adds /Detector, /Documentation, /Indexing at root.

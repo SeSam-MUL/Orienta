@@ -5611,6 +5611,15 @@ async def import_h5_result(req: ImportH5Request):
                   "indexing_method": method.value},
     )
 
+    # Restore the spherical render geometry (detector_geometry + sht_paths_by_
+    # phase) if the export persisted it, so the Pattern Match dialog can render
+    # simulated patterns for this re-imported result instead of "detector_
+    # geometry missing". No-op for older files that don't carry it.
+    try:
+        result.metadata.update(_restore_render_geometry(p))
+    except Exception:
+        logger.debug("import-h5: render-geometry restore failed", exc_info=True)
+
     # Carry per-phase CI maps over from the xmap (loader stashes them) so
     # subsequent re-exports re-emit /Indexing/PerPhase/ unchanged.
     per_phase = getattr(xmap, "_per_phase_data", None)
@@ -5952,6 +5961,66 @@ def _write_fresh_edax_h5(out_path: str, signal) -> None:
         d.attrs["patterns_processed"] = True
 
 
+def _json_num_default(o):
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    return str(o)
+
+
+def _write_render_geometry_attrs(idx_group, md) -> None:
+    """Persist the spherical render geometry on the /Indexing group so a
+    re-imported result can still render simulated patterns.
+
+    Stores two JSON strings:
+      * detector_geometry     — vendor PC + detector shape + tilt + pixel size
+      * sht_paths_by_phase    — {phase_id: absolute .sht path}
+    The SHT paths are absolute, so a re-render only works on the same machine
+    (the pattern-match dialog fails loud with a clear message if the .sht moved).
+    """
+    import json
+    md = md or {}
+    dg = md.get("detector_geometry")
+    if dg:
+        try:
+            idx_group.attrs["detector_geometry"] = json.dumps(dg, default=_json_num_default)
+        except Exception:
+            logger.debug("export: could not serialise detector_geometry", exc_info=True)
+    sht = md.get("sht_paths_by_phase")
+    if sht:
+        try:
+            idx_group.attrs["sht_paths_by_phase"] = json.dumps(
+                {str(k): str(v) for k, v in sht.items()})
+        except Exception:
+            logger.debug("export: could not serialise sht_paths_by_phase", exc_info=True)
+
+
+def _restore_render_geometry(h5_path) -> dict:
+    """Read detector_geometry + sht_paths_by_phase back from a rich/light
+    export's /Indexing group (written by _write_render_geometry_attrs)."""
+    import json
+    import h5py
+    out: dict = {}
+    try:
+        with h5py.File(str(h5_path), "r") as f:
+            idxg = f.get("Indexing")
+            if idxg is None:
+                return out
+            dg = idxg.attrs.get("detector_geometry")
+            if dg is not None:
+                out["detector_geometry"] = json.loads(dg)
+            sht = idxg.attrs.get("sht_paths_by_phase")
+            if sht is not None:
+                out["sht_paths_by_phase"] = {int(k): v for k, v in json.loads(sht).items()}
+    except Exception:
+        logger.debug("import: could not restore render geometry from %s",
+                     h5_path, exc_info=True)
+    return out
+
+
 @router.post("/export")
 async def export_indexing_result(req: ExportRequest):
     """Export indexing result as .ang, rich .h5, or light .h5.
@@ -6122,6 +6191,9 @@ async def export_indexing_result(req: ExportRequest):
                 idx.attrs["software"] = "Orienta"
                 idx.attrs["created"] = now
                 idx.attrs["grid_shape"] = list(active.original_shape)
+                # Persist spherical render geometry so a re-imported result can
+                # still render simulated patterns (detector geometry + SHT refs).
+                _write_render_geometry_attrs(idx, getattr(active, "metadata", None))
 
                 # Export-frame conversion (see orientation_frame): write Euler
                 # in the source vendor's stored frame so MTEX/Aztec read it
@@ -6403,6 +6475,9 @@ async def export_indexing_result(req: ExportRequest):
                 idx.attrs["software"] = "Orienta"
                 idx.attrs["created"] = now
                 idx.attrs["grid_shape"] = list(active.original_shape)
+                # Persist spherical render geometry so a re-imported result can
+                # still render simulated patterns (detector geometry + SHT refs).
+                _write_render_geometry_attrs(idx, getattr(active, "metadata", None))
                 idx.attrs["format_version"] = _LIGHT_FMT_VERSION
 
                 # step_size_um resolved above (before the file was opened).
