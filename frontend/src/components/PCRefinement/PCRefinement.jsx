@@ -1981,6 +1981,18 @@ function ControlsPanel({
               </Label>
             </FormRow>
           )}
+          {/* Reliability guard: Hough-based PC refine is unreliable on small
+              (low-res) patterns and can drift far from the vendor/.osc PC. */}
+          {result.pc_warning && (
+            <div style={{
+              marginTop: 6, marginBottom: 6, padding: '8px 10px',
+              background: 'rgba(224,160,32,0.12)',
+              border: '1px solid #e0a020', borderRadius: 4,
+              color: colors.text, fontSize: '8.5pt', lineHeight: 1.4,
+            }}>
+              ⚠ {result.pc_warning}
+            </div>
+          )}
           <Button
             small
             style={{ width: '100%', marginBottom: 4 }}

@@ -1023,6 +1023,15 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
             indexer = ctrl.indexer
             detector = ctrl.detector
 
+        # Reference PC (the value BEFORE this refine — e.g. the vendor/.osc PC)
+        # + pattern size, for the reliability guard below.
+        _ref_pc = np.asarray(detector.pc, dtype=float).reshape(-1, 3).mean(axis=0)
+        try:
+            _ph, _pw = np.asarray(patterns_data[0]).shape[-2:]
+            _pat_min = int(min(int(_ph), int(_pw)))
+        except Exception:
+            _ph = _pw = _pat_min = None
+
         results = []
         for i, pat in enumerate(patterns_data):
             mean_pc, _ = optimize_pc(
@@ -1037,6 +1046,32 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
             _optimization_tasks[task_id]["progress"] = (i + 1) / len(patterns_data)
 
         mean_pc = list(np.mean(results, axis=0))
+
+        # --- Reliability guard --------------------------------------------------
+        # This refine is Hough/Radon band-fitting based (PyEBSDIndex optimize_pc).
+        # On small patterns that band-fitting is unreliable, so the PC can drift
+        # to a wrong value. Warn when (a) patterns are small (<~100 px) or (b) the
+        # refined PC moved far from the starting (vendor/.osc) PC — on low-res
+        # data that is usually refinement noise, not real drift. Generally useful
+        # whenever patterns are small (user request 2026-07-23).
+        _SMALL_PAT_PX = 100
+        _PC_DRIFT_TOL = 0.05
+        _warns = []
+        if _pat_min is not None and _pat_min < _SMALL_PAT_PX:
+            _warns.append(
+                f"Small patterns ({_ph}×{_pw} px): the Hough/Radon band-fitting this "
+                f"PC refine relies on is unreliable below ~{_SMALL_PAT_PX} px, so the "
+                "refined PC can be noisy. Cross-check it against your vendor/.osc PC.")
+        _pc_dev = float(np.max(np.abs(np.asarray(mean_pc, dtype=float) - _ref_pc)))
+        if _pc_dev > _PC_DRIFT_TOL:
+            _warns.append(
+                f"Refined PC moved {_pc_dev:.3f} from the starting PC "
+                f"(refined {[round(float(v), 3) for v in mean_pc]} vs start "
+                f"{[round(float(v), 3) for v in _ref_pc]}). On low-quality / low-res "
+                "patterns this is usually refinement noise — verify before trusting it.")
+        _pc_warning = "  ".join(_warns) if _warns else None
+        if _pc_warning:
+            logger.warning("[pc-optimize] %s", _pc_warning)
 
         # Apply optimized PC to detector and re-index — all under lock
         with _state_lock:
@@ -1073,6 +1108,9 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
                 "mean_pc": mean_pc,
                 "ci": ci,
                 "segments": segments,
+                "pc_warning": _pc_warning,
+                "pc_deviation": _pc_dev,
+                "pattern_size": [int(_ph), int(_pw)] if _ph is not None else None,
             }
     except Exception as e:
         _optimization_tasks[task_id]["status"] = "failed"
