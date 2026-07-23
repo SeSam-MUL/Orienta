@@ -21,6 +21,7 @@ import useLoadedFilesStore from '../../stores/useLoadedFilesStore';
 import { addRecentFile } from '../Dashboard/Dashboard';
 import FileSwitcher from '../common/FileSwitcher';
 import InfoTooltip from '../common/InfoTooltip';
+import { qualityProvenanceKey } from '../common/qualityProvenance';
 import LoadProgressModal from './LoadProgressModal';
 import {
   colors, alpha, spacing,
@@ -219,6 +220,10 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewError, setOverviewError] = useState(null);
   const [overviewSampled, setOverviewSampled] = useState(false);
+  // Provenance of the current Band Contrast overview: "native" (Oxford, read
+  // from file) vs "computed" (kikuchipy FFT pattern quality). Surfaced as a
+  // caption chip so the user knows whether the map is measured or derived.
+  const [overviewSource, setOverviewSource] = useState(null);
   const [qualityMask, setQualityMask] = useState(false);
   const [qualityThreshold, setQualityThreshold] = useState(25);
   const overviewRef = useRef(null);
@@ -517,6 +522,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       const res = await ebsdApi.overview(modeMap[mode] || 'mean');
       setOverviewImage(res.data?.image || null);
       setOverviewSampled(!!res.data?.sampled);
+      setOverviewSource(res.data?.source || null);
     } catch (e) {
       // Surface the failure instead of silently leaving the empty placeholder —
       // a swallowed error here looked identical to "loaded but no image".
@@ -1815,6 +1821,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           }}>
             <span style={{ color: colors.cyan, fontWeight: 600 }}>{t('overview.captionTitle')}</span>
             <span>· {t(`overview.modeNames.${overviewMode}`, { defaultValue: overviewMode })}</span>
+            {overviewMode === 'Band Contrast' && overviewSource && (
+              <span style={{
+                padding: '0 6px', borderRadius: 3,
+                background: colors.bgSecondary, border: `1px solid ${colors.border}`,
+                color: overviewSource === 'native' ? colors.green : colors.yellow,
+                fontWeight: 600,
+              }}>
+                {t(qualityProvenanceKey(overviewSource))}
+              </span>
+            )}
             {gridShape && <span>· {gridShape[0]}×{gridShape[1]}</span>}
             <span style={{ flex: 1 }} />
             <span style={{ opacity: 0.7 }}>{t('overview.captionHint')}</span>

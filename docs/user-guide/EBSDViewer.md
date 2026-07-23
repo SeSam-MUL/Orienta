@@ -109,6 +109,18 @@ This is normally the **first** module you open in a session. Use it to:
   in milliseconds regardless of file size. The intensity-based modes (Mean, etc.)
   must read patterns from disk; on very large lazy-loaded scans they are sampled
   (down-strided) and marked as a "sampled preview", then upscaled.
+- **Band Contrast is native when the file has it, computed otherwise.** In the
+  **Band Contrast** overview mode Orienta prefers the vendor's real per-pixel
+  quality: when the file carries Oxford's stored Band Contrast it is read straight
+  from the file and shown as **"Band Contrast (native)"**. When it does not (EDAX,
+  synthetic data, some imported results), Orienta instead computes a kikuchipy
+  FFT pattern-quality per pixel and shows it as **"Pattern Quality (computed)"** —
+  a genuine sharpness-of-diffraction proxy, not a stand-in for Band Contrast. A
+  small **provenance chip** in the overview caption tells you which of the two you
+  are currently looking at, so you never mistake a computed proxy for a measured
+  value. This distinction matters downstream: the Band-Contrast analyses in the
+  Analysis module (GMM, quality filter) only accept the native value (see
+  `Analysis.md`).
 - **Processing is destructive but safe by default.** Keep **Auto-deepcopy**
   ticked so each step writes to a derived dataset and your raw data is preserved.
 - **CLAHE shows real progress.** Long CLAHE runs report a progress bar with

@@ -246,17 +246,17 @@ async def band_contrast(
             "label": "Band Contrast (native)",
         }
 
-    # Fallback — compute image quality via kikuchipy. This is slower
-    # (FFT-per-pattern) but works on any 4D signal.
+    # Fallback — compute image quality via the central quality service
+    # (kikuchipy FFT-per-pattern). Heavy + lazy, so materialise off the
+    # event loop so the backend stays responsive.
+    from backend.api.services.pattern_quality import (
+        LABEL_COMPUTED,
+        compute_image_quality,
+    )
+
     sig, data = _signal_data()
     try:
-        # ``get_image_quality`` runs an FFT per pattern over the whole
-        # stack — heavy + lazy. Materialise off the event loop so the
-        # backend stays responsive.
-        def _compute_iq():
-            return np.asarray(sig.get_image_quality(), dtype=np.float64)
-
-        iq = await asyncio.to_thread(_compute_iq)
+        iq = await asyncio.to_thread(lambda: compute_image_quality(sig))
     except Exception as exc:
         logger.exception("get_image_quality failed")
         raise HTTPException(
@@ -275,5 +275,5 @@ async def band_contrast(
         "min_val": float(np.nanmin(iq)),
         "max_val": float(np.nanmax(iq)),
         "source": "computed",
-        "label": "Image Quality (kikuchipy fallback)",
+        "label": LABEL_COMPUTED,
     }

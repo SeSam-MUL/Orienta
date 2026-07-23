@@ -366,23 +366,34 @@ async def load_xmap(req: LoadXmapRequest):
             if _last_result is None:
                 raise HTTPException(status_code=400, detail="No indexing result available")
             xmap = _last_result.xmap
-            # Inject confidence scores into xmap.prop so EBSDDataset.bc works
-            if _last_result.confidence_scores is not None and 'scores' not in xmap.prop and 'pq' not in xmap.prop and 'bc' not in xmap.prop:
-                ci = np.asarray(_last_result.confidence_scores).ravel()
-                n_pixels = xmap.size
-                if ci.size != n_pixels:
-                    # pyebsdindex stores indxData['cm'] as shape
-                    # (n_phases + 1, n_pixels) row-major. The LAST row is the
-                    # consensus best-per-pixel (indxData[-1] = indxData[0] for
-                    # single-phase). Previous code did ci.reshape(n_pixels, -1)[:, 0]
-                    # which interleaved wrong values into the best-solution
-                    # column, producing nonsense BC for GMM fitting.
-                    if ci.size % n_pixels == 0:
-                        ci = ci.reshape(-1, n_pixels)[-1]
-                    else:
-                        ci = ci[-n_pixels:]  # clip to last n_pixels (consensus tail)
-                # Scale CI (0-1) to BC-like range (0-255) for GMM fitting
-                xmap.prop['bc'] = (ci * 255).astype(np.float32)
+            # NOTE: We deliberately do NOT synthesise a Band Contrast array from
+            # the confidence/CI scores. Confidence is match reliability, not
+            # image quality — the BC-calibrated GMM and quality-filter must fail
+            # loud (see EBSDDataset.has_native_bc) rather than run on a fake BC.
+            #
+            # But we DO bridge the result's OWN source-file native Band Contrast
+            # into xmap.prop['bc'] so has_native_bc / bc_gmm / quality-filter
+            # work for Oxford H5OINA indexing results (same pattern the
+            # phase-map BC layer uses). read_native_band_contrast returns None
+            # for EDAX / synthetic / stripped sources — in which case
+            # has_native_bc stays False and the BC-only analyses fail loud
+            # *truthfully*.
+            if 'bc' not in xmap.prop:
+                try:
+                    from backend.api.services.pattern_quality import read_native_band_contrast
+                    src = None
+                    meta = getattr(_last_result, "metadata", None)
+                    if isinstance(meta, dict):
+                        src = meta.get("source_file")
+                    if src:
+                        n_rows, n_cols = xmap.shape
+                        native_bc = read_native_band_contrast(src, n_rows, n_cols)
+                        if native_bc is not None:
+                            bc_flat = native_bc.ravel()
+                            if bc_flat.size == xmap.size:
+                                xmap.prop['bc'] = bc_flat.astype('float32')
+                except Exception:
+                    logger.debug("native BC bridge for indexing result failed", exc_info=True)
             step_size = getattr(xmap, 'dx', None)
             if not step_size or step_size == 1.0:
                 step_size = _fallback_step_size()
@@ -981,6 +992,12 @@ async def apply_quality_filter(req: QualityFilterRequest):
     """
     if _dataset is None:
         raise HTTPException(status_code=400, detail="No dataset loaded")
+    if not _dataset.has_native_bc:
+        raise HTTPException(
+            status_code=400,
+            detail=("Band Contrast quality filter requires native Band Contrast (Oxford H5OINA). "
+                    "This dataset has only computed Pattern Quality."),
+        )
     try:
         stats = _dataset.apply_quality_filter(
             bc_min=req.bc_min,
@@ -1282,6 +1299,12 @@ def fit_bc_gmm():
     """Fit 3-Gaussian Mixture Model to Band Contrast distribution."""
     if _dataset is None:
         raise HTTPException(status_code=400, detail="No dataset loaded")
+    if not _dataset.has_native_bc:
+        raise HTTPException(
+            status_code=400,
+            detail=("Band Contrast GMM requires native Band Contrast (Oxford H5OINA). "
+                    "This dataset has only computed Pattern Quality."),
+        )
 
     try:
         from analysis.bc_analysis import fit_bc_gmm as _fit_gmm, calculate_bc_histogram

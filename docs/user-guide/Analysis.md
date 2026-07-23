@@ -119,6 +119,14 @@ Analysis → Deformation → Texture → Recrystallization → Batch & Export**.
 
 ## Tips & notes
 
+- **Band-Contrast analyses need *native* Band Contrast.** The 3-Gaussian
+  Band-Contrast model (Deformed / Recovered / Recrystallized) in Deformation and
+  the **Quality Filter** in Tab 1 both require the vendor's real per-pixel Band
+  Contrast — i.e. an Oxford H5OINA (or a light-`.h5` that carried it forward). On
+  datasets without it (EDAX, synthetic data, some indexing results, where only a
+  computed FFT "Pattern Quality" is available) these fail loudly with a clear
+  message rather than silently running the model on a surrogate. Everything else
+  (grain reconstruction, KAM, GOS, texture, RX) works regardless.
 - **Reconstruct grains first.** GOS, ECD, RX, grain-boundary maps, deformation,
   and texture all require a grain set — running them before reconstruction returns
   a clear "reconstruct grains first" message.

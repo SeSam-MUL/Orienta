@@ -149,9 +149,13 @@
     "addToPcRefinement": "+ 至 PC Refinement",
     "addToPcRefinementTooltip": "将当前显示的花样发送到 PC Refinement 窗口。"
   },
+  "quality": {
+    "nativeBandContrast": "带对比度 (原生)",
+    "computedPatternQuality": "花样质量 (计算)"
+  },
   "overview": {
     "label": "概览:",
-    "modeTooltip": "概览图模式:\nMean Intensity: 每像素的平均花样亮度。\nStd Dev (Quality): 花样对比度 — 越高衍射越好。\nBand Contrast: 标准差/均值之比 — 稳健的质量指标。",
+    "modeTooltip": "概览图模式:\nMean Intensity: 每像素的平均花样亮度。\nStd Dev (Quality): 花样对比度 — 越高衍射越好。\nBand Contrast: 文件提供时使用原生 Oxford 带对比度,否则使用计算得到的 FFT 花样质量指标。",
     "maskLabel": "掩膜",
     "maskTooltip": "启用质量掩膜: 将低于阈值的像素变暗。\n有助于识别衍射质量差的区域。",
     "thresholdTooltip": "质量阈值百分位（0-100%）。\n低于此百分位的像素在概览图上会变暗。",

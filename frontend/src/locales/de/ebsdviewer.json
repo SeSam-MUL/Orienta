@@ -149,9 +149,13 @@
     "addToPcRefinement": "+ Zu PC-Refinement",
     "addToPcRefinementTooltip": "Aktuell angezeigtes Muster an das PC-Refinement-Fenster senden."
   },
+  "quality": {
+    "nativeBandContrast": "Bandkontrast (nativ)",
+    "computedPatternQuality": "Musterqualität (berechnet)"
+  },
   "overview": {
     "label": "Übersicht:",
-    "modeTooltip": "Übersichtskartenmodus:\nMean Intensity: mittlere Musterhelligkeit pro Pixel.\nStd Dev (Quality): Musterkontrast — höher = bessere Beugung.\nBand Contrast: Std/Mittel-Verhältnis — robuste Qualitätsmetrik.",
+    "modeTooltip": "Übersichtskartenmodus:\nMean Intensity: mittlere Musterhelligkeit pro Pixel.\nStd Dev (Quality): Musterkontrast — höher = bessere Beugung.\nBand Contrast: nativer Oxford-Bandkontrast, falls die Datei ihn liefert, sonst eine berechnete FFT-Musterqualitätsmetrik.",
     "maskLabel": "Maske",
     "maskTooltip": "Qualitätsmaskierung aktivieren: Pixel unter der Schwelle abdunkeln.\nNützlich, um Bereiche mit schlechter Beugungsqualität zu erkennen.",
     "thresholdTooltip": "Qualitäts-Schwellenperzentil (0-100%).\nPixel unter diesem Perzentil werden auf der Übersichtskarte abgedunkelt.",

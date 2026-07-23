@@ -1016,6 +1016,10 @@ async def probe(req: ProbeRequest):
     # --- BC (native) ---
     bc_value: Optional[float] = None
     bc_grid = _read_native_bc_safe()
+    # Only ever "native" or None here — a hover tooltip must stay cheap, so we
+    # never compute BC on the probe path. Computed BC surfaces via the BC layer
+    # (the /band-contrast endpoint), not the probe.
+    bc_source: Optional[str] = "native" if bc_grid is not None else None
     if bc_grid is not None and bc_grid.ndim == 2:
         if 0 <= req.row < bc_grid.shape[0] and 0 <= req.col < bc_grid.shape[1]:
             bc_value = float(bc_grid[req.row, req.col])
@@ -1028,6 +1032,7 @@ async def probe(req: ProbeRequest):
         "col": req.col,
         "elements": elements_out,
         "bc": bc_value,
+        "bc_source": bc_source,
         "phase": phase_info,
         "display_mode": req.display_mode,
     }

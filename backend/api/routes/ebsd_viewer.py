@@ -1840,12 +1840,6 @@ def _reduce_nav(data, mode):
         return data.std(axis=(-2, -1))
     elif mode == "max":
         return data.max(axis=(-2, -1))
-    elif mode == "bc":
-        # Band Contrast = std / mean (coefficient of variation)
-        mean_map = data.mean(axis=(-2, -1)).astype(float)
-        std_map = data.std(axis=(-2, -1)).astype(float)
-        mean_map[mean_map == 0] = 1  # avoid division by zero
-        return std_map / mean_map
     elif mode == "sharpness":
         # Sharpness approximation: horizontal gradient variance (fast)
         dx = np.diff(data.astype(np.float32), axis=-1)
@@ -1913,6 +1907,24 @@ async def overview(mode: str = "mean"):
                 and active_dataset == Path(_ebsd_file_path).stem
                 and active_dataset not in _dirty_datasets):
             nav_map = _read_stored_quality_map(_ebsd_file_path, mode, n_rows, n_cols)
+        native_hit = nav_map is not None
+
+        # --- Computed Band Contrast: native BC else kikuchipy FFT image quality.
+        # No std/mean CoV fake. bc is intercepted here so it never reaches
+        # _reduce_nav (which has no bc branch anymore).
+        if nav_map is None and mode == "bc":
+            from backend.api.services.pattern_quality import compute_image_quality
+            data = signal.data
+            is_lazy = hasattr(data, "chunks")
+            n_pat = n_rows * n_cols
+            if is_lazy and n_pat > _OVERVIEW_PATTERN_CAP:
+                stride = int(np.ceil((n_pat / _OVERVIEW_PATTERN_CAP) ** 0.5))
+                sub = signal.inav[::stride, ::stride]
+                small = np.asarray(compute_image_quality(sub)).astype(float)
+                nav_map = _upscale_nearest(small, n_rows, n_cols)
+                sampled = True
+            else:
+                nav_map = np.asarray(compute_image_quality(signal)).astype(float)
 
         if nav_map is None:
             data = signal.data  # (n_rows, n_cols, sig_h, sig_w)
@@ -1951,6 +1963,11 @@ async def overview(mode: str = "mean"):
             "worst_pos": [int(x) for x in np.unravel_index(nav_f.argmin(), nav_f.shape)],
             "dataset": active_dataset,
             "sampled": sampled,
+            "source": "native" if native_hit else "computed",
+            "metric": (
+                "band_contrast" if (native_hit and mode == "bc")
+                else ("image_quality" if mode == "bc" else mode)
+            ),
         }
 
     try:

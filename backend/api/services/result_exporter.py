@@ -637,7 +637,8 @@ def _write_ctf(
 
     Quality columns:
     - ``BC``: real per-pixel Band Contrast from the source h5oina if
-      ``source_h5_path`` is provided; otherwise ``CI*255`` surrogate.
+      ``source_h5_path`` is provided; otherwise an honest all-zero column
+      (never a CI surrogate) plus a provenance note on the ``Prj`` header.
     - ``Bands``: real per-pixel band count from the source if available,
       else 8 (a neutral placeholder).
     - ``MAD``: written as 0. We re-index from scratch and our pipeline
@@ -666,13 +667,12 @@ def _write_ctf(
     # Euler angles — Bunge convention, CTF wants degrees
     eulers = xmap.rotations.to_euler(degrees=True)
     eulers = np.asarray(eulers).reshape(-1, 3)
-    # Confidence / MAD proxy from CI prop (absent → zeros)
-    ci = np.asarray(xmap.prop.get("ci", np.zeros(n, dtype=np.float32))).reshape(-1)
 
-    # Real BC/Bands from source h5oina if available; for BC fall back to
-    # CI*255 surrogate when the source has none. MAD is always 0 — we
-    # re-index from scratch so we have no MAD of our own and the
-    # source's MAD doesn't apply to our orientations.
+    # Real BC/Bands from source h5oina if available; when the source has
+    # no Band Contrast we write an honest all-zero BC column (never a
+    # confidence surrogate). MAD is always 0 — we re-index from scratch so
+    # we have no MAD of our own and the source's MAD doesn't apply to our
+    # orientations.
     quality = _read_h5oina_quality(source_h5_path, n)
     has_real_bc    = "bc" in quality
     has_real_bands = "bands" in quality
@@ -682,7 +682,7 @@ def _write_ctf(
     if has_real_bc:
         bc = quality["bc"].astype(int)
     else:
-        bc = (ci * 255).astype(int)
+        bc = np.zeros(n, dtype=int)  # no native Band Contrast — honest empty column, never a CI surrogate
     bs = np.full(n, 255, dtype=int)
 
     # Grid dimensions (infer from coordinate range)
@@ -789,7 +789,14 @@ def _write_ctf(
 
     with open(ctf_path, "w", encoding="utf-8", newline="\r\n") as f:
         f.write("Channel Text File\n")
-        f.write(f"Prj\tOrienta multi-phase batch\n")
+        # Prj is free text; MTEX/HKL parsers ignore its content. Append a
+        # provenance note ONLY when there is no native Band Contrast, so the
+        # BC column of 0 isn't mistaken for a real (or CI-surrogate) signal.
+        # Byte-identical to the original line when native BC IS present.
+        prj = "Orienta multi-phase batch"
+        if not has_real_bc:
+            prj += " — BC column = 0 (no native Band Contrast in source)"
+        f.write(f"Prj\t{prj}\n")
         f.write(f"Author\tOrienta\n")
         f.write(f"JobMode\tGrid\n")
         f.write(f"XCells\t{x_cells}\n")
@@ -806,9 +813,10 @@ def _write_ctf(
         # import to fail in some versions.
         if not has_real_bc:
             logger.warning(
-                "CTF %s: writing surrogate BC (real BC not available "
-                "from source). Pass source_h5_path to get the real "
-                "Band Contrast values from the h5oina.", ctf_path,
+                "CTF %s: no native Band Contrast available — writing BC "
+                "column = 0 (honest empty column, not a CI surrogate). "
+                "Pass source_h5_path to get the real Band Contrast values "
+                "from the h5oina.", ctf_path,
             )
         f.write(f"Phases\t{len(phase_names)}\n")
         for name in phase_names:
@@ -836,6 +844,7 @@ def _inject_ang_acquisition(
     *,
     sample_tilt: Optional[float] = None,
     pc: Optional[List[float]] = None,
+    note: Optional[str] = None,
 ) -> None:
     """Add/replace TILT and PC lines in an ANG file's header.
 
@@ -851,10 +860,14 @@ def _inject_ang_acquisition(
         # y-star        <pcy>
         # z-star        <pcz>
     Existing matching lines are replaced; missing lines are inserted at
-    the end of the header. If neither sample_tilt nor pc is given the
+    the end of the header.
+
+    ``note`` (optional) is a free-text ``#``-comment line (e.g. a
+    provenance note that the IQ column is empty). It is added/replaced in
+    the header just like the geometry lines. If nothing is supplied the
     file is left untouched.
     """
-    if sample_tilt is None and pc is None:
+    if sample_tilt is None and pc is None and note is None:
         return
     try:
         with open(ang_path, "r", encoding="utf-8") as fh:
@@ -874,6 +887,9 @@ def _inject_ang_acquisition(
         replacements["# x-star"] = f"# x-star        {float(pc[0]):.6f}\n"
         replacements["# y-star"] = f"# y-star        {float(pc[1]):.6f}\n"
         replacements["# z-star"] = f"# z-star        {float(pc[2]):.6f}\n"
+    if note is not None:
+        # Full ``#``-comment line; replaced if already present, else appended.
+        replacements["# NOTE:"] = note if note.endswith("\n") else note + "\n"
 
     out: List[str] = []
     seen = set()
@@ -1100,6 +1116,15 @@ def export_ang_ctf(
         bc_arr = bc_quality.get("bc")
         if bc_arr is not None:
             prop["iq"] = bc_arr.astype(np.float32)
+        # When there is no native Band Contrast, orix writes zeros into the
+        # ANG IQ column (no fake). Record that honestly in the header so the
+        # empty IQ column isn't mistaken for a confidence surrogate.
+        ang_iq_note = None
+        if bc_arr is None:
+            ang_iq_note = (
+                "# NOTE: IQ column = 0 (no native Band Contrast in source; "
+                "not a confidence surrogate)"
+            )
 
         rotations = Rotation.from_euler(euler_flat, degrees=False)
         xmap = CrystalMap(
@@ -1127,7 +1152,9 @@ def export_ang_ctf(
                 # detector geometry as input — adding it as additional
                 # ``# KEY VALUE`` lines is the standard ANG convention
                 # and MTEX / EDAX OIM tolerate (and parse) extras.
-                _inject_ang_acquisition(ang_path, sample_tilt=sample_tilt, pc=pc)
+                _inject_ang_acquisition(
+                    ang_path, sample_tilt=sample_tilt, pc=pc, note=ang_iq_note
+                )
                 logger.info("Exported .ang: %s", ang_path)
             except Exception as e:
                 logger.warning("Failed to export .ang: %s", e)

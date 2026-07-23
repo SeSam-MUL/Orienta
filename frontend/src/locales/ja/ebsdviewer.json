@@ -149,9 +149,13 @@
     "addToPcRefinement": "+ PC Refinement へ",
     "addToPcRefinementTooltip": "現在表示中のパターンを PC Refinement ウィンドウへ送信します。"
   },
+  "quality": {
+    "nativeBandContrast": "バンドコントラスト (ネイティブ)",
+    "computedPatternQuality": "パターン品質 (算出)"
+  },
   "overview": {
     "label": "概観:",
-    "modeTooltip": "概観マップのモード:\nMean Intensity: ピクセルごとの平均パターン輝度。\nStd Dev (Quality): パターンのコントラスト — 高いほど回折が良好。\nBand Contrast: 標準偏差/平均の比 — 堅牢な品質指標。",
+    "modeTooltip": "概観マップのモード:\nMean Intensity: ピクセルごとの平均パターン輝度。\nStd Dev (Quality): パターンのコントラスト — 高いほど回折が良好。\nBand Contrast: ファイルに含まれる場合はネイティブの Oxford バンドコントラスト、なければ算出した FFT パターン品質指標。",
     "maskLabel": "マスク",
     "maskTooltip": "品質マスキングを有効化: しきい値未満のピクセルを暗くします。\n回折品質の悪い領域を特定するのに役立ちます。",
     "thresholdTooltip": "品質しきい値パーセンタイル（0-100%）。\nこのパーセンタイル未満のピクセルは概観マップ上で暗くなります。",

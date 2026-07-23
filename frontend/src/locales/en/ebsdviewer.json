@@ -149,9 +149,13 @@
     "addToPcRefinement": "+ To PC Refinement",
     "addToPcRefinementTooltip": "Send the currently displayed pattern to the PC Refinement window."
   },
+  "quality": {
+    "nativeBandContrast": "Band Contrast (native)",
+    "computedPatternQuality": "Pattern Quality (computed)"
+  },
   "overview": {
     "label": "Overview:",
-    "modeTooltip": "Overview map mode:\nMean Intensity: Average pattern brightness per pixel.\nStd Dev (Quality): Pattern contrast — higher = better diffraction.\nBand Contrast: Std/Mean ratio — robust quality metric.",
+    "modeTooltip": "Overview map mode:\nMean Intensity: Average pattern brightness per pixel.\nStd Dev (Quality): Pattern contrast — higher = better diffraction.\nBand Contrast: native Oxford Band Contrast when the file provides it, otherwise a computed FFT pattern-quality metric.",
     "maskLabel": "Mask",
     "maskTooltip": "Enable quality masking: dim pixels below the threshold.\nUseful for identifying regions with poor diffraction quality.",
     "thresholdTooltip": "Quality threshold percentile (0-100%).\nPixels below this percentile are dimmed on the overview map.",

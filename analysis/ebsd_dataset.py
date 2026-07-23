@@ -267,6 +267,23 @@ class EBSDDataset:
         return np.ones(self.xmap.size) * 128
 
     @property
+    def has_native_bc(self) -> bool:
+        """True only when the xmap carries a real native Band Contrast array.
+        pq / scores are NOT native BC — the BC-calibrated GMM/quality-filter
+        must fail loud rather than run on those.
+
+        INVARIANT: xmap.prop['bc'] must only ever hold REAL native Band
+        Contrast (e.g. bridged from an Oxford H5OINA source file), never a
+        computed/surrogate value (CI, scores, FFT image quality). This property
+        trusts prop['bc'] as native — writing a surrogate there would silently
+        make the BC-only analyses run on fake data."""
+        prop = getattr(self.xmap, "prop", {}) or {}
+        try:
+            return bool("bc" in prop and np.asarray(prop["bc"]).size == self.xmap.size)
+        except Exception:
+            return False
+
+    @property
     def bc_2d(self) -> np.ndarray:
         """Band contrast reshaped to 2D map (ny, nx)."""
         return self.bc.reshape(self.shape)

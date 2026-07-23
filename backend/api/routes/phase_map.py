@@ -1316,8 +1316,11 @@ def _compute_layer_rgba(
                 src = None
             if src:
                 try:
-                    from backend.api.routes.virtual_images import _read_native_band_contrast_from
-                    native_bc = _read_native_band_contrast_from(src)
+                    # Route the path-based native read through the central
+                    # pattern-quality service (single source of truth). It uses
+                    # a PRIVATE read-only handle, so no shared-session mutation.
+                    from backend.api.services.pattern_quality import read_native_band_contrast
+                    native_bc = read_native_band_contrast(src, n_rows, n_cols)
                 except Exception:
                     native_bc = None
             # Fall back to whatever file is currently open (legacy behaviour).
