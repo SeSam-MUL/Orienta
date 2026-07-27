@@ -75,8 +75,12 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
 
-  // Real scan overview (mean intensity) — fetched once when the dialog
-  // opens with a file loaded. Used as the ScanPicker background.
+  // Real scan overview (Band Contrast) — fetched once when the dialog
+  // opens with a file loaded. Used as the ScanPicker background. Uses the
+  // 'bc' mode so this picker shows the SAME crisp band-contrast map as the
+  // Indexing Navigation Map / EBSD Viewer overview (native Oxford BC, with a
+  // computed FFT image-quality fallback), instead of a washed-out per-pixel
+  // mean-intensity map.
   const [overviewB64, setOverviewB64] = useState(null);
   // Measured pattern at the active pixel — fetched whenever pixelIndex
   // changes so the user SEES the pattern before running the test.
@@ -111,7 +115,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   useEffect(() => {
     if (!open || !fileLoaded) return;
     let cancelled = false;
-    ebsdApi.overview('mean')
+    ebsdApi.overview('bc')
       .then((r) => { if (!cancelled) setOverviewB64(r?.data?.image || null); })
       .catch(() => { /* silently fall back to the empty picker */ });
     return () => { cancelled = true; };
@@ -752,7 +756,7 @@ function Bar({ value, label, color }) {
 }
 
 /**
- * Click-to-pick scan overview with the real mean-intensity image as
+ * Click-to-pick scan overview with the real Band Contrast image as
  * background + an SVG crosshair at the active pixel. Mirrors the
  * CrystalHint SinglePixelMode picker. Falls back to an empty box (the
  * crosshair + click logic still works) until the overview loads.

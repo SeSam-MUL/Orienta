@@ -132,15 +132,18 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
   // elements). On the same pixel re-clicked, we don't want to re-fire 1-5s
   // worth of COD+MP queries. The reviewer flagged this as wasteful — agreed.
   const externalCacheRef = useRef(new Map());
-  // Real scan overview (mean intensity) — fetched once when the tab
+  // Real scan overview (Band Contrast) — fetched once when the tab
   // becomes active and a file is loaded. Cached client-side; backend
-  // caches by (dataset, mode) too.
+  // caches by (dataset, mode) too. Uses the 'bc' mode so the picker shows
+  // the same crisp band-contrast map as the Indexing Navigation Map (native
+  // Oxford BC, computed FFT image-quality fallback) rather than a washed-out
+  // per-pixel mean-intensity map.
   const [overviewB64, setOverviewB64] = useState(null);
 
   useEffect(() => {
     if (!fileLoaded || !isActive) return;
     let cancelled = false;
-    ebsdApi.overview('mean')
+    ebsdApi.overview('bc')
       .then((r) => {
         if (cancelled) return;
         setOverviewB64(r?.data?.image || null);
