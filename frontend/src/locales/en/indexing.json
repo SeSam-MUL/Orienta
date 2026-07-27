@@ -539,6 +539,8 @@
     "useForIndexing": "Use for indexing",
     "useForIndexingTip": "Add this phase to the indexing list for {{method}} and switch the indexing method to it.",
     "methodUnavailable": "This phase has no file for {{method}} — generate one first (CIF→Hough, SHT→Spherical, master .h5→Dictionary).",
+    "addedToList": "✓ {{formula}} added to the {{method}} indexing list",
+    "alreadyInList": "{{formula}} is already in the {{method}} list",
     "export": "Export…",
     "exportTip": "Open the publication figure export composer",
     "excludedByEds": "▸ {{count}} excluded by EDS chemistry",

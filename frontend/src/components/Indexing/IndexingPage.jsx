@@ -1803,9 +1803,14 @@ export default function IndexingPage({ isActive }) {
   // "Use for indexing" from the Phase Test: add this phase for the chosen method,
   // switching the indexing method if needed (the method-change effect clears the
   // old method-incompatible list; same-method just appends).
+  //
+  // Deliberately does NOT close the dialog — the user builds up a multi-phase
+  // list by clicking through pixels, identifying the phase at each and adding it,
+  // so the picker stays open until they close it with ×. Returns a status
+  // ('switched' | 'added' | 'exists') the dialog uses for its confirmation line.
   const handleUsePhaseFromTest = (phase, targetMethod) => {
     const path = { hough: phase.cif_path, spherical: phase.sht_path, dictionary: phase.master_h5_path }[targetMethod];
-    if (!path) return;
+    if (!path) return null;
     const file = {
       path,
       filename: String(path).split(/[\\/]/).pop(),
@@ -1814,14 +1819,17 @@ export default function IndexingPage({ isActive }) {
     if (targetMethod !== method) {
       setPendingPhase(file);        // applied by the effect above, after the switch
       setMethod(targetMethod);
-    } else if (!phaseFiles.includes(path)) {
+      return 'switched';
+    }
+    if (!phaseFiles.includes(path)) {
       setPhases(p => [...p, file]);
       setPhaseFiles(p => [...p, path]);
       setFileStatus(t('phases.selectedCount', { count: phaseFiles.length + 1 }));
       setFileStatusColor(C.green);
       setPhaseInfo(t('phases.phasesPrefix', { list: [...phases.map(p => p.formula || p.filename), file.formula].join(', ') }));
+      return 'added';
     }
-    setShowPhaseTestDialog(false);
+    return 'exists';
   };
 
   async function discoverFilesForMethod(m) {

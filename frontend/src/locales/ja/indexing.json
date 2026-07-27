@@ -539,6 +539,8 @@
     "useForIndexing": "インデキシングに使用",
     "useForIndexingTip": "この相を {{method}} 用のインデキシングリストに追加し、インデキシング方式を切り替えます。",
     "methodUnavailable": "この相には {{method}} 用のファイルがありません — 先に生成してください（CIF→Hough、SHT→Spherical、マスター.h5→Dictionary）。",
+    "addedToList": "✓ {{formula}} を {{method}} のインデキシングリストに追加しました",
+    "alreadyInList": "{{formula}} は既に {{method}} のリストにあります",
     "export": "エクスポート…",
     "exportTip": "論文用図のエクスポートコンポーザーを開く",
     "excludedByEds": "▸ {{count}} 件が EDS 化学組成により除外",

@@ -539,6 +539,8 @@
     "useForIndexing": "用于标定",
     "useForIndexingTip": "将此相添加到 {{method}} 的标定列表，并切换标定方法。",
     "methodUnavailable": "此相没有 {{method}} 所需的文件 — 请先生成（CIF→Hough、SHT→Spherical、主图谱.h5→Dictionary）。",
+    "addedToList": "✓ 已将 {{formula}} 添加到 {{method}} 标定列表",
+    "alreadyInList": "{{formula}} 已在 {{method}} 列表中",
     "export": "导出…",
     "exportTip": "打开论文图导出编排器",
     "excludedByEds": "▸ {{count}} 个因 EDS 化学组成被排除",

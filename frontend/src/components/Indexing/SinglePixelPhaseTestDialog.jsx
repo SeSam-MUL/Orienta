@@ -53,6 +53,18 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   const markerCtl = useLinkedPatternMarkers();
   const [exportOpen, setExportOpen] = useState(false);
 
+  // Transient confirmation shown under the "Use for indexing" buttons after a
+  // phase is added, so the click gives visible feedback now that the dialog no
+  // longer closes on add (the user keeps it open to collect phases across
+  // multiple pixels). ``{ formula, method, status }``; auto-clears after ~2.6 s.
+  const [justUsed, setJustUsed] = useState(null);
+  const justUsedTimerRef = useRef(null);
+  const markUsed = useCallback((formula, methodLabel, status) => {
+    setJustUsed({ formula, method: methodLabel, status });
+    if (justUsedTimerRef.current) clearTimeout(justUsedTimerRef.current);
+    justUsedTimerRef.current = setTimeout(() => setJustUsed(null), 2600);
+  }, []);
+
   // Phase picker: the library phases we *can* test, plus the user's
   // current selection. Defaults to ALL phases selected once they load.
   const [phases, setPhases] = useState([]);
@@ -142,7 +154,10 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   useEffect(() => {
     if (!open) { runIdRef.current += 1; stopPolling(); }
   }, [open, stopPolling]);
-  useEffect(() => () => { runIdRef.current += 1; stopPolling(); }, [stopPolling]);
+  useEffect(() => () => {
+    runIdRef.current += 1; stopPolling();
+    if (justUsedTimerRef.current) clearTimeout(justUsedTimerRef.current);
+  }, [stopPolling]);
 
   // Fetch the measured pattern for the active pixel whenever it changes.
   useEffect(() => {
@@ -667,8 +682,11 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
             </div>
 
             {/* Use this phase for indexing — pick the method; disabled methods
-                have no file for this phase (✗). Switches the indexing method. */}
+                have no file for this phase (✗). Adds the phase and switches the
+                indexing method, but keeps this dialog OPEN so the user can click
+                the next pixel and add another phase (close it with ×). */}
             {onUsePhase && (
+              <>
               <div style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 9, color: '#6272a4' }}>{t('phaseTest.useForIndexing')}:</span>
                 {[
@@ -676,7 +694,13 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
                   { m: 'spherical', path: selected.sht_path, label: 'Spherical' },
                   { m: 'dictionary', path: selected.master_h5_path, label: 'Dictionary' },
                 ].map(({ m, path, label }) => (
-                  <button key={m} disabled={!path} onClick={() => onUsePhase(selected, m)}
+                  <button key={m} disabled={!path}
+                    onClick={() => {
+                      const status = onUsePhase(selected, m);
+                      // Only confirm if the click actually did something (path
+                      // present ⇒ button enabled ⇒ non-null status).
+                      if (status) markUsed(selected.display_formula || selected.formula, label, status);
+                    }}
                     title={path ? t('phaseTest.useForIndexingTip', { method: label }) : t('phaseTest.methodUnavailable', { method: label })}
                     style={{ fontSize: 9, padding: '3px 8px', borderRadius: 3, cursor: path ? 'pointer' : 'not-allowed',
                       background: path ? (m === currentMethod ? C.green : C.bg) : '#2a2a3a',
@@ -686,6 +710,15 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
                   </button>
                 ))}
               </div>
+              {justUsed && (
+                <div role="status" aria-live="polite" style={{ marginTop: 5, textAlign: 'center', fontSize: 10,
+                  color: justUsed.status === 'exists' ? C.orange : C.green }}>
+                  {justUsed.status === 'exists'
+                    ? t('phaseTest.alreadyInList', { formula: justUsed.formula, method: justUsed.method })
+                    : t('phaseTest.addedToList', { formula: justUsed.formula, method: justUsed.method })}
+                </div>
+              )}
+              </>
             )}
           </div>
         )}

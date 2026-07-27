@@ -407,4 +407,65 @@ describe('SinglePixelPhaseTestDialog', () => {
     await waitFor(() =>
       expect(indexApi.phaseTestPixelChemistry).toHaveBeenCalledWith(5000));
   });
+
+  it('"Use for indexing" adds the phase, keeps the dialog OPEN, and shows a confirmation', async () => {
+    const onClose = vi.fn();
+    const onUsePhase = vi.fn(() => 'added');
+    indexApi.phaseTestStart.mockResolvedValue({ data: {
+      job_id: 'JU', total: 1, experimental_png: 'E', row: 2, col: 3,
+    } });
+    indexApi.phaseTestProgress.mockResolvedValue({ data: {
+      status: 'done', done: 1, total: 1, current: 'Al', error: null,
+      result: {
+        experimental_png: 'E', eds_weighting_effective: 'off',
+        mask_applied: false, bandwidth: 128,
+        candidates: [
+          { phase_key: 'Al', formula: 'Al', display_formula: 'Al',
+            r_score: 0.5, rank: 1, simulated_png: 'S', ncc_diff_png: 'D',
+            euler_deg: [0, 0, 0], cif_path: 'C:/lib/Al.cif' },
+        ],
+        excluded: [],
+      },
+    } });
+    render(<SinglePixelPhaseTestDialog open onClose={onClose}
+      currentMethod="hough" onUsePhase={onUsePhase} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-Run/i }));
+    await waitFor(() => expect(screen.getByText(/R = 0.500/)).toBeInTheDocument());
+    // Click the (enabled, has cif_path) Hough "Use for indexing" button.
+    fireEvent.click(screen.getByRole('button', { name: /✓ Hough/ }));
+    expect(onUsePhase).toHaveBeenCalledWith(
+      expect.objectContaining({ phase_key: 'Al' }), 'hough');
+    // Dialog must NOT close — the user keeps collecting phases across pixels.
+    expect(onClose).not.toHaveBeenCalled();
+    // And a confirmation line appears.
+    expect(await screen.findByText(/added to the Hough indexing list/i)).toBeInTheDocument();
+  });
+
+  it('"Use for indexing" on a phase already in the list shows the "already in list" note', async () => {
+    const onClose = vi.fn();
+    const onUsePhase = vi.fn(() => 'exists');
+    indexApi.phaseTestStart.mockResolvedValue({ data: {
+      job_id: 'JE', total: 1, experimental_png: 'E', row: 2, col: 3,
+    } });
+    indexApi.phaseTestProgress.mockResolvedValue({ data: {
+      status: 'done', done: 1, total: 1, current: 'Al', error: null,
+      result: {
+        experimental_png: 'E', eds_weighting_effective: 'off',
+        mask_applied: false, bandwidth: 128,
+        candidates: [
+          { phase_key: 'Al', formula: 'Al', display_formula: 'Al',
+            r_score: 0.5, rank: 1, simulated_png: 'S', ncc_diff_png: 'D',
+            euler_deg: [0, 0, 0], cif_path: 'C:/lib/Al.cif' },
+        ],
+        excluded: [],
+      },
+    } });
+    render(<SinglePixelPhaseTestDialog open onClose={onClose}
+      currentMethod="hough" onUsePhase={onUsePhase} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-Run/i }));
+    await waitFor(() => expect(screen.getByText(/R = 0.500/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /✓ Hough/ }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByText(/already in the Hough list/i)).toBeInTheDocument();
+  });
 });
