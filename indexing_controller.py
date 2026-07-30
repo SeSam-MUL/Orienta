@@ -1699,6 +1699,135 @@ def _resolve_cif_for_sht(sht_path: str) -> str:
         return ""
 
 
+class _PatternStackTooLarge(Exception):
+    """Raised when the full pattern stack would exceed the in-memory read budget
+    for streaming-path pseudo-symmetry resolution (see
+    :func:`_materialize_patterns_for_resolution`). Carries the estimated size so
+    the caller can log an honest message and fall back to raw orientations."""
+
+    def __init__(self, nbytes: int):
+        self.nbytes = int(nbytes)
+        super().__init__(f"pattern stack ~{nbytes / 1e9:.1f} GB exceeds read budget")
+
+
+def _resolve_read_budget_bytes() -> int:
+    """Max bytes we'll pull into RAM to build the Hough anchor for pseudo-symmetry
+    resolution on the streaming (index_h5) path. Half of *available* RAM (leaves
+    headroom for the Hough indexer + the CrystalMap), min 1 GB. Falls back to 4 GB
+    if psutil is unavailable. This is a safety valve: a 27 GB lazy-loaded map never
+    triggers a giant read — it just keeps the raw orientations and tells the user
+    to use an ROI or the Hough method instead."""
+    try:
+        import psutil
+        return max(1 * 1024 ** 3, int(0.5 * psutil.virtual_memory().available))
+    except Exception:
+        return 4 * 1024 ** 3
+
+
+def _read_h5_pattern_stack(
+    h5_path: str,
+    indices: Optional[np.ndarray] = None,
+    max_bytes: Optional[int] = None,
+) -> np.ndarray:
+    """Read the EBSD pattern dataset from an H5OINA / EDAX .h5 into a NumPy array.
+
+    ``indices=None`` reads the full ``(N, H, W)`` stack in file order; otherwise
+    reads only those flat pattern indices (must be ascending for efficient
+    chunked reads). Dataset discovery mirrors
+    ``Tier1Indexer._open_pattern_dataset`` so both Oxford H5OINA
+    (``1/EBSD/Data/Processed Patterns``) and EDAX H5
+    (``<Scan>/EBSD/Data/Pattern``) work.
+
+    ``max_bytes`` (full read only) raises :class:`_PatternStackTooLarge` before
+    allocating if the stack would exceed the budget — used by the streaming-path
+    resolver so a huge lazy-loaded file can't OOM the run.
+    """
+    import h5py
+    with h5py.File(h5_path, "r") as f:
+        candidates = [
+            "1/EBSD/Data/Processed Patterns",
+            "1/EBSD/Data/Patterns",
+            "1/EBSD/Data/Raw Patterns",
+        ]
+        for top_name in list(f.keys()):
+            top = f[top_name]
+            if not isinstance(top, h5py.Group):
+                continue
+            for sub in ("EBSD/Data/Pattern", "EBSD/Data/Patterns"):
+                full = f"{top_name}/{sub}"
+                if full in f and isinstance(f[full], h5py.Dataset):
+                    candidates.append(full)
+        dset = None
+        for ds_path in candidates:
+            if ds_path in f and isinstance(f[ds_path], h5py.Dataset) and f[ds_path].ndim == 3:
+                dset = f[ds_path]
+                break
+        if dset is None:
+            raise FileNotFoundError(
+                f"No EBSD pattern dataset in {h5_path} (tried: {candidates})"
+            )
+        if indices is None:
+            if max_bytes is not None:
+                nbytes = int(np.prod(dset.shape)) * int(dset.dtype.itemsize)
+                if nbytes > max_bytes:
+                    raise _PatternStackTooLarge(nbytes)
+            return np.asarray(dset[:])
+        idx = np.asarray(indices)
+        return np.asarray(dset[idx])
+
+
+def _materialize_patterns_for_resolution(
+    h5_path: str, masters_meta, phase_id, progress=None,
+) -> Optional[np.ndarray]:
+    """Provide in-memory patterns for pseudo-symmetry resolution on the streaming
+    (``index_h5``) full-map path, which otherwise has none.
+
+    On the streaming path there are no in-memory patterns, so the Hough
+    pseudo-symmetry resolver + variant unification were silently skipped and a
+    ``z_rot==2`` intermetallic (cubic approximant m-3/23, cubic -43m, orthorhombic
+    mmm/222/mm2) kept its WRONG spherical pseudo-variant on every pixel. If such a
+    phase actually won pixels, read the pattern stack from the H5 now (as the
+    Hough anchor) so the auto-correction runs on a plain full-map index too — no
+    viewer pre-processing / ROI required.
+
+    Returns ``(N, H, W)`` patterns in result order, or ``None`` to keep the raw
+    spherical orientations (nothing to resolve, file too large for the RAM budget,
+    or any read error — all fail safe to the prior behaviour).
+    """
+    from backend.spherical_gpu.pseudosym import spherical_unreliable
+    try:
+        present = {int(x) for x in np.unique(np.asarray(phase_id).reshape(-1))}
+    except Exception:
+        return None
+    need = any(
+        spherical_unreliable((m or {}).get("z_rot"), (m or {}).get("point_group"))
+        and (i + 1) in present
+        for i, m in enumerate(masters_meta or [])
+    )
+    if not need or not h5_path:
+        return None
+    try:
+        pats = _read_h5_pattern_stack(h5_path, max_bytes=_resolve_read_budget_bytes())
+    except _PatternStackTooLarge as e:
+        if progress:
+            progress(
+                f"Spherical-GPU: pattern stack ~{e.nbytes / 1e9:.1f} GB exceeds the "
+                f"in-memory cap — skipping automatic pseudo-symmetry resolution. "
+                f"Index a region (ROI) or use the Hough method for intermetallic "
+                f"maps.", 0.905)
+        return None
+    except Exception:
+        logger.warning(
+            "Could not materialise patterns for pseudo-symmetry resolution on the "
+            "streaming path; keeping raw spherical orientations", exc_info=True)
+        return None
+    if progress:
+        progress(
+            "Spherical-GPU: loaded patterns from H5 for pseudo-symmetry resolution "
+            "(z_rot==2 phase present)...", 0.905)
+    return pats
+
+
 def spherical_gpu_index_patterns(
     h5_path: str,
     config: IndexingConfig,
@@ -2059,6 +2188,18 @@ def spherical_gpu_index_patterns(
     # NOT the GPU indexer — so it runs here, after the `finally` freed the GPU.
     # Streams progress; fail-safe per phase. Provenance is surfaced in the result
     # metadata so the Pattern Match view + Phase Test can label the source.
+    # On the streaming (index_h5) full-map path there are no in-memory patterns,
+    # so the resolver below (and variant unification) would be skipped and a
+    # z_rot==2 intermetallic would keep its wrong spherical pseudo-variant on
+    # every pixel. Materialise the pattern stack from the H5 now (fail-safe:
+    # None on nothing-to-resolve / too-large / read error) so the auto-Hough
+    # correction runs on a plain full-map index too — no ROI / viewer edit needed.
+    if _sp_patterns_for_resolve is None:
+        _streamed = _materialize_patterns_for_resolution(
+            h5_path, masters_meta, result.phase_id.numpy(), progress=_progress)
+        if _streamed is not None:
+            _sp_patterns_for_resolve = _apply_mask(_streamed)
+
     _orientation_source = "spherical"
     _orientation_source_reason = ""
     _resolved_phase_ids = set()

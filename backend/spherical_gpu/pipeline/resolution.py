@@ -23,6 +23,7 @@ The coset machinery (:func:`extract_topk_peaks`, :func:`topk_distinct`,
 """
 from __future__ import annotations
 
+import logging
 import math
 import time
 from pathlib import Path
@@ -30,6 +31,8 @@ from pathlib import Path
 import numpy as np
 
 from ..pseudosym import same_orientation_angle_deg
+
+logger = logging.getLogger(__name__)
 
 
 def topk_distinct(
@@ -170,6 +173,24 @@ def batch_hough_orientations(
     )
     indexer = create_indexer(det, pl, prepare_reflectors(pl), nBands=12)   # build ONCE
 
+    # Force CPU band detection. This resolver runs AFTER the caller frees the
+    # spherical GPU indexer (indexing_controller does backend.invalidate() +
+    # _release_cuda_cache() first) precisely so Hough can run on the CPU — but
+    # PyEBSDIndex silently auto-uses OpenCL when PyOpenCL is present, re-engaging
+    # the SAME GPU right after a heavy torch-CUDA session. On large maps that
+    # CUDA<->OpenCL contention crashed the Hough (the resolver then fell back to
+    # the wrong raw spherical variant). This Hough only runs on the few-thousand
+    # z_rot==2 pixels, so CPU is plenty fast, deterministic, and matches the
+    # documented "Hough (CPU)" intent. Verified equivalent orientations (median
+    # 0.13 deg vs OpenCL, same fit) on real intermetallic patterns. Guarded so an
+    # older PyEBSDIndex without the toggle keeps its default.
+    try:
+        bdp = getattr(indexer, "bandDetectPlan", None)
+        if bdp is not None and hasattr(bdp, "useCPU"):
+            bdp.useCPU = True
+    except Exception:
+        pass
+
     pats = np.asarray(patterns, dtype=np.float32)
     B = pats.shape[0]
     quats = np.zeros((B, 4), dtype=np.float64)
@@ -248,12 +269,22 @@ def resolve_eulers(
                           raw_eulers=raw_eulers, progress=progress)
         eulers = np.asarray(Rotation(res["resolved"]).to_euler(), dtype=np.float64)
         return eulers, res
-    except Exception:
-        # Fail safe: never let a resolver problem break the indexing run.
+    except Exception as e:
+        # Fail safe: never let a resolver problem break the indexing run — but
+        # SURFACE the reason. Swallowing the traceback (the old behaviour) made
+        # a real Hough failure indistinguishable from "no z_rot==2 phase" and
+        # left the user staring at wrong orientations with no clue why. Log the
+        # full traceback to the backend logger AND put a concise reason on the
+        # progress line so it shows up in the app's indexing log.
+        logger.warning(
+            "Pseudo-symmetry resolution failed (point group %s); keeping raw "
+            "spherical orientations", point_group, exc_info=True)
         if progress:
             try:
-                progress("Pseudo-symmetry resolution FAILED — keeping raw "
-                         "spherical orientations (may be wrong for intermetallics)")
+                progress(
+                    f"Pseudo-symmetry resolution FAILED "
+                    f"({type(e).__name__}: {e}) — keeping raw spherical "
+                    f"orientations (intermetallic may be the wrong variant)")
             except Exception:
                 pass
         return raw_eulers, None
@@ -323,7 +354,12 @@ def resolve_eulers_multiphase(
                 pats[mask], raw[mask], cif, det_params, pg, z_rot=zr,
                 progress=progress)
         except Exception:
-            continue  # fail safe: this phase keeps raw, others proceed
+            # fail safe: this phase keeps raw, others proceed — but log why so a
+            # per-phase resolver crash is never invisible.
+            logger.warning(
+                "Pseudo-symmetry resolution raised for phase %d (%s); keeping "
+                "raw spherical for that phase", i + 1, pg, exc_info=True)
+            continue
         if res is None or np.array_equal(res, raw[mask]):
             continue  # Hough produced nothing usable for this phase → keep raw
         out[mask] = res
