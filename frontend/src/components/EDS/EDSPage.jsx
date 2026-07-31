@@ -32,6 +32,7 @@ import { useEdsLayerStack } from './hooks/useEdsLayerStack';
 import { allMapsLayersFor } from './edsLayerSources';
 import { useHoverProbe } from './hooks/useHoverProbe';
 import { useLinescan } from './hooks/useLinescan';
+import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from './hooks/useZoomViews';
 import { usePhaseMap, PhaseMapControls } from './PhaseMapPanel';
 import { exportComposite } from './compositeExporter';
 
@@ -40,6 +41,72 @@ const DISPLAY_MODES = [
   { id: 'wt_pct', labelKey: 'mode.wtPct',  tipKey: 'mode.wtPctTip' },
   { id: 'at_pct', labelKey: 'mode.atPct',  tipKey: 'mode.atPctTip' },
 ];
+
+// Zoom-view id of the composite overlay. The tiles use their layer id, so this
+// only has to be distinct from those.
+const OVERLAY_VIEW_ID = '__overlay__';
+
+/**
+ * Zoom sync switch + reset, shown in the "All Maps" header. 'All' locks every
+ * map (tiles AND the composite overlay) to one view; 'Single' gives each its
+ * own. Reset returns everything to 1x.
+ */
+function ZoomToolbar({ mode, onModeChange, onReset, resetDisabled }) {
+  const { t } = useTranslation('eds');
+  const options = [
+    { id: SYNC_ALL, label: t('allMaps.zoomSyncAll'), tip: t('allMaps.zoomSyncAllTooltip') },
+    { id: SYNC_SINGLE, label: t('allMaps.zoomSyncSingle'), tip: t('allMaps.zoomSyncSingleTooltip') },
+  ];
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={t('allMaps.zoomHint')}>
+      <span>{t('allMaps.zoomSync')}</span>
+      <div role="group" aria-label={t('allMaps.zoomSyncAriaLabel')}
+        style={{ display: 'flex', border: `1px solid ${colors.border}`, borderRadius: 4, overflow: 'hidden' }}>
+        {options.map((opt, i) => (
+          <button
+            key={opt.id}
+            onClick={() => onModeChange(opt.id)}
+            aria-pressed={mode === opt.id}
+            data-zoom-sync={opt.id}
+            title={opt.tip}
+            style={{
+              padding: '2px 8px',
+              background: mode === opt.id ? colors.purple : 'transparent',
+              color: mode === opt.id ? colors.bg : colors.textSecondary,
+              fontWeight: mode === opt.id ? 700 : 400,
+              fontSize: '8.5pt',
+              border: 'none',
+              borderLeft: i > 0 ? `1px solid ${colors.border}` : 'none',
+              cursor: 'pointer',
+              transition: 'all 0.15s',
+            }}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+      <button
+        onClick={onReset}
+        disabled={resetDisabled}
+        data-zoom-reset
+        title={t('allMaps.zoomResetTooltip')}
+        style={{
+          background: 'transparent',
+          border: `1px solid ${resetDisabled ? colors.border : colors.cyan}`,
+          color: resetDisabled ? colors.textSecondary : colors.cyan,
+          borderRadius: 4,
+          padding: '2px 8px',
+          fontSize: '8.5pt',
+          fontWeight: 600,
+          cursor: resetDisabled ? 'not-allowed' : 'pointer',
+          opacity: resetDisabled ? 0.5 : 1,
+        }}
+      >
+        {t('allMaps.zoomReset')}
+      </button>
+    </div>
+  );
+}
 
 // Mode toggle — matches EDSOverlayPanel mode_combo
 function ModeToggle({ value, onChange }) {
@@ -281,6 +348,20 @@ export default function EDSPage({ onNavigate }) {
   const [linescanMode, setLinescanMode] = useState(false);
   const [magnifierEnabled, setMagnifierEnabled] = useState(false);
   const [tileMinWidth, setTileMinWidth] = useState(240);
+
+  // Zoom for the composite overlay + every tile. 'all' (default) keeps them
+  // locked together; 'single' gives each map its own view.
+  const zoom = useZoomViews(SYNC_ALL);
+  const overlayView = zoom.viewFor(OVERLAY_VIEW_ID);
+  const onOverlayZoom = useCallback(
+    (factor, px, py) => zoom.zoomAtPointer(OVERLAY_VIEW_ID, factor, px, py),
+    [zoom],
+  );
+  const onOverlayPan = useCallback(
+    (dx, dy) => zoom.pan(OVERLAY_VIEW_ID, dx, dy),
+    [zoom],
+  );
+  const onOverlayResetView = useCallback(() => zoom.resetOne(OVERLAY_VIEW_ID), [zoom]);
 
   // Indexing-result availability gates the "+ Add Layer" options below.
   const indexingResult = useResultStore((s) => s.indexingResult);
@@ -652,6 +733,10 @@ export default function EDSPage({ onNavigate }) {
                   swipe={swipe}
                   onSwipeSplitChange={onSwipeSplitChange}
                   magnifierEnabled={magnifierEnabled}
+                  view={overlayView}
+                  onZoomAt={onOverlayZoom}
+                  onPan={onOverlayPan}
+                  onResetView={onOverlayResetView}
                 />
               </div>
             </GroupBox>
@@ -694,7 +779,14 @@ export default function EDSPage({ onNavigate }) {
               title={(
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 12 }}>
                   <span>{t('allMaps.title')}</span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '9pt', color: colors.textSecondary, fontWeight: 400 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: '9pt', color: colors.textSecondary, fontWeight: 400, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    <ZoomToolbar
+                      mode={zoom.mode}
+                      onModeChange={zoom.setMode}
+                      onReset={zoom.resetAll}
+                      resetDisabled={!zoom.anyZoomed}
+                    />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span>{t('allMaps.tileSize')}</span>
                     <input
                       type="range"
@@ -706,6 +798,7 @@ export default function EDSPage({ onNavigate }) {
                       title={t('allMaps.tileSizeTooltip', { value: tileMinWidth })}
                     />
                     <span style={{ minWidth: 40, textAlign: 'right' }}>{t('allMaps.tileSizeValue', { value: tileMinWidth })}</span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -720,6 +813,7 @@ export default function EDSPage({ onNavigate }) {
                 onRegionSelected={onRegionSelected}
                 minTileWidth={tileMinWidth}
                 emptyMessage={t('allMaps.empty')}
+                zoom={zoom}
               />
             </GroupBox>
           </div>

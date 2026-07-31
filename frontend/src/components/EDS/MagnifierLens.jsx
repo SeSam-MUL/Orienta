@@ -26,13 +26,26 @@ export default function MagnifierLens({ hostRef, pos, visible }) {
     lc.height = LENS_SIZE;
     const ctx = lc.getContext('2d');
     ctx.imageSmoothingEnabled = false;
-    const sx = pos.x - LENS_SIZE / (2 * ZOOM);
-    const sy = pos.y - LENS_SIZE / (2 * ZOOM);
     ctx.clearRect(0, 0, LENS_SIZE, LENS_SIZE);
+    // Source coordinates are derived from the canvas' ON-SCREEN rect, which
+    // already carries any zoom transform on an ancestor. That keeps the lens
+    // showing what is under the cursor when the overlay is zoomed, and also
+    // fixes the pre-zoom approximation that assumed the canvas buffer and its
+    // CSS box were the same size (they rarely are — the buffer is the map's
+    // native resolution).
+    const hostRect = host.getBoundingClientRect();
+    const canvasRect = sourceCanvas.getBoundingClientRect();
+    if (!canvasRect.width || !canvasRect.height) return;
+    const bufPerCssX = sourceCanvas.width / canvasRect.width;
+    const bufPerCssY = sourceCanvas.height / canvasRect.height;
+    const srcW = (LENS_SIZE / ZOOM) * bufPerCssX;
+    const srcH = (LENS_SIZE / ZOOM) * bufPerCssY;
+    const sx = (hostRect.left + pos.x - canvasRect.left) * bufPerCssX - srcW / 2;
+    const sy = (hostRect.top + pos.y - canvasRect.top) * bufPerCssY - srcH / 2;
     try {
       ctx.drawImage(
         sourceCanvas,
-        sx, sy, LENS_SIZE / ZOOM, LENS_SIZE / ZOOM,
+        sx, sy, srcW, srcH,
         0, 0, LENS_SIZE, LENS_SIZE,
       );
     } catch {

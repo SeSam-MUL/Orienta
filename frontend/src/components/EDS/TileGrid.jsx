@@ -1,7 +1,12 @@
 import Tile from './Tile';
 import { colors } from '../../theme/components';
 
-export default function TileGrid({ layers, bitmaps, errors, shape, onPixelClick, onRegionSelected, minTileWidth = 240, emptyMessage = 'Tick a layer in the panel on the left, or pick a preset.' }) {
+/**
+ * `zoom` (optional) is the useZoomViews handle. Left out, every tile renders
+ * unzoomed and the wheel/pan handlers stay inert — which is what the grid did
+ * before zooming existed.
+ */
+export default function TileGrid({ layers, bitmaps, errors, shape, onPixelClick, onRegionSelected, minTileWidth = 240, emptyMessage = 'Tick a layer in the panel on the left, or pick a preset.', zoom = null }) {
   const visible = layers.filter((l) => l.visible);
   if (visible.length === 0) {
     return (
@@ -39,6 +44,10 @@ export default function TileGrid({ layers, bitmaps, errors, shape, onPixelClick,
           shape={shape}
           onPixelClick={onPixelClick}
           onRegionSelected={onRegionSelected}
+          view={zoom ? zoom.viewFor(l.id) : undefined}
+          onZoomAt={zoom ? ((factor, px, py) => zoom.zoomAtPointer(l.id, factor, px, py)) : undefined}
+          onPan={zoom ? ((dx, dy) => zoom.pan(l.id, dx, dy)) : undefined}
+          onResetView={zoom ? (() => zoom.resetOne(l.id)) : undefined}
         />
       ))}
     </div>

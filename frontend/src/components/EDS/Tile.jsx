@@ -3,14 +3,40 @@ import { pointerToRowCol, rowColToContainerPx } from './mapCoords';
 import { useCursorPublisher, useCursorSync } from './CursorSyncContext';
 import { useRectangleDrag } from './hooks/useRectangleDrag';
 import { buildMaskCanvas } from '../PhaseMap/maskCanvas';
+import { IDENTITY_VIEW, isZoomed, viewToTransform, zoomedRect, wheelFactor } from './zoomView';
 import { colors } from '../../theme/components';
 
-export default function Tile({ layer, bitmap, error, shape, onPixelClick, onRegionSelected }) {
+// A drag shorter than this (in CSS px) still counts as a click, so panning a
+// zoomed tile never fires click-to-quantify by accident.
+const CLICK_SLOP_PX = 3;
+
+export default function Tile({
+  layer, bitmap, error, shape, onPixelClick, onRegionSelected,
+  view = IDENTITY_VIEW, onZoomAt, onPan, onResetView,
+}) {
   const hostRef = useRef(null);
   const canvasRef = useRef(null);
   const publish = useCursorPublisher();
   const [crosshair, setCrosshair] = useState(null);
-  const drag = useRectangleDrag({ shape, onRegion: onRegionSelected });
+
+  // Latest view + zoom callbacks in refs: the wheel listener below is attached
+  // natively (once) and the pointer handlers run at 60Hz — neither should
+  // depend on a fresh closure.
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const zoomCbRef = useRef(onZoomAt);
+  zoomCbRef.current = onZoomAt;
+
+  const drag = useRectangleDrag({
+    shape,
+    onRegion: onRegionSelected,
+    mapRect: (r) => zoomedRect(r, viewRef.current),
+  });
+
+  // Pan bookkeeping: last pointer position plus the distance travelled, which
+  // decides whether the following click counts.
+  const panRef = useRef(null);
+  const suppressClickRef = useRef(false);
 
   // Single-layer draw — no blending. Bitmap may be undefined while fetching.
   // For mask layers, `bitmap` is the SOURCE bitmap (provided by TileGrid) and
@@ -47,29 +73,88 @@ export default function Tile({ layer, bitmap, error, shape, onPixelClick, onRegi
     }
   }, [bitmap, layer.threshold, layer.kind]);
 
+  // Ctrl/Cmd + wheel zooms towards the cursor; a plain wheel is left alone so
+  // it keeps scrolling the tile grid. Attached natively because React's
+  // onWheel is passive — preventDefault() there would be ignored (and would
+  // let Electron zoom the whole app instead).
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return undefined;
+    const onWheel = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!zoomCbRef.current) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      zoomCbRef.current(
+        wheelFactor(e.deltaY),
+        (e.clientX - rect.left) / rect.width,
+        (e.clientY - rect.top) / rect.height,
+      );
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
   useCursorSync((pos) => {
     if (!shape || !pos.hovering || !hostRef.current) { setCrosshair(null); return; }
     const rect = hostRef.current.getBoundingClientRect();
-    const { x, y } = rowColToContainerPx(pos.row, pos.col, rect, shape);
+    const zr = zoomedRect(rect, viewRef.current);
+    const p = rowColToContainerPx(pos.row, pos.col, zr, shape);
+    if (!p) { setCrosshair(null); return; }
+    const x = p.x + (zr.left - rect.left);
+    const y = p.y + (zr.top - rect.top);
+    // While zoomed the synced pixel can sit outside the visible crop.
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) { setCrosshair(null); return; }
     setCrosshair({ x, y });
   });
 
   const onMove = (e) => {
     if (!shape || !hostRef.current) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, rect, shape);
+    // Pan first — it must feel immediate and does not depend on pixel mapping.
+    if (panRef.current) {
+      if (e.buttons !== 1) { panRef.current = null; }
+      else if (rect.width && rect.height) {
+        const dx = e.clientX - panRef.current.x;
+        const dy = e.clientY - panRef.current.y;
+        panRef.current = {
+          x: e.clientX, y: e.clientY,
+          moved: panRef.current.moved + Math.abs(dx) + Math.abs(dy),
+        };
+        if (panRef.current.moved > CLICK_SLOP_PX) suppressClickRef.current = true;
+        onPan?.(dx / rect.width, dy / rect.height);
+      }
+    }
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
     if (out) publish({ row: out.row, col: out.col, hovering: true, screenX: e.clientX, screenY: e.clientY });
   };
   const onLeave = (e) => {
+    panRef.current = null;
     if (!shape) return;
     publish({ row: 0, col: 0, hovering: false, screenX: e.clientX, screenY: e.clientY });
   };
+  const onDown = (e) => {
+    // Shift+drag stays the ROI tool; plain drag pans once zoomed in.
+    if (!e.shiftKey && e.button === 0 && isZoomed(viewRef.current) && onPan) {
+      panRef.current = { x: e.clientX, y: e.clientY, moved: 0 };
+      suppressClickRef.current = false;
+    }
+    drag.onPointerDown(e);
+  };
+  const onUp = (e) => {
+    panRef.current = null;
+    drag.onPointerUp(e);
+  };
   const onClick = (e) => {
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (!shape || !hostRef.current || !onPixelClick) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, rect, shape);
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
     if (out) onPixelClick(out.row, out.col);
   };
+
+  const zoomed = isZoomed(view);
 
   return (
     <div
@@ -92,20 +177,29 @@ export default function Tile({ layer, bitmap, error, shape, onPixelClick, onRegi
       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '9pt', color: colors.text, fontWeight: 600 }}>
         <span>{layer.label}</span>
         <span style={{ color: colors.textSecondary, fontSize: '7.5pt' }}>
+          {zoomed && (
+            <span data-tile-zoom-badge style={{ color: colors.accent, fontWeight: 700, marginRight: 4 }}>
+              {view.scale.toFixed(1)}×
+            </span>
+          )}
           {layer.blend} · {Math.round((layer.opacity ?? 1) * 100)}%
         </span>
       </div>
       <div
         ref={hostRef}
         data-tile-host
-        onMouseDown={drag.onPointerDown}
+        onMouseDown={onDown}
         onMouseMove={(e) => { onMove(e); drag.onPointerMove(e); }}
-        onMouseUp={drag.onPointerUp}
+        onMouseUp={onUp}
         onMouseLeave={onLeave}
         onClick={onClick}
+        onDoubleClick={() => onResetView?.()}
         style={{
           position: 'relative',
           width: '100%',
+          overflow: 'hidden',
+          borderRadius: 3,
+          cursor: zoomed ? 'grab' : 'crosshair',
           // Aspect from the bitmap's own dims so the canvas (width/height 100%)
           // is never stretched. Falls back to `shape`, then a sane default,
           // while the bitmap is still fetching.
@@ -114,16 +208,27 @@ export default function Tile({ layer, bitmap, error, shape, onPixelClick, onRegi
             : (shape ? `${shape[1]}/${shape[0]}` : '156/128'),
         }}
       >
-        <canvas
-          ref={canvasRef}
+        {/* Zoom wrapper: a CSS transform, so no canvas is ever re-drawn and
+            the pixel data stays byte-identical to the unzoomed render. */}
+        <div
+          data-tile-zoom-layer
           style={{
-            width: '100%', height: '100%',
-            imageRendering: 'pixelated',
-            borderRadius: 3,
-            opacity: Math.max(0.4, layer.opacity ?? 1),
-            background: '#000',
+            position: 'absolute', inset: 0,
+            transform: viewToTransform(view),
+            transformOrigin: '50% 50%',
+            willChange: zoomed ? 'transform' : 'auto',
           }}
-        />
+        >
+          <canvas
+            ref={canvasRef}
+            style={{
+              width: '100%', height: '100%',
+              imageRendering: 'pixelated',
+              opacity: Math.max(0.4, layer.opacity ?? 1),
+              background: '#000',
+            }}
+          />
+        </div>
         {crosshair && (
           <div
             data-tile-crosshair

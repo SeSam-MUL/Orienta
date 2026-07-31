@@ -5,13 +5,18 @@ import MagnifierLens from './MagnifierLens';
 import { pointerToRowCol, rowColToContainerPx } from './mapCoords';
 import { useCursorPublisher, useCursorSync } from './CursorSyncContext';
 import { useRectangleDrag } from './hooks/useRectangleDrag';
+import { IDENTITY_VIEW, isZoomed, viewToTransform, zoomedRect, wheelFactor } from './zoomView';
 import { colors } from '../../theme/components';
+
+// Drags shorter than this still count as a click (see Tile.jsx).
+const CLICK_SLOP_PX = 3;
 
 export default function OverlayCard({
   layers, bitmaps, bitmapVersion = 0, errors, shape, onPixelClick, onRegionSelected,
   linescanMode = false, onLineComplete,
   swipe = { a: null, b: null }, onSwipeSplitChange,
   magnifierEnabled = false,
+  view = IDENTITY_VIEW, onZoomAt, onPan, onResetView,
 }) {
   const inSwipeMode = !!(swipe?.a && swipe?.b);
   const hostRef = useRef(null);
@@ -21,19 +26,63 @@ export default function OverlayCard({
   // component so 60Hz mouse moves don't bubble up and re-render the rest of
   // the EDS page.
   const [lensPos, setLensPos] = useState(null);
-  const drag = useRectangleDrag({ shape, onRegion: onRegionSelected });
+
+  // Latest zoom view + callback in refs — the wheel listener is attached once
+  // natively and the pointer handlers must not depend on a fresh closure.
+  const viewRef = useRef(view);
+  viewRef.current = view;
+  const zoomCbRef = useRef(onZoomAt);
+  zoomCbRef.current = onZoomAt;
+
+  const drag = useRectangleDrag({
+    shape,
+    onRegion: onRegionSelected,
+    mapRect: (r) => zoomedRect(r, viewRef.current),
+  });
+
+  // Pan bookkeeping (plain drag once zoomed; shift stays ROI, linescan mode
+  // keeps the line tool).
+  const panRef = useRef(null);
+  const suppressClickRef = useRef(false);
 
   // Linescan drag state: persistent endpoints in container-relative px so the
   // line keeps showing after release until the next start.
   const [linePts, setLinePts] = useState(null);   // { x0, y0, x1, y1 }
   const lineStartRef = useRef(null);              // { row, col, x, y }
 
+  // Ctrl/Cmd + wheel zooms towards the cursor; a plain wheel is left untouched
+  // so the page keeps scrolling. Native listener because React's onWheel is
+  // passive and could not preventDefault (Electron would zoom the whole app).
+  useEffect(() => {
+    const el = hostRef.current;
+    if (!el) return undefined;
+    const onWheel = (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (!zoomCbRef.current) return;
+      e.preventDefault();
+      const rect = el.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      zoomCbRef.current(
+        wheelFactor(e.deltaY),
+        (e.clientX - rect.left) / rect.width,
+        (e.clientY - rect.top) / rect.height,
+      );
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, []);
+
   // Subscribe to cursor sync and rebuild crosshair position when a sibling
   // (Tile or another OverlayCard) publishes. shape-null → no crosshair.
   useCursorSync((pos) => {
     if (!shape || !pos.hovering || !hostRef.current) { setCrosshair(null); return; }
     const rect = hostRef.current.getBoundingClientRect();
-    const { x, y } = rowColToContainerPx(pos.row, pos.col, rect, shape);
+    const zr = zoomedRect(rect, viewRef.current);
+    const p = rowColToContainerPx(pos.row, pos.col, zr, shape);
+    if (!p) { setCrosshair(null); return; }
+    const x = p.x + (zr.left - rect.left);
+    const y = p.y + (zr.top - rect.top);
+    if (x < 0 || y < 0 || x > rect.width || y > rect.height) { setCrosshair(null); return; }
     setCrosshair({ x, y });
   });
 
@@ -43,12 +92,26 @@ export default function OverlayCard({
     if (magnifierEnabled) {
       setLensPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     }
-    const out = pointerToRowCol(e, rect, shape);
+    if (panRef.current) {
+      if (e.buttons !== 1) { panRef.current = null; }
+      else if (rect.width && rect.height) {
+        const dx = e.clientX - panRef.current.x;
+        const dy = e.clientY - panRef.current.y;
+        panRef.current = {
+          x: e.clientX, y: e.clientY,
+          moved: panRef.current.moved + Math.abs(dx) + Math.abs(dy),
+        };
+        if (panRef.current.moved > CLICK_SLOP_PX) suppressClickRef.current = true;
+        onPan?.(dx / rect.width, dy / rect.height);
+      }
+    }
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
     if (out) publish({ row: out.row, col: out.col, hovering: true, screenX: e.clientX, screenY: e.clientY });
   };
 
   const handleMouseLeave = (e) => {
     if (magnifierEnabled) setLensPos(null);
+    panRef.current = null;
     if (!shape) return;
     publish({ row: 0, col: 0, hovering: false, screenX: e.clientX, screenY: e.clientY });
   };
@@ -57,17 +120,34 @@ export default function OverlayCard({
     // Suppress the click-to-quantify when in linescan mode — a click+drag in
     // linescan mode should ONLY publish the line, never trigger pixel quantify.
     if (linescanMode) return;
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (!shape || !hostRef.current || !onPixelClick) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, rect, shape);
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
     if (out) onPixelClick(out.row, out.col);
+  };
+
+  // Plain drag pans a zoomed overlay. Shift keeps the ROI tool and linescan
+  // mode keeps the line tool, so nothing existing loses its gesture.
+  const handleMouseDown = (e) => {
+    if (linescanMode) { onLinePointerDown(e); return; }
+    if (!e.shiftKey && e.button === 0 && isZoomed(viewRef.current) && onPan) {
+      panRef.current = { x: e.clientX, y: e.clientY, moved: 0 };
+      suppressClickRef.current = false;
+    }
+    drag.onPointerDown(e);
+  };
+  const handleMouseUp = (e) => {
+    if (linescanMode) { onLinePointerUp(e); return; }
+    panRef.current = null;
+    drag.onPointerUp(e);
   };
 
   // --- Linescan drag handlers ---
   const onLinePointerDown = (e) => {
     if (!shape || !hostRef.current) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, rect, shape);
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
     if (!out) return;
     lineStartRef.current = {
       row: out.row, col: out.col,
@@ -97,7 +177,7 @@ export default function OverlayCard({
       return;
     }
     const rect = hostRef.current.getBoundingClientRect();
-    const end = pointerToRowCol(e, rect, shape);
+    const end = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
     if (end) {
       onLineComplete?.({
         start: { row: lineStartRef.current.row, col: lineStartRef.current.col },
@@ -108,18 +188,21 @@ export default function OverlayCard({
     // NB: keep `linePts` so the dashed line remains visible until next drag.
   };
 
+  const zoomed = isZoomed(view);
+
   return (
     <div
       ref={hostRef}
       data-overlay-card-host
-      onMouseDown={linescanMode ? onLinePointerDown : drag.onPointerDown}
+      onMouseDown={handleMouseDown}
       onMouseMove={(e) => {
         handleMouseMove(e);
         (linescanMode ? onLinePointerMove : drag.onPointerMove)(e);
       }}
-      onMouseUp={linescanMode ? onLinePointerUp : drag.onPointerUp}
+      onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseLeave}
       onClick={handleClick}
+      onDoubleClick={() => { if (!linescanMode) onResetView?.(); }}
       style={{
         position: 'relative',
         width: '100%',
@@ -128,24 +211,46 @@ export default function OverlayCard({
         borderRadius: 4,
         overflow: 'hidden',
         maxHeight: '55vh',
-        cursor: 'crosshair',
+        cursor: zoomed && !linescanMode ? 'grab' : 'crosshair',
       }}
     >
-      {inSwipeMode ? (
-        <SwipeCanvas
-          bitmapA={bitmaps.get(swipe.a)}
-          bitmapB={bitmaps.get(swipe.b)}
-          shape={shape}
-          splitX={swipe.splitX ?? 0.5}
-          onSplitChange={onSwipeSplitChange}
-        />
-      ) : (
-        <LayeredCanvas
-          layers={layers}
-          bitmaps={bitmaps}
-          bitmapVersion={bitmapVersion}
-          perLayerErrors={errors}
-        />
+      {/* Zoom wrapper — a CSS transform, so LayeredCanvas keeps compositing
+          exactly as before and nothing is re-rendered for a zoom. */}
+      <div
+        data-overlay-zoom-layer
+        style={{
+          position: 'absolute', inset: 0,
+          transform: viewToTransform(view),
+          transformOrigin: '50% 50%',
+          willChange: zoomed ? 'transform' : 'auto',
+        }}
+      >
+        {inSwipeMode ? (
+          <SwipeCanvas
+            bitmapA={bitmaps.get(swipe.a)}
+            bitmapB={bitmaps.get(swipe.b)}
+            shape={shape}
+            splitX={swipe.splitX ?? 0.5}
+            onSplitChange={onSwipeSplitChange}
+          />
+        ) : (
+          <LayeredCanvas
+            layers={layers}
+            bitmaps={bitmaps}
+            bitmapVersion={bitmapVersion}
+            perLayerErrors={errors}
+          />
+        )}
+      </div>
+      {zoomed && (
+        <div data-overlay-zoom-badge style={{
+          position: 'absolute', left: 6, top: 6,
+          padding: '1px 6px', borderRadius: 3,
+          background: 'rgba(0,0,0,.55)', color: colors.accent,
+          fontSize: '8pt', fontWeight: 700, pointerEvents: 'none', zIndex: 4,
+        }}>
+          {view.scale.toFixed(1)}×
+        </div>
       )}
       {crosshair && (
         <div
