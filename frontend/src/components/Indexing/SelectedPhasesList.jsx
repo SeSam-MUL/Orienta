@@ -24,6 +24,11 @@ export default function SelectedPhasesList({
   selectedDictPaths = {},
   degeneracy = { clusters: [], byPhaseIndex: {} },
   onReducePhases,
+  edsAvailable = false,
+  edsStrengths = {},
+  onStrengthChange,
+  expectedOverrides = {},
+  onExpectedChange,
 }) {
   const { t } = useTranslation('indexing');
   return (
@@ -93,6 +98,9 @@ export default function SelectedPhasesList({
                   onRemove={() => onRemovePhase && onRemovePhase(idx)}
                   onSelectDict={onSelectDict}
                   selectedDictPath={selectedDictPaths[phase.path] || ''}
+                  edsAvailable={edsAvailable}
+                  edsStrengths={edsStrengths}
+                  onStrengthChange={onStrengthChange}
                 />
               );
             }
@@ -104,6 +112,9 @@ export default function SelectedPhasesList({
                 color={color}
                 degeneracy={degeneracy.byPhaseIndex?.[idx]}
                 onRemove={() => onRemovePhase && onRemovePhase(idx)}
+                edsAvailable={edsAvailable}
+                edsStrengths={edsStrengths}
+                onStrengthChange={onStrengthChange}
                 t={t}
               />
             );
@@ -146,7 +157,7 @@ export default function SelectedPhasesList({
 // SimplePhaseCard — used for hough / spherical methods
 // ---------------------------------------------------------------------------
 
-function SimplePhaseCard({ phase, color, degeneracy, onRemove, t }) {
+function SimplePhaseCard({ phase, color, degeneracy, onRemove, edsAvailable = false, edsStrengths = {}, onStrengthChange, t }) {
   // Canonical phase-identity label (formula → structure → α/β tag) — matches the
   // Phase-Tester. Falls back to the raw formula for older/un-enriched entries.
   const displayLabel = phase?.display_label || phase?.formula || '—';
@@ -201,6 +212,26 @@ function SimplePhaseCard({ phase, color, degeneracy, onRemove, t }) {
         >
           {filename}
         </div>
+        {edsAvailable && (
+          <div style={{ marginTop: 4 }}>
+            <label
+              style={{ fontSize: '8pt', color: C.textSecondary }}
+              title={t('hoverTips.phaseEdsStrength')}
+            >
+              {t('phases.edsStrength')}: {edsStrengths[phase.path] ?? 0}%
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={edsStrengths[phase.path] ?? 0}
+              onChange={e => onStrengthChange && onStrengthChange(phase.path, Number(e.target.value))}
+              title={t('hoverTips.phaseEdsStrength')}
+              style={{ width: '100%' }}
+            />
+          </div>
+        )}
       </div>
       <button
         onClick={onRemove}

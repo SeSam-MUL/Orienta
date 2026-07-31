@@ -52,7 +52,8 @@
     "removePhase": "移除相",
     "selected": "已选",
     "cannotAdd": "无法添加 \"{{name}}\": {{method}} 标定需要 .{{ext}} 文件（实际为 .{{got}}）",
-    "skippedNoFile": "已跳过 {{count}} 个没有 .{{ext}} 文件的相（{{method}} 标定）"
+    "skippedNoFile": "已跳过 {{count}} 个没有 .{{ext}} 文件的相（{{method}} 标定）",
+    "edsStrength": "EDS 影响"
   },
   "phaseDropdown": {
     "search": "搜索相...",
@@ -307,7 +308,8 @@
     "sentToAnalysis": "已发送到分析: {{phases}} 个相，形状 {{shape}}",
     "analysisLoadFailed": "加载到分析失败: {{detail}}",
     "failedSendAnalysis": "发送到分析失败: {{error}}",
-    "gpuReleased": "GPU 已释放: 释放 {{freed}} MiB（之前 {{before}} GB，现在 {{after}} GB）",
+    "gpuReleased": "GPU 已释放: 释放 {{freed}} — 现在 {{after}} GB 可用",
+    "gpuReleasedResidual": " · 后端 GPU 显存已释放（Torch 现为 {{torch}} GB）；其余 {{used}} GB 被共享 GPU 上的其他程序占用（Windows 桌面/dwm、浏览器、Aztec …）＋ 约 1-2 GB 的 CUDA 上下文——此按钮无法释放它们",
     "gpuReleasedEvicted": " — 已驱逐 {{count}} 个缓存的相测试后端",
     "gpuReleasedPhases": " — 已清除 {{count}} 个缓存的渲染相",
     "gpuReleaseNoCuda": "GPU 释放: 无 CUDA 设备 — 无需操作",
@@ -515,6 +517,8 @@
     "qualityStandard": "标准（128）",
     "bgRemove": "BG 去除",
     "bgRemoveTip": "在对比前从实测花样中去除动态背景（与干净的模拟花样匹配 → 更好的 R/区分度）。",
+    "usePixelPc": "逐像素精确 PC",
+    "usePixelPcTip": "关闭（默认）：模拟几何使用图谱平均 PC — 逐像素点击即时响应（无需重建）。开启：使用所点击像素的精确 PC — 几何更精确，但每次点击都会重建相模型（较慢）。相排序在两种模式下都稳健；需要精确单像素检查时开启。",
     "mask": "掩膜",
     "maskRadius": "掩膜半径",
     "phasesToggle": "相（{{selected}}/{{total}}）",
@@ -631,6 +635,7 @@
     "phaseTestCancel": "取消正在运行的相测试",
     "phaseTestClearMarkers": "从比较面板中移除所有编号标记",
     "phaseTestExcludedToggle": "显示或隐藏被 EDS 化学组成筛选排除的相",
-    "matchesClearMarkers": "从比较面板中移除所有编号标记"
+    "matchesClearMarkers": "从比较面板中移除所有编号标记",
+    "phaseEdsStrength": "该相的 EDS 化学成分对相选择的影响强度（0 = 仅按花样）。"
   }
 }

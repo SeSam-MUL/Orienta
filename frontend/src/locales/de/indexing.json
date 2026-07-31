@@ -52,7 +52,8 @@
     "removePhase": "Phase entfernen",
     "selected": "gewählt",
     "cannotAdd": "\"{{name}}\" kann nicht hinzugefügt werden: {{method}}-Indizierung benötigt eine .{{ext}}-Datei (erhalten: .{{got}})",
-    "skippedNoFile": "{{count}} Phase(n) ohne .{{ext}}-Datei übersprungen ({{method}}-Indizierung)"
+    "skippedNoFile": "{{count}} Phase(n) ohne .{{ext}}-Datei übersprungen ({{method}}-Indizierung)",
+    "edsStrength": "EDS-Einfluss"
   },
   "phaseDropdown": {
     "search": "Phase suchen...",
@@ -307,7 +308,8 @@
     "sentToAnalysis": "An Analyse gesendet: {{phases}} Phase(n), Form {{shape}}",
     "analysisLoadFailed": "Laden in Analyse fehlgeschlagen: {{detail}}",
     "failedSendAnalysis": "Senden an Analyse fehlgeschlagen: {{error}}",
-    "gpuReleased": "GPU freigegeben: {{freed}} MiB freigegeben (vorher {{before}} GB, jetzt {{after}} GB)",
+    "gpuReleased": "GPU freigegeben: {{freed}} freigegeben — jetzt {{after}} GB frei",
+    "gpuReleasedResidual": " · Backend-GPU-Speicher freigegeben (Torch jetzt {{torch}} GB); {{used}} GB belegen andere Programme auf der geteilten GPU (Windows-Desktop/dwm, Browser, Aztec …) + der ~1-2 GB CUDA-Kontext — die kann dieser Button nicht freigeben",
     "gpuReleasedEvicted": " — {{count}} gecachte Phasentest-Backend(s) entfernt",
     "gpuReleasedPhases": " — {{count}} gecachte Render-Phase(n) geräumt",
     "gpuReleaseNoCuda": "GPU-Freigabe: kein CUDA-Gerät — nichts zu tun",
@@ -515,6 +517,8 @@
     "qualityStandard": "Standard (128)",
     "bgRemove": "BG entfernen",
     "bgRemoveTip": "Dynamischen Hintergrund vor dem Vergleich aus dem gemessenen Muster entfernen (passt zum sauberen simulierten Muster → besseres R/Trennung).",
+    "usePixelPc": "Exakter per-Pixel-PC",
+    "usePixelPcTip": "AUS (Standard): Karten-Mittel-PC für die simulierte Geometrie — Durchklicken der Pixel ist sofort (kein Rebuild). AN: exakter PC des geklickten Pixels — genauere Geometrie, baut aber die Phasenmodelle bei jedem Klick neu (langsamer). Die Phasen-Rangfolge ist so oder so robust; AN für eine präzise Einzel-Pixel-Prüfung.",
     "mask": "Maske",
     "maskRadius": "Maskenradius",
     "phasesToggle": "Phasen ({{selected}}/{{total}})",
@@ -631,6 +635,7 @@
     "phaseTestCancel": "Den laufenden Phasentest abbrechen",
     "phaseTestClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
     "phaseTestExcludedToggle": "Vom EDS-Chemie-Filter ausgeschlossene Phasen ein- oder ausblenden",
-    "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen"
+    "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
+    "phaseEdsStrength": "Wie stark die EDS-Chemie dieser Phase die Phasenwahl beeinflusst (0 = nur Muster)."
   }
 }

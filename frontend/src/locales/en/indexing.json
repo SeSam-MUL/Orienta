@@ -52,7 +52,8 @@
     "removePhase": "Remove phase",
     "selected": "selected",
     "cannotAdd": "Cannot add \"{{name}}\": {{method}} indexing needs a .{{ext}} file (got .{{got}})",
-    "skippedNoFile": "Skipped {{count}} phase(s) without a .{{ext}} file ({{method}} indexing)"
+    "skippedNoFile": "Skipped {{count}} phase(s) without a .{{ext}} file ({{method}} indexing)",
+    "edsStrength": "EDS influence"
   },
   "phaseDropdown": {
     "search": "Search phase...",
@@ -307,7 +308,8 @@
     "sentToAnalysis": "Sent to Analysis: {{phases}} phase(s), shape {{shape}}",
     "analysisLoadFailed": "Analysis load failed: {{detail}}",
     "failedSendAnalysis": "Failed to send to Analysis: {{error}}",
-    "gpuReleased": "GPU released: {{freed}} MiB freed (was {{before}} GB, now {{after}} GB)",
+    "gpuReleased": "GPU released: {{freed}} freed — {{after}} GB now free",
+    "gpuReleasedResidual": " · backend GPU memory released (torch now {{torch}} GB); {{used}} GB still used on the shared GPU by other programs (Windows desktop/dwm, browsers, Aztec …) + the ~1-2 GB CUDA context — this button can't free those",
     "gpuReleasedEvicted": " — evicted {{count}} cached phase-test backend(s)",
     "gpuReleasedPhases": " — cleared {{count}} cached render phase(s)",
     "gpuReleaseNoCuda": "GPU release: no CUDA device — nothing to do",
@@ -515,6 +517,8 @@
     "qualityStandard": "Standard (128)",
     "bgRemove": "BG remove",
     "bgRemoveTip": "Remove the dynamic background from the measured pattern before comparison (matches the clean simulated pattern → better R/discrimination).",
+    "usePixelPc": "Exact per-pixel PC",
+    "usePixelPcTip": "OFF (default): use the map-mean PC for the simulated geometry — clicking through pixels is instant (no rebuild). ON: use the exact PC of the clicked pixel — more accurate geometry, but rebuilds the phase models each click (slower). Phase ranking is robust either way; turn ON for a precise single-pixel check.",
     "mask": "Mask",
     "maskRadius": "Mask radius",
     "phasesToggle": "Phases ({{selected}}/{{total}})",
@@ -631,6 +635,7 @@
     "phaseTestCancel": "Cancel the running phase test",
     "phaseTestClearMarkers": "Remove all numbered markers from the comparison panels",
     "phaseTestExcludedToggle": "Show or hide phases excluded by the EDS chemistry filter",
-    "matchesClearMarkers": "Remove all numbered markers from the comparison panels"
+    "matchesClearMarkers": "Remove all numbered markers from the comparison panels",
+    "phaseEdsStrength": "How strongly this phase's EDS chemistry biases the phase choice (0 = pattern only)."
   }
 }

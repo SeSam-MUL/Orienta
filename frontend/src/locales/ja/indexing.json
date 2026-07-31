@@ -52,7 +52,8 @@
     "removePhase": "相を削除",
     "selected": "選択済み",
     "cannotAdd": "\"{{name}}\" を追加できません: {{method}} 指数付けには .{{ext}} ファイルが必要です（.{{got}} を取得）",
-    "skippedNoFile": ".{{ext}} ファイルのない {{count}} 相をスキップしました（{{method}} 指数付け）"
+    "skippedNoFile": ".{{ext}} ファイルのない {{count}} 相をスキップしました（{{method}} 指数付け）",
+    "edsStrength": "EDS の影響"
   },
   "phaseDropdown": {
     "search": "相を検索...",
@@ -307,7 +308,8 @@
     "sentToAnalysis": "解析へ送信: {{phases}} 相、形状 {{shape}}",
     "analysisLoadFailed": "解析への読み込み失敗: {{detail}}",
     "failedSendAnalysis": "解析への送信に失敗: {{error}}",
-    "gpuReleased": "GPU 解放: {{freed}} MiB 解放（前 {{before}} GB、現 {{after}} GB）",
+    "gpuReleased": "GPU 解放: {{freed}} 解放 — 現在 {{after}} GB 空き",
+    "gpuReleasedResidual": " · バックエンドの GPU メモリは解放済み（Torch は現在 {{torch}} GB）。残り {{used}} GB は共有 GPU 上の他プログラム（Windows デスクトップ/dwm、ブラウザ、Aztec …）＋ 約 1-2 GB の CUDA コンテキストが使用中で、このボタンでは解放できません",
     "gpuReleasedEvicted": " — キャッシュ済み相テストバックエンド {{count}} 件を削除",
     "gpuReleasedPhases": " — キャッシュ済みレンダー相 {{count}} 件をクリア",
     "gpuReleaseNoCuda": "GPU 解放: CUDA デバイスなし — 何もしません",
@@ -515,6 +517,8 @@
     "qualityStandard": "標準（128）",
     "bgRemove": "BG 除去",
     "bgRemoveTip": "比較前に実測パターンから動的背景を除去します（クリーンなシミュレートパターンに一致 → R/識別が向上）。",
+    "usePixelPc": "ピクセルごとの正確なPC",
+    "usePixelPcTip": "OFF（既定）：シミュレート形状にマップ平均PCを使用 — ピクセルをクリックしても即座（再構築なし）。ON：クリックしたピクセルの正確なPCを使用 — 形状はより正確だが、クリックごとに相モデルを再構築（低速）。相のランキングはどちらでも頑健。単一ピクセルの精密確認時にONにしてください。",
     "mask": "マスク",
     "maskRadius": "マスク半径",
     "phasesToggle": "相（{{selected}}/{{total}}）",
@@ -631,6 +635,7 @@
     "phaseTestCancel": "実行中の相テストをキャンセルします",
     "phaseTestClearMarkers": "比較パネルからすべての番号付きマーカーを削除します",
     "phaseTestExcludedToggle": "EDS 化学組成フィルタで除外された相を表示/非表示します",
-    "matchesClearMarkers": "比較パネルからすべての番号付きマーカーを削除します"
+    "matchesClearMarkers": "比較パネルからすべての番号付きマーカーを削除します",
+    "phaseEdsStrength": "この相の EDS 化学組成が相の選択にどれだけ強く影響するか（0 = パターンのみ）。"
   }
 }

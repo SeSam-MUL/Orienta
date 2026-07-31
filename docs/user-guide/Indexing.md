@@ -147,3 +147,32 @@ Typical entry points:
   width outside EMSphInx's valid range, the backend auto-substitutes a pixel size
   (and logs it). Set a real pixel size in PC Refinement for physically accurate
   geometry.
+
+## EDS-guided phase assignment (e.g. Al vs Si)
+
+Some phases are almost identical crystallographically but clearly different
+chemically — the classic case being **fcc Al and diamond-cubic Si**, both cubic
+with the same symmetry. Their Kikuchi patterns look nearly the same, so
+pattern-only indexing often labels Si particles as Al. When the loaded file has
+**EDS**, you can let the local chemistry break the tie.
+
+- Each selected phase gets an **"EDS influence" slider** (0–100 %). It only appears
+  when EDS is available for the active file.
+- **Default is 0 % for every phase**, which means *no change* — indexing is exactly
+  as it was. Turn a phase up (e.g. set **Si** to 50–75 %) to have its EDS chemistry
+  bias the phase choice **toward the chemically-consistent phase without overriding
+  a clear pattern match**. It acts strongest exactly where the pattern is ambiguous.
+- It works for **Spherical, Dictionary, and Hough** (a chemistry-active multi-CIF
+  Hough run indexes each phase separately, so it is slower — only enabled when a
+  strength is set).
+- The expected composition comes from each phase's **formula** automatically; you
+  do not need to enter anything.
+- After the run, the log reports **`EDS chemistry prior: adjusted N pixels`** — how
+  many pixels the chemistry moved off the pattern-only choice.
+- **No EDS, or all sliders at 0 ⇒ bit-identical** to standard indexing.
+
+Practical tip: leave well-behaved phases at 0 and only raise the discriminating
+element (Si here). The chemistry is a **tie-breaker**, not an override — it
+resolves ambiguous pixels but cannot invent a phase whose pattern is absent.
+Because EDS is spatially coarser than EBSD, compositions at particle edges are
+mixed; the soft weighting is designed to tolerate this.

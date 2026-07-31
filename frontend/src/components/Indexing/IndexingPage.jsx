@@ -1380,6 +1380,10 @@ export default function IndexingPage({ isActive }) {
   const [phasePanelOpen, setPhasePanelOpen]       = useState(false);
   const [selectedDictPaths, setSelectedDictPaths] = useState({}); // { masterPath: dictPath }
 
+  // --- EDS chemistry prior (per-phase influence at indexing) ---
+  const [edsStrengths, setEdsStrengths]                 = useState({}); // { [phase.path]: 0..100 }
+  const [edsExpectedOverrides, setEdsExpectedOverrides] = useState({}); // { [phase.path]: {El:atPct} } (editor deferred)
+
   // --- Required files ---
   const [discoveredFiles, setDiscoveredFiles] = useState([]);
   const [fileInput, setFileInput]       = useState('');    // typed / selected path
@@ -1779,6 +1783,10 @@ export default function IndexingPage({ isActive }) {
     // Clear files from previous method — can't use .sht for Dictionary etc.
     setPhaseFiles([]);
     setPhases([]);
+    // Drop any per-phase EDS strengths/overrides — their phase.path keys belong
+    // to the just-cleared list and must not linger into the new method's run.
+    setEdsStrengths({});
+    setEdsExpectedOverrides({});
     setPhaseDropdownOpen(false);
     setFileInput('');
     setFileStatus(t('phases.noFileLoaded'));
@@ -1884,6 +1892,7 @@ export default function IndexingPage({ isActive }) {
       const newPhases = phases.filter(p => p.path !== path);
       setPhaseFiles(newPaths);
       setPhases(newPhases);
+      pruneEdsMaps(newPhases);
       if (newPhases.length === 0) {
         setPhaseInfo(t('pcPhase.notLoaded'));
         setFileStatus(t('phases.noFileLoaded'));
@@ -1942,6 +1951,7 @@ export default function IndexingPage({ isActive }) {
     const newPhases = filteredPaths.map(p => discoveredFiles.find(f => f.path === p)).filter(Boolean);
     setPhaseFiles(filteredPaths);
     setPhases(newPhases);
+    pruneEdsMaps(newPhases);
     if (newPhases.length === 0) {
       setPhaseInfo(t('pcPhase.notLoaded'));
       setFileStatus(t('phases.noFileLoaded'));
@@ -1968,6 +1978,17 @@ export default function IndexingPage({ isActive }) {
     [phases],
   );
 
+  // Keep the per-phase EDS chemistry-prior maps in sync with the surviving
+  // phase set: drop any phase.path key that is no longer selected so a removed
+  // phase can never leak a stale strength into buildParams()'s payload. Called
+  // with [] this clears everything; called with newPhases it prunes surgically
+  // and preserves the strengths of phases that remain.
+  function pruneEdsMaps(keepPhases) {
+    const keep = new Set((keepPhases || []).map(p => p.path));
+    setEdsStrengths(s => Object.fromEntries(Object.entries(s).filter(([k]) => keep.has(k))));
+    setEdsExpectedOverrides(o => Object.fromEntries(Object.entries(o).filter(([k]) => keep.has(k))));
+  }
+
   // Remove several phases at once (used by the "reduce to one" banner action).
   // phases[] and phaseFiles[] are kept index-aligned by handleTogglePath /
   // handleSetAllPaths, so a positional filter is safe.
@@ -1978,6 +1999,7 @@ export default function IndexingPage({ isActive }) {
     const newPaths = phaseFiles.filter((_, i) => !removeSet.has(i));
     setPhases(newPhases);
     setPhaseFiles(newPaths);
+    pruneEdsMaps(newPhases);
     if (newPhases.length === 0) {
       setPhaseInfo(t('pcPhase.notLoaded'));
       setFileStatus(t('phases.noFileLoaded'));
@@ -2145,6 +2167,13 @@ export default function IndexingPage({ isActive }) {
       allFiles = allFiles.map(f => selectedDictPaths[f] || f);
     }
 
+    // Same substitution as `allFiles` above, as a per-key function — so the EDS
+    // maps (keyed on phase.path) get re-keyed to whatever path actually lands in
+    // cif_paths/master_h5_paths/sht_paths. For Dictionary that's the selected
+    // dictionary path; for Hough/Spherical it's phase.path unchanged.
+    const edsRemapPath = p =>
+      (method === 'dictionary' && selectedDictPaths[p]) ? selectedDictPaths[p] : p;
+
     const common = {
       method,
       dataset: selectedDataset || undefined,
@@ -2157,6 +2186,22 @@ export default function IndexingPage({ isActive }) {
       // selection_mode + mask on the backend, so we still ship those
       // for the legacy/non-phasemap codepath.
       use_phase_map_routing: phaseMapRoutingAvailable && usePhaseMapRouting,
+      // EDS chemistry prior (per-phase) — only shipped when EDS is available AND
+      // the user actually moved a strength slider above 0. Off by default ⇒ the
+      // keys are absent and the payload is byte-identical to before this feature.
+      // The maps are keyed on phase.path, but for Dictionary we substitute the
+      // selected dictionary path into master_h5_paths (mirrors the allFiles map
+      // above). The backend iterates those substituted paths and looks up the
+      // strength by that key, so we re-key through the SAME substitution here or
+      // every dictionary lookup would miss and the prior would silently drop.
+      ...(edsOverlayAvailable && Object.values(edsStrengths).some(v => v > 0) ? {
+        eds_phase_strengths: Object.fromEntries(
+          Object.entries(edsStrengths)
+            .filter(([, v]) => v > 0)
+            .map(([p, v]) => [edsRemapPath(p), Number(v) / 100])),
+        eds_expected_overrides: Object.fromEntries(
+          Object.entries(edsExpectedOverrides).map(([p, d]) => [edsRemapPath(p), d])),
+      } : {}),
       ...selectionParams,
     };
 
@@ -2565,6 +2610,11 @@ export default function IndexingPage({ isActive }) {
           })()}
           onSelectDict={handleSelectDict}
           selectedDictPaths={selectedDictPaths}
+          edsAvailable={edsOverlayAvailable}
+          edsStrengths={edsStrengths}
+          onStrengthChange={(path, v) => setEdsStrengths(s => ({ ...s, [path]: v }))}
+          expectedOverrides={edsExpectedOverrides}
+          onExpectedChange={(path, d) => setEdsExpectedOverrides(o => ({ ...o, [path]: d }))}
         />
         <StatusLabel color={fileStatusColor} style={{ marginTop: 4 }}>{fileStatus}</StatusLabel>
       </GroupBox>
@@ -2926,9 +2976,28 @@ export default function IndexingPage({ isActive }) {
                   total_vram_gb: runtimeInfo?.total_vram_gb || 0,
                   low_vram_warning: (d.free_after_gb || 0) < 1.0,
                 });
-                log(t('messages.gpuReleased', { freed: d.freed_mb, before: d.free_before_gb, after: d.free_after_gb })
+                // freed_mb is measured before any eviction, so it's the honest
+                // total; show it in GB once it's ≥1 GB. The residual note is
+                // honest about WHY the card isn't at 0 used: after release the
+                // backend holds ~0 (torch_reserved_after_gb); the rest is the
+                // GPU shared with other programs (Windows dwm/compositor,
+                // browsers, Aztec, …) + the ~1-2 GB CUDA context — none of which
+                // this button can free. Earlier this was mislabelled "CUDA
+                // context", which made a shared-GPU situation look like a leak.
+                const freedMb = d.freed_mb || 0;
+                const freedStr = freedMb >= 1024
+                  ? `${(freedMb / 1024).toFixed(2)} GB`
+                  : `${Math.round(freedMb)} MiB`;
+                const residual = (d.used_after_gb != null)
+                  ? t('messages.gpuReleasedResidual', {
+                      used: d.used_after_gb,
+                      torch: d.torch_reserved_after_gb != null ? d.torch_reserved_after_gb : 0,
+                    })
+                  : '';
+                log(t('messages.gpuReleased', { freed: freedStr, after: d.free_after_gb })
                   + (d.backends_evicted ? t('messages.gpuReleasedEvicted', { count: d.backends_evicted }) : '')
-                  + (d.render_phases_cleared ? t('messages.gpuReleasedPhases', { count: d.render_phases_cleared }) : ''));
+                  + (d.render_phases_cleared ? t('messages.gpuReleasedPhases', { count: d.render_phases_cleared }) : '')
+                  + residual);
               } else {
                 log(t('messages.gpuReleaseNoCuda'));
               }

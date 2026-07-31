@@ -112,6 +112,10 @@ class IndexingConfig:
     col_start: int = 0
     col_end: int = -1
 
+    # EDS chemistry prior (per-phase, keyed by phase file path). Empty => off.
+    eds_phase_strengths: Dict[str, float] = field(default_factory=dict)
+    eds_expected_overrides: Dict[str, dict] = field(default_factory=dict)
+
 
 @dataclass
 class IndexingResult:
@@ -192,6 +196,7 @@ class ComparisonResult:
     consensus_map: Optional[np.ndarray] = None  # (n_rows, n_cols) majority-vote phase
     eds_counts: Optional[Dict] = None
     phase_compositions: Optional[Dict] = None
+    n_eds_adjusted: int = 0  # pixels whose winner flipped due to EDS phase_weights
 
 
 def discover_files_for_method(
@@ -638,7 +643,16 @@ def hough_index_patterns(
     else:
         _progress(f"Hough: extracting {n_selected} selected patterns (out of {n_rows*n_cols})...", 0.35)
         with timed_step(f"Hough: extract {n_selected} patterns"):
-            patterns = signal.data[selection_mask]  # (n_selected, sig_h, sig_w)
+            # Reshape to (n_total, H, W) and select by integer positions rather
+            # than `signal.data[selection_mask]`: a 2-D boolean mask indexing a
+            # 4-D LAZY (dask) array is mishandled by dask (it treats the mask's
+            # total size as a 1-D index over axis 0 → "Boolean array with size
+            # n_rows*n_cols is not long enough for axis 0 with size n_rows").
+            # Integer fancy-indexing over the flattened nav axis is dask-safe and
+            # preserves row-major order (matches the mask ravel + back-mapping).
+            sig_shape = signal.data.shape[2:]
+            _sel_idx = np.where(np.asarray(selection_mask, dtype=bool).ravel())[0]
+            patterns = signal.data.reshape((-1,) + sig_shape)[_sel_idx]  # (n_selected, H, W)
             nav_shape = (n_selected,)
             is_partial = True
     _check_cancel()
@@ -1836,6 +1850,7 @@ def spherical_gpu_index_patterns(
     progress_callback=None,
     sht_paths: Optional[List[str]] = None,
     cancel_check=None,
+    phase_weights: Optional[np.ndarray] = None,
 ) -> IndexingResult:
     """Run Spherical Indexing via the in-process PyTorch GPU pipeline.
 
@@ -2120,6 +2135,7 @@ def spherical_gpu_index_patterns(
                 patterns=_sp_patterns_for_resolve,
                 detector_params=detector_params,
                 progress_callback=_bcb,
+                phase_weights=phase_weights,
             )
         elif processed is not None:
             # Full grid, viewer pre-processing applied.
@@ -2128,12 +2144,14 @@ def spherical_gpu_index_patterns(
                 patterns=_sp_patterns_for_resolve,
                 detector_params=detector_params,
                 progress_callback=_bcb,
+                phase_weights=phase_weights,
             )
         else:
             result = backend.index_h5(
                 h5_path=h5_path,
                 detector_params=detector_params,
                 progress_callback=_bcb,
+                phase_weights=phase_weights,
             )
         # Snapshot only the small metadata fields we need to build the
         # CrystalMap's PhaseList. CRITICAL: do NOT keep references to the
@@ -2450,6 +2468,9 @@ def spherical_gpu_index_patterns(
             "device_name": backend.runtime.device_name,
             "orientation_source": _orientation_source,
             "orientation_source_reason": _orientation_source_reason,
+            # EDS chemistry prior: pixels whose winning phase flipped vs the
+            # unweighted argmax (0 when the prior is off — see Task 3/8).
+            "eds_n_adjusted": int(getattr(result, "n_adjusted", 0)),
             # Map-wide variant unification provenance (per resolved phase):
             # grain count, flipped/ambiguous/rescued totals + per-grain
             # decisions (mode, margin, centroid) for the UI / diagnostics.
@@ -3596,12 +3617,25 @@ def run_single_phase_method(
     )
 
 
-def compute_comparison_maps(comparison: ComparisonResult) -> ComparisonResult:
+def compute_comparison_maps(
+    comparison: ComparisonResult,
+    phase_weights: Optional[np.ndarray] = None,
+) -> ComparisonResult:
     """Compute best_phase_per_pixel and consensus_map from all results.
 
     For each pixel:
     - best_phase_per_pixel: phase with highest score across ALL (phase, method) combos
     - consensus_map: phase that wins in majority of methods (majority vote)
+
+    Parameters
+    ----------
+    phase_weights : np.ndarray | None
+        Optional (n_phases, n_pixels) multiplier applied to ``scores_3d``
+        before the winner argmax. Row ``i`` corresponds to phase index ``i``
+        (phase-id order); columns are in full-grid raveled pixel order — the
+        SAME order ``score_map_2d.ravel()`` produces. When ``None`` (default)
+        this function is byte-for-byte identical to its previous behaviour and
+        ``ComparisonResult.n_eds_adjusted`` stays 0.
     """
     n_rows, n_cols = comparison.original_shape
     n_phases = len(comparison.phases)
@@ -3626,6 +3660,20 @@ def compute_comparison_maps(comparison: ComparisonResult) -> ComparisonResult:
         if pmr.score_map_2d is not None:
             scores_3d[pi, mi, :] = pmr.score_map_2d.ravel()
 
+    # Optional EDS chemistry prior: reweight scores per phase before the
+    # winner argmax. Bit-identical when phase_weights is None (block skipped).
+    _base = None
+    if phase_weights is not None:
+        pw = np.asarray(phase_weights, dtype=np.float64)   # (P, n_pixels)
+        # Unweighted winner (baseline), for the adjusted-count comparison.
+        _flat0 = scores_3d.reshape(n_phases * n_methods, n_pixels)
+        _has0 = ~np.all(np.isnan(_flat0), axis=0)
+        _base = np.full(n_pixels, -1, dtype=int)
+        if _has0.any():
+            with np.errstate(invalid='ignore'):
+                _base[_has0] = np.nanargmax(_flat0[:, _has0], axis=0) // n_methods
+        scores_3d = scores_3d * pw[:, None, :]   # broadcast over methods; NaN*w=NaN
+
     # Best phase per pixel: highest score across all (phase, method) combos
     # Reshape to (n_phases * n_methods, n_pixels)
     flat_scores = scores_3d.reshape(n_phases * n_methods, n_pixels)
@@ -3637,6 +3685,11 @@ def compute_comparison_maps(comparison: ComparisonResult) -> ComparisonResult:
             best_flat_idx = np.nanargmax(flat_scores[:, has_data], axis=0)
         best_phase_flat[has_data] = best_flat_idx // n_methods
     comparison.best_phase_per_pixel = best_phase_flat.reshape(n_rows, n_cols)
+
+    # Count pixels whose winner flipped due to the EDS reweight (both >= 0).
+    if _base is not None:
+        comparison.n_eds_adjusted = int(np.sum(
+            (best_phase_flat >= 0) & (_base >= 0) & (best_phase_flat != _base)))
 
     # Consensus map: for each pixel, which phase wins in majority of methods?
     # Per method, find the best phase

@@ -213,6 +213,7 @@ class IndexResult:
     score: torch.Tensor           # (N,) float32 correlation peak, on CPU
     phase_id: torch.Tensor        # (N,) int8 (1-indexed phase), on CPU
     runtime_seconds: float
+    n_adjusted: int = 0           # pixels whose winner changed vs the unweighted argmax (EDS prior)
 
 
 class Tier1Indexer:

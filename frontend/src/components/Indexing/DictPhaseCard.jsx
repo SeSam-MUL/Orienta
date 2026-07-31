@@ -73,7 +73,7 @@ function selectBestDict(dicts, currentPc) {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function DictPhaseCard({ phase, allFiles = [], currentPc = null, color, onRemove, onSelectDict, selectedDictPath }) {
+export default function DictPhaseCard({ phase, allFiles = [], currentPc = null, color, onRemove, onSelectDict, selectedDictPath, edsAvailable = false, edsStrengths = {}, onStrengthChange }) {
   const { t } = useTranslation('indexing');
   const formula      = (phase?.formula || '').toLowerCase();
   const formulaLabel = phase?.formula  || '—';
@@ -152,6 +152,28 @@ export default function DictPhaseCard({ phase, allFiles = [], currentPc = null, 
           ×
         </button>
       </div>
+
+      {/* ---- EDS chemistry-prior strength (only when EDS is available) ---- */}
+      {edsAvailable && (
+        <div style={{ padding: '2px 8px 4px 12px' }}>
+          <label
+            style={{ fontSize: '8pt', color: C.textSecondary }}
+            title={t('hoverTips.phaseEdsStrength')}
+          >
+            {t('phases.edsStrength')}: {edsStrengths[phase.path] ?? 0}%
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={edsStrengths[phase.path] ?? 0}
+            onChange={e => onStrengthChange && onStrengthChange(phase.path, Number(e.target.value))}
+            title={t('hoverTips.phaseEdsStrength')}
+            style={{ width: '100%' }}
+          />
+        </div>
+      )}
 
       {/* ---- Master Pattern row ---- */}
       <MasterRow entry={masterEntry} t={t} />

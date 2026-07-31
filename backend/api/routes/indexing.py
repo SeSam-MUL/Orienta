@@ -509,15 +509,53 @@ def _build_phase_configs(req):
             sht_path=p if req.method == 'spherical' else '',
         )
 
-        # For Hough: load phase from CIF
+        # For Hough: load phase from CIF. hough_index_patterns treats
+        # phase_list as an iterable PhaseList (e.g. len(list(phase_list))), so
+        # wrap the single Phase in a PhaseList — a bare Phase is not iterable
+        # ("'Phase' object is not iterable"). This path is exercised by the
+        # per-phase Hough split (EDS chemistry prior); the native multi-CIF
+        # Hough call already builds a PhaseList itself.
         if req.method == 'hough':
-            from orix.crystal_map import Phase
+            from orix.crystal_map import Phase, PhaseList
             from ebsd_utils import sanitize_cif
-            pc.phase_list = Phase.from_cif(sanitize_cif(p))
+            pc.phase_list = PhaseList(Phase.from_cif(sanitize_cif(p)))
 
         configs.append(pc)
 
     return configs
+
+
+def _phase_formulas_for_paths(paths: list[str]) -> list[str]:
+    """Best-effort formula per phase file (for expected composition)."""
+    from pathlib import Path as _P
+    from phase_metadata import get_phase_metadata
+    out = []
+    for p in paths:
+        try:
+            meta = get_phase_metadata(_P(p))
+            out.append(getattr(meta, "formula", "") or "")
+        except Exception:
+            out.append("")
+    return out
+
+
+def _build_eds_phase_weights(req, method_paths, selection_mask, full_grid_order: bool):
+    """(P, N) weight matrix or None. full_grid_order=True builds N over the whole nav
+    grid (Dictionary/Hough merge); False builds N over the selected pattern stack
+    (Spherical). None when no EDS or every strength is 0."""
+    from backend.api.services.eds_indexing_prior import (
+        expected_at_pct_for_phases, chemistry_weight_matrix, measured_atpct_per_pixel,
+    )
+    strengths = [float(req.eds_phase_strengths.get(p, 0.0)) for p in method_paths]
+    if not any(s > 0.0 for s in strengths):
+        return None
+    sel = None if full_grid_order else selection_mask
+    measured = measured_atpct_per_pixel(sel)
+    if measured is None:
+        return None
+    overrides = [req.eds_expected_overrides.get(p) for p in method_paths]
+    expected = expected_at_pct_for_phases(_phase_formulas_for_paths(method_paths), overrides)
+    return chemistry_weight_matrix(measured, expected, strengths)
 
 
 def get_last_indexing_result():
@@ -661,13 +699,18 @@ def _bg_remove_phase_test(exp):
         return np.asarray(exp, dtype=np.float32)
 
 
-def _get_detector_for_phase_test(pixel_index=None):
+def _get_detector_for_phase_test(pixel_index=None, use_pixel_pc=False):
     """Return (calibration_entry, det_params) for the active dataset, or
     (None, None) if no detector is registered.
 
-    When ``pixel_index`` is given and the active dataset carries a per-pixel PC
-    map, det_params uses the PC at THAT pixel (F3 tested-pixel); otherwise the
-    map mean (or the single PC)."""
+    When ``use_pixel_pc`` is True and ``pixel_index`` is given and the active
+    dataset carries a per-pixel PC map, det_params uses the PC at THAT pixel
+    (most accurate geometry, but a different PC per pixel forces a full backend
+    rebuild each click). By default (``use_pixel_pc=False``) it uses the map
+    mean (or the single PC) — a STABLE PC so consecutive pixel clicks reuse the
+    cached per-phase backend instead of rebuilding it. Phase identification (the
+    ranking) is robust to the small neighbour-to-neighbour PC drift, so stable
+    is the sensible default; the measured pattern is still read per-pixel."""
     from backend.api.routes.ebsd_viewer import _active_dataset, _ebsd_file_path
     from backend.api.services.calibration_store import calibration_store
     detector = calibration_store.get_detector(_active_dataset)
@@ -676,7 +719,7 @@ def _get_detector_for_phase_test(pixel_index=None):
         return None, None
     signal = _get_active_signal_for_phase_test()
     pixel_rc = None
-    if pixel_index is not None and signal is not None:
+    if use_pixel_pc and pixel_index is not None and signal is not None:
         try:
             n_cols = int(signal.axes_manager.navigation_shape[0])
             if n_cols > 0:
@@ -798,6 +841,10 @@ class IndexingStartRequest(BaseModel):
     # request.
     use_phase_map_routing: bool = False
 
+    # EDS chemistry prior — {phase_file_path: strength 0..1} and {phase_file_path: {El: at%}}
+    eds_phase_strengths: Dict[str, float] = {}
+    eds_expected_overrides: Dict[str, Dict[str, float]] = {}
+
 
 class SinglePixelPhaseTestRequest(BaseModel):
     pixel_index: int = Field(..., ge=0)
@@ -808,6 +855,16 @@ class SinglePixelPhaseTestRequest(BaseModel):
     max_bandwidth: int = Field(128, ge=64, le=512)
     phase_keys: Optional[list[str]] = None
     bg_remove: bool = True
+    # PC used for the simulated-pattern geometry. Default False → the dataset's
+    # map-mean / single PC (STABLE across pixels): clicking a different pixel
+    # then reuses the cached per-phase backend instead of rebuilding the
+    # PC-dependent normalized-correlator denominator (~1 s/phase) every click.
+    # The measured pattern is still read at the clicked pixel; only the geometry
+    # PC is held stable. True → the exact per-pixel PC (more accurate geometry,
+    # but forces a full rebuild per pixel). Phase IDENTIFICATION (the ranking) is
+    # robust to the small neighbour-to-neighbour PC drift, so stable is the
+    # sensible default; power users flip it on for a precise single-pixel check.
+    use_pixel_pc: bool = False
 
 
 class PhaseTestRemaskRequest(BaseModel):
@@ -941,6 +998,8 @@ async def start_indexing(req: IndexingStartRequest):
                 row_end=req.row_end,
                 col_start=req.col_start,
                 col_end=req.col_end,
+                eds_phase_strengths=dict(req.eds_phase_strengths or {}),
+                eds_expected_overrides=dict(req.eds_expected_overrides or {}),
             )
 
             if req.sht_paths:
@@ -1223,6 +1282,15 @@ async def start_indexing(req: IndexingStartRequest):
                         f"Spherical-GPU multi-phase: {req.sht_paths and len(req.sht_paths) or 0} phase(s)",
                         0.10,
                     )
+                    # EDS chemistry prior: (P, n_selected) weight matrix in
+                    # mask/selection order (columns match the pattern stack the
+                    # ROI/full index_array/index_h5 path consumes). Row order =
+                    # sht_paths order = phase-id − 1. None when EDS off / every
+                    # strength 0 → the call is byte-for-byte unchanged.
+                    sph_weights = _build_eds_phase_weights(
+                        req, list(req.sht_paths or []), selection_mask,
+                        full_grid_order=False,
+                    )
                     result = spherical_gpu_index_patterns(
                         h5_path=_ebsd_file_path or '',
                         config=config,
@@ -1231,6 +1299,7 @@ async def start_indexing(req: IndexingStartRequest):
                         progress_callback=_progress,
                         sht_paths=list(req.sht_paths or []),
                         cancel_check=_cancel_check,
+                        phase_weights=sph_weights,
                     )
                     # Phase names for the legend/exports are set centrally by
                     # _inject_phase_names() after the method dispatch (clean,
@@ -1242,6 +1311,28 @@ async def start_indexing(req: IndexingStartRequest):
                     gpu_fast_path_done = True
                 else:
                     phase_configs = _build_phase_configs(req)
+
+                    # Multi-phase Dictionary needs BOTH pc.dictionary AND
+                    # pc.phase_list on every PhaseConfig — run_single_phase_method
+                    # raises when either is None (indexing_controller.py DICTIONARY
+                    # branch). But _build_phase_configs only fills master_h5_path for
+                    # the dictionary method, so this loop was ALWAYS broken: the first
+                    # phase raised "Dictionary signal required", every phase failed,
+                    # and the run died with "All phases failed during multi-phase
+                    # indexing". Populate both here, defensively (no-op when already
+                    # set), by loading each precomputed dictionary once; its own xmap
+                    # carries the correct phase. Spherical is unaffected — its configs
+                    # have no master_h5_path and use sht_path instead.
+                    if indexing_method == IndexingMethod.DICTIONARY:
+                        import kikuchipy as kp
+                        for pc in phase_configs:
+                            if getattr(pc, "dictionary", None) is None and pc.master_h5_path:
+                                pc.dictionary = kp.load(pc.master_h5_path)
+                            if getattr(pc, "phase_list", None) is None:
+                                _dict_xmap = getattr(pc.dictionary, "xmap", None)
+                                if _dict_xmap is not None:
+                                    pc.phase_list = _dict_xmap.phases
+
                     comparison_config = ComparisonConfig(
                         phases=phase_configs,
                         methods=[indexing_method],
@@ -1303,7 +1394,22 @@ async def start_indexing(req: IndexingStartRequest):
                         original_shape=(n_rows, n_cols),
                         selection_mask=selection_mask,
                     )
-                    comparison = compute_comparison_maps(comparison)
+                    # EDS chemistry prior for the Dictionary merge: (P, N) weight
+                    # matrix, rows = master_h5_paths order = phase-id, columns = the
+                    # full nav grid row-major (matches scores_3d / score_map_2d.ravel(),
+                    # hence full_grid_order=True; NaN outside the mask makes the outside
+                    # weights irrelevant). None when EDS off / every strength 0 → the
+                    # merge is byte-for-byte unchanged. Only built for Dictionary: the
+                    # non-GPU spherical merge shares this block but keys its phases on
+                    # sht_paths (spherical weighting runs on the GPU fast path above),
+                    # so passing master-path weights here would mis-order its rows.
+                    dict_weights = None
+                    if indexing_method == IndexingMethod.DICTIONARY:
+                        dict_weights = _build_eds_phase_weights(
+                            req, list(req.master_h5_paths), selection_mask,
+                            full_grid_order=True,
+                        )
+                    comparison = compute_comparison_maps(comparison, phase_weights=dict_weights)
                     merged_xmap = build_consensus_xmap(comparison)
 
                 # Skip the per-phase merge bookkeeping for the GPU fast path
@@ -1394,6 +1500,11 @@ async def start_indexing(req: IndexingStartRequest):
                             'per_phase_stats': per_phase_stats,
                             'n_phases': len(phase_configs),
                             'per_phase_data': per_phase_data,
+                            # EDS chemistry prior: pixels whose winner flipped
+                            # due to phase_weights (0 when the prior is off; the
+                            # non-GPU spherical merge passes no weights so it is
+                            # always 0 here — see Task 6/8).
+                            'eds_n_adjusted': comparison.n_eds_adjusted,
                         },
                     )
 
@@ -1406,37 +1517,132 @@ async def start_indexing(req: IndexingStartRequest):
                 if not req.cif_paths:
                     raise ValueError("Hough indexing requires at least one CIF file path")
 
-                from orix.crystal_map import Phase, PhaseList
-                from ebsd_utils import sanitize_cif
+                # EDS chemistry prior for Hough. PyEBSDIndex competes ALL phases
+                # inside ONE multi-Phase PhaseList, so the native call yields no
+                # per-phase score map to reweight. GATED alternate path: when a
+                # chemistry prior is active on a multi-CIF run, index each CIF on
+                # its OWN single-phase PhaseList (each yields that phase's CI as
+                # score_map_2d), then merge through the SAME
+                # compute_comparison_maps(phase_weights=W) → build_consensus_xmap
+                # machinery the Dictionary/Spherical EDS merges use. Weight rows
+                # key on list(req.cif_paths) order = phase-id − 1;
+                # full_grid_order=True builds the columns over the whole nav grid
+                # (matches score_map_2d.ravel() / scores_3d). When no strength is
+                # set (or a single CIF) the native hough_index_patterns call below
+                # runs UNCHANGED — bit-identical, no P× cost.
+                hough_strengths = [
+                    float(req.eds_phase_strengths.get(p, 0.0)) for p in req.cif_paths
+                ]
+                if len(req.cif_paths) > 1 and any(s > 0.0 for s in hough_strengths):
+                    from indexing_controller import (
+                        ComparisonConfig, ComparisonResult, IndexingResult,
+                        run_single_phase_method, compute_comparison_maps,
+                        build_consensus_xmap,
+                    )
 
-                from pathlib import Path as P
+                    _progress(
+                        f"EDS chemistry prior active — per-phase Hough split over "
+                        f"{len(req.cif_paths)} phase(s)...",
+                        0.15,
+                    )
+                    # One single-CIF PhaseConfig per CIF (cif_path + phase_list set).
+                    phase_configs = _build_phase_configs(req)
+                    comparison_config = ComparisonConfig(
+                        phases=phase_configs,
+                        methods=[IndexingMethod.HOUGH],
+                        selection_mode=selection_mode,
+                        n_bands=req.n_bands,
+                        t_sigma=req.t_sigma,
+                        r_sigma=req.r_sigma,
+                        metric=req.metric,
+                        keep_n=req.keep_n,
+                        row_start=req.row_start,
+                        row_end=req.row_end,
+                        col_start=req.col_start,
+                        col_end=req.col_end,
+                    )
 
-                phases = []
-                for cif_path in req.cif_paths:
-                    _progress(f"Loading phase from {cif_path}...")
-                    phase = Phase.from_cif(sanitize_cif(cif_path))
-                    # Restore original name if sanitize_cif created a temp file
-                    original_stem = P(cif_path).stem
-                    if phase.name != original_stem:
-                        phase.name = original_stem
-                    phases.append(phase)
-                phase_list = PhaseList(phases)
+                    per_phase_results = []
+                    for i, pc in enumerate(phase_configs):
+                        _progress(
+                            f"Phase {i+1}/{len(phase_configs)}: {pc.name} — "
+                            f"Hough indexing...",
+                            0.15 + 0.7 * (i / len(phase_configs)),
+                        )
+                        # HOUGH ignores h5_path/detector_params (defaults kept).
+                        per_phase_results.append(run_single_phase_method(
+                            signal=signal,
+                            detector=detector,
+                            phase_config=pc,
+                            method=IndexingMethod.HOUGH,
+                            config=comparison_config,
+                            selection_mask=selection_mask,
+                        ))
 
-                _indexing_tasks[task_id]["progress"] = 0.2
-                _progress("Running Hough indexing...")
+                    comparison = ComparisonResult(
+                        results=per_phase_results,
+                        phases=phase_configs,
+                        methods=[IndexingMethod.HOUGH],
+                        original_shape=(n_rows, n_cols),
+                        selection_mask=selection_mask,
+                    )
+                    # (P, N) chemistry weights: rows = list(req.cif_paths) order =
+                    # phase-id − 1, columns = full nav grid (full_grid_order=True
+                    # matches score_map_2d.ravel()). None here if no EDS map is
+                    # loaded → unweighted merge (graceful).
+                    hough_weights = _build_eds_phase_weights(
+                        req, list(req.cif_paths), selection_mask, full_grid_order=True,
+                    )
+                    comparison = compute_comparison_maps(
+                        comparison, phase_weights=hough_weights,
+                    )
+                    merged_xmap = build_consensus_xmap(comparison)
+                    best_pmr = max(per_phase_results, key=lambda r: r.mean_score)
+                    _progress(
+                        f"EDS-weighted Hough merge complete "
+                        f"({comparison.n_eds_adjusted} pixel(s) reassigned by chemistry)",
+                        0.95,
+                    )
+                    result = IndexingResult(
+                        xmap=merged_xmap,
+                        selection_mask=selection_mask,
+                        original_shape=(n_rows, n_cols),
+                        method=IndexingMethod.HOUGH,
+                        confidence_scores=best_pmr.indexing_result.confidence_scores,
+                        metadata={"eds_n_adjusted": comparison.n_eds_adjusted},
+                    )
+                else:
+                    from orix.crystal_map import Phase, PhaseList
+                    from ebsd_utils import sanitize_cif
 
-                def _cancel_check():
-                    return _indexing_tasks.get(task_id, {}).get("status") == "failed"
+                    from pathlib import Path as P
 
-                result = hough_index_patterns(
-                    signal=signal,
-                    phase_list=phase_list,
-                    detector=detector,
-                    config=config,
-                    selection_mask=selection_mask,
-                    progress_callback=_progress,
-                    cancel_check=_cancel_check,
-                )
+                    phases = []
+                    for cif_path in req.cif_paths:
+                        _progress(f"Loading phase from {cif_path}...")
+                        phase = Phase.from_cif(sanitize_cif(cif_path))
+                        # Restore original name if sanitize_cif created a temp file
+                        original_stem = P(cif_path).stem
+                        if phase.name != original_stem:
+                            phase.name = original_stem
+                        phases.append(phase)
+                    phase_list = PhaseList(phases)
+
+                    _indexing_tasks[task_id]["progress"] = 0.2
+                    _progress("Running Hough indexing...")
+
+                    def _cancel_check():
+                        return _indexing_tasks.get(task_id, {}).get("status") == "failed"
+
+                    result = hough_index_patterns(
+                        signal=signal,
+                        phase_list=phase_list,
+                        detector=detector,
+                        config=config,
+                        selection_mask=selection_mask,
+                        progress_callback=_progress,
+                        cancel_check=_cancel_check,
+                    )
 
             # --- Dictionary indexing ---
             elif indexing_method == IndexingMethod.DICTIONARY:
@@ -1506,6 +1712,14 @@ async def start_indexing(req: IndexingStartRequest):
                 sht_paths=req.sht_paths if req.method == "spherical" else None,
                 det_params=det_params,
             )
+
+            # Unified EDS-adjusted-pixel log line — covers all three methods.
+            # Each method sets metadata["eds_n_adjusted"] exactly once (Spherical
+            # + Dictionary here, Hough via its EDS merge above); 0 / no metadata
+            # when the prior is off, so this stays silent for an unchanged run.
+            _eds_n = int((result.metadata or {}).get("eds_n_adjusted", 0)) if getattr(result, "metadata", None) else 0
+            if _eds_n:
+                _progress(f"EDS chemistry prior: adjusted {_eds_n} pixels")
 
             # Don't overwrite a multi-pixel result with a single-pixel quick test
             if not (req.quick_test and _get_result() is not None):
@@ -1682,7 +1896,26 @@ async def release_gpu_memory():
     info = {"device": "cpu", "freed_mb": 0, "free_before_gb": 0.0,
             "free_after_gb": 0.0, "backends_evicted": 0, "tables_cleared": 0}
 
-    # Drop the live-referenced GPU caches FIRST. This is the actual fix —
+    import gc
+    try:
+        import torch
+    except Exception:
+        torch = None
+
+    # Capture the TRUE free BEFORE any eviction. The eviction helpers below each
+    # call empty_cache() internally, so measuring free_before AFTER them (the old
+    # bug) credited the click with only the final tiny delta — it reported
+    # "104 MiB freed" while ~7-10 GB was actually reclaimed during eviction, which
+    # read as "sowas von falsch". Measured here, freed_mb is the honest total.
+    free_before = None
+    total_b = None
+    if torch is not None and torch.cuda.is_available():
+        try:
+            free_before, total_b = torch.cuda.mem_get_info(0)
+        except Exception:
+            free_before = total_b = None
+
+    # Drop the live-referenced GPU caches FIRST. This is the actual reclaim —
     # without it empty_cache() frees nothing after a Phase Test. Done
     # unconditionally so the references die even on a CPU-only box.
     try:
@@ -1704,18 +1937,57 @@ async def release_gpu_memory():
     except Exception as exc:
         logger.debug("release_gpu_memory: wigner cache clear failed: %s", exc)
 
+    # cuFFT plan cache (torch): the SO(3) correlation FFTs leave cached plans +
+    # workspaces that empty_cache() does NOT reclaim. Small but real; harmless to
+    # clear. Per-device so multi-GPU boxes are covered.
+    if torch is not None and torch.cuda.is_available():
+        try:
+            cache = torch.backends.cuda.cufft_plan_cache
+            for dev in range(torch.cuda.device_count()):
+                try:
+                    cache[dev].clear()
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.debug("release_gpu_memory: cufft plan cache clear failed: %s", exc)
+
+    # CuPy memory pool (fused max-only kernels use their own allocator, invisible
+    # to torch.empty_cache()). Guarded import — CuPy may be absent.
     try:
-        import torch, gc
-        if torch.cuda.is_available():
-            free_before, _ = torch.cuda.mem_get_info(0)
+        import cupy as _cp
+        _cp.get_default_memory_pool().free_all_blocks()
+        try:
+            _cp.get_default_pinned_memory_pool().free_all_blocks()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
+        if torch is not None and torch.cuda.is_available():
             gc.collect()
             torch.cuda.empty_cache()
-            free_after, _ = torch.cuda.mem_get_info(0)
+            free_after, total_after = torch.cuda.mem_get_info(0)
+            if total_b is None:
+                total_b = total_after
+            if free_before is None:
+                free_before = free_after
+            reserved = torch.cuda.memory_reserved(0)
+            used_after = total_b - free_after
+            non_torch = max(used_after - reserved, 0)
             info["device"] = "cuda"
             info["device_name"] = torch.cuda.get_device_properties(0).name
             info["free_before_gb"] = round(free_before / (1024 ** 3), 2)
             info["free_after_gb"] = round(free_after / (1024 ** 3), 2)
             info["freed_mb"] = round((free_after - free_before) / (1024 ** 2), 1)
+            # Breakdown of what's STILL used after release, so a genuine residual
+            # is visible (and distinguishable from the unfreeable CUDA context):
+            # torch_reserved = torch caching allocator (should be ~0 after this);
+            # non_torch = CUDA context + libraries (cuBLAS/cuSOLVER/cuFFT), which
+            # only a process restart can reclaim (~1-2 GB baseline).
+            info["used_after_gb"] = round(used_after / (1024 ** 3), 2)
+            info["torch_reserved_after_gb"] = round(reserved / (1024 ** 3), 2)
+            info["non_torch_after_gb"] = round(non_torch / (1024 ** 3), 2)
         else:
             gc.collect()
     except Exception as exc:
@@ -4457,7 +4729,8 @@ async def single_pixel_phase_test(req: SinglePixelPhaseTestRequest):
     if signal is None:
         raise HTTPException(status_code=400, detail="No EBSD file loaded — open one first")
 
-    entry, det_params = _get_detector_for_phase_test(pixel_index=req.pixel_index)
+    entry, det_params = _get_detector_for_phase_test(
+        pixel_index=req.pixel_index, use_pixel_pc=req.use_pixel_pc)
     if det_params is None:
         raise HTTPException(status_code=400, detail="No detector/calibration for the active dataset")
     if entry is not None and getattr(entry, "pc_source", None) == "missing":
@@ -4665,7 +4938,8 @@ async def single_pixel_phase_test_start(req: SinglePixelPhaseTestRequest):
     signal = _get_active_signal_for_phase_test()
     if signal is None:
         raise HTTPException(status_code=400, detail="No EBSD file loaded — open one first")
-    entry, det_params = _get_detector_for_phase_test(pixel_index=req.pixel_index)
+    entry, det_params = _get_detector_for_phase_test(
+        pixel_index=req.pixel_index, use_pixel_pc=req.use_pixel_pc)
     if det_params is None:
         raise HTTPException(status_code=400, detail="No detector/calibration for the active dataset")
     if entry is not None and getattr(entry, "pc_source", None) == "missing":

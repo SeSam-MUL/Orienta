@@ -176,6 +176,7 @@ class SphericalGPUBackend:
         h5_path: Union[str, Path],
         detector_params: dict,
         progress_callback: Optional[Callable[[str, float], None]] = None,
+        phase_weights: Optional[np.ndarray] = None,
     ) -> IndexResult:
         """Index every pattern in an H5OINA / EDAX H5 file.
 
@@ -193,12 +194,20 @@ class SphericalGPUBackend:
         progress_callback
             ``(message: str, fraction_done: float) -> None``. Forwarded to
             the indexer; called once per batch.
+        phase_weights
+            Optional ``(P, N)`` float32 multiplier applied to the per-phase
+            scores before the winner argmax (EDS chemistry prior). Phase-id
+            order (rows), result-pixel order matching the pattern stack
+            (cols). ``None`` (default) skips the multiply entirely — the
+            argmax inputs are bit-identical to an unweighted run. Ignored on
+            single-phase configs (documented no-op).
         """
         self._ensure_built(detector_params)
         return self._index_with_phases(
             kind="h5",
             payload=str(h5_path),
             progress_callback=progress_callback,
+            phase_weights=phase_weights,
         )
 
     def index_array(
@@ -206,6 +215,7 @@ class SphericalGPUBackend:
         patterns: np.ndarray,
         detector_params: dict,
         progress_callback: Optional[Callable[[str, float], None]] = None,
+        phase_weights: Optional[np.ndarray] = None,
     ) -> IndexResult:
         """Index a stack of patterns already loaded in memory.
 
@@ -213,6 +223,11 @@ class SphericalGPUBackend:
         is when patterns came from a non-H5 source or have been ROI-cropped
         in upstream code. Detector params are still required so we can
         build the right SHT geometry.
+
+        ``phase_weights`` is an optional ``(P, N)`` float32 EDS chemistry
+        prior applied to the per-phase scores before the winner argmax; see
+        :meth:`index_h5`. ``None`` (default) is bit-identical to an
+        unweighted run.
         """
         if patterns.ndim != 3:
             raise ValueError(
@@ -223,6 +238,7 @@ class SphericalGPUBackend:
             kind="array",
             payload=patterns,
             progress_callback=progress_callback,
+            phase_weights=phase_weights,
         )
 
     def index_signal(
@@ -444,8 +460,16 @@ class SphericalGPUBackend:
         kind: str,
         payload,
         progress_callback,
+        phase_weights: Optional[np.ndarray] = None,
     ) -> IndexResult:
         """Run all phases, select the per-pixel winner by score.
+
+        ``phase_weights`` is an optional ``(P, N)`` float32 EDS chemistry
+        prior (phase-id rows, result-pixel cols) multiplied into the
+        per-phase scores before the winner argmax. ``None`` (default) skips
+        the multiply — the argmax inputs are bit-identical to today.
+        Applied at both competition sites (interleaved + fallback). The
+        single-phase branch below ignores it (documented no-op).
 
         For single-phase configs this just returns the one indexer's result.
 
@@ -483,7 +507,7 @@ class SphericalGPUBackend:
 
         if all_same_preproc:
             return self._index_with_phases_interleaved(
-                kind, payload, progress_callback,
+                kind, payload, progress_callback, phase_weights=phase_weights,
             )
 
         # Fallback: per-phase loop (heterogeneous preprocessing).
@@ -500,17 +524,36 @@ class SphericalGPUBackend:
             )
             res = self._index_single_phase(ix, kind, payload, wrapped_cb)
             per_phase.append(res)
-        scores = torch.stack([r.score for r in per_phase], dim=0)
+        scores = torch.stack([r.score for r in per_phase], dim=0)   # (P, N) CPU RAW
         eulers = torch.stack([r.euler_xyz for r in per_phase], dim=0)
-        winner = scores.argmax(dim=0)
+        n_adjusted = 0
+        if phase_weights is not None:
+            n_phases = len(self._indexers)
+            n_total = scores.shape[1]
+            assert phase_weights.shape == (n_phases, n_total), (
+                f"phase_weights {phase_weights.shape} != ({n_phases}, {n_total})"
+            )
+            w = torch.from_numpy(
+                np.ascontiguousarray(phase_weights, dtype=np.float32)
+            ).to(scores.device)
+            base_winner = scores.argmax(dim=0)
+            # Reweighted scores decide the WINNER only; `scores` is left
+            # untouched so the REPORTED CI is the RAW (pre-multiply) value —
+            # consistent with Dictionary/Hough, which never chemistry-scale
+            # the reported confidence (the app thresholds on CI).
+            winner = (scores * w).argmax(dim=0)
+            n_adjusted = int((winner != base_winner).sum().item())
+        else:
+            winner = scores.argmax(dim=0)
         n = winner.shape[0]
         idx = torch.arange(n)
         best_eulers = eulers[winner, idx]
-        best_scores = scores[winner, idx]
+        best_scores = scores[winner, idx]   # RAW score (not weighted)
         phase_id = (winner + 1).to(torch.int8)
         return IndexResult(
             euler_xyz=best_eulers, score=best_scores, phase_id=phase_id,
             runtime_seconds=time.perf_counter() - runtime0,
+            n_adjusted=n_adjusted,
         )
 
     def _index_with_phases_interleaved(
@@ -518,6 +561,7 @@ class SphericalGPUBackend:
         kind: str,
         payload,
         progress_callback,
+        phase_weights: Optional[np.ndarray] = None,
     ) -> IndexResult:
         """Batch-level multi-phase: read each batch once, run all phases,
         pick winner. Cuts H5 I/O + preprocessing + (full) SHT cost from
@@ -526,6 +570,14 @@ class SphericalGPUBackend:
         Each phase's Tier1Indexer still has its own ``_l_active`` /
         ``_master_coefs_a`` / etc. set up; we just feed them the same
         preprocessed patterns instead of redoing the read+prep cycle.
+
+        ``phase_weights`` is an optional ``(P, N)`` float32 EDS chemistry
+        prior (phase-id rows, result-pixel cols). When given it is moved to
+        the device once and the relevant ``[:, start:end]`` slice multiplies
+        the stacked per-phase scores before the winner argmax; the count of
+        pixels whose winner changed vs the unweighted argmax is accumulated
+        across batches into ``IndexResult.n_adjusted``. ``None`` (default)
+        skips the multiply entirely — bit-identical to today.
         """
         import h5py
         from .pipeline.preprocessing import gausbckg, nregions, circmask
@@ -563,6 +615,19 @@ class SphericalGPUBackend:
         all_eulers = torch.empty(n_total, 3, dtype=torch.float32)
         all_scores = torch.empty(n_total, dtype=torch.float32)
         all_phase_id = torch.empty(n_total, dtype=torch.int8)
+
+        # EDS chemistry prior: (P, N) score multiplier, applied per batch on
+        # the [:, start:end] slice before the winner argmax. Built once on
+        # device now that n_total is known. None (default) is a no-op.
+        w_dev = None
+        n_adjusted = 0
+        if phase_weights is not None:
+            assert phase_weights.shape == (n_phases, n_total), (
+                f"phase_weights {phase_weights.shape} != ({n_phases}, {n_total})"
+            )
+            w_dev = torch.from_numpy(
+                np.ascontiguousarray(phase_weights, dtype=np.float32)
+            ).to(self._device)
 
         # perf A4: prefetch next batch's H5 read on a worker thread so
         # the disk I/O + uint8->float32 conversion overlaps with current
@@ -614,13 +679,22 @@ class SphericalGPUBackend:
                     phase_eulers.append(eulers_i)
                     phase_scores.append(scores_i)
 
-                stacked_scores = torch.stack(phase_scores, dim=0)   # (P, b)
+                stacked_scores = torch.stack(phase_scores, dim=0)   # (P, b) RAW
                 stacked_eulers = torch.stack(phase_eulers, dim=0)   # (P, b, 3)
-                winner = stacked_scores.argmax(dim=0)               # (b,)
+                if w_dev is not None:
+                    base_winner = stacked_scores.argmax(dim=0)
+                    # Reweighted scores pick the WINNER only; `stacked_scores`
+                    # stays RAW so the REPORTED CI is the pre-multiply value —
+                    # consistent with Dictionary/Hough (no chemistry-scaling of
+                    # the reported confidence; the app thresholds on CI).
+                    winner = (stacked_scores * w_dev[:, start:end]).argmax(dim=0)  # (b,)
+                    n_adjusted += int((winner != base_winner).sum().item())
+                else:
+                    winner = stacked_scores.argmax(dim=0)           # (b,)
                 bsz = winner.shape[0]
                 bidx = torch.arange(bsz, device=self._device)
                 best_eul = stacked_eulers[winner, bidx]             # (b, 3)
-                best_sco = stacked_scores[winner, bidx]             # (b,)
+                best_sco = stacked_scores[winner, bidx]             # (b,) RAW score
 
                 all_eulers[start:end] = best_eul.cpu()
                 all_scores[start:end] = best_sco.cpu()
@@ -644,6 +718,7 @@ class SphericalGPUBackend:
         return IndexResult(
             euler_xyz=all_eulers, score=all_scores, phase_id=all_phase_id,
             runtime_seconds=time.perf_counter() - runtime0,
+            n_adjusted=n_adjusted,
         )
 
     def _index_array_via_indexer(
