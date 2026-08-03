@@ -24,6 +24,7 @@ import SwipeCompareController from './SwipeCompareController';
 import TileGrid from './TileGrid';
 import LayerStackPanel from '../PhaseMap/LayerStackPanel';
 import FileSwitcher from '../common/FileSwitcher';
+import { qualityProvenanceKey } from '../common/qualityProvenance';
 import HoverProbeOverlay from './HoverProbeOverlay';
 import ThresholdHistogram from './ThresholdHistogram';
 import LinescanProfilePlot from './LinescanProfilePlot';
@@ -560,8 +561,24 @@ export default function EDSPage({ onNavigate }) {
   // (kind='mask') also skip — they already represent a binary selection.
   const renderLayerExtras = useCallback((layer) => {
     if (!['eds-element', 'bc', 'vbse'].includes(layer.kind)) return null;
+    // BC provenance: the /band-contrast endpoint returns "h5oina" (native
+    // per-pixel Band Contrast) or "computed" (FFT pattern-quality fallback).
+    // Normalise "h5oina" → "native" so the shared quality helper picks the
+    // right ebsdviewer key; anything else falls through to "computed".
+    const bcSourceRaw = layer.kind === 'bc' ? stack.layerSources?.get(layer.id) : null;
+    const bcSource = bcSourceRaw === 'h5oina' ? 'native' : bcSourceRaw;
     return (
       <>
+        {bcSourceRaw && (
+          <div style={{
+            fontSize: '7.5pt',
+            color: colors.textSecondary,
+            fontStyle: 'italic',
+            padding: '1px 2px',
+          }}>
+            {t(qualityProvenanceKey(bcSource), { ns: 'ebsdviewer' })}
+          </div>
+        )}
         <ThresholdHistogram
           bitmap={stack.bitmaps.get(layer.id)}
           threshold={layer.threshold}

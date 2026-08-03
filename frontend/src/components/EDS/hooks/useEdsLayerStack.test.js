@@ -198,6 +198,21 @@ describe('useEdsLayerStack', () => {
     await waitFor(() => expect(result.current.bitmaps.has('bc')).toBe(true));
   });
 
+  it('populates layerSources from the bandContrast response source', async () => {
+    ebsdApi.bandContrast.mockResolvedValue({
+      data: { image: TINY_PNG, shape: [128, 156], source: 'computed', label: 'Pattern Quality (computed)' },
+    });
+    const initial = [
+      { id: 'bc', kind: 'bc', label: 'BC', visible: true, opacity: 0.5, blend: 'multiply' },
+    ];
+    const { result } = renderHook(() => useEdsLayerStack({ initialLayers: initial, displayMode: 'at_pct' }));
+    await waitFor(() => expect(result.current.bitmaps.has('bc')).toBe(true));
+    await waitFor(() => expect(result.current.layerSources.get('bc')).toBe('computed'));
+    // removeLayer must clear provenance so a later layer/file never shows stale source.
+    act(() => { result.current.removeLayer('bc'); });
+    expect(result.current.layerSources.has('bc')).toBe(false);
+  });
+
   it('setThreshold attaches a threshold to the targeted layer', async () => {
     const initial = [
       { id: 'bc', kind: 'bc', label: 'BC', visible: true, opacity: 0.5, blend: 'multiply' },

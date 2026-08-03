@@ -63,6 +63,7 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
   const orderRef    = useRef([]);            // LRU order (most-recent at end)
   const fetchingRef = useRef(new Set());     // ids currently in-flight
   const errorRef    = useRef(new Map());     // layerId → error string
+  const sourceRef   = useRef(new Map());     // layerId → backend `source` (provenance)
   const displayModeRef = useRef(displayMode);
   const shapeRef    = useRef(null);          // [H, W] — the page's interaction grid
   const shapeFromGridRef = useRef(false);    // true once `shapeRef` came from a scan-grid layer
@@ -105,6 +106,7 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
     const c = cacheRef.current;
     const o = orderRef.current;
     const errs = errorRef.current;
+    const srcs = sourceRef.current;
     for (const [id, bmp] of c.entries()) {
       if (predicate(id)) {
         try { bmp.close(); } catch { /* ignore */ }
@@ -115,6 +117,11 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
     }
     for (const id of [...errs.keys()]) {
       if (predicate(id)) errs.delete(id);
+    }
+    // Drop stale provenance alongside the cache/error entries so a file switch
+    // (REPLACE_ALL flush) or removeLayer never shows a previous file's source.
+    for (const id of [...srcs.keys()]) {
+      if (predicate(id)) srcs.delete(id);
     }
     force();
   }, []);
@@ -232,6 +239,9 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
       }
       cacheSet(layer.id, bitmap);
       errorRef.current.delete(layer.id);
+      // Record provenance (e.g. BC layer's "h5oina" native vs "computed" FFT
+      // pattern-quality) so the panel can surface which one is displayed.
+      if (res?.data?.source) sourceRef.current.set(layer.id, res.data.source);
     } catch (err) {
       errorRef.current.set(
         layer.id,
@@ -290,6 +300,7 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
     bitmaps: cacheRef.current,
     bitmapVersion,
     errors: errorRef.current,
+    layerSources: sourceRef.current,
     shape: shapeRef.current,
     addLayer,
     removeLayer,
