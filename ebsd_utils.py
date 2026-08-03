@@ -117,6 +117,58 @@ def prepare_reflectors(phase_list, min_d=1.0, f_threshold=0.1, max_reflectors=70
     return [_reflectors_for_phase(phase_list[pid], min_d, f_threshold, max_reflectors) for pid in ids]
 
 
+# PyEBSDIndex derives a phase's Laue class from its space-group NUMBER, and its
+# lookup table only covers the standard numbers 1-230. A CIF written in a
+# NON-STANDARD SETTING hands diffpy/orix an alternate-setting number instead
+# (beta-AlFeSi is "A12/a1" -> 4015), which runs off the end of that table and
+# resolves to CUBIC m-3m. Every reflector is then expanded into 24 "equivalent"
+# poles that are all geometrically distinct on a monoclinic lattice, so the
+# number of unique inter-pole angles explodes — and since the band-triplet
+# library is provisioned as npoles * nangs**3 / 6, indexing dies with
+# "Unable to allocate 1.40 TiB for an array with shape (64177025400, 3)".
+# Mapping the number back to its standard setting keeps the crystal system and
+# the Laue class (verified for all 284 alternate settings in diffpy's table)
+# and brings that phase down to 3.6 GiB provisioned / 6042 real triplets.
+_MAX_STANDARD_SPACE_GROUP = 230
+
+
+def _standard_setting_phase_list(phase_list):
+    """Phase list whose space groups all carry a standard 1-230 number.
+
+    Only the Hough indexer sees this — reflectors are still computed from the
+    phase exactly as the CIF defines it, so the real centring and systematic
+    absences are untouched. Returns the input unchanged when nothing needs
+    fixing (the common case).
+    """
+    off_standard = {}
+    for pid, phase in phase_list:
+        number = getattr(phase.space_group, "number", None)
+        if number is not None and not (1 <= number <= _MAX_STANDARD_SPACE_GROUP):
+            off_standard[pid] = number
+    if not off_standard:
+        return phase_list
+
+    fixed = phase_list.deepcopy()
+    for pid, number in off_standard.items():
+        phase = fixed[pid]
+        standard = number % 1000  # diffpy numbers alternate settings <n>*1000 + <number>
+        if not (1 <= standard <= _MAX_STANDARD_SPACE_GROUP):
+            raise ValueError(
+                f"Phase '{phase.name}' has space group number {number}, which is neither "
+                f"a standard space group (1-230) nor a recognised alternate setting. "
+                f"PyEBSDIndex cannot determine its symmetry from that — re-export the CIF "
+                f"in a standard setting, or index this phase with Dictionary/Spherical."
+            )
+        logger.warning(
+            "phase %s: space group %s (%s) is a non-standard setting; the Hough indexer "
+            "gets the standard number %d instead so PyEBSDIndex reads the correct Laue "
+            "class (reflectors are unaffected)",
+            phase.name, number, getattr(phase.space_group, "short_name", "?"), standard,
+        )
+        phase.space_group = standard
+    return fixed
+
+
 def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma=2):
     """
     Builds a Hough indexer with the given parameters.
@@ -128,10 +180,25 @@ def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma
         ref_hkl = [r.hkl.tolist() for r in reflectors]
     else:
         ref_hkl = reflectors.hkl.tolist()
-    return detector.get_indexer(
-        phase_list, ref_hkl,
-        nBands=nBands, tSigma=tSigma, rSigma=rSigma
-    )
+    try:
+        return detector.get_indexer(
+            _standard_setting_phase_list(phase_list), ref_hkl,
+            nBands=nBands, tSigma=tSigma, rSigma=rSigma
+        )
+    except MemoryError as e:
+        # PyEBSDIndex over-provisions the band-triplet library from the reflector
+        # count, and that grows steeply as symmetry drops. Name the phases so the
+        # user knows which one to trim instead of reading a raw numpy traceback.
+        names = ", ".join(
+            f"{p.name} ({p.point_group.name if p.point_group else 'unknown symmetry'})"
+            for _, p in phase_list
+        )
+        raise MemoryError(
+            f"Hough indexing could not build the band-triplet library for {names}: {e}. "
+            f"PyEBSDIndex sizes that library from the number of reflector families, which "
+            f"grows steeply for low-symmetry phases — lower max_reflectors for this phase, "
+            f"or index it with Dictionary or Spherical indexing instead."
+        ) from e
 
 
 def log_index_data(xmap, index_data, band_data):
