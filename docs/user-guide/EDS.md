@@ -60,7 +60,20 @@ not as a certified composition measurement.
 5. The **All Maps** tile grid (centre) shows every element map, electron image,
    and band contrast simultaneously. Use the **Tile size** slider to resize the
    tiles.
-6. **Hover** any map to get a tooltip with all element values, band contrast, and
+6. **Zoom into a map** with **Ctrl + mouse wheel** (towards the cursor, up to
+   16×); **drag** to pan once zoomed, and **double-click** to reset that map. A
+   plain wheel still scrolls the tile list. The **Zoom** switch in the *All Maps*
+   header chooses what a zoom affects:
+   - **All** — every tile *and* the composite overlay share one view, so you
+     compare the same spot across all elements at once.
+   - **Single** — each map zooms on its own; only the map under the cursor moves.
+
+   **Reset zoom** returns everything to 1×. Switching the mode keeps your
+   per-map views, and going *Single → All* adopts the map you zoomed last, so
+   the view never jumps. The current magnification is shown on each zoomed map.
+   Crosshair sync, click-to-quantify, Shift-drag regions and the linescan all
+   stay pixel-exact while zoomed.
+7. **Hover** any map to get a tooltip with all element values, band contrast, and
    (if a phase map exists) the phase at that pixel, in one lookup. Toggle the
    **Lens** (4× magnifier), the **Linescan** tool (drag a line to plot per-layer
    profiles), and **Export PNG** to save the composite. A **swipe compare**
@@ -68,30 +81,30 @@ not as a certified composition measurement.
 
 ### Quantify
 
-7. In the right rail's **Pixel Quantification** box, enter a **Row** and **Col**
+8. In the right rail's **Pixel Quantification** box, enter a **Row** and **Col**
    (or click a pixel on any map), then **Quantify** to get the Element / Counts /
    Wt.% / At.% table. The footer shows the At.% sum with a ✓/⚠ check that it
    normalises near 100 %. **Copy** puts the table on the clipboard as TSV.
-8. In **Region Average**, type a rectangle (Row/Col start–end) or **Shift-drag** a
+9. In **Region Average**, type a rectangle (Row/Col start–end) or **Shift-drag** a
    box on a map; the page fills the fields and computes the mean ± standard
    deviation per element over the region.
 
 ### Build a phase map (optional)
 
-9. In the **Phase Map** controls, set the **Tolerance** (allowed per-element At.%
-   deviation) and **Min Score** sliders, then click **Auto-Classify**. Every pixel
-   is matched against your curated CIF library (`Database/crystal_database.xlsx`)
-   and the best-scoring phase is assigned; a colour legend with per-phase area
-   fractions appears.
-10. Refine the map manually: pick a phase in the legend, choose **Rectangle** or
+10. In the **Phase Map** controls, set the **Tolerance** (allowed per-element At.%
+    deviation) and **Min Score** sliders, then click **Auto-Classify**. Every pixel
+    is matched against your curated CIF library (`Database/crystal_database.xlsx`)
+    and the best-scoring phase is assigned; a colour legend with per-phase area
+    fractions appears.
+11. Refine the map manually: pick a phase in the legend, choose **Rectangle** or
     **Polygon** paint mode, draw on the map, and **Assign** to overwrite those
     pixels with that phase. Use phase `-1` to mark pixels unclassified.
-11. Use the **send-to-indexing** action to hand the phase map's CIF filenames and
+12. Use the **send-to-indexing** action to hand the phase map's CIF filenames and
     pixel masks to the Indexing page for chemistry-guided indexing.
 
 ### Suggest phases
 
-12. In **Phase Suggestion**, set Row/Col (or click a pixel) and **Suggest**. The
+13. In **Phase Suggestion**, set Row/Col (or click a pixel) and **Suggest**. The
     chemistry at that pixel is matched against your CIF library (or a built-in
     fallback library if you have not built one yet); each candidate shows formula,
     space group, crystal system, and a match score.
