@@ -140,7 +140,14 @@
     "circmaskInscribed": "Einbeschriebener Kreis (0)",
     "circmaskCustom": "Eigener Radius",
     "customRadiusTip": "Eigener Kreismasken-Radius in Pixeln",
-    "px": "px"
+    "px": "px",
+    "cpuFallback": "Keine NVIDIA-GPU erkannt — Spherical läuft auf der CPU. Gleiche Ergebnisse, aber deutlich langsamer.",
+    "cpuFallbackWithEstimate": "Keine NVIDIA-GPU erkannt — Spherical läuft auf der CPU. Gleiche Ergebnisse, aber grob {{estimate}} für {{n}} Patterns (mit GPU: Minuten).",
+    "cpuConfirmTitle": "Keine NVIDIA-GPU erkannt",
+    "cpuConfirmBody": "Die Spherical-Indizierung läuft auf der CPU. Die Ergebnisse sind identisch zum GPU-Pfad, es dauert aber deutlich länger. Trotzdem starten?",
+    "cpuConfirmBodyWithEstimate": "Die Spherical-Indizierung läuft auf der CPU. Die Ergebnisse sind identisch zum GPU-Pfad, aber für {{n}} Patterns sind grob {{estimate}} zu erwarten statt weniger Minuten auf einer GPU. Die Schätzung ist grob — eine Laptop-CPU kann um ein Vielfaches langsamer sein. Trotzdem starten?",
+    "cpuConfirmStart": "Trotzdem starten",
+    "cpuConfirmCancel": "Abbrechen"
   },
   "embedding": {
     "groupTitle": "Embedding-Parameter (neuronales Netz)",

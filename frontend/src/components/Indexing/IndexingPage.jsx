@@ -20,6 +20,7 @@
 import { useState, useEffect, useCallback, useRef, useReducer, useMemo, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
 import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phaseMapApi } from '../../services/api';
+import { estimateCpuSphericalSeconds, formatRoughDuration } from './cpuEstimate';
 import NavigationCanvas from './NavigationCanvas';
 import EdsOverlayPanel from './EdsOverlayPanel';
 import BatchIndexingDialog from './BatchIndexingDialog';
@@ -1447,6 +1448,8 @@ export default function IndexingPage({ isActive }) {
   // fast and whether a previous run still holds the GPU.
   const [runtimeInfo, setRuntimeInfo]   = useState(null);
   const [releasingGpu, setReleasingGpu] = useState(false);
+  // Confirm dialog shown when spherical would run on the CPU (no CUDA).
+  const [cpuWarnOpen, setCpuWarnOpen]   = useState(false);
   const pollRef                         = useRef(null);
   const pollTerminatedRef               = useRef(false);
   const chemMaskRef                     = useRef(null);
@@ -2117,7 +2120,17 @@ export default function IndexingPage({ isActive }) {
   // Start indexing
   // ---------------------------------------------------------------------------
 
+  // Start button. Spherical without CUDA runs on the CPU — same results, but a
+  // full map can take hours, so ask once instead of silently committing the
+  // user to it. The dialog's confirm calls runIndexing() directly (rather than
+  // flipping a flag and re-entering) so there is no setState race.
   async function handleStart() {
+    if (running) return;
+    if (sphericalOnCpu) { setCpuWarnOpen(true); return; }
+    return runIndexing();
+  }
+
+  async function runIndexing() {
     if (running) return;
 
     const params = buildParams();
@@ -2417,6 +2430,32 @@ export default function IndexingPage({ isActive }) {
   const showSpherical  = method === 'spherical';
   const showEmbedding  = method === 'embedding';
   const canStart       = dataLoaded && !running;
+
+  // --- Spherical without a CUDA GPU -----------------------------------------
+  // The PyTorch spherical backend falls back to the CPU (same results, ~10-25x
+  // slower). That fallback used to CRASH on "fused_max_only requires CUDA
+  // tensors"; now it runs, so the job here is to make sure the user knows a
+  // full map may take hours before they start one. EMSphInx is a separate
+  // CPU program, so the warning only applies to the spherical_gpu backend.
+  const sphericalOnCpu = showSpherical
+    && sphericalBackend === 'spherical_gpu'
+    && runtimeInfo !== null
+    && runtimeInfo.device !== 'cuda';
+
+  const selectedPixels = useMemo(() => {
+    if (!nRows || !nCols) return 0;
+    if (selMode === 'region') {
+      return Math.max(0, region.rowEnd - region.rowStart)
+           * Math.max(0, region.colEnd - region.colStart);
+    }
+    // 'full' and 'mask' (mask size is not tracked numerically here — the full
+    // grid is the honest upper bound for an estimate).
+    return nRows * nCols;
+  }, [selMode, region, nRows, nCols]);
+
+  const cpuEstimate = formatRoughDuration(
+    estimateCpuSphericalSeconds(selectedPixels, bandwidth)
+  );
 
   // Master to seed the "Generate Dictionary" dialog: the single file field, or
   // a master (.h5 that is not a pre-generated _dict_) already in the Selected
@@ -2769,6 +2808,20 @@ export default function IndexingPage({ isActive }) {
               <option value="emsphinx">{t('spherical.backendEmsphinx')}</option>
             </select>
           </Row>
+          {sphericalOnCpu && (
+            <Row gap={6} style={{ flexWrap: 'wrap', marginBottom: 6 }}>
+              <span style={{
+                fontSize: '9pt', color: C.yellow, lineHeight: 1.4,
+                padding: '5px 9px', borderRadius: 4,
+                background: `${C.yellow}14`, border: `1px solid ${C.yellow}44`,
+              }}>
+                {'⚠'}{' '}
+                {cpuEstimate
+                  ? t('spherical.cpuFallbackWithEstimate', { n: selectedPixels, estimate: cpuEstimate })
+                  : t('spherical.cpuFallback')}
+              </span>
+            </Row>
+          )}
           <Row gap={8} style={{ flexWrap: 'wrap', marginBottom: 6 }}>
             <InlineLabel>{t('spherical.bandwidth')}</InlineLabel>
             <select
@@ -3209,6 +3262,61 @@ export default function IndexingPage({ isActive }) {
           style={{ height: '100%' }}
         />
       </div>
+
+      {/* No-CUDA confirmation for spherical (CPU fallback can take hours) */}
+      {cpuWarnOpen && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999,
+          }}
+          onClick={() => setCpuWarnOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('spherical.cpuConfirmTitle')}
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: C.bgSecondary, border: `1px solid ${C.yellow}66`,
+              borderRadius: 8, padding: '18px 22px', maxWidth: 460,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }}
+          >
+            <div style={{ fontSize: '12pt', fontWeight: 'bold', color: C.yellow, marginBottom: 10 }}>
+              {'⚠'} {t('spherical.cpuConfirmTitle')}
+            </div>
+            <div style={{ fontSize: '10pt', color: C.text, lineHeight: 1.55, marginBottom: 16 }}>
+              {cpuEstimate
+                ? t('spherical.cpuConfirmBodyWithEstimate', { n: selectedPixels, estimate: cpuEstimate })
+                : t('spherical.cpuConfirmBody')}
+            </div>
+            <Row gap={8} style={{ justifyContent: 'flex-end' }}>
+              <button
+                onClick={() => setCpuWarnOpen(false)}
+                style={{
+                  background: 'transparent', color: C.text,
+                  border: `1px solid ${C.textSecondary}`, borderRadius: 4,
+                  padding: '6px 14px', fontSize: '10pt', cursor: 'pointer',
+                }}
+              >
+                {t('spherical.cpuConfirmCancel')}
+              </button>
+              <button
+                autoFocus
+                onClick={() => { setCpuWarnOpen(false); runIndexing(); }}
+                style={{
+                  background: C.yellow, color: C.bgSecondary, border: 'none',
+                  borderRadius: 4, padding: '6px 14px', fontSize: '10pt',
+                  fontWeight: 'bold', cursor: 'pointer',
+                }}
+              >
+                {t('spherical.cpuConfirmStart')}
+              </button>
+            </Row>
+          </div>
+        </div>
+      )}
 
       {/* Batch Indexing Dialog */}
       <BatchIndexingDialog open={showBatchDialog} onClose={() => setShowBatchDialog(false)} />

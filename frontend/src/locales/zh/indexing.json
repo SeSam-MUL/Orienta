@@ -140,7 +140,14 @@
     "circmaskInscribed": "内切圆 (0)",
     "circmaskCustom": "自定义半径",
     "customRadiusTip": "自定义圆形掩膜半径（像素）",
-    "px": "px"
+    "px": "px",
+    "cpuFallback": "未检测到 NVIDIA GPU — 球面标定将在 CPU 上运行。结果相同，但慢得多。",
+    "cpuFallbackWithEstimate": "未检测到 NVIDIA GPU — 球面标定将在 CPU 上运行。结果相同，但 {{n}} 个花样约需 {{estimate}}（使用 GPU 仅需几分钟）。",
+    "cpuConfirmTitle": "未检测到 NVIDIA GPU",
+    "cpuConfirmBody": "球面标定将在 CPU 上运行。结果与 GPU 路径完全相同，但耗时长得多。仍要开始吗？",
+    "cpuConfirmBodyWithEstimate": "球面标定将在 CPU 上运行。结果与 GPU 路径完全相同，但 {{n}} 个花样预计约需 {{estimate}}，而使用 GPU 仅需几分钟。该估算较为粗略 — 笔记本 CPU 可能慢数倍。仍要开始吗？",
+    "cpuConfirmStart": "仍要开始",
+    "cpuConfirmCancel": "取消"
   },
   "embedding": {
     "groupTitle": "Embedding 参数（神经网络）",

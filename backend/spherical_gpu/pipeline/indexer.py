@@ -174,7 +174,10 @@ def _fused_max_only_dispatch(
     global _CUPY_FUSION_AVAILABLE
     if _CUPY_FUSION_AVAILABLE is None:
         _CUPY_FUSION_AVAILABLE = _cupy_kernel_ok()
-    if _CUPY_FUSION_AVAILABLE:
+    # `_cupy_kernel_ok()` is a LIBRARY check — cupy's pip wheel ships the CUDA
+    # runtime, so it answers True on a box with no NVIDIA GPU at all. The kernel
+    # itself only accepts CUDA tensors, so the device of the actual data decides.
+    if _CUPY_FUSION_AVAILABLE and cc_real_f32.is_cuda:
         return _fused_max_only_cupy(cc_real_f32, rDen)
     # Eager fallback: still materialises nc_vol since torch can't fuse
     # mul+max without it. Returns just the (max_vals, max_idx) tuple.
@@ -196,7 +199,7 @@ def _fused_mul_max_dispatch(
     global _CUPY_FUSION_AVAILABLE
     if _CUPY_FUSION_AVAILABLE is None:
         _CUPY_FUSION_AVAILABLE = _cupy_kernel_ok()
-    if _CUPY_FUSION_AVAILABLE:
+    if _CUPY_FUSION_AVAILABLE and cc_real_f32.is_cuda:  # see _fused_max_only_dispatch
         return _fused_mul_max_cupy(cc_real_f32, rDen)
     # Fallback: torch eager — same math, two kernels.
     nc_vol = cc_real_f32 * rDen

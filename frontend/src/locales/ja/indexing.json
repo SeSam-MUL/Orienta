@@ -140,7 +140,14 @@
     "circmaskInscribed": "内接円 (0)",
     "circmaskCustom": "カスタム半径",
     "customRadiusTip": "カスタム円形マスク半径（ピクセル）",
-    "px": "px"
+    "px": "px",
+    "cpuFallback": "NVIDIA GPU が検出されません — 球面指数付けは CPU で実行されます。結果は同じですが、大幅に遅くなります。",
+    "cpuFallbackWithEstimate": "NVIDIA GPU が検出されません — 球面指数付けは CPU で実行されます。結果は同じですが、{{n}} パターンでおよそ {{estimate}} かかります（GPU なら数分）。",
+    "cpuConfirmTitle": "NVIDIA GPU が検出されません",
+    "cpuConfirmBody": "球面指数付けは CPU で実行されます。結果は GPU と同一ですが、大幅に時間がかかります。それでも開始しますか？",
+    "cpuConfirmBodyWithEstimate": "球面指数付けは CPU で実行されます。結果は GPU と同一ですが、{{n}} パターンでは GPU の数分に対しおよそ {{estimate}} かかる見込みです。この見積もりは概算で、ノート PC の CPU では数倍遅くなることがあります。それでも開始しますか？",
+    "cpuConfirmStart": "それでも開始",
+    "cpuConfirmCancel": "キャンセル"
   },
   "embedding": {
     "groupTitle": "Embedding パラメータ（ニューラルネットワーク）",

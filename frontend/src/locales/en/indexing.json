@@ -140,7 +140,14 @@
     "circmaskInscribed": "Inscribed circle (0)",
     "circmaskCustom": "Custom radius",
     "customRadiusTip": "Custom circular mask radius in pixels",
-    "px": "px"
+    "px": "px",
+    "cpuFallback": "No NVIDIA GPU detected — spherical will run on the CPU. Same results, but far slower.",
+    "cpuFallbackWithEstimate": "No NVIDIA GPU detected — spherical will run on the CPU. Same results, but roughly {{estimate}} for {{n}} patterns (minutes on a GPU).",
+    "cpuConfirmTitle": "No NVIDIA GPU detected",
+    "cpuConfirmBody": "Spherical indexing will run on the CPU. Results are identical to the GPU path, but it is far slower. Start anyway?",
+    "cpuConfirmBodyWithEstimate": "Spherical indexing will run on the CPU. Results are identical to the GPU path, but for {{n}} patterns expect roughly {{estimate}} instead of a few minutes on a GPU. The estimate is rough — a laptop CPU can be several times slower. Start anyway?",
+    "cpuConfirmStart": "Start anyway",
+    "cpuConfirmCancel": "Cancel"
   },
   "embedding": {
     "groupTitle": "Embedding Parameters (Neural Network)",
