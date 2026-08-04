@@ -123,6 +123,18 @@ export const ebsdApi = {
     // Initialise to "just contacted" so the threshold starts ticking from
     // the moment loadWithProgress is invoked, not from epoch 0.
     let lastBackendContactAt = Date.now();
+    // Last elapsed the BACKEND reported. Used so a failure can say how long
+    // the load actually ran instead of the hardcoded 0 it used to report
+    // ("Load failed … 0.0 s elapsed" while the load had been running for
+    // minutes, which made a slow load look like an instant failure).
+    let lastElapsedSeconds = 0;
+    // Set when the stale detector has already produced a good error message,
+    // so aborting the POST below doesn't overwrite it with "canceled".
+    let staleErrorEmitted = false;
+    // Lets the stale detector cancel the in-flight POST. Without it, dropping
+    // the POST's own timeout (see below) would leave the request hanging
+    // forever against a backend that has genuinely died.
+    const abortController = new AbortController();
 
     const poll = async () => {
       if (stopped) return;
@@ -136,6 +148,9 @@ export const ebsdApi = {
           timeout: 3000,
         });
         lastBackendContactAt = Date.now();
+        if (typeof r.data?.elapsed_seconds === 'number') {
+          lastElapsedSeconds = r.data.elapsed_seconds;
+        }
         if (!stopped && onProgress) {
           onProgress(r.data);
         }
@@ -160,6 +175,10 @@ export const ebsdApi = {
         // Stop polling to avoid spamming a dead endpoint; the modal is
         // now in error state and the user clicks Close to dismiss.
         stopped = true;
+        staleErrorEmitted = true;
+        // The POST has no timeout of its own, so cancel it here — otherwise
+        // it would wait forever on a backend that is not coming back.
+        abortController.abort();
       }
       if (!stopped) {
         pollTimer = setTimeout(poll, pollIntervalMs);
@@ -170,11 +189,26 @@ export const ebsdApi = {
     // register the first stage. setTimeout(...,0) is enough.
     pollTimer = setTimeout(poll, 0);
 
-    const postPromise = api.post('/api/ebsd/load', {
-      path,
-      use_kikuchipy: useKikuchipy,
-      request_id: requestId,
-    });
+    const postPromise = api.post(
+      '/api/ebsd/load',
+      {
+        path,
+        use_kikuchipy: useKikuchipy,
+        request_id: requestId,
+      },
+      {
+        // NO client-side deadline for the load itself. The axios instance
+        // defaults to 5 minutes, which is a fine ceiling for ordinary calls
+        // but wrong here: a large scan on a slow or networked disk can take
+        // longer, and aborting the request does NOT stop the backend — it
+        // keeps loading, finishes, and holds the file, while the user is
+        // told "Load failed". A genuinely dead backend is still caught
+        // within STALE_THRESHOLD_MS by the progress poll above, which aborts
+        // this request via abortController.
+        timeout: 0,
+        signal: abortController.signal,
+      },
+    );
 
     return postPromise.then(
       (response) => {
@@ -187,15 +221,18 @@ export const ebsdApi = {
         if (pollTimer) clearTimeout(pollTimer);
         // Synthesise an error progress event so the modal can render the
         // failure message — the backend may not have written stage='error'
-        // yet (or the request never reached it).
-        if (onProgress) {
+        // yet (or the request never reached it). Skipped when the stale
+        // detector already reported a better message and aborted us.
+        if (onProgress && !staleErrorEmitted) {
           const detail =
             error?.response?.data?.detail || error?.message || 'Unknown error';
           onProgress({
             stage: 'error',
             stage_idx: 0,
             stage_total: 4,
-            elapsed_seconds: 0,
+            // How long the BACKEND said it had been loading, not 0 — a slow
+            // load that fails should not look like an instant failure.
+            elapsed_seconds: lastElapsedSeconds,
             message: detail,
             error: detail,
           });

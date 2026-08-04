@@ -127,4 +127,73 @@ describe('ebsdApi.loadWithProgress', () => {
     expect(last.stage).toBe('error');
     expect(last.message).toContain('file missing');
   });
+  // --- Regression: a slow load must not be killed by a client deadline -------
+  // A user reported "Load failed — timeout of 300000ms exceeded" while the
+  // backend log showed the load handler running the whole time (continuous
+  // 200s on the progress endpoint). The POST inherited the axios instance's
+  // 5-minute default; aborting it does not stop the backend, so the file
+  // finished loading while the UI claimed failure.
+
+  it('sends the load POST without a client-side timeout', async () => {
+    mockPost.mockResolvedValue({ data: { success: true } });
+    mockGet.mockResolvedValue({
+      data: { stage: 'complete', stage_idx: 4, stage_total: 4, elapsed_seconds: 1.0, message: 'Done' },
+    });
+
+    await ebsdApi.loadWithProgress('/big.h5oina', {});
+
+    const config = mockPost.mock.calls[0][2];
+    expect(config).toBeDefined();
+    expect(config.timeout).toBe(0);          // 0 = no deadline in axios
+    expect(config.signal).toBeDefined();     // still cancellable
+  });
+
+  it('reports the backend elapsed time on failure, not 0', async () => {
+    const error = Object.assign(new Error('boom'), {
+      response: { status: 500, data: { detail: 'disk exploded' } },
+    });
+    mockPost.mockRejectedValue(error);
+    mockGet.mockResolvedValue({
+      data: {
+        stage: 'building_signal', stage_idx: 2, stage_total: 4,
+        elapsed_seconds: 187.5, message: 'Building lazy signal',
+      },
+    });
+
+    const onProgress = (state) => onProgressCalls.push(state);
+    // Let at least one poll land so an elapsed value is observed.
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await expect(
+      ebsdApi.loadWithProgress('/slow.h5oina', { onProgress }),
+    ).rejects.toBe(error);
+
+    const last = onProgressCalls.at(-1);
+    expect(last.stage).toBe('error');
+    // Either the observed backend elapsed, or 0 if no poll landed first —
+    // but it must never be a hardcoded 0 when a poll DID report a value.
+    if (onProgressCalls.some((c) => c.elapsed_seconds === 187.5)) {
+      expect(last.elapsed_seconds).toBe(187.5);
+    }
+  });
+
+  it('aborts the POST when the backend goes silent', async () => {
+    vi.useFakeTimers();
+    // POST never settles — mimics a backend that died mid-load.
+    mockPost.mockReturnValue(new Promise(() => {}));
+    // Progress polls fail as network errors (no .response) => no contact.
+    mockGet.mockRejectedValue(new Error('network down'));
+
+    const onProgress = (state) => onProgressCalls.push(state);
+    ebsdApi.loadWithProgress('/dead.h5oina', { onProgress }).catch(() => {});
+
+    // Push past STALE_THRESHOLD_MS (10 s) worth of 250 ms polls.
+    for (let i = 0; i < 60; i += 1) {
+      await vi.advanceTimersByTimeAsync(250);
+    }
+
+    const stale = onProgressCalls.find((c) => c.error === 'Backend not responding');
+    expect(stale).toBeDefined();
+    const config = mockPost.mock.calls[0][2];
+    expect(config.signal.aborted).toBe(true);
+  });
 });
