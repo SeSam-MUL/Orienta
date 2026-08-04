@@ -15,6 +15,7 @@ shared. The only difference is the command you use to launch the app (Step 4).
 
 > **Quick reference (experienced users):**
 > ```bash
+> cd /path/to/Orienta        # <- FIRST. Must contain requirements.txt
 > conda create -n ebsd python=3.11
 > conda activate ebsd
 > conda install -c conda-forge "blas=*=openblas"
@@ -23,6 +24,12 @@ shared. The only difference is the command you use to launch the app (Step 4).
 > python start_app.py        # browser version
 > # or: python start_desktop.py   # desktop version
 > ```
+
+> **The single most common installation failure:** running `pip install -r
+> requirements.txt` from the wrong folder. A freshly opened Anaconda Prompt starts
+> in your **home folder** (e.g. `C:\Users\YourName`), not in Orienta, so `pip`
+> reports that `requirements.txt` does not exist. **Step 1 below shows how to get
+> into the right folder — do not skip it.**
 
 ---
 
@@ -56,8 +63,14 @@ Install these before you begin. The first two are **required**; the last two are
 
 4. **WSL + EMsoft / EMSphInx** — only if you want **master-pattern simulation** or
    **spherical indexing**. These are external scientific tools that run inside the
-   Windows Subsystem for Linux (WSL). They are installed and licensed separately by
-   you, and are **not** required for loading data, Hough indexing, Dictionary
+   Windows Subsystem for Linux (WSL).
+
+   **You do not install these by hand.** Orienta has a built-in installer under
+   **Settings → EMsoft + EMSphInx Installation** that sets up WSL, creates the
+   Linux user and builds both tools for you. Do this *after* the app runs — see
+   [Step 5](#step-5--optional-emsoft--emsphinx-via-the-built-in-installer).
+
+   They are **not** required for loading data, Hough indexing, Dictionary
    indexing, EDS analysis, phase maps, or the rest of the app.
 
 ---
@@ -69,19 +82,65 @@ Choose **one** of the following.
 **Option A — Clone with Git** (recommended; makes updates easy):
 
 ```bash
-git clone <your-repo-url>
-cd <repo-folder>
+git clone https://github.com/SeSam-MUL/Orienta.git
 ```
+
+This creates a folder named `Orienta` inside whatever folder your terminal is
+currently in.
 
 **Option B — Download a ZIP:**
 
-1. On the repository web page, click the green **Code** button → **Download ZIP**.
+1. On the [repository page](https://github.com/SeSam-MUL/Orienta), click the green
+   **Code** button → **Download ZIP**.
 2. Unzip it somewhere convenient (avoid paths with unusual characters).
-3. Open a terminal (Anaconda Prompt on Windows) and `cd` into the unzipped folder.
 
-All remaining commands are run **from the repository root** (the folder that
-contains `requirements.txt`, `start_app.py`, and the `frontend/` directory),
-unless a step says otherwise.
+---
+
+## Step 1b — Go into the Orienta folder (do not skip)
+
+Every remaining command must be run **from the Orienta folder** — the one that
+contains `requirements.txt`, `start_app.py` and `frontend/`. When you open an
+Anaconda Prompt it starts in your **home folder**, not in Orienta, so this is
+almost always the first thing that goes wrong.
+
+**1. Find the full path of the folder.** In Windows Explorer, open the Orienta
+folder and click the address bar — it shows something like
+`C:\Users\YourName\Downloads\Orienta`. Copy it.
+
+**2. Change into it** (right-click pastes into the Anaconda Prompt):
+
+```bash
+cd C:\Users\YourName\Downloads\Orienta
+```
+
+> **Windows: if Orienta is on a different drive** (D:, E: …), plain `cd` will
+> *not* switch drives in the Anaconda Prompt. Use the `/d` flag:
+> ```bash
+> cd /d D:\Data\Orienta
+> ```
+
+On macOS / Linux:
+
+```bash
+cd ~/Downloads/Orienta
+```
+
+**3. Verify you are in the right place.** This must print the file name, not an
+error:
+
+```bash
+dir requirements.txt      # Windows
+ls requirements.txt       # macOS / Linux
+```
+
+If instead you get *"File Not Found"* / *"No such file or directory"*, you are in
+the wrong folder — go back to point 1. Running `pip install -r requirements.txt`
+from the wrong folder is the most common installation failure, and the error it
+produces (`Could not open requirements file`) does not make the cause obvious.
+
+> Keep this terminal open for the rest of the guide. If you close it and come
+> back later, you must `cd` into the folder again (and re-run
+> `conda activate ebsd`).
 
 ---
 
@@ -213,6 +272,65 @@ tab. It requires **Node.js** (Step 0) and the `npm install` from **Step 3**.
 
 ---
 
+## Step 5 — Optional: EMsoft + EMSphInx via the built-in installer
+
+Skip this step unless you need **master-pattern simulation** or **spherical
+indexing**. Everything else in Orienta works without it.
+
+You do **not** need to follow EMsoft's own build instructions. Orienta ships an
+installer that runs the whole chain for you — including a **required CMake
+downgrade** that is easy to get wrong by hand (see the version table below).
+
+### Where to find it
+
+Start Orienta (Step 4), then in the left sidebar open **Settings** and scroll to
+the **“EMsoft + EMSphInx Installation”** panel. It has a system check followed by
+three numbered steps:
+
+| Panel | What it does |
+|---|---|
+| **System Check** | Reports your platform, CPU architecture, NVIDIA GPU + driver, and whether WSL is version 1 or 2. Read the warnings here first — they explain, for example, that WSL 1 has no GPU passthrough. |
+| **Step 1 — WSL Installation** | Pick the Linux distribution and click **Install WSL**. Windows asks for administrator rights (UAC) and the install runs in a separate elevated console window. Takes several minutes, and **you may have to restart your PC afterwards**. If a broken distribution is detected the button becomes **Repair WSL**. Use **Refresh Status** to re-check once it finishes (or after the restart). |
+| **Step 2 — WSL User Setup** | WSL starts out with only a `root` account. Enter a username and password and click **Create User**. Remember this password — Step 3 needs it for `sudo`. (**Reset password** is there if you forget it later.) |
+| **Step 3 — EMsoft + EMSphInx Installation** | Enter the password from Step 2 and click **Run in WSL**. The build log streams live into the panel. This is the long one — see the time estimate below. |
+
+**On native Linux and macOS** there is no WSL: the panel shows **“Direct
+Installation — No WSL needed”** with a single **Run Install** button, and Steps 1
+and 2 are not used.
+
+### Versions — these matter
+
+The installer pins specific versions on purpose. **Do not substitute newer ones.**
+
+| Component | Required version | Why |
+|---|---|---|
+| **CMake** | **exactly 3.27.9** | **EMsoft does not build with newer CMake.** The installer *removes* the distribution's CMake and installs 3.27.9 from Kitware into `/opt`. If you build EMsoft by hand with whatever `apt` gives you (4.x), the build fails. |
+| **Ubuntu (WSL)** | **22.04 LTS (recommended)**; 20.04 and 24.04 also supported | These are the three distributions the wizard offers and the installer knows. Anything else falls back to the 22.04 code path and is untested. |
+| **Clang / LLVM** | **18** | Installed from `apt.llvm.org`; required to build POCL (the OpenCL backend). |
+| **WSL** | **version 2** | WSL 1 works for CPU-only builds but has **no GPU passthrough**. Upgrade with `wsl --set-version <distro> 2` in an admin PowerShell. |
+| **NVIDIA driver** | **470 or newer** (only if you want GPU) | Older drivers cannot pass the GPU through to WSL 2. Without a GPU everything still runs, on CPU. |
+
+### What to expect
+
+- **Disk space:** about **20 GB** free inside WSL.
+- **RAM:** **4 GB** minimum. The installer also creates a **16 GB swap file** if
+  none exists, because the EMsoft build is memory-hungry.
+- **Time:** roughly **30–90 minutes**, depending on your CPU. The log will sit on
+  single compile steps for minutes at a time — that is normal, not a freeze.
+- **Internet:** required throughout (sources are downloaded during the build).
+
+### If it fails partway through
+
+The installer records each completed phase in `~/.emsoft_install_progress` inside
+WSL. **Just click “Run in WSL” again** — it skips everything that already
+finished and resumes at the failed phase. You do not have to start over.
+
+The nine phases are: pre-flight checks → swap file → build dependencies → POCL
+(OpenCL) → CMake 3.27.9 → EMsoft SDK → EMsoft → EMSphInx → config and PATH →
+verification.
+
+---
+
 ## First run / verify
 
 Once the app is open (browser or desktop):
@@ -229,6 +347,28 @@ If patterns show up, your installation is working correctly.
 ---
 
 ## Troubleshooting
+
+**`Could not open requirements file: ... requirements.txt` / "No such file or directory"**
+You are running `pip` from the wrong folder — almost certainly your home folder,
+where a fresh Anaconda Prompt starts. Go back to [Step 1b](#step-1b--go-into-the-orienta-folder-do-not-skip)
+and `cd` into the Orienta folder first. On Windows, if Orienta sits on another
+drive, use `cd /d D:\path\to\Orienta` — plain `cd` does not switch drives.
+
+**`'conda' is not recognized` / `python` opens the Microsoft Store**
+You are in a plain Command Prompt or PowerShell instead of the **Anaconda
+Prompt**. Open "Anaconda Prompt" from the Start menu and start again from
+Step 1b.
+
+**EMsoft build fails with a CMake error**
+EMsoft requires **CMake 3.27.9** and does not build with newer releases. The
+built-in installer (Step 5) handles this by removing the distribution's CMake
+first — so use it rather than building EMsoft by hand. If you did install EMsoft
+manually with a 4.x CMake, remove that CMake and re-run the installer from
+**Settings → EMsoft + EMSphInx Installation**.
+
+**The EMsoft installation stopped halfway / the log ended with an error**
+Nothing is lost. Click **Run in WSL** again — the installer resumes from the last
+completed phase (markers live in `~/.emsoft_install_progress` inside WSL).
 
 **"Port 8000 is already in use" / the app won't start**
 Another program (often a previous Orienta backend that didn't shut down) is using

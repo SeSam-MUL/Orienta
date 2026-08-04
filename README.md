@@ -33,7 +33,11 @@ Scientific layer      kikuchipy, orix, diffsims, numpy/scipy, PyTorch (GPU)
   ships only the Electron shell — it launches a system/conda Python at runtime).
 - Node.js 18+ (only for building the frontend / running it in dev).
 - Optional: **WSL** with **EMsoft** / **EMSphInx** for master-pattern simulation
-  and spherical indexing. NVIDIA GPU (CUDA 12) optional for GPU indexing/simulation.
+  and spherical indexing. You do **not** install these by hand — Orienta ships a
+  wizard under **Settings → EMsoft + EMSphInx Installation** that sets up WSL,
+  the Linux user and both tools. See
+  [INSTALL.md § Step 5](INSTALL.md#step-5--optional-emsoft--emsphinx-via-the-built-in-installer).
+  NVIDIA GPU (CUDA 12) optional for GPU indexing/simulation.
 
 ## Install
 
@@ -41,18 +45,36 @@ Scientific layer      kikuchipy, orix, diffsims, numpy/scipy, PyTorch (GPU)
 > it covers prerequisites (with download links), the Python environment, building
 > the UI, both run modes, and troubleshooting, step by step.
 
-Quick version (from the repository root, with conda + Node.js 18+ installed):
+Quick version, with conda + Node.js 18+ installed.
+
+> **The first command is `cd`, and it is not optional.** A fresh Anaconda Prompt
+> starts in your home folder, *not* in Orienta. Every command below — especially
+> `pip install -r requirements.txt` — only works from the folder that contains
+> `requirements.txt`. Replace the example path with wherever you unzipped or
+> cloned Orienta.
 
 ```bash
+# 1. Go into the Orienta folder FIRST (adjust the path to your machine):
+cd C:\Users\YourName\Downloads\Orienta      # Windows
+# cd ~/Downloads/Orienta                    # macOS / Linux
+
+# 2. Confirm you are in the right place — this must list requirements.txt:
+dir requirements.txt                        # Windows
+# ls requirements.txt                       # macOS / Linux
+
+# 3. Python environment
 conda create -n ebsd python=3.11
 conda activate ebsd
 # Optimized BLAS first (NumPy is ~1000x slower on reference BLAS):
 conda install -c conda-forge "blas=*=openblas"
 pip install -r requirements.txt
 
-# Build the user interface (needed before first run):
+# 4. Build the user interface (needed before first run):
 cd frontend && npm install && npm run build && cd ..
 ```
+
+If step 2 says the file cannot be found, you are in the wrong folder — `cd` to
+the correct one before continuing.
 
 ## Run
 
