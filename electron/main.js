@@ -144,7 +144,15 @@ function startBackend() {
     // orphan uvicorn workers / leave port 8000 bound. On Windows `detached` has
     // different semantics — taskkill /T already kills the whole tree there.
     detached: process.platform !== 'win32',
-    env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', KIKUCHIPY_WATCHDOG: '1' },
+    env: {
+      ...process.env,
+      PYTHONDONTWRITEBYTECODE: '1',
+      KIKUCHIPY_WATCHDOG: '1',
+      // Last line of defence: the backend polls this PID and exits when we are
+      // gone. Covers the paths our own cleanup cannot — Electron being killed
+      // outright, or the user closing the console that hosts npm/concurrently.
+      KIKUCHIPY_PARENT_PID: String(process.pid),
+    },
   });
 
   backendProcess.stdout.on('data', (data) => {
@@ -243,15 +251,22 @@ function createWindow() {
     if (userInitiatedQuit) return;
     if (rendererReloadCount >= MAX_RENDERER_RELOADS) {
       console.error(`[Renderer] crashed ${rendererReloadCount} times — giving up.`);
-      // Crucial: tag this so the upcoming window-all-closed / before-quit
-      // chain leaves the backend alive — a long-running batch can still
-      // be reached at http://127.0.0.1:BACKEND_PORT from any browser.
-      keepBackendOnQuit = true;
+      // Keeping the backend alive here is OPT-IN only. It was the default, to
+      // protect a 12 h batch from a renderer crash, but the cost was worse than
+      // the benefit in practice: the surviving process kept port 8000, the next
+      // session silently attached to it, and a backend that outlived a USB
+      // replug then served dead file handles ("errno 22") on every load. Quit
+      // means quit; set KIKUCHIPY_KEEP_BACKEND=1 before launching when you
+      // deliberately want a long job to survive the UI.
+      keepBackendOnQuit = process.env.KIKUCHIPY_KEEP_BACKEND === '1';
       dialog.showErrorBox(
         'Renderer keeps crashing',
         `The UI process crashed ${rendererReloadCount} times (last: ${details.reason}). ` +
-        `The backend is still running — open http://127.0.0.1:${BACKEND_PORT} in your browser ` +
-        `to keep using it. Restart the app when you're ready.`
+        (keepBackendOnQuit
+          ? `The backend is still running — open http://127.0.0.1:${BACKEND_PORT} in your browser ` +
+            `to keep using it. Restart the app when you're ready.`
+          : `The backend has been shut down with it. Restart the app to continue. ` +
+            `(Launch with KIKUCHIPY_KEEP_BACKEND=1 if you need a running job to survive this.)`)
       );
       return;
     }
@@ -375,21 +390,25 @@ function killBackend() {
     req.end();
   } catch {}
 
-  // 2. Force-kill after short delay to ensure it's gone
-  // PID is a number from child_process.spawn — safe to interpolate
-  setTimeout(() => {
-    if (!backendProcess) return;
-    try {
-      if (process.platform === 'win32') {
-        execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
-      } else {
-        process.kill(-pid, 'SIGTERM');
-      }
-    } catch {
-      try { backendProcess.kill('SIGKILL'); } catch {}
+  // 2. Force-kill — SYNCHRONOUSLY.
+  //
+  // This used to sit in setTimeout(..., 1000). killBackend() is called from
+  // 'before-quit', and Electron tears the process down long before a 1 s timer
+  // can fire, so the taskkill never actually ran: the backend's survival came
+  // down to whether the fire-and-forget /api/shutdown request above happened to
+  // complete first. That race is why an orphaned backend kept coming back, held
+  // port 8000, and let the next session attach to a stale process.
+  // PID is a number from child_process.spawn — safe to interpolate.
+  try {
+    if (process.platform === 'win32') {
+      execSync(`taskkill /PID ${pid} /T /F`, { stdio: 'ignore' });
+    } else {
+      process.kill(-pid, 'SIGTERM');
     }
-    backendProcess = null;
-  }, 1000);
+  } catch {
+    try { backendProcess.kill('SIGKILL'); } catch {}
+  }
+  backendProcess = null;
 }
 
 app.on('window-all-closed', () => {

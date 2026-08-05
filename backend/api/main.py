@@ -189,12 +189,73 @@ async def _reap_orphaned_emsoft():
         logger.exception("Startup reaper failed (non-fatal)")
 
 
+async def _parent_watchdog():
+    """Exit as soon as the process that launched us is gone.
+
+    The desktop app spawns this backend as a child of Electron and passes its
+    own PID as ``KIKUCHIPY_PARENT_PID``. When Electron exits — normally, after a
+    crash, or because the user closed the console window that hosts it — this
+    backend must go too. Nothing else reliably covers all of those paths:
+
+      * Electron's own ``before-quit`` kill never runs when Electron itself is
+        killed (closing the console kills the whole npm/concurrently tree).
+      * ``_frontend_watchdog`` keys on ``ws_manager.active_connections``, and a
+        half-open WebSocket from a dead renderer keeps that count above zero
+        indefinitely — which is exactly how a backend survived 19 h and then
+        served stale, dead file handles after the data drive was replugged.
+
+    Checking the parent process is deterministic and immune to both. Disabled
+    when the variable is unset, so ``start_app.py``, --headless and plain
+    uvicorn runs (no parent to speak of) are unaffected.
+    """
+    raw = os.environ.get("KIKUCHIPY_PARENT_PID", "").strip()
+    if not raw:
+        logger.info("Parent watchdog disabled (KIKUCHIPY_PARENT_PID unset)")
+        return
+    try:
+        parent_pid = int(raw)
+    except ValueError:
+        logger.warning("Parent watchdog disabled — KIKUCHIPY_PARENT_PID=%r is not a PID", raw)
+        return
+
+    try:
+        import psutil
+        parent = psutil.Process(parent_pid)
+        # Pin the identity: a PID alone is not enough, the OS reuses them.
+        parent_started_at = parent.create_time()
+    except Exception:
+        logger.warning("Parent watchdog: parent PID %d not found at startup — "
+                       "exiting rather than outliving it", parent_pid)
+        os._exit(0)
+
+    interval = 3.0
+    logger.info("Parent watchdog enabled — exiting when PID %d goes away "
+                "(checked every %.0fs)", parent_pid, interval)
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            if not psutil.pid_exists(parent_pid):
+                gone = "process no longer exists"
+            elif psutil.Process(parent_pid).create_time() != parent_started_at:
+                gone = "PID was reused by a different process"
+            else:
+                continue
+        except Exception:
+            gone = "parent process is no longer inspectable"
+        logger.info("Parent (PID %d) gone (%s) — shutting the backend down.",
+                    parent_pid, gone)
+        os._exit(0)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global _frontend_heartbeat_task
     logger.info("Orienta Backend starting...")
     _frontend_heartbeat_task = asyncio.create_task(_frontend_watchdog())
+    # Hard guarantee that closing the desktop app (or its console) takes the
+    # backend with it — see _parent_watchdog for why the other two paths fail.
+    asyncio.create_task(_parent_watchdog())
     # Fire-and-forget prewarm — the first load no longer pays import cost.
     asyncio.create_task(_prewarm_kikuchipy_imports())
     # Fire-and-forget reaper — clean up EMsoft processes left running in WSL
