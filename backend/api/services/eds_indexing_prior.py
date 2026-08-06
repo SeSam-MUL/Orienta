@@ -64,18 +64,44 @@ def _build_at_pct_maps_for_loaded_file():
     return _f()
 
 
+class EdsGridMismatch(ValueError):
+    """EDS map grid differs from the EBSD navigation grid.
+
+    Raised instead of silently slicing: with different shapes every pattern
+    would be paired with a DIFFERENT pixel's chemistry, so the prior would be
+    confidently wrong rather than merely unhelpful. Fail loud (2026-08-05).
+    """
+
+
 def measured_atpct_per_pixel(
     selection_mask: Optional[np.ndarray] = None,
+    expected_shape: Optional[tuple] = None,
 ) -> Optional[list]:
     """Per RESULT-pixel At.% dicts (0-100), row-major over the nav grid. With
     selection_mask, only selected pixels in row-major (ascending-flat) order — the
-    same order the pattern stack / result use. Returns None if no EDS is available."""
+    same order the pattern stack / result use. Returns None if no EDS is available.
+
+    ``expected_shape`` is the (n_rows, n_cols) of the EBSD navigation grid. When
+    given — or derivable from ``selection_mask`` — it is compared against the EDS
+    grid and a mismatch raises :class:`EdsGridMismatch`.
+    """
     try:
         at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
     except Exception:
         return None
     if not at_maps:
         return None
+
+    want = expected_shape
+    if want is None and selection_mask is not None:
+        want = tuple(np.asarray(selection_mask).shape)
+    if want is not None and tuple(int(v) for v in want) != (int(n_rows), int(n_cols)):
+        raise EdsGridMismatch(
+            f"EDS grid {int(n_rows)}x{int(n_cols)} does not match the EBSD "
+            f"navigation grid {tuple(int(v) for v in want)}. Pairing them would "
+            f"give every pattern the wrong pixel's chemistry."
+        )
+
     elements = list(at_maps.keys())
     n_full = n_rows * n_cols
     # (N_full, E)

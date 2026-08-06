@@ -572,7 +572,29 @@ def chemistry_fit(
     # "drop chemically-impossible phases that win cubic-FCC by symmetry
     # degeneracy" rule. Pure tightening: it only ever LOWERS scores for
     # phases the pixel chemistry rules out.
-    _MAJOR_REQ, _ABSENT = 0.15, 0.02
+    # 2026-08-04: _MAJOR_REQ lowered 0.15 -> 0.05. At 0.15 a phase whose
+    # DEFINING elements are nominally below 15 at% was never vetoed when those
+    # elements were absent. alpha-Al(Fe,Mn)Si (Fe 7.5 + Mn 7.5 at%) therefore
+    # scored 0.596 on Al/Si mixing-boundary pixels that contain 0.2 at% Fe --
+    # BETTER than Si (0.235) -- because its nominal Al/Si ratio sits on the
+    # Al<->Si mixing line. That is why the alpha rim around Si particles
+    # survived even a fully symmetric prior (measured: 127/168 particles still
+    # shelled). Verified on ProbeB: rim fit 0.596 -> 0.050, while the real
+    # 1607-px Fe/Mn particle (Fe 3.96 at%) keeps fit 0.903 and still wins over
+    # Al (0.712) and Si (0.020) -- the 2 at% _ABSENT floor gives enough margin
+    # even with the ~0.42x heavy-element under-read of the standardless
+    # Cliff-Lorimer quantification.
+    # 2026-08-05: _ABSENT lowered 0.02 -> 0.012. At 2 at% the threshold sat INSIDE
+    # the Mn distribution of a real alpha-Al(Fe,Mn)Si particle (Mn 1.8-2.2 at%
+    # throughout), so measurement noise punched 394 holes into a 1607-px grain —
+    # 99 separate patches, 60 % of them deep in the interior, not a rim effect.
+    # The pattern evidence there is identical to the core (CI 0.635 vs 0.636).
+    # Matrix and Si-boundary pixels sit at Mn ~0.3 at%, so there is a wide empty
+    # gap between "absent" and "present"; 1.2 at% sits in the middle of it
+    # instead of on the edge of a noisy distribution. Measured on ProbeB:
+    # alpha grain retained 79.8 % -> 100 %, while the Si-rim veto and the Al
+    # matrix stay at 100 % vetoed.
+    _MAJOR_REQ, _ABSENT = 0.05, 0.012
     for el, frac in q.items():
         if frac >= _MAJOR_REQ and p.get(el, 0.0) < _ABSENT:
             return min(score, 0.05)

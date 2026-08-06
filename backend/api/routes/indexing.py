@@ -550,7 +550,14 @@ def _build_eds_phase_weights(req, method_paths, selection_mask, full_grid_order:
     if not any(s > 0.0 for s in strengths):
         return None
     sel = None if full_grid_order else selection_mask
-    measured = measured_atpct_per_pixel(sel)
+    # Grid guard (2026-08-05): the EDS map and the EBSD nav grid were never
+    # compared, so a size mismatch silently paired each pattern with a
+    # DIFFERENT pixel's chemistry. measured_atpct_per_pixel now raises
+    # EdsGridMismatch; let it propagate — a wrong-pixel prior is worse than a
+    # failed run. selection_mask alone does not cover full_grid_order=True,
+    # hence the explicit nav shape.
+    from backend.api.services.eds_preflight import _ebsd_nav_shape
+    measured = measured_atpct_per_pixel(sel, expected_shape=_ebsd_nav_shape())
     if measured is None:
         return None
     overrides = [req.eds_expected_overrides.get(p) for p in method_paths]
@@ -922,6 +929,32 @@ class RefineRequest(BaseModel):
     trust_region: float = 5.0
 
 
+class EdsPreflightRequest(BaseModel):
+    """Phase files the user is about to index with (sht/cif/master paths)."""
+    phase_files: List[str] = []
+
+
+@router.post("/eds-preflight")
+async def eds_preflight(req: EdsPreflightRequest):
+    """Is the loaded file's EDS chemistry usable for these phases?
+
+    Replaces the old single ``has_eds`` boolean. Reports grid alignment
+    (blocking — a mismatch pairs every pattern with the wrong pixel), signal
+    strength, element coverage, and per-phase chemical plausibility using the
+    SAME rule the veto in ``chemistry_fit`` applies. A phase reported at 0 %
+    supported area will be vetoed at every pixel.
+    """
+    from backend.api.services.eds_preflight import run_preflight
+    try:
+        return run_preflight(
+            list(req.phase_files or []),
+            phase_formulas=_phase_formulas_for_paths(list(req.phase_files or [])),
+        )
+    except Exception as exc:
+        logger.exception("EDS preflight failed")
+        raise HTTPException(status_code=500, detail=f"EDS preflight failed: {exc}")
+
+
 @router.post("/start")
 async def start_indexing(req: IndexingStartRequest):
     """Start an indexing job as a background task."""
@@ -1277,6 +1310,23 @@ async def start_indexing(req: IndexingStartRequest):
                 # Dictionary) keep the legacy per-phase loop below.
                 gpu_fast_path_done = False
                 all_results = None
+                # Dictionary and Hough apply the prior further down; the
+                # Spherical/EMSphInx CPU branch does NOT — it used to ignore it
+                # silently while the UI still showed the control. A knob that
+                # does nothing is worse than no knob (2026-08-05). Say so.
+                if (any(float(v) > 0.0 for v in (req.eds_phase_strengths or {}).values())
+                        and indexing_method == IndexingMethod.SPHERICAL
+                        and req.backend != "spherical_gpu"):
+                    _progress(
+                        "WARNING: EDS chemistry is only applied on the "
+                        "Spherical GPU backend — this run ignores it",
+                        0.09,
+                    )
+                    logger.warning(
+                        "EDS prior requested (method=%s backend=%s) but only "
+                        "spherical_gpu applies it; running WITHOUT chemistry.",
+                        indexing_method, req.backend,
+                    )
                 if indexing_method == IndexingMethod.SPHERICAL and req.backend == "spherical_gpu":
                     _progress(
                         f"Spherical-GPU multi-phase: {req.sht_paths and len(req.sht_paths) or 0} phase(s)",
