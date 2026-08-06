@@ -15,6 +15,12 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        // The install wizard streams its log over a WebSocket that lives
+        // under /api (/api/install/ws/install-emsoft). Without ws:true Vite
+        // registers no upgrade handler for this context, so the browser's
+        // upgrade request is never answered and the socket dies with a bare
+        // "WebSocket connection error" — while every REST call still works.
+        ws: true,
       },
       '/ws': {
         target: 'ws://127.0.0.1:8000',
