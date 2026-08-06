@@ -52,8 +52,36 @@
     "removePhase": "移除相",
     "selected": "已选",
     "cannotAdd": "无法添加 \"{{name}}\": {{method}} 标定需要 .{{ext}} 文件（实际为 .{{got}}）",
-    "skippedNoFile": "已跳过 {{count}} 个没有 .{{ext}} 文件的相（{{method}} 标定）",
-    "edsStrength": "EDS 影响"
+    "skippedNoFile": "已跳过 {{count}} 个没有 .{{ext}} 文件的相（{{method}} 标定）"
+  },
+  "edsPrior": {
+    "toggle": "使用 EDS 化学成分辅助定相",
+    "noEds": "该数据集不含 EDS 数据 — 仅使用衍射花样标定",
+    "offNote": "关闭 — 仅根据衍射花样确定物相",
+    "emsphinxIgnored": "EMSphInx 后端会忽略 EDS 化学成分 — 本次运行仅使用花样。如需应用，请将球面后端切换为 GPU (PyTorch)。",
+    "startBlockedTip": "EDS 预检未通过 — 请先解决问题，或关闭 EDS 化学成分",
+    "preflightTitle": "EDS 预检",
+    "checking": "检查中…",
+    "unavailable": "EDS 预检不可用 ({{error}}) — 仍可继续标定",
+    "blocked": "该数据集无法使用 EDS 化学成分。",
+    "blockedHint": "关闭上方开关即可在不使用化学成分的情况下标定。",
+    "checks": {
+      "eds_present": "EDS 数据",
+      "grid": "网格匹配",
+      "signal": "信号强度",
+      "coverage": "元素覆盖"
+    },
+    "gridShapes": "EDS {{eds}} / EBSD {{ebsd}}",
+    "colPhase": "物相",
+    "colDefining": "定义元素 (标称 at.%)",
+    "colArea": "可能面积占比",
+    "atMost": "至多 {{pct}} %",
+    "notJudgeable": "无法判定",
+    "notMeasured": "(未测量: {{elements}})",
+    "weakBoundTip": "单元素物相 — 该元素痕量分布于各处，此上限几乎没有约束力。",
+    "upperBoundNote": "“至多”是各物相面积占比的上限 (表示化学成分未在该处排除该相)，并非预测值。",
+    "weakBoundNote": "灰色数值来自单元素物相，其上限几乎没有约束力。",
+    "noPhases": "尚未选择物相 — 以上检查针对整个数据集。"
   },
   "phaseDropdown": {
     "search": "搜索相...",
@@ -643,6 +671,6 @@
     "phaseTestClearMarkers": "从比较面板中移除所有编号标记",
     "phaseTestExcludedToggle": "显示或隐藏被 EDS 化学组成筛选排除的相",
     "matchesClearMarkers": "从比较面板中移除所有编号标记",
-    "phaseEdsStrength": "该相的 EDS 化学成分对相选择的影响强度（0 = 仅按花样）。"
+    "edsPriorToggle": "按每个像素实测的 EDS 化学成分对定相进行加权。对所有已选物相同等生效；关闭时仅由花样决定。"
   }
 }

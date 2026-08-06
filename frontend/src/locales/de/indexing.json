@@ -52,8 +52,36 @@
     "removePhase": "Phase entfernen",
     "selected": "gewählt",
     "cannotAdd": "\"{{name}}\" kann nicht hinzugefügt werden: {{method}}-Indizierung benötigt eine .{{ext}}-Datei (erhalten: .{{got}})",
-    "skippedNoFile": "{{count}} Phase(n) ohne .{{ext}}-Datei übersprungen ({{method}}-Indizierung)",
-    "edsStrength": "EDS-Einfluss"
+    "skippedNoFile": "{{count}} Phase(n) ohne .{{ext}}-Datei übersprungen ({{method}}-Indizierung)"
+  },
+  "edsPrior": {
+    "toggle": "EDS-Chemie für die Phasenzuordnung nutzen",
+    "noEds": "Dieser Datensatz enthält keine EDS-Daten — es wird nur das Beugungsmuster genutzt",
+    "offNote": "Aus — die Phase wird allein aus dem Beugungsmuster bestimmt",
+    "emsphinxIgnored": "Das EMSphInx-Backend ignoriert die EDS-Chemie — dieser Lauf nutzt nur das Muster. Zum Anwenden das Spherical-Backend auf GPU (PyTorch) umstellen.",
+    "startBlockedTip": "Die EDS-Vorprüfung ist fehlgeschlagen — Ursache beheben oder die EDS-Chemie ausschalten",
+    "preflightTitle": "EDS-Vorprüfung",
+    "checking": "Prüfe…",
+    "unavailable": "EDS-Vorprüfung nicht verfügbar ({{error}}) — Indizierung bleibt möglich",
+    "blocked": "Die EDS-Chemie kann für diesen Datensatz nicht genutzt werden.",
+    "blockedHint": "Oben ausschalten, um ohne Chemie zu indizieren.",
+    "checks": {
+      "eds_present": "EDS-Daten",
+      "grid": "Raster-Abgleich",
+      "signal": "Signalstärke",
+      "coverage": "Element-Abdeckung"
+    },
+    "gridShapes": "EDS {{eds}} vs. EBSD {{ebsd}}",
+    "colPhase": "Phase",
+    "colDefining": "Definierende Elemente (nominal At.-%)",
+    "colArea": "Möglicher Flächenanteil",
+    "atMost": "höchstens {{pct}} %",
+    "notJudgeable": "nicht beurteilbar",
+    "notMeasured": "(nicht gemessen: {{elements}})",
+    "weakBoundTip": "Einelement-Phase — die Schranke ist trivial schwach, weil Spuren dieses Elements überall vorkommen.",
+    "upperBoundNote": "„Höchstens“ ist eine OBERE SCHRANKE für den Flächenanteil (die Chemie schließt die Phase dort nicht aus), keine Vorhersage.",
+    "weakBoundNote": "Ausgegraute Werte stammen von Einelement-Phasen, bei denen die Schranke trivial schwach ist.",
+    "noPhases": "Noch keine Phase gewählt — die Prüfungen oben gelten für den Datensatz."
   },
   "phaseDropdown": {
     "search": "Phase suchen...",
@@ -643,6 +671,6 @@
     "phaseTestClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
     "phaseTestExcludedToggle": "Vom EDS-Chemie-Filter ausgeschlossene Phasen ein- oder ausblenden",
     "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
-    "phaseEdsStrength": "Wie stark die EDS-Chemie dieser Phase die Phasenwahl beeinflusst (0 = nur Muster)."
+    "edsPriorToggle": "Gewichtet die Phasenwahl mit der gemessenen EDS-Chemie jedes Pixels. Gilt für ALLE gewählten Phasen gleichermaßen — aus heißt: allein das Muster entscheidet."
   }
 }

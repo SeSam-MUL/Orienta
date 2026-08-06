@@ -52,8 +52,36 @@
     "removePhase": "Remove phase",
     "selected": "selected",
     "cannotAdd": "Cannot add \"{{name}}\": {{method}} indexing needs a .{{ext}} file (got .{{got}})",
-    "skippedNoFile": "Skipped {{count}} phase(s) without a .{{ext}} file ({{method}} indexing)",
-    "edsStrength": "EDS influence"
+    "skippedNoFile": "Skipped {{count}} phase(s) without a .{{ext}} file ({{method}} indexing)"
+  },
+  "edsPrior": {
+    "toggle": "Use EDS chemistry for phase assignment",
+    "noEds": "This dataset has no EDS data — indexing uses the diffraction pattern only",
+    "offNote": "Off — phases are chosen from the diffraction pattern alone",
+    "emsphinxIgnored": "The EMSphInx backend ignores the EDS chemistry — this run will be pattern-only. Switch the Spherical backend to GPU (PyTorch) to apply it.",
+    "startBlockedTip": "The EDS pre-flight check failed — fix it or switch the EDS chemistry off",
+    "preflightTitle": "EDS pre-flight check",
+    "checking": "Checking…",
+    "unavailable": "EDS pre-flight check unavailable ({{error}}) — indexing is still allowed",
+    "blocked": "The EDS chemistry cannot be used with this dataset.",
+    "blockedHint": "Switch it off above to index without chemistry.",
+    "checks": {
+      "eds_present": "EDS data",
+      "grid": "Grid alignment",
+      "signal": "Signal strength",
+      "coverage": "Element coverage"
+    },
+    "gridShapes": "EDS {{eds}} vs EBSD {{ebsd}}",
+    "colPhase": "Phase",
+    "colDefining": "Defining elements (nominal at.%)",
+    "colArea": "Possible area",
+    "atMost": "at most {{pct}} %",
+    "notJudgeable": "not judgeable",
+    "notMeasured": "(not measured: {{elements}})",
+    "weakBoundTip": "Single-element phase — the bound is trivially weak, because trace amounts of that element sit everywhere.",
+    "upperBoundNote": "\"At most\" is an upper bound on each phase's area (chemistry does not rule the phase out there), not a predicted area fraction.",
+    "weakBoundNote": "Greyed values come from single-element phases, where the bound is trivially weak.",
+    "noPhases": "No phases selected yet — the checks above apply to the dataset."
   },
   "phaseDropdown": {
     "search": "Search phase...",
@@ -643,6 +671,6 @@
     "phaseTestClearMarkers": "Remove all numbered markers from the comparison panels",
     "phaseTestExcludedToggle": "Show or hide phases excluded by the EDS chemistry filter",
     "matchesClearMarkers": "Remove all numbered markers from the comparison panels",
-    "phaseEdsStrength": "How strongly this phase's EDS chemistry biases the phase choice (0 = pattern only)."
+    "edsPriorToggle": "Weight the phase choice by the measured EDS chemistry at every pixel. Applies to ALL selected phases equally — off means the pattern decides alone."
   }
 }

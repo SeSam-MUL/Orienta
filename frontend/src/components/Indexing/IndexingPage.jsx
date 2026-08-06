@@ -29,6 +29,8 @@ import PhaseDropdown from './PhaseDropdown';
 import PhaseResultModal from './PhaseResultModal';
 import SinglePixelPhaseTestDialog from './SinglePixelPhaseTestDialog';
 import SelectedPhasesList from './SelectedPhasesList';
+import EdsPreflightPanel from './EdsPreflightPanel';
+import { buildEdsPhaseStrengths, edsPriorActive } from './edsPriorParams';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
@@ -1381,9 +1383,17 @@ export default function IndexingPage({ isActive }) {
   const [phasePanelOpen, setPhasePanelOpen]       = useState(false);
   const [selectedDictPaths, setSelectedDictPaths] = useState({}); // { masterPath: dictPath }
 
-  // --- EDS chemistry prior (per-phase influence at indexing) ---
-  const [edsStrengths, setEdsStrengths]                 = useState({}); // { [phase.path]: 0..100 }
-  const [edsExpectedOverrides, setEdsExpectedOverrides] = useState({}); // { [phase.path]: {El:atPct} } (editor deferred)
+  // --- EDS chemistry prior (one switch for the whole run) ---
+  // Was a per-phase 0-100 % slider until 2026-08-05. The backend weight is
+  // w_p = (1 - s_p) + s_p * chemistry_fit, so a phase left at 0 keeps weight
+  // EXACTLY 1.0 and is immune while the raised phases get penalised — setting it
+  // on Al+Si alone was measured to inflate a third phase from 1.5 % to 10 % of
+  // the map. Only two states are meaningful: off, or on for EVERY phase.
+  // Default ON; buildParams omits the field entirely when off.
+  const [edsEnabled, setEdsEnabled] = useState(true);
+  const [edsPreflight, setEdsPreflight] = useState(null);          // last response
+  const [edsPreflightLoading, setEdsPreflightLoading] = useState(false);
+  const [edsPreflightError, setEdsPreflightError] = useState(null); // string | null
 
   // --- Required files ---
   const [discoveredFiles, setDiscoveredFiles] = useState([]);
@@ -1786,10 +1796,6 @@ export default function IndexingPage({ isActive }) {
     // Clear files from previous method — can't use .sht for Dictionary etc.
     setPhaseFiles([]);
     setPhases([]);
-    // Drop any per-phase EDS strengths/overrides — their phase.path keys belong
-    // to the just-cleared list and must not linger into the new method's run.
-    setEdsStrengths({});
-    setEdsExpectedOverrides({});
     setPhaseDropdownOpen(false);
     setFileInput('');
     setFileStatus(t('phases.noFileLoaded'));
@@ -1895,7 +1901,6 @@ export default function IndexingPage({ isActive }) {
       const newPhases = phases.filter(p => p.path !== path);
       setPhaseFiles(newPaths);
       setPhases(newPhases);
-      pruneEdsMaps(newPhases);
       if (newPhases.length === 0) {
         setPhaseInfo(t('pcPhase.notLoaded'));
         setFileStatus(t('phases.noFileLoaded'));
@@ -1954,7 +1959,6 @@ export default function IndexingPage({ isActive }) {
     const newPhases = filteredPaths.map(p => discoveredFiles.find(f => f.path === p)).filter(Boolean);
     setPhaseFiles(filteredPaths);
     setPhases(newPhases);
-    pruneEdsMaps(newPhases);
     if (newPhases.length === 0) {
       setPhaseInfo(t('pcPhase.notLoaded'));
       setFileStatus(t('phases.noFileLoaded'));
@@ -1981,17 +1985,6 @@ export default function IndexingPage({ isActive }) {
     [phases],
   );
 
-  // Keep the per-phase EDS chemistry-prior maps in sync with the surviving
-  // phase set: drop any phase.path key that is no longer selected so a removed
-  // phase can never leak a stale strength into buildParams()'s payload. Called
-  // with [] this clears everything; called with newPhases it prunes surgically
-  // and preserves the strengths of phases that remain.
-  function pruneEdsMaps(keepPhases) {
-    const keep = new Set((keepPhases || []).map(p => p.path));
-    setEdsStrengths(s => Object.fromEntries(Object.entries(s).filter(([k]) => keep.has(k))));
-    setEdsExpectedOverrides(o => Object.fromEntries(Object.entries(o).filter(([k]) => keep.has(k))));
-  }
-
   // Remove several phases at once (used by the "reduce to one" banner action).
   // phases[] and phaseFiles[] are kept index-aligned by handleTogglePath /
   // handleSetAllPaths, so a positional filter is safe.
@@ -2002,7 +1995,6 @@ export default function IndexingPage({ isActive }) {
     const newPaths = phaseFiles.filter((_, i) => !removeSet.has(i));
     setPhases(newPhases);
     setPhaseFiles(newPaths);
-    pruneEdsMaps(newPhases);
     if (newPhases.length === 0) {
       setPhaseInfo(t('pcPhase.notLoaded'));
       setFileStatus(t('phases.noFileLoaded'));
@@ -2117,6 +2109,91 @@ export default function IndexingPage({ isActive }) {
   }, [phaseFiles, discoveredFiles, energy, pcValues]);
 
   // ---------------------------------------------------------------------------
+  // EDS chemistry prior — phase paths, pre-flight check
+  // ---------------------------------------------------------------------------
+
+  // The phase paths EXACTLY as they land in cif_paths / master_h5_paths /
+  // sht_paths. For Dictionary the selected dictionary path replaces the master
+  // path, and the backend looks the chemistry weight up by that substituted key
+  // — so the pre-flight request and eds_phase_strengths must both use this list
+  // or every dictionary lookup would miss and the prior would silently drop.
+  const effectivePhasePaths = useMemo(() => {
+    const base = phaseFiles.length > 0 ? phaseFiles : (fileInput ? [fileInput] : []);
+    if (method === 'dictionary' && Object.keys(selectedDictPaths).length > 0) {
+      return base.map(f => selectedDictPaths[f] || f);
+    }
+    return base;
+  }, [phaseFiles, fileInput, method, selectedDictPaths]);
+
+  // Human-readable label per effective path, for the pre-flight table. Keyed on
+  // the SUBSTITUTED path so a Dictionary row still shows the phase's label
+  // rather than the dictionary file's stem.
+  const edsPhaseLabels = useMemo(() => {
+    const out = {};
+    const base = phaseFiles.length > 0 ? phaseFiles : (fileInput ? [fileInput] : []);
+    base.forEach((p, i) => {
+      const key = (method === 'dictionary' && selectedDictPaths[p]) ? selectedDictPaths[p] : p;
+      const ph = phases.find(x => x.path === p) || phases[i];
+      const label = ph?.display_label || ph?.formula || ph?.filename;
+      if (label) out[key] = label;
+    });
+    return out;
+  }, [phaseFiles, fileInput, method, selectedDictPaths, phases]);
+
+  // Would this run actually ship the chemistry prior? Drives the pre-flight
+  // fetch AND whether a blocking verdict may hold the Start button back — a
+  // block is irrelevant when the field is not sent at all.
+  const edsPriorOn = edsPriorActive({
+    enabled: edsEnabled,
+    edsAvailable: edsOverlayAvailable,
+    phasePaths: effectivePhasePaths,
+  });
+
+  // Re-run the check when the dataset or the phase list changes. Debounced so
+  // click-through phase selection doesn't fire one request per click. A failed
+  // fetch degrades to "check unavailable" and NEVER blocks indexing.
+  // The dependency is the joined string, not the array: the memo above yields a
+  // fresh array whenever selectedDictPaths is replaced, which would re-fire the
+  // request for an unchanged list. Newline-joined — real paths contain spaces.
+  const edsPreflightKey = effectivePhasePaths.join('\n');
+  useEffect(() => {
+    if (!edsEnabled || !edsOverlayAvailable || !dataLoaded) {
+      setEdsPreflight(null);
+      setEdsPreflightError(null);
+      setEdsPreflightLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setEdsPreflightLoading(true);
+    const timer = setTimeout(() => {
+      indexApi.edsPreflight(edsPreflightKey ? edsPreflightKey.split('\n') : [])
+        .then(r => {
+          if (cancelled) return;
+          setEdsPreflight(r.data || null);
+          setEdsPreflightError(null);
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setEdsPreflight(null);
+          setEdsPreflightError(err?.response?.data?.detail || err?.message || 'error');
+        })
+        .finally(() => { if (!cancelled) setEdsPreflightLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [edsEnabled, edsOverlayAvailable, dataLoaded, selectedDataset, edsPreflightKey]);
+
+  // Blocking pre-flight verdict (today: an EDS/EBSD grid mismatch, which would
+  // pair every pattern with the wrong pixel's chemistry). Only bites while the
+  // prior is actually being sent — switching EDS off is the way out, so the
+  // switch itself deliberately stays enabled.
+  const edsPreflightBlocked = edsPriorOn && edsPreflight?.can_index === false;
+
+  // EMSphInx is a separate CPU program; the backend applies the chemistry only
+  // on spherical_gpu (and on Dictionary/Hough). Warn instead of blocking.
+  const edsIgnoredByBackend =
+    edsPriorOn && method === 'spherical' && sphericalBackend !== 'spherical_gpu';
+
+  // ---------------------------------------------------------------------------
   // Start indexing
   // ---------------------------------------------------------------------------
 
@@ -2170,22 +2247,17 @@ export default function IndexingPage({ isActive }) {
       } :
       { selection_mode: 'mask', mask: chemMaskRef.current || undefined };
 
-    // Collect all phase files (list + any single fileInput not yet added)
-    let allFiles = phaseFiles.length > 0
-      ? phaseFiles
-      : (fileInput ? [fileInput] : []);
+    // All phase files (list + any single fileInput not yet added), with the
+    // Dictionary master → selected-dictionary substitution already applied.
+    const allFiles = effectivePhasePaths;
 
-    // For dictionary method: replace master paths with selected dictionary paths
-    if (method === 'dictionary' && Object.keys(selectedDictPaths).length > 0) {
-      allFiles = allFiles.map(f => selectedDictPaths[f] || f);
-    }
-
-    // Same substitution as `allFiles` above, as a per-key function — so the EDS
-    // maps (keyed on phase.path) get re-keyed to whatever path actually lands in
-    // cif_paths/master_h5_paths/sht_paths. For Dictionary that's the selected
-    // dictionary path; for Hough/Spherical it's phase.path unchanged.
-    const edsRemapPath = p =>
-      (method === 'dictionary' && selectedDictPaths[p]) ? selectedDictPaths[p] : p;
+    // EDS chemistry prior: one switch for the whole run, 1.0 for every phase.
+    // See edsPriorParams.js for why a per-phase strength was removed.
+    const edsPhaseStrengths = buildEdsPhaseStrengths({
+      enabled: edsEnabled,
+      edsAvailable: edsOverlayAvailable,
+      phasePaths: allFiles,
+    });
 
     const common = {
       method,
@@ -2199,22 +2271,11 @@ export default function IndexingPage({ isActive }) {
       // selection_mode + mask on the backend, so we still ship those
       // for the legacy/non-phasemap codepath.
       use_phase_map_routing: phaseMapRoutingAvailable && usePhaseMapRouting,
-      // EDS chemistry prior (per-phase) — only shipped when EDS is available AND
-      // the user actually moved a strength slider above 0. Off by default ⇒ the
-      // keys are absent and the payload is byte-identical to before this feature.
-      // The maps are keyed on phase.path, but for Dictionary we substitute the
-      // selected dictionary path into master_h5_paths (mirrors the allFiles map
-      // above). The backend iterates those substituted paths and looks up the
-      // strength by that key, so we re-key through the SAME substitution here or
-      // every dictionary lookup would miss and the prior would silently drop.
-      ...(edsOverlayAvailable && Object.values(edsStrengths).some(v => v > 0) ? {
-        eds_phase_strengths: Object.fromEntries(
-          Object.entries(edsStrengths)
-            .filter(([, v]) => v > 0)
-            .map(([p, v]) => [edsRemapPath(p), Number(v) / 100])),
-        eds_expected_overrides: Object.fromEntries(
-          Object.entries(edsExpectedOverrides).map(([p, d]) => [edsRemapPath(p), d])),
-      } : {}),
+      // EDS chemistry prior. Omitted entirely when the switch is off or the file
+      // has no EDS ⇒ the payload stays byte-identical to a run without this
+      // feature. When on it is 1.0 for EVERY phase — a partial application is
+      // the failure mode this control was redesigned to remove.
+      ...(edsPhaseStrengths ? { eds_phase_strengths: edsPhaseStrengths } : {}),
       ...selectionParams,
     };
 
@@ -2429,7 +2490,9 @@ export default function IndexingPage({ isActive }) {
   const showDict       = method === 'dictionary';
   const showSpherical  = method === 'spherical';
   const showEmbedding  = method === 'embedding';
-  const canStart       = dataLoaded && !running;
+  // A blocking EDS pre-flight holds Start back only while the prior is actually
+  // being sent; turning the EDS switch off releases it.
+  const canStart       = dataLoaded && !running && !edsPreflightBlocked;
 
   // --- Spherical without a CUDA GPU -----------------------------------------
   // The PyTorch spherical backend falls back to the CPU (same results, ~10-25x
@@ -2634,6 +2697,45 @@ export default function IndexingPage({ isActive }) {
 
       {/* Phase Selection — inline list + floating picker */}
       <GroupBox title={t('phases.groupTitle')}>
+        {/* EDS chemistry — a property of the RUN, not of a phase, hence one
+            switch above the list rather than a control on every card. */}
+        <div style={{ marginBottom: 8 }}>
+          <CheckOption
+            label={t('edsPrior.toggle')}
+            checked={edsEnabled && edsOverlayAvailable}
+            disabled={!edsOverlayAvailable}
+            onChange={e => setEdsEnabled(e.target.checked)}
+            title={edsOverlayAvailable ? t('hoverTips.edsPriorToggle') : t('edsPrior.noEds')}
+          />
+          {!edsOverlayAvailable && (
+            <StatusLabel color={C.textSecondary} style={{ paddingTop: 1 }}>
+              {t('edsPrior.noEds')}
+            </StatusLabel>
+          )}
+          {edsOverlayAvailable && !edsEnabled && (
+            <StatusLabel color={C.textSecondary} style={{ paddingTop: 1 }}>
+              {t('edsPrior.offNote')}
+            </StatusLabel>
+          )}
+          {edsOverlayAvailable && edsEnabled && edsIgnoredByBackend && (
+            <div style={{
+              marginTop: 5, fontSize: '8.5pt', color: C.yellow, lineHeight: 1.4,
+              padding: '5px 9px', borderRadius: 4,
+              background: `${C.yellow}14`, border: `1px solid ${C.yellow}44`,
+            }}>
+              {'⚠'} {t('edsPrior.emsphinxIgnored')}
+            </div>
+          )}
+          {edsOverlayAvailable && edsEnabled && (
+            <EdsPreflightPanel
+              result={edsPreflight}
+              loading={edsPreflightLoading}
+              error={edsPreflightError}
+              phaseLabels={edsPhaseLabels}
+            />
+          )}
+        </div>
+
         <SelectedPhasesList
           phases={phases}
           method={method}
@@ -2649,11 +2751,6 @@ export default function IndexingPage({ isActive }) {
           })()}
           onSelectDict={handleSelectDict}
           selectedDictPaths={selectedDictPaths}
-          edsAvailable={edsOverlayAvailable}
-          edsStrengths={edsStrengths}
-          onStrengthChange={(path, v) => setEdsStrengths(s => ({ ...s, [path]: v }))}
-          expectedOverrides={edsExpectedOverrides}
-          onExpectedChange={(path, d) => setEdsExpectedOverrides(o => ({ ...o, [path]: d }))}
         />
         <StatusLabel color={fileStatusColor} style={{ marginTop: 4 }}>{fileStatus}</StatusLabel>
       </GroupBox>
@@ -2978,7 +3075,11 @@ export default function IndexingPage({ isActive }) {
           }}
           onMouseEnter={e => { if (canStart) { e.currentTarget.style.opacity = '0.88'; e.currentTarget.style.transform = 'scale(1.02)'; } }}
           onMouseLeave={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.transform = 'scale(1)'; }}
-          title={running ? t('actions.indexingInProgress') : t('actions.startIndexingTip')}
+          title={
+            running ? t('actions.indexingInProgress')
+              : edsPreflightBlocked ? t('edsPrior.startBlockedTip')
+              : t('actions.startIndexingTip')
+          }
         >
           {running ? <><span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.7s linear infinite', marginRight: 6, verticalAlign: 'middle' }} />{t('actions.indexing')}</> : t('actions.startIndexing')}
         </button>

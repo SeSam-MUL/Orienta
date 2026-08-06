@@ -456,6 +456,12 @@ export const indexApi = {
   batchStop: () => api.post('/api/indexing/batch/stop'),
   refine: (params) => api.post('/api/indexing/refine', params),
   previewPreprocessing: (params) => api.post('/api/indexing/preview-preprocessing', params),
+  // EDS pre-flight: is the loaded file's chemistry usable for these phases?
+  // `phaseFiles` must be the SAME paths that go into eds_phase_strengths (i.e.
+  // already remapped to the selected dictionary path for Dictionary runs), so
+  // the per-phase verdicts line up with what the run will actually weight.
+  edsPreflight: (phaseFiles = []) =>
+    api.post('/api/indexing/eds-preflight', { phase_files: phaseFiles }),
   // Per-dataset PC storage
   storePC: (datasetName, pc) => api.post(`/api/indexing/pc/store?dataset_name=${encodeURIComponent(datasetName)}`, pc),
   getStoredPCs: () => api.get('/api/indexing/pc/stored'),

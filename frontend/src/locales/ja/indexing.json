@@ -52,8 +52,36 @@
     "removePhase": "相を削除",
     "selected": "選択済み",
     "cannotAdd": "\"{{name}}\" を追加できません: {{method}} 指数付けには .{{ext}} ファイルが必要です（.{{got}} を取得）",
-    "skippedNoFile": ".{{ext}} ファイルのない {{count}} 相をスキップしました（{{method}} 指数付け）",
-    "edsStrength": "EDS の影響"
+    "skippedNoFile": ".{{ext}} ファイルのない {{count}} 相をスキップしました（{{method}} 指数付け）"
+  },
+  "edsPrior": {
+    "toggle": "相の判定に EDS 化学組成を使用する",
+    "noEds": "このデータセットには EDS データがありません — 回折パターンのみで指数付けします",
+    "offNote": "オフ — 回折パターンのみで相を決定します",
+    "emsphinxIgnored": "EMSphInx バックエンドは EDS 化学組成を無視します — この実行はパターンのみになります。適用するには球面バックエンドを GPU (PyTorch) に切り替えてください。",
+    "startBlockedTip": "EDS 事前チェックに失敗しました — 問題を解決するか、EDS 化学組成をオフにしてください",
+    "preflightTitle": "EDS 事前チェック",
+    "checking": "確認中…",
+    "unavailable": "EDS 事前チェックを実行できません ({{error}}) — 指数付けは可能です",
+    "blocked": "このデータセットでは EDS 化学組成を使用できません。",
+    "blockedHint": "上のスイッチをオフにすると、化学組成なしで指数付けできます。",
+    "checks": {
+      "eds_present": "EDS データ",
+      "grid": "グリッド整合",
+      "signal": "信号強度",
+      "coverage": "元素カバレッジ"
+    },
+    "gridShapes": "EDS {{eds}} / EBSD {{ebsd}}",
+    "colPhase": "相",
+    "colDefining": "定義元素 (公称 at.%)",
+    "colArea": "可能な面積率",
+    "atMost": "最大 {{pct}} %",
+    "notJudgeable": "判定不可",
+    "notMeasured": "(未測定: {{elements}})",
+    "weakBoundTip": "単一元素の相 — この元素は微量ながら全体に存在するため、上限はほとんど意味を持ちません。",
+    "upperBoundNote": "「最大」は各相の面積率の上限であり (その場所で化学組成が相を否定しないという意味)、予測値ではありません。",
+    "weakBoundNote": "灰色の値は単一元素の相によるもので、上限はほとんど意味を持ちません。",
+    "noPhases": "相が未選択です — 上のチェックはデータセット全体に対するものです。"
   },
   "phaseDropdown": {
     "search": "相を検索...",
@@ -643,6 +671,6 @@
     "phaseTestClearMarkers": "比較パネルからすべての番号付きマーカーを削除します",
     "phaseTestExcludedToggle": "EDS 化学組成フィルタで除外された相を表示/非表示します",
     "matchesClearMarkers": "比較パネルからすべての番号付きマーカーを削除します",
-    "phaseEdsStrength": "この相の EDS 化学組成が相の選択にどれだけ強く影響するか（0 = パターンのみ）。"
+    "edsPriorToggle": "各ピクセルで測定した EDS 化学組成により相の判定を重み付けします。選択したすべての相に等しく適用され、オフではパターンのみで判定します。"
   }
 }
