@@ -88,7 +88,11 @@
     "adoptBtn": "Diese Orientierung aufs Korn anwenden (Δ{{delta}}°)",
     "adoptBusy": "Wird angewendet…",
     "adoptDone": "Orientierung auf {{n}} px angewendet (Δ{{delta}}°).",
-    "adoptTip": "Ersetzt die gespeicherte Orientierung des Korns durch die frisch re-indexierte (Flood-Fill übers Korn, einstufiges Undo). Sinnvoll, wenn R besser wird, obwohl die Phase schon stimmt — die gespeicherte Orientierung liegt dann nur knapp neben dem scharfen Render-NCC-Optimum."
+    "adoptTip": "Ersetzt die gespeicherte Orientierung des Korns durch die frisch re-indexierte (Flood-Fill übers Korn, einstufiges Undo). Sinnvoll, wenn R besser wird, obwohl die Phase schon stimmt — die gespeicherte Orientierung liegt dann nur knapp neben dem scharfen Render-NCC-Optimum.",
+    "rIsCandidate": "re-indexierter Vorschlag (nicht das, was auf der Karte steht)",
+    "rStoredCompare": "gespeicherte Orientierung auf der Karte: R = {{value}}",
+    "rStoredBetter": "die gespeicherte passt besser",
+    "adoptWorse": "Re-indexierte Orientierung liegt {{delta}}° daneben, passt aber SCHLECHTER (R {{rCand}} gegen {{rStored}}) — wird nicht angeboten"
   },
   "displayModes": {
     "phase": "Phasenkarte",

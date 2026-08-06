@@ -26,6 +26,7 @@ import { toast } from '../../stores/useToastStore';
 import usePhaseColorStore from '../../stores/usePhaseColorStore';
 import LayeredCanvas from './LayeredCanvas';
 import LayerStackPanel from './LayerStackPanel';
+import { adoptDecision } from './adoptDecision';
 import ComputeDiagnosticsPanel from './ComputeDiagnosticsPanel';
 import RefinementPanel from './RefinementPanel';
 import AnomalyBrowserDrawer from './AnomalyBrowser/AnomalyBrowserDrawer';
@@ -578,10 +579,32 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                   it reflects the per-phase selection in compare mode. */}
               {displayed?.r_score != null && (
                 <div style={{ textAlign: 'center' }}>
+                  {/* Which orientation does this number describe? In compare
+                      mode the headline shows a freshly RE-INDEXED candidate,
+                      not what is on the map — unlabelled that reads as "your
+                      grain is a poor match" when the stored one may be better
+                      (measured: 0.140 candidate vs 0.262 stored). Name it, and
+                      put the stored value beside it. */}
+                  {phaseResults && (
+                    <div style={{ fontSize: '8.5pt', color: '#6272a4' }}>
+                      {t('phasemap:matches.rIsCandidate')}
+                    </div>
+                  )}
                   <div style={{ fontSize: '18pt', fontWeight: 700, color: rColor }}>
                     {t('phasemap:matches.rValue', { value: displayed.r_score.toFixed(4) })}
                   </div>
                   <div style={{ fontSize: '10pt', color: '#bd93f9' }}>{rLabel}</div>
+                  {phaseResults && matchData?.r_score != null && (
+                    <div style={{ fontSize: '8.5pt', marginTop: 2, color: '#6272a4' }}>
+                      {t('phasemap:matches.rStoredCompare', {
+                        value: matchData.r_score.toFixed(4) })}
+                      {displayed.r_score < matchData.r_score && (
+                        <span style={{ color: '#ffb86c' }}>
+                          {' — '}{t('phasemap:matches.rStoredBetter')}
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {/* Compare mode, same phase: Δ° between this re-indexed and
                       the STORED orientation. <2° = same orientation, just off
                       the sharp render-NCC optimum (refinement, not a variant
@@ -615,9 +638,18 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                 // the stored one → offer to ADOPT it (grain flood-fill, undo).
                 // Replaces the dead disabled Assign button in the same slot
                 // (per ui-designer consult: one actionable verb per slot).
-                const canAdopt = samePhase
-                  && Array.isArray(selectedPhase.quat_wxyz)
-                  && (selectedPhase.disorientation_deg ?? 0) > 0.05;
+                // Adoption used to be offered on the Δ° alone, with no
+                // comparison of the render match — see adoptDecision.js for the
+                // measured case that motivated the guard.
+                const rCand = selectedPhase.r_score;
+                const rStored = matchData.r_score;
+                const { canAdopt, rejected: adoptRejected } = adoptDecision({
+                  samePhase,
+                  quat: selectedPhase.quat_wxyz,
+                  disorientationDeg: selectedPhase.disorientation_deg,
+                  rCandidate: rCand,
+                  rStored,
+                });
                 return (
                   <div style={{ textAlign: 'center', marginTop: 6 }}>
                     <div style={{ fontSize: '8pt', color: '#6272a4', marginBottom: 3 }}>
@@ -625,7 +657,12 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                         ? (canAdopt
                             ? t('phasemap:matches.adoptCaption', {
                                 delta: selectedPhase.disorientation_deg.toFixed(2) })
-                            : t('phasemap:matches.assignIsCurrent'))
+                            : adoptRejected
+                              ? t('phasemap:matches.adoptWorse', {
+                                  rCand: rCand != null ? rCand.toFixed(3) : '—',
+                                  rStored: rStored != null ? rStored.toFixed(3) : '—',
+                                  delta: selectedPhase.disorientation_deg.toFixed(2) })
+                              : t('phasemap:matches.assignIsCurrent'))
                         : t('phasemap:matches.assignStoredCaption', {
                             phase: matchData.phase_name ?? '—',
                             r: matchData.r_score != null ? matchData.r_score.toFixed(3) : '—',

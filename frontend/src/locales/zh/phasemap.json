@@ -88,7 +88,11 @@
     "adoptBtn": "将此取向应用到晶粒 (Δ{{delta}}°)",
     "adoptBusy": "应用中…",
     "adoptDone": "已将取向应用到 {{n}} px (Δ{{delta}}°)。",
-    "adoptTip": "用重新标定的取向替换晶粒的已存取向(晶粒范围洪水填充,支持一级撤销)。当相已正确但 R 有改善时使用 — 说明已存取向只是稍微偏离尖锐的渲染 NCC 最优点。"
+    "adoptTip": "用重新标定的取向替换晶粒的已存取向(晶粒范围洪水填充,支持一级撤销)。当相已正确但 R 有改善时使用 — 说明已存取向只是稍微偏离尖锐的渲染 NCC 最优点。",
+    "rIsCandidate": "重新标定的候选（并非图上的取向）",
+    "rStoredCompare": "图上已存取向: R = {{value}}",
+    "rStoredBetter": "已存取向匹配更好",
+    "adoptWorse": "重新标定的取向偏差 {{delta}}°，但匹配更差 (R {{rCand}} 对 {{rStored}}) — 不提供应用"
   },
   "displayModes": {
     "phase": "相分布图",

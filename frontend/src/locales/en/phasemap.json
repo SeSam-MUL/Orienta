@@ -88,7 +88,11 @@
     "adoptBtn": "Apply this orientation to the grain (Δ{{delta}}°)",
     "adoptBusy": "Applying…",
     "adoptDone": "Orientation applied to {{n}} px (Δ{{delta}}°).",
-    "adoptTip": "Replace the grain's stored orientation with this freshly re-indexed one (flood fill over the grain, one-level undo). Use when R improves although the phase is already correct — the stored orientation is just off the sharp render-NCC optimum."
+    "adoptTip": "Replace the grain's stored orientation with this freshly re-indexed one (flood fill over the grain, one-level undo). Use when R improves although the phase is already correct — the stored orientation is just off the sharp render-NCC optimum.",
+    "rIsCandidate": "re-indexed candidate (not what is on the map)",
+    "rStoredCompare": "stored orientation on the map: R = {{value}}",
+    "rStoredBetter": "the stored one matches better",
+    "adoptWorse": "Re-indexed orientation is {{delta}}° away but matches WORSE (R {{rCand}} vs {{rStored}}) — not offered"
   },
   "displayModes": {
     "phase": "Phase Map",
