@@ -12,7 +12,7 @@ const CLICK_SLOP_PX = 3;
 
 export default function Tile({
   layer, bitmap, error, shape, onPixelClick, onRegionSelected,
-  view = IDENTITY_VIEW, onZoomAt, onPan, onResetView,
+  view = IDENTITY_VIEW, onZoomAt, onPan, onResetView, onContextMenu,
 }) {
   const hostRef = useRef(null);
   const canvasRef = useRef(null);
@@ -194,6 +194,11 @@ export default function Tile({
         onMouseLeave={onLeave}
         onClick={onClick}
         onDoubleClick={() => onResetView?.()}
+        onContextMenu={(e) => {
+          if (!onContextMenu) return;
+          e.preventDefault();
+          onContextMenu(e.clientX, e.clientY);
+        }}
         style={{
           position: 'relative',
           width: '100%',

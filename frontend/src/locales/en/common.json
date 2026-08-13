@@ -20,5 +20,9 @@
   "stop": "Stop",
   "back": "Back",
   "next": "Next",
-  "moreInfo": "More information"
+  "moreInfo": "More information",
+  "fullscreen": {
+    "enter": "Fullscreen",
+    "exit": "Leave fullscreen"
+  }
 }

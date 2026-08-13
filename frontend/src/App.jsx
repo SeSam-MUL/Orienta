@@ -326,9 +326,18 @@ function App() {
   const handleNavigate = useCallback((pageId) => {
     if (pageId === 'h5viewer') {
       setH5ViewerOpen(true);
-    } else {
-      setCurrentPage(pageId);
+      return;
     }
+    // An id no page answers to used to be accepted anyway: the window went
+    // blank, and the page that never mounted also never loaded its data — the
+    // "→ Phase Map" button sent 'phase-map' while the page is called
+    // 'phasemap', and the result gallery stayed empty. Refuse the move and say
+    // so instead of showing nothing.
+    if (!SIDEBAR_PAGES.some((p) => p.id === pageId)) {
+      console.warn(`[App] ignoring navigation to unknown page "${pageId}"`);
+      return;
+    }
+    setCurrentPage(pageId);
   }, []);
 
   // Recent-file click on Dashboard → navigate to EBSD Viewer and auto-load

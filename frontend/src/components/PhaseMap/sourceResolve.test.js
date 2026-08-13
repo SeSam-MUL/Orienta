@@ -88,3 +88,39 @@ describe('alignShape', () => {
     expect(a.aligned).toBe(false);
   });
 });
+
+describe('resolveSource — the payloads the backend really sends', () => {
+  // These are verbatim response shapes: /api/ebsd/info answers with file_path
+  // and a 4-D data_shape, /api/indexing/results with source_file. Reading the
+  // wrong key made every result look source-less, which removed every EDS and
+  // electron-image layer from the Phase Map layer list without saying why.
+  const EBSD_INFO = {
+    loaded: true,
+    file_path: 'C:/data/SampleB.h5oina',
+    data_shape: [90, 120, 128, 156],
+  };
+
+  it('links through /api/ebsd/info file_path + data_shape', () => {
+    const r = resolveSource({ resultEntry: null, ebsdInfo: EBSD_INFO, resultShape: [90, 120] });
+    expect(r.linked).toBe(true);
+    expect(r.sourcePath).toBe('C:/data/SampleB.h5oina');
+    expect(r.sourceShape).toEqual([90, 120]);
+    expect(r.reason).toBeNull();
+  });
+
+  it('links through a gallery entry carrying source_file', () => {
+    const r = resolveSource({
+      resultEntry: { data: { source_file: 'C:/data/Other.h5oina' } },
+      ebsdInfo: null,
+      resultShape: [90, 120],
+    });
+    expect(r.linked).toBe(true);
+    expect(r.sourcePath).toBe('C:/data/Other.h5oina');
+  });
+
+  it('still refuses a source of the wrong size', () => {
+    const r = resolveSource({ resultEntry: null, ebsdInfo: EBSD_INFO, resultShape: [174, 145] });
+    expect(r.linked).toBe(false);
+    expect(r.reason).toMatch(/mismatch/i);
+  });
+});

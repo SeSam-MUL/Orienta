@@ -92,7 +92,8 @@
     "rIsCandidate": "再指数付けした候補（マップ上の値ではありません）",
     "rStoredCompare": "マップ上の保存方位: R = {{value}}",
     "rStoredBetter": "保存方位のほうが一致が良好",
-    "adoptWorse": "再指数付け方位は {{delta}}° ずれていますが一致は悪化します (R {{rCand}} 対 {{rStored}}) — 適用は提示しません"
+    "adoptWorse": "再指数付け方位は {{delta}}° ずれていますが一致は悪化します (R {{rCand}} 対 {{rStored}}) — 適用は提示しません",
+    "pickHint": "ピクセルをクリック、または十字線をドラッグ。ズーム中のドラッグは画像を移動します — Shift を押しながらで十字線を移動。"
   },
   "displayModes": {
     "phase": "相分布図",
@@ -523,7 +524,9 @@
     "typeArrow": "矢印",
     "noPhasesYet": "（まだ相がありません）",
     "scalebarUnit": "{{length}} µm",
-    "defaultTitle": "タイトル"
+    "defaultTitle": "タイトル",
+    "bgColor": "背景",
+    "bgOpacity": "不透明度"
   },
   "canvasOverlay": {
     "ipfKeyAlt": "IPF カラーキー",
@@ -593,7 +596,18 @@
     "annotText": "マップに表示するタイトルテキスト",
     "annotColor": "この注釈の色",
     "annotArrowLabel": "矢印の方向ラベル（ND/RD/TD/X/Y/Z）",
-    "matchesClearMarkers": "比較パネルからすべての番号付きマーカーを削除します"
+    "matchesClearMarkers": "比較パネルからすべての番号付きマーカーを削除します",
+    "zoomReset": "クリックでズームをリセット",
+    "changeLayerType": "このレイヤーに別のマップを表示します（不透明度・ブレンド・並び順はそのまま）",
+    "exportWithKey": "書き出す画像にカラーキーの列をマップの横へ描画します。オフならマップのみ。",
+    "gbClassOn": "この区分の境界を描画",
+    "gbFrom": "この区分の下限角（下の区分も追従）",
+    "gbTo": "この区分の上限角（上の区分も追従）",
+    "gbColor": "この区分の線色",
+    "gbWidth": "線の太さ（走査ステップの¼単位）",
+    "gbReset": "亜粒界<5°、小角5–15°、大角≥15°に戻す",
+    "annotBgColor": "この注釈の背景プレートの色",
+    "annotBgOpacity": "背景プレートの不透明度 — 0 % で表示しません"
   },
   "pseudosym": {
     "title": "擬似対称",
@@ -633,5 +647,18 @@
   },
   "advanced": {
     "title": "高度なツール"
+  },
+  "exportWithKey": "IPFカラーキーを含める",
+  "grainBoundaries": {
+    "sub": "亜粒界",
+    "lagb": "小角粒界",
+    "hagb": "大角粒界",
+    "classHeading": "区分",
+    "fromHeading": "開始 °",
+    "toHeading": "終了 °",
+    "colorHeading": "色",
+    "widthHeading": "太さ",
+    "unitHint": "角度は°、太さは走査ステップの¼単位",
+    "reset": "既定に戻す"
   }
 }

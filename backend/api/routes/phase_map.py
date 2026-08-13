@@ -228,7 +228,10 @@ def _draw_ipf_color_keys(fig, gs_cell, xmap, direction: str,
             # Inner layout: colour bar (tiny) + triangle. The phase name sits
             # as the axis title with enough pad to clear orix's [hkl] corner
             # labels at the top of the triangle.
-            inner = cell.subgridspec(2, 1, height_ratios=[1, 16], hspace=0.12)
+            # hspace is generous on purpose: orix draws the [111]/[101] vertex
+            # labels OUTSIDE the triangle axes, above its top edge. At the old
+            # 0.12 those labels ran into the colour bar sitting directly above.
+            inner = cell.subgridspec(2, 1, height_ratios=[1, 16], hspace=0.7)
 
             # Colour bar — one segment per phase, matches the Phase-Map legend
             # square. Crucial for the user: "which triangle belongs to which
@@ -1128,6 +1131,7 @@ def _compute_layer_rgba(
     out_alpha: int = 153,
     grain_stabilized: bool = False,
     phase_filter: int | None = None,
+    gb_bands: str = "",
 ) -> "np.ndarray":
     """Render a single layer as a raw (H, W, 4) uint8 RGBA array.
 
@@ -1185,7 +1189,8 @@ def _compute_layer_rgba(
         rgba[..., 3] = np.where(np.isfinite(arr), 255, 0).astype(np.uint8)
         return rgba
 
-    valid_kinds = {"phase", "ipf-x", "ipf-y", "ipf-z", "bc", "ci", "uncertainty", "ci-threshold"}
+    valid_kinds = {"phase", "ipf-x", "ipf-y", "ipf-z", "bc", "ci", "uncertainty",
+                   "ci-threshold", "grain-boundaries"}
     if kind not in valid_kinds and not kind.startswith("ci_"):
         raise HTTPException(
             status_code=400,
@@ -1217,6 +1222,11 @@ def _compute_layer_rgba(
         fill_unindexed=fill_unindexed,
         modal_filter_size=modal_filter_size,
     )
+
+    if kind == "grain-boundaries":
+        from backend.api.services import grain_boundaries as _gb
+        angles = _gb.cached_boundary_angles(xmap, n_rows, n_cols, mask, result)
+        return _gb.render_boundaries(angles, n_rows, n_cols, _gb.parse_bands(gb_bands))
 
     rgba = np.zeros((n_rows, n_cols, 4), dtype=np.uint8)
     alpha = np.zeros((n_rows, n_cols), dtype=bool)
@@ -1818,6 +1828,7 @@ async def get_layer(
     out_alpha: int = 153,
     grain_stabilized: bool = False,
     phase_filter: int = -1,
+    gb_bands: str = "",
 ):
     """Return a single layer as base64 RGBA PNG with transparent background.
 
@@ -1856,6 +1867,7 @@ async def get_layer(
                     out_alpha=out_alpha,
                     grain_stabilized=grain_stabilized,
                     phase_filter=None if phase_filter < 0 else int(phase_filter),
+                    gb_bands=gb_bands,
                 )
                 img = Image.fromarray(rgba)  # mode inferred from uint8 HxWx4 → RGBA
                 buf = _io.BytesIO()

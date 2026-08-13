@@ -17,7 +17,8 @@
   },
   "canvas": {
     "noPatternLoaded": "Kein Muster geladen",
-    "ariaLabel": "EBSD-Muster mit PC-Fadenkreuz-Overlay"
+    "ariaLabel": "EBSD-Muster mit PC-Fadenkreuz-Overlay",
+    "exportName": "Muster mit Bändern"
   },
   "preview": {
     "hideLines": "Linien ausblenden",

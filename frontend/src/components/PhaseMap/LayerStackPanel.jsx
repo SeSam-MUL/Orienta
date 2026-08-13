@@ -36,6 +36,7 @@ import useResultStore from '../../stores/useResultStore';
 function LayerRow({
   layer, index, bitmapReady, error,
   onSetOpacity, onSetBlend, onSetVisibility, onRemove, onReorder,
+  onRetype, typeOptions = [],
   renderLayerExtras,
 }) {
   const { t } = useTranslation('phasemap');
@@ -67,11 +68,19 @@ function LayerRow({
     : t('phasemap:layers.gateDiagHint');
   const gateSuffix = isGatedRef ? t('phasemap:layers.gateRefSuffix') : t('phasemap:layers.gateDiagSuffix');
 
+  // The legend matters for layers whose colours encode a meaning the user
+  // cannot infer (the assignment-source provenance map), so it rides along in
+  // the row tooltip — behind an error, which is the more urgent message.
+  const label = layer.label;
+  const legend = def?.tipKey ? t(def.tipKey) : null;
+
   const baseTitle = error
-    ? `${layer.label}: ${error}`
-    : (bitmapReady ? layer.label : t('phasemap:layers.loadingSuffix', { label: layer.label }));
+    ? `${label}: ${error}`
+    : (bitmapReady
+        ? (legend ? `${label} — ${legend}` : label)
+        : t('phasemap:layers.loadingSuffix', { label }));
   const rowTitle = isGated
-    ? `${layer.label} — ${gateHint}`
+    ? `${label} — ${gateHint}`
     : baseTitle;
   const rowOpacity = isGated ? 0.4 : (layer.visible ? 1 : 0.55);
   const rowBorder = isGated
@@ -81,14 +90,11 @@ function LayerRow({
   const extras = renderLayerExtras?.(layer);
   return (
     <div style={{ marginBottom: 2 }}>
+      {/* Two lines on purpose. On one line the panel is ~285px wide and the
+          fixed columns (handle, box, slider, %, blend, ×) ate all of it: the
+          name column resolved to ONE pixel, so no layer showed its name. The
+          slider gets its own line and a real width instead of 80px. */}
       <div
-        draggable
-        onDragStart={(e) => {
-          setDragging(true);
-          e.dataTransfer.setData('text/plain', String(index));
-          e.dataTransfer.effectAllowed = 'move';
-        }}
-        onDragEnd={() => setDragging(false)}
         onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }}
         onDrop={(e) => {
           e.preventDefault();
@@ -97,50 +103,75 @@ function LayerRow({
         }}
         title={rowTitle}
         style={{
-          display: 'grid',
-          gridTemplateColumns: '14px 16px minmax(0, 1fr) 80px 36px 70px 18px',
-          alignItems: 'center',
-          columnGap: 6,
-          height: 28,
-          padding: '0 6px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 3,
+          padding: '4px 6px',
           background: dragging ? colors.bgSecondary : colors.bgTertiary,
           border: rowBorder,
           borderRadius: 3,
           opacity: rowOpacity,
         }}
       >
-        <span style={{ cursor: 'grab', color: colors.textSecondary, fontSize: 11, lineHeight: 1, textAlign: 'center', userSelect: 'none' }}
-              title={t('phasemap:layers.dragToReorder')}>&#9776;</span>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '14px 16px minmax(0, 1fr) 70px 18px',
+        alignItems: 'center',
+        columnGap: 6,
+      }}>
+        {/* ONLY the handle starts a drag. With `draggable` on the whole row the
+            browser began an HTML5 drag as soon as the pointer went down on the
+            slider, so the slider emitted no input at all — measured: 0 input
+            events, value unchanged, one dragstart. That is the "sliders don't
+            work" report, and it was literally true. */}
+        <span
+          draggable
+          onDragStart={(e) => {
+            setDragging(true);
+            e.dataTransfer.setData('text/plain', String(index));
+            e.dataTransfer.effectAllowed = 'move';
+          }}
+          onDragEnd={() => setDragging(false)}
+          style={{ cursor: 'grab', color: colors.textSecondary, fontSize: 11, lineHeight: 1, textAlign: 'center', userSelect: 'none' }}
+          title={t('phasemap:layers.dragToReorder')}
+        >&#9776;</span>
         <input
           type="checkbox"
           checked={layer.visible}
           onChange={(e) => onSetVisibility(layer.id, e.target.checked)}
           disabled={isGated}
-          aria-label={t('phasemap:layers.toggleVisibilityAria', { label: layer.label })}
+          aria-label={t('phasemap:layers.toggleVisibilityAria', { label })}
           title={isGated ? gateHint : undefined}
           style={{ margin: 0 }}
         />
-        <span
-          title={isGated ? gateHint : undefined}
-          style={{
-            fontSize: '9pt', color: error ? colors.red : (bitmapReady ? colors.text : colors.textSecondary),
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            fontStyle: (isGated || !bitmapReady) ? 'italic' : 'normal',
-          }}
-        >
-          {layer.label}{isGated ? gateSuffix : ''}
-        </span>
-        <input
-          type="range"
-          min={0} max={100} value={pct}
-          onChange={(e) => onSetOpacity(layer.id, Number(e.target.value) / 100)}
-          style={{ width: '100%', height: 4, margin: 0 }}
-          aria-label={t('phasemap:layers.opacityAria', { label: layer.label })}
-          title={t('phasemap:hoverTips.opacitySlider')}
-        />
-        <span style={{
-          fontSize: '8pt', color: colors.textSecondary, fontFamily: 'monospace', textAlign: 'right',
-        }}>{pct}%</span>
+        {onRetype ? (
+          // The name doubles as a type picker: opacity, blend, visibility and
+          // stack position are properties of the SLOT, not of the map in it,
+          // so trying the same arrangement on IPF-X should not mean building
+          // it again from scratch.
+          <Select
+            value={layer.id}
+            onChange={(e) => onRetype(layer.id, e.target.value)}
+            options={typeOptions}
+            style={{
+              width: '100%', fontSize: '8.5pt', height: 22, padding: '0 4px',
+              fontStyle: (isGated || !bitmapReady) ? 'italic' : 'normal',
+              color: error ? colors.red : undefined,
+            }}
+            title={t('phasemap:hoverTips.changeLayerType')}
+          />
+        ) : (
+          <span
+            title={isGated ? gateHint : undefined}
+            style={{
+              fontSize: '9pt', color: error ? colors.red : (bitmapReady ? colors.text : colors.textSecondary),
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              fontStyle: (isGated || !bitmapReady) ? 'italic' : 'normal',
+            }}
+          >
+            {label}{isGated ? gateSuffix : ''}
+          </span>
+        )}
         <Select
           value={layer.blend}
           onChange={(e) => onSetBlend(layer.id, e.target.value)}
@@ -150,7 +181,7 @@ function LayerRow({
         />
         <button
           onClick={() => onRemove(layer.id)}
-          aria-label={t('phasemap:layers.removeAria', { label: layer.label })}
+          aria-label={t('phasemap:layers.removeAria', { label })}
           title={t('phasemap:layers.removeTooltip')}
           style={{
             background: 'transparent', border: 'none',
@@ -158,6 +189,29 @@ function LayerRow({
             padding: 0, fontSize: 14, lineHeight: 1,
           }}
         >&times;</button>
+      </div>
+
+      {/* Line 2: the slider, with the room it needs. */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) 40px',
+        alignItems: 'center',
+        columnGap: 6,
+      }}>
+        <input
+          type="range"
+          min={0} max={100} value={pct}
+          disabled={isGated}
+          onChange={(e) => onSetOpacity(layer.id, Number(e.target.value) / 100)}
+          onDoubleClick={() => onSetOpacity(layer.id, 1)}
+          style={{ width: '100%', margin: 0 }}
+          aria-label={t('phasemap:layers.opacityAria', { label })}
+          title={t('phasemap:hoverTips.opacitySlider')}
+        />
+        <span style={{
+          fontSize: '8pt', color: colors.textSecondary, fontFamily: 'monospace', textAlign: 'right',
+        }}>{pct}%</span>
+      </div>
       </div>
       {extras}
     </div>
@@ -169,6 +223,8 @@ export default function LayerStackPanel({
   onSetOpacity, onSetBlend, onSetVisibility,
   onRemove, onReorder, onAdd, onUsePreset,
   onSetSingleLayer,
+  onRetype,
+  activeMode = null,
   availableToAdd = [],
   renderLayerExtras,
 }) {
@@ -200,13 +256,22 @@ export default function LayerStackPanel({
     ...Object.entries(PRESETS).map(([name, p]) => ({ value: name, label: p.label })),
   ];
 
+  // What a layer may become: the same catalogue "+ Add Layer" offers, plus
+  // its own type so the picker can show what it currently is. Types already in
+  // the stack stay out — two layers with one id would share a bitmap slot.
+  const typeOptionsFor = (layer) => {
+    const own = { value: layer.id, label: layer.label };
+    const others = availableToAdd.filter((o) => o.value && o.value !== layer.id);
+    return [own, ...others];
+  };
+
   // Display top-down (UI top = topmost layer = last in layers array).
   const displayLayers = [...layers].reverse();
 
-  // Highlight the active mode button when the stack is a single layer
-  // matching one of the quick modes — gives the user feedback that
-  // clicking the button "selected" that view.
-  const activeQuickMode = layers.length === 1 ? layers[0].id : null;
+  // Which mode button reads as selected. Taken from the stack itself only as
+  // a fallback: once a mode holds more than one layer, "the stack is a single
+  // layer called X" stops being true while the user is still inside mode X.
+  const activeQuickMode = activeMode ?? (layers.length === 1 ? layers[0].id : null);
 
   return (
     <CollapsibleGroup title={t('phasemap:layers.title')} defaultCollapsed={false}>
@@ -266,6 +331,8 @@ export default function LayerStackPanel({
                 onSetBlend={onSetBlend}
                 onSetVisibility={onSetVisibility}
                 onRemove={onRemove}
+                onRetype={onRetype}
+                typeOptions={typeOptionsFor(layer)}
                 onReorder={onReorder}
                 renderLayerExtras={renderLayerExtras}
               />

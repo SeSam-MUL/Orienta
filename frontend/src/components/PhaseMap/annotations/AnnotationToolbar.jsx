@@ -59,6 +59,38 @@ function AnnotationToolbar({
   if (selected) {
     const p = selected.props || {};
     const patchProp = (key, val) => onUpdate(selected.id, { props: { [key]: val } });
+    // Every annotation can sit on a plate. Same two controls everywhere, so
+    // the answer to "how do I make this readable on a bright map" does not
+    // depend on which annotation you happen to have selected.
+    const backgroundRows = (
+      <>
+        <Row label={t('phasemap:annotations.bgColor')}>
+          <input
+            type="color"
+            value={p.bgColor ?? '#14161e'}
+            onChange={(e) => patchProp('bgColor', e.target.value)}
+            style={{ ...inputStyle, padding: 0, width: '100%', height: 26 }}
+            title={t('phasemap:hoverTips.annotBgColor')}
+            data-annot-bg-color
+          />
+        </Row>
+        <Row label={t('phasemap:annotations.bgOpacity')}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <input
+              type="range" min={0} max={1} step={0.05}
+              value={p.bgOpacity ?? (selected.type === 'legend' && p.background ? 0.85 : 0)}
+              onChange={(e) => patchProp('bgOpacity', Number(e.target.value))}
+              style={{ flex: 1 }}
+              title={t('phasemap:hoverTips.annotBgOpacity')}
+              data-annot-bg-opacity
+            />
+            <span style={{ fontSize: '8pt', color: colors.textSecondary, width: 34, textAlign: 'right' }}>
+              {Math.round((p.bgOpacity ?? (selected.type === 'legend' && p.background ? 0.85 : 0)) * 100)}%
+            </span>
+          </div>
+        </Row>
+      </>
+    );
     switch (selected.type) {
       case 'legend':
         propsPanel = (
@@ -72,15 +104,7 @@ function AnnotationToolbar({
                 title={t('phasemap:hoverTips.annotFontSize')}
               />
             </Row>
-            <Row label={t('phasemap:annotations.background')}>
-              <input
-                type="text"
-                value={p.background ?? 'rgba(20,22,30,0.85)'}
-                onChange={(e) => patchProp('background', e.target.value)}
-                style={inputStyle}
-                title={t('phasemap:hoverTips.annotBackground')}
-              />
-            </Row>
+            {backgroundRows}
           </>
         );
         break;
@@ -123,6 +147,7 @@ function AnnotationToolbar({
                 title={t('phasemap:hoverTips.annotTextColor')}
               />
             </Row>
+            {backgroundRows}
           </>
         );
         break;
@@ -156,6 +181,7 @@ function AnnotationToolbar({
                 title={t('phasemap:hoverTips.annotColor')}
               />
             </Row>
+            {backgroundRows}
           </>
         );
         break;
@@ -195,6 +221,7 @@ function AnnotationToolbar({
                 title={t('phasemap:hoverTips.annotFontSize')}
               />
             </Row>
+            {backgroundRows}
           </>
         );
         break;

@@ -160,7 +160,7 @@
     "maskTooltip": "品質マスキングを有効化: しきい値未満のピクセルを暗くします。\n回折品質の悪い領域を特定するのに役立ちます。",
     "thresholdTooltip": "品質しきい値パーセンタイル（0-100%）。\nこのパーセンタイル未満のピクセルは概観マップ上で暗くなります。",
     "captionTitle": "概観",
-    "captionHint": "クリックでナビゲート · Shift+ドラッグ = ROI",
+    "captionHint": "クリック = ナビゲート · ホイール = ズーム · Shift+ドラッグ = ROI",
     "imageAlt": "概観",
     "roiLabel": "ROI: ({{startRow}},{{startCol}})→({{endRow}},{{endCol}})",
     "sampledPreview": "サンプリングプレビュー",
@@ -199,7 +199,7 @@
   "pattern": {
     "captionTitle": "パターン",
     "preview": "プレビュー",
-    "captionHint": "ホイール = ズーム · ダブルクリック = リセット",
+    "captionHint": "ホイール = ズーム · ドラッグ = 移動 · ダブルクリック = リセット",
     "alt": "パターン [{{row}}, {{col}}]",
     "loading": "パターンを読み込み中...",
     "emptyHint": "まずファイルを読み込んでください"
@@ -337,6 +337,8 @@
     "bestPattern": "最良のパターンは [{{pos}}] にあります",
     "noBestPattern": "最良のパターンが見つかりませんでした",
     "worstPattern": "最悪のパターンは [{{pos}}] にあります",
-    "noWorstPattern": "最悪のパターンが見つかりませんでした"
+    "noWorstPattern": "最悪のパターンが見つかりませんでした",
+    "exportedImageTo": "画像を {{path}} にエクスポートしました",
+    "exportedImage": "画像を {{name}} としてエクスポートしました"
   }
 }

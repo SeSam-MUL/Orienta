@@ -5,6 +5,9 @@ import useDataStore from '../../stores/useDataStore';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
+import { useZoomViews, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
+import { viewToTransform, zoomedRect, isZoomed } from '../EDS/zoomView';
+import useWheelZoom from '../common/useWheelZoom';
 
 const C = {
   bg: '#282a36', bgSecondary: '#21222c', border: '#44475a', text: '#f8f8f2',
@@ -17,8 +20,18 @@ const img = (b64) => (b64 ? `data:image/png;base64,${b64}` : null);
 const EDS_COLORS = ['#ff5555', '#50fa7b', '#8be9fd', '#ffb86c', '#bd93f9', '#f1fa8c', '#ff79c6', '#62d6e8'];
 const edsSym = (el) => (typeof el === 'string' ? el : (el?.element || el?.symbol || el?.name || ''));
 
+const SCAN_VIEW = 'scan';
+const MEASURED_VIEW = 'measured';
+const COMPARE_VIEW = 'compare';
+
 export default function SinglePixelPhaseTestDialog({ open, onClose, currentMethod = 'hough', onUsePhase }) {
-  const { t } = useTranslation('indexing');
+  const { t } = useTranslation(['indexing', 'phasemap']);
+  // One view per picture, not one shared view: the scan map, the measured
+  // pattern and the comparison panels show different things at different
+  // native sizes, so zooming one says nothing about the others. The three
+  // comparison panels are the exception and share a view — they are the same
+  // detector frame three ways, and comparing them means looking at one spot.
+  const zoom = useZoomViews(SYNC_SINGLE);
   const currentIndex = useDataStore((s) => s.currentIndex) || 0;
   const gridShape = useDataStore((s) => s.gridShape) || [0, 0];
   const setPosition = useDataStore((s) => s.setPosition);
@@ -397,6 +410,10 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
             </div>
             {nRows > 0 && nCols > 0 ? (
               <ScanPicker
+              view={zoom.viewFor(SCAN_VIEW)}
+              onZoomAt={(f, px, py) => zoom.zoomAtPointer(SCAN_VIEW, f, px, py)}
+              onPan={(dx, dy) => zoom.pan(SCAN_VIEW, dx, dy)}
+              onResetView={() => zoom.resetOne(SCAN_VIEW)}
                 gridShape={gridShape}
                 pixelIndex={pixelIndex}
                 overviewB64={overviewB64}
@@ -458,8 +475,14 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
               {t('phaseTest.measuredPattern', { row: previewRow, col: previewCol })}
             </div>
             {previewB64 ? (
-              <img src={img(previewB64)} alt={t('phaseTest.measuredPattern', { row: previewRow, col: previewCol })}
-                style={{ width: '100%', aspectRatio: '1', objectFit: 'contain', background: '#000',
+              <LinkedPatternImage
+                src={img(previewB64)}
+                alt={t('phaseTest.measuredPattern', { row: previewRow, col: previewCol })}
+                view={zoom.viewFor(MEASURED_VIEW)}
+                onZoomAt={(f, px, py) => zoom.zoomAtPointer(MEASURED_VIEW, f, px, py)}
+                onPan={(dx, dy) => zoom.pan(MEASURED_VIEW, dx, dy)}
+                onResetView={() => zoom.resetOne(MEASURED_VIEW)}
+                style={{ width: '100%', aspectRatio: '1', background: '#000',
                   border: `1px solid ${C.border}`, borderRadius: 4 }} />
             ) : (
               <div title={previewError || undefined} style={{ width: '100%', aspectRatio: '1', background: C.bgSecondary,
@@ -641,6 +664,10 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
                     <LinkedPatternImage src={img(b64)} alt={label}
                       markers={markerCtl.markers} hover={markerCtl.hover}
                       onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick}
+                      view={zoom.viewFor(COMPARE_VIEW)}
+                      onZoomAt={(f, px, py) => zoom.zoomAtPointer(COMPARE_VIEW, f, px, py)}
+                      onPan={(dx, dy) => zoom.pan(COMPARE_VIEW, dx, dy)}
+                      onResetView={() => zoom.resetOne(COMPARE_VIEW)}
                       style={{ width: '100%', aspectRatio: '1', background: '#000',
                         border: `1px solid ${C.border}`, borderRadius: 4 }} />
                   ) : <div style={{ aspectRatio: '1', background: C.bg, borderRadius: 4 }} />}
@@ -794,8 +821,16 @@ function Bar({ value, label, color }) {
  * CrystalHint SinglePixelMode picker. Falls back to an empty box (the
  * crosshair + click logic still works) until the overview loads.
  */
-function ScanPicker({ gridShape, pixelIndex, overviewB64, onPick, t, edsOverlays = [], edsOpacity = 0.6 }) {
+function ScanPicker({
+  gridShape, pixelIndex, overviewB64, onPick, t, edsOverlays = [], edsOpacity = 0.6,
+  view = null, onZoomAt, onPan, onResetView,
+}) {
   const [nRows, nCols] = gridShape;
+  const zoomView = view || { scale: 1, cx: 0.5, cy: 0.5 };
+  const zoomed = isZoomed(zoomView);
+  const bindWheel = useWheelZoom(onZoomAt);
+  const panRef = useRef(null);
+  const movedRef = useRef(false);
   const maxW = 280;
   const maxH = 240;
   const aspect = nCols / Math.max(nRows, 1);
@@ -804,24 +839,74 @@ function ScanPicker({ gridShape, pixelIndex, overviewB64, onPick, t, edsOverlays
   const cy = Math.floor(pixelIndex / Math.max(nCols, 1));
   const cx = pixelIndex % Math.max(nCols, 1);
   const handleClick = (ev) => {
-    const rect = ev.currentTarget.getBoundingClientRect();
+    // A drag that panned the view is not a pick — otherwise letting go after
+    // moving the map would silently jump to another pixel.
+    if (movedRef.current) { movedRef.current = false; return; }
+    const box = ev.currentTarget.getBoundingClientRect();
+    // The picture is drawn through a CSS transform, so the box is NOT where
+    // the content is once zoomed. `zoomedRect` gives the rectangle the content
+    // actually occupies; measuring the box instead would pick the wrong pixel
+    // by exactly the pan offset.
+    const rect = zoomedRect(box, zoomView);
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
     const c = Math.max(0, Math.min(nCols - 1, Math.floor((x / rect.width) * nCols)));
     const r = Math.max(0, Math.min(nRows - 1, Math.floor((y / rect.height) * nRows)));
     onPick(r, c);
   };
+
+  const startPan = (ev) => {
+    if (!zoomed || ev.button !== 0 || !onPan) return;
+    panRef.current = { x: ev.clientX, y: ev.clientY, w: ev.currentTarget.clientWidth, h: ev.currentTarget.clientHeight };
+    movedRef.current = false;
+  };
+  const movePan = (ev) => {
+    const p = panRef.current;
+    if (!p) return;
+    const dx = ev.clientX - p.x;
+    const dy = ev.clientY - p.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) movedRef.current = true;
+    panRef.current = { ...p, x: ev.clientX, y: ev.clientY };
+    onPan(-dx / (p.w * zoomView.scale), -dy / (p.h * zoomView.scale));
+  };
+  const endPan = () => { panRef.current = null; };
   const px = ((cx + 0.5) / nCols) * w;
   const py = ((cy + 0.5) / nRows) * h;
   return (
     <div
+      ref={bindWheel}
+      data-scan-picker
       onClick={handleClick}
+      onMouseDown={startPan}
+      onMouseMove={movePan}
+      onMouseUp={endPan}
+      onMouseLeave={endPan}
       style={{
         position: 'relative', width: w, height: h,
         background: C.bgSecondary, border: `1px solid ${C.border}`,
-        borderRadius: 4, cursor: 'crosshair', overflow: 'hidden',
+        borderRadius: 4, cursor: zoomed ? 'grab' : 'crosshair',
+        // Non-negotiable: the zoomed picture stays inside its frame.
+        overflow: 'hidden',
       }}
     >
+      {zoomed && (
+        <div
+          data-scanpicker-zoom-badge
+          onClick={(e) => { e.stopPropagation(); onResetView?.(); }}
+          title={t('phasemap:hoverTips.zoomReset')}
+          style={{
+            position: 'absolute', top: 3, right: 3, zIndex: 3,
+            padding: '1px 6px', borderRadius: 9, background: 'rgba(0,0,0,.6)',
+            color: '#fff', fontSize: 9, lineHeight: 1.5, cursor: 'pointer', userSelect: 'none',
+          }}
+        >
+          {zoomView.scale.toFixed(1)}×
+        </div>
+      )}
+      <div style={{
+        position: 'absolute', inset: 0,
+        transform: viewToTransform(zoomView), transformOrigin: '50% 50%',
+      }}>
       {overviewB64 ? (
         <img
           src={`data:image/png;base64,${overviewB64}`}
@@ -862,6 +947,7 @@ function ScanPicker({ gridShape, pixelIndex, overviewB64, onPick, t, edsOverlays
           ({cy}, {cx})
         </text>
       </svg>
+      </div>
     </div>
   );
 }

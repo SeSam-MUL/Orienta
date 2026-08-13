@@ -110,7 +110,8 @@
     "loadingViewer": "3D ビューアを読み込み中…",
     "spaceGroupShort": "空間群 {{sg}}",
     "bandwidthSuffix": "bw {{bw}}",
-    "hint": "ドラッグで回転 · スクロールでズーム"
+    "hint": "ドラッグで回転 · スクロールでズーム",
+    "captureNotReady": "球体はまだ準備できていません。描画されるまでお待ちください。"
   },
   "splitterTooltip": "ドラッグして、ファイルテーブルとプレビューパネルの幅を調整します。",
   "status": {

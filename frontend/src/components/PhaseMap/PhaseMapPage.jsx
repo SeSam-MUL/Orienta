@@ -47,11 +47,30 @@ import { LAYER_SOURCES } from './layerSources';
 import { CursorSyncProvider, useCursorSync, useCursorPublisher } from '../EDS/CursorSyncContext';
 import { pointerToRowCol, rowColToContainerPx } from '../EDS/mapCoords';
 import TileGrid from '../EDS/TileGrid';
+import ContextMenu from '../common/ContextMenu';
+import ImageExportDialog from '../common/ImageExportDialog';
+import ExportAnnotationOverlay from './ExportAnnotationOverlay';
+import GrainBoundaryPanel from './GrainBoundaryPanel';
+import { defaultBands as defaultGbBands } from './grainBoundaryBands';
+import { drawAnnotationsOnto } from './annotations/composeExport';
+import { applyPatch, withAdded, withRemoved } from './annotations/exportAnnotEdits';
+import { buildPanelSheet } from '../common/imageExport';
+// Layer-stack canvases are shape-compatible between EDS and PhaseMap, so
+// the same builders serve both rather than a near-duplicate set.
+import {
+  buildSingleCanvas, buildCompositeCanvas, buildMontageCanvas,
+  sourceBitmapFor, canvasToDataUrl, contentBounds,
+} from '../EDS/edsExportSources';
 import ThresholdHistogram from '../EDS/ThresholdHistogram';
 import LinescanProfilePlot from '../EDS/LinescanProfilePlot';
 import MagnifierLens from '../EDS/MagnifierLens';
 import { exportComposite } from '../EDS/compositeExporter';
 import { useRectangleDrag } from '../EDS/hooks/useRectangleDrag';
+import { useHeatmapPick } from '../common/useHeatmapPick';
+import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
+import { IDENTITY_VIEW, isZoomed, zoomedRect, wheelFactor, viewToTransform } from '../EDS/zoomView';
+import { zoomRectPct } from '../EBSDViewer/zoomOverlay';
+import { useWheelZoom } from '../common/useWheelZoom';
 
 // PhaseMap-specific tooling (landed in earlier commits this branch)
 import PhaseMapProbeOverlay from './PhaseMapProbeOverlay';
@@ -79,7 +98,38 @@ const SHT_QUALITY_OPTIONS = [
 ];
 
 
+// The three detector panels share one zoom view: they already share the
+// crosshair and the markers, so zooming them apart would be a lie about
+// what lines up with what.
+const PATTERN_VIEW_ID = '__patterns__';
+const NCCMAP_VIEW_ID = '__nccmap__';
+
 function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientationsChanged = null }) {
+  // Right-click export for the four panels of this dialog.
+  // Separate views: the NCC map is a map, the three panels are one detector
+  // image seen three ways.
+  const patZoom = useZoomViews(SYNC_SINGLE);
+  const bindNccWheel = useWheelZoom(
+    (f, px, py) => patZoom.zoomAtPointer(NCCMAP_VIEW_ID, f, px, py),
+  );
+  const nccBoxRef = useRef(null);
+  const [matchMenu, setMatchMenu] = useState(null);
+  const [matchExport, setMatchExport] = useState(null);
+  const [matchExportError, setMatchExportError] = useState(null);
+  // Closing the dialog must forget the export it was showing — this component
+  // is rendered with open=false rather than unmounted, so the state survives
+  // and the export window would reappear on the next click.
+  useEffect(() => {
+    if (!open) { setMatchMenu(null); setMatchExport(null); setMatchExportError(null); }
+  }, [open]);
+  const openMatchExport = useCallback(async (build, name, label) => {
+    try {
+      setMatchExportError(null);
+      setMatchExport({ src: await build(), name, label });
+    } catch (err) {
+      setMatchExportError(err?.message || String(err));
+    }
+  }, []);
   const { t } = useTranslation('phasemap');
   const [heatmapClean, setHeatmapClean] = useState(null);
   const [gridDims, setGridDims] = useState({ rows: 0, cols: 0 });
@@ -230,20 +280,39 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
     return () => { cancelled = true; };
   }, [selectedPixel, rank, shtQuality, aperture, apertureRadius, comparePhases, matchRefresh]);
 
-  const handleHeatmapClick = (e) => {
-    const img = heatmapRef.current;
-    if (!img || !gridDims.rows) return;
-    const rect = img.getBoundingClientRect();
-    const localRow = Math.min(Math.max(0, Math.floor((e.clientY - rect.top) / rect.height * gridDims.rows)), gridDims.rows - 1);
-    const localCol = Math.min(Math.max(0, Math.floor((e.clientX - rect.left) / rect.width * gridDims.cols)), gridDims.cols - 1);
-    setSelectedPixel({ row: localRow + cropOffset.row, col: localCol + cropOffset.col, localRow, localCol }); setRank(0);
-  };
+  // Click OR drag the crosshair. Dragging only moves a local preview; the
+  // selection is committed on release, because every committed pixel re-fetches
+  // a freshly rendered pattern from the backend.
+  const heatmapPick = useHeatmapPick({
+    imgRef: heatmapRef,
+    dims: gridDims,
+    offset: cropOffset,
+    onPick: (p) => { setSelectedPixel(p); setRank(0); },
+    // Zoomed in, dragging has to move the picture — otherwise there is no way
+    // to reach the part of the map that is off screen. A click still picks.
+    // At 1x this is null, so the drag-the-crosshair behaviour is untouched.
+    onPan: isZoomed(patZoom.viewFor(NCCMAP_VIEW_ID))
+      ? ((dx, dy) => patZoom.pan(NCCMAP_VIEW_ID, dx, dy))
+      : null,
+    boxRef: nccBoxRef,
+  });
 
   if (!open) return null;
   const C = colors;
 
-  const crossX = selectedPixel ? ((selectedPixel.localCol + 0.5) / gridDims.cols * 100) : -10;
-  const crossY = selectedPixel ? ((selectedPixel.localRow + 0.5) / gridDims.rows * 100) : -10;
+  // While dragging, the crosshair follows the pointer even though the match
+  // shown beside it still belongs to the committed pixel.
+  const crossPixel = heatmapPick.preview || selectedPixel;
+  const crossXRaw = crossPixel ? ((crossPixel.localCol + 0.5) / gridDims.cols * 100) : -10;
+  const crossYRaw = crossPixel ? ((crossPixel.localRow + 0.5) / gridDims.rows * 100) : -10;
+  // The crosshair is drawn OUTSIDE the zoom transform — a 1px line inside it
+  // would be 16px thick at 16x — so it is carried through the same view maths
+  // numerically. The pixel PICKING needs no such term: it measures the <img>,
+  // whose client rect already includes the transform.
+  const nccView = patZoom.viewFor(NCCMAP_VIEW_ID);
+  const crossZ = zoomRectPct({ left: crossXRaw, top: crossYRaw, width: 0, height: 0 }, nccView);
+  const crossX = crossZ.left;
+  const crossY = crossZ.top;
 
   // Misindex-diagnose (2026-05-26): when compare_phases is on AND the
   // backend returned per-phase results, the dialog displays the SELECTED
@@ -279,11 +348,54 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
       }
     : matchData;
 
+  // Plain values, deliberately NOT hooks: `displayed` above is computed after
+  // the early return, so a hook here would either sit before its own input or
+  // change the hook count between renders. Both are cheap to rebuild.
+  // The four things this dialog shows. Kept in one place so the per-panel menu
+  // and the "all four" sheet cannot list different sets.
+  const matchPanels = [
+    { id: 'ncc-map', label: t('phasemap:matches.nccAlt'), b64: heatmapClean },
+    { id: 'experimental', label: t('phasemap:matches.experimental'), b64: matchData?.experimental },
+    { id: 'simulated', label: t('phasemap:matches.bestMatchSimulated'), b64: displayed?.simulated },
+    { id: 'ncc-image', label: t('phasemap:matches.nccImage'), b64: matchData?.ncc_image },
+  ];
+
+  const matchMenuItems = (panelId) => {
+    const px = selectedPixel ? `_r${selectedPixel.row}_c${selectedPixel.col}` : '';
+    const one = matchPanels.find((p) => p.id === panelId);
+    const items = [];
+    if (one?.b64) {
+      items.push({
+        id: 'this',
+        label: t('imageexport:menuExportThis'),
+        onSelect: () => openMatchExport(
+          async () => `data:image/png;base64,${one.b64}`,
+          `match${px}_${one.id}`,
+          one.label,
+        ),
+      });
+    }
+    items.push({
+      id: 'all',
+      label: t('imageexport:menuExportAllPanels'),
+      onSelect: () => openMatchExport(
+        async () => canvasToDataUrl(await buildPanelSheet(
+          matchPanels.map((p) => ({ label: p.label, src: p.b64 ? `data:image/png;base64,${p.b64}` : null })),
+        )),
+        `match${px}_all`,
+        t('phasemap:matches.title', { defaultValue: 'Pattern match' }),
+      ),
+    });
+    return items;
+  };
+
   // R-score color (green >= 0.3, orange >= 0.15, red < 0.15)
   const rColor = displayed?.r_quality === 'good' ? '#50fa7b' : displayed?.r_quality === 'acceptable' ? '#ffb86c' : '#ff5555';
   const rLabel = displayed?.r_quality === 'good' ? t('phasemap:matches.match.good') : displayed?.r_quality === 'acceptable' ? t('phasemap:matches.match.acceptable') : t('phasemap:matches.match.poor');
 
   const patStyle = { height: 240, objectFit: 'contain', borderRadius: 3, border: `1px solid ${C.border}`, background: '#000' };
+
+
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 999 }} onClick={onClose}>
@@ -388,9 +500,39 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
           <div style={{ width: '30%', minWidth: 200 }}>
             {loading && <div style={{ color: C.textSecondary, padding: 40, textAlign: 'center' }}>{t('phasemap:matches.loading')}</div>}
             {heatmapClean && (
-              <div style={{ position: 'relative', cursor: 'crosshair' }} onClick={handleHeatmapClick}>
-                <img ref={heatmapRef} src={`data:image/png;base64,${heatmapClean}`} alt={t('phasemap:matches.nccAlt')} style={{ width: '100%', display: 'block', borderRadius: 3, border: `1px solid ${C.border}` }} />
-                {selectedPixel && (<>
+              <div
+                style={{
+                  position: 'relative',
+                  // Without this the magnified map escapes its column and
+                  // covers the pattern panels next to it.
+                  overflow: 'hidden',
+                  borderRadius: 3,
+                  cursor: heatmapPick.dragging
+                    ? 'grabbing'
+                    : (heatmapPick.panning ? 'grab' : 'crosshair'),
+                }}
+                ref={(el) => { nccBoxRef.current = el; bindNccWheel(el); }}
+                onMouseDown={heatmapPick.onMouseDown}
+                onContextMenu={(e) => { e.preventDefault(); setMatchMenu({ x: e.clientX, y: e.clientY, panel: 'ncc-map' }); }}
+                title={t('phasemap:matches.pickHint')}
+              >
+                {isZoomed(nccView) && (
+                  <div
+                    data-nccmap-zoom-badge
+                    onClick={(e) => { e.stopPropagation(); patZoom.resetOne(NCCMAP_VIEW_ID); }}
+                    title={t('phasemap:hoverTips.zoomReset')}
+                    style={{
+                      position: 'absolute', top: 4, left: 4, zIndex: 2,
+                      padding: '1px 6px', borderRadius: 9, background: 'rgba(0,0,0,.6)',
+                      color: '#fff', fontSize: '8pt', lineHeight: 1.5,
+                      cursor: 'pointer', userSelect: 'none',
+                    }}
+                  >
+                    {nccView.scale.toFixed(1)}×
+                  </div>
+                )}
+                <img ref={heatmapRef} src={`data:image/png;base64,${heatmapClean}`} alt={t('phasemap:matches.nccAlt')} draggable={false} style={{ width: '100%', display: 'block', transform: viewToTransform(nccView), transformOrigin: '50% 50%', borderRadius: 3, border: `1px solid ${C.border}`, userSelect: 'none' }} />
+                {crossPixel && (<>
                   <div style={{ position: 'absolute', left: 0, right: 0, top: `${crossY}%`, height: 1, background: '#ffb86c', pointerEvents: 'none' }} />
                   <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${crossX}%`, width: 1, background: '#ffb86c', pointerEvents: 'none' }} />
                   <div style={{ position: 'absolute', left: `${crossX}%`, top: `${crossY}%`, width: 12, height: 12, transform: 'translate(-50%,-50%)', pointerEvents: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffb86c', fontSize: 16, fontWeight: 700 }}>+</div>
@@ -402,7 +544,13 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
             </div>}
             {selectedPixel && matchData && (
               <div style={{ fontSize: '9pt', color: '#f8f8f2', marginTop: 6, textAlign: 'center' }}>
-                {t('phasemap:matches.pixelScore', { col: selectedPixel.col, row: selectedPixel.row, score: matchData.ncc_score?.toFixed(4) ?? '—' })}
+                {t('phasemap:matches.pixelScore', {
+                  col: crossPixel.col,
+                  row: crossPixel.row,
+                  // Mid-drag the score belongs to the pixel we came from, so
+                  // pairing it with the new coordinates would be a lie.
+                  score: heatmapPick.dragging ? '…' : (matchData.ncc_score?.toFixed(4) ?? '—'),
+                })}
               </div>
             )}
             {/* Neighbourhood zoom + 1-px nudge: tiny nests are hard to hit
@@ -448,15 +596,21 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
             {matchData && (<>
               {/* 3 panels side by side */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                <div style={{ flex: 1, textAlign: 'center' }}>
+                <div
+                  style={{ flex: 1, textAlign: 'center' }}
+                  onContextMenu={(e) => { e.preventDefault(); setMatchMenu({ x: e.clientX, y: e.clientY, panel: 'experimental' }); }}
+                >
                   {/* Fixed-height header so all three images align vertically —
                       the middle (simulated) panel has an extra phase-name line. */}
                   <div style={{ height: 38, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', marginBottom: 4 }}>
                     <div style={{ fontSize: '9pt', color: '#f8f8f2' }}>{t('phasemap:matches.experimental')}</div>
                   </div>
-                  {matchData.experimental ? <LinkedPatternImage src={`data:image/png;base64,${matchData.experimental}`} alt={t('phasemap:matches.expAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.notAvailable')}</div>}
+                  {matchData.experimental ? <LinkedPatternImage src={`data:image/png;base64,${matchData.experimental}`} alt={t('phasemap:matches.expAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} view={patZoom.viewFor(PATTERN_VIEW_ID)} onZoomAt={(f, px, py) => patZoom.zoomAtPointer(PATTERN_VIEW_ID, f, px, py)} onPan={(dx, dy) => patZoom.pan(PATTERN_VIEW_ID, dx, dy)} onResetView={() => patZoom.resetOne(PATTERN_VIEW_ID)} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.notAvailable')}</div>}
                 </div>
-                <div style={{ flex: 1, textAlign: 'center' }}>
+                <div
+                  style={{ flex: 1, textAlign: 'center' }}
+                  onContextMenu={(e) => { e.preventDefault(); setMatchMenu({ x: e.clientX, y: e.clientY, panel: 'simulated' }); }}
+                >
                   {/* Same fixed-height header as the other two panels (label +
                       the phase name) so the simulated image aligns with them. */}
                   <div style={{ height: 38, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', marginBottom: 4 }}>
@@ -474,7 +628,7 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                     </div>
                   </div>
                   {displayed?.simulated ? (
-                    <LinkedPatternImage src={`data:image/png;base64,${displayed.simulated}`} alt={t('phasemap:matches.simAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, width: '100%' }} />
+                    <LinkedPatternImage src={`data:image/png;base64,${displayed.simulated}`} alt={t('phasemap:matches.simAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} view={patZoom.viewFor(PATTERN_VIEW_ID)} onZoomAt={(f, px, py) => patZoom.zoomAtPointer(PATTERN_VIEW_ID, f, px, py)} onPan={(dx, dy) => patZoom.pan(PATTERN_VIEW_ID, dx, dy)} onResetView={() => patZoom.resetOne(PATTERN_VIEW_ID)} style={{ ...patStyle, width: '100%' }} />
                   ) : (
                     <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4', padding: 12, textAlign: 'center', fontSize: '9pt' }}>
                       {matchData.simulated_error
@@ -485,12 +639,15 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                     </div>
                   )}
                 </div>
-                <div style={{ flex: 1, textAlign: 'center' }}>
+                <div
+                  style={{ flex: 1, textAlign: 'center' }}
+                  onContextMenu={(e) => { e.preventDefault(); setMatchMenu({ x: e.clientX, y: e.clientY, panel: 'ncc-image' }); }}
+                >
                   <div style={{ height: 38, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', marginBottom: 4 }}>
                     <div style={{ fontSize: '9pt', color: '#f8f8f2' }}>{t('phasemap:matches.nccImage')}</div>
                   </div>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'stretch' }}>
-                    {matchData.ncc_image ? <LinkedPatternImage src={`data:image/png;base64,${matchData.ncc_image}`} alt={t('phasemap:matches.nccAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, flex: 1, minWidth: 0, background: '#1a1b26' }} /> : <div style={{ height: 240, flex: 1, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.bothPatternsNeeded')}</div>}
+                    {matchData.ncc_image ? <LinkedPatternImage src={`data:image/png;base64,${matchData.ncc_image}`} alt={t('phasemap:matches.nccAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} view={patZoom.viewFor(PATTERN_VIEW_ID)} onZoomAt={(f, px, py) => patZoom.zoomAtPointer(PATTERN_VIEW_ID, f, px, py)} onPan={(dx, dy) => patZoom.pan(PATTERN_VIEW_ID, dx, dy)} onResetView={() => patZoom.resetOne(PATTERN_VIEW_ID)} style={{ ...patStyle, flex: 1, minWidth: 0, background: '#1a1b26' }} /> : <div style={{ height: 240, flex: 1, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.bothPatternsNeeded')}</div>}
                     {/* NCC Colorbar */}
                     {matchData.ncc_image && (
                       <div style={{ width: 18, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', fontSize: '6pt', color: '#6272a4' }}>
@@ -844,6 +1001,40 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
           </div>
         </div>
       </div>
+
+      {/* Right-click export for the four panels of this dialog */}
+      {matchMenu && (
+        <ContextMenu
+          x={matchMenu.x}
+          y={matchMenu.y}
+          onClose={() => setMatchMenu(null)}
+          items={matchMenuItems(matchMenu.panel)}
+        />
+      )}
+      {matchExportError && (
+        <div
+          role="alert"
+          onClick={() => setMatchExportError(null)}
+          style={{
+            position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+            zIndex: 3600, background: C.bgSecondary, border: `1px solid ${C.red || '#ff5555'}`,
+            color: C.red || '#ff5555', borderRadius: 6, padding: '8px 14px',
+            fontSize: '9pt', cursor: 'pointer',
+          }}
+        >
+          {matchExportError}
+        </div>
+      )}
+      {matchExport && (
+        <ImageExportDialog
+          open
+          onClose={() => setMatchExport(null)}
+          src={matchExport.src}
+          title={matchExport.label}
+          defaultBaseName={matchExport.name}
+          annotations={{ label: matchExport.label }}
+        />
+      )}
       <PatternExportDialog
         open={exportOpen} onClose={() => setExportOpen(false)}
         sources={{
@@ -962,12 +1153,21 @@ function directionFromMode(modeId) {
 // ---------------------------------------------------------------------------
 // Gallery item row
 // ---------------------------------------------------------------------------
+// A drag that travels further than this is a pan, not a click. Same slop as
+// the EDS tiles and the EBSD viewer.
+const CLICK_SLOP_PX = 3;
+// The stacked composite is one map, so one entry in the zoom store.
+const STACK_VIEW_ID = '__stack__';
+
 function CanvasInteractionLayer({
   view, layers, bitmaps, errors, shape, tileMinWidth,
   bitmapVersion, scalebar, title, stepX, ipfKeyImage, showIpfKey, hoverPixel,
   onPixelClick, onRegionSelected, onLineComplete,
   linescanMode, magnifierEnabled,
+  onContextMenu, zoom, onContentBbox, wheelHostRef,
 }) {
+  const { t } = useTranslation('phasemap');
+  const zoomResetHint = t('phasemap:hoverTips.zoomReset');
   const hostRef = useRef(null);
   const publish = useCursorPublisher();
   const [crosshair, setCrosshair] = useState(null);
@@ -981,20 +1181,114 @@ function CanvasInteractionLayer({
   // mapping untouched.
   const [contentBbox, setContentBbox] = useState(null);
   const activeBbox = view === 'stack' ? contentBbox : null;
+  // The annotation scalebar needs it too: it draws over this map, so its bar
+  // length depends on the same magnification.
+  useEffect(() => { onContentBbox?.(activeBbox); }, [activeBbox, onContentBbox]);
+
+  // Zoom for the stacked map. The wheel listener is attached once (below), so
+  // it reads the live view through a ref rather than a closed-over value.
+  const stackView = zoom ? zoom.viewFor(STACK_VIEW_ID) : IDENTITY_VIEW;
+  const viewRef = useRef(stackView);
+  viewRef.current = stackView;
+  const zoomed = view === 'stack' && isZoomed(stackView);
+  const panRef = useRef(null);
+  const suppressClickRef = useRef(false);
+
+  // The rect every pointer<->pixel conversion is measured against.
+  //
+  // Not the host: the map occupies a letterboxed box inside it, and that box is
+  // what the canvas transform's percentage translates resolve against. Feeding
+  // the host rect through zoomedRect instead would drift by
+  // (0.5 - cx) * scale * (hostWidth - boxWidth) as soon as the user panned.
+  // Falls back to the host rect in grid view and before the first paint, which
+  // is what this did before zooming existed.
+  const mapRectNow = useCallback(() => {
+    const host = hostRef.current;
+    if (!host) return null;
+    const boxEl = host.querySelector('[data-phasemap-map-box]');
+    return zoomedRect((boxEl || host).getBoundingClientRect(), viewRef.current);
+  }, []);
+
+  // Wheel zoom. addEventListener with {passive:false}, because React's onWheel
+  // is passive — preventDefault would be ignored there and Electron would zoom
+  // the whole app instead of the map.
+  useEffect(() => {
+    // The listener goes on the map CONTAINER, not on this host. The annotation
+    // layer is a sibling that lays a full-size, clickable backdrop over the map
+    // (that is how clicking empty space deselects an annotation), and a wheel
+    // event over it never reaches a listener on the host — measured: with one
+    // annotation placed, wheel-zoom on the map was dead. The container is an
+    // ancestor of both, so it sees the event either way.
+    const el = wheelHostRef?.current || hostRef.current;
+    if (!el || !zoom) return undefined;
+    const onWheel = (e) => {
+      // Only the stacked map zooms here; the grid's tiles bring their own
+      // handlers and their list has to stay scrollable.
+      const box = el.querySelector('[data-phasemap-map-box]');
+      if (!box) return;
+      e.preventDefault();
+      const r = box.getBoundingClientRect();
+      if (!r.width || !r.height) return;
+      zoom.zoomAtPointer(
+        STACK_VIEW_ID,
+        wheelFactor(e.deltaY),
+        (e.clientX - r.left) / r.width,
+        (e.clientY - r.top) / r.height,
+      );
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [zoom, wheelHostRef]);
+  // The page needs this too: the export opens on the region actually shown, and
+  // that region is decided here. Reported rather than lifted, because the
+  // pointer mapping in this component reads it on every mouse move.
 
   useCursorSync((pos) => {
     if (!shape || !pos.hovering || !hostRef.current) { setCrosshair(null); return; }
-    const rect = hostRef.current.getBoundingClientRect();
-    const out = rowColToContainerPx(pos.row, pos.col, rect, shape, activeBbox);
-    if (out) setCrosshair({ x: out.x, y: out.y });
+    const host = hostRef.current.getBoundingClientRect();
+    const mrect = mapRectNow();
+    if (!mrect) { setCrosshair(null); return; }
+    const out = rowColToContainerPx(pos.row, pos.col, mrect, shape, activeBbox);
+    if (!out) { setCrosshair(null); return; }
+    // rowColToContainerPx answers relative to the rect it was given; the
+    // crosshair is a sibling of the map, so shift it back into host space.
+    const x = out.x + (mrect.left - host.left);
+    const y = out.y + (mrect.top - host.top);
+    // Zoomed in, the synced pixel can sit outside the visible crop.
+    if (x < 0 || y < 0 || x > host.width || y > host.height) { setCrosshair(null); return; }
+    setCrosshair({ x, y });
   });
 
-  const drag = useRectangleDrag({ shape, onRegion: onRegionSelected, contentBbox: activeBbox });
+  const drag = useRectangleDrag({
+    shape,
+    onRegion: onRegionSelected,
+    contentBbox: activeBbox,
+    // Pixel maths follows the zoom; the dashed box itself stays drawn in host
+    // coordinates so it keeps sitting under the cursor.
+    mapRect: () => mapRectNow(),
+  });
 
   const onMouseMove = (e) => {
     if (!shape || !hostRef.current) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, rect, shape, activeBbox);
+    if (panRef.current) {
+      if (e.buttons !== 1) {
+        panRef.current = null;
+      } else if (rect.width && rect.height) {
+        const dx = e.clientX - panRef.current.x;
+        const dy = e.clientY - panRef.current.y;
+        panRef.current = {
+          x: e.clientX,
+          y: e.clientY,
+          moved: panRef.current.moved + Math.abs(dx) + Math.abs(dy),
+        };
+        if (panRef.current.moved > CLICK_SLOP_PX) suppressClickRef.current = true;
+        zoom?.pan(STACK_VIEW_ID, dx / rect.width, dy / rect.height);
+        return;
+      }
+    }
+    const mrect = mapRectNow();
+    const out = mrect && pointerToRowCol(e, mrect, shape, activeBbox);
     if (out) publish({ row: out.row, col: out.col, hovering: true, screenX: e.clientX, screenY: e.clientY });
     setLensPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     if (linescanMode && lineStartRef.current) {
@@ -1013,9 +1307,16 @@ function CanvasInteractionLayer({
     setLensPos(null);
   };
   const onMouseDown = (e) => {
+    // Plain drag pans once zoomed in. Shift stays the ROI tool, and the
+    // linescan tool keeps priority over both.
+    if (!linescanMode && !e.shiftKey && e.button === 0 && zoomed && zoom) {
+      panRef.current = { x: e.clientX, y: e.clientY, moved: 0 };
+      suppressClickRef.current = false;
+    }
     if (linescanMode && shape && hostRef.current) {
       const rect = hostRef.current.getBoundingClientRect();
-      const out = pointerToRowCol(e, rect, shape, activeBbox);
+      const mrect = mapRectNow();
+      const out = mrect && pointerToRowCol(e, mrect, shape, activeBbox);
       if (out) {
         lineStartRef.current = { row: out.row, col: out.col, x: e.clientX - rect.left, y: e.clientY - rect.top };
         setLinePts({
@@ -1028,9 +1329,10 @@ function CanvasInteractionLayer({
     drag.onPointerDown(e);
   };
   const onMouseUp = (e) => {
+    panRef.current = null;
     if (linescanMode && lineStartRef.current && hostRef.current && shape) {
-      const rect = hostRef.current.getBoundingClientRect();
-      const end = pointerToRowCol(e, rect, shape, activeBbox);
+      const mrect = mapRectNow();
+      const end = mrect && pointerToRowCol(e, mrect, shape, activeBbox);
       if (end) onLineComplete?.({ start: { row: lineStartRef.current.row, col: lineStartRef.current.col }, end });
       lineStartRef.current = null;
       return;
@@ -1038,10 +1340,12 @@ function CanvasInteractionLayer({
     drag.onPointerUp(e);
   };
   const onClickHandler = (e) => {
+    // A drag that panned the map must not also open the pattern-match dialog.
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (linescanMode) return;  // never trigger click-to-quantify in linescan mode
     if (!shape || !hostRef.current || !onPixelClick) return;
-    const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, rect, shape, activeBbox);
+    const mrect = mapRectNow();
+    const out = mrect && pointerToRowCol(e, mrect, shape, activeBbox);
     if (out) onPixelClick(out.row, out.col);
   };
 
@@ -1054,7 +1358,16 @@ function CanvasInteractionLayer({
       onMouseDown={onMouseDown}
       onMouseUp={onMouseUp}
       onClick={onClickHandler}
-      style={{ position: 'relative', width: '100%', height: '100%', cursor: shape ? 'crosshair' : 'default' }}
+      onContextMenu={(e) => {
+        if (!onContextMenu) return;
+        e.preventDefault();
+        // Stacked view has no per-tile hit target, so report the composite.
+        onContextMenu(e.clientX, e.clientY, null);
+      }}
+      style={{
+        position: 'relative', width: '100%', height: '100%',
+        cursor: zoomed ? 'grab' : (shape ? 'crosshair' : 'default'),
+      }}
     >
       {view === 'grid' ? (
         <TileGrid
@@ -1065,6 +1378,10 @@ function CanvasInteractionLayer({
           onPixelClick={onPixelClick}
           onRegionSelected={onRegionSelected}
           minTileWidth={tileMinWidth}
+          zoom={zoom}
+          onTileContextMenu={onContextMenu
+            ? ((layer, x, y) => onContextMenu(x, y, layer))
+            : undefined}
         />
       ) : (
         <LayeredCanvas
@@ -1081,7 +1398,23 @@ function CanvasInteractionLayer({
           showIpfKey={showIpfKey}
           hoverPixel={hoverPixel}
           onContentBbox={setContentBbox}
+          zoomView={stackView}
         />
+      )}
+      {zoomed && (
+        <div
+          data-phasemap-zoom-badge
+          onClick={(e) => { e.stopPropagation(); zoom?.resetOne(STACK_VIEW_ID); }}
+          title={zoomResetHint}
+          style={{
+            position: 'absolute', top: 8, left: 8,
+            padding: '2px 7px', borderRadius: 10,
+            background: 'rgba(0,0,0,.6)', color: '#fff',
+            fontSize: '8.5pt', cursor: 'pointer', userSelect: 'none',
+          }}
+        >
+          {stackView.scale.toFixed(1)}x
+        </div>
       )}
       {view === 'stack' && crosshair && (
         <div data-phasemap-crosshair style={{
@@ -1251,6 +1584,59 @@ function SaveFormatPicker({ entry, onPick, onCancel }) {
 // Main component
 // ---------------------------------------------------------------------------
 export default function PhaseMapPage({ onNavigate, isActive = false }) {
+  // Right-click export for the phase map: the stacked composite, a single tile
+  // in grid view, or every layer on one sheet.
+  const [mapMenu, setMapMenu] = useState(null);
+  const [mapExport, setMapExport] = useState(null);
+  // The dialog's own copy of the annotations. Separate state on purpose:
+  // folding it into `mapExport` would hand the dialog a new object on every
+  // drag, and its load effect keys on that — the crop would reset each time.
+  const [mapExportAnnots, setMapExportAnnots] = useState(null);
+  // Which annotation the dialog's properties panel edits. Shared with the
+  // preview overlay so clicking one selects it in the other.
+  const [mapExportSel, setMapExportSel] = useState(null);
+  const [mapExportError, setMapExportError] = useState(null);
+  const openMapExport = useCallback(async (build, name, label,
+    { autoCrop = false, withAnnotations = false } = {}) => {
+    try {
+      setMapExportError(null);
+      const built = await build();
+      // A plain canvas (single layer / montage) or the composed map, which also
+      // reports where the MAP ends and the colour-key column begins.
+      const canvas = built?.canvas ?? built;
+      // A phase map only covers its indexed region; opening on the whole grid
+      // shows it small inside a wide empty surround, which is not what the page
+      // shows. Measured from the rendered pixels — dependable regardless of
+      // whether the view reported an auto-zoom box (on a real result it did
+      // not, while the content filled only 48.6% of the composed image).
+      const crop = autoCrop ? contentBounds(canvas) : null;
+      setMapExport({
+        src: canvasToDataUrl(canvas), name, label, crop,
+        // A COPY of the map's annotations — the dialog edits these, the map
+        // keeps its own. (User's choice: arranging a figure must not disturb
+        // the working view.)
+        // Annotations are normalised to the MAP, not to the whole canvas —
+        // the colour key rides in a column beside it and must stay outside
+        // their coordinate space, or a centred title would drift right.
+        source: {
+          width: canvas.width,
+          height: canvas.height,
+          mapWidth: built?.mapWidth ?? canvas.width,
+          mapHeight: built?.mapHeight ?? canvas.height,
+          // In SCAN columns/rows — the frame may be cropped to the indexed
+          // region, and the scale bar measures in scan steps.
+          mapCols: built?.mapCols ?? null,
+          mapRows: built?.mapRows ?? null,
+        },
+      });
+      setMapExportAnnots(withAnnotations
+        ? (annotRef.current || []).map((a) => ({ ...a, props: { ...a.props } }))
+        : null);
+    } catch (err) {
+      setMapExportError(err?.message || String(err));
+    }
+  }, []);
+
   const { t } = useTranslation(['phasemap', 'common']);
   // Gallery state — subscribe to Zustand store for reactivity
   const indexingResult = useResultStore((s) => s.indexingResult);
@@ -1276,6 +1662,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // layout. localStorage-backed; survives backend restarts (not result
   // metadata) so the user's publication-figure setup sticks.
   const annotState = useAnnotations(indexingResult?.result_id ?? null);
+  // Read by the export opener; a ref so that callback need not rebuild
+  // whenever an annotation moves.
+  const annotRef = useRef(annotState.annotations);
+  annotRef.current = annotState.annotations;
   const [selectedAnnotId, setSelectedAnnotId] = useState(null);
   const mapContainerRef = useRef(null);
   // Phase color overrides — a flat { phaseName: '#rrggbb' } map persisted in
@@ -1325,6 +1715,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [askConfirm, confirmProps] = useConfirm();
   const [askPrompt, promptProps] = usePrompt();
   const [gallery, setGallery] = useState([]);
+  // Read by the visit-sync below: a state updater runs at the NEXT render,
+  // far too late for code that must decide which entry to select now.
+  const galleryRef = useRef([]);
+  galleryRef.current = gallery;
   const [selectedGalleryIdx, setSelectedGalleryIdx] = useState(-1);
   const [showMatchesDialog, setShowMatchesDialog] = useState(false);
   // Pre-seeded pixel for the PatternMatchesDialog when launched from the
@@ -1442,6 +1836,11 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
 
   // ----- Tier-2 tooling state (new) -----
   const [view, setView] = useState('stack');           // 'stack' | 'grid'
+  // Auto-zoom box of the map, reported by the canvas layer. Null in grid view.
+  const [mapContentBbox, setMapContentBbox] = useState(null);
+  // Wheel zoom for the map. One store serves both views: the stacked composite
+  // keeps a single entry, the grid keeps one per tile.
+  const zoom = useZoomViews(SYNC_ALL);
   const [tileMinWidth, setTileMinWidth] = useState(240);
   const [linescanMode, setLinescanMode] = useState(false);
   const [magnifierEnabled, setMagnifierEnabled] = useState(false);
@@ -1501,6 +1900,20 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     // its sector boundary, so ~1° orientation noise flips pixel colours —
     // smooth data renders as colour speckle. The backend then colours each
     // pixel by its grain-mean orientation (display-only, data untouched).
+    if (layer.id === 'grain-boundaries') {
+      let bands;
+      try {
+        bands = JSON.parse((layer.params || {}).gb_bands || '');
+      } catch {
+        bands = null;
+      }
+      return (
+        <GrainBoundaryPanel
+          bands={Array.isArray(bands) && bands.length === 3 ? bands : defaultGbBands()}
+          onChange={(next) => layerStack.setLayerParams(layer.id, { gb_bands: JSON.stringify(next) })}
+        />
+      );
+    }
     if (layer.id === 'ipf-x' || layer.id === 'ipf-y' || layer.id === 'ipf-z') {
       const on = !!(layer.params || {}).grain_stabilized;
       const pf = (layer.params || {}).phase_filter ?? -1;
@@ -1776,6 +2189,126 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   }, [layerStack.layers]);
   const effectiveTitle = mapTitle.trim() || autoTitle;
 
+
+  // The map export's picture. Called by the context menu and again whenever
+  // the user switches the colour-key column on or off — the key is drawn INTO
+  // the canvas, so that choice means composing a different picture.
+  const [mapExportWithKey, setMapExportWithKey] = useState(true);
+  const mapExportKeyRef = useRef(true);
+  mapExportKeyRef.current = mapExportWithKey;
+
+  const composeMapExport = useCallback(async (withKey) => {
+    const { composeMapCanvas } = await import('./annotations/composeExport');
+    return composeMapCanvas({
+      layers: layerStack.layers,
+      bitmaps: layerStack.bitmaps,
+      shape: stackShape ? { rows: stackShape[0], cols: stackShape[1] } : null,
+      scale: 2,
+      ipfKey: (withKey && hasIpfLayer && ipfKeyImage) ? ipfKeyImage : null,
+      // The same frame the screen shows, so the annotations land where they
+      // were put.
+      contentBbox: mapContentBbox,
+    });
+  }, [layerStack.layers, layerStack.bitmaps, stackShape, hasIpfLayer, ipfKeyImage, mapContentBbox]);
+
+  // Switching the colour key redraws the source picture but leaves everything
+  // the user has arranged in the dialog alone — annotations, chosen format,
+  // resolution. Only `src` and the extents change.
+  const applyMapExportKey = useCallback(async (next) => {
+    setMapExportWithKey(next);
+    try {
+      const built = await composeMapExport(next);
+      const canvas = built?.canvas ?? built;
+      setMapExport((cur) => (cur ? {
+        ...cur,
+        src: canvasToDataUrl(canvas),
+        source: {
+          width: canvas.width, height: canvas.height,
+          mapWidth: built?.mapWidth ?? canvas.width,
+          mapHeight: built?.mapHeight ?? canvas.height,
+          mapCols: built?.mapCols ?? null,
+          mapRows: built?.mapRows ?? null,
+        },
+      } : cur));
+    } catch (err) {
+      setMapExportError(err?.message || String(err));
+    }
+  }, [composeMapExport]);
+
+  // Menu for a right-click on the map. In grid view `layer` is the tile that
+  // was hit; in stacked view it is null and only the composite makes sense.
+  const mapMenuItems = useCallback((layer) => {
+    const stem = (effectiveTitle || 'phase-map').replace(/[\/]/g, '_');
+    const items = [];
+    if (layer) {
+      items.push({
+        id: 'this',
+        label: t('imageexport:menuExportThis'),
+        onSelect: () => openMapExport(
+          () => buildSingleCanvas(layer, sourceBitmapFor(layer, layerStack.bitmaps)),
+          `${stem}_${layer.label ?? layer.id}`,
+          String(layer.label ?? layer.id),
+        ),
+      });
+    } else {
+      // Annotations are NOT baked in here — they stay editable in the dialog
+      // and are burnt in at save time. No auto-crop either: the composed
+      // picture already IS the figure, and cropping it would move the
+      // annotations the user arranged on it.
+      const openMap = (withKey) => {
+        setMapExportWithKey(withKey);
+        openMapExport(
+          () => composeMapExport(withKey),
+          withKey ? stem : `${stem}_map`,
+          effectiveTitle || 'Phase map',
+          { autoCrop: false, withAnnotations: true },
+        );
+      };
+      // With a colour key on screen the two sensible figures are "the whole
+      // panel" and "the map alone" — asking here saves opening the dialog to
+      // find out. Without a key there is only one thing to export.
+      if (hasIpfLayer && ipfKeyImage) {
+        items.push({
+          id: 'map',
+          label: t('imageexport:menuExportMapWithKey'),
+          onSelect: () => openMap(true),
+        });
+        items.push({
+          id: 'map-only',
+          label: t('imageexport:menuExportMapOnly'),
+          onSelect: () => openMap(false),
+        });
+      } else {
+        items.push({
+          id: 'map',
+          label: t('imageexport:menuExportMap'),
+          onSelect: () => openMap(false),
+        });
+      }
+    }
+    // "All maps on one sheet" only earns its place where several maps are
+    // actually on screen — in the grid view. In the stacked view the user sees
+    // exactly one composed map, and offering to export "all" of it is noise.
+    const visible = layerStack.layers.filter((l) => l.visible).length;
+    if (layer && visible > 1) {
+      items.push({
+        id: 'all',
+        label: t('imageexport:menuExportAll'),
+        onSelect: () => openMapExport(
+          () => buildMontageCanvas({
+            layers: layerStack.layers,
+            bitmaps: layerStack.bitmaps,
+            shape: stackShape,
+            labelFor: (l) => String(l.label ?? l.id),
+          }),
+          `${stem}_all-layers`,
+          effectiveTitle || 'Phase map',
+        ),
+      });
+    }
+    return items;
+  }, [t, openMapExport, layerStack, stackShape, effectiveTitle]);
+
   // Calibration
   const [stepX, setStepX] = useState(1.0);
   const [stepY, setStepY] = useState(1.0);
@@ -2006,6 +2539,36 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   }, [isActive, handleRefreshPreview]);
 
   // ---------------------------------------------------------------------------
+  // Making a gallery entry the CURRENT one on the backend. Selecting an entry
+  // in the UI is only half the job: the backend holds exactly one active
+  // result, and /render, /layer and /phase-stats all answer for that one. A
+  // highlighted chip whose result was never activated shows the previous
+  // result's map — which is what "I have to click it myself" looked like.
+  const activateEntry = useCallback(async (entry) => {
+    if (!entry) return;
+    try {
+      if (entry.result_id) {
+        const resp = await indexApi.activateResult(entry.result_id);
+        if (resp?.data?.auto_switched_file) await syncFromBackend();
+      } else if (entry.data?.source_path) {
+        await indexApi.deactivateResult().catch(() => {});
+        await analysisApi.load(entry.data.source_path);
+      }
+    } catch (err) {
+      console.warn('[PhaseMap] activating result failed:', err);
+      const detail = err?.response?.data?.detail || err?.message || 'unknown error';
+      toast.error(t('phasemap:errors.couldntLoadResult', { detail }));
+    }
+  }, [syncFromBackend, t]);
+
+  // Activate, then repaint — in that order, so the canvas fetches against the
+  // result that is now current instead of racing the activation.
+  const adoptEntry = useCallback(async (entry) => {
+    await activateEntry(entry);
+    setBackendSyncTick((tick) => tick + 1);
+    handleRefreshPreview();
+  }, [activateEntry, handleRefreshPreview]);
+
   // Populate gallery when indexing results change
   // ---------------------------------------------------------------------------
   // Tracks the last indexingResult we've already processed (by result_id
@@ -2056,11 +2619,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       setSelectedGalleryIdx(newSelectedIdx);
     }
     setSendToAnalysisEnabled(true);
-    // Fresh indexing run: backend's _last_indexing_result is the new one,
-    // so bump the sync tick to make the layered canvas refetch against it.
-    setBackendSyncTick((t) => t + 1);
-    handleRefreshPreview();
-  }, [indexingResult, handleRefreshPreview]);
+    // Arriving from Indexing must land the same way a click on the chip does.
+    // A run started in this session is usually already the backend's active
+    // one, but a result handed over from elsewhere (import, another page, a
+    // second file) is not — and then the map showed the previous result.
+    adoptEntry({ result_id: resultId, data: indexingResult });
+  }, [indexingResult, handleRefreshPreview, adoptEntry]);
 
   // ---------------------------------------------------------------------------
   // Sync gallery with resultsList from useResultStore. This handles the case
@@ -2118,34 +2682,61 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   }, [storeStepSize, isActive]);
 
   // ---------------------------------------------------------------------------
-  // Sync with backend on mount — load all stored results into gallery
+  // Every time this page becomes visible: ask the backend what results exist
+  // and show the one it would actually render.
+  //
+  // This used to run once, and only while the gallery was still empty. An
+  // indexing loaded or run AFTER that — the ordinary case: index on one page,
+  // then come here — never reached the gallery, so the page kept showing the
+  // older result until the user clicked a chip. Re-reading on each visit is one
+  // cheap call and makes "open Phase Maps" mean "see the current result".
   // ---------------------------------------------------------------------------
+  const labelForResult = (r) => [
+    r.method || 'Indexing',
+    r.phases?.length > 0 ? r.phases.map((p) => (typeof p === 'object' ? p.name : p)).join(', ') : null,
+    r.mean_ci != null ? `CI: ${r.mean_ci.toFixed(3)}` : null,
+    `${r.n_indexed} px`,
+  ].filter(Boolean).join(' — ');
+
   useEffect(() => {
-    if (!isActive) return;
-    if (indexingResult || gallery.length > 0) return; // already have data from Zustand
-    // Fetch all stored results from backend
+    if (!isActive) return undefined;
+    let cancelled = false;
     indexApi.listResults()
-      .then(res => {
+      .then((res) => {
+        if (cancelled) return;
         const results = res.data?.results || [];
         if (results.length === 0) return;
-        const entries = results.map(r => ({
-          id: r.id || Date.now(),
-          result_id: r.id,
-          label: [
-            r.method || 'Indexing',
-            r.phases?.length > 0 ? r.phases.map(p => typeof p === 'object' ? p.name : p).join(', ') : null,
-            r.mean_ci != null ? `CI: ${r.mean_ci.toFixed(3)}` : null,
-            `${r.n_indexed} px`,
-          ].filter(Boolean).join(' — '),
-          data: r,
-        }));
-        setGallery(entries);
-        // Select the active result if known, otherwise the last
-        const activeIdx = results.findIndex(r => r.is_active);
-        setSelectedGalleryIdx(activeIdx >= 0 ? activeIdx : entries.length - 1);
+
+        // Follow the backend: it renders exactly one result, and the chip must
+        // name that one. Nothing active → the newest, which is what the user
+        // just produced.
+        const active = results.find((r) => r.is_active);
+        const shown = active || results[results.length - 1];
+        if (!shown?.id) return;
+
+        // ONLY that one gets added. The backend keeps every run and every
+        // import of the whole session in its registry; listing all of them
+        // turned "I loaded one result" into a row of nine chips, most of them
+        // indistinguishable. Entries the user actually brought here — this
+        // session's runs, files added by hand — are already in the list and
+        // stay untouched.
+        const prev = galleryRef.current;
+        const merged = prev.some((e) => e.result_id === shown.id)
+          ? prev
+          : [...prev, { id: shown.id, result_id: shown.id, label: labelForResult(shown), data: shown }];
+        if (merged !== prev) setGallery(merged);
         setSendToAnalysisEnabled(true);
+
+        const idx = merged.findIndex((e) => e.result_id === shown.id);
+        if (idx < 0) return;
+        setSelectedGalleryIdx((cur) => (cur === idx ? cur : idx));
+        // Already the active one → it is on screen already; only a result that
+        // is merely stored needs activating.
+        if (!active) adoptEntry(merged[idx]);
+        else handleRefreshPreview();
       })
-      .catch(() => { /* no previous results — that's fine */ });
+      .catch(() => { /* no results yet — nothing to show */ });
+    return () => { cancelled = true; };
   }, [isActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
@@ -2288,37 +2879,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     //                        any stale _last_result so /render falls back to
     //                        _analysis_dataset instead of rendering the
     //                        previously-activated indexing run.
-    try {
-      if (entry.result_id) {
-        // activate_result auto-switches the active file on the backend
-        // when the result's source_file differs from the current one.
-        // We then call syncFromBackend so the global useDataStore (and
-        // therefore the FileSwitcher and any page-mount effects) reflect
-        // the new active file.
-        const activateResp = await indexApi.activateResult(entry.result_id);
-        if (activateResp?.data?.auto_switched_file) {
-          await syncFromBackend();
-        }
-      } else if (entry.data?.source_path) {
-        // Reload the file — cheap, keeps state fresh when user jumps between
-        // multiple loaded files in the gallery.
-        await indexApi.deactivateResult().catch(() => {});
-        await analysisApi.load(entry.data.source_path);
-      }
-    } catch (err) {
-      console.warn('[PhaseMap] gallery selection switch failed:', err);
-      // Don't swallow this silently — a failed re-activation is exactly the
-      // "my results disappeared" symptom. Tell the user what happened and why
-      // (the backend holds one active dataset; switching files resets results).
-      const detail = err?.response?.data?.detail || err?.message || 'unknown error';
-      toast.error(t('phasemap:errors.couldntLoadResult', { detail }));
-    }
-    // Bump the backend-sync tick AFTER activation completes — this makes
-    // resetSignal change which triggers a cacheFlush + REPLACE_ALL in
-    // useLayerStack, so the layered canvas refetches against the now-
-    // current backend result instead of racing with activateResult.
-    setBackendSyncTick((t) => t + 1);
-    handleRefreshPreview();
+    // Same step the automatic paths take: activate on the backend (which may
+    // auto-switch the file), then refetch.
+    await adoptEntry(entry);
   };
 
   const handleGalleryRename = async () => {
@@ -2791,6 +3354,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           </div>
         ) : layerStack.layers.length > 0 ? (
           <CanvasInteractionLayer
+            onContextMenu={(x, y, layer) => setMapMenu({ x, y, layer })}
+            zoom={zoom}
+            onContentBbox={setMapContentBbox}
+            wheelHostRef={mapContainerRef}
             view={view}
             layers={layerStack.layers}
             bitmaps={layerStack.bitmaps}
@@ -2930,10 +3497,16 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             ctx={{
               phaseStats: phaseStatsForAnnot,
               stepX,
-              // Width of the scan grid (cols) so ScalebarBody can compute
-              // the physical bar length: lengthUm / stepX -> scan pixels,
-              // divided by scanCols -> fraction of the scan grid.
               scanCols: stackShape ? stackShape[1] : null,
+              // Everything the scalebar needs to state a real length: the grid
+              // it belongs to, the auto-zoom box, the user's zoom, and how wide
+              // the map is actually drawn. A fraction of the CONTAINER is not a
+              // fraction of the map — the map sits letterboxed inside it.
+              mapNativeSize: stackShape ? { w: stackShape[1], h: stackShape[0] } : null,
+              mapContentBbox,
+              mapZoomScale: zoom.viewFor('__stack__').scale,
+              mapBoxWidthPx: mapContainerRef.current
+                ?.querySelector('[data-phasemap-map-box]')?.getBoundingClientRect().width || null,
             }}
           />
         )}
@@ -3000,6 +3573,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       onAdd={layerStack.addLayer}
       onUsePreset={layerStack.usePreset}
       onSetSingleLayer={layerStack.setSingleLayer}
+      onRetype={layerStack.retypeLayer}
+      activeMode={layerStack.activeMode}
       availableToAdd={availableToAdd}
       renderLayerExtras={renderLayerExtras}
     />
@@ -3789,6 +4364,154 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           requestProbe={requestProbe}
           clearProbe={clearProbe}
         />
+
+        {/* Right-click export for the map itself */}
+        {mapMenu && (
+          <ContextMenu
+            x={mapMenu.x}
+            y={mapMenu.y}
+            onClose={() => setMapMenu(null)}
+            items={mapMenuItems(mapMenu.layer)}
+          />
+        )}
+        {mapExportError && (
+          <div
+            role="alert"
+            onClick={() => setMapExportError(null)}
+            style={{
+              position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+              zIndex: 3600, background: C.bgSecondary, border: `1px solid ${C.red || '#ff5555'}`,
+              color: C.red || '#ff5555', borderRadius: 6, padding: '8px 14px',
+              fontSize: '9pt', cursor: 'pointer',
+            }}
+          >
+            {mapExportError}
+          </div>
+        )}
+        {mapExport && (
+          <ImageExportDialog
+            open
+            onClose={() => { setMapExport(null); setMapExportAnnots(null); setMapExportSel(null); }}
+            src={mapExport.src}
+            title={mapExport.label}
+            defaultBaseName={mapExport.name}
+            defaultCrop={mapExport.crop}
+            overlay={mapExportAnnots ? ((rect) => (
+              <ExportAnnotationOverlay
+                rect={{
+                  // The annotations belong to the MAP; the colour key sits in a
+                  // column beside it and must stay out of their coordinates.
+                  width: rect.width * (mapExport.source.mapWidth / mapExport.source.width),
+                  height: rect.height * (mapExport.source.mapHeight / mapExport.source.height),
+                }}
+                annotations={mapExportAnnots}
+                onChange={setMapExportAnnots}
+                selectedId={mapExportSel}
+                onSelect={setMapExportSel}
+                ctx={{
+                  phaseStats: phaseStatsForAnnot,
+                  stepX,
+                  scanCols: mapExport.source.mapCols ?? (stackShape ? stackShape[1] : null),
+                  mapNativeSize: mapExport.source.mapCols
+                    ? { w: mapExport.source.mapCols, h: mapExport.source.mapRows }
+                    : (stackShape ? { w: stackShape[1], h: stackShape[0] } : null),
+                }}
+              />
+            )) : null}
+            drawOverlay={mapExportAnnots ? ((ctx, geom) => {
+              const src = mapExport.source;
+              drawAnnotationsOnto(ctx, mapExportAnnots, {
+                // The box the normalised coordinates refer to, mapped through
+                // the dialog's crop and magnification.
+                width: src.mapWidth * geom.sx,
+                height: src.mapHeight * geom.sy,
+                offsetX: geom.origin.x - geom.crop.x * geom.sx,
+                offsetY: geom.origin.y - geom.crop.y * geom.sy,
+                phaseStats: phaseStatsForAnnot,
+                stepX,
+                scanCols: src.mapCols ?? (stackShape ? stackShape[1] : null),
+                // Text grows with the picture, otherwise a 4x figure gets
+                // hairline captions.
+                textScale: geom.sx,
+              });
+            }) : null}
+            sidePanel={mapExportAnnots ? (
+              <>
+                {hasIpfLayer && ipfKeyImage && (
+                  <label
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      fontSize: '9pt', color: colors.text, marginBottom: 6, cursor: 'pointer',
+                    }}
+                    title={t('phasemap:hoverTips.exportWithKey')}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={mapExportWithKey}
+                      onChange={(e) => applyMapExportKey(e.target.checked)}
+                      style={{ margin: 0 }}
+                    />
+                    {t('phasemap:exportWithKey')}
+                  </label>
+                )}
+              <AnnotationToolbar
+                annotations={mapExportAnnots}
+                selectedId={mapExportSel}
+                onSelect={setMapExportSel}
+                onAdd={(type) => setMapExportAnnots((prev) => {
+                  const { annotations: next, id } = withAdded(prev, type);
+                  if (id) setMapExportSel(id);
+                  return next;
+                })}
+                onRemove={(id) => {
+                  setMapExportAnnots((prev) => withRemoved(prev, id));
+                  setMapExportSel((cur) => (cur === id ? null : cur));
+                }}
+                onUpdate={(id, patch) => setMapExportAnnots((prev) => applyPatch(prev, id, patch))}
+                onClear={() => { setMapExportAnnots([]); setMapExportSel(null); }}
+              />
+              </>
+            ) : null}
+            // One bar, two places to set it: the dialog's scale-bar controls
+            // edit the annotation the user placed on the map instead of adding
+            // a bar of their own.
+            scalebarBinding={mapExportAnnots ? (() => {
+              const bar = mapExportAnnots.find((a) => a.type === 'scalebar');
+              return {
+                present: !!bar,
+                lengthUm: bar?.props?.lengthUm ?? 5,
+                fontSize: bar?.props?.fontSize ?? 12,
+                color: bar?.props?.barColor ?? '#ffffff',
+                lengthChoices: [0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500],
+                onToggle: (on) => {
+                  if (on) {
+                    setMapExportAnnots((prev) => {
+                      const { annotations: next, id } = withAdded(prev, 'scalebar');
+                      if (id) setMapExportSel(id);
+                      return next;
+                    });
+                  } else if (bar) {
+                    setMapExportAnnots((prev) => withRemoved(prev, bar.id));
+                    setMapExportSel((cur) => (cur === bar.id ? null : cur));
+                  }
+                },
+                onChange: (patch) => {
+                  if (!bar) return;
+                  const props = {};
+                  if (patch.lengthUm != null) props.lengthUm = patch.lengthUm;
+                  if (patch.fontSize != null) props.fontSize = patch.fontSize;
+                  // One colour control for a bar whose text and bar are drawn
+                  // separately — two pickers for one object would be noise.
+                  if (patch.color) { props.barColor = patch.color; props.textColor = patch.color; }
+                  setMapExportAnnots((prev) => applyPatch(prev, bar.id, { props }));
+                },
+              };
+            })() : null}
+            unitsPerPixel={storeStepSize?.x ?? null}
+            unitLabel={storeStepSize?.units || 'µm'}
+            annotations={{ label: mapExport.label }}
+          />
+        )}
       </div>
     </CursorSyncProvider>
   );

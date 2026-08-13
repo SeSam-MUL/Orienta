@@ -16,7 +16,7 @@ export default function OverlayCard({
   linescanMode = false, onLineComplete,
   swipe = { a: null, b: null }, onSwipeSplitChange,
   magnifierEnabled = false,
-  view = IDENTITY_VIEW, onZoomAt, onPan, onResetView,
+  view = IDENTITY_VIEW, onZoomAt, onPan, onResetView, onContextMenu,
 }) {
   const inSwipeMode = !!(swipe?.a && swipe?.b);
   const hostRef = useRef(null);
@@ -203,6 +203,11 @@ export default function OverlayCard({
       onMouseLeave={handleMouseLeave}
       onClick={handleClick}
       onDoubleClick={() => { if (!linescanMode) onResetView?.(); }}
+      onContextMenu={(e) => {
+        if (!onContextMenu) return;
+        e.preventDefault();
+        onContextMenu(e.clientX, e.clientY);
+      }}
       style={{
         position: 'relative',
         width: '100%',

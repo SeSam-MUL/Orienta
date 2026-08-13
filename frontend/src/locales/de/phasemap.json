@@ -92,7 +92,8 @@
     "rIsCandidate": "re-indexierter Vorschlag (nicht das, was auf der Karte steht)",
     "rStoredCompare": "gespeicherte Orientierung auf der Karte: R = {{value}}",
     "rStoredBetter": "die gespeicherte passt besser",
-    "adoptWorse": "Re-indexierte Orientierung liegt {{delta}}° daneben, passt aber SCHLECHTER (R {{rCand}} gegen {{rStored}}) — wird nicht angeboten"
+    "adoptWorse": "Re-indexierte Orientierung liegt {{delta}}° daneben, passt aber SCHLECHTER (R {{rCand}} gegen {{rStored}}) — wird nicht angeboten",
+    "pickHint": "Pixel anklicken oder das Fadenkreuz ziehen. Gezoomt verschiebt Ziehen das Bild — mit Umschalt gedrückt zieht es das Fadenkreuz."
   },
   "displayModes": {
     "phase": "Phasenkarte",
@@ -523,7 +524,9 @@
     "typeArrow": "Pfeil",
     "noPhasesYet": "(noch keine Phasen)",
     "scalebarUnit": "{{length}} µm",
-    "defaultTitle": "Titel"
+    "defaultTitle": "Titel",
+    "bgColor": "Hintergrund",
+    "bgOpacity": "Deckkraft"
   },
   "canvasOverlay": {
     "ipfKeyAlt": "IPF-Farbschlüssel",
@@ -593,7 +596,18 @@
     "annotText": "Auf der Karte angezeigter Titeltext",
     "annotColor": "Farbe dieser Annotation",
     "annotArrowLabel": "Richtungsbeschriftung für den Pfeil (ND/RD/TD/X/Y/Z)",
-    "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen"
+    "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
+    "zoomReset": "Klicken, um den Zoom zurückzusetzen",
+    "changeLayerType": "Eine andere Karte in dieser Ebene anzeigen — Deckkraft, Mischmodus und Position bleiben erhalten",
+    "exportWithKey": "Die Farbskala-Spalte neben der Karte ins Exportbild zeichnen. Aus: nur die Karte.",
+    "gbClassOn": "Diese Grenzklasse zeichnen",
+    "gbFrom": "Untere Winkelgrenze — zieht die Klasse darunter mit",
+    "gbTo": "Obere Winkelgrenze — zieht die Klasse darüber mit",
+    "gbColor": "Linienfarbe dieser Klasse",
+    "gbWidth": "Linienbreite in Viertel-Rasterschritten",
+    "gbReset": "Zurück auf Sub < 5°, Kleinwinkel 5–15°, Großwinkel ≥ 15°",
+    "annotBgColor": "Farbe der Fläche hinter dieser Annotation",
+    "annotBgOpacity": "Wie deckend die Fläche ist — 0 % lässt sie ganz weg"
   },
   "pseudosym": {
     "title": "Pseudo-Symmetrie",
@@ -633,5 +647,18 @@
   },
   "advanced": {
     "title": "Erweiterte Werkzeuge"
+  },
+  "exportWithKey": "IPF-Farbskala einbeziehen",
+  "grainBoundaries": {
+    "sub": "Subgrenzen",
+    "lagb": "Kleinwinkelkorngrenze",
+    "hagb": "Großwinkelkorngrenze",
+    "classHeading": "Klasse",
+    "fromHeading": "ab °",
+    "toHeading": "bis °",
+    "colorHeading": "Farbe",
+    "widthHeading": "Dicke",
+    "unitHint": "Winkel in °, Dicke in ¼ Rasterschritten",
+    "reset": "Zurücksetzen"
   }
 }

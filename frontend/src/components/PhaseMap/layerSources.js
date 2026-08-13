@@ -10,6 +10,10 @@
  * at runtime by useLayerStack — these static entries are the always-present
  * ones.
  */
+import { defaultBands as defaultGrainBoundaryBands } from './grainBoundaryBands';
+
+const GB_DEFAULT_BANDS = defaultGrainBoundaryBands();
+
 export const LAYER_SOURCES = {
   result: {
     label: 'Indexing Result',
@@ -26,6 +30,13 @@ export const LAYER_SOURCES = {
       // alpha). Default band [0, 0.3] flags low-confidence pixels.
       { id: 'ci-threshold',label: 'CI Threshold',  kind: 'ci-threshold',defaultBlend: 'normal',   defaultOpacity: 0.6,
         params: { band_min: 0.0, band_max: 0.3, out_color: 'ff3333', out_alpha: 153 } },
+      // Grain boundaries drawn ON the interfaces between pixels, classified by
+      // misorientation angle. The three classes travel as one JSON param so the
+      // backend gets them atomically — half-applied bands would paint a map
+      // that matches no setting the user ever chose.
+      { id: 'grain-boundaries', label: 'Grain Boundaries', kind: 'grain-boundaries',
+        defaultBlend: 'normal', defaultOpacity: 1.0,
+        params: { gb_bands: JSON.stringify(GB_DEFAULT_BANDS) } },
     ],
   },
   analysis: {

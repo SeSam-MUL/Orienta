@@ -160,7 +160,7 @@
     "maskTooltip": "启用质量掩膜: 将低于阈值的像素变暗。\n有助于识别衍射质量差的区域。",
     "thresholdTooltip": "质量阈值百分位（0-100%）。\n低于此百分位的像素在概览图上会变暗。",
     "captionTitle": "概览",
-    "captionHint": "点击导航 · Shift+拖动 = ROI",
+    "captionHint": "点击 = 导航 · 滚轮 = 缩放 · Shift+拖动 = ROI",
     "imageAlt": "概览",
     "roiLabel": "ROI: ({{startRow}},{{startCol}})→({{endRow}},{{endCol}})",
     "sampledPreview": "采样预览",
@@ -199,7 +199,7 @@
   "pattern": {
     "captionTitle": "花样",
     "preview": "预览",
-    "captionHint": "滚轮 = 缩放 · 双击 = 重置",
+    "captionHint": "滚轮 = 缩放 · 拖动 = 平移 · 双击 = 重置",
     "alt": "花样 [{{row}}, {{col}}]",
     "loading": "正在加载花样...",
     "emptyHint": "请先加载文件"
@@ -337,6 +337,8 @@
     "bestPattern": "最佳花样位于 [{{pos}}]",
     "noBestPattern": "未能找到最佳花样",
     "worstPattern": "最差花样位于 [{{pos}}]",
-    "noWorstPattern": "未能找到最差花样"
+    "noWorstPattern": "未能找到最差花样",
+    "exportedImageTo": "图像已导出到 {{path}}",
+    "exportedImage": "图像已导出为 {{name}}"
   }
 }

@@ -17,7 +17,8 @@
   },
   "canvas": {
     "noPatternLoaded": "未加载花样",
-    "ariaLabel": "带 PC 十字线叠加的 EBSD 花样"
+    "ariaLabel": "带 PC 十字线叠加的 EBSD 花样",
+    "exportName": "带条带的图案"
   },
   "preview": {
     "hideLines": "隐藏线条",

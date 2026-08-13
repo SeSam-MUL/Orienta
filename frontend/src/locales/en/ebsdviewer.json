@@ -160,7 +160,7 @@
     "maskTooltip": "Enable quality masking: dim pixels below the threshold.\nUseful for identifying regions with poor diffraction quality.",
     "thresholdTooltip": "Quality threshold percentile (0-100%).\nPixels below this percentile are dimmed on the overview map.",
     "captionTitle": "OVERVIEW",
-    "captionHint": "click to navigate · shift+drag = ROI",
+    "captionHint": "click = navigate · wheel = zoom · shift+drag = ROI",
     "imageAlt": "Overview",
     "roiLabel": "ROI: ({{startRow}},{{startCol}})→({{endRow}},{{endCol}})",
     "sampledPreview": "sampled preview",
@@ -199,7 +199,7 @@
   "pattern": {
     "captionTitle": "PATTERN",
     "preview": "PREVIEW",
-    "captionHint": "wheel = zoom · dbl-click = reset",
+    "captionHint": "wheel = zoom · drag = pan · dbl-click = reset",
     "alt": "Pattern [{{row}}, {{col}}]",
     "loading": "Loading pattern...",
     "emptyHint": "Load a file first"
@@ -337,6 +337,8 @@
     "bestPattern": "Best pattern at [{{pos}}]",
     "noBestPattern": "Could not find best pattern",
     "worstPattern": "Worst pattern at [{{pos}}]",
-    "noWorstPattern": "Could not find worst pattern"
+    "noWorstPattern": "Could not find worst pattern",
+    "exportedImageTo": "Image exported to {{path}}",
+    "exportedImage": "Image exported as {{name}}"
   }
 }

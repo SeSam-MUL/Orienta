@@ -23,6 +23,8 @@ import { useTranslation } from 'react-i18next';
 import { pcApi, ebsdApi, calibrationApi, indexApi } from '../../services/api';
 import useDataStore from '../../stores/useDataStore';
 import PhaseDropdown from '../Indexing/PhaseDropdown';
+import { useImageExport, exportStem } from '../common/useImageExport';
+import { buildPanelSheet } from '../common/imageExport';
 import FloatingPhasePanel from '../Indexing/FloatingPhasePanel';
 import {
   colors,
@@ -152,9 +154,10 @@ function cornersAreBlack(ctx, w, h) {
 
 // Pattern canvas with PC crosshair overlay
 // ---------------------------------------------------------------------------
-function PatternCanvas({ patternBase64, pcx, pcy, hideLines, segments }) {
+function PatternCanvas({ patternBase64, pcx, pcy, hideLines, segments, exportName }) {
   const { t } = useTranslation('pcrefinement');
   const canvasRef = useRef(null);
+  const imageExport = useImageExport();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -237,9 +240,23 @@ function PatternCanvas({ patternBase64, pcx, pcy, hideLines, segments }) {
   }, [patternBase64, pcx, pcy, hideLines, segments, t]);
 
   return (
+    <>
     <canvas
       ref={canvasRef}
       aria-label={t('pcrefinement:canvas.ariaLabel')}
+      onContextMenu={(e) => {
+        if (!patternBase64) return;
+        imageExport.openMenu(e, {
+          // Read the CANVAS, not the source PNG: the band lines and the PC
+          // crosshair are drawn here, so exporting the base64 would silently
+          // drop exactly what the user is looking at. Its backing store is the
+          // pattern's own pixel grid, so this is the data resolution — enlarge
+          // it in the dialog if a figure needs more.
+          build: () => canvasRef.current?.toDataURL('image/png'),
+          name: exportName || 'pattern',
+          label: exportName || 'pattern',
+        });
+      }}
       style={{
         width: '100%',
         height: 'auto',
@@ -250,6 +267,8 @@ function PatternCanvas({ patternBase64, pcx, pcy, hideLines, segments }) {
         background: colors.bg,
       }}
     />
+    {imageExport.node}
+    </>
   );
 }
 
@@ -283,6 +302,45 @@ function PreviewPanel({
 }) {
   const { t } = useTranslation(['pcrefinement', 'common']);
   const [hideLines, setHideLines] = useState(false);
+  const simExport = useImageExport();
+  // The two forward-simulation panels: each on its own, or both side by side —
+  // the pair is what makes the comparison readable in a document.
+  const simExportMenu = (which) => {
+    const exp = patternBase64 ? `data:image/png;base64,${patternBase64}` : null;
+    const sim = simulatedB64 ? `data:image/png;base64,${simulatedB64}` : null;
+    const items = [];
+    if (which === 'experimental' && exp) {
+      items.push({
+        id: 'panel',
+        menuLabel: t('imageexport:menuExportThisPanel'),
+        build: () => exp,
+        name: 'experimental',
+        label: t('pcrefinement:preview.experimental'),
+      });
+    }
+    if (which === 'simulated' && sim) {
+      items.push({
+        id: 'panel',
+        menuLabel: t('imageexport:menuExportThisPanel'),
+        build: () => sim,
+        name: 'simulated',
+        label: t('pcrefinement:preview.simulated'),
+      });
+    }
+    if (exp && sim) {
+      items.push({
+        id: 'both',
+        menuLabel: t('imageexport:menuExportBothPanels'),
+        build: () => buildPanelSheet([
+          { label: t('pcrefinement:preview.experimental'), src: exp },
+          { label: t('pcrefinement:preview.simulated'), src: sim },
+        ]).then((c) => c.toDataURL('image/png')),
+        name: 'experimental-vs-simulated',
+        label: t('pcrefinement:preview.forwardSimTitle'),
+      });
+    }
+    return items;
+  };
 
   return (
     <div
@@ -295,6 +353,8 @@ function PreviewPanel({
         overflow: 'hidden',
       }}
     >
+      {simExport.node}
+
       {/* Canvas */}
       <div style={{ flexShrink: 0 }}>
         <PatternCanvas
@@ -303,6 +363,7 @@ function PreviewPanel({
           pcy={pcy}
           hideLines={hideLines}
           segments={segments}
+          exportName={t('pcrefinement:canvas.exportName')}
         />
       </div>
 
@@ -441,6 +502,7 @@ function PreviewPanel({
                 <img
                   alt={t('pcrefinement:preview.experimentalAlt')}
                   src={`data:image/png;base64,${patternBase64}`}
+                  onContextMenu={(e) => simExport.openMenu(e, simExportMenu('experimental'))}
                   style={{
                     width: '100%', maxHeight: 130, objectFit: 'contain',
                     border: `1px solid ${colors.border}`, borderRadius: 3,
@@ -465,6 +527,7 @@ function PreviewPanel({
                 <img
                   alt={t('pcrefinement:preview.simulatedAlt')}
                   src={`data:image/png;base64,${simulatedB64}`}
+                  onContextMenu={(e) => simExport.openMenu(e, simExportMenu('simulated'))}
                   style={{
                     width: '100%', maxHeight: 130, objectFit: 'contain',
                     border: `1px solid ${colors.border}`, borderRadius: 3,
@@ -1687,6 +1750,7 @@ function ControlsPanel({
   };
 
   const canRun = detectorReady && phaseLoaded && !isRunning;
+  const driftExport = useImageExport();
 
   return (
     <div
@@ -1701,6 +1765,8 @@ function ControlsPanel({
         gap: spacing.groupSpacing,
       }}
     >
+      {driftExport.node}
+
       {/* Progress bar + Cancel — initially hidden (visible when running) */}
       {isRunning && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, animation: 'fadeSlideIn 0.2s ease-out' }}>
@@ -1897,6 +1963,11 @@ function ControlsPanel({
             <img
               src={`data:image/png;base64,${sourceDriftImage}`}
               alt={t('pcrefinement:controls.sourceDriftImageAlt')}
+              onContextMenu={(e) => driftExport.openMenu(e, {
+                build: () => `data:image/png;base64,${sourceDriftImage}`,
+                name: 'pc-drift',
+                label: t('pcrefinement:controls.sourceDriftTitle'),
+              })}
               style={{ width: '100%', borderRadius: 3, border: `1px solid ${colors.border}` }}
             />
             {sourceDriftStats && (

@@ -6,6 +6,28 @@
  * pixel geometries align.
  */
 
+// What the backend actually calls these things.
+//
+//   /api/ebsd/info      → { file_path, data_shape: [rows, cols, detRows, detCols] }
+//   /api/indexing/results → { source_file, original_shape }
+//
+// This module used to read `path`/`shape`/`source_path`, none of which exist,
+// so every result resolved to "no source file available" and the whole H5OINA
+// group — every EDS element map and electron image — silently never appeared
+// in the layer list. The aliases are read in order; the old names stay first so
+// anything already passing them keeps working.
+function pickPath(obj) {
+  return obj?.source_path ?? obj?.path ?? obj?.file_path ?? obj?.source_file ?? null;
+}
+
+// A pattern array is [rows, cols, detectorRows, detectorCols]; the map is the
+// first two. A map shape is already [rows, cols] and passes through.
+function pickShape(obj) {
+  const raw = obj?.shape ?? obj?.data_shape ?? obj?.original_shape ?? null;
+  if (!Array.isArray(raw) || raw.length < 2) return null;
+  return [raw[0], raw[1]];
+}
+
 function shapesEqual(a, b) {
   return Array.isArray(a) && Array.isArray(b)
     && a.length === b.length
@@ -46,8 +68,8 @@ export function resolveSource({
   }
 
   // 2. resultEntry.source_path + ebsdInfo agree → auto-link
-  const sourcePath = resultEntry?.data?.source_path ?? ebsdInfo?.path ?? null;
-  const sourceShape = ebsdInfo?.shape ?? null;
+  const sourcePath = pickPath(resultEntry?.data) ?? pickPath(ebsdInfo);
+  const sourceShape = pickShape(ebsdInfo);
 
   if (!sourcePath) {
     return {

@@ -246,7 +246,9 @@ export default function PatternExportDialog({ open, onClose, sources, rNcc, step
   const selected = model.elements.find((e) => e.id === selectedIds[selectedIds.length - 1]) || null;
 
   return (
-    <div onClick={(e) => { e.stopPropagation(); onClose(); }}
+    // The backdrop deliberately does not close the dialog — a stray click
+    // beside the window would throw away the whole composition.
+    <div
       style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
       <div onClick={(e) => e.stopPropagation()} style={{
         background: C.bgSecondary, border: `1px solid ${C.border}`, borderRadius: 8, padding: 16,

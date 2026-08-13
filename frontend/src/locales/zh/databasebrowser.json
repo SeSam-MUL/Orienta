@@ -110,7 +110,8 @@
     "loadingViewer": "正在加载 3D 查看器…",
     "spaceGroupShort": "空间群 {{sg}}",
     "bandwidthSuffix": "bw {{bw}}",
-    "hint": "拖动旋转 · 滚动缩放"
+    "hint": "拖动旋转 · 滚动缩放",
+    "captureNotReady": "球体尚未就绪 — 请等待其绘制完成。"
   },
   "splitterTooltip": "拖动以调整文件表格与预览面板的宽度。",
   "status": {

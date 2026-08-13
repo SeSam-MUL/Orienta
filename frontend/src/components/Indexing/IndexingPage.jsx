@@ -28,10 +28,15 @@ import GenerateDictionaryDialog from './GenerateDictionaryDialog';
 import PhaseDropdown from './PhaseDropdown';
 import PhaseResultModal from './PhaseResultModal';
 import SinglePixelPhaseTestDialog from './SinglePixelPhaseTestDialog';
+import { useHeatmapPick } from '../common/useHeatmapPick';
 import SelectedPhasesList from './SelectedPhasesList';
 import EdsPreflightPanel from './EdsPreflightPanel';
 import { buildEdsPhaseStrengths, edsPriorActive } from './edsPriorParams';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
+import { useZoomViews, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
+import { isZoomed, viewToTransform } from '../EDS/zoomView';
+import { zoomRectPct } from '../EBSDViewer/zoomOverlay';
+import { useWheelZoom } from '../common/useWheelZoom';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
 import PseudoSymmetryPanel from '../common/PseudoSymmetryPanel';
@@ -364,8 +369,19 @@ function RefineDialog({ open, onClose, onLog }) {
 }
 
 /** Pattern Matches Viewer — 3-panel layout: NCC heatmap | Experimental | Simulated | NCC Image */
+// The three detector panels share one zoom view: they already share the
+// crosshair and the markers, so zooming them apart would be a lie about
+// what lines up with what.
+const PATTERN_VIEW_ID = '__patterns__';
+const NCCMAP_VIEW_ID = '__nccmap__';
+
 function PatternMatchesDialog({ open, onClose }) {
   const { t } = useTranslation('indexing');
+  const patZoom = useZoomViews(SYNC_SINGLE);
+  const bindNccWheel = useWheelZoom(
+    (f, px, py) => patZoom.zoomAtPointer(NCCMAP_VIEW_ID, f, px, py),
+  );
+  const nccBoxRef = useRef(null);
   const [heatmapClean, setHeatmapClean] = useState(null);
   const [gridDims, setGridDims] = useState({ rows: 0, cols: 0 });
   const [cropOffset, setCropOffset] = useState({ row: 0, col: 0 });
@@ -443,22 +459,39 @@ function PatternMatchesDialog({ open, onClose }) {
       .then(rr => setMatchData(rr.data)).catch(() => {});
   };
 
-  const handleHeatmapClick = (e) => {
-    const img = heatmapRef.current;
-    if (!img || !gridDims.rows) return;
-    const rect = img.getBoundingClientRect();
-    // Local coordinates within the cropped heatmap
-    const localRow = Math.min(Math.max(0, Math.floor((e.clientY - rect.top) / rect.height * gridDims.rows)), gridDims.rows - 1);
-    const localCol = Math.min(Math.max(0, Math.floor((e.clientX - rect.left) / rect.width * gridDims.cols)), gridDims.cols - 1);
-    // Translate back to original grid coordinates for the backend
-    setSelectedPixel({ row: localRow + cropOffset.row, col: localCol + cropOffset.col, localRow, localCol }); setRank(0);
-  };
+  // Click OR drag the crosshair. Dragging only moves a local preview; the
+  // selection is committed on release, because every committed pixel re-fetches
+  // a freshly rendered pattern from the backend.
+  const heatmapPick = useHeatmapPick({
+    imgRef: heatmapRef,
+    dims: gridDims,
+    offset: cropOffset,
+    onPick: (p) => { setSelectedPixel(p); setRank(0); },
+    // Zoomed in, dragging has to move the picture — otherwise there is no way
+    // to reach the part of the map that is off screen. A click still picks.
+    // At 1x this is null, so the drag-the-crosshair behaviour is untouched.
+    onPan: isZoomed(patZoom.viewFor(NCCMAP_VIEW_ID))
+      ? ((dx, dy) => patZoom.pan(NCCMAP_VIEW_ID, dx, dy))
+      : null,
+    boxRef: nccBoxRef,
+  });
 
   if (!open) return null;
 
   // Crosshair uses local (cropped) coordinates
-  const crossX = selectedPixel ? ((selectedPixel.localCol + 0.5) / gridDims.cols * 100) : -10;
-  const crossY = selectedPixel ? ((selectedPixel.localRow + 0.5) / gridDims.rows * 100) : -10;
+  // While dragging, the crosshair follows the pointer even though the match
+  // shown beside it still belongs to the committed pixel.
+  const crossPixel = heatmapPick.preview || selectedPixel;
+  const crossXRaw = crossPixel ? ((crossPixel.localCol + 0.5) / gridDims.cols * 100) : -10;
+  const crossYRaw = crossPixel ? ((crossPixel.localRow + 0.5) / gridDims.rows * 100) : -10;
+  // The crosshair is drawn OUTSIDE the zoom transform — a 1px line inside it
+  // would be 16px thick at 16x — so it is carried through the same view maths
+  // numerically. The pixel PICKING needs no such term: it measures the <img>,
+  // whose client rect already includes the transform.
+  const nccView = patZoom.viewFor(NCCMAP_VIEW_ID);
+  const crossZ = zoomRectPct({ left: crossXRaw, top: crossYRaw, width: 0, height: 0 }, nccView);
+  const crossX = crossZ.left;
+  const crossY = crossZ.top;
 
   // R-score color (green >= 0.3, orange >= 0.15, red < 0.15)
   const rColor = matchData?.r_quality === 'good' ? '#50fa7b' : matchData?.r_quality === 'acceptable' ? '#ffb86c' : '#ff5555';
@@ -487,9 +520,38 @@ function PatternMatchesDialog({ open, onClose }) {
           <div style={{ width: '30%', minWidth: 200 }}>
             {loading && <div style={{ color: C.textSecondary, padding: 40, textAlign: 'center' }}>{t('matchesDialog.loading')}</div>}
             {heatmapClean && (
-              <div style={{ position: 'relative', cursor: 'crosshair' }} onClick={handleHeatmapClick}>
-                <img ref={heatmapRef} src={`data:image/png;base64,${heatmapClean}`} alt="NCC" style={{ width: '100%', display: 'block', borderRadius: 3, border: `1px solid ${C.border}` }} />
-                {selectedPixel && (<>
+              <div
+                style={{
+                  position: 'relative',
+                  // Without this the magnified map escapes its column and
+                  // covers the pattern panels next to it.
+                  overflow: 'hidden',
+                  borderRadius: 3,
+                  cursor: heatmapPick.dragging
+                    ? 'grabbing'
+                    : (heatmapPick.panning ? 'grab' : 'crosshair'),
+                }}
+                ref={(el) => { nccBoxRef.current = el; bindNccWheel(el); }}
+                onMouseDown={heatmapPick.onMouseDown}
+                title={t('matchesDialog.pickHint')}
+              >
+                {isZoomed(nccView) && (
+                  <div
+                    data-nccmap-zoom-badge
+                    onClick={(e) => { e.stopPropagation(); patZoom.resetOne(NCCMAP_VIEW_ID); }}
+                    title={t('phasemap:hoverTips.zoomReset')}
+                    style={{
+                      position: 'absolute', top: 4, left: 4, zIndex: 2,
+                      padding: '1px 6px', borderRadius: 9, background: 'rgba(0,0,0,.6)',
+                      color: '#fff', fontSize: '8pt', lineHeight: 1.5,
+                      cursor: 'pointer', userSelect: 'none',
+                    }}
+                  >
+                    {nccView.scale.toFixed(1)}×
+                  </div>
+                )}
+                <img ref={heatmapRef} src={`data:image/png;base64,${heatmapClean}`} alt="NCC" draggable={false} style={{ width: '100%', display: 'block', transform: viewToTransform(nccView), transformOrigin: '50% 50%', borderRadius: 3, border: `1px solid ${C.border}`, userSelect: 'none' }} />
+                {crossPixel && (<>
                   <div style={{ position: 'absolute', left: 0, right: 0, top: `${crossY}%`, height: 1, background: '#ffb86c', pointerEvents: 'none' }} />
                   <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${crossX}%`, width: 1, background: '#ffb86c', pointerEvents: 'none' }} />
                   <div style={{ position: 'absolute', left: `${crossX}%`, top: `${crossY}%`, width: 12, height: 12, transform: 'translate(-50%,-50%)', pointerEvents: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffb86c', fontSize: 16, fontWeight: 700 }}>+</div>
@@ -501,7 +563,13 @@ function PatternMatchesDialog({ open, onClose }) {
             </div>}
             {selectedPixel && matchData && (
               <div style={{ fontSize: '9pt', color: '#f8f8f2', marginTop: 6, textAlign: 'center' }}>
-                {t('matchesDialog.pixelScore', { col: selectedPixel.col, row: selectedPixel.row, score: matchData.ncc_score?.toFixed(4) ?? t('matchesDialog.dash') })}
+                {t('matchesDialog.pixelScore', {
+                  col: crossPixel.col,
+                  row: crossPixel.row,
+                  // Mid-drag the score belongs to the pixel we came from, so
+                  // pairing it with the new coordinates would be a lie.
+                  score: heatmapPick.dragging ? '…' : (matchData.ncc_score?.toFixed(4) ?? t('matchesDialog.dash')),
+                })}
               </div>
             )}
             {/* Neighbourhood zoom + 1-px nudge: tiny nests are hard to hit
@@ -540,16 +608,16 @@ function PatternMatchesDialog({ open, onClose }) {
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 <div style={{ flex: 1, textAlign: 'center' }}>
                   <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 4 }}>{t('matchesDialog.experimental')}</div>
-                  {matchData.experimental ? <LinkedPatternImage src={`data:image/png;base64,${matchData.experimental}`} alt={t('matchesDialog.experimental')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.na')}</div>}
+                  {matchData.experimental ? <LinkedPatternImage src={`data:image/png;base64,${matchData.experimental}`} alt={t('matchesDialog.experimental')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} view={patZoom.viewFor(PATTERN_VIEW_ID)} onZoomAt={(f, px, py) => patZoom.zoomAtPointer(PATTERN_VIEW_ID, f, px, py)} onPan={(dx, dy) => patZoom.pan(PATTERN_VIEW_ID, dx, dy)} onResetView={() => patZoom.resetOne(PATTERN_VIEW_ID)} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.na')}</div>}
                 </div>
                 <div style={{ flex: 1, textAlign: 'center' }}>
                   <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 4 }}>{t('matchesDialog.bestMatch')}</div>
-                  {matchData.simulated ? <LinkedPatternImage src={`data:image/png;base64,${matchData.simulated}`} alt={t('matchesDialog.bestMatch')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.dictNotInMemory')}</div>}
+                  {matchData.simulated ? <LinkedPatternImage src={`data:image/png;base64,${matchData.simulated}`} alt={t('matchesDialog.bestMatch')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} view={patZoom.viewFor(PATTERN_VIEW_ID)} onZoomAt={(f, px, py) => patZoom.zoomAtPointer(PATTERN_VIEW_ID, f, px, py)} onPan={(dx, dy) => patZoom.pan(PATTERN_VIEW_ID, dx, dy)} onResetView={() => patZoom.resetOne(PATTERN_VIEW_ID)} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.dictNotInMemory')}</div>}
                 </div>
                 <div style={{ flex: 1, textAlign: 'center' }}>
                   <div style={{ fontSize: '9pt', color: '#f8f8f2', marginBottom: 4 }}>{t('matchesDialog.nccImage')}</div>
                   <div style={{ display: 'flex', gap: 4, alignItems: 'stretch' }}>
-                    {matchData.ncc_image ? <LinkedPatternImage src={`data:image/png;base64,${matchData.ncc_image}`} alt={t('matchesDialog.nccImage')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} style={{ ...patStyle, flex: 1, minWidth: 0, background: '#1a1b26' }} /> : <div style={{ height: 240, flex: 1, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.bothNeeded')}</div>}
+                    {matchData.ncc_image ? <LinkedPatternImage src={`data:image/png;base64,${matchData.ncc_image}`} alt={t('matchesDialog.nccImage')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} view={patZoom.viewFor(PATTERN_VIEW_ID)} onZoomAt={(f, px, py) => patZoom.zoomAtPointer(PATTERN_VIEW_ID, f, px, py)} onPan={(dx, dy) => patZoom.pan(PATTERN_VIEW_ID, dx, dy)} onResetView={() => patZoom.resetOne(PATTERN_VIEW_ID)} style={{ ...patStyle, flex: 1, minWidth: 0, background: '#1a1b26' }} /> : <div style={{ height: 240, flex: 1, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('matchesDialog.bothNeeded')}</div>}
                     {/* NCC Colorbar */}
                     {matchData.ncc_image && (
                       <div style={{ width: 18, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'space-between', fontSize: '6pt', color: '#6272a4' }}>
@@ -3439,7 +3507,7 @@ export default function IndexingPage({ isActive }) {
         method={method}
         totalPixels={perPhaseStats.reduce((sum, s) => sum + (s.pixels || 0), 0)}
         elapsed={quality.match(/(\d+\.\d+s)/)?.[1] || ''}
-        onGoPhaseMap={() => window.dispatchEvent(new CustomEvent('navigate-to', { detail: { page: 'phase-map' } }))}
+        onGoPhaseMap={() => window.dispatchEvent(new CustomEvent('navigate-to', { detail: { page: 'phasemap' } }))}
         onGoAnalysis={() => window.dispatchEvent(new CustomEvent('navigate-to', { detail: { page: 'analysis' } }))}
       />
 

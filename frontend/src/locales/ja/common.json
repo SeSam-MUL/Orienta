@@ -20,5 +20,9 @@
   "stop": "停止",
   "back": "戻る",
   "next": "次へ",
-  "moreInfo": "詳細情報"
+  "moreInfo": "詳細情報",
+  "fullscreen": {
+    "enter": "全画面表示",
+    "exit": "全画面表示を終了"
+  }
 }

@@ -8,10 +8,13 @@
  *
  * See docs/superpowers/specs/2026-06-22-sht-sphere-viewer-design.md
  */
-import { useState, useEffect, useMemo, Suspense, lazy } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
 import { dbApi } from '../../services/api';
 import { colors } from '../../theme/components';
+import { useImageExport, exportStem } from '../common/useImageExport';
+import { trimUniformBackground } from '../common/imageExport';
+import { useFullscreen, fullscreenIcon } from '../common/useFullscreen';
 
 // Lazy so the ~MB Plotly bundle is only pulled when a sphere is actually viewed.
 // react-plotly.js is CJS; under Vite's ESM interop the dynamic import can resolve to
@@ -90,7 +93,62 @@ function buildSurface(payload) {
 }
 
 export default function MasterSphereViewer({ filename, isLocal }) {
-  const { t } = useTranslation('databasebrowser');
+  // 'common' too: the fullscreen label lives there, shared with the other viewers.
+  const { t } = useTranslation(['databasebrowser', 'common']);
+  const imageExport = useImageExport();
+  // Plotly's graph div, handed over on init.
+  const gdRef = useRef(null);
+  const boxRef = useRef(null);
+  const fs = useFullscreen(boxRef);
+  // Plotly builds the modebar from `config`; a fresh object on every render
+  // would make it rebuild the bar constantly. So the config is memoised on the
+  // only thing that actually changes it — the icon/label — and the click goes
+  // through a ref that always holds the current toggle.
+  const toggleRef = useRef(fs.toggle);
+  toggleRef.current = fs.toggle;
+
+  /**
+   * The sphere as a PNG data URL.
+   *
+   * Plotly builds its gl3d context WITHOUT `preserveDrawingBuffer` on desktop,
+   * so reading its canvas with toDataURL() gives a blank image. The scene's own
+   * `toImage` redraws and does a readPixels, which is the only route that
+   * returns actual pixels.
+   *
+   * It is reached through `gd._fullLayout` — an internal handle — because
+   * importing the `plotly.js` module here fails under Vite ("global is not
+   * defined": the CJS entry expects Node globals, while react-plotly.js gets a
+   * pre-bundled copy). Verified live. If a Plotly upgrade ever moves it, the
+   * guard below turns that into a plain message rather than a blank export.
+   */
+  const captureSphere = useCallback(async () => {
+    const scene = gdRef.current?._fullLayout?.scene?._scene;
+    if (typeof scene?.toImage !== 'function') {
+      throw new Error(t('databasebrowser:sphere.captureNotReady'));
+    }
+
+    // Shoot at three times the screen resolution, so the export dialog is
+    // downscaling rather than enlarging a screen grab. Anything beyond that is
+    // pointless: measured on this machine, a ratio of 12 came back SMALLER than
+    // a ratio of 8 because the browser silently caps the drawing buffer.
+    // The on-screen canvas keeps its own size throughout — nothing flickers.
+    const base = scene.pixelRatio || 1;
+    const glplot = scene.glplot || null;
+    const prev = { scene: scene.pixelRatio, gl: glplot?.pixelRatio };
+    let src;
+    try {
+      scene.pixelRatio = Math.min(base * 3, 6);
+      if (glplot) glplot.pixelRatio = scene.pixelRatio;
+      src = scene.toImage('png');
+    } finally {
+      scene.pixelRatio = prev.scene;
+      if (glplot) glplot.pixelRatio = prev.gl;
+    }
+
+    // The sphere covers a fraction of a wide strip; open the dialog on the
+    // sphere itself. "Whole image" undoes it.
+    return { src, defaultCrop: await trimUniformBackground(src) };
+  }, [t]);
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -127,6 +185,21 @@ export default function MasterSphereViewer({ filename, isLocal }) {
   if (error) return <div style={{ ...BOX, color: colors.red }}>{t('databasebrowser:sphere.loadError', { error })}</div>;
   if (!surface) return <div style={BOX}>{t('databasebrowser:sphere.selectLocal')}</div>;
 
+  // Fullscreen as a modebar icon rather than a button floating over the plot:
+  // same size, same hover, same alignment as the zoom/pan/reset icons, and it
+  // stays reachable while fullscreen because the modebar goes fullscreen too.
+  const plotConfig = {
+    displaylogo: false,
+    responsive: true,
+    modeBarButtonsToRemove: ['toImage'],
+    modeBarButtonsToAdd: [{
+      name: 'fullscreen',
+      title: fs.active ? t('common:fullscreen.exit') : t('common:fullscreen.enter'),
+      icon: fullscreenIcon(fs.active),
+      click: () => toggleRef.current?.(),
+    }],
+  };
+
   const meta = payload.meta || {};
   const metaLine = [
     meta.formula,
@@ -136,7 +209,16 @@ export default function MasterSphereViewer({ filename, isLocal }) {
   ].filter(Boolean).join(' · ');
 
   return (
-    <div>
+    <div
+      onContextMenu={(e) => {
+        if (typeof gdRef.current?._fullLayout?.scene?._scene?.toImage !== 'function') return;
+        imageExport.openMenu(e, {
+          build: captureSphere,
+          name: exportStem(filename, 'master-sphere'),
+          label: exportStem(filename, 'master-sphere'),
+        });
+      }}
+    >
       <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 4 }}>
         <label style={{ fontSize: '8pt', color: colors.textSecondary, marginRight: 4 }}
                htmlFor="sphere-res">{t('databasebrowser:sphere.resolutionLabel')}</label>
@@ -149,6 +231,16 @@ export default function MasterSphereViewer({ filename, isLocal }) {
           ))}
         </select>
       </div>
+      <div
+        ref={boxRef}
+        style={{
+          position: 'relative',
+          // Fullscreen replaces the fixed 360 px preview height, otherwise the
+          // sphere would sit as a small box in the middle of a black screen.
+          height: fs.active ? '100%' : undefined,
+          background: fs.active ? bgColor : undefined,
+        }}
+      >
       <Suspense fallback={<div style={BOX}>{t('databasebrowser:sphere.loadingViewer')}</div>}>
         <Plot
           data={[{
@@ -164,7 +256,8 @@ export default function MasterSphereViewer({ filename, isLocal }) {
           }]}
           layout={{
             autosize: true,
-            height: 360,
+            // In fullscreen the height comes from the box, not from a constant.
+            height: fs.active ? undefined : 360,
             margin: { l: 0, r: 0, t: 0, b: 0 },
             paper_bgcolor: bgColor,
             plot_bgcolor: bgColor,
@@ -175,12 +268,13 @@ export default function MasterSphereViewer({ filename, isLocal }) {
               dragmode: 'orbit',
             },
           }}
-          style={{ width: '100%' }}
-          config={{ displaylogo: false, responsive: true,
-            modeBarButtonsToRemove: ['toImage'] }}
+          style={{ width: '100%', height: fs.active ? '100%' : undefined }}
+          config={plotConfig}
           useResizeHandler
+          onInitialized={(fig, gd) => { gdRef.current = gd; }}
         />
       </Suspense>
+      </div>
       {metaLine && (
         <div style={{ fontSize: '8pt', color: colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
           {metaLine}
@@ -190,6 +284,7 @@ export default function MasterSphereViewer({ filename, isLocal }) {
       <div style={{ fontSize: '8pt', color: colors.textSecondary, textAlign: 'center', marginTop: 2, opacity: 0.7 }}>
         {t('databasebrowser:sphere.hint')}
       </div>
+      {imageExport.node}
     </div>
   );
 }

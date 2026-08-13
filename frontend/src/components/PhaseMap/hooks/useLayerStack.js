@@ -9,7 +9,7 @@
  *   - Exposes addLayer / removeLayer / setOpacity / setBlend / setVisibility /
  *     reorder / applyPreset / clear methods.
  */
-import { useReducer, useRef, useCallback, useEffect } from 'react';
+import { useReducer, useRef, useCallback, useEffect, useState } from 'react';
 import { layerStackReducer, initialState } from '../layerStackReducer';
 import { findLayerDef } from '../layerSources';
 import { applyPreset } from '../presets';
@@ -116,6 +116,20 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
   // user back to Phase every time they click a different gallery entry.
   // Shape: { type: 'single', id } | { type: 'preset', name } | null
   const lastModeRef = useRef(null);
+  // What each quick mode looked like when the user last left it, so switching
+  // IPF-Z -> IPF-X -> IPF-Z brings the stack back instead of throwing the
+  // user's work away. Keyed by mode id; cleared whenever the underlying result
+  // changes, because those layers belong to that result's data.
+  const modeStacksRef = useRef(new Map());
+  // Which quick mode the current stack belongs to. Not derivable from the
+  // stack: as soon as a second layer is added the stack is no longer "one
+  // layer named X", but the user is still working inside mode X.
+  const [activeMode, setActiveMode] = useState(null);
+  // Ref twin of activeMode, so the switch callback reads the current value
+  // without having to be rebuilt on every change.
+  const activeModeRef = useRef(null);
+  // The reducer state, readable from callbacks without listing it as a dep.
+  const layersRef = useRef([]);
 
   // Monotonic epoch, bumped on every cacheFlush(). A layer fetch captures the
   // epoch at start and refuses to write its decoded bitmap if the epoch has
@@ -134,6 +148,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
   // arrive — the Map reference itself is stable so React can't see the
   // mutation by reference equality alone.
   const [bitmapVersion, force] = useReducer((x) => x + 1, 0);
+  layersRef.current = state.layers;
 
   const cacheTouch = useCallback((id) => {
     const order = cacheOrderRef.current;
@@ -279,6 +294,8 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
       dispatch({ type: 'CLEAR' });
       return;
     }
+    // The parked stacks belong to the result they were built on.
+    modeStacksRef.current = new Map();
     const last = lastModeRef.current;
     if (last?.type === 'single') {
       // Re-apply the last quick-mode pick. inferDynamicDef handles
@@ -346,6 +363,31 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     dispatch({ type: 'ADD', layer });
   }, []);
 
+  // Change what a layer shows without losing how it is set up.
+  const retypeLayer = useCallback((id, nextId) => {
+    if (!nextId || nextId === id) return;
+    const def = findLayerDef(nextId) ?? inferDynamicDef(nextId);
+    if (!def) {
+      console.warn('[useLayerStack] unknown layer id:', nextId);
+      return;
+    }
+    // The outgoing layer's bitmap is nobody's business now; dropping it also
+    // clears any error it had recorded.
+    cacheFlush((cid) => cid === id);
+    dispatch({
+      type: 'RETYPE',
+      id,
+      layer: {
+        id: nextId, label: def.label ?? nextId, source: def.source,
+        opacity: def.defaultOpacity ?? 1.0,
+        blend: def.defaultBlend ?? 'normal',
+        visible: true,
+        params: def.params ? { ...def.params } : undefined,
+        key: `${nextId}-${Date.now()}`,
+      },
+    });
+  }, [cacheFlush]);
+
   const removeLayer = useCallback((id) => {
     // Also drop the bitmap + any stored error so the user can re-add the
     // layer fresh without ghost state lingering.
@@ -379,23 +421,43 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     lastModeRef.current = { type: 'preset', name };
   }, [cacheFlush]);
 
-  /** Replace the entire stack with a single layer at default opacity/blend.
-   *  Replaces the old "Display Mode" dropdown — one click resets the view
-   *  to just this layer. */
+  /** Switch to a quick mode.
+   *
+   *  The FIRST visit to a mode starts it as a single layer at full opacity —
+   *  the old "Display Mode" behaviour. After that the mode remembers whatever
+   *  the user built there: extra layers, opacities, blends, order. Leaving a
+   *  mode stores its stack; coming back restores it.
+   *
+   *  This used to replace the stack unconditionally, so anything added on top
+   *  of IPF-Z was gone the moment you looked at IPF-X and came back. */
   const setSingleLayer = useCallback((id) => {
     const def = findLayerDef(id) ?? inferDynamicDef(id);
     if (!def) {
       console.warn('[useLayerStack] unknown layer id:', id);
       return;
     }
+    // Park the stack we are leaving under its own mode.
+    const leaving = activeModeRef.current;
+    if (leaving && leaving !== id && layersRef.current.length) {
+      modeStacksRef.current.set(leaving, layersRef.current);
+    }
+    if (leaving === id) return;   // already there — do not reset it
+
     cacheFlush();
-    // Remember the user's choice so we re-apply it on result change.
     lastModeRef.current = { type: 'single', id };
+    activeModeRef.current = id;
+    setActiveMode(id);
+
+    const saved = modeStacksRef.current.get(id);
+    if (saved?.length) {
+      dispatch({ type: 'REPLACE_ALL', layers: saved });
+      return;
+    }
     dispatch({
       type: 'REPLACE_ALL',
       layers: [{
         id, label: def.label ?? id, source: def.source,
-        // Single-layer modes always render at full opacity / normal blend,
+        // A mode's FIRST layer renders at full opacity / normal blend,
         // regardless of the layer's catalog defaults (which were tuned for
         // stacking on top of a base layer).
         opacity: 1.0,
@@ -413,8 +475,9 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     bitmapVersion,
     fetching: fetchingRef.current,
     errors: errorRef.current,
-    addLayer, removeLayer, setOpacity, setBlend, setVisibility, setThreshold, setLayerParams, reorder,
+    addLayer, removeLayer, retypeLayer, setOpacity, setBlend, setVisibility, setThreshold, setLayerParams, reorder,
     usePreset, setSingleLayer, clear,
+    activeMode,
     // Targeted invalidation for callers that mutate the backend result in
     // place (e.g. the pseudo-symmetry grain flip changes orientations →
     // IPF layers must refetch, same pattern as the frameSig effect above).

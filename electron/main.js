@@ -328,6 +328,32 @@ ipcMain.handle('dialog:saveFile', async (event, options) => {
   return result.canceled ? null : result.filePath;
 });
 
+/**
+ * Save an image produced in the renderer.
+ *
+ * `dialog:saveFile` above only hands back a path, because its callers pass that
+ * path to the Python backend and let it do the writing. An exported PNG/JPEG
+ * exists only as bytes in the renderer, so this handler shows the dialog AND
+ * writes the file.
+ *
+ * Returns the written path, or null when the user cancels. Write errors are
+ * thrown so the renderer can show them rather than reporting a phantom success.
+ */
+ipcMain.handle('dialog:saveImage', async (event, options) => {
+  const result = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: options?.defaultPath || 'image.png',
+    filters: options?.filters || [
+      { name: 'PNG Image', extensions: ['png'] },
+      { name: 'JPEG Image', extensions: ['jpg', 'jpeg'] },
+      { name: 'WebP Image', extensions: ['webp'] },
+      { name: 'All Files', extensions: ['*'] },
+    ],
+  });
+  if (result.canceled || !result.filePath) return null;
+  await fs.promises.writeFile(result.filePath, Buffer.from(options.base64, 'base64'));
+  return result.filePath;
+});
+
 const poleFigureWindows = new Set();
 
 ipcMain.handle('window:openPoleFigure', () => {

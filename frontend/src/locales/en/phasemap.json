@@ -92,7 +92,8 @@
     "rIsCandidate": "re-indexed candidate (not what is on the map)",
     "rStoredCompare": "stored orientation on the map: R = {{value}}",
     "rStoredBetter": "the stored one matches better",
-    "adoptWorse": "Re-indexed orientation is {{delta}}° away but matches WORSE (R {{rCand}} vs {{rStored}}) — not offered"
+    "adoptWorse": "Re-indexed orientation is {{delta}}° away but matches WORSE (R {{rCand}} vs {{rStored}}) — not offered",
+    "pickHint": "Click a pixel, or drag the crosshair. Zoomed in, dragging moves the image — hold Shift to drag the crosshair."
   },
   "displayModes": {
     "phase": "Phase Map",
@@ -523,7 +524,9 @@
     "typeArrow": "Arrow",
     "noPhasesYet": "(no phases yet)",
     "scalebarUnit": "{{length}} µm",
-    "defaultTitle": "Title"
+    "defaultTitle": "Title",
+    "bgColor": "Background",
+    "bgOpacity": "Opacity"
   },
   "canvasOverlay": {
     "ipfKeyAlt": "IPF colour key",
@@ -593,7 +596,18 @@
     "annotText": "Title text shown on the map",
     "annotColor": "Colour of this annotation",
     "annotArrowLabel": "Direction label for the arrow (ND/RD/TD/X/Y/Z)",
-    "matchesClearMarkers": "Remove all numbered markers from the comparison panels"
+    "matchesClearMarkers": "Remove all numbered markers from the comparison panels",
+    "zoomReset": "Click to reset the zoom",
+    "changeLayerType": "Show a different map in this layer — opacity, blend mode and position stay as they are",
+    "exportWithKey": "Draw the colour-key column beside the map in the exported image. Off exports the map alone.",
+    "gbClassOn": "Draw this class of boundary",
+    "gbFrom": "Lower angle of this class — moves the class below with it",
+    "gbTo": "Upper angle of this class — moves the class above with it",
+    "gbColor": "Line colour for this class",
+    "gbWidth": "Line width, in quarter scan steps",
+    "gbReset": "Back to sub < 5°, low-angle 5–15°, high-angle ≥ 15°",
+    "annotBgColor": "Colour of the plate behind this annotation",
+    "annotBgOpacity": "How opaque the plate is — 0 % leaves it out entirely"
   },
   "pseudosym": {
     "title": "Pseudo-Symmetry",
@@ -633,5 +647,18 @@
   },
   "advanced": {
     "title": "Advanced tools"
+  },
+  "exportWithKey": "Include IPF colour key",
+  "grainBoundaries": {
+    "sub": "Sub-boundaries",
+    "lagb": "Low-angle GB",
+    "hagb": "High-angle GB",
+    "classHeading": "Class",
+    "fromHeading": "from °",
+    "toHeading": "to °",
+    "colorHeading": "Col",
+    "widthHeading": "Width",
+    "unitHint": "Angles in °, width in ¼ scan steps",
+    "reset": "Reset"
   }
 }

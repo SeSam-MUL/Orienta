@@ -17,7 +17,8 @@
   },
   "canvas": {
     "noPatternLoaded": "No pattern loaded",
-    "ariaLabel": "EBSD pattern with PC crosshair overlay"
+    "ariaLabel": "EBSD pattern with PC crosshair overlay",
+    "exportName": "Pattern with bands"
   },
   "preview": {
     "hideLines": "Hide Lines",

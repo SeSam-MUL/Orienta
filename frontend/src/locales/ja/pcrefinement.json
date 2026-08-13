@@ -17,7 +17,8 @@
   },
   "canvas": {
     "noPatternLoaded": "パターンが読み込まれていません",
-    "ariaLabel": "PC 十字線オーバーレイ付き EBSD パターン"
+    "ariaLabel": "PC 十字線オーバーレイ付き EBSD パターン",
+    "exportName": "バンド付きパターン"
   },
   "preview": {
     "hideLines": "線を隠す",

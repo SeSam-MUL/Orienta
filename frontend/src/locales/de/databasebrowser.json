@@ -110,7 +110,8 @@
     "loadingViewer": "3D-Viewer wird geladen…",
     "spaceGroupShort": "RG {{sg}}",
     "bandwidthSuffix": "bw {{bw}}",
-    "hint": "ziehen zum Drehen · scrollen zum Zoomen"
+    "hint": "ziehen zum Drehen · scrollen zum Zoomen",
+    "captureNotReady": "Die Kugel ist noch nicht fertig — warte, bis sie gezeichnet ist."
   },
   "splitterTooltip": "Ziehen, um Dateitabelle und Vorschaubereich in der Breite anzupassen.",
   "status": {

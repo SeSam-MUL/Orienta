@@ -22,7 +22,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 const STORAGE_PREFIX = 'phaseMapAnnotations:';
 
 // Default templates for each type. x/y/w/h are normalised canvas coords.
-const DEFAULTS = {
+export const DEFAULTS = {
   legend: {
     x: 0.02, y: 0.65, w: 0.28, h: 0.33, rotation: 0,
     props: { fontSize: 11, background: 'rgba(20,22,30,0.85)' },
@@ -41,7 +41,7 @@ const DEFAULTS = {
   },
 };
 
-function makeId(type) {
+export function makeId(type) {
   return `${type}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`;
 }
 

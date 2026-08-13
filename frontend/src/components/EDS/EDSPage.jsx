@@ -36,6 +36,12 @@ import { useLinescan } from './hooks/useLinescan';
 import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from './hooks/useZoomViews';
 import { usePhaseMap, PhaseMapControls } from './PhaseMapPanel';
 import { exportComposite } from './compositeExporter';
+import ContextMenu from '../common/ContextMenu';
+import ImageExportDialog from '../common/ImageExportDialog';
+import {
+  buildSingleCanvas, buildCompositeCanvas, buildMontageCanvas,
+  sourceBitmapFor, canvasToDataUrl,
+} from './edsExportSources';
 
 const DISPLAY_MODES = [
   { id: 'counts', labelKey: 'mode.counts', tipKey: 'mode.countsTip' },
@@ -58,6 +64,7 @@ function ZoomToolbar({ mode, onModeChange, onReset, resetDisabled }) {
     { id: SYNC_ALL, label: t('allMaps.zoomSyncAll'), tip: t('allMaps.zoomSyncAllTooltip') },
     { id: SYNC_SINGLE, label: t('allMaps.zoomSyncSingle'), tip: t('allMaps.zoomSyncSingleTooltip') },
   ];
+
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={t('allMaps.zoomHint')}>
       <span>{t('allMaps.zoomSync')}</span>
@@ -280,9 +287,12 @@ function HoverProbeLayer({ probe, error, displayMode, requestProbe, clearProbe }
 }
 
 export default function EDSPage({ onNavigate }) {
-  const { t } = useTranslation('eds');
+  const { t } = useTranslation(['eds', 'imageexport']);
   const isFileOpen = useDataStore((s) => s.isFileOpen);
   const filePath = useDataStore((s) => s.filePath);
+  // EDS maps sit on the scan grid, so one pixel is one step — same physical
+  // scale the EBSD overview uses for its bar.
+  const stepSize = useDataStore((s) => s.stepSize);
   const rawSetPending = useDataStore((s) => s.setPendingPhaseMapIndexing);
   const setPendingPhaseMap = useMemo(() => rawSetPending ?? (() => {}), [rawSetPending]);
 
@@ -623,6 +633,74 @@ export default function EDSPage({ onNavigate }) {
     window.addEventListener('mouseup', onUp);
   };
 
+  // --- Right-click export -----------------------------------------------
+  // `menu` holds the click point plus what was hit; `exportSrc` is the rendered
+  // image handed to the shared dialog.
+  const [menu, setMenu] = useState(null);
+  const [exportSrc, setExportSrc] = useState(null);
+  const [exportError, setExportError] = useState(null);
+
+  const exportStem = useMemo(() => {
+    const raw = filePath || 'eds';
+    return raw.split(/[\\/]/).pop().replace(/\.[^.]+$/, '') || 'eds';
+  }, [filePath]);
+
+  // Building a canvas can fail (a layer whose bitmap has not arrived yet).
+  // Surface that instead of opening an empty dialog.
+  const openExport = useCallback((build, name, label) => {
+    try {
+      setExportError(null);
+      setExportSrc({ src: canvasToDataUrl(build()), name, label });
+    } catch (err) {
+      setExportError(err?.message || String(err));
+    }
+  }, []);
+
+  const layerName = useCallback((l) => String(l.label ?? l.id), []);
+
+  const exportMenuItems = useCallback((hit) => {
+    const items = [];
+    if (hit?.kind === 'tile' && hit.layer) {
+      const l = hit.layer;
+      items.push({
+        id: 'this',
+        label: t('imageexport:menuExportThis'),
+        onSelect: () => openExport(
+          () => buildSingleCanvas(l, sourceBitmapFor(l, allMaps.bitmaps)),
+          `${exportStem}_${layerName(l)}`,
+          `${exportStem} \u00b7 ${layerName(l)}`,
+        ),
+      });
+    }
+    if (hit?.kind === 'overlay') {
+      items.push({
+        id: 'overlay',
+        label: t('imageexport:menuExportOverlay'),
+        onSelect: () => openExport(
+          () => buildCompositeCanvas({ layers: stack.layers, bitmaps: stack.bitmaps, shape: stack.shape }),
+          `${exportStem}_overlay`,
+          `${exportStem} \u00b7 ${t('overlay.title', { defaultValue: 'Overlay' })}`,
+        ),
+      });
+    }
+    items.push({
+      id: 'all',
+      label: t('imageexport:menuExportAll'),
+      onSelect: () => openExport(
+        () => buildMontageCanvas({
+          layers: allMaps.layers,
+          bitmaps: allMaps.bitmaps,
+          shape: allMaps.shape,
+          labelFor: layerName,
+        }),
+        `${exportStem}_all-maps`,
+        `${exportStem} \u00b7 ${t('allMaps.title', { defaultValue: 'All maps' })}`,
+      ),
+    });
+    return items;
+  }, [t, openExport, exportStem, layerName, allMaps, stack]);
+
+
   if (!isFileOpen) return <EmptyState />;
 
   return (
@@ -754,6 +832,7 @@ export default function EDSPage({ onNavigate }) {
                   onZoomAt={onOverlayZoom}
                   onPan={onOverlayPan}
                   onResetView={onOverlayResetView}
+                  onContextMenu={(x, y) => setMenu({ x, y, kind: 'overlay' })}
                 />
               </div>
             </GroupBox>
@@ -831,6 +910,7 @@ export default function EDSPage({ onNavigate }) {
                 minTileWidth={tileMinWidth}
                 emptyMessage={t('allMaps.empty')}
                 zoom={zoom}
+                onTileContextMenu={(layer, x, y) => setMenu({ x, y, kind: 'tile', layer })}
               />
             </GroupBox>
           </div>
@@ -1067,6 +1147,43 @@ export default function EDSPage({ onNavigate }) {
           requestProbe={requestProbe}
           clearProbe={clearProbe}
         />
+
+        {/* Right-click export: menu on any tile and on the composite overlay */}
+        {menu && (
+          <ContextMenu
+            x={menu.x}
+            y={menu.y}
+            onClose={() => setMenu(null)}
+            items={exportMenuItems(menu)}
+          />
+        )}
+        {exportError && (
+          <div
+            data-eds-export-error
+            role="alert"
+            onClick={() => setExportError(null)}
+            style={{
+              position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
+              zIndex: 3600, background: colors.bgSecondary,
+              border: `1px solid ${colors.red}`, color: colors.red,
+              borderRadius: 6, padding: '8px 14px', fontSize: '9pt', cursor: 'pointer',
+            }}
+          >
+            {exportError}
+          </div>
+        )}
+        {exportSrc && (
+          <ImageExportDialog
+            open
+            onClose={() => setExportSrc(null)}
+            src={exportSrc.src}
+            title={exportSrc.label}
+            defaultBaseName={exportSrc.name}
+            unitsPerPixel={stepSize?.x ?? null}
+            unitLabel={stepSize?.units || 'µm'}
+            annotations={{ label: exportSrc.label }}
+          />
+        )}
       </div>
     </CursorSyncProvider>
   );

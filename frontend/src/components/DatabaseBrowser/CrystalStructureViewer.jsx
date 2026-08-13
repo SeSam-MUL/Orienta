@@ -13,6 +13,9 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { dbApi } from '../../services/api';
 import { colors } from '../../theme/components';
+import { useImageExport, exportStem } from '../common/useImageExport';
+import { trimUniformBackground } from '../common/imageExport';
+import { useFullscreen, FullscreenButton } from '../common/useFullscreen';
 import { elementSummary } from './crystalScene';
 
 /** Resolve a `var(--x)` color to its computed hex (WebGL can't read CSS vars). */
@@ -37,6 +40,9 @@ const overlayBox = {
 
 export default function CrystalStructureViewer({ filename, isLocal }) {
   const { t } = useTranslation('databasebrowser');
+  const imageExport = useImageExport();
+  const fsRef = useRef(null);
+  const fs = useFullscreen(fsRef);
   const containerRef = useRef(null);
   const sceneRef = useRef(null);
   const [payload, setPayload] = useState(null);
@@ -147,7 +153,17 @@ export default function CrystalStructureViewer({ filename, isLocal }) {
   };
 
   return (
-    <div>
+    <div
+      ref={fsRef}
+      style={fs.active ? {
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        background: colors.bg,
+        padding: 8,
+        boxSizing: 'border-box',
+      } : undefined}
+    >
       {/* Controls */}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 4, fontSize: '8pt', color: colors.textSecondary, flexWrap: 'wrap' }}>
         <label style={ctrlLabel} title={t('crystalStructure.bondsTooltip')}>
@@ -162,15 +178,36 @@ export default function CrystalStructureViewer({ filename, isLocal }) {
         <div style={{ flex: 1 }} />
         <button type="button" style={iconBtn} onClick={() => sceneRef.current?.resetView()} title={t('crystalStructure.resetTooltip')}>⟲ {t('crystalStructure.reset')}</button>
         <button type="button" style={iconBtn} onClick={() => sceneRef.current?.screenshot()} title={t('crystalStructure.screenshotTooltip')}>⤓ PNG</button>
+        <FullscreenButton active={fs.active} onToggle={fs.toggle} variant="plate" />
       </div>
 
       {/* Canvas + overlays (container is always present so the scene can mount) */}
       <div
         ref={containerRef}
+        onContextMenu={(e) => {
+          if (!isLocal || !sceneRef.current) return;
+          imageExport.openMenu(e, {
+            // Reads the view back as it stands — same camera, same hidden
+            // elements, same toggles.
+            build: async () => {
+              const src = sceneRef.current?.toDataURL();
+              return { src, defaultCrop: src ? await trimUniformBackground(src) : null };
+            },
+            name: exportStem(filename, 'crystal-structure'),
+            label: exportStem(filename, 'crystal-structure'),
+          });
+        }}
         style={{
-          position: 'relative', height: HEIGHT, width: '100%',
+          position: 'relative',
+          // Fullscreen: take whatever the row above leaves. A percentage would
+          // resolve against a parent with no height of its own. The scene's
+          // ResizeObserver picks the new size up either way.
+          height: fs.active ? undefined : HEIGHT,
+          flex: fs.active ? 1 : undefined,
+          minHeight: 0,
+          width: '100%',
           background: colors.bgSecondary, border: `1px solid ${colors.border}`,
-          borderRadius: 4, overflow: 'hidden',
+          borderRadius: fs.active ? 0 : 4, overflow: 'hidden',
         }}
       >
         {/* Element legend (click to hide) */}
@@ -226,6 +263,7 @@ export default function CrystalStructureViewer({ filename, isLocal }) {
       <div style={{ fontSize: '8pt', color: colors.textSecondary, textAlign: 'center', marginTop: 2, opacity: 0.7 }}>
         {t('crystalStructure.hint')}
       </div>
+      {imageExport.node}
     </div>
   );
 }

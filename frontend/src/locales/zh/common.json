@@ -20,5 +20,9 @@
   "stop": "停止",
   "back": "返回",
   "next": "下一步",
-  "moreInfo": "更多信息"
+  "moreInfo": "更多信息",
+  "fullscreen": {
+    "enter": "全屏",
+    "exit": "退出全屏"
+  }
 }

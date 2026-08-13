@@ -23,6 +23,14 @@ import FileSwitcher from '../common/FileSwitcher';
 import InfoTooltip from '../common/InfoTooltip';
 import { qualityProvenanceKey } from '../common/qualityProvenance';
 import LoadProgressModal from './LoadProgressModal';
+// Same zoom mechanics as the EDS analysis maps — imported rather than copied so
+// the two pages cannot drift apart. See ../EDS/zoomView.js for the derivation.
+import {
+  IDENTITY_VIEW, isZoomed, viewToTransform, zoomAt, panBy, wheelFactor,
+} from '../EDS/zoomView';
+import { zoomRectPct } from './zoomOverlay';
+import ContextMenu from '../common/ContextMenu';
+import ImageExportDialog from '../common/ImageExportDialog';
 import {
   colors, alpha, spacing,
   Button, NumberInput, Select, Label,
@@ -30,6 +38,11 @@ import {
   FormRow, Separator, ScrollPanel, useConfirm, ConfirmDialog,
   usePrompt, PromptDialog,
 } from '../../theme/components';
+
+// A drag shorter than this (in CSS px) still counts as a click, so panning a
+// zoomed overview never navigates to a pattern by accident. Same slop as the
+// EDS tiles use for click-to-quantify.
+const CLICK_SLOP_PX = 3;
 
 // ---------------------------------------------------------------------------
 // Small local helpers that have no equivalent in shared components
@@ -170,8 +183,8 @@ import { toast } from '../../stores/useToastStore';
 import { disambiguateNames } from './disambiguateNames';
 
 export default function EBSDViewer({ onNavigate, isActive }) {
-  const { t } = useTranslation(['ebsdviewer', 'common']);
-  const { ebsdLoaded, ebsdInfo, setEBSDLoaded, setFileData, setMetadata, setPendingChemMask } = useDataStore();
+  const { t } = useTranslation(['ebsdviewer', 'imageexport', 'common']);
+  const { ebsdLoaded, ebsdInfo, setEBSDLoaded, setFileData, setMetadata, setPendingChemMask, stepSize } = useDataStore();
   const [askConfirm, confirmProps] = useConfirm();
   const [askPrompt, promptProps] = usePrompt();
 
@@ -265,10 +278,27 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const [edsPhases, setEdsPhases] = useState(null);
   const [showEdsOverlay, setShowEdsOverlay] = useState(false);
 
-  // --- Pattern zoom/pan ---
-  const [patZoom, setPatZoom] = useState(1);
-  const [patPan, setPatPan] = useState({ x: 0, y: 0 });
+  // --- Zoom/pan for the two images ---
+  // Each image keeps its OWN view; they show unrelated things (a map of the
+  // sample vs. one detector pattern), so there is nothing to synchronise.
+  // A view is { scale, cx, cy } with a normalised centre — see ../EDS/zoomView.
+  const [ovView, setOvView] = useState(IDENTITY_VIEW);
+  const [patView, setPatView] = useState(IDENTITY_VIEW);
+  // Boxes the CSS transforms are relative to; also the reference rect for
+  // turning pointer deltas into fractions.
+  const ovBoxRef = useRef(null);
+  const patBoxRef = useRef(null);
+  // Pan bookkeeping: last pointer position plus distance travelled, so a drag
+  // that pans does not also fire the overview's click-to-navigate.
+  const ovPanRef = useRef(null);
+  const ovSuppressClickRef = useRef(false);
   const patDragRef = useRef(null);
+
+  // --- Right-click export ---
+  // `contextMenu` holds the click point plus which image was hit; `exportFor`
+  // is the image the dialog is currently open for.
+  const [contextMenu, setContextMenu] = useState(null);
+  const [exportFor, setExportFor] = useState(null);
 
   // --- Compare mode ---
   const [compareOpen, setCompareOpen] = useState(false);
@@ -890,7 +920,10 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       if (e.key === 'ArrowDown') { e.preventDefault(); navigateTo(row + (e.shiftKey ? 10 : 1), col); }
       if (e.key === 'Home') { e.preventDefault(); navigateTo(0, 0); }
       if (e.key === 'End' && gridShape) { e.preventDefault(); navigateTo(gridShape[0] - 1, gridShape[1] - 1); }
-      if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.altKey) { setPatZoom(1); setPatPan({ x: 0, y: 0 }); }
+      // "R" resets the zoom. Now covers BOTH images — the overview gained a
+      // zoom of its own, and a shortcut that silently skipped it would leave
+      // the user stuck at 16x with no keyboard way out.
+      if (e.key.toLowerCase() === 'r' && !e.ctrlKey && !e.altKey) { setPatView(IDENTITY_VIEW); setOvView(IDENTITY_VIEW); }
       if (e.ctrlKey && e.key.toLowerCase() === 'k') { e.preventDefault(); setCompareOpen((v) => !v); }
       if (e.altKey && e.key.toLowerCase() === 'd') { e.preventDefault(); doProcessing('bg_dyn', t('logMessages.labelBgDynamic')); }
       if (e.altKey && e.key.toLowerCase() === 's') { e.preventDefault(); doProcessing('bg_stat', t('logMessages.labelBgStatic')); }
@@ -908,19 +941,32 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     if (!overviewRef.current) return;
     const img = overviewRef.current.querySelector('img');
     if (!img || !img.naturalWidth) return;
-    const container = img.getBoundingClientRect();
+    // offsetWidth/Height, NOT getBoundingClientRect(): the image now carries
+    // the zoom transform, so its client rect is the ZOOMED rect, while
+    // ovImgRect must stay the unzoomed letterbox geometry (the zoom is applied
+    // on top of it at render time via zoomRectPct). Layout metrics ignore CSS
+    // transforms, so they give the untransformed box directly.
+    //
+    // It must be the IMAGE's box, not the bordered container's: ovImgRect is
+    // consumed as percentages of the overlay's parent, which is the container's
+    // PADDING box. Measuring the border box instead is off by the 1px border on
+    // each side — invisible at 1x, but zoomRectPct multiplies that error by the
+    // magnification, drifting the crosshair and ROI off their features.
+    const contW = img.offsetWidth;
+    const contH = img.offsetHeight;
+    if (!contW || !contH) return;
     const natW = img.naturalWidth;
     const natH = img.naturalHeight;
-    const scale = Math.min(container.width / natW, container.height / natH);
+    const scale = Math.min(contW / natW, contH / natH);
     const imgW = natW * scale;
     const imgH = natH * scale;
-    const offsetX = (container.width - imgW) / 2;
-    const offsetY = (container.height - imgH) / 2;
+    const offsetX = (contW - imgW) / 2;
+    const offsetY = (contH - imgH) / 2;
     setOvImgRect({
-      left: (offsetX / container.width) * 100,
-      top: (offsetY / container.height) * 100,
-      width: (imgW / container.width) * 100,
-      height: (imgH / container.height) * 100,
+      left: (offsetX / contW) * 100,
+      top: (offsetY / contH) * 100,
+      width: (imgW / contW) * 100,
+      height: (imgH / contH) * 100,
     });
   }, []);
 
@@ -939,7 +985,40 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     };
   }, [updateOvImgRect]);
 
+  // --- Wheel zoom for both images ---
+  // Attached natively with { passive: false }: React's onWheel is passive, so
+  // preventDefault() there is ignored and Electron would zoom the whole app
+  // instead. Plain wheel AND Ctrl+wheel both zoom — unlike the EDS tile grid,
+  // neither image sits inside a scrollable list that a plain wheel must reach.
+  useEffect(() => {
+    const bind = (el, setView) => {
+      if (!el) return () => {};
+      const onWheel = (e) => {
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        setView((v) => zoomAt(
+          v,
+          wheelFactor(e.deltaY),
+          (e.clientX - rect.left) / rect.width,
+          (e.clientY - rect.top) / rect.height,
+        ));
+      };
+      el.addEventListener('wheel', onWheel, { passive: false });
+      return () => el.removeEventListener('wheel', onWheel);
+    };
+    const unbind = [
+      bind(ovBoxRef.current, setOvView),
+      bind(patBoxRef.current, setPatView),
+    ];
+    return () => unbind.forEach((fn) => fn());
+  }, []);
+
   // --- Overview pointer interaction ---
+  // Zoom-aware for free: the <img> carries the CSS transform, so its
+  // getBoundingClientRect() below IS the zoomed rect, and the object-fit math
+  // scales with it. Every pixel mapping (navigate, ROI, crosshair) therefore
+  // stays exact while zoomed without touching this function.
   const calcOverviewPos = (e) => {
     if (!overviewRef.current || !gridShape) return null;
     const img = overviewRef.current.querySelector('img');
@@ -990,6 +1069,24 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   };
 
   const handleOverviewMouseMove = (e) => {
+    // Panning a zoomed overview takes precedence over scrubbing. Started only
+    // in onMouseDown when the view is actually zoomed, so at 1x this branch is
+    // dead and the drag-to-scrub behaviour below is bit-for-bit unchanged.
+    if (ovPanRef.current) {
+      if (e.buttons !== 1) { ovPanRef.current = null; return; }
+      const box = ovBoxRef.current?.getBoundingClientRect();
+      if (!box?.width || !box?.height) return;
+      const dx = e.clientX - ovPanRef.current.x;
+      const dy = e.clientY - ovPanRef.current.y;
+      ovPanRef.current = {
+        x: e.clientX,
+        y: e.clientY,
+        moved: ovPanRef.current.moved + Math.abs(dx) + Math.abs(dy),
+      };
+      if (ovPanRef.current.moved > CLICK_SLOP_PX) ovSuppressClickRef.current = true;
+      setOvView((v) => panBy(v, dx / box.width, dy / box.height));
+      return;
+    }
     if (e.buttons === 1 && e.shiftKey && gridShape) {
       const pos = calcOverviewPos(e);
       if (!pos || !roiStartRef.current) return;
@@ -1007,6 +1104,73 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const crosshair = gridShape
     ? { x: ((col + 0.5) / gridShape[1]) * 100, y: ((row + 0.5) / gridShape[0]) * 100 }
     : null;
+
+  const ovZoomed = isZoomed(ovView);
+  const patZoomed = isZoomed(patView);
+  // The ROI box and crosshair sit in an untransformed overlay so their border
+  // and cross arms keep a constant on-screen size at any magnification; the
+  // overlay is moved numerically instead. See ./zoomOverlay.js.
+  const ovRectZoomed = useMemo(
+    () => (ovImgRect ? zoomRectPct(ovImgRect, ovView) : null),
+    [ovImgRect, ovView],
+  );
+
+  // --- Export ---------------------------------------------------------------
+  // Short, human-recognisable stem for the suggested filename.
+  const exportStem = useMemo(() => {
+    const raw = filePath || activeDataset || 'ebsd';
+    return raw.split(/[\\/]/).pop().replace(/\.[^.]+$/, '') || 'ebsd';
+  }, [filePath, activeDataset]);
+
+  const openExport = useCallback(async (target) => {
+    // During a drag over the overview the pattern pane shows a ~1/4-resolution
+    // atlas thumbnail. Exporting that would silently write a blurry file, so
+    // fetch the real pattern before opening the dialog.
+    if (target === 'pattern' && patternIsThumb) {
+      await loadPattern(row, col);
+    }
+    setExportFor(target);
+  }, [patternIsThumb, loadPattern, row, col]);
+
+  const exportProps = useMemo(() => {
+    if (!exportFor) return null;
+    const units = stepSize?.units || 'µm';
+    if (exportFor === 'overview') {
+      const modeName = t(`overview.modeNames.${overviewMode}`, { defaultValue: overviewMode });
+      return {
+        src: overviewImage ? `data:image/png;base64,${overviewImage}` : null,
+        title: t('overview.captionTitle'),
+        defaultBaseName: `${exportStem}_${modeName}${gridShape ? `_${gridShape[0]}x${gridShape[1]}` : ''}`,
+        // The overview carries no CSS correction — what is in the PNG is what
+        // is on screen, so "as displayed" and "raw" are the same thing here.
+        displayFilter: null,
+        unitsPerPixel: stepSize?.x ?? null,
+        unitLabel: units,
+        annotations: {
+          crosshair: gridShape ? { row, col } : null,
+          roi: roi || null,
+          label: `${exportStem} · ${modeName}${gridShape ? ` · ${gridShape[0]}×${gridShape[1]}` : ''}`,
+        },
+      };
+    }
+    return {
+      src: pattern ? `data:image/png;base64,${pattern}` : null,
+      title: t('pattern.captionTitle'),
+      defaultBaseName: `${exportStem}_r${row}_c${col}`,
+      // Brightness lives only in CSS on the <img>; mirror it so "as displayed"
+      // really matches the screen.
+      displayFilter: gamma !== 100 ? `brightness(${gamma / 100})` : null,
+      // A detector pixel is not a length on the specimen — no scalebar.
+      unitsPerPixel: null,
+      unitLabel: units,
+      annotations: {
+        crosshair: null,
+        roi: null,
+        label: `${exportStem} · [${row}, ${col}]`,
+      },
+    };
+  }, [exportFor, exportStem, overviewImage, overviewMode, gridShape, roi, row, col,
+      pattern, gamma, stepSize, t]);
 
   const switchDataset = async (name) => {
     try {
@@ -1042,13 +1206,12 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     }
   };
 
+  // Opens the same dialog the right-click menu uses. This button used to fire
+  // an immediate, silent browser download with no format, location or crop —
+  // keeping two different export behaviours around would only confuse.
   const handleExport = () => {
     if (!pattern) return;
-    const a = document.createElement('a');
-    a.href = `data:image/png;base64,${pattern}`;
-    a.download = `ebsd_pattern_r${row}_c${col}.png`;
-    a.click();
-    log(t('logMessages.exportedPattern', { row, col }));
+    openExport('pattern');
   };
 
   // Add the currently displayed pattern to the PC Refinement list (used by
@@ -1832,6 +1995,11 @@ export default function EBSDViewer({ onNavigate, isActive }) {
               </span>
             )}
             {gridShape && <span>· {gridShape[0]}×{gridShape[1]}</span>}
+            {ovZoomed && (
+              <span data-overview-zoom-badge style={{ color: colors.accent, fontWeight: 600 }}>
+                · {ovView.scale.toFixed(1)}×
+              </span>
+            )}
             <span style={{ flex: 1 }} />
             <span style={{ opacity: 0.7 }}>{t('overview.captionHint')}</span>
           </div>
@@ -1842,44 +2010,83 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           style={{
             flex: 1, minHeight: 0, position: 'relative',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: ebsdLoaded ? 'crosshair' : 'default',
+            cursor: ebsdLoaded ? (ovZoomed ? 'grab' : 'crosshair') : 'default',
             overflow: 'hidden', padding: 4,
           }}
-          onClick={(e) => { if (!e.shiftKey) handleOverviewPointer(e); }}
+          onClick={(e) => {
+            // A drag that panned must not also navigate. Short clicks (below
+            // CLICK_SLOP_PX) never set this, so click-to-navigate keeps working
+            // while zoomed in.
+            if (ovSuppressClickRef.current) { ovSuppressClickRef.current = false; return; }
+            if (!e.shiftKey) handleOverviewPointer(e);
+          }}
           onMouseDown={(e) => {
             if (e.shiftKey && gridShape) {
               const pos = calcOverviewPos(e);
               if (pos) roiStartRef.current = { row: pos.r, col: pos.c };
+            } else if (ovZoomed && e.button === 0) {
+              // Zoomed in, a plain drag pans. Navigation is left to onClick so
+              // that a pan does not scrub through patterns on the way.
+              ovPanRef.current = { x: e.clientX, y: e.clientY, moved: 0 };
+              ovSuppressClickRef.current = false;
             } else {
               handleOverviewPointer(e);
             }
           }}
-          onMouseUp={() => { roiStartRef.current = null; loadPattern(row, col); fetchEds(row, col); }}
+          onMouseUp={() => {
+            ovPanRef.current = null;
+            roiStartRef.current = null;
+            loadPattern(row, col);
+            fetchEds(row, col);
+          }}
           onMouseMove={handleOverviewMouseMove}
+          onMouseLeave={() => { ovPanRef.current = null; }}
+          onDoubleClick={() => setOvView(IDENTITY_VIEW)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY, target: 'overview' });
+          }}
         >
-          <div style={{
-            position: 'relative',
-            width: '100%', height: '100%',
-            border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden',
-            background: '#000',
-          }}>
+          <div
+            ref={ovBoxRef}
+            data-overview-box
+            style={{
+              position: 'relative',
+              width: '100%', height: '100%',
+              border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden',
+              background: '#000',
+            }}
+          >
           {overviewImage ? (
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>
-              <img
-                className="image-reveal"
-                src={`data:image/png;base64,${overviewImage}`}
-                alt={t('overview.imageAlt')}
-                draggable={false}
-                onDragStart={(e) => e.preventDefault()}
-                onLoad={updateOvImgRect}
-                style={{ width: '100%', height: '100%', display: 'block', objectFit: 'contain', imageRendering: 'pixelated', userSelect: 'none' }}
-              />
-              {/* Overlay positioned exactly over the visible image area */}
-              {ovImgRect && (
+              {/* Zoom layer — a CSS transform only, so the overview PNG is
+                  never re-fetched or re-rendered by a zoom. */}
+              <div data-overview-zoom-layer style={{
+                position: 'absolute', inset: 0,
+                transform: viewToTransform(ovView),
+                transformOrigin: '50% 50%',
+                willChange: ovZoomed ? 'transform' : 'auto',
+              }}>
+                <img
+                  className="image-reveal"
+                  src={`data:image/png;base64,${overviewImage}`}
+                  alt={t('overview.imageAlt')}
+                  draggable={false}
+                  onDragStart={(e) => e.preventDefault()}
+                  onLoad={updateOvImgRect}
+                  style={{ width: '100%', height: '100%', display: 'block', objectFit: 'contain', imageRendering: 'pixelated', userSelect: 'none' }}
+                />
+              </div>
+              {/* Overlay positioned exactly over the visible image area.
+                  Deliberately OUTSIDE the zoom transform: its ROI border and
+                  crosshair arms are absolute pixel sizes that must not grow
+                  with the magnification, so the rect is moved numerically
+                  through the very same view instead. */}
+              {ovRectZoomed && (
                 <div style={{
                   position: 'absolute', pointerEvents: 'none',
-                  left: `${ovImgRect.left}%`, top: `${ovImgRect.top}%`,
-                  width: `${ovImgRect.width}%`, height: `${ovImgRect.height}%`,
+                  left: `${ovRectZoomed.left}%`, top: `${ovRectZoomed.top}%`,
+                  width: `${ovRectZoomed.width}%`, height: `${ovRectZoomed.height}%`,
                 }}>
                   {/* ROI selection rectangle */}
                   {roi && gridShape && (
@@ -1902,7 +2109,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                   )}
                   {/* Crosshair */}
                   {crosshair && (
-                    <div style={{
+                    <div data-overview-crosshair style={{
                       position: 'absolute', left: `${crosshair.x}%`, top: `${crosshair.y}%`,
                       transform: 'translate(-50%, -50%)',
                     }}>
@@ -1967,7 +2174,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             {ebsdInfo?.pattern_shape && (
               <span>· {ebsdInfo.pattern_shape[0]}×{ebsdInfo.pattern_shape[1]}</span>
             )}
-            {patZoom > 1.05 && <span style={{ color: colors.accent }}>· {patZoom.toFixed(1)}×</span>}
+            {patZoomed && <span style={{ color: colors.accent }}>· {patView.scale.toFixed(1)}×</span>}
             {filter !== 'None' && <span style={{ color: colors.orange }}>· {filter}</span>}
             {gamma !== 100 && <span style={{ color: colors.yellow }}>· B {(gamma / 100).toFixed(1)}</span>}
             {maskEnabled && <span style={{ color: colors.green }}>· mask {maskRadius}%</span>}
@@ -1981,34 +2188,42 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           style={{
             flex: 1, minHeight: 0, position: 'relative',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            overflow: 'hidden', cursor: patZoom > 1 ? 'grab' : 'default',
+            overflow: 'hidden', cursor: patZoomed ? 'grab' : 'default',
             padding: 4,
           }}
-          onWheel={(e) => {
-            e.preventDefault();
-            setPatZoom((z) => Math.max(1, Math.min(8, z + (e.deltaY < 0 ? 0.3 : -0.3))));
-            if (patZoom <= 1.1) setPatPan({ x: 0, y: 0 });
-          }}
           onMouseDown={(e) => {
-            if (patZoom > 1 && e.button === 0) {
-              patDragRef.current = { startX: e.clientX - patPan.x, startY: e.clientY - patPan.y };
+            if (patZoomed && e.button === 0) {
+              patDragRef.current = { x: e.clientX, y: e.clientY };
             }
           }}
           onMouseMove={(e) => {
-            if (patDragRef.current && e.buttons === 1) {
-              setPatPan({ x: e.clientX - patDragRef.current.startX, y: e.clientY - patDragRef.current.startY });
-            }
+            if (!patDragRef.current) return;
+            if (e.buttons !== 1) { patDragRef.current = null; return; }
+            const box = patBoxRef.current?.getBoundingClientRect();
+            if (!box?.width || !box?.height) return;
+            const dx = e.clientX - patDragRef.current.x;
+            const dy = e.clientY - patDragRef.current.y;
+            patDragRef.current = { x: e.clientX, y: e.clientY };
+            setPatView((v) => panBy(v, dx / box.width, dy / box.height));
           }}
           onMouseUp={() => { patDragRef.current = null; }}
           onMouseLeave={() => { patDragRef.current = null; }}
-          onDoubleClick={() => { setPatZoom(1); setPatPan({ x: 0, y: 0 }); }}
+          onDoubleClick={() => setPatView(IDENTITY_VIEW)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY, target: 'pattern' });
+          }}
         >
-          <div style={{
-            position: 'relative',
-            width: '100%', height: '100%',
-            border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden',
-            background: '#000',
-          }}>
+          <div
+            ref={patBoxRef}
+            data-pattern-box
+            style={{
+              position: 'relative',
+              width: '100%', height: '100%',
+              border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden',
+              background: '#000',
+            }}
+          >
           {patternLoading ? (
             <div style={{
               position: 'absolute', inset: 0,
@@ -2026,19 +2241,28 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             </div>
           ) : pattern ? (
             <>
-              <img
-                className="image-reveal"
-                src={`data:image/png;base64,${pattern}`}
-                alt={t('pattern.alt', { row, col })}
-                draggable={false}
-                style={{
-                  width: '100%', height: '100%', objectFit: 'contain',
-                  imageRendering: patternIsThumb ? 'auto' : (interpolation === 'nearest' ? 'pixelated' : 'auto'),
-                  transform: `scale(${patZoom}) translate(${patPan.x / patZoom}px, ${patPan.y / patZoom}px)`,
-                  transition: patDragRef.current ? 'none' : 'transform 0.15s',
-                  filter: gamma !== 100 ? `brightness(${gamma / 100})` : 'none',
-                }}
-              />
+              {/* Zoom layer — the transform lives on a wrapper so the EDS
+                  composition overlay below stays put and unscaled. No
+                  transition: with zoom-to-cursor an animated transform makes
+                  the point under the pointer visibly drift while it runs. */}
+              <div data-pattern-zoom-layer style={{
+                position: 'absolute', inset: 0,
+                transform: viewToTransform(patView),
+                transformOrigin: '50% 50%',
+                willChange: patZoomed ? 'transform' : 'auto',
+              }}>
+                <img
+                  className="image-reveal"
+                  src={`data:image/png;base64,${pattern}`}
+                  alt={t('pattern.alt', { row, col })}
+                  draggable={false}
+                  style={{
+                    width: '100%', height: '100%', objectFit: 'contain',
+                    imageRendering: patternIsThumb ? 'auto' : (interpolation === 'nearest' ? 'pixelated' : 'auto'),
+                    filter: gamma !== 100 ? `brightness(${gamma / 100})` : 'none',
+                  }}
+                />
+              </div>
               {showEdsOverlay && (
                 <EdsOverlay composition={edsComposition} mode={edsMode} />
               )}
@@ -2161,7 +2385,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         flexShrink: 0,
       }}>
         <span style={{ fontSize: '8pt', color: colors.textSecondary }}>
-          {t('patternFooter.zoom', { percent: Math.round(patZoom * 100) })}
+          {t('patternFooter.zoom', { percent: Math.round(patView.scale * 100) })}
         </span>
         <div style={{ flex: 1 }} />
         <CheckRow
@@ -2364,6 +2588,37 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         progressState={loadProgressState}
         onClose={() => setLoadProgressOpen(false)}
       />
+
+      {/* Right-click menu for the two images */}
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={() => setContextMenu(null)}
+          items={[{
+            id: 'export',
+            label: t('imageexport:menuExport'),
+            disabled: contextMenu.target === 'overview' ? !overviewImage : !pattern,
+            onSelect: () => openExport(contextMenu.target),
+          }]}
+        />
+      )}
+
+      {/* Export dialog. Guarded on `src` because the image can only be exported
+          once it exists — the menu entry is already disabled in that case, but
+          the dialog would otherwise open empty after a file switch. */}
+      {exportProps?.src && (
+        <ImageExportDialog
+          open
+          onClose={() => setExportFor(null)}
+          onExported={(res) => log(
+            res.via === 'electron'
+              ? t('logMessages.exportedImageTo', { path: res.path })
+              : t('logMessages.exportedImage', { name: res.path }),
+          )}
+          {...exportProps}
+        />
+      )}
 
       {/* Drag overlay */}
       {dragOver && (

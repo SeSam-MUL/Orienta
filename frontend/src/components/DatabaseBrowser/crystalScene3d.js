@@ -221,6 +221,60 @@ export function createCrystalScene(container, { onHover, background = '#21222c' 
     controls.update();
   }
 
+  /** The current view as a PNG data URL, rendered for print rather than grabbed
+   * off the screen.
+   *
+   * Capturing the on-screen buffer and letting the export dialog enlarge it gave
+   * a soft, visibly polygonal image: the canvas is only a few hundred pixels
+   * wide, and the shared geometries carry just enough detail for that size.
+   * So for the capture the scene is re-rendered LARGE and with finer geometry,
+   * and everything is put back afterwards.
+   *
+   * Same camera, same visible elements — only the sampling changes.
+   */
+  function toDataURL({ targetLongSide = 4096 } = {}) {
+    const cw = Math.max(1, container.clientWidth);
+    const ch = Math.max(1, container.clientHeight);
+
+    // How far we may go up: the wish, what the GPU will allocate, and a sane cap.
+    let maxBuffer = 4096;
+    try {
+      const gl = renderer.getContext();
+      maxBuffer = gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) || maxBuffer;
+    } catch { /* keep the conservative default */ }
+    const scale = Math.max(1, Math.min(
+      targetLongSide / Math.max(cw, ch),
+      maxBuffer / Math.max(cw, ch),
+      8,
+    ));
+
+    // 24x16 spheres and 12-sided cylinders read as faceted once they cover a
+    // thousand pixels. Swap in finer ones for the shot only — rebuilding the
+    // InstancedMeshes would be far more disruptive than swapping their geometry.
+    const fineSphere = new THREE.SphereGeometry(1, 96, 64);
+    const fineCyl = new THREE.CylinderGeometry(1, 1, 1, 48);
+    const swapped = [];
+    for (const m of atomsGroup.children) { swapped.push([m, m.geometry]); m.geometry = fineSphere; }
+    for (const m of bondsGroup.children) { swapped.push([m, m.geometry]); m.geometry = fineCyl; }
+
+    const prevRatio = renderer.getPixelRatio();
+    try {
+      // Size the buffer directly and leave the CSS size alone, so the on-screen
+      // canvas does not flash at a different size mid-capture.
+      renderer.setPixelRatio(1);
+      renderer.setSize(Math.round(cw * scale), Math.round(ch * scale), false);
+      renderer.render(scene, camera);
+      return renderer.domElement.toDataURL('image/png');
+    } finally {
+      for (const [m, g] of swapped) m.geometry = g;
+      fineSphere.dispose();
+      fineCyl.dispose();
+      renderer.setPixelRatio(prevRatio);
+      renderer.setSize(cw, ch);
+      renderer.render(scene, camera);
+    }
+  }
+
   function screenshot() {
     renderer.render(scene, camera);
     renderer.domElement.toBlob((blob) => {
@@ -290,5 +344,5 @@ export function createCrystalScene(container, { onHover, background = '#21222c' 
     if (renderer.domElement.parentNode === container) container.removeChild(renderer.domElement);
   }
 
-  return { update, setOptions, resetView, screenshot, dispose };
+  return { update, setOptions, resetView, screenshot, toDataURL, dispose };
 }

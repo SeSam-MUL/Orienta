@@ -25,6 +25,9 @@ import { useTranslation } from 'react-i18next';
 import { BLEND_MAP } from './layerSources';
 import { buildMaskCanvas } from './maskCanvas';
 import { bboxContentRect } from '../EDS/mapCoords';
+import { IDENTITY_VIEW, isZoomed, viewToTransform } from '../EDS/zoomView';
+import { zoomRectPct } from '../EBSDViewer/zoomOverlay';
+import { scalebarGeometry } from './scalebarGeometry';
 import { colors } from '../../theme/components';
 
 // Structural equality for content bboxes (or null). Used to gate the
@@ -54,7 +57,19 @@ function markerPercent(row, col, nativeSize, contentBbox) {
     leftFrac = (col + 0.5) / natW;
     topFrac = (row + 0.5) / natH;
   }
-  return { left: `${leftFrac * 100}%`, top: `${topFrac * 100}%` };
+  return { left: leftFrac * 100, top: topFrac * 100 };
+}
+
+// The marker sits OUTSIDE the zoom transform (a transformed 12px circle with a
+// 2px border would render 32px thick at 16x), so its position is carried
+// through the same view maths numerically — the trick zoomOverlay.js exists for.
+function markerStyle(row, col, nativeSize, contentBbox, zoomView) {
+  const p = markerPercent(row, col, nativeSize, contentBbox);
+  const z = zoomRectPct({ left: p.left, top: p.top, width: 0, height: 0 }, zoomView);
+  // Off the visible crop while zoomed in: drawing it would pin a stray dot to
+  // the edge of the map.
+  if (z.left < 0 || z.top < 0 || z.left > 100 || z.top > 100) return null;
+  return { left: `${z.left}%`, top: `${z.top}%` };
 }
 
 // Compute the bounding box of non-transparent pixels in the canvas.
@@ -95,26 +110,6 @@ function computeAlphaBbox(ctx, w, h) {
   return bbox;
 }
 
-// Round a physical length to a "nice" number: 1, 2, 5 × 10^n.
-function niceLength(rawMicrons) {
-  if (!Number.isFinite(rawMicrons) || rawMicrons <= 0) return null;
-  const exponent = Math.floor(Math.log10(rawMicrons));
-  const base = Math.pow(10, exponent);
-  const norm = rawMicrons / base;
-  let pick;
-  if (norm < 1.5) pick = 1;
-  else if (norm < 3.5) pick = 2;
-  else if (norm < 7.5) pick = 5;
-  else pick = 10;
-  return pick * base;
-}
-
-function formatMicrons(um) {
-  if (um >= 1000) return `${(um / 1000).toFixed(um >= 10000 ? 0 : 1)} mm`;
-  if (um >= 1) return `${um % 1 === 0 ? um : um.toFixed(1)} µm`;
-  return `${(um * 1000).toFixed(um >= 0.1 ? 0 : 1)} nm`;
-}
-
 // Full 9-position map. The old logic only matched startsWith('upper') and
 // endsWith('right'), so all 5 'center' positions (upper center / center left
 // / center / center right / lower center) fell through to bottom-left,
@@ -131,15 +126,21 @@ const SCALEBAR_POS_STYLE = {
   'lower right':  { bottom: '3%', right: '3%' },
 };
 
-function ScalebarOverlay({ nativeSize, stepX, settings }) {
-  if (!settings?.enabled || !nativeSize || !stepX || stepX <= 0) return null;
-  const mapWidthUm = nativeSize.w * stepX;
-  const raw = mapWidthUm * settings.length;
-  const nice = niceLength(raw);
-  if (!nice) return null;
-  const widthFrac = nice / mapWidthUm;          // fraction of map width
-  const widthPct = `${(widthFrac * 100).toFixed(2)}%`;
-  const label = formatMicrons(nice);
+function ScalebarOverlay({ nativeSize, contentBbox, stepX, settings, fitSize, zoomScale }) {
+  if (!settings?.enabled) return null;
+  // Pixels, not a percentage: the bar sits in a shrink-wrapped flex column, so
+  // a percentage width resolved against the LABEL rather than the map — the bar
+  // came out ~47x too short. scalebarGeometry also folds in the auto-zoom.
+  const geom = scalebarGeometry({
+    nativeSize,
+    contentBbox,
+    stepX,
+    lengthFrac: settings.length,
+    fitWidth: fitSize?.w,
+    zoomScale,
+  });
+  if (!geom) return null;
+  const { label, barPx } = geom;
 
   const pos = SCALEBAR_POS_STYLE[settings.position] ?? SCALEBAR_POS_STYLE['lower right'];
 
@@ -157,10 +158,13 @@ function ScalebarOverlay({ nativeSize, stepX, settings }) {
       display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
       pointerEvents: 'none',
     }}>
-      <div style={{
-        width: widthPct, height: 4,
-        background: settings.barColor,
-      }} />
+      <div
+        data-scalebar-bar
+        style={{
+          width: `${barPx}px`, height: 4,
+          background: settings.barColor,
+        }}
+      />
       <div>{label}</div>
     </div>
   );
@@ -230,7 +234,13 @@ export default function LayeredCanvas({
   scalebar = null, title = null, stepX = 1.0,
   ipfKeyImage = null, showIpfKey = false,
   hoverPixel = null, onContentBbox = null,
+  // User zoom. Applied as a CSS transform to the CANVAS only, so the map
+  // magnifies while the scalebar, title and IPF key keep their size and stay
+  // anchored to the map box. Null renders exactly as before.
+  zoomView = null,
 }) {
+  const view = zoomView || IDENTITY_VIEW;
+  const zoomed = isZoomed(view);
   const { t } = useTranslation('phasemap');
   const visibleRef = useRef(null);
   const offscreenRef = useRef(null);
@@ -274,7 +284,10 @@ export default function LayeredCanvas({
     if (!nativeSize || !containerRef.current) return;
     const el = containerRef.current;
     const recompute = () => {
-      const rect = el.getBoundingClientRect();
+      // Layout metrics, NOT getBoundingClientRect: the client rect includes any
+      // CSS transform on an ancestor, so once the user zooms in, measuring it
+      // would feed the magnified size back into the fit and compound it.
+      const rect = { width: el.clientWidth, height: el.clientHeight };
       if (rect.width <= 0 || rect.height <= 0) return;
       const aspectMap = nativeSize.w / nativeSize.h;
       const aspectBox = rect.width / rect.height;
@@ -459,11 +472,18 @@ export default function LayeredCanvas({
       }}
     >
       {nativeSize && fitSize && (
-        <div style={{
-          position: 'relative',
-          width: `${fitSize.w}px`,
-          height: `${fitSize.h}px`,
-        }}>
+        <div
+          data-phasemap-map-box
+          style={{
+            position: 'relative',
+            width: `${fitSize.w}px`,
+            height: `${fitSize.h}px`,
+            // The zoomed canvas is clipped to the map's own box rather than the
+            // black letterbox area, so the decorations anchored to its corners
+            // keep meaning what they say.
+            overflow: 'hidden',
+          }}
+        >
           <canvas
             ref={visibleRef}
             style={{
@@ -471,19 +491,32 @@ export default function LayeredCanvas({
               height: '100%',
               display: 'block',
               imageRendering: 'pixelated',
+              // Percentage translates resolve against this element's own box,
+              // which is exactly the box the page's pointer maths measures.
+              transform: viewToTransform(view),
+              transformOrigin: '50% 50%',
+              willChange: zoomed ? 'transform' : 'auto',
             }}
           />
-          <ScalebarOverlay nativeSize={nativeSize} stepX={stepX} settings={scalebar} />
+          <ScalebarOverlay
+            nativeSize={nativeSize}
+            contentBbox={contentBbox}
+            stepX={stepX}
+            settings={scalebar}
+            fitSize={fitSize}
+            zoomScale={view.scale}
+          />
           <TitleOverlay text={title} />
           {showIpfKey && <IpfKeyOverlay imageBase64={ipfKeyImage} />}
           {hoverPixel
             && Number.isFinite(hoverPixel.row)
             && Number.isFinite(hoverPixel.col)
-            && nativeSize.w > 0 && nativeSize.h > 0 && (
+            && nativeSize.w > 0 && nativeSize.h > 0
+            && markerStyle(hoverPixel.row, hoverPixel.col, nativeSize, contentBbox, view) && (
             <div
               style={{
                 position: 'absolute',
-                ...markerPercent(hoverPixel.row, hoverPixel.col, nativeSize, contentBbox),
+                ...markerStyle(hoverPixel.row, hoverPixel.col, nativeSize, contentBbox, view),
                 width: 12,
                 height: 12,
                 transform: 'translate(-50%, -50%)',

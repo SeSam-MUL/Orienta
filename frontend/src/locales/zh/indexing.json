@@ -457,7 +457,8 @@
     "zoomKindPhase": "相",
     "zoomLayerGroup": "缩放图层",
     "zoomLayerTip": "选择放大镜显示的图层:IPF 取向 (Z/Y/X) 或相颜色",
-    "suspicionHintRefine": "取向相同(偏差 {{delta}}° 以内)— 需要的是亚度级微调,而不是变体翻转。请使用「重新标定此像素」并应用到晶粒。"
+    "suspicionHintRefine": "取向相同(偏差 {{delta}}° 以内)— 需要的是亚度级微调,而不是变体翻转。请使用「重新标定此像素」并应用到晶粒。",
+    "pickHint": "点击像素，或拖动十字准线。放大后拖动会移动图像 — 按住 Shift 可拖动十字准线。"
   },
   "phaseResultModal": {
     "title": "多相 结果",

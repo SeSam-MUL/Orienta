@@ -110,7 +110,8 @@
     "loadingViewer": "Loading 3D viewer…",
     "spaceGroupShort": "SG {{sg}}",
     "bandwidthSuffix": "bw {{bw}}",
-    "hint": "drag to rotate · scroll to zoom"
+    "hint": "drag to rotate · scroll to zoom",
+    "captureNotReady": "The sphere is not ready yet — wait until it is drawn."
   },
   "splitterTooltip": "Drag to resize the file table versus the preview panel.",
   "status": {

@@ -92,7 +92,8 @@
     "rIsCandidate": "重新标定的候选（并非图上的取向）",
     "rStoredCompare": "图上已存取向: R = {{value}}",
     "rStoredBetter": "已存取向匹配更好",
-    "adoptWorse": "重新标定的取向偏差 {{delta}}°，但匹配更差 (R {{rCand}} 对 {{rStored}}) — 不提供应用"
+    "adoptWorse": "重新标定的取向偏差 {{delta}}°，但匹配更差 (R {{rCand}} 对 {{rStored}}) — 不提供应用",
+    "pickHint": "点击像素，或拖动十字准线。放大后拖动会移动图像 — 按住 Shift 可拖动十字准线。"
   },
   "displayModes": {
     "phase": "相分布图",
@@ -523,7 +524,9 @@
     "typeArrow": "箭头",
     "noPhasesYet": "（暂无相）",
     "scalebarUnit": "{{length}} µm",
-    "defaultTitle": "标题"
+    "defaultTitle": "标题",
+    "bgColor": "背景",
+    "bgOpacity": "不透明度"
   },
   "canvasOverlay": {
     "ipfKeyAlt": "IPF 色键",
@@ -593,7 +596,18 @@
     "annotText": "图上显示的标题文本",
     "annotColor": "此注释的颜色",
     "annotArrowLabel": "箭头的方向标签（ND/RD/TD/X/Y/Z）",
-    "matchesClearMarkers": "从比较面板中移除所有编号标记"
+    "matchesClearMarkers": "从比较面板中移除所有编号标记",
+    "zoomReset": "点击以重置缩放",
+    "changeLayerType": "在此图层中显示另一种图 — 不透明度、混合模式和顺序保持不变",
+    "exportWithKey": "在导出图像中于图旁绘制色标列。关闭则仅导出图本身。",
+    "gbClassOn": "绘制该类边界",
+    "gbFrom": "该类下限角 — 下方类别随之移动",
+    "gbTo": "该类上限角 — 上方类别随之移动",
+    "gbColor": "该类线条颜色",
+    "gbWidth": "线宽（¼扫描步长）",
+    "gbReset": "恢复为 亚晶界<5°、小角5–15°、大角≥15°",
+    "annotBgColor": "该标注背景板的颜色",
+    "annotBgOpacity": "背景板的不透明度 — 0 % 表示不显示"
   },
   "pseudosym": {
     "title": "伪对称",
@@ -633,5 +647,18 @@
   },
   "advanced": {
     "title": "高级工具"
+  },
+  "exportWithKey": "包含 IPF 色标",
+  "grainBoundaries": {
+    "sub": "亚晶界",
+    "lagb": "小角度晶界",
+    "hagb": "大角度晶界",
+    "classHeading": "类别",
+    "fromHeading": "起 °",
+    "toHeading": "至 °",
+    "colorHeading": "颜色",
+    "widthHeading": "线宽",
+    "unitHint": "角度以°计，线宽以¼扫描步长计",
+    "reset": "重置"
   }
 }

@@ -9,5 +9,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openFile: (options) => ipcRenderer.invoke('dialog:openFile', options),
   openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
   saveFile: (options) => ipcRenderer.invoke('dialog:saveFile', options),
+  // Unlike saveFile (which only returns a path for the BACKEND to write to),
+  // this one also writes the bytes — images are produced in the renderer and
+  // never touch the backend.
+  saveImage: (options) => ipcRenderer.invoke('dialog:saveImage', options),
   openPoleFigure: () => ipcRenderer.invoke('window:openPoleFigure'),
 });

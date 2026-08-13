@@ -20,5 +20,9 @@
   "stop": "Stopp",
   "back": "Zurück",
   "next": "Weiter",
-  "moreInfo": "Weitere Informationen"
+  "moreInfo": "Weitere Informationen",
+  "fullscreen": {
+    "enter": "Vollbild",
+    "exit": "Vollbild verlassen"
+  }
 }

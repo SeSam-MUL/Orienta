@@ -30,6 +30,31 @@ export function layerStackReducer(state, action) {
       if (state.layers.some((l) => l.id === action.layer.id)) return state;
       return { ...state, layers: [...state.layers, action.layer] };
     }
+    // Same slot, different map: keeps position, opacity, blend, visibility and
+    // threshold, and swaps only what the layer SHOWS. Rebuilding it through
+    // REMOVE + ADD would drop it to the end of the stack at default settings,
+    // which is exactly the work this saves.
+    case 'RETYPE': {
+      const at = state.layers.findIndex((l) => l.id === action.id);
+      if (at < 0) return state;
+      // Refuse a duplicate: two layers with the same id would fight over one
+      // bitmap cache entry.
+      if (state.layers.some((l) => l.id === action.layer.id)) return state;
+      const prev = state.layers[at];
+      const next = {
+        ...action.layer,
+        opacity: prev.opacity,
+        blend: prev.blend,
+        visible: prev.visible,
+        // A threshold is a window on THIS layer's values (band contrast 0..255,
+        // CI 0..1, …). Carrying it to a different quantity would silently mask
+        // the wrong pixels, so the new layer starts unthresholded.
+        threshold: undefined,
+      };
+      const layers = state.layers.slice();
+      layers[at] = next;
+      return { ...state, layers };
+    }
     case 'REMOVE': {
       return { ...state, layers: state.layers.filter((l) => l.id !== action.id) };
     }

@@ -8,6 +8,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useImageExport, exportStem } from '../common/useImageExport';
+import { useFullscreen, FullscreenButton } from '../common/useFullscreen';
 import { dbApi, h5Api } from '../../services/api';
 import CascadeDeleteDialog from './CascadeDeleteDialog';
 import MasterSphereViewer from './MasterSphereViewer';
@@ -351,11 +353,11 @@ function FileTable({ tabDef, entries, onRowClick, loading, selectedFiles, onTogg
   );
 }
 
-// ---------------------------------------------------------------------------
-// Thumbnail preview (async loading from backend)
-// ---------------------------------------------------------------------------
 function ThumbnailPreview({ filename, isLocal, fileType }) {
   const { t } = useTranslation('databasebrowser');
+  const imageExport = useImageExport();
+  const fsRef = useRef(null);
+  const fs = useFullscreen(fsRef);
   const [thumb, setThumb] = useState(null);
   const [loading, setLoading] = useState(false);
   const ft = (fileType || '').toUpperCase();
@@ -388,8 +390,45 @@ function ThumbnailPreview({ filename, isLocal, fileType }) {
   if (thumb?.image) {
     return (
       <>
-        <img src={`data:image/png;base64,${thumb.image}`} alt={t('databasebrowser:preview.title')}
-          style={{ width: '100%', height: 160, objectFit: 'contain', background: '#282a36', borderRadius: 4, border: `1px solid ${colors.border}` }} />
+        {/* The whole block goes fullscreen — button row included, so the way
+            back out stays on screen. */}
+        <div
+          ref={fsRef}
+          style={fs.active ? {
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            background: '#282a36',
+            padding: 8,
+            boxSizing: 'border-box',
+          } : undefined}
+        >
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 4 }}>
+          <FullscreenButton active={fs.active} onToggle={fs.toggle} variant="plate" />
+        </div>
+        <img
+          src={`data:image/png;base64,${thumb.image}`}
+          alt={t('databasebrowser:preview.title')}
+          onContextMenu={(e) => imageExport.openMenu(e, {
+            // Already a PNG data URL — hand the untouched original over rather
+            // than re-encoding what is on screen at 160 px.
+            build: () => `data:image/png;base64,${thumb.image}`,
+            name: exportStem(filename, 'master'),
+            label: exportStem(filename, 'master'),
+          })}
+          style={{
+            width: '100%',
+            height: fs.active ? undefined : 160,
+            flex: fs.active ? 1 : undefined,
+            minHeight: 0,
+            objectFit: 'contain',
+            background: '#282a36',
+            borderRadius: fs.active ? 0 : 4,
+            border: fs.active ? 'none' : `1px solid ${colors.border}`,
+            display: 'block',
+          }} />
+        </div>
+        {imageExport.node}
         {thumb.metadata && Object.keys(thumb.metadata).length > 0 && (
           <GroupBox title={t('databasebrowser:preview.patternInfo')} style={{ marginTop: spacing.outerSpacing }}>
             {Object.entries(thumb.metadata).map(([k, v]) => (

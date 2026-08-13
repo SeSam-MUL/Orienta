@@ -283,7 +283,11 @@ input[type="number"]:hover::-webkit-inner-spin-button {
 input[type="range"] {
   accent-color: var(--accent-purple);
   cursor: pointer;
-  height: 4px;
+  /* The box IS the hit area. At the previous 4px the pointer had a four-pixel
+     band to land on, which is why the sliders felt unresponsive. The visible
+     track stays thin (the browser centres it in the box), so nothing looks
+     different — there is just something to grab. */
+  height: 16px;
 }
 input[type="range"]::-webkit-slider-thumb {
   cursor: grab;

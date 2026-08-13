@@ -160,7 +160,7 @@
     "maskTooltip": "Qualitätsmaskierung aktivieren: Pixel unter der Schwelle abdunkeln.\nNützlich, um Bereiche mit schlechter Beugungsqualität zu erkennen.",
     "thresholdTooltip": "Qualitäts-Schwellenperzentil (0-100%).\nPixel unter diesem Perzentil werden auf der Übersichtskarte abgedunkelt.",
     "captionTitle": "ÜBERSICHT",
-    "captionHint": "klicken zum Navigieren · Shift+Ziehen = ROI",
+    "captionHint": "Klick = Navigieren · Rad = Zoom · Shift+Ziehen = ROI",
     "imageAlt": "Übersicht",
     "roiLabel": "ROI: ({{startRow}},{{startCol}})→({{endRow}},{{endCol}})",
     "sampledPreview": "abgetastete Vorschau",
@@ -199,7 +199,7 @@
   "pattern": {
     "captionTitle": "MUSTER",
     "preview": "VORSCHAU",
-    "captionHint": "Rad = Zoom · Doppelklick = zurücksetzen",
+    "captionHint": "Rad = Zoom · Ziehen = Verschieben · Doppelklick = zurücksetzen",
     "alt": "Muster [{{row}}, {{col}}]",
     "loading": "Muster wird geladen...",
     "emptyHint": "Zuerst eine Datei laden"
@@ -337,6 +337,8 @@
     "bestPattern": "Bestes Muster bei [{{pos}}]",
     "noBestPattern": "Bestes Muster konnte nicht gefunden werden",
     "worstPattern": "Schlechtestes Muster bei [{{pos}}]",
-    "noWorstPattern": "Schlechtestes Muster konnte nicht gefunden werden"
+    "noWorstPattern": "Schlechtestes Muster konnte nicht gefunden werden",
+    "exportedImageTo": "Bild exportiert nach {{path}}",
+    "exportedImage": "Bild exportiert als {{name}}"
   }
 }

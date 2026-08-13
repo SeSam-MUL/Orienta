@@ -1,5 +1,66 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { umToScreenPx, niceLength } from '../scalebarGeometry';
+
+/**
+ * How much room a scale bar actually needs, in pixels.
+ *
+ * The bar's length is physics — µm through step size, letterboxing and zoom —
+ * so the widget cannot have an independent width. Storing one (the default was
+ * 30 % of the map) produced a selection frame five times wider than the bar it
+ * held, with resize handles that changed nothing visible. The frame is now
+ * derived from the same number the bar is drawn with.
+ *
+ * Returns null when the geometry is not known yet; the caller then falls back
+ * to the stored box rather than collapsing the widget to nothing.
+ */
+export function scalebarBoxSize(annot, ctx) {
+  const barPx = umToScreenPx({
+    um: annot.props?.lengthUm ?? 5,
+    nativeSize: ctx?.mapNativeSize,
+    contentBbox: ctx?.mapContentBbox,
+    stepX: ctx?.stepX,
+    fitWidth: ctx?.mapBoxWidthPx,
+    zoomScale: ctx?.mapZoomScale,
+  });
+  if (!barPx) return null;
+  const fontSize = annot.props?.fontSize ?? 12;
+  // A plate needs padding of its own, or the colour would stop dead at the
+  // bar's ends and read as clipped.
+  const PAD = backgroundCss(annot.props) === 'transparent' ? 4 : 9;
+  const barH = Math.max(3, fontSize * 0.4);
+  return {
+    w: barPx + 2 * PAD,
+    // bar + gap + one line of text
+    h: barH + 2 + fontSize * 1.3 + 2 * PAD,
+  };
+}
+
+/**
+ * The plate an annotation sits on: a colour and how much of it comes through.
+ *
+ * One rule for all four types, because "put something behind it so it reads on
+ * a bright map" is the same wish for a legend, a scale bar, a title and an
+ * arrow. Opacity 0 — the default everywhere except the legend — means no plate
+ * at all, so existing figures keep the look they had.
+ */
+export function backgroundCss(props) {
+  // Legends used to store a ready-made CSS colour. Honour it until the user
+  // touches the new controls, or their plate would vanish on upgrade.
+  const legacy = props?.background;
+  const opacity = props?.bgOpacity;
+  if (opacity == null && typeof legacy === 'string' && legacy) return legacy;
+  const a = Math.max(0, Math.min(1, Number(opacity) || 0));
+  if (a <= 0) return 'transparent';
+  const hex = String(props?.bgColor || '#000000').replace('#', '');
+  const full = hex.length === 3 ? hex.split('').map((c) => c + c).join('') : hex;
+  const r = parseInt(full.slice(0, 2), 16) || 0;
+  const g = parseInt(full.slice(2, 4), 16) || 0;
+  const b = parseInt(full.slice(4, 6), 16) || 0;
+  return `rgba(${r}, ${g}, ${b}, ${a})`;
+}
+
+const PLATE_RADIUS = 4;
 
 /**
  * Floating overlay on the Phase Maps canvas. Hosts user-positioned
@@ -46,8 +107,8 @@ function LegendBody({ annot, phaseStats }) {
   return (
     <div style={{
       width: '100%', height: '100%',
-      background: annot.props?.background || 'rgba(20,22,30,0.85)',
-      borderRadius: 4, padding: '6px 8px',
+      background: backgroundCss(annot.props),
+      borderRadius: PLATE_RADIUS, padding: '6px 8px',
       color: '#eaeaea', fontSize, lineHeight: 1.4,
       overflow: 'hidden',
       boxSizing: 'border-box',
@@ -77,35 +138,56 @@ function LegendBody({ annot, phaseStats }) {
   );
 }
 
-function ScalebarBody({ annot, stepX, scanCols, canvasWidthPx }) {
+function ScalebarBody({ annot, ctx, containerSize }) {
   const lengthUm = annot.props?.lengthUm ?? 5;
   const fontSize = annot.props?.fontSize ?? 12;
   const barColor = annot.props?.barColor ?? '#ffffff';
   const textColor = annot.props?.textColor ?? '#ffffff';
-  // Compute the PHYSICAL width the bar should occupy:
-  //   lengthUm / stepX  -> scan pixels
-  //   / scanCols        -> fraction of the scan grid
-  //   * canvasWidthPx   -> canvas pixels
-  // Divided by the annotation box's pixel width to express as a percent
-  // of the BOX (so we can render with `width: NN%`). When we can't
-  // derive (stepX or scanCols missing), fall back to 100% so the user
-  // still sees a positionable bar.
-  let barWidthPct = 100;
-  if (stepX && scanCols && canvasWidthPx && annot.w > 0) {
-    const wantedFractionOfCanvas = (lengthUm / stepX) / scanCols;
-    const wantedCanvasPx = wantedFractionOfCanvas * canvasWidthPx;
-    const boxPx = annot.w * canvasWidthPx;
-    barWidthPct = Math.max(2, Math.min(100, (wantedCanvasPx / boxPx) * 100));
-  }
+
+  // How long is `lengthUm` on this screen, right now?
+  //
+  // The previous version worked it out as a fraction of the SCAN GRID
+  // (lengthUm/stepX/scanCols) and multiplied by `canvasWidthPx` — a value the
+  // page never passed, so the whole branch was skipped and the bar simply
+  // filled its box at 100%. The label said 5 µm and the bar was whatever width
+  // the box had been dragged to.
+  //
+  // Two things that maths missed even with the value supplied: the map is drawn
+  // letterboxed inside the container (so a fraction of the CONTAINER is not a
+  // fraction of the map), and the view auto-zooms to the indexed region, which
+  // magnifies it. `umToScreenPx` folds in both, plus any user zoom, exactly the
+  // way the layer-stack scalebar does — the two are checked against each other.
+  //
+  // The exported figure is a different picture (the full grid, unzoomed), and
+  // composeExport keeps its own correct maths for that.
+  const barPx = umToScreenPx({
+    um: lengthUm,
+    nativeSize: ctx?.mapNativeSize,
+    contentBbox: ctx?.mapContentBbox,
+    stepX: ctx?.stepX,
+    fitWidth: ctx?.mapBoxWidthPx,
+    zoomScale: ctx?.mapZoomScale,
+  });
+  // In PIXELS, and deliberately NOT clamped to the widget box. The box is a
+  // frame the user drags around for positioning; the bar's length is physics.
+  // Clamping it to the box (what the previous version did) made the bar stop
+  // growing while the label still claimed 5 µm — measured 13 % short at 3.8x
+  // zoom. If the bar outgrows its frame it now visibly sticks out, which tells
+  // the user to widen the frame or pick a shorter length.
+  // Without a usable geometry it falls back to filling the box rather than
+  // stating a length it cannot back up.
+  const barStyle = barPx ? { width: `${barPx}px` } : { width: '100%' };
   return (
     <div style={{
       width: '100%', height: '100%',
       display: 'flex', flexDirection: 'column', alignItems: 'center',
       justifyContent: 'center', gap: 2,
-      background: 'transparent', boxSizing: 'border-box',
+      background: backgroundCss(annot.props), borderRadius: PLATE_RADIUS,
+      boxSizing: 'border-box',
     }}>
       <div style={{
-        width: `${barWidthPct}%`,
+        ...barStyle,
+        flexShrink: 0,
         height: Math.max(3, fontSize * 0.4),
         background: barColor, borderRadius: 1,
       }} />
@@ -129,6 +211,7 @@ function TitleBody({ annot }) {
       width: '100%', height: '100%',
       display: 'flex', alignItems: 'center', justifyContent: 'flex-start',
       padding: '0 6px', boxSizing: 'border-box',
+      background: backgroundCss(annot.props), borderRadius: PLATE_RADIUS,
       color, fontSize, fontWeight: 600, fontFamily: 'sans-serif',
       textShadow: '0 0 4px rgba(0,0,0,0.7)',
       overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis',
@@ -143,11 +226,16 @@ function ArrowBody({ annot }) {
   const color = annot.props?.color ?? '#ffb86c';
   const fontSize = annot.props?.fontSize ?? 11;
   return (
-    <svg
-      width="100%" height="100%"
-      viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"
-      style={{ overflow: 'visible' }}
-    >
+    <div style={{
+      width: '100%', height: '100%',
+      background: backgroundCss(annot.props), borderRadius: PLATE_RADIUS,
+      boxSizing: 'border-box',
+    }}>
+      <svg
+        width="100%" height="100%"
+        viewBox="0 0 100 100" preserveAspectRatio="xMidYMid meet"
+        style={{ overflow: 'visible', display: 'block' }}
+      >
       <defs>
         <marker
           id="arrowhead" markerWidth="10" markerHeight="7"
@@ -163,20 +251,16 @@ function ArrowBody({ annot }) {
             style={{ fontFamily: 'sans-serif', fontWeight: 700 }}>
         {label}
       </text>
-    </svg>
+      </svg>
+    </div>
   );
 }
 
-function renderBody(annot, ctx) {
+function renderBody(annot, ctx, containerSize) {
   switch (annot.type) {
     case 'legend':   return <LegendBody annot={annot} phaseStats={ctx.phaseStats} />;
     case 'scalebar': return (
-      <ScalebarBody
-        annot={annot}
-        stepX={ctx.stepX}
-        scanCols={ctx.scanCols}
-        canvasWidthPx={ctx.canvasWidthPx}
-      />
+      <ScalebarBody annot={annot} ctx={ctx} containerSize={containerSize} />
     );
     case 'title':    return <TitleBody annot={annot} />;
     case 'arrow':    return <ArrowBody annot={annot} />;
@@ -196,14 +280,27 @@ function AnnotationWidget({
   // widget renderable even if size hasn't measured yet (rare).
   const rectW = containerSize?.width || containerRef.current?.getBoundingClientRect().width || 0;
   const rectH = containerSize?.height || containerRef.current?.getBoundingClientRect().height || 0;
-  if (rectW <= 0 || rectH <= 0) return null;
+  // A scale bar's frame hugs the bar; every other annotation keeps the box the
+  // user dragged.
+  const naturalBox = annot.type === 'scalebar' ? scalebarBoxSize(annot, ctx) : null;
+  // NOTE: "nothing to draw yet" is decided AFTER every hook below has run.
+  // Bailing out here (what this did before) skipped the drag hooks on the very
+  // first paint, and the next paint — once the container had measured — called
+  // more hooks than the one before it, which React refuses to reconcile.
+  // On the map that first paint always had a measured container, so it never
+  // showed; in the export dialog host and layer mount together and it crashed
+  // the page.
+  const measured = rectW > 0 && rectH > 0;
   const left = annot.x * rectW;
   const top = annot.y * rectH;
-  const width = annot.w * rectW;
-  const height = annot.h * rectH;
+  const width = naturalBox ? naturalBox.w : annot.w * rectW;
+  const height = naturalBox ? naturalBox.h : annot.h * rectH;
 
   // ----- Drag (whole-body) ---------------------------------------------------
   const dragRef = useRef(null);
+  const handlersRef = useRef({ move: null, up: null });
+  const winMove = useRef((ev) => handlersRef.current.move?.(ev)).current;
+  const winUp = useRef(() => handlersRef.current.up?.()).current;
   const onMouseDownBody = (e) => {
     if (e.button !== 0) return;
     e.preventDefault();
@@ -212,8 +309,8 @@ function AnnotationWidget({
     const startX = e.clientX, startY = e.clientY;
     const startAx = annot.x, startAy = annot.y;
     dragRef.current = { mode: 'drag', startX, startY, startAx, startAy };
-    window.addEventListener('mousemove', onWindowMove);
-    window.addEventListener('mouseup', onWindowUp);
+    window.addEventListener('mousemove', winMove);
+    window.addEventListener('mouseup', winUp);
   };
   const onMouseDownResize = (corner) => (e) => {
     if (e.button !== 0) return;
@@ -225,9 +322,13 @@ function AnnotationWidget({
       mode: 'resize', corner,
       startX, startY,
       startAx: annot.x, startAy: annot.y, startAw: annot.w, startAh: annot.h,
+      // For the scale bar: where the drag started, in the units the bar is
+      // actually measured in.
+      startUm: annot.props?.lengthUm ?? 5,
+      startBarPx: naturalBox ? naturalBox.w - 8 : 0,
     };
-    window.addEventListener('mousemove', onWindowMove);
-    window.addEventListener('mouseup', onWindowUp);
+    window.addEventListener('mousemove', winMove);
+    window.addEventListener('mouseup', winUp);
   };
   const onMouseDownRotate = (e) => {
     if (e.button !== 0) return;
@@ -244,8 +345,8 @@ function AnnotationWidget({
       mode: 'rotate', cx, cy, rectLeft: rectNow.left, rectTop: rectNow.top,
       startRot: annot.rotation || 0, startAngle,
     };
-    window.addEventListener('mousemove', onWindowMove);
-    window.addEventListener('mouseup', onWindowUp);
+    window.addEventListener('mousemove', winMove);
+    window.addEventListener('mouseup', winUp);
   };
 
   const onWindowMove = useCallback((ev) => {
@@ -262,6 +363,21 @@ function AnnotationWidget({
         y: clamp01(d.startAy + dy),
       });
     } else if (d.mode === 'resize') {
+      // A scale bar has no free width — its length is µm through the step
+      // size. Dragging a corner therefore changes the LENGTH, snapped to the
+      // 1/2/5 ladder a reader expects, and the frame follows. Before this the
+      // handles moved a box the bar ignored, which is what "the box does not
+      // work" meant.
+      if (annot.type === 'scalebar' && d.startBarPx > 0) {
+        const grow = d.corner.includes('e') ? 1 : -1;
+        const nextPx = Math.max(8, d.startBarPx + grow * (ev.clientX - d.startX));
+        const raw = (d.startUm || 5) * (nextPx / d.startBarPx);
+        const snapped = niceLength(raw);
+        if (snapped && snapped !== annot.props?.lengthUm) {
+          onUpdate(annot.id, { props: { lengthUm: snapped } });
+        }
+        return;
+      }
       const dx = (ev.clientX - d.startX) / rect2.width;
       const dy = (ev.clientY - d.startY) / rect2.height;
       let nx = d.startAx, ny = d.startAy, nw = d.startAw, nh = d.startAh;
@@ -281,16 +397,27 @@ function AnnotationWidget({
 
   const onWindowUp = useCallback(() => {
     dragRef.current = null;
-    window.removeEventListener('mousemove', onWindowMove);
-    window.removeEventListener('mouseup', onWindowUp);
-  }, [onWindowMove]);
+    window.removeEventListener('mousemove', winMove);
+    window.removeEventListener('mouseup', winUp);
+  }, [winMove, winUp]);
+
+  // The window listeners are these two forwarders, whose identity never
+  // changes; they look up the current handlers when they fire. Registering the
+  // handlers themselves ends the drag as soon as the parent hands down a fresh
+  // onUpdate, because the cleanup below then sees "different function" and
+  // unregisters mid-gesture. The map's parent memoises its callbacks so it got
+  // away with it; the export dialog's does not, and there the annotation
+  // stopped after the first mouse-move.
+  handlersRef.current.move = onWindowMove;
+  handlersRef.current.up = onWindowUp;
 
   useEffect(() => () => {
-    window.removeEventListener('mousemove', onWindowMove);
-    window.removeEventListener('mouseup', onWindowUp);
-  }, [onWindowMove, onWindowUp]);
+    window.removeEventListener('mousemove', winMove);
+    window.removeEventListener('mouseup', winUp);
+  }, [winMove, winUp]);
 
   // ----- Render ---------------------------------------------------------------
+  if (!measured) return null;
   const wrapperStyle = {
     position: 'absolute',
     left, top, width, height,
@@ -300,6 +427,8 @@ function AnnotationWidget({
     boxSizing: 'border-box',
     border: isSelected ? '1px dashed #50fa7b' : '1px dashed rgba(255,255,255,0.0)',
     userSelect: 'none',
+    // The annotation is the only part of this layer that takes the pointer.
+    pointerEvents: 'auto',
   };
   const handleStyle = {
     position: 'absolute', width: HANDLE, height: HANDLE,
@@ -308,8 +437,8 @@ function AnnotationWidget({
   };
 
   return (
-    <div style={wrapperStyle} onMouseDown={onMouseDownBody}>
-      {renderBody(annot, ctx)}
+    <div data-annotation-widget style={wrapperStyle} onMouseDown={onMouseDownBody}>
+      {renderBody(annot, ctx, containerSize)}
       {isSelected && (
         <>
           {/* Corner handles */}
@@ -387,6 +516,20 @@ export default function AnnotationLayer({
     };
   }, [containerRef]);
 
+  // Deselect on a press that missed every annotation. This used to be a
+  // full-bleed div with pointer events on; that div also ate the map's clicks.
+  // Listening on the container instead leaves the map fully usable.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    const onDown = (e) => {
+      if (e.target.closest?.('[data-annotation-widget]')) return;
+      onSelect(null);
+    };
+    el.addEventListener('mousedown', onDown);
+    return () => el.removeEventListener('mousedown', onDown);
+  }, [containerRef, onSelect]);
+
   // Merge canvas size into ctx so per-annotation drawers can use it.
   const enrichedCtx = { ...ctx, canvasWidthPx: size.width, canvasHeightPx: size.height };
 
@@ -400,11 +543,15 @@ export default function AnnotationLayer({
         pointerEvents: 'none', overflow: 'visible',
         zIndex: 5,
       }}
-      onMouseDown={() => onSelect(null)}
     >
       <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        {/* inset:0 makes each of these cover the ENTIRE map, so they must stay
+            transparent to the pointer. With `auto` here — which is how it was —
+            a single annotation laid a full-screen click catcher over the map and
+            neither left- nor right-click reached it any more. The widget inside
+            re-enables pointer events for its own box. */}
         {annotations.map((a) => (
-          <div key={a.id} style={{ pointerEvents: 'auto', position: 'absolute', inset: 0 }}>
+          <div key={a.id} style={{ pointerEvents: 'none', position: 'absolute', inset: 0 }}>
             <AnnotationWidget
               annot={a}
               isSelected={selectedId === a.id}
