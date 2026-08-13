@@ -36,7 +36,12 @@ export default function ExportAnnotationOverlay({
       ref={hostRef}
       data-export-annotations
       style={{
-        position: 'absolute', inset: 0,
+        position: 'absolute',
+        // Placed on the MAP, which may sit to the right of a colour-bar column.
+        left: rect?.left ?? 0,
+        top: 0,
+        width: rect?.width ?? '100%',
+        height: rect?.height ?? '100%',
         // The layer itself is transparent to the pointer; its widgets are not.
         pointerEvents: 'none',
       }}

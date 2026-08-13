@@ -458,7 +458,8 @@
     "zoomLayerGroup": "Zoom map layer",
     "zoomLayerTip": "Choose which map the lens shows: IPF direction (Z/Y/X) or phase colours",
     "suspicionHintRefine": "Same orientation to within {{delta}}° — this needs sub-degree refinement, not a variant flip. Use “Re-index this pixel” and apply it to the grain.",
-    "pickHint": "Click a pixel, or drag the crosshair. Zoomed in, dragging moves the image — hold Shift to drag the crosshair."
+    "pickHint": "Click a pixel, or drag the crosshair. Zoomed in, dragging moves the image — hold Shift to drag the crosshair.",
+    "nccLegend": "NCC"
   },
   "phaseResultModal": {
     "title": "Multi-Phase Results",

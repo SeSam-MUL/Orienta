@@ -12,7 +12,10 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import api, { phaseMapApi, analysisApi, ebsdApi, indexApi, h5Api, pcApi } from '../../services/api';
+import api, {
+  phaseMapApi, analysisApi, ebsdApi, indexApi, h5Api, pcApi,
+  forwardDiagApi, refinementApi,
+} from '../../services/api';
 import {
   colors, spacing,
   Button, Input, NumberInput, Select, GroupBox, CollapsibleGroup,
@@ -41,7 +44,7 @@ import { openPoleFigureWindow } from '../PoleFigure/openPoleFigureWindow';
 import useFrameStore from '../../stores/useFrameStore';
 import { useLayerStack } from './hooks/useLayerStack';
 import { useSourceLink } from './hooks/useSourceLink';
-import { LAYER_SOURCES } from './layerSources';
+import { buildAddLayerOptions, findLayerDef } from './layerSources';
 
 // EDS-shared building blocks (reused for Tier-2 tools)
 import { CursorSyncProvider, useCursorSync, useCursorPublisher } from '../EDS/CursorSyncContext';
@@ -51,6 +54,7 @@ import ContextMenu from '../common/ContextMenu';
 import ImageExportDialog from '../common/ImageExportDialog';
 import ExportAnnotationOverlay from './ExportAnnotationOverlay';
 import GrainBoundaryPanel from './GrainBoundaryPanel';
+import ScaleLegend from './ScaleLegend';
 import { defaultBands as defaultGbBands } from './grainBoundaryBands';
 import { drawAnnotationsOnto } from './annotations/composeExport';
 import { applyPatch, withAdded, withRemoved } from './annotations/exportAnnotEdits';
@@ -144,6 +148,9 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
   const [rank, setRank] = useState(0);
   const [loading, setLoading] = useState(false);
   const [stats, setStats] = useState(null);
+  // The picture's colour axis, which is NOT the data's span: the map is
+  // normalised by its maximum, so the bar runs 0..max.
+  const [nccScale, setNccScale] = useState(null);
   const [shtQuality, setShtQuality] = useState(128);  // SHT bandwidth preset
   const [aperture, setAperture] = useState('auto');   // auto | circular | full
   const [apertureRadius, setApertureRadius] = useState(1.0);
@@ -214,6 +221,7 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
       setGridDims({ rows: r.data.n_rows, cols: r.data.n_cols });
       setCropOffset({ row: r.data.crop_row_offset ?? 0, col: r.data.crop_col_offset ?? 0 });
       setStats({ min: r.data.min_score, max: r.data.max_score, mean: r.data.mean_score });
+      setNccScale(r.data.scale ?? null);
       setLoading(false);
       // Pre-select an external pixel (e.g. from AnomalyBrowserDrawer or
       // PhaseMap canvas click). Coordinates are in original (uncropped)
@@ -497,11 +505,27 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
               three pattern panels on the right, which are much taller.
               Without alignItems:center the small heatmap stuck to the
               top while the right column dominated the row height. */}
-          <div style={{ width: '30%', minWidth: 200 }}>
+          {/* The colour bar is ADDED to this column, not taken out of it:
+              the map keeps the 30 % it always had. */}
+          <div style={{ width: 'calc(30% + 62px)', minWidth: 262 }}>
             {loading && <div style={{ color: C.textSecondary, padding: 40, textAlign: 'center' }}>{t('phasemap:matches.loading')}</div>}
             {heatmapClean && (
               <div
+                // stretch + 'fill': the bar ends up as tall as the map beside it
+                style={{ display: 'flex', alignItems: 'stretch', gap: 6 }}
+              >
+              {nccScale && (
+                <div
+                  // A flex container itself, or the bar cannot stretch:
+                  // `flex: 1` needs a flex parent.
+                  style={{ flexShrink: 0, display: 'flex' }}
+                >
+                <ScaleLegend label={t('phasemap:matches.nccLegend')} scale={nccScale} height="fill" />
+                </div>
+              )}
+              <div
                 style={{
+                  flex: 1, minWidth: 0,
                   position: 'relative',
                   // Without this the magnified map escapes its column and
                   // covers the pattern panels next to it.
@@ -537,6 +561,7 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                   <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${crossX}%`, width: 1, background: '#ffb86c', pointerEvents: 'none' }} />
                   <div style={{ position: 'absolute', left: `${crossX}%`, top: `${crossY}%`, width: 12, height: 12, transform: 'translate(-50%,-50%)', pointerEvents: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffb86c', fontSize: 16, fontWeight: 700 }}>+</div>
                 </>)}
+              </div>
               </div>
             )}
             {stats && <div style={{ fontSize: '8pt', color: C.textSecondary, marginTop: 4 }}>
@@ -1164,7 +1189,7 @@ function CanvasInteractionLayer({
   bitmapVersion, scalebar, title, stepX, ipfKeyImage, showIpfKey, hoverPixel,
   onPixelClick, onRegionSelected, onLineComplete,
   linescanMode, magnifierEnabled,
-  onContextMenu, zoom, onContentBbox, wheelHostRef,
+  onContextMenu, zoom, onContentBbox, wheelHostRef, roiBbox,
 }) {
   const { t } = useTranslation('phasemap');
   const zoomResetHint = t('phasemap:hoverTips.zoomReset');
@@ -1397,6 +1422,7 @@ function CanvasInteractionLayer({
           ipfKeyImage={ipfKeyImage}
           showIpfKey={showIpfKey}
           hoverPixel={hoverPixel}
+          roiBbox={roiBbox}
           onContentBbox={setContentBbox}
           zoomView={stackView}
         />
@@ -1623,6 +1649,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           height: canvas.height,
           mapWidth: built?.mapWidth ?? canvas.width,
           mapHeight: built?.mapHeight ?? canvas.height,
+          // Where the map starts inside the picture: the colour bars sit to
+          // its left, and annotations are placed against the MAP.
+          mapLeft: built?.legendWidth ?? 0,
           // In SCAN columns/rows — the frame may be cropped to the indexed
           // region, and the scale bar measures in scan steps.
           mapCols: built?.mapCols ?? null,
@@ -1705,6 +1734,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [resultView, setResultView] = useState('original'); // 'original' | 'refined'
   const originalResultId = indexingResult?.result_id;
   const refinementInfo = useDataStore((s) => s.refinementComputed[originalResultId]);
+  // Virtual BSE needs patterns in the backend. `ebsdLoaded` alone would lie
+  // after a page reload: syncFromBackend restores isFileOpen/hasPatterns but
+  // not that flag, and the signal is very much still there.
+  const ebsdLoaded = useDataStore((s) => s.ebsdLoaded || (s.isFileOpen && s.hasPatterns));
   const effectiveResultId = (resultView === 'refined' && refinementInfo?.refined_result_id)
     ? refinementInfo.refined_result_id
     : originalResultId;
@@ -1740,6 +1773,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // compute-heavy tool boxes collapse into one "Advanced tools" accordion.
   const [cleanView, setCleanView] = useState(false);
   const [ipfKeyOpen, setIpfKeyOpen] = useState(false);
+  // The value scales get their own switch, and start OPEN. Hanging them on the
+  // IPF key's state hid them by default, and on a stack without an IPF layer
+  // there was not even a button to open them with.
+  const [scaleLegendOpen, setScaleLegendOpen] = useState(true);
   // Transient hover marker driven by the AnomalyBrowserDrawer. Rendered as
   // an absolutely-positioned div on top of the LayeredCanvas. Cleared on
   // mouse leave.
@@ -1838,6 +1875,15 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [view, setView] = useState('stack');           // 'stack' | 'grid'
   // Auto-zoom box of the map, reported by the canvas layer. Null in grid view.
   const [mapContentBbox, setMapContentBbox] = useState(null);
+  // The indexed region of the result on screen, as the backend reports it.
+  // Null for a full-scan run — then nothing is cropped, exactly as before.
+  const [activeRoiBbox, setActiveRoiBbox] = useState(null);
+  // The result the backend would draw right now, whether or not this browser
+  // session produced it. The result store only holds runs made here, so it is
+  // empty for a result adopted on arrival — and everything keyed off it (the
+  // layer picker's availability, the per-result gates) would read as "nothing
+  // loaded" while a map is plainly on screen.
+  const [backendResultId, setBackendResultId] = useState(null);
   // Wheel zoom for the map. One store serves both views: the stacked composite
   // keeps a single entry, the grid keeps one per tile.
   const zoom = useZoomViews(SYNC_ALL);
@@ -2026,15 +2072,15 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // phase CI maps, EDS element maps, and electron images depend on what's
   // loaded — discover them on result/source change.
   const [dynamicLayers, setDynamicLayers] = useState([]);
-
   useEffect(() => {
     let cancelled = false;
     const promises = [];
     // Per-phase CI from available-maps (result-scoped)
     promises.push(
       phaseMapApi.availableMaps().then((res) => {
+        const maps = res.data?.maps ?? [];
         const out = [];
-        for (const m of res.data?.maps ?? []) {
+        for (const m of maps) {
           if (m.id && m.id.startsWith && m.id.startsWith('ci_')) {
             out.push({
               id: m.id, label: m.label ?? m.id, source: 'result',
@@ -2077,31 +2123,132 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     return () => { cancelled = true; };
   }, [resetSignal, sourceLink.linked]);
 
+  // Does an analysis dataset exist? KAM and GOS come from /api/analysis/map,
+  // which 400s without one — the only way to know is to ask.
+  const [analysisLoaded, setAnalysisLoaded] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    analysisApi.status()
+      .then((r) => { if (!cancelled) setAnalysisLoaded(!!r.data?.loaded); })
+      .catch(() => { if (!cancelled) setAnalysisLoaded(false); });
+    return () => { cancelled = true; };
+  }, [resetSignal, indexingResult?.result_id]);
+
+  // Keep the backend's result id current. It used to be a by-product of the
+  // once-per-visit gallery sync, which never re-runs while the page stays
+  // open — so loading a file through "Add file…" (import-h5 + a gallery entry,
+  // no store write) left the id null and the picker called every result layer
+  // unavailable, with the map right there. Anything that can mean "a different
+  // result is on screen now" re-asks; it is one small call.
+  useEffect(() => {
+    let cancelled = false;
+    indexApi.listResults()
+      .then((res) => {
+        if (cancelled) return;
+        const rs = res.data?.results || [];
+        // Same precedence as the renderer: the active one, else the last
+        // stored one (get_last_indexing_result draws that).
+        const shown = rs.find((r) => r.is_active) ?? rs[rs.length - 1] ?? null;
+        setBackendResultId(shown?.id ?? null);
+      })
+      .catch(() => { if (!cancelled) setBackendResultId(null); });
+    return () => { cancelled = true; };
+  }, [isActive, backendSyncTick, resetSignal, indexingResult?.result_id, gallery.length]);
+
+  // Direct evidence: a result layer that has already produced a bitmap. It
+  // cannot have drawn without data behind it, whichever path put the data
+  // there — so no bookkeeping about ids or load paths can contradict it.
+  // (bitmaps is a stable Map; bitmapVersion is what changes on add.)
+  const resultLayerDrew = useMemo(
+    () => layerStack.layers.some((l) => {
+      const def = findLayerDef(l.id);
+      const fromResult = def ? def.source === 'result' : String(l.id).startsWith('ci_');
+      return fromResult && !!layerStack.bitmaps?.has?.(l.id) && !layerStack.errors?.get?.(l.id);
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [layerStack.layers, layerStack.bitmaps, layerStack.bitmapVersion, layerStack.errors],
+  );
+
+  // Which derived layers can draw anything yet. Keyed off whichever result is
+  // on screen — a result adopted from the backend has no entry under the
+  // store's (empty) id.
+  const gateResultId = originalResultId ?? backendResultId;
+  const diagStoreFlag = useDataStore((s) => !!s.diagnosticsComputed[gateResultId]);
+  const refStoreFlag = useDataStore((s) => !!s.refinementComputed[gateResultId]);
+
+  // ...and the store is not the authority. It records what THIS session
+  // computed; the products live in the backend and outlive a page reload. Ask
+  // it — /summary answers 200 when the block exists and 404 when it does not.
+  // Trusting the store alone put ten perfectly drawable layers behind a "run
+  // it first" that had already been run.
+  const [derivedReady, setDerivedReady] = useState({ diagnostics: false, refinement: false });
+  useEffect(() => {
+    if (!gateResultId) {
+      setDerivedReady({ diagnostics: false, refinement: false });
+      return undefined;
+    }
+    let cancelled = false;
+    Promise.all([
+      Promise.resolve().then(() => forwardDiagApi.summary(gateResultId)).catch(() => null),
+      Promise.resolve().then(() => refinementApi.summary(gateResultId)).catch(() => null),
+    ]).then(([diag, ref]) => {
+      if (cancelled) return;
+      setDerivedReady({ diagnostics: !!diag?.computed, refinement: !!ref?.computed });
+    });
+    return () => { cancelled = true; };
+    // The store flags re-trigger the ask the moment a compute finishes here.
+  }, [gateResultId, diagStoreFlag, refStoreFlag]);
+
+  const diagnosticsGate = derivedReady.diagnostics || diagStoreFlag;
+  const refinementGate = derivedReady.refinement || refStoreFlag;
+  // The same two booleans go to the layer rows, so a row painted red and a
+  // layer held back by the picker always mean the same thing.
+  const derivedGates = useMemo(
+    () => ({ diagnostics: diagnosticsGate, refinement: refinementGate }),
+    [diagnosticsGate, refinementGate],
+  );
+
+  // What each group of layers needs before it can draw anything. The picker
+  // hides what is not ready instead of offering a layer that can only produce
+  // an error chip; the reason travels along so it can say what is missing.
+  const availability = useMemo(() => {
+    // Anything that proves the renderer has something to work with counts,
+    // and the strongest proof is a layer that already drew. The phase-map
+    // endpoints take EITHER the last indexing result OR a loaded analysis
+    // dataset — asking only about the first called every result layer
+    // unavailable for a map loaded the other way, which draws perfectly well.
+    const resultId = originalResultId ?? backendResultId;
+    const hasResult = {
+      ok: !!resultId || analysisLoaded || resultLayerDrew,
+      reason: t('phasemap:layers.gateNoResult'),
+    };
+    return {
+      result: hasResult,
+      diagnostics: hasResult,
+      refinement: hasResult,
+      analysis: { ok: analysisLoaded, reason: t('phasemap:layers.gateNoAnalysis') },
+      ebsd: { ok: ebsdLoaded, reason: t('phasemap:layers.gateNoEbsd') },
+      h5: { ok: sourceLink.linked, reason: sourceLink.reason },
+      diagnosticsComputed: { ok: !!diagnosticsGate, reason: t('phasemap:layers.gateDiagHint') },
+      refinementComputed: { ok: !!refinementGate, reason: t('phasemap:layers.gateRefHint') },
+      // No gate on the provenance layer. The "grain_" id prefix identifies the
+      // results the per-grain assignment produced here, but a result exported
+      // and re-imported keeps the provenance and loses the prefix — and hiding
+      // a layer that would have drawn is worse than one error chip.
+    };
+  }, [originalResultId, backendResultId,
+      analysisLoaded, resultLayerDrew, ebsdLoaded, sourceLink.linked, sourceLink.reason,
+      diagnosticsGate, refinementGate, t]);
+
   // Build the "Add Layer" dropdown options (static + dynamic, dedup'd)
-  const availableToAdd = useMemo(() => {
-    const opts = [];
-    const used = new Set(layerStack.layers.map((l) => l.id));
-    for (const [groupKey, group] of Object.entries(LAYER_SOURCES)) {
-      for (const layer of group.layers) {
-        if (used.has(layer.id)) continue;
-        opts.push({
-          value: layer.id,
-          label: `${group.label}: ${layer.label}`,
-          disabled: groupKey === 'h5' && !sourceLink.linked,
-          tip: groupKey === 'h5' && !sourceLink.linked ? sourceLink.reason : null,
-        });
-      }
-    }
-    for (const d of dynamicLayers) {
-      if (used.has(d.id)) continue;
-      opts.push({
-        value: d.id,
-        label: `${d.groupLabel}: ${d.label}`,
-        disabled: false,
-      });
-    }
-    return opts;
-  }, [layerStack.layers, dynamicLayers, sourceLink.linked, sourceLink.reason]);
+  const availableToAdd = useMemo(() => buildAddLayerOptions({
+    layers: layerStack.layers,
+    dynamicLayers,
+    sourceLinked: sourceLink.linked,
+    sourceReason: sourceLink.reason,
+    availability,
+    t,
+  }), [layerStack.layers, dynamicLayers, sourceLink.linked, sourceLink.reason, availability, t]);
 
   // -------- IPF-key overlay --------------------------------------------
   // Show the IPF colour-key triangles as a canvas overlay whenever any
@@ -2125,11 +2272,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     // 'vertical': the key opens as a COLUMN beside the map, so it costs
     // spare width instead of map height (the below-map version squeezed the
     // canvas).
-    const cacheKey = `${resetSignal}|${ipfDirection}|${ipfPhaseFilter}|v`;
+    // The colour picks are part of the picture now, so they are part of the key.
+    const cacheKey = `${resetSignal}|${ipfDirection}|${ipfPhaseFilter}|v|${JSON.stringify(phaseColorOverrides || {})}`;
     const cached = ipfKeyCacheRef.current.get(cacheKey);
     if (cached) { setIpfKeyImage(cached); return; }
     let cancelled = false;
-    phaseMapApi.ipfKey(ipfDirection, ipfPhaseFilter, 'vertical').then((res) => {
+    phaseMapApi.ipfKey(ipfDirection, ipfPhaseFilter, 'vertical', phaseColorOverrides).then((res) => {
       if (cancelled) return;
       const img = res.data?.image ?? null;
       if (img) ipfKeyCacheRef.current.set(cacheKey, img);
@@ -2138,7 +2286,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       if (!cancelled) setIpfKeyImage(null);
     });
     return () => { cancelled = true; };
-  }, [hasIpfLayer, ipfDirection, ipfPhaseFilter, resetSignal]);
+  }, [hasIpfLayer, ipfDirection, ipfPhaseFilter, resetSignal, phaseColorOverrides]);
 
   // Flush IPF key cache on result change
   useEffect(() => {
@@ -2205,11 +2353,15 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       shape: stackShape ? { rows: stackShape[0], cols: stackShape[1] } : null,
       scale: 2,
       ipfKey: (withKey && hasIpfLayer && ipfKeyImage) ? ipfKeyImage : null,
+      // The same bars the map shows beside it, on the opposite side of the
+      // figure — a reader gets the numbers without the app.
+      scaleLegends: scaleLegends.map((l) => ({ label: l.label, scale: l.scale })),
       // The same frame the screen shows, so the annotations land where they
       // were put.
       contentBbox: mapContentBbox,
     });
-  }, [layerStack.layers, layerStack.bitmaps, stackShape, hasIpfLayer, ipfKeyImage, mapContentBbox]);
+  }, [layerStack.layers, layerStack.bitmaps, stackShape, hasIpfLayer, ipfKeyImage,
+      mapContentBbox, scaleLegends]);
 
   // Switching the colour key redraws the source picture but leaves everything
   // the user has arranged in the dialog alone — annotations, chosen format,
@@ -2565,6 +2717,17 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // result that is now current instead of racing the activation.
   const adoptEntry = useCallback(async (entry) => {
     await activateEntry(entry);
+    // Re-read the region: a different result is on screen now, and it may have
+    // covered a different part of the scan (or all of it).
+    try {
+      const res = await indexApi.listResults();
+      const shown = (res.data?.results || []).find((r) => r.is_active)
+        ?? (res.data?.results || []).slice(-1)[0];
+      setActiveRoiBbox(shown?.roi_bbox ?? null);
+      setBackendResultId(shown?.id ?? null);
+    } catch {
+      setActiveRoiBbox(null);
+    }
     setBackendSyncTick((tick) => tick + 1);
     handleRefreshPreview();
   }, [activateEntry, handleRefreshPreview]);
@@ -2705,7 +2868,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       .then((res) => {
         if (cancelled) return;
         const results = res.data?.results || [];
-        if (results.length === 0) return;
+        if (results.length === 0) {
+          // Nothing stored any more (backend restart, results cleared) — say
+          // so, or the picker keeps offering layers against a dead id.
+          setBackendResultId(null);
+          return;
+        }
 
         // Follow the backend: it renders exactly one result, and the chip must
         // name that one. Nothing active → the newest, which is what the user
@@ -2726,6 +2894,16 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           : [...prev, { id: shown.id, result_id: shown.id, label: labelForResult(shown), data: shown }];
         if (merged !== prev) setGallery(merged);
         setSendToAnalysisEnabled(true);
+
+        // The region the run covered, straight from the backend. Everything
+        // on the map is framed by it, so a region run reads like a full one.
+        setActiveRoiBbox(shown.roi_bbox ?? null);
+        // Which result the layer endpoints will actually draw. The result
+        // store only knows about runs made in this browser session, so a
+        // result adopted from the backend leaves it empty — and the layer
+        // picker would then call every result layer unavailable while one is
+        // on screen.
+        setBackendResultId(shown.id);
 
         const idx = merged.findIndex((e) => e.result_id === shown.id);
         if (idx < 0) return;
@@ -3356,6 +3534,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           <CanvasInteractionLayer
             onContextMenu={(x, y, layer) => setMapMenu({ x, y, layer })}
             zoom={zoom}
+            roiBbox={activeRoiBbox}
             onContentBbox={setMapContentBbox}
             wheelHostRef={mapContainerRef}
             view={view}
@@ -3512,6 +3691,24 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         )}
       </div>
 
+      {/* Value scales for the layers that have one, beside the map. Their own
+          column so they never cover the data — the same reason the IPF key
+          moved out of the canvas. */}
+      {scaleLegends.length > 0 && scaleLegendOpen && (
+        <div className="thin-scrollbar" data-scale-legend-column style={{
+          flexShrink: 0, overflowY: 'auto', alignSelf: 'stretch',
+          display: 'flex', flexDirection: 'column', gap: 6,
+          background: colors.bgSecondary, borderRadius: 4, padding: 4,
+          border: `1px solid ${colors.border}`,
+        }}>
+          {/* 'fill': the bars share the column's full height, so each reads
+              against the map beside it rather than floating at the top. */}
+          {scaleLegends.map((l) => (
+            <ScaleLegend key={l.id} label={l.label} scale={l.scale} height="fill" />
+          ))}
+        </div>
+      )}
+
       {/* IPF-key side column (inside the canvas row): vertical triangle
           stack, scrolls if many Laue classes. Never overlays the data. */}
       {hasIpfLayer && ipfKeyImage && ipfKeyOpen && (
@@ -3529,6 +3726,24 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       )}
       </div>
       {/* end canvas row */}
+
+      {/* Value-scale toggle chip (below the canvas row) */}
+      {scaleLegends.length > 0 && (
+        <div style={{ flexShrink: 0, marginTop: 6, marginRight: 6, display: 'inline-block' }}>
+          <button
+            onClick={() => setScaleLegendOpen((o) => !o)}
+            title={t('phasemap:scaleLegend.tip')}
+            data-scale-legend-toggle
+            style={{
+              background: 'transparent', border: `1px solid ${colors.border}`,
+              borderRadius: 3, color: colors.textSecondary, cursor: 'pointer',
+              padding: '2px 10px', fontSize: '8.5pt', fontWeight: 600,
+            }}
+          >
+            {scaleLegendOpen ? '▾' : '▸'} {t('phasemap:scaleLegend.title')}
+          </button>
+        </div>
+      )}
 
       {/* IPF colour key toggle chip (below the canvas row) */}
       {hasIpfLayer && ipfKeyImage && (
@@ -3577,6 +3792,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       activeMode={layerStack.activeMode}
       availableToAdd={availableToAdd}
       renderLayerExtras={renderLayerExtras}
+      derivedReady={derivedGates}
     />
   );
   const rightPanel = (
@@ -4399,8 +4615,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             overlay={mapExportAnnots ? ((rect) => (
               <ExportAnnotationOverlay
                 rect={{
-                  // The annotations belong to the MAP; the colour key sits in a
-                  // column beside it and must stay out of their coordinates.
+                  // The annotations belong to the MAP; the colour bars and the
+                  // IPF key sit in columns beside it and must stay out of their
+                  // coordinates.
+                  left: rect.width * ((mapExport.source.mapLeft ?? 0) / mapExport.source.width),
                   width: rect.width * (mapExport.source.mapWidth / mapExport.source.width),
                   height: rect.height * (mapExport.source.mapHeight / mapExport.source.height),
                 }}
@@ -4425,7 +4643,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 // the dialog's crop and magnification.
                 width: src.mapWidth * geom.sx,
                 height: src.mapHeight * geom.sy,
-                offsetX: geom.origin.x - geom.crop.x * geom.sx,
+                offsetX: geom.origin.x + (src.mapLeft ?? 0) * geom.sx - geom.crop.x * geom.sx,
                 offsetY: geom.origin.y - geom.crop.y * geom.sy,
                 phaseStats: phaseStatsForAnnot,
                 stepX,

@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { BLEND_MAP } from './layerSources';
 import { buildMaskCanvas } from './maskCanvas';
 import { bboxContentRect } from '../EDS/mapCoords';
+import { roiDefiningLayers } from './roiFrame';
 import { IDENTITY_VIEW, isZoomed, viewToTransform } from '../EDS/zoomView';
 import { zoomRectPct } from '../EBSDViewer/zoomOverlay';
 import { scalebarGeometry } from './scalebarGeometry';
@@ -234,6 +235,9 @@ export default function LayeredCanvas({
   scalebar = null, title = null, stepX = 1.0,
   ipfKeyImage = null, showIpfKey = false,
   hoverPixel = null, onContentBbox = null,
+  // The indexed region, straight from the result (null = the whole scan).
+  // Everything is drawn inside it, so a region run behaves like a full one.
+  roiBbox = null,
   // User zoom. Applied as a CSS transform to the CANVAS only, so the map
   // magnifies while the scalebar, title and IPF key keep their size and stay
   // anchored to the map box. Null renders exactly as before.
@@ -251,6 +255,10 @@ export default function LayeredCanvas({
   // map through it, and mirrored to the parent via onContentBbox so pointer
   // hit-testing uses the same bbox.
   const [contentBbox, setContentBbox] = useState(null);
+  // Scratch canvas for measuring the result's own extent, and the last frame we
+  // measured — see roiFrame.js for why the frame is the result's business.
+  const roiCanvasRef = useRef(null);
+  const lastRoiBboxRef = useRef(null);
   const lastBboxRef = useRef(null);
   // JS-measured fit size: width/height in CSS pixels at which we render
   // the canvas + overlays. Recomputed on container resize via ResizeObserver.
@@ -405,7 +413,58 @@ export default function LayeredCanvas({
       // to FILL the canvas with letterboxing where the aspect doesn't
       // match. Without this the rendered content sits in whatever
       // corner the ROI lived in and most of the canvas is empty black.
-      const bbox = computeAlphaBbox(offCtx, off.width, off.height);
+      // The region comes from the RESULT, not from the pixels on screen.
+      // Measuring the drawing cannot work: an EDS element map, an electron
+      // image and even band contrast (which falls back to the file's own BC)
+      // exist at full scan size whatever the run covered, so the frame snapped
+      // back to the whole scan the moment one of them was added — and with only
+      // such a layer showing there was nothing left to measure at all.
+      const roiLayers = roiDefiningLayers(layers).filter((l) => bitmaps.get(l.id));
+      let bbox;
+      if (roiBbox && roiBbox.w > 0 && roiBbox.h > 0) {
+        bbox = roiBbox;
+        lastRoiBboxRef.current = roiBbox;
+      } else if (roiLayers.length > 0) {
+        if (!roiCanvasRef.current) roiCanvasRef.current = document.createElement('canvas');
+        const roi = roiCanvasRef.current;
+        if (roi.width !== off.width || roi.height !== off.height) {
+          roi.width = off.width; roi.height = off.height;
+        }
+        const roiCtx = roi.getContext('2d', { willReadFrequently: true });
+        roiCtx.globalAlpha = 1;
+        roiCtx.globalCompositeOperation = 'source-over';
+        roiCtx.imageSmoothingEnabled = false;
+        // Measured one layer at a time, because a layer that covers the whole
+        // scan says nothing about the region. Band contrast is the case in
+        // point: it sits in the "Indexing Result" group but falls back to the
+        // file's own BC for every pixel, so a union with it would hand back the
+        // full frame. `computeAlphaBbox` already answers null for full cover,
+        // which is exactly "this layer does not constrain the frame".
+        let acc = null;
+        for (const layer of roiLayers) {
+          const bmp = bitmaps.get(layer.id);
+          if (!bmp) continue;
+          roiCtx.clearRect(0, 0, roi.width, roi.height);
+          roiCtx.drawImage(bmp, 0, 0, roi.width, roi.height);
+          const b = computeAlphaBbox(roiCtx, roi.width, roi.height);
+          if (!b) continue;
+          acc = acc ? {
+            x: Math.min(acc.x, b.x),
+            y: Math.min(acc.y, b.y),
+            w: Math.max(acc.x + acc.w, b.x + b.w) - Math.min(acc.x, b.x),
+            h: Math.max(acc.y + acc.h, b.y + b.h) - Math.min(acc.y, b.y),
+          } : b;
+        }
+        bbox = acc;
+        // Only remember a real region: a full-frame result must not leave a
+        // stale crop behind for the next stack that has nothing to say.
+        lastRoiBboxRef.current = acc;
+      } else {
+        // Nothing from the result is showing right now (the user hid it, or
+        // only source images are stacked). Keep the frame we had instead of
+        // snapping to the full scan under their hands.
+        bbox = lastRoiBboxRef.current ?? null;
+      }
       const visCtx = vis.getContext('2d');
       visCtx.imageSmoothingEnabled = false;
       visCtx.clearRect(0, 0, vis.width, vis.height);

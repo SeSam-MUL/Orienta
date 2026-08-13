@@ -30,6 +30,7 @@ import { colors, spacing, CollapsibleGroup, Select } from '../../theme/component
 import { PRESETS } from './presets';
 import { MAX_LAYERS } from './layerStackReducer';
 import { findLayerDef } from './layerSources';
+import AddLayerPicker from './AddLayerPicker';
 import useDataStore from '../../stores/useDataStore';
 import useResultStore from '../../stores/useResultStore';
 
@@ -38,6 +39,7 @@ function LayerRow({
   onSetOpacity, onSetBlend, onSetVisibility, onRemove, onReorder,
   onRetype, typeOptions = [],
   renderLayerExtras,
+  derivedReady = null,
 }) {
   const { t } = useTranslation('phasemap');
   const BLEND_OPTIONS = [
@@ -54,14 +56,24 @@ function LayerRow({
   // `requiresRefinement` need joint R+PC refinement computed. Until then they
   // render visually disabled with a locked visibility toggle (user can still
   // remove). Phase A pattern, extended for Phase B refinement.
+  //
+  // `derivedReady` is the answer the page got from the backend, and it wins:
+  // the store only knows what this browser session computed, so a result
+  // adopted on arrival painted every derived row red while it was drawing
+  // perfectly well. Without the prop (other pages) the old store reading
+  // stands, unchanged.
   const def = findLayerDef(layer.id);
   const diagnosticsComputed = useDataStore((s) => s.diagnosticsComputed);
   const refinementComputed = useDataStore((s) => s.refinementComputed);
   const activeResultId = useResultStore((s) => s.indexingResult?.result_id ?? null);
-  const isGatedDiag = !!def?.requiresCompute
-    && !(activeResultId && diagnosticsComputed?.[activeResultId]);
-  const isGatedRef = !!def?.requiresRefinement
-    && !(activeResultId && refinementComputed?.[activeResultId]);
+  const diagReady = derivedReady
+    ? !!derivedReady.diagnostics
+    : !!(activeResultId && diagnosticsComputed?.[activeResultId]);
+  const refReady = derivedReady
+    ? !!derivedReady.refinement
+    : !!(activeResultId && refinementComputed?.[activeResultId]);
+  const isGatedDiag = !!def?.requiresCompute && !diagReady;
+  const isGatedRef = !!def?.requiresRefinement && !refReady;
   const isGated = isGatedDiag || isGatedRef;
   const gateHint = isGatedRef
     ? t('phasemap:layers.gateRefHint')
@@ -227,6 +239,10 @@ export default function LayerStackPanel({
   activeMode = null,
   availableToAdd = [],
   renderLayerExtras,
+  // { diagnostics, refinement } as the backend reports them for the result on
+  // screen. Given, the rows and the "+ Add Layer" picker say the same thing
+  // about the same layer — which is the only way either can be believed.
+  derivedReady = null,
 }) {
   const { t } = useTranslation('phasemap');
   const atLimit = layers.length >= MAX_LAYERS;
@@ -247,10 +263,6 @@ export default function LayerStackPanel({
   // Sentinel-based placeholder: first option has empty value and is the
   // label the user sees while no selection is made. We keep value="" so
   // the sentinel stays visible after each pick (one-shot dropdown).
-  const addOptions = [
-    { value: '', label: atLimit ? t('phasemap:layers.limit', { max: MAX_LAYERS }) : t('phasemap:layers.addLayer') },
-    ...availableToAdd,
-  ];
   const presetOptions = [
     { value: '', label: t('phasemap:layers.preset') },
     ...Object.entries(PRESETS).map(([name, p]) => ({ value: name, label: p.label })),
@@ -335,43 +347,32 @@ export default function LayerStackPanel({
                 typeOptions={typeOptionsFor(layer)}
                 onReorder={onReorder}
                 renderLayerExtras={renderLayerExtras}
+                derivedReady={derivedReady}
               />
             );
           })}
         </div>
 
-        <div style={{ display: 'flex', gap: 4 }}>
-          <Select
-            value=""
-            onChange={(e) => { const v = e.target.value; if (v) onAdd(v); }}
-            options={addOptions}
-            disabled={atLimit}
-            style={{ flex: 1, minWidth: 0, fontSize: '9pt', height: 26, padding: '2px 6px' }}
-            title={t('phasemap:hoverTips.addLayer')}
-          />
-          <Select
-            value=""
-            onChange={(e) => { const v = e.target.value; if (v) onUsePreset(v); }}
-            options={presetOptions}
-            style={{ flex: 1, minWidth: 0, fontSize: '9pt', height: 26, padding: '2px 6px' }}
-            title={t('phasemap:hoverTips.presetSelect')}
-          />
-        </div>
-        {(() => {
-          const hint = availableToAdd.find((o) => o.disabled && o.tip)?.tip;
-          if (!hint) return null;
-          return (
-            <div style={{
-              color: colors.textSecondary,
-              fontSize: '8pt',
-              padding: '4px 2px',
-              fontStyle: 'italic',
-              lineHeight: 1.3,
-            }}>
-              {hint}
-            </div>
-          );
-        })()}
+        {/* The preset dropdown rides inside the picker so that the two share
+            one row while the open layer list spans the whole panel. */}
+        <AddLayerPicker
+          options={availableToAdd}
+          onAdd={onAdd}
+          disabled={atLimit}
+          disabledLabel={t('phasemap:layers.limit', { max: MAX_LAYERS })}
+          trailing={(
+            <Select
+              value=""
+              onChange={(e) => { const v = e.target.value; if (v) onUsePreset(v); }}
+              options={presetOptions}
+              style={{ flex: 1, minWidth: 0, fontSize: '9pt', height: 26, padding: '2px 6px' }}
+              title={t('phasemap:hoverTips.presetSelect')}
+            />
+          )}
+        />
+        {/* The standing "link a source first" hint used to live here. Every
+            unavailable layer now carries its own reason inside the picker,
+            where the question is actually asked. */}
       </div>
     </CollapsibleGroup>
   );

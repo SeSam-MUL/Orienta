@@ -572,8 +572,17 @@ export const phaseMapApi = {
    *  phaseFilter (phase id, -1 = all) restricts the key to one phase so it
    *  matches a phase-filtered IPF layer. orientation 'vertical' stacks the
    *  triangles in a column (for the side panel next to the map). */
-  ipfKey: (direction = 'Z', phaseFilter = -1, orientation = 'horizontal') =>
-    api.get('/api/phasemap/ipf-key', { params: { direction, phase_filter: phaseFilter, orientation } }),
+  ipfKey: (direction = 'Z', phaseFilter = -1, orientation = 'horizontal', colorOverrides = null) =>
+    api.get('/api/phasemap/ipf-key', {
+      params: {
+        direction, phase_filter: phaseFilter, orientation,
+        // The swatch above each triangle names a phase, so it has to carry the
+        // user's colour picks like the map and the legend do.
+        ...(colorOverrides && Object.keys(colorOverrides).length > 0
+          ? { color_overrides: JSON.stringify(colorOverrides) }
+          : {}),
+      },
+    }),
   // Export takes the full render-params object so the file on disk matches the
   // live preview (direction, cleanup, scalebar, title, confidence overlay…).
   export: (outputPath, format = 'png', dpi = 300, viewParams = {}) =>
@@ -1166,14 +1175,36 @@ export const createWebSocket = (onMessage) => {
   };
 
   ws.onopen = () => {
+    ws.__opened = true;
     console.log('WebSocket connected');
   };
 
-  ws.onerror = (err) => {
-    console.error('WebSocket error:', err);
+  // A WebSocket error event carries no detail — it is always a bare Event. The
+  // only case worth reporting is a socket that was already carrying traffic and
+  // then broke; a handshake that never completed (backend still starting, or
+  // React's dev double-mount tearing the socket down) is routine and reconnects
+  // on its own, so logging it as an error was pure noise on every page load.
+  ws.onerror = () => {
+    if (ws.__opened && !ws.__closingIntentionally) {
+      console.warn('WebSocket connection lost — reconnecting.');
+    }
   };
 
   return ws;
+};
+
+/**
+ * Close a socket without the "closed before the connection is established"
+ * warning the browser logs when you close one mid-handshake.
+ */
+export const closeWebSocket = (ws) => {
+  if (!ws) return;
+  ws.__closingIntentionally = true;
+  if (ws.readyState === WebSocket.CONNECTING) {
+    ws.addEventListener('open', () => ws.close(), { once: true });
+    return;
+  }
+  if (ws.readyState === WebSocket.OPEN) ws.close();
 };
 
 // --- Reference Frame / Coordinate System ---

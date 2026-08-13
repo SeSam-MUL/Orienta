@@ -93,7 +93,8 @@
     "rStoredCompare": "マップ上の保存方位: R = {{value}}",
     "rStoredBetter": "保存方位のほうが一致が良好",
     "adoptWorse": "再指数付け方位は {{delta}}° ずれていますが一致は悪化します (R {{rCand}} 対 {{rStored}}) — 適用は提示しません",
-    "pickHint": "ピクセルをクリック、または十字線をドラッグ。ズーム中のドラッグは画像を移動します — Shift を押しながらで十字線を移動。"
+    "pickHint": "ピクセルをクリック、または十字線をドラッグ。ズーム中のドラッグは画像を移動します — Shift を押しながらで十字線を移動。",
+    "nccLegend": "NCC"
   },
   "displayModes": {
     "phase": "相分布図",
@@ -386,7 +387,18 @@
     "gateDiagHint": "先に「Compute Diagnostics」を実行してください",
     "gateRefHint": "先に「Refine R + PC」を実行してください",
     "gateDiagSuffix": "（計算が必要）",
-    "gateRefSuffix": "（精密化が必要）"
+    "gateRefSuffix": "（精密化が必要）",
+    "assignmentSource": "割り当ての由来",
+    "assignmentSourceTip": "各ピクセルの相の由来：シアン＝結晶粒単位の処理が相を決定して書き込んだ（元と同じ相の場合もあるため、変更された数ではない）、オレンジ＝化学組成で判断できなかったため未変更（粒内部が小さすぎて測定不可、組成が不均一、または複数の相が同程度に適合）、無色＝指数付けのまま。",
+    "searchPlaceholder": "レイヤーを検索…",
+    "showUnavailable": "利用できないものも表示",
+    "showUnavailableN": "利用できないものも表示 ({{n}})",
+    "hiddenCount": "現在 {{n}} 件が利用できません",
+    "noMatches": "該当するレイヤーがありません",
+    "unavailable": "まだ利用できません",
+    "gateNoResult": "先に指数付け結果を読み込んでください",
+    "gateNoAnalysis": "先に 'Analysis' で xmap を読み込んでください",
+    "gateNoEbsd": "先に EBSD パターンを読み込んでください"
   },
   "diagnostics": {
     "title": "Forward 診断",
@@ -660,5 +672,9 @@
     "widthHeading": "太さ",
     "unitHint": "角度は°、太さは走査ステップの¼単位",
     "reset": "既定に戻す"
+  },
+  "scaleLegend": {
+    "title": "値スケール",
+    "tip": "色が数値を表すレイヤーのカラーバーを表示/非表示"
   }
 }

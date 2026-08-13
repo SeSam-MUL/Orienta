@@ -93,7 +93,8 @@
     "rStoredCompare": "gespeicherte Orientierung auf der Karte: R = {{value}}",
     "rStoredBetter": "die gespeicherte passt besser",
     "adoptWorse": "Re-indexierte Orientierung liegt {{delta}}° daneben, passt aber SCHLECHTER (R {{rCand}} gegen {{rStored}}) — wird nicht angeboten",
-    "pickHint": "Pixel anklicken oder das Fadenkreuz ziehen. Gezoomt verschiebt Ziehen das Bild — mit Umschalt gedrückt zieht es das Fadenkreuz."
+    "pickHint": "Pixel anklicken oder das Fadenkreuz ziehen. Gezoomt verschiebt Ziehen das Bild — mit Umschalt gedrückt zieht es das Fadenkreuz.",
+    "nccLegend": "NCC"
   },
   "displayModes": {
     "phase": "Phasenkarte",
@@ -386,7 +387,18 @@
     "gateDiagHint": "Zuerst 'Compute Diagnostics' ausführen",
     "gateRefHint": "Zuerst 'Refine R + PC' ausführen",
     "gateDiagSuffix": " (Berechnung nötig)",
-    "gateRefSuffix": " (Verfeinerung nötig)"
+    "gateRefSuffix": " (Verfeinerung nötig)",
+    "assignmentSource": "Herkunft der Zuordnung",
+    "assignmentSourceTip": "Wie jedes Pixel seine Phase bekam: Cyan = der Korn-Schritt hat die Phase dieses Korns entschieden und hier eingetragen — es kann dieselbe sein, die das Pixel schon hatte, Cyan zählt also nicht, was sich geändert hat; Orange = unangetastet, weil die Chemie für das Korn nicht entscheiden konnte (Inneres zu klein zum Messen, Zusammensetzung uneinheitlich, oder mehrere Phasen passen gleich gut); ungefärbt = so, wie die Indizierung es hinterlassen hat.",
+    "searchPlaceholder": "Ebenen suchen…",
+    "showUnavailable": "Nicht verfügbare anzeigen",
+    "showUnavailableN": "Nicht verfügbare anzeigen ({{n}})",
+    "hiddenCount": "{{n}} derzeit nicht verfügbar",
+    "noMatches": "Keine Ebene gefunden",
+    "unavailable": "Noch nicht verfügbar",
+    "gateNoResult": "Zuerst ein Indizierungsergebnis laden",
+    "gateNoAnalysis": "Zuerst unter 'Analysis' eine xmap laden",
+    "gateNoEbsd": "Zuerst EBSD-Muster laden"
   },
   "diagnostics": {
     "title": "Forward-Diagnostik",
@@ -660,5 +672,9 @@
     "widthHeading": "Dicke",
     "unitHint": "Winkel in °, Dicke in ¼ Rasterschritten",
     "reset": "Zurücksetzen"
+  },
+  "scaleLegend": {
+    "title": "Wertskala",
+    "tip": "Farbbalken der Ebenen ein-/ausblenden, deren Farben einen Wert bedeuten"
   }
 }

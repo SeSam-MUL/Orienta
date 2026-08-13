@@ -17,6 +17,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 LABEL_NATIVE = "Band Contrast (native)"
+LABEL_NATIVE_IQ = "Image Quality (native)"
 LABEL_COMPUTED = "Pattern Quality (computed)"
 
 
@@ -72,6 +73,56 @@ def read_native_band_contrast(
     return None
 
 
+def read_native_image_quality(
+    source_file: Optional[str],
+    n_rows: Optional[int] = None,
+    n_cols: Optional[int] = None,
+) -> Optional[np.ndarray]:
+    """Read the EDAX-style ``IQ`` channel, the same way as Oxford's BC.
+
+    Oxford writes "Band Contrast", EDAX writes "IQ" — different quantities
+    (band sharpness in the Hough transform vs. a pattern-quality index) but
+    both measured by the vendor and stored in the file. A file that has IQ and
+    no BC used to yield nothing at all: the map refused to draw, and the
+    honest reading "this file has no band contrast" was of no use to someone
+    holding a perfectly good quality channel.
+
+    Returns the raw values (EDAX IQ has no fixed range) or ``None``.
+    """
+    if not source_file:
+        return None
+    try:
+        import h5py
+    except Exception:
+        return None
+    try:
+        with h5py.File(source_file, "r") as h5:
+            for scan_key in list(h5.keys()):
+                try:
+                    grp = h5[scan_key]
+                    iq = np.asarray(grp["EBSD/Data/IQ"][...])
+                except Exception:
+                    continue
+                if iq.ndim == 1:
+                    r = c = None
+                    try:
+                        hdr = grp["EBSD/Header"]
+                        c = int(np.ravel(hdr["nColumns"][()])[0])
+                        r = int(np.ravel(hdr["nRows"][()])[0])
+                    except Exception:
+                        r = c = None
+                    if not (r and c and iq.size == r * c) and n_rows and n_cols:
+                        r, c = n_rows, n_cols
+                    if not (r and c and iq.size == r * c):
+                        continue
+                    iq = iq.reshape(r, c)
+                return iq.astype(np.float64)
+    except Exception:
+        logger.debug("native IQ read failed for %s", source_file, exc_info=True)
+        return None
+    return None
+
+
 def _prop_bc(xmap, n_rows, n_cols) -> Optional[np.ndarray]:
     """Real native BC carried in ``xmap.prop['bc']`` (from a light-h5)."""
     try:
@@ -107,6 +158,16 @@ def get_quality_map(
         native = _prop_bc(xmap, n_rows, n_cols)
     if native is not None:
         return QualityMap(native, "native", "band_contrast", LABEL_NATIVE, (0, 255))
+
+    # The vendor's own quality channel, when it is EDAX rather than Oxford.
+    # Measured data beats anything computed here, so it comes before the FFT.
+    iq_native = read_native_image_quality(source_file, n_rows, n_cols)
+    if iq_native is not None:
+        lo = float(np.nanmin(iq_native))
+        hi = float(np.nanmax(iq_native))
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            lo, hi = 0.0, 1.0
+        return QualityMap(iq_native, "native", "image_quality", LABEL_NATIVE_IQ, (lo, hi))
 
     if allow_compute and signal is not None:
         iq = compute_image_quality(signal)

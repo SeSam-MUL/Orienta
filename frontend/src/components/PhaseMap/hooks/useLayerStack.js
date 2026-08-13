@@ -61,7 +61,10 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
         mergedParams.color_overrides = JSON.stringify(colorOverrides);
       }
       const res = await phaseMapApi.layer(layer.id, mergedParams);
-      return { base64: res.data.image, keyToAlpha: false };
+      // `scale` is present only where the colours mean a number (CI, band
+      // contrast, the diagnostics). It carries the range ACTUALLY painted, so
+      // the legend states what the map shows rather than a nominal 0..1.
+      return { base64: res.data.image, keyToAlpha: false, scale: res.data.scale ?? null };
     }
     case 'diagnostics':
     case 'refinement': {
@@ -74,7 +77,7 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
       const res = await phaseMapApi.layer(kind, cleanupParams);
       // The backend already emits a transparent-background RGBA PNG
       // (NaN / non-indexed pixels → alpha 0), so no colour-keying needed.
-      return { base64: res.data.image, keyToAlpha: false };
+      return { base64: res.data.image, keyToAlpha: false, scale: res.data.scale ?? null };
     }
     case 'analysis': {
       const res = await analysisApi.getMap(layer.id);
@@ -108,6 +111,9 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
 export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverrides = null }) {
   const [state, dispatch] = useReducer(layerStackReducer, initialState);
   const cacheRef = useRef(new Map());           // layerId → ImageBitmap
+  // layerId → { min, max, unit, cmap, stops } for layers whose colours mean a
+  // number. Kept beside the bitmaps so a legend can never outlive its map.
+  const scaleRef = useRef(new Map());
   const cacheOrderRef = useRef([]);             // LRU order (most recent at end)
   const fetchingRef = useRef(new Set());        // layer ids currently in-flight
   const errorRef = useRef(new Map());           // layerId → error string
@@ -184,6 +190,9 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
       if (!predicate || predicate(id)) {
         try { bmp.close(); } catch { /* ignore */ }
         cache.delete(id);
+        // The legend goes with the map it describes: a bar left behind would
+        // state the range of a picture that is no longer on screen.
+        scaleRef.current.delete(id);
         const idx = order.indexOf(id);
         if (idx !== -1) order.splice(idx, 1);
       }
@@ -202,7 +211,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     fetchingRef.current.add(layer.id);
     const epoch = epochRef.current;  // snapshot; a flush mid-flight bumps this
     try {
-      const { base64, keyToAlpha } = await fetchLayerImage({ layer, cleanupParams, colorOverrides });
+      const { base64, keyToAlpha, scale } = await fetchLayerImage({ layer, cleanupParams, colorOverrides });
       if (!base64) throw new Error('Empty image payload');
       const bitmap = await pngBase64ToBitmap(base64, { keyToAlpha });
       // Result/file switched while we were fetching → this bitmap belongs to
@@ -220,6 +229,8 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
         return;
       }
       cacheSet(layer.id, bitmap);
+      if (scale) scaleRef.current.set(layer.id, scale);
+      else scaleRef.current.delete(layer.id);
       errorRef.current.delete(layer.id);
     } catch (err) {
       errorRef.current.set(layer.id, err?.response?.data?.detail ?? err.message ?? 'fetch failed');
@@ -472,6 +483,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
   return {
     layers: state.layers,
     bitmaps: cacheRef.current,
+    scales: scaleRef.current,
     bitmapVersion,
     fetching: fetchingRef.current,
     errors: errorRef.current,

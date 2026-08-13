@@ -34,6 +34,7 @@ import EdsPreflightPanel from './EdsPreflightPanel';
 import { buildEdsPhaseStrengths, edsPriorActive } from './edsPriorParams';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useZoomViews, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
+import ScaleLegend from '../PhaseMap/ScaleLegend';
 import { isZoomed, viewToTransform } from '../EDS/zoomView';
 import { zoomRectPct } from '../EBSDViewer/zoomOverlay';
 import { useWheelZoom } from '../common/useWheelZoom';
@@ -418,6 +419,7 @@ function PatternMatchesDialog({ open, onClose }) {
     setRank(0);
   }, [gridDims.rows, gridDims.cols, cropOffset.row, cropOffset.col]);
   const [stats, setStats] = useState(null);
+  const [nccScale, setNccScale] = useState(null);
   const heatmapRef = useRef(null);
   // Linked crosshair + numbered red markers shared across the 3 comparison
   // panels, plus the publication-figure export composer — the SAME shared tools
@@ -433,6 +435,9 @@ function PatternMatchesDialog({ open, onClose }) {
       setGridDims({ rows: r.data.n_rows, cols: r.data.n_cols });
       setCropOffset({ row: r.data.crop_row_offset ?? 0, col: r.data.crop_col_offset ?? 0 });
       setStats({ min: r.data.min_score, max: r.data.max_score, mean: r.data.mean_score });
+      // The colour axis of the picture, which is NOT the data's own span: the
+      // map is normalised by its maximum, so the bar runs 0..max.
+      setNccScale(r.data.scale ?? null);
       setLoading(false);
     }).catch(() => setLoading(false));
   }, [open]);
@@ -517,11 +522,27 @@ function PatternMatchesDialog({ open, onClose }) {
           {/* Left: NCC Heatmap (30%) — vertically centred against the
               taller right column so the heatmap sits in line with the
               middle of the pattern panels. */}
-          <div style={{ width: '30%', minWidth: 200 }}>
+          {/* The colour bar is ADDED to this column, not taken out of it:
+              the map keeps the 30 % it always had. */}
+          <div style={{ width: 'calc(30% + 62px)', minWidth: 262 }}>
             {loading && <div style={{ color: C.textSecondary, padding: 40, textAlign: 'center' }}>{t('matchesDialog.loading')}</div>}
             {heatmapClean && (
               <div
+                // stretch + 'fill': the bar ends up as tall as the map beside it
+                style={{ display: 'flex', alignItems: 'stretch', gap: 6 }}
+              >
+              {nccScale && (
+                <div
+                  // A flex container itself, or the bar cannot stretch:
+                  // `flex: 1` needs a flex parent.
+                  style={{ flexShrink: 0, display: 'flex' }}
+                >
+                <ScaleLegend label={t('matchesDialog.nccLegend')} scale={nccScale} height="fill" />
+                </div>
+              )}
+              <div
                 style={{
+                  flex: 1, minWidth: 0,
                   position: 'relative',
                   // Without this the magnified map escapes its column and
                   // covers the pattern panels next to it.
@@ -556,6 +577,7 @@ function PatternMatchesDialog({ open, onClose }) {
                   <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${crossX}%`, width: 1, background: '#ffb86c', pointerEvents: 'none' }} />
                   <div style={{ position: 'absolute', left: `${crossX}%`, top: `${crossY}%`, width: 12, height: 12, transform: 'translate(-50%,-50%)', pointerEvents: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#ffb86c', fontSize: 16, fontWeight: 700 }}>+</div>
                 </>)}
+              </div>
               </div>
             )}
             {stats && <div style={{ fontSize: '8pt', color: C.textSecondary, marginTop: 4 }}>

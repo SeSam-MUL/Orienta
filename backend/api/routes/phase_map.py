@@ -120,6 +120,32 @@ def _is_unindexed_phase(name) -> bool:
     return str(name).strip().lower() in _UNINDEXED_NAMES
 
 
+def _phase_colors_by_name(xmap, color_overrides: dict | None = None) -> dict:
+    """``{phase_name: (r, g, b)}`` exactly as the map paints it.
+
+    `build_phase_color_map` is keyed by phase id; the IPF keys are grouped by
+    symmetry and know only names, so this flips it. Same source, so the swatch
+    beside a triangle cannot drift from the map's colours.
+    """
+    out: dict[str, tuple] = {}
+    try:
+        by_id = build_phase_color_map(xmap, color_overrides)
+        for entry in list(xmap.phases):
+            if isinstance(entry, tuple) and len(entry) == 2:
+                pid, phase_obj = entry
+            else:
+                pid, phase_obj = getattr(entry, "id", None), entry
+            name = getattr(phase_obj, "name", "") or ""
+            if pid is None or not name:
+                continue
+            rgb = by_id.get(int(pid))
+            if rgb is not None and name not in out:
+                out[name] = rgb
+    except Exception:  # noqa: BLE001 — a key without swatches beats no key
+        return {}
+    return out
+
+
 def _group_phases_by_symmetry(xmap, only_phase_id: int | None = None):
     """Group real phases by point-group symmetry.
 
@@ -238,8 +264,15 @@ def _draw_ipf_color_keys(fig, gs_cell, xmap, direction: str,
             # phase" is answered by matching the bar colour to the legend.
             ax_bar = fig.add_subplot(inner[0, 0])
             phases = info["phases"]
+            # The SAME colour the map and the legend use. This bar exists to
+            # answer "which triangle belongs to which phase", so it has to be
+            # read from `build_phase_color_map` (name-stable HSV hue, honouring
+            # the user's colour picks) rather than from the legacy 8-slot
+            # palette — that one ignored both, and the bar then named a colour
+            # that appeared nowhere on the map.
+            name_colors = _phase_colors_by_name(xmap, color_overrides)
             for j, phase_name in enumerate(phases):
-                rgb = _resolve_phase_color(phase_name, color_overrides)
+                rgb = name_colors.get(phase_name) or _resolve_phase_color(phase_name, color_overrides)
                 ax_bar.axvspan(j / len(phases), (j + 1) / len(phases),
                                facecolor=rgb, edgecolor='none')
             ax_bar.set_xlim(0, 1)
@@ -1036,7 +1069,15 @@ _REF_KIND_TO_CMAP = {
 }
 
 
-def _ref_rgba(kind: str, n_rows: int, n_cols: int) -> "np.ndarray":
+_REF_KIND_TO_UNIT = {
+    "orientation_delta": "°",
+    "pc_delta_x": "px",
+    "pc_delta_y": "px",
+    "pc_delta_l": "µm",
+}
+
+
+def _ref_rgba(kind: str, n_rows: int, n_cols: int, scale_out: dict | None = None) -> "np.ndarray":
     """Render one of the six refinement layers."""
     import numpy as np
     import matplotlib
@@ -1070,13 +1111,38 @@ def _ref_rgba(kind: str, n_rows: int, n_cols: int) -> "np.ndarray":
             vmax = vmin + 1e-6
 
     cmap = matplotlib.colormaps[_REF_KIND_TO_CMAP[kind]]
+    if scale_out is not None:
+        scale_out.update(_scale_info(_REF_KIND_TO_CMAP[kind], vmin, vmax,
+                                     unit=_REF_KIND_TO_UNIT.get(kind, "")))
     norm = np.clip((arr - vmin) / (vmax - vmin), 0.0, 1.0)
     rgba = (cmap(norm) * 255).astype(np.uint8)
     rgba[..., 3] = np.where(np.isnan(arr), 0, 255).astype(np.uint8)
     return rgba
 
 
-def _diag_rgba(kind: str, n_rows: int, n_cols: int) -> "np.ndarray":
+def _scale_info(cmap_name: str, vmin: float, vmax: float, *, unit: str = "",
+                n_stops: int = 16) -> dict:
+    """What a colour bar needs: the numbers it spans and the colours it runs through.
+
+    The stops are sampled here rather than named, so the browser draws exactly
+    the colormap the map was painted with — no second implementation of viridis
+    that drifts from matplotlib's.
+    """
+    import matplotlib
+    import numpy as np
+    cmap = matplotlib.colormaps[cmap_name]
+    xs = np.linspace(0.0, 1.0, int(max(2, n_stops)))
+    stops = ["#%02x%02x%02x" % tuple(int(round(255 * c)) for c in cmap(float(x))[:3]) for x in xs]
+    return {
+        "min": float(vmin),
+        "max": float(vmax),
+        "unit": unit,
+        "cmap": cmap_name,
+        "stops": stops,
+    }
+
+
+def _diag_rgba(kind: str, n_rows: int, n_cols: int, scale_out: dict | None = None) -> "np.ndarray":
     """Render one of the four forward-diagnostic layers as transparent RGBA."""
     import numpy as np
     import matplotlib
@@ -1109,6 +1175,8 @@ def _diag_rgba(kind: str, n_rows: int, n_cols: int) -> "np.ndarray":
             vmax = vmin + 1e-6
 
     cmap = matplotlib.colormaps[_DIAG_KIND_TO_CMAP[kind]]
+    if scale_out is not None:
+        scale_out.update(_scale_info(_DIAG_KIND_TO_CMAP[kind], vmin, vmax))
     norm = np.clip((arr - vmin) / (vmax - vmin), 0.0, 1.0)
     rgba = (cmap(norm) * 255).astype(np.uint8)   # (H, W, 4)
     # Make NaN pixels transparent
@@ -1132,6 +1200,10 @@ def _compute_layer_rgba(
     grain_stabilized: bool = False,
     phase_filter: int | None = None,
     gb_bands: str = "",
+    # Filled with what a colour bar needs for layers that carry a value scale.
+    # Left untouched for categorical ones (phase, IPF, grain boundaries): a bar
+    # from 0 to 1 under a phase map would be a caption for nothing.
+    scale_out: dict | None = None,
 ) -> "np.ndarray":
     """Render a single layer as a raw (H, W, 4) uint8 RGBA array.
 
@@ -1155,7 +1227,7 @@ def _compute_layer_rgba(
         if result is None:
             raise HTTPException(status_code=404, detail={"error": "no active indexing result"})
         n_rows, n_cols = result.original_shape
-        return _diag_rgba(kind, n_rows, n_cols)
+        return _diag_rgba(kind, n_rows, n_cols, scale_out)
 
     # Joint R+PC refinement dispatch (Phase B) — reads result.metadata["refinement"].
     if kind in _REF_KIND_TO_KEY:
@@ -1163,7 +1235,7 @@ def _compute_layer_rgba(
         if result is None:
             raise HTTPException(status_code=404, detail={"error": "no active indexing result"})
         n_rows, n_cols = result.original_shape
-        return _ref_rgba(kind, n_rows, n_cols)
+        return _ref_rgba(kind, n_rows, n_cols, scale_out)
 
     # Render-verified phase check (Stage A) — per-grain margin of the stored
     # phase vs the best alternative (stored − best alt). Positive/green =
@@ -1340,6 +1412,33 @@ def _compute_layer_rgba(
                     native_bc = _read_native_band_contrast()
                 except Exception:
                     native_bc = None
+            quality_label = None
+            if native_bc is None:
+                # Not every vendor writes Band Contrast. EDAX files carry an
+                # `IQ` channel instead, and a result exported from this app can
+                # be EDAX-flavoured — which is why this layer used to refuse to
+                # draw on a file that had a perfectly good quality map in it.
+                # The shared service knows the whole precedence: Oxford BC ->
+                # xmap.prop['bc'] -> EDAX IQ -> computed FFT image quality.
+                try:
+                    from backend.api.services.pattern_quality import get_quality_map
+                    from backend.api.routes.ebsd_viewer import _get_active_signal
+                    try:
+                        sig = _get_active_signal()
+                    except Exception:
+                        sig = None
+                    qm = get_quality_map(
+                        n_rows, n_cols,
+                        source_file=src,
+                        signal=sig,
+                        xmap=xmap,
+                        allow_compute=True,
+                    )
+                except Exception:
+                    qm = None
+                if qm is not None and np.asarray(qm.array).shape == (n_rows, n_cols):
+                    native_bc = np.asarray(qm.array, dtype=np.float64)
+                    quality_label = qm.label
             if native_bc is not None and native_bc.shape == (n_rows, n_cols):
                 # Normalise to [0, 1] for the grey ramp.
                 lo = float(np.nanmin(native_bc))
@@ -1348,16 +1447,29 @@ def _compute_layer_rgba(
                     bc_2d = ((native_bc - lo) / (hi - lo)).astype(np.float32)
                 else:
                     bc_2d = np.zeros_like(native_bc, dtype=np.float32)
+                if scale_out is not None:
+                    # The values keep their own numbers (Oxford BC is 0..255,
+                    # EDAX IQ is unbounded); the grey ramp is only how they are
+                    # drawn. The label travels with them so the legend names the
+                    # quantity rather than calling everything band contrast.
+                    scale_out.update(_scale_info("gray", lo, hi))
+                    if quality_label:
+                        scale_out["label"] = quality_label
         else:
             bc_2d = bc_factor
+            if scale_out is not None:
+                # The computed fallback is an FFT image-quality factor, already
+                # scaled to 0..1 — no native units to report.
+                scale_out.update(_scale_info("gray", 0.0, 1.0))
 
         if bc_2d is None:
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "No Band Contrast available: indexing result doesn't carry "
-                    "BC and no source H5OINA file is currently open. Load the "
-                    "source file in the EBSD Viewer to enable BC overlay."
+                    "No pattern-quality map available: this result carries no "
+                    "band contrast, its source file has neither Band Contrast "
+                    "(Oxford) nor IQ (EDAX), and no patterns are loaded to "
+                    "compute one from. Load the source file in the EBSD Viewer."
                 ),
             )
 
@@ -1384,13 +1496,19 @@ def _compute_layer_rgba(
         valid = np.isfinite(ci_arr_2d)
         if valid.any():
             v = ci_arr_2d.copy()
-            vmin = float(np.nanmin(v))
-            vmax = float(np.nanmax(v))
-            if vmax > vmin:
-                v = (v - vmin) / (vmax - vmin)
-            else:
-                v = np.zeros_like(v)
+            # A FIXED 0..1 axis, not the data's own span.
+            #
+            # A confidence index is defined on 0..1, and a fixed axis is what
+            # makes two maps comparable: stretching each map over its own
+            # min..max painted a 0.18..0.47 result and a 0.60..0.95 one in the
+            # same colours, so "green" meant something different in every
+            # figure. The cost is contrast — a narrow spread now occupies a
+            # narrow band of the colormap, which is the honest picture of it.
+            vmin, vmax = 0.0, 1.0
+            v = np.clip((v - vmin) / (vmax - vmin), 0.0, 1.0)
             v[~valid] = 0
+            if scale_out is not None:
+                scale_out.update(_scale_info("RdYlGn", vmin, vmax))
             rgba_float = cmap(v)
             rgba[..., :3] = (rgba_float[..., :3] * 255.0).astype(np.uint8)
         alpha[:] = valid
@@ -1853,6 +1971,7 @@ async def get_layer(
             # Some layer kinds (ci/bc) build a matplotlib figure internally,
             # so hold the matplotlib lock for the whole compute.
             with _mpl_lock:
+                scale: dict = {}
                 rgba = _compute_layer_rgba(
                     kind=kind,
                     ci_threshold=ci_threshold,
@@ -1868,6 +1987,7 @@ async def get_layer(
                     grain_stabilized=grain_stabilized,
                     phase_filter=None if phase_filter < 0 else int(phase_filter),
                     gb_bands=gb_bands,
+                    scale_out=scale,
                 )
                 img = Image.fromarray(rgba)  # mode inferred from uint8 HxWx4 → RGBA
                 buf = _io.BytesIO()
@@ -1877,6 +1997,8 @@ async def get_layer(
                     "image": base64.b64encode(buf.read()).decode("utf-8"),
                     "kind": kind,
                     "shape": [int(rgba.shape[0]), int(rgba.shape[1])],
+                    # Present only for layers whose colours mean a number.
+                    "scale": scale or None,
                 }
 
         return await asyncio.to_thread(_work)
@@ -1889,7 +2011,7 @@ async def get_layer(
 
 @router.get("/ipf-key")
 async def get_ipf_key(direction: str = "Z", phase_filter: int = -1,
-                      orientation: str = "horizontal"):
+                      orientation: str = "horizontal", color_overrides: str = ""):
     """Render only the IPF colour key(s) on a transparent background.
 
     One stereographic triangle per Laue class in the active xmap. Used by
@@ -1935,6 +2057,17 @@ async def get_ipf_key(direction: str = "Z", phase_filter: int = -1,
 
         n_keys = len(groups)
 
+        overrides_dict = None
+        if color_overrides:
+            try:
+                import json as _json
+                parsed = _json.loads(color_overrides)
+                if isinstance(parsed, dict):
+                    overrides_dict = {str(k): str(v) for k, v in parsed.items()}
+            except (ValueError, TypeError):
+                # A broken override string must not cost the user their key.
+                logger.warning("Ignoring unreadable colour overrides for the IPF key")
+
         def _work():
             with _mpl_lock:
                 # Layout: one row (wider per key for legible vertex labels)
@@ -1952,7 +2085,7 @@ async def get_ipf_key(direction: str = "Z", phase_filter: int = -1,
                 fig.patch.set_alpha(0.0)
                 gs = fig.add_gridspec(1, 1)
                 _draw_ipf_color_keys(fig, gs[0, 0], xmap, direction,
-                                      color_overrides=None,
+                                      color_overrides=overrides_dict,
                                       orientation=("vertical" if orientation == "vertical"
                                                    else "horizontal"),
                                       only_phase_id=only_pid)

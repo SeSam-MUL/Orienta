@@ -5208,8 +5208,12 @@ async def get_ncc_heatmap(result_id: str = None):
     score_cropped = score_clipped[crop_r0:crop_r1, crop_c0:crop_c1]
     crop_rows, crop_cols = score_cropped.shape
 
-    vmax = min(float(np.nanmax(score_cropped)), 1.0)
-    vmax = max(vmax, 0.01)
+    # A FIXED 0..1 axis. A normalised cross-correlation lives on that range,
+    # and dividing each map by its own maximum meant "dark green" described a
+    # 0.47 match in one figure and a 0.95 match in the next. The cost is
+    # contrast: a run whose scores sit between 0.18 and 0.47 now occupies the
+    # lower half of the colormap, which is what those scores are.
+    vmax = 1.0
 
     # Full heatmap with colorbar (cropped)
     fig, ax = plt.subplots(1, 1, figsize=(6, 4))
@@ -5226,13 +5230,13 @@ async def get_ncc_heatmap(result_id: str = None):
     # Clean heatmap for click mapping — direct PIL (no matplotlib margins)
     from PIL import Image as _PILImage
     import matplotlib.cm as _cm
+    from backend.api.routes.phase_map import _scale_info as _phase_map_scale_info
 
     # Normalize scores to [0,1] for colormap, handle NaN
     score_norm = np.copy(score_cropped)
     nan_mask = ~np.isfinite(score_norm)
     score_norm[nan_mask] = 0.0
-    score_norm = score_norm / vmax
-    score_norm = np.clip(score_norm, 0.0, 1.0)
+    score_norm = np.clip(score_norm / vmax, 0.0, 1.0)
 
     # Apply RdYlGn colormap → RGBA → RGB
     colored = (_cm.RdYlGn(score_norm) * 255).astype(np.uint8)[:, :, :3]
@@ -5263,6 +5267,10 @@ async def get_ncc_heatmap(result_id: str = None):
         "min_score": float(valid.min()) if len(valid) else 0.0,
         "max_score": float(valid.max()) if len(valid) else 0.0,
         "mean_score": float(valid.mean()) if len(valid) else 0.0,
+        # What a colour bar beside this map has to say. The COLOUR AXIS runs
+        # 0..vmax (the picture above is normalised by vmax, not by the data's
+        # minimum), so a bar drawn from min_score would mis-read every pixel.
+        "scale": _phase_map_scale_info("RdYlGn", 0.0, float(vmax)),
     }
 
 
@@ -5405,6 +5413,7 @@ async def get_forward_ncc_heatmap(result_id: str = None):
     nan_mask = ~np.isfinite(cropped)
     norm[nan_mask] = 0.0
 
+    from backend.api.routes.phase_map import _scale_info as _phase_map_scale_info
     colored = (_cm.viridis(norm) * 255).astype(np.uint8)[:, :, :3]
     colored[nan_mask] = [40, 42, 54]
 
@@ -5428,6 +5437,8 @@ async def get_forward_ncc_heatmap(result_id: str = None):
         "max_score": vmax,
         "mean_score": float(valid.mean()) if len(valid) else 0.0,
         "bandwidth": md.get("forward_ncc_bandwidth"),
+        # This one IS stretched between the data's own ends (see `norm` above).
+        "scale": _phase_map_scale_info("viridis", vmin, vmax),
     }
 
 
@@ -5496,6 +5507,30 @@ async def get_last_result():
     return resp
 
 
+def _selection_bbox(res) -> dict | None:
+    """Bounding box of a result's selection mask, in scan pixels.
+
+    ``None`` when the mask covers the whole grid (nothing to crop to) or when
+    it cannot be read — the caller then treats the result as full-scan, which
+    is the behaviour that predates region runs.
+    """
+    try:
+        mask = np.asarray(res.selection_mask, dtype=bool)
+        rows, cols = res.original_shape
+        mask = mask.reshape(int(rows), int(cols))
+    except Exception:
+        return None
+    if mask.all() or not mask.any():
+        return None
+    ys, xs = np.nonzero(mask)
+    return {
+        "x": int(xs.min()),
+        "y": int(ys.min()),
+        "w": int(xs.max() - xs.min() + 1),
+        "h": int(ys.max() - ys.min() + 1),
+    }
+
+
 @router.get("/results")
 async def list_results():
     """List all stored indexing results with metadata."""
@@ -5509,6 +5544,13 @@ async def list_results():
             "method": res.method.value,
             "n_indexed": int(res.selection_mask.sum()),
             "original_shape": list(res.original_shape),
+            # The rectangle the indexed pixels live in, or None when the run
+            # covered the whole scan. The Phase Maps view frames the result by
+            # it, so a region run behaves exactly like a full one: every layer
+            # is cropped to this box, whatever else the user stacks on top.
+            # Measuring it from the drawn layers cannot work — an EDS map or an
+            # electron image exists at full scan size regardless of the run.
+            "roi_bbox": _selection_bbox(res),
             "is_active": rid == _active_result_id,
             "source_file": source_file,
             "phases": [],

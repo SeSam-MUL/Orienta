@@ -11,6 +11,7 @@ Usage:
                                      # only Ctrl+C in this terminal stops the backend.
 """
 
+import atexit
 import subprocess
 import sys
 import os
@@ -43,6 +44,34 @@ def wait_for_server(port, timeout=15):
     return False
 
 
+def _backend_env(headless: bool, base: dict | None = None) -> dict:
+    """Environment for the backend process.
+
+    KIKUCHIPY_PARENT_PID makes the backend watch THIS launcher and exit ~3 s
+    after it disappears. It is the only thing that covers a hard kill: closing
+    the console window (or Task Manager) terminates this script without running
+    any handler, and the backend would otherwise keep the port — measured: it
+    did, until the machine went down. Set in headless mode too; "headless"
+    means the backend survives the BROWSER closing, not this launcher exiting.
+    """
+    env = dict(os.environ if base is None else base)
+    env["KIKUCHIPY_WATCHDOG"] = "0" if headless else "1"
+    env["KIKUCHIPY_PARENT_PID"] = str(os.getpid())
+    return env
+
+
+def _kill_tree(pid: int) -> None:
+    """End a process and everything it spawned."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"],
+                       capture_output=True, check=False)
+        return
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)  # type: ignore[attr-defined]
+    except (ProcessLookupError, PermissionError, AttributeError):
+        pass
+
+
 def main():
     dev_mode = "--dev" in sys.argv
     headless = "--headless" in sys.argv
@@ -64,7 +93,7 @@ def main():
     #                         a renderer freeze used to kill the backend with it
     #                         and wipe an in-flight 12 h job.
     print("[1/3] Starting FastAPI backend...")
-    backend_env = {**os.environ, "KIKUCHIPY_WATCHDOG": "0" if headless else "1"}
+    backend_env = _backend_env(headless)
     backend_proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.api.main:app",
          "--host", "127.0.0.1", "--port", str(BACKEND_PORT),
@@ -114,13 +143,32 @@ def main():
         print(f"  Press Ctrl+C to stop")
     print("=" * 60)
 
+    def shutdown():
+        """Leave nothing behind, whichever way this script ends.
+
+        `terminate()` ends the process we spawned and not what IT spawned,
+        which on Windows can leave the actual server holding the port. And it
+        only ran on Ctrl+C — closing the console left everything up.
+
+        Headless mode keeps the backend alive when the BROWSER closes; that is
+        not the same as this launcher exiting, which does stop it.
+        """
+        for proc in (frontend_proc, backend_proc):
+            if proc is not None and proc.poll() is None:
+                _kill_tree(proc.pid)
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+
+    atexit.register(shutdown)
     try:
         backend_proc.wait()
     except KeyboardInterrupt:
         print("\nShutting down...")
-        backend_proc.terminate()
-        if frontend_proc:
-            frontend_proc.terminate()
+    finally:
+        shutdown()
+        atexit.unregister(shutdown)
         print("Done.")
 
 

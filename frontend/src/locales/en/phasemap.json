@@ -93,7 +93,8 @@
     "rStoredCompare": "stored orientation on the map: R = {{value}}",
     "rStoredBetter": "the stored one matches better",
     "adoptWorse": "Re-indexed orientation is {{delta}}° away but matches WORSE (R {{rCand}} vs {{rStored}}) — not offered",
-    "pickHint": "Click a pixel, or drag the crosshair. Zoomed in, dragging moves the image — hold Shift to drag the crosshair."
+    "pickHint": "Click a pixel, or drag the crosshair. Zoomed in, dragging moves the image — hold Shift to drag the crosshair.",
+    "nccLegend": "NCC"
   },
   "displayModes": {
     "phase": "Phase Map",
@@ -386,7 +387,18 @@
     "gateDiagHint": "Run 'Compute Diagnostics' first",
     "gateRefHint": "Run 'Refine R + PC' first",
     "gateDiagSuffix": " (compute required)",
-    "gateRefSuffix": " (refine required)"
+    "gateRefSuffix": " (refine required)",
+    "assignmentSource": "Assignment Source",
+    "assignmentSourceTip": "How each pixel got its phase: cyan = the grain step decided this grain’s phase and wrote it here — it may be the phase the pixel already had, so cyan is not a count of what changed; orange = left alone, because the chemistry could not decide for the grain (interior too small to measure, composition uneven, or several phases fitting equally well); uncoloured = as indexing left it.",
+    "searchPlaceholder": "Search layers…",
+    "showUnavailable": "Show unavailable",
+    "showUnavailableN": "Show unavailable ({{n}})",
+    "hiddenCount": "{{n}} not available right now",
+    "noMatches": "No layer matches",
+    "unavailable": "Not available yet",
+    "gateNoResult": "Load an indexing result first",
+    "gateNoAnalysis": "Load an xmap under 'Analysis' first",
+    "gateNoEbsd": "Load EBSD patterns first"
   },
   "diagnostics": {
     "title": "Forward Diagnostics",
@@ -660,5 +672,9 @@
     "widthHeading": "Width",
     "unitHint": "Angles in °, width in ¼ scan steps",
     "reset": "Reset"
+  },
+  "scaleLegend": {
+    "title": "Value scale",
+    "tip": "Show or hide the colour bars for layers whose colours mean a number"
   }
 }
