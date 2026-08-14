@@ -10,7 +10,10 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.dictionary_gpu.pipeline import generate_dictionary_gpu
+from backend.dictionary_gpu.pipeline import (
+    generate_dictionary_cpu,
+    generate_dictionary_gpu,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -27,10 +30,30 @@ class GenerateRequest(BaseModel):
     detector_shape: List[int] = Field(..., min_length=2, max_length=2)
     pc: List[float] = Field(..., min_length=3, max_length=3)
     sample_tilt: float = 70.0
+    # Camera geometry of the loaded dataset. Defaults keep the old behaviour,
+    # but the UI must send the real values — a dictionary simulated at
+    # detector_tilt 0 for a 3.44 deg detector is unusable (NCC ~0.02).
+    detector_tilt_deg: float = 0.0
+    azimuthal_deg: float = 0.0
     energy_kv: Optional[float] = None
     resolution_deg: float = 5.0
     output_path: Optional[str] = None
     normalize: bool = False
+    # When true (and no explicit output_path), write into
+    # Database/Dictionary_Library under the canonical name so the Indexing
+    # page's file discovery can find the result and attach it to its phase
+    # card. Without this the dictionary lands in tasks/ where nothing looks.
+    save_to_library: bool = False
+    # "gpu" = in-process PyTorch projection; "cpu" = kikuchipy get_patterns.
+    # Both write the same file layout, so the choice is purely about hardware.
+    backend: str = "gpu"
+
+
+def _dictionary_library_dir() -> Path:
+    """Root of the local dictionary library. Indirection so tests can redirect."""
+    from path_utils import get_local_database_path, DATABASE_SUBFOLDERS
+
+    return get_local_database_path() / DATABASE_SUBFOLDERS["dictionary_library"]
 
 
 _tasks: dict = {}   # task_id -> {"status", "progress", "message", "result"}
@@ -48,11 +71,18 @@ def _run_job(task_id: str, payload: GenerateRequest) -> None:
         def cb(frac: float, msg: str) -> None:
             _set(task_id, progress=frac, message=msg)
 
-        result = generate_dictionary_gpu(
+        runner = (
+            generate_dictionary_cpu
+            if payload.backend == "cpu"
+            else generate_dictionary_gpu
+        )
+        result = runner(
             master_path=payload.master_path,
             detector_shape=tuple(payload.detector_shape),
             pc=tuple(payload.pc),
             sample_tilt=payload.sample_tilt,
+            detector_tilt_deg=payload.detector_tilt_deg,
+            azimuthal_deg=payload.azimuthal_deg,
             energy_kv=payload.energy_kv,
             resolution_deg=payload.resolution_deg,
             output_path=payload.output_path,
@@ -79,10 +109,31 @@ def generate(payload: GenerateRequest):
     if not Path(payload.master_path).is_file():
         raise HTTPException(404, f"master pattern not found: {payload.master_path}")
 
+    if payload.save_to_library and not payload.output_path:
+        # The energy is part of the filename, and a wrong energy in the name
+        # mislabels the file for every later reader. Refuse rather than guess.
+        if payload.energy_kv is None:
+            raise HTTPException(
+                400,
+                "save_to_library needs energy_kv — it is part of the library "
+                "filename and must not be guessed.",
+            )
+        from simulation.dictionary_generator import dictionary_library_paths
+
+        h5_path, _ = dictionary_library_paths(
+            _dictionary_library_dir(),
+            master_path=payload.master_path,
+            energy_kv=payload.energy_kv,
+            detector_shape=tuple(payload.detector_shape),
+            pc=tuple(payload.pc),
+            resolution_deg=payload.resolution_deg,
+        )
+        payload.output_path = str(h5_path)
+
     task_id = str(uuid.uuid4())
     _set(task_id, status="running", progress=0.0, message="queued")
     threading.Thread(target=_run_job, args=(task_id, payload), daemon=True).start()
-    return {"task_id": task_id}
+    return {"task_id": task_id, "output_path": payload.output_path}
 
 
 @router.get("/progress/{task_id}")

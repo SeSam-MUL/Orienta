@@ -54,10 +54,37 @@ class ChunkedDictionaryWriter:
         self._mmap[self._cursor : self._cursor + n] = np_batch
         self._cursor += n
 
-    def finalize(self) -> Path:
+    def finalize(self, rotations=None, phase=None) -> Path:
+        """Write the dictionary, WITH the orientation each pattern was simulated at.
+
+        Parameters
+        ----------
+        rotations : orix.quaternion.Rotation
+            One rotation per pattern, in the same order as they were appended.
+            Required: dictionary indexing recovers an orientation by mapping the
+            best-matching pattern INDEX through this list, so a dictionary
+            without it can only ever report one constant orientation for the
+            whole map. Saving a bare ``kp.signals.EBSD(data)`` used to do
+            exactly that — kikuchipy synthesises N identity rotations on load,
+            which looks like a valid xmap and is silently useless.
+        phase : orix.crystal_map.Phase, optional
+            Phase of the simulated patterns. Carries the point group that IPF
+            colouring and ``pc.phase_list`` need downstream.
+        """
         if self._cursor != self.n_total:
             raise ValueError(
                 f"finalize called with {self._cursor}/{self.n_total} patterns written"
+            )
+        if rotations is None:
+            raise ValueError(
+                "finalize() needs the rotations the patterns were simulated at — "
+                "a dictionary without them cannot be used for indexing."
+            )
+        if rotations.size != self.n_total:
+            raise ValueError(
+                f"rotation count {rotations.size} does not match the "
+                f"{self.n_total} patterns written — every match would be mapped "
+                "to the wrong orientation."
             )
         self._mmap.flush()
 
@@ -67,8 +94,17 @@ class ChunkedDictionaryWriter:
         # may still materialize the array internally during save — that's outside
         # our control, but at least we don't add an unnecessary extra copy.
         import kikuchipy as kp
+        from orix.crystal_map import CrystalMap, Phase, PhaseList
+
         data = np.asarray(self._mmap)
         sig = kp.signals.EBSD(data)
+        # Same xmap shape kikuchipy's own EBSDMasterPattern.get_patterns()
+        # attaches to a dictionary (ebsd_master_pattern.py), so files from this
+        # writer and from the CPU generator are interchangeable downstream.
+        sig.xmap = CrystalMap(
+            rotations=rotations,
+            phase_list=PhaseList(phase if phase is not None else Phase()),
+        )
         sig.save(str(self.output_path), overwrite=True)
 
         # Clean up staging file

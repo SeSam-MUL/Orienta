@@ -21,6 +21,12 @@ class GPUDictionaryMetadata:
     detector_shape: Tuple[int, int] = (60, 60)
     pc: Tuple[float, float, float] = (0.5, 0.5, 0.5)
     sample_tilt: float = 70.0
+    # Detector (camera) tilt and azimuthal, in degrees. Recorded because a
+    # dictionary is only valid for the geometry it was simulated at — on a
+    # 3.44 deg detector a dictionary built at 0 deg correlates at NCC ~0.02
+    # against the correct pattern for the SAME orientation.
+    detector_tilt: float = 0.0
+    azimuthal: float = 0.0
     resolution_deg: float = 5.0
     n_orientations: int = 0
     created_at: str = ""

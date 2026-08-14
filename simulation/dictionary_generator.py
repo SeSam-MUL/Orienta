@@ -90,9 +90,63 @@ def build_dictionary_filename(
     """
     h, w = detector_shape
     mat = material.replace(" ", "_") or "unknown"
-    # Encode PC as 3-digit integers (value × 1000) for compact filenames
-    pc_tag = f"pc{int(pc[0]*1000)}_{int(pc[1]*1000)}_{int(pc[2]*1000)}"
+    pc_tag = _pc_tag(pc)
     return f"{mat}_dict_{int(energy_kv)}kV_{h}x{w}_{pc_tag}_{resolution_deg:.1f}deg"
+
+
+def _pc_tag(pc: Tuple[float, float, float]) -> str:
+    """Encode a PC as 3-digit integers (value × 1000) for compact filenames."""
+    return f"pc{int(pc[0]*1000)}_{int(pc[1]*1000)}_{int(pc[2]*1000)}"
+
+
+def dictionary_library_paths(
+    library_dir,
+    master_path: str,
+    energy_kv: float,
+    detector_shape: Tuple[int, int],
+    pc: Tuple[float, float, float],
+    resolution_deg: float,
+) -> Tuple[Path, Path]:
+    """Canonical (h5, json) location for a generated dictionary.
+
+    This is the ONE place that defines where a dictionary lives, shared by the
+    CPU writer (:func:`save_dictionary`) and the GPU route
+    (``POST /api/dictionary-gpu/generate`` with ``save_to_library``). Both must
+    agree, because the Indexing page finds dictionaries by scanning
+    ``Dictionary_Library`` and attributes each file to a phase card by matching
+    its FILENAME against the CIF library — so both the folder and the name are
+    load-bearing, not cosmetic:
+
+      ``<library_dir>/<Mat>/<master_stem>_dict_<E>kV_<HxW>_pc<x_y_z>_<res>deg.h5``
+
+    e.g. ``Dictionary_Library/Si/Si_master_E20kV_npx500_dict_20kV_128x156_pc547_465_609_2.0deg.h5``
+
+    The leading token of the stem ("Si") is what links the file to its phase;
+    the ``_dict_`` separator is what marks it as a dictionary rather than a
+    master; the PC tag keeps dictionaries for different projection centres
+    side-by-side instead of overwriting each other.
+
+    Parameters
+    ----------
+    library_dir : str or Path
+        Root of the dictionary library (``Database/Dictionary_Library``).
+    master_path : str
+        Source master pattern. Its stem drives both the subfolder and the name.
+
+    Returns
+    -------
+    tuple of Path
+        ``(h5_path, json_path)``. Neither is created; the caller writes them.
+    """
+    master_stem = Path(master_path).stem if master_path else "unknown"
+    short_mat = master_stem.split("_")[0]  # "Al", "Ni", "Si", …
+    h, w = detector_shape
+    base_name = (
+        f"{master_stem}_dict_{int(energy_kv)}kV"
+        f"_{h}x{w}_{_pc_tag(pc)}_{resolution_deg:.1f}deg"
+    )
+    mat_dir = Path(library_dir) / short_mat
+    return mat_dir / f"{base_name}.h5", mat_dir / f"{base_name}.json"
 
 
 # ---------------------------------------------------------------------------
@@ -270,26 +324,17 @@ def save_dictionary(dictionary, metadata: DictionaryMetadata, output_dir) -> Pat
     Path
         Path to the saved H5 file.
     """
-    output_dir = Path(output_dir)
-
-    # Derive a short material name for the subfolder (e.g. "Al" from
-    # "Al_master_E20kV_npx500") so the file lands in Dictionary_Library/Al/.
-    master_stem = Path(metadata.master_path).stem if metadata.master_path else metadata.material
-    short_mat = master_stem.split("_")[0]  # "Al", "Ni", "Fe", …
-    mat_dir = output_dir / short_mat
-    mat_dir.mkdir(parents=True, exist_ok=True)
-
-    # Filename includes master stem + PC so dictionaries for different
-    # projection centres are stored side-by-side instead of overwriting.
-    h, w = metadata.detector_shape
-    pc = metadata.pc
-    pc_tag = f"pc{int(pc[0]*1000)}_{int(pc[1]*1000)}_{int(pc[2]*1000)}"
-    base_name = (
-        f"{master_stem}_dict_{int(metadata.energy_kv)}kV"
-        f"_{h}x{w}_{pc_tag}_{metadata.resolution_deg:.1f}deg"
+    # Folder + name come from the shared convention so this writer and the GPU
+    # route land in exactly the same place (see dictionary_library_paths).
+    h5_path, json_path = dictionary_library_paths(
+        output_dir,
+        master_path=metadata.master_path or metadata.material,
+        energy_kv=metadata.energy_kv,
+        detector_shape=metadata.detector_shape,
+        pc=metadata.pc,
+        resolution_deg=metadata.resolution_deg,
     )
-    h5_path = mat_dir / f"{base_name}.h5"
-    json_path = mat_dir / f"{base_name}.json"
+    h5_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Save dictionary signal
     dictionary.save(str(h5_path), overwrite=True)
