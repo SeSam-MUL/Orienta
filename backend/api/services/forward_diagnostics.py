@@ -250,9 +250,13 @@ def _render_chunk_four_variants(
     detector_shape: tuple,
     pixel_size_um: float,
     tilt_deg: float,
+    det_tilt_deg: float,
     deltas: dict,
 ) -> tuple:
     """Render the same chunk at (PC, PC+dx, PC+dy, PC+dL).
+
+    ``tilt_deg`` is the SAMPLE tilt, ``det_tilt_deg`` the DETECTOR elevation —
+    the renderer needs both (alpha = 90 - sample_tilt + det_tilt).
 
     Returns (base, dx, dy, dL) each of shape (B, H, W) on CPU.
     """
@@ -266,6 +270,7 @@ def _render_chunk_four_variants(
         pc_emsoft=(xpc, ypc, L),
         detector_shape=detector_shape,
         pixel_size_um=pixel_size_um, tilt_deg=tilt_deg,
+        det_tilt_deg=det_tilt_deg,
         chunk_size=quats.shape[0],
     )
     dx = renderer.render_batch(
@@ -273,6 +278,7 @@ def _render_chunk_four_variants(
         pc_emsoft=(xpc + dx_px, ypc, L),
         detector_shape=detector_shape,
         pixel_size_um=pixel_size_um, tilt_deg=tilt_deg,
+        det_tilt_deg=det_tilt_deg,
         chunk_size=quats.shape[0],
     )
     dy = renderer.render_batch(
@@ -280,6 +286,7 @@ def _render_chunk_four_variants(
         pc_emsoft=(xpc, ypc + dy_px, L),
         detector_shape=detector_shape,
         pixel_size_um=pixel_size_um, tilt_deg=tilt_deg,
+        det_tilt_deg=det_tilt_deg,
         chunk_size=quats.shape[0],
     )
     dL_var = renderer.render_batch(
@@ -287,6 +294,7 @@ def _render_chunk_four_variants(
         pc_emsoft=(xpc, ypc, L + dL_um),
         detector_shape=detector_shape,
         pixel_size_um=pixel_size_um, tilt_deg=tilt_deg,
+        det_tilt_deg=det_tilt_deg,
         chunk_size=quats.shape[0],
     )
     return base, dx, dy, dL_var
@@ -418,6 +426,11 @@ def compute_full_diagnostics(
     pat_w = int(det["pat_width"])
     pixel_size_um = float(det.get("pixel_size", 70.0))
     sample_tilt = float(det.get("sample_tilt", 70.0))
+    # ``tilt`` is the DETECTOR elevation, a separate angle from the sample
+    # tilt (the renderer uses alpha = 90 - sample_tilt + det_tilt). Omitting
+    # it rotates every simulated pattern by exactly det.tilt, which drags all
+    # four diagnostic maps toward the "everything is anomalous" reading.
+    det_tilt = float(det.get("tilt", 0.0))
 
     # Circular-detector mask. EDAX/TSL detectors record a circular pattern
     # with dark corners; the SHT renderer fills the full square, so an
@@ -571,6 +584,7 @@ def compute_full_diagnostics(
                     renderer=renderer, grid=grid, quats=cq,
                     pc_emsoft=pc_emsoft, detector_shape=(pat_h, pat_w),
                     pixel_size_um=pixel_size_um, tilt_deg=sample_tilt,
+                    det_tilt_deg=det_tilt,
                     deltas=deltas,
                 )
             else:
@@ -587,6 +601,7 @@ def compute_full_diagnostics(
                         quats=cq[local_i:local_i + 1],
                         pc_emsoft=pc_ij, detector_shape=(pat_h, pat_w),
                         pixel_size_um=pixel_size_um, tilt_deg=sample_tilt,
+                        det_tilt_deg=det_tilt,
                         deltas=deltas,
                     )
                     base_list.append(b)
@@ -824,6 +839,7 @@ def thumbnail_pair(result, row: int, col: int, size: int = 64) -> dict:
         detector_shape=(size, size),
         pixel_size_um=pixel_size_thumb,
         tilt_deg=float(det.get("sample_tilt", 70.0)),
+        det_tilt_deg=float(det.get("tilt", 0.0)),
     ).numpy().astype(np.float32)
     exp = _get_experimental_pattern(result, row, col)
     if exp is None:

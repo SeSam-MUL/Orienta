@@ -181,6 +181,11 @@ def compute_forward_ncc_map(
     pat_w = int(det["pat_width"])
     pixel_size_um = float(det.get("pixel_size", 70.0))
     sample_tilt = float(det.get("sample_tilt", 70.0))
+    # ``tilt`` is the DETECTOR elevation and is a separate angle from the
+    # sample tilt (the renderer uses alpha = 90 - sample_tilt + det_tilt).
+    # Omitting it makes every simulated pattern come out rotated by exactly
+    # det.tilt, which drives the whole forward-NCC map toward 0.
+    det_tilt = float(det.get("tilt", 0.0))
 
     # Circular-detector mask for EDAX/TSL (dark corners). See
     # forward_diagnostics.build_circular_include_mask for the rationale —
@@ -289,6 +294,7 @@ def compute_forward_ncc_map(
                 detector_shape=(pat_h, pat_w),
                 pixel_size_um=pixel_size_um,
                 tilt_deg=sample_tilt,
+                det_tilt_deg=det_tilt,
                 chunk_size=chunk_size,
             ).numpy()                                                 # (B, H, W)
 

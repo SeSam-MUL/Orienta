@@ -499,6 +499,45 @@ def run_dictionary_index(
         torch.cuda.synchronize()
     _phase_done("7. tiled top-k NCC matching")
 
+    # In the PCA subspace the score is the cosine between the PROJECTIONS: the
+    # components orthogonal to the retained ones — exactly where the
+    # model-vs-experiment mismatch lives — are dropped from both vectors before
+    # the angle is taken, so it reads high. Measured on LoGainNi, 2 deg grid:
+    # 0.5669 truncated against 0.4685 for the same winning orientations.
+    #
+    # PCA switches itself on under memory pressure, which depends on the
+    # dictionary size and on what else is using the card. Without this, the
+    # same file indexed twice can report scores 0.1 apart with nothing in the
+    # output saying why. So re-score the winners at full dimension: keep_n rows
+    # per pixel, one gather and one row-wise dot product, and the number the
+    # user reads is an NCC again whatever the search ran in.
+    if pca is not None:
+        _check_cancel()
+        flat_idx = best_indices.reshape(-1).clamp_min(0)
+        exact = torch.empty_like(best_scores).reshape(-1)
+        RESCORE_TILE = 1_000_000
+        for s in range(0, flat_idx.numel(), RESCORE_TILE):
+            e = min(s + RESCORE_TILE, flat_idx.numel())
+            rows = flat_idx[s:e]
+            exp_rows = exp_norm[torch.div(
+                torch.arange(s, e, device=device), keep_n, rounding_mode="floor")]
+            exact[s:e] = (dict_norm[rows] * exp_rows).sum(dim=1)
+        exact = exact.reshape(best_scores.shape)
+        # -1 marks a padding slot from a short tile; leave those at -inf.
+        best_scores = torch.where(best_indices >= 0, exact, best_scores)
+        # The candidates came back ordered by the truncated score, which is not
+        # the order the exact one puts them in. Re-sort so "best match" means
+        # the best by the number we now report. This only re-ranks within the
+        # keep_n the search found — it cannot recover a candidate the truncated
+        # search never shortlisted.
+        best_scores, order = torch.sort(best_scores, dim=1, descending=True)
+        best_indices = best_indices.gather(1, order)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        _p("Dict-GPU: re-scored top matches at full dimension "
+           f"(PCA k={pca.n_components} was used for the search only)")
+        _phase_done("7b. exact NCC re-score of top-k")
+
     # ---- 8. Build CrystalMap (BEFORE releasing the GPU tensors!) -----------
     # build_crystal_map consumes best_indices / best_scores (it converts
     # them to CPU numpy internally) so it must run BEFORE the VRAM

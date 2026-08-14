@@ -158,12 +158,16 @@ def _render_serial_per_pc(
     detector_shape: tuple,
     pixel_size_um: float,
     tilt_deg: float,
+    det_tilt_deg: float,
 ) -> torch.Tensor:
     """Render N patterns one (quaternion, PC) pair at a time.
 
     Workaround for ``PatternRenderer.render_batch`` requiring a single shared
     PC across the batch (Bug 1 from Phase B E2E). Returns an
     ``(N, H, W)`` float64 tensor stacked on the quats' device.
+
+    ``tilt_deg`` is the SAMPLE tilt and ``det_tilt_deg`` the DETECTOR
+    elevation; the renderer needs both (alpha = 90 - sample_tilt + det_tilt).
 
     Each per-pixel call goes through ``renderer.render(...)`` which expects
     a single quaternion of shape ``(4,)`` and a single PC tuple. The
@@ -191,6 +195,7 @@ def _render_serial_per_pc(
             detector_shape=detector_shape,
             pixel_size_um=pixel_size_um,
             tilt_deg=tilt_deg,
+            det_tilt_deg=det_tilt_deg,
         )
         if not isinstance(pat, torch.Tensor):
             pat = torch.as_tensor(pat)
@@ -211,6 +216,7 @@ def _compute_jp_finite_difference(
     detector_shape: tuple,
     pixel_size_um: float,
     tilt_deg: float,
+    det_tilt_deg: float,
 ) -> torch.Tensor:                    # returns (B, 3) ∂r/∂PC where r = 1 - NCC
     """Central finite-difference Jacobian of the data residual r=1-NCC w.r.t. PC.
 
@@ -240,11 +246,11 @@ def _compute_jp_finite_difference(
             pcs_minus[:, axis] = pcs_minus[:, axis] - eps
             I_plus = _render_serial_per_pc(
                 renderer, grid, quats_d, pcs_plus,
-                detector_shape, pixel_size_um, tilt_deg,
+                detector_shape, pixel_size_um, tilt_deg, det_tilt_deg,
             )
             I_minus = _render_serial_per_pc(
                 renderer, grid, quats_d, pcs_minus,
-                detector_shape, pixel_size_um, tilt_deg,
+                detector_shape, pixel_size_um, tilt_deg, det_tilt_deg,
             )
             ncc_plus = _ncc_batched(I_exp_d, I_plus.to(torch.float64))
             ncc_minus = _ncc_batched(I_exp_d, I_minus.to(torch.float64))
@@ -263,6 +269,7 @@ def refine_per_pixel(
     detector_shape: tuple,
     pixel_size_um: float,
     tilt_deg: float,
+    det_tilt_deg: float,
     max_iter: int = STAGE1_MAX_ITER,
     pc_only: bool = False,
 ) -> dict:
@@ -304,6 +311,7 @@ def refine_per_pixel(
         detector_shape=detector_shape,
         pixel_size_um=pixel_size_um,
         tilt_deg=tilt_deg,
+        det_tilt_deg=det_tilt_deg,
     )                                                # (B, 3) float64
 
     for it in range(max_iter):
@@ -325,7 +333,7 @@ def refine_per_pixel(
         # renderers the returned tensor has no grad and J falls back to zero.
         I_sim = _render_serial_per_pc(
             renderer, grid, q_eff, pc_eff,
-            detector_shape, pixel_size_um, tilt_deg,
+            detector_shape, pixel_size_um, tilt_deg, det_tilt_deg,
         )
         if isinstance(I_sim, torch.Tensor):
             I_sim_t = I_sim.to(torch.float64)
@@ -422,7 +430,7 @@ def refine_per_pixel(
         pc_eff_new = pc0[idx_active] + x_new[:, 3:]
         I_sim_new = _render_serial_per_pc(
             renderer, grid, q_eff_new, pc_eff_new,
-            detector_shape, pixel_size_um, tilt_deg,
+            detector_shape, pixel_size_um, tilt_deg, det_tilt_deg,
         )
         if isinstance(I_sim_new, torch.Tensor):
             I_sim_new_t = I_sim_new.to(torch.float64).detach()
@@ -466,7 +474,7 @@ def refine_per_pixel(
         pc_eff = pc0 + x.detach()[:, 3:]
         I_sim = _render_serial_per_pc(
             renderer, grid, q_eff, pc_eff,
-            detector_shape, pixel_size_um, tilt_deg,
+            detector_shape, pixel_size_um, tilt_deg, det_tilt_deg,
         )
         I_sim_t = I_sim.to(torch.float64).detach()
         ncc_final = _ncc_batched(I_exp, I_sim_t)
@@ -593,6 +601,7 @@ def refine_r_only(
     detector_shape: tuple,
     pixel_size_um: float,
     tilt_deg: float,
+    det_tilt_deg: float,
     max_iter: int = STAGE3_MAX_ITER,
 ) -> dict:
     """Stage 3: R-only LM refinement with fixed per-pixel PC.
@@ -623,7 +632,7 @@ def refine_r_only(
         # requires a single shared PC for the whole batch).
         I_sim = _render_serial_per_pc(
             renderer, grid, q_eff, pc_eff,
-            detector_shape, pixel_size_um, tilt_deg,
+            detector_shape, pixel_size_um, tilt_deg, det_tilt_deg,
         )
         I_sim_t = I_sim.to(torch.float64)
         r = 1.0 - _ncc_batched(I_exp[idx_active], I_sim_t)
@@ -662,7 +671,7 @@ def refine_r_only(
         q_eff_new = quat_multiply(q0[idx_active], so3_exp_to_quat(omega_new))
         I_sim_new = _render_serial_per_pc(
             renderer, grid, q_eff_new, pc_eff,
-            detector_shape, pixel_size_um, tilt_deg,
+            detector_shape, pixel_size_um, tilt_deg, det_tilt_deg,
         )
         I_sim_new_t = I_sim_new.to(torch.float64).detach()
         r_new = 1.0 - _ncc_batched(I_exp[idx_active], I_sim_new_t)
@@ -690,7 +699,7 @@ def refine_r_only(
         q_eff = quat_multiply(q0, so3_exp_to_quat(omega.detach()))
         I_sim = _render_serial_per_pc(
             renderer, grid, q_eff, pc_fixed,
-            detector_shape, pixel_size_um, tilt_deg,
+            detector_shape, pixel_size_um, tilt_deg, det_tilt_deg,
         )
         I_sim_t = I_sim.to(torch.float64).detach()
         ncc_final = _ncc_batched(I_exp, I_sim_t)
@@ -798,6 +807,12 @@ def compute_full_refinement(
     W_pat = int(det["pat_width"])
     pixel_size_um = float(det.get("pixel_size", 70.0))
     sample_tilt = float(det.get("sample_tilt", 70.0))
+    # ``tilt`` is the DETECTOR elevation, a separate angle from the sample
+    # tilt (the renderer uses alpha = 90 - sample_tilt + det_tilt). Omitting
+    # it renders every pattern rotated by det.tilt, so the LM residual is
+    # dominated by a geometry error the solver cannot fix and refinement
+    # walks the orientation away from the correct answer.
+    det_tilt = float(det.get("tilt", 0.0))
     xpc, ypc, L_um = convert_pc_to_emsoft(
         pc=(float(det["pc_x"]), float(det["pc_y"]), float(det["pc_z"])),
         vendor=str(det.get("vendor", "Bruker")),
@@ -881,6 +896,7 @@ def compute_full_refinement(
                     q0=q0[cs:ce], pc0=pc0_batch[cs:ce],
                     detector_shape=(H_pat, W_pat),
                     pixel_size_um=pixel_size_um, tilt_deg=sample_tilt,
+                    det_tilt_deg=det_tilt,
                     max_iter=STAGE1_MAX_ITER,
                 )
                 local_chunk_idx = ph_local_idx[cs:ce]
@@ -1037,6 +1053,7 @@ def compute_full_refinement(
                     q0=q0_phase[cs:ce], pc_fixed=pc_fixed_phase[cs:ce],
                     detector_shape=(H_pat, W_pat),
                     pixel_size_um=pixel_size_um, tilt_deg=sample_tilt,
+                    det_tilt_deg=det_tilt,
                 )
                 local_chunk_idx = ph_local_idx[cs:ce]
                 ncc_final_all[local_chunk_idx] = out["ncc_final"].numpy()
