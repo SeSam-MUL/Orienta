@@ -339,6 +339,7 @@
     "worstPattern": "最悪のパターンは [{{pos}}] にあります",
     "noWorstPattern": "最悪のパターンが見つかりませんでした",
     "exportedImageTo": "画像を {{path}} にエクスポートしました",
-    "exportedImage": "画像を {{name}} としてエクスポートしました"
+    "exportedImage": "画像を {{name}} としてエクスポートしました",
+    "edsOnlyLoaded": "{{name}} に回折パターンはありません — EDS マッピング（{{elements}} 元素）と SE/BSE 画像 {{images}} 枚のみです。パターン表示と指数付けは空のままです。EDS ページを開いてください。"
   }
 }

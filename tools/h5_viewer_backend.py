@@ -44,10 +44,21 @@ class H5OINADataExtractor:
         self._pattern_cache_max_size = 50  # Cache last 50 patterns
 
     def _find_root_key(self):
-        """Find the root key for EBSD data (Oxford: '1', EDAX: sample name)"""
+        """Find the acquisition slot (Oxford: '1', EDAX: sample name).
+
+        Prefers a slot that holds EBSD data — unchanged behaviour for every
+        normal file. Falls back to a slot that only has EDS or electron images:
+        Aztec "Elementverteilungsdaten" acquisitions have no ``EBSD`` group at
+        all, and returning None there made the extractor report no elements and
+        no images, so the EDS viewer had nothing to show.
+        """
         for key in self.h5file.keys():
             if isinstance(self.h5file[key], h5py.Group):
                 if f'{key}/EBSD' in self.h5file:
+                    return key
+        for key in self.h5file.keys():
+            if isinstance(self.h5file[key], h5py.Group):
+                if f'{key}/EDS' in self.h5file or f'{key}/Electron Image' in self.h5file:
                     return key
         return None
 
@@ -88,6 +99,16 @@ class H5OINADataExtractor:
             n_cols = self._safe_read(header_path, 'nColumns', 1)
             n_rows = self._safe_read(header_path, 'nRows', 1)
 
+        # EDS-only acquisitions have no EBSD header at all. Their grid lives in
+        # the EDS header — without this fall-back every element map came back
+        # as a flat 1-D array on a 1x1 "grid" and could not be displayed.
+        if int(n_cols) <= 1 and int(n_rows) <= 1:
+            eds_header = f'{self.root_key}/EDS/Header'
+            eds_cols = self._safe_read(eds_header, 'X Cells', 0)
+            eds_rows = self._safe_read(eds_header, 'Y Cells', 0)
+            if int(eds_cols) > 0 and int(eds_rows) > 0:
+                n_cols, n_rows = eds_cols, eds_rows
+
         n_rows_i, n_cols_i = int(n_rows), int(n_cols)
         # Fail loudly on corrupt headers (e.g. X Cells = 0) rather than
         # silently clamping to a 1x1 grid — a silent clamp caused every
@@ -102,6 +123,64 @@ class H5OINADataExtractor:
             )
         self._grid_cache = (n_rows_i, n_cols_i)
         return self._grid_cache
+
+    _AREA_GROUPS = {
+        "ebsd": "EBSD",
+        "eds": "EDS",
+        "electron_image": "Electron Image",
+    }
+
+    def get_pixel_sizes(self):
+        """Physical size of one pixel, PER ACQUISITION AREA, in microns.
+
+        The areas do not share a scale. On a real file measured 2026-08-14:
+
+            EBSD / EDS      12 x 9      X Step 0.6579 um
+            Electron Image  1024 x 768  X Step 0.0621 um
+
+        — a factor of 10.6 on a different field of view. Anything that draws a
+        scale bar has to ask for the area the image came from; using one global
+        step size silently mis-scales every electron-image export.
+
+        Returns
+        -------
+        dict
+            ``{"ebsd"|"eds"|"electron_image": {"x", "y", "units", "source"}}``,
+            with ``None`` for an area that is absent or carries no geometry —
+            never a guessed value, because a wrong scale bar is worse than no
+            scale bar.
+        """
+        out = {}
+        for key, group in self._AREA_GROUPS.items():
+            out[key] = self._pixel_size_for(group)
+        return out
+
+    def _pixel_size_for(self, group_name):
+        if self.root_key is None:
+            return None
+        header = f"{self.root_key}/{group_name}/Header"
+        if header not in self.h5file:
+            return None
+
+        sx = self._safe_read(header, "X Step")
+        sy = self._safe_read(header, "Y Step", sx)
+        if sx is not None and float(sx) > 0:
+            return {"x": float(sx), "y": float(sy if sy else sx),
+                    "units": "um", "source": "step"}
+
+        # Older exports: derive from the field of view and the cell count.
+        bbox = self._safe_read(header, "Bounding Box Size")
+        n_cols = self._safe_read(header, "X Cells")
+        n_rows = self._safe_read(header, "Y Cells")
+        try:
+            if bbox is not None and n_cols and n_rows:
+                bw, bh = float(bbox[0]), float(bbox[1])
+                if bw > 0 and bh > 0 and int(n_cols) > 0 and int(n_rows) > 0:
+                    return {"x": bw / int(n_cols), "y": bh / int(n_rows),
+                            "units": "um", "source": "bounding_box"}
+        except (TypeError, IndexError, ValueError):
+            pass
+        return None
 
     def get_pattern_count(self):
         """Get total number of patterns"""

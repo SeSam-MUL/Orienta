@@ -339,6 +339,7 @@
     "worstPattern": "最差花样位于 [{{pos}}]",
     "noWorstPattern": "未能找到最差花样",
     "exportedImageTo": "图像已导出到 {{path}}",
-    "exportedImage": "图像已导出为 {{name}}"
+    "exportedImage": "图像已导出为 {{name}}",
+    "edsOnlyLoaded": "{{name}} 不含衍射花样 — 仅有 EDS 元素分布（{{elements}} 种元素）和 {{images}} 幅 SE/BSE 图像。花样与标定视图将保持为空；请打开 EDS 页面。"
   }
 }

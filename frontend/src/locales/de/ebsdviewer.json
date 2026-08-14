@@ -339,6 +339,7 @@
     "worstPattern": "Schlechtestes Muster bei [{{pos}}]",
     "noWorstPattern": "Schlechtestes Muster konnte nicht gefunden werden",
     "exportedImageTo": "Bild exportiert nach {{path}}",
-    "exportedImage": "Bild exportiert als {{name}}"
+    "exportedImage": "Bild exportiert als {{name}}",
+    "edsOnlyLoaded": "{{name}} enthält keine Beugungsmuster — nur EDS-Mapping ({{elements}} Elemente) und {{images}} SE-/BSE-Bilder. Muster- und Indizierungsansichten bleiben leer; öffne die EDS-Seite."
   }
 }

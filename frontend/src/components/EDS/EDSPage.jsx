@@ -19,6 +19,7 @@ import {
 import useDataStore from '../../stores/useDataStore';
 import useResultStore from '../../stores/useResultStore';
 import { CursorSyncProvider, useCursorSync } from './CursorSyncContext';
+import { pixelSizeForLayer } from './layerPixelSize';
 import OverlayCard from './OverlayCard';
 import SwipeCompareController from './SwipeCompareController';
 import TileGrid from './TileGrid';
@@ -293,6 +294,7 @@ export default function EDSPage({ onNavigate }) {
   // EDS maps sit on the scan grid, so one pixel is one step — same physical
   // scale the EBSD overview uses for its bar.
   const stepSize = useDataStore((s) => s.stepSize);
+  const pixelSizes = useDataStore((s) => s.pixelSizes);
   const rawSetPending = useDataStore((s) => s.setPendingPhaseMapIndexing);
   const setPendingPhaseMap = useMemo(() => rawSetPending ?? (() => {}), [rawSetPending]);
 
@@ -647,10 +649,14 @@ export default function EDSPage({ onNavigate }) {
 
   // Building a canvas can fail (a layer whose bitmap has not arrived yet).
   // Surface that instead of opening an empty dialog.
-  const openExport = useCallback((build, name, label) => {
+  // `scale` is the physical pixel size OF THE IMAGE BEING EXPORTED. It has to
+  // travel with it: electron images sit on the SEM raster and the maps on the
+  // scan raster, measured 10.6x apart on a real file, so one global step size
+  // mis-scales half the exports.
+  const openExport = useCallback((build, name, label, scale = null) => {
     try {
       setExportError(null);
-      setExportSrc({ src: canvasToDataUrl(build()), name, label });
+      setExportSrc({ src: canvasToDataUrl(build()), name, label, scale });
     } catch (err) {
       setExportError(err?.message || String(err));
     }
@@ -669,6 +675,7 @@ export default function EDSPage({ onNavigate }) {
           () => buildSingleCanvas(l, sourceBitmapFor(l, allMaps.bitmaps)),
           `${exportStem}_${layerName(l)}`,
           `${exportStem} \u00b7 ${layerName(l)}`,
+          pixelSizeForLayer(l.id, pixelSizes),
         ),
       });
     }
@@ -680,6 +687,8 @@ export default function EDSPage({ onNavigate }) {
           () => buildCompositeCanvas({ layers: stack.layers, bitmaps: stack.bitmaps, shape: stack.shape }),
           `${exportStem}_overlay`,
           `${exportStem} \u00b7 ${t('overlay.title', { defaultValue: 'Overlay' })}`,
+          // The composite is drawn on the bottom layer's raster.
+          pixelSizeForLayer(stack.layers?.[0]?.id, pixelSizes),
         ),
       });
     }
@@ -695,10 +704,13 @@ export default function EDSPage({ onNavigate }) {
         }),
         `${exportStem}_all-maps`,
         `${exportStem} \u00b7 ${t('allMaps.title', { defaultValue: 'All maps' })}`,
+        // A montage mixes rasters with different pixel sizes \u2014 no single scale
+        // bar can be correct for it, so offer none.
+        null,
       ),
     });
     return items;
-  }, [t, openExport, exportStem, layerName, allMaps, stack]);
+  }, [t, openExport, exportStem, layerName, allMaps, stack, pixelSizes]);
 
 
   if (!isFileOpen) return <EmptyState />;
@@ -1179,8 +1191,8 @@ export default function EDSPage({ onNavigate }) {
             src={exportSrc.src}
             title={exportSrc.label}
             defaultBaseName={exportSrc.name}
-            unitsPerPixel={stepSize?.x ?? null}
-            unitLabel={stepSize?.units || 'µm'}
+            unitsPerPixel={exportSrc.scale?.x ?? null}
+            unitLabel={exportSrc.scale?.units || stepSize?.units || 'µm'}
             annotations={{ label: exportSrc.label }}
           />
         )}

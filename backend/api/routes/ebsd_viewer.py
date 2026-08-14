@@ -537,6 +537,133 @@ def _restore_registry_for_file(file_path, fresh_raw_name: str) -> bool:
     return True
 
 
+def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> dict:
+    """Open a file that has EDS / electron images but no diffraction patterns.
+
+    Everything the EDS page needs comes from ``h5_session``; the EBSD signal
+    registries are cleared so no stale patterns from the previously loaded file
+    can be mistaken for this one's. The response says ``has_patterns: False``
+    and ``content_mode: "eds_only"`` so the UI can explain the missing pattern
+    views instead of looking broken.
+    """
+    global _ebsd_signal, _ebsd_file_path, _active_dataset
+
+    _update_progress(request_id, stage="building_signal", stage_idx=2,
+                     stage_total=4, started_at=started_at,
+                     message="No diffraction patterns — opening EDS data")
+
+    _prev_file_path = _ebsd_file_path
+    try:
+        _stash_registry_for_file(_prev_file_path)
+    except Exception:
+        logger.warning("Could not stash dataset registry for %s", _prev_file_path,
+                       exc_info=True)
+
+    # No EBSD signal exists for this file. Clearing rather than keeping the
+    # previous file's signal is deliberate: a stale pattern grid of the wrong
+    # shape is far worse than an empty one.
+    _ebsd_signal = None
+    _ebsd_file_path = path
+    _raw_signals.clear()
+    _positions.clear()
+    _dirty_datasets.clear()
+    _signal_masks.clear()
+    _overview_cache.clear()
+    _active_dataset = None
+    calibration_store.clear()
+
+    try:
+        from backend.api.routes import indexing as _idx_mod
+        _idx_mod.reactivate_result_for_source(path)
+    except Exception:
+        logger.warning("Could not reactivate indexing result on EDS-only load",
+                       exc_info=True)
+    try:
+        from backend.api.routes import analysis as _ana_mod
+        _ana_mod.stash_dataset_for_file(_prev_file_path)
+        _ana_mod.restore_dataset_for_file(path)
+    except Exception:
+        logger.warning("Could not stash/restore analysis dataset on EDS-only load",
+                       exc_info=True)
+
+    _update_progress(request_id, stage="detecting_features", stage_idx=3,
+                     stage_total=4, started_at=started_at,
+                     message="Reading EDS elements and electron images")
+
+    has_eds = probe.get("has_eds", False)
+    has_electron = probe.get("has_electron_images", False)
+    eds_elements = list(probe.get("eds_elements", []))
+    electron_images = list(probe.get("electron_images", []))
+    try:
+        from backend.api.services.h5_session import (
+            open_file as h5_open, is_open as h5_is_open,
+            get_extractor, close_file as h5_close, get_current_path,
+        )
+        if h5_is_open() and get_current_path() != path:
+            h5_close()
+        if not h5_is_open():
+            h5_open(path)
+        features = get_extractor().detect_available_features()
+        ext_elements = [str(e) for e in features.get('eds_elements', [])]
+        ext_images = [str(e) for e in features.get('electron_images', [])]
+        # The extractor is the authority once open — it is also what the EDS
+        # page itself queries. If it comes back empty while the probe saw data,
+        # the EDS page will be empty too, so say so loudly rather than
+        # reporting a rosy element list the viewer cannot actually serve.
+        if not ext_elements and eds_elements:
+            logger.warning(
+                "h5_session found no EDS elements in %s although the file "
+                "contains %d (%s) — the EDS page will be empty",
+                Path(path).name, len(eds_elements), ", ".join(eds_elements[:5]),
+            )
+        else:
+            eds_elements = ext_elements
+        if not ext_images and electron_images:
+            logger.warning(
+                "h5_session found no electron images in %s although the file "
+                "contains %s", Path(path).name, ", ".join(electron_images),
+            )
+        else:
+            electron_images = ext_images
+        has_eds = bool(eds_elements) or features.get('has_eds', has_eds)
+        has_electron = bool(electron_images) or features.get('has_electron_images', has_electron)
+    except Exception:
+        logger.exception("h5_session setup for EDS-only file %s failed", path)
+
+    _update_progress(request_id, stage="finalising", stage_idx=4,
+                     stage_total=4, started_at=started_at, message="Finalising")
+    _register_loaded_file(path)
+
+    response = {
+        "success": True,
+        "dataset_name": Path(path).stem,
+        "file_path": path,
+        "format_type": "Oxford" if 'h5oina' in path.lower() else "EDAX",
+        "pc_source": None,
+        "pc_defaulted": False,
+        "content_mode": "eds_only",
+        "data_shape": [],
+        "navigation_shape": [],
+        "signal_shape": [],
+        "grid_shape": [0, 0],
+        "pattern_shape": [0, 0],
+        "pattern_count": 0,
+        "n_patterns": 0,
+        "has_patterns": False,
+        "has_raw_patterns": False,
+        "has_eds": has_eds,
+        "has_electron_images": has_electron,
+        "eds_elements": eds_elements,
+        "electron_images": electron_images,
+        "request_id": request_id,
+    }
+
+    _update_progress(request_id, stage="complete", stage_idx=4, stage_total=4,
+                     started_at=started_at, message="Complete")
+    state_version.bump()
+    return response
+
+
 def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     """Synchronous portion of the EBSD load.
 
@@ -558,7 +685,23 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
                      stage_total=4, started_at=started_at,
                      message="Reading file headers")
 
-    from safe_loader import load_ebsd_safe
+    # Some Aztec "Elementverteilungsdaten" acquisitions carry EDS maps and
+    # SE/FSE images but no /<n>/EBSD group at all. Both loaders reject those
+    # ("no top groups with subgroup name 'EBSD'"), which used to make the file
+    # unopenable — even though the EDS viewer reads everything it needs through
+    # h5_session and never touches the EBSD signal. Take the EDS-only route
+    # instead of failing.
+    from safe_loader import load_ebsd_safe, probe_ebsd_content
+
+    _probe = probe_ebsd_content(path)
+    if _probe.get("eds_only"):
+        logger.info(
+            "%s has no EBSD patterns — loading as EDS-only (%d elements, images: %s)",
+            Path(path).name, len(_probe["eds_elements"]),
+            ", ".join(_probe["electron_images"]) or "none",
+        )
+        return _load_eds_only_blocking(path, _probe, request_id, started_at)
+
     signal = load_ebsd_safe(path)
 
     _update_progress(request_id, stage="building_signal", stage_idx=2,
@@ -1132,27 +1275,93 @@ def _extract_step_size(signal, file_path=None):
     except Exception:
         pass
 
-    # Fallback: read directly from H5OINA file
+    # Fallback: read directly from H5OINA file. EDS-only acquisitions have no
+    # EBSD header at all, so try the EDS and Electron Image headers too —
+    # otherwise the scale bar stays greyed out on a file that plainly carries
+    # its pixel size (X Step = 0.1815 um).
     fp = file_path or _ebsd_file_path
     if fp and fp.lower().endswith('.h5oina'):
         try:
             import h5py
             with h5py.File(fp, 'r') as f:
-                for entry in f.keys():
-                    hdr = f.get(f'{entry}/EBSD/Header')
-                    if hdr is None:
-                        continue
-                    for xkey in ['X Step', 'Step X', 'StepX', 'x_step']:
-                        if xkey in hdr:
-                            sx = float(hdr[xkey][()])
-                            sy_val = hdr.get('Y Step', hdr.get('Step Y', hdr.get('StepY')))
-                            sy = float(sy_val[()]) if sy_val is not None else sx
-                            if sx > 0:
-                                return {"x": sx, "y": sy, "units": "um"}
+                for area in ('EBSD', 'EDS', 'Electron Image'):
+                    for entry in f.keys():
+                        hdr = f.get(f'{entry}/{area}/Header')
+                        if hdr is None:
+                            continue
+                        for xkey in ['X Step', 'Step X', 'StepX', 'x_step']:
+                            if xkey in hdr:
+                                sx = float(np.ravel(hdr[xkey][()])[0])
+                                sy_val = hdr.get('Y Step', hdr.get('Step Y', hdr.get('StepY')))
+                                sy = float(np.ravel(sy_val[()])[0]) if sy_val is not None else sx
+                                if sx > 0:
+                                    return {"x": sx, "y": sy, "units": "um"}
         except Exception:
             pass
 
-    return {"x": 1.0, "y": 1.0, "units": "um"}
+    # No geometry anywhere. Returning 1 um/px here used to look like a valid
+    # scale and produced silently wrong scale bars; None makes the UI disable
+    # the scale bar instead.
+    return None
+
+
+def _pixel_sizes_from_session():
+    """Per-area pixel size from the open h5 session, or {} when unavailable."""
+    try:
+        from backend.api.services.h5_session import is_open as h5_is_open, get_extractor
+        if h5_is_open():
+            return get_extractor().get_pixel_sizes() or {}
+    except Exception:
+        logger.warning("Could not read per-area pixel sizes", exc_info=True)
+    return {}
+
+
+def _eds_only_metadata(path: str) -> dict:
+    """Metadata for a file that carries EDS / electron images but no patterns.
+
+    Same keys the normal response uses, so the store and every consumer work
+    unchanged — just with empty pattern geometry.
+    """
+    pixel_sizes = _pixel_sizes_from_session()
+    step = _extract_step_size(None, path)
+    if step is None:
+        # Prefer whichever area does report a scale.
+        for key in ("eds", "electron_image", "ebsd"):
+            ps = pixel_sizes.get(key)
+            if ps:
+                step = {"x": ps["x"], "y": ps["y"], "units": ps.get("units", "um")}
+                break
+
+    has_eds, eds_elements = False, []
+    grid = [0, 0]
+    try:
+        from backend.api.services.h5_session import is_open as h5_is_open, get_extractor
+        if h5_is_open():
+            ext = get_extractor()
+            features = ext.detect_available_features()
+            has_eds = features.get("has_eds", False)
+            eds_elements = [str(e) for e in features.get("eds_elements", [])]
+            grid = [int(v) for v in features.get("grid_shape", (0, 0))]
+    except Exception:
+        logger.warning("Could not read EDS features for %s", path, exc_info=True)
+
+    return {
+        "loaded": True,
+        "content_mode": "eds_only",
+        "detector": {"has_detector": False},
+        "axes_repr": "",
+        "step_size": step,
+        "pixel_sizes": pixel_sizes,
+        "grid_shape": grid,
+        "pattern_shape": [0, 0],
+        "pattern_count": 0,
+        "beam_energy": _extract_beam_energy(path),
+        "format_type": "Oxford" if 'h5oina' in path.lower() else "EDAX",
+        "file_path": path,
+        "has_eds": has_eds,
+        "eds_elements": eds_elements,
+        "phases": [],
+    }
 
 
 def _extract_beam_energy(file_path):
@@ -1221,6 +1430,11 @@ async def get_metadata():
     """
     signal = _get_active_signal()
     if signal is None:
+        # An EDS-only acquisition has no EBSD signal but still has geometry,
+        # elements and images. Returning a bare {"loaded": false} left the
+        # store without a step size, which greys out the export scale bar.
+        if _ebsd_file_path:
+            return _eds_only_metadata(_ebsd_file_path)
         return {"loaded": False, "detector": {"has_detector": False}}
 
     # Detector — prefer CalibrationStore (survives deepcopy)
@@ -1270,6 +1484,10 @@ async def get_metadata():
         "detector": detector,
         "axes_repr": axes_repr,
         "step_size": step_size,
+        # Per-area pixel size. The electron images live on the SEM raster, the
+        # maps on the scan raster — measured 10.6x apart on a real file — so a
+        # scale bar must use the area its image came from, not `step_size`.
+        "pixel_sizes": _pixel_sizes_from_session(),
         "grid_shape": [int(n_rows), int(n_cols)],
         "pattern_shape": [int(pat_h), int(pat_w)],
         "pattern_count": int(n_rows * n_cols),

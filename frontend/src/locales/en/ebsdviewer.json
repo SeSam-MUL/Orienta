@@ -339,6 +339,7 @@
     "worstPattern": "Worst pattern at [{{pos}}]",
     "noWorstPattern": "Could not find worst pattern",
     "exportedImageTo": "Image exported to {{path}}",
-    "exportedImage": "Image exported as {{name}}"
+    "exportedImage": "Image exported as {{name}}",
+    "edsOnlyLoaded": "{{name}} contains no diffraction patterns — only EDS mapping ({{elements}} elements) and {{images}} SE/BSE images. Pattern and indexing views stay empty; open the EDS page."
   }
 }

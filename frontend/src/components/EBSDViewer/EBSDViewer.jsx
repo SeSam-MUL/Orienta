@@ -668,8 +668,21 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       fetchEds(0, 0);
       fetchAtlas(); // load pattern atlas in background for instant drag
       const fname = path.split(/[\\/]/).pop();
-      log(t('logMessages.loadedFile', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
-      toast.success(t('logMessages.loadedToast', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
+      if (info.content_mode === 'eds_only') {
+        // Aztec "Elementverteilungsdaten" acquisitions carry no diffraction
+        // patterns at all. Say that plainly and point at what IS available,
+        // so the empty pattern panes don't read as a failed load.
+        const msg = t('logMessages.edsOnlyLoaded', {
+          name: fname,
+          elements: (info.eds_elements || []).length,
+          images: (info.electron_images || []).length,
+        });
+        log(msg);
+        toast.info(msg, 15000);
+      } else {
+        log(t('logMessages.loadedFile', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
+        toast.success(t('logMessages.loadedToast', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
+      }
       // Success: close the modal. Essential fetches are awaited above —
       // by here the viewer is interactive for navigation; overview and
       // atlas fill in async without blocking the user.

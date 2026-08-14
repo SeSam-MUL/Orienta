@@ -53,6 +53,10 @@ const useDataStore = create((set, get) => ({
   metadata: null,       // Full metadata object from backend
   detector: null,       // { has_detector, shape, pc, sample_tilt, camera_tilt, ... }
   stepSize: null,       // { x, y, units }
+  // Per-acquisition-area pixel size: { ebsd|eds|electron_image: {x,y,units} }.
+  // The electron images sit on the SEM raster, the maps on the scan raster —
+  // measured 10.6x apart — so a scale bar must pick the right one.
+  pixelSizes: null,
   beamEnergy: null,     // kV or null
   axesRepr: '',         // Human-readable axes manager string
   phases: [],           // Phase names from loaded data
@@ -93,6 +97,7 @@ const useDataStore = create((set, get) => ({
     metadata: null,
     detector: null,
     stepSize: null,
+    pixelSizes: null,
     beamEnergy: null,
     axesRepr: '',
     phases: [],
@@ -147,6 +152,7 @@ const useDataStore = create((set, get) => ({
     metadata: meta,
     detector: meta.detector || null,
     stepSize: meta.step_size || null,
+    pixelSizes: meta.pixel_sizes || null,
     beamEnergy: meta.beam_energy || null,
     axesRepr: meta.axes_repr || '',
     phases: meta.phases || [],

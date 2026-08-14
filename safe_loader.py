@@ -469,6 +469,92 @@ def get_loader_info(file_path: str) -> dict:
     return loader.get_info()
 
 
+def probe_ebsd_content(file_path) -> dict:
+    """Report what an HDF5 acquisition actually contains, without loading it.
+
+    Aztec writes "Elementverteilungsdaten" acquisitions that carry EDS maps and
+    SE/FSE images but **no** ``/<n>/EBSD`` group at all. Both loaders reject
+    those outright ("no top groups with subgroup name 'EBSD'"), so the file
+    could not be opened even though the EDS viewer needs none of the EBSD
+    machinery. This probe lets the caller take an EDS-only route instead of
+    failing, and lets it say WHY there are no pattern views.
+
+    Cheap: opens the file read-only and reads dataset *shapes*, never data.
+
+    Returns
+    -------
+    dict
+        ``has_patterns``, ``has_eds``, ``has_electron_images``, ``eds_only``,
+        ``eds_elements``, ``electron_images``, ``n_patterns``, ``error``.
+        Every field is safe to read even when the file is not HDF5 at all.
+    """
+    from pathlib import Path as _Path
+
+    info = {
+        "has_patterns": False,
+        "has_eds": False,
+        "has_electron_images": False,
+        "eds_only": False,
+        "eds_elements": [],
+        "electron_images": [],
+        "n_patterns": 0,
+        "error": None,
+    }
+
+    path = _Path(file_path)
+    if path.suffix.lower() not in (".h5", ".hdf5", ".h5oina"):
+        return info
+
+    try:
+        import h5py
+    except ImportError as e:            # pragma: no cover - h5py is a hard dep
+        info["error"] = str(e)
+        return info
+
+    try:
+        with h5py.File(str(path), "r") as f:
+            for top in f.keys():
+                grp = f.get(top)
+                if not isinstance(grp, h5py.Group):
+                    continue
+
+                ebsd_data = grp.get("EBSD/Data")
+                if isinstance(ebsd_data, h5py.Group):
+                    for key in ("Processed Patterns", "Unprocessed Patterns",
+                                "Pattern", "patterns"):
+                        ds = ebsd_data.get(key)
+                        # A zero-length patterns dataset is not usable data.
+                        if isinstance(ds, h5py.Dataset) and ds.shape and ds.shape[0] > 0:
+                            info["has_patterns"] = True
+                            info["n_patterns"] = max(info["n_patterns"], int(ds.shape[0]))
+                            break
+
+                wi = grp.get("EDS/Data/Window Integral")
+                if isinstance(wi, h5py.Group) and len(wi.keys()):
+                    info["has_eds"] = True
+                    for el in wi.keys():
+                        if el not in info["eds_elements"]:
+                            info["eds_elements"].append(str(el))
+                elif isinstance(grp.get("EDS/Data"), h5py.Group):
+                    info["has_eds"] = True
+
+                ei = grp.get("Electron Image/Data")
+                if isinstance(ei, h5py.Group) and len(ei.keys()):
+                    info["has_electron_images"] = True
+                    for img in ei.keys():
+                        if img not in info["electron_images"]:
+                            info["electron_images"].append(str(img))
+    except Exception as e:
+        info["error"] = str(e)
+        return info
+
+    info["eds_only"] = (
+        not info["has_patterns"]
+        and (info["has_eds"] or info["has_electron_images"])
+    )
+    return info
+
+
 if __name__ == '__main__':
     """Test the safe loader with sample files from Test_data/."""
     import sys
