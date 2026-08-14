@@ -1494,7 +1494,45 @@ async def start_indexing(req: IndexingStartRequest):
                         if sm.size == n_total and not sm.all():
                             sel_mask_flat = sm
 
+                    # Where the pattern-match dialog can fetch a simulated
+                    # pattern from, PER PHASE. The merged xmap carries neither
+                    # `simulation_indices` (build_consensus_xmap builds a bare
+                    # CrystalMap with no `prop`) nor the dictionary itself, and
+                    # the merged metadata used to drop `dict_path` too — so
+                    # every multi-phase Dictionary run showed "Dictionary not
+                    # in memory", however well it had indexed.
+                    per_phase_match_sources = {}
+
                     for pmr in all_results:
+                        try:
+                            src_meta = getattr(pmr.indexing_result, 'metadata', None) or {}
+                            src_dict_path = src_meta.get('dict_path')
+                            src_xmap = pmr.indexing_result.xmap
+                            src_sim = None
+                            if hasattr(src_xmap, 'prop') and 'simulation_indices' in src_xmap.prop:
+                                src_sim = np.asarray(src_xmap.prop['simulation_indices'])
+                            if src_dict_path and src_sim is not None:
+                                # Lift onto the full grid so the dialog can index
+                                # it with a plain row*n_cols+col, like the xmap.
+                                sim_2d = src_sim.reshape(src_sim.shape[0], -1) if src_sim.ndim > 1 \
+                                    else src_sim.reshape(-1, 1)
+                                sim_full = np.full((n_total, sim_2d.shape[1]), -1, dtype=np.int64)
+                                if sel_mask_flat is not None and sim_2d.shape[0] == int(sel_mask_flat.sum()):
+                                    sim_full[sel_mask_flat] = sim_2d
+                                elif sim_2d.shape[0] == n_total:
+                                    sim_full = sim_2d.astype(np.int64)
+                                else:
+                                    sim_full = None
+                                if sim_full is not None:
+                                    per_phase_match_sources[pmr.phase_name] = {
+                                        'dict_path': src_dict_path,
+                                        'simulation_indices': sim_full,
+                                    }
+                        except Exception as e:
+                            logger.warning(
+                                "Could not record match source for %s: %s", pmr.phase_name, e
+                            )
+
                         try:
                             pmr_euler = pmr.indexing_result.xmap.rotations.to_euler(degrees=False)
                             pmr_ci = pmr.indexing_result.confidence_scores
@@ -1550,6 +1588,10 @@ async def start_indexing(req: IndexingStartRequest):
                             'per_phase_stats': per_phase_stats,
                             'n_phases': len(phase_configs),
                             'per_phase_data': per_phase_data,
+                            # Lets get_best_match_pattern lazy-read the winning
+                            # phase's simulated pattern straight from its
+                            # dictionary file (see tools/pattern_comparison.py).
+                            'per_phase_match_sources': per_phase_match_sources,
                             # EDS chemistry prior: pixels whose winner flipped
                             # due to phase_weights (0 when the prior is off; the
                             # non-GPU spherical merge passes no weights so it is

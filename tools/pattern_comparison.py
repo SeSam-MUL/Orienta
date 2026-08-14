@@ -148,6 +148,96 @@ def _load_pattern_from_dict_file(
         return None
 
 
+def _read_pattern_row(dict_path: str, index: int) -> Optional[np.ndarray]:
+    """Read one pattern row out of a dictionary HDF5 file."""
+    from pathlib import Path
+    if not dict_path or not Path(dict_path).is_file():
+        logger.debug(f"dict_path not usable: {dict_path!r}")
+        return None
+    try:
+        import h5py
+        with h5py.File(dict_path, "r") as f:
+            patterns_ds = None
+            for top_key in f.keys():
+                grp = f[top_key]
+                if hasattr(grp, "keys") and "EBSD" in grp:
+                    ds = grp.get("EBSD/Data/patterns")
+                    if ds is not None:
+                        patterns_ds = ds
+                        break
+            if patterns_ds is None:
+                for k in ("patterns", "dictionary", "data"):
+                    if k in f:
+                        patterns_ds = f[k]
+                        break
+            if patterns_ds is None:
+                logger.warning(f"No patterns dataset found in {dict_path}")
+                return None
+            if not (0 <= index < patterns_ds.shape[0]):
+                logger.warning(
+                    f"pattern index {index} out of range "
+                    f"(dict has {patterns_ds.shape[0]} patterns)"
+                )
+                return None
+            return np.asarray(patterns_ds[index], dtype=np.float32)
+    except Exception as e:
+        logger.warning(f"Failed to read pattern {index} from {dict_path}: {e}")
+        return None
+
+
+def _load_pattern_multi_phase(result, sources: dict, row: int, col: int, rank: int):
+    """Best-match pattern for a merged multi-phase Dictionary result.
+
+    Each phase was indexed against its own dictionary file, so the merged
+    result cannot carry a single ``dict_path``. ``per_phase_match_sources``
+    holds ``{phase_name: {dict_path, simulation_indices}}`` with the indices
+    already lifted onto the full navigation grid; the winner at this pixel
+    comes from the merged xmap's ``phase_id``.
+    """
+    n_rows, n_cols = result.original_shape
+    flat_idx = row * n_cols + col
+
+    mask = getattr(result, "selection_mask", None)
+    if mask is not None:
+        flat_mask = np.asarray(mask).ravel()
+        if flat_idx < flat_mask.size and not flat_mask[flat_idx]:
+            return None
+
+    xmap = result.xmap
+    try:
+        phase_ids = np.asarray(xmap.phase_id).ravel()
+        pid = int(phase_ids[flat_idx])
+    except Exception as e:
+        logger.debug(f"multi-phase: no phase_id for ({row},{col}): {e}")
+        return None
+    if pid < 0:
+        return None  # pixel not assigned to any phase
+
+    try:
+        phase_name = str(xmap.phases[pid].name)
+    except Exception as e:
+        logger.debug(f"multi-phase: phase {pid} not in phase list: {e}")
+        return None
+
+    src = sources.get(phase_name)
+    if not src:
+        logger.debug(
+            f"multi-phase: no match source recorded for phase {phase_name!r} "
+            f"(have: {sorted(sources)})"
+        )
+        return None
+
+    sim = np.asarray(src.get("simulation_indices"))
+    if sim.ndim != 2 or flat_idx >= sim.shape[0]:
+        return None
+    r = min(rank, sim.shape[1] - 1)
+    best_idx = int(sim[flat_idx, r])
+    if best_idx < 0:
+        return None
+
+    return _read_pattern_row(src.get("dict_path"), best_idx)
+
+
 # ---------------------------------------------------------------------------
 # Best-match simulated pattern
 # ---------------------------------------------------------------------------
@@ -184,6 +274,14 @@ def get_best_match_pattern(
 
     dictionary = result.metadata.get('dictionary')
     dict_path = result.metadata.get('dict_path')
+
+    # Strategy 0a: multi-phase run. The merged result has neither the
+    # dictionary nor a single dict_path — each phase was indexed against its
+    # own file. Resolve which phase won this pixel and read from that file.
+    if dictionary is None and not dict_path:
+        sources = result.metadata.get('per_phase_match_sources')
+        if sources:
+            return _load_pattern_multi_phase(result, sources, row, col, rank)
 
     # Strategy 0: lazy single-pattern fetch from disk.
     # GPU-path dict indexing releases the dictionary tensor from VRAM after
