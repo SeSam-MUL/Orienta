@@ -59,6 +59,29 @@ def test_padding_slots_keep_minus_inf():
     assert "torch.where(best_indices >= 0, exact, best_scores)" in src
 
 
+def test_rescore_tile_is_sized_from_the_feature_dimension():
+    """Both gathers materialise (tile, feat_dim) floats. A fixed row count is
+    the wrong unit: 1e6 rows at 3600 features is 8 GB — on a branch reached
+    precisely because memory was tight."""
+    src = inspect.getsource(indexer_mod.run_dictionary_index)
+    assert "rescore_tile = max(1, RESCORE_BUDGET_BYTES // (feat_dim * 4 * 2))" in src, (
+        "the re-score tile must be derived from feat_dim, not a constant row count"
+    )
+    ns: dict = {}
+    for line in src.splitlines():
+        s = line.strip()
+        if s.startswith("RESCORE_BUDGET_BYTES"):
+            exec(s, {}, ns)
+            break
+    budget = ns["RESCORE_BUDGET_BYTES"]
+    assert 16 << 20 <= budget <= 512 << 20, f"{budget} bytes is not a sane transient"
+    # a realistic full map: 28,086 px x keep_n 20 at a 60x60 detector
+    feat_dim = 3600
+    tile = max(1, budget // (feat_dim * 4 * 2))
+    assert tile >= 1000, "tile so small the loop dominates"
+    assert tile * feat_dim * 4 * 2 <= budget
+
+
 def test_rescore_math_matches_a_plain_ncc():
     """The gather-and-dot the indexer does is an NCC when both sides are
     already mean-subtracted and L2-normalised."""

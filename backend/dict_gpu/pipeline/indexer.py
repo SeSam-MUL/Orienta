@@ -515,9 +515,15 @@ def run_dictionary_index(
         _check_cancel()
         flat_idx = best_indices.reshape(-1).clamp_min(0)
         exact = torch.empty_like(best_scores).reshape(-1)
-        RESCORE_TILE = 1_000_000
-        for s in range(0, flat_idx.numel(), RESCORE_TILE):
-            e = min(s + RESCORE_TILE, flat_idx.numel())
+        # Both gathers materialise (tile, feat_dim) floats, so the tile must be
+        # sized from the feature dimension — not from a row count. A fixed
+        # 1e6 rows would be 8 GB at feat_dim 3600, on a run that reached this
+        # branch precisely because memory was tight. 256 MB of transient
+        # instead, which at 3600 features is ~8900 rows per pass.
+        RESCORE_BUDGET_BYTES = 256 << 20
+        rescore_tile = max(1, RESCORE_BUDGET_BYTES // (feat_dim * 4 * 2))
+        for s in range(0, flat_idx.numel(), rescore_tile):
+            e = min(s + rescore_tile, flat_idx.numel())
             rows = flat_idx[s:e]
             exp_rows = exp_norm[torch.div(
                 torch.arange(s, e, device=device), keep_n, rounding_mode="floor")]
