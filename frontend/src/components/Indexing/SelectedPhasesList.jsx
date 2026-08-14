@@ -24,6 +24,9 @@ export default function SelectedPhasesList({
   selectedDictPaths = {},
   degeneracy = { clusters: [], byPhaseIndex: {} },
   onReducePhases,
+  onGenerateDict,
+  detectorShape = null,
+  geom = null,
 }) {
   const { t } = useTranslation('indexing');
   return (
@@ -93,6 +96,9 @@ export default function SelectedPhasesList({
                   onRemove={() => onRemovePhase && onRemovePhase(idx)}
                   onSelectDict={onSelectDict}
                   selectedDictPath={selectedDictPaths[phase.path] || ''}
+                  onGenerateDict={onGenerateDict}
+                  detectorShape={detectorShape}
+                  geom={geom}
                 />
               );
             }

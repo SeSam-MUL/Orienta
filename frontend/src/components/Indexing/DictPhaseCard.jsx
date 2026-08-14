@@ -15,6 +15,11 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors as C } from '../../theme/tokens';
+import {
+  mastersForPhase, dictsForPhase, masterPathForPhase,
+  selectBestDict, dictShapeMatches, dictGeometryMatches, dictGeometryUnknown,
+  pcDeltaPercent,
+} from './dictionaryTargets';
 
 const PC_COLORS = { good: '#c3e88d', ok: '#ffcb6b', bad: '#ff5370', unknown: '#666' };
 const PC_BG     = { good: '#1a3a1a', ok: '#3a3a1a', bad: '#3a1a1a', unknown: '#2a2a2a' };
@@ -22,17 +27,6 @@ const PC_BG     = { good: '#1a3a1a', ok: '#3a3a1a', bad: '#3a1a1a', unknown: '#2
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Compute % difference between two PC vectors (Euclidean distance / √3 * 100). */
-function pcDeltaPercent(pcA, pcB) {
-  if (!pcA || !pcB || pcA.length < 3 || pcB.length < 3) return null;
-  const dx = pcA[0] - pcB[0];
-  const dy = pcA[1] - pcB[1];
-  const dz = pcA[2] - pcB[2];
-  const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-  // Normalise to 0-100 % (√3 is the max Euclidean distance in unit cube)
-  return (dist / Math.sqrt(3)) * 100;
-}
 
 function pcCategory(deltaPercent) {
   if (deltaPercent === null) return 'unknown';
@@ -52,44 +46,29 @@ function abbreviateFilename(filename, formula) {
   return name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
 
-/** Pick the best dictionary: lowest PC delta first, then finest (smallest) resolution. */
-function selectBestDict(dicts, currentPc) {
-  if (!dicts.length) return null;
-  return dicts.reduce((best, d) => {
-    const bestDelta = pcDeltaPercent(currentPc, best?.pc);
-    const dDelta    = pcDeltaPercent(currentPc, d?.pc);
-    // Prefer lower delta; if equal or both null, prefer finer resolution (smaller number)
-    if (dDelta !== null && (bestDelta === null || dDelta < bestDelta)) return d;
-    if (dDelta === bestDelta || (dDelta === null && bestDelta === null)) {
-      const bestRes = best?.resolution ?? Infinity;
-      const dRes    = d?.resolution    ?? Infinity;
-      return dRes < bestRes ? d : best;
-    }
-    return best;
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export default function DictPhaseCard({ phase, allFiles = [], currentPc = null, color, onRemove, onSelectDict, selectedDictPath }) {
+export default function DictPhaseCard({ phase, allFiles = [], currentPc = null, color, onRemove, onSelectDict, selectedDictPath, onGenerateDict, detectorShape = null, geom = null }) {
   const { t } = useTranslation('indexing');
-  const formula      = (phase?.formula || '').toLowerCase();
   const formulaLabel = phase?.formula  || '—';
   const spaceGroup   = phase?.space_group   || '';
   const crystalSystem = phase?.crystal_system || '';
 
   // Collect related masters and dictionaries by formula
-  const { masters, dicts, bestDict } = useMemo(() => {
-    const ms = allFiles.filter(
-      f => f.file_type === 'master' && (f.formula || '').toLowerCase() === formula
-    );
-    const ds = allFiles.filter(
-      f => f.file_type === 'dictionary' && (f.formula || '').toLowerCase() === formula
-    );
-    return { masters: ms, dicts: ds, bestDict: selectBestDict(ds, currentPc) };
-  }, [allFiles, formula, currentPc]);
+  const { masters, dicts, bestDict, masterPath } = useMemo(() => {
+    const ms = mastersForPhase(phase, allFiles);
+    const ds = dictsForPhase(phase, allFiles);
+    return {
+      masters: ms,
+      dicts: ds,
+      // Same call the indexing request makes (resolveDictPathForPhase) — the
+      // "chosen" badge below must name the file that will really be indexed.
+      bestDict: selectBestDict(ds, currentPc, detectorShape, geom),
+      masterPath: masterPathForPhase(phase, allFiles),
+    };
+  }, [allFiles, phase, currentPc, detectorShape, geom]);
 
   // Auto-select best dict on mount if none selected
   const activeDictPath = selectedDictPath || bestDict?.path || '';
@@ -188,10 +167,68 @@ export default function DictPhaseCard({ phase, allFiles = [], currentPc = null, 
             formula={formulaLabel}
             currentPc={currentPc}
             isSelected={d.path === activeDictPath}
+            fitsDetector={dictShapeMatches(d, detectorShape)}
+            fitsGeometry={dictGeometryMatches(d, geom)}
+            tiltUnknown={dictGeometryUnknown(d, geom)}
+            neededShape={detectorShape}
+            neededTilt={geom?.detectorTilt}
             onClick={() => onSelectDict && onSelectDict(phase, d)}
             t={t}
           />
         ))
+      )}
+
+      {/* ---- Generate a dictionary FOR THIS PHASE ----
+          Per-phase, because a single page-level button can only ever seed one
+          master and silently picked the first phase in the list. */}
+      {onGenerateDict && (
+        <GenerateDictRow
+          disabled={!masterPath}
+          onClick={() => onGenerateDict(phase, masterPath)}
+          t={t}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GenerateDictRow — per-phase "build one for my detector" action
+// ---------------------------------------------------------------------------
+
+function GenerateDictRow({ disabled, onClick, t }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 8px 5px 20px',
+        borderTop: `1px solid rgba(255,255,255,0.05)`,
+      }}
+    >
+      <button
+        type="button"
+        onClick={disabled ? undefined : onClick}
+        disabled={disabled}
+        title={disabled ? t('dictCard.generateNoMasterTip') : t('dictCard.generateForPhaseTip')}
+        style={{
+          background: 'transparent',
+          border: `1px dashed ${disabled ? C.border : '#50fa7b66'}`,
+          borderRadius: 3,
+          color: disabled ? C.textSecondary : '#50fa7b',
+          fontSize: '8pt',
+          padding: '2px 8px',
+          cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.5 : 1,
+        }}
+      >
+        {t('dictCard.generateForPhase')}
+      </button>
+      {disabled && (
+        <span style={{ color: C.textSecondary, fontSize: '7.5pt' }}>
+          {t('dictCard.generateNoMaster')}
+        </span>
       )}
     </div>
   );
@@ -244,10 +281,13 @@ function MasterRow({ entry, t }) {
 // DictRow
 // ---------------------------------------------------------------------------
 
-function DictRow({ entry, formula, currentPc, isSelected, onClick, t }) {
+function DictRow({ entry, formula, currentPc, isSelected, onClick, t, fitsDetector = true, fitsGeometry = true, tiltUnknown = false, neededShape = null, neededTilt = null }) {
   const filename  = entry?.filename || entry?.path?.split(/[\\/]/).pop() || '—';
   const shortName = abbreviateFilename(filename, formula);
-  const resolution = entry?.resolution != null ? `${entry.resolution}°` : '';
+  // Discovery reports `resolution_deg`; only older/inline entries use
+  // `resolution`. Reading just the latter left this column permanently blank.
+  const resolutionValue = entry?.resolution ?? entry?.resolution_deg;
+  const resolution = resolutionValue != null ? `${resolutionValue}°` : '';
   const shape      = entry?.detector_shape
     ? `${entry.detector_shape[0]}×${entry.detector_shape[1]}`
     : '';
@@ -308,8 +348,45 @@ function DictRow({ entry, formula, currentPc, isSelected, onClick, t }) {
         </span>
       )}
       {shape && (
-        <span style={{ color: 'var(--text-secondary)', fontSize: '7.5pt', flexShrink: 0 }}>
-          {shape}
+        <span
+          style={{
+            // A dictionary built for a different detector cannot be used at
+            // all — the indexer rejects it. Say so here instead of letting the
+            // run die halfway through.
+            color: fitsDetector ? 'var(--text-secondary)' : PC_COLORS.bad,
+            fontSize: '7.5pt',
+            flexShrink: 0,
+            fontWeight: fitsDetector ? 400 : 700,
+          }}
+          title={fitsDetector ? undefined : t('dictCard.shapeMismatch', {
+            got: shape,
+            needed: neededShape ? `${neededShape[0]}×${neededShape[1]}` : '?',
+          })}
+        >
+          {shape}{fitsDetector ? '' : ' ⚠'}
+        </span>
+      )}
+      {!fitsGeometry && (
+        <span
+          style={{
+            color: PC_COLORS.bad, fontSize: '7.5pt', flexShrink: 0, fontWeight: 700,
+          }}
+          title={t('dictCard.tiltMismatch', {
+            got: entry?.detector_tilt != null ? `${Number(entry.detector_tilt).toFixed(2)}°` : '?',
+            needed: neededTilt != null ? `${Number(neededTilt).toFixed(2)}°` : '?',
+          })}
+        >
+          {t('dictCard.tiltBadge')} ⚠
+        </span>
+      )}
+      {tiltUnknown && fitsGeometry && (
+        <span
+          style={{ color: PC_COLORS.ok, fontSize: '7.5pt', flexShrink: 0 }}
+          title={t('dictCard.tiltUnknownTip', {
+            needed: neededTilt != null ? `${Number(neededTilt).toFixed(2)}°` : '?',
+          })}
+        >
+          {t('dictCard.tiltUnknownBadge')}
         </span>
       )}
       {isSelected && (

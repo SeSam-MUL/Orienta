@@ -25,6 +25,10 @@ import NavigationCanvas from './NavigationCanvas';
 import EdsOverlayPanel from './EdsOverlayPanel';
 import BatchIndexingDialog from './BatchIndexingDialog';
 import GenerateDictionaryDialog from './GenerateDictionaryDialog';
+import {
+  dictionaryTargets, detectorShapeFromSignalShape,
+  resolvePhasePaths, unresolvedDictPhases,
+} from './dictionaryTargets';
 import PhaseDropdown from './PhaseDropdown';
 import PhaseResultModal from './PhaseResultModal';
 import SinglePixelPhaseTestDialog from './SinglePixelPhaseTestDialog';
@@ -1520,6 +1524,12 @@ export default function IndexingPage({ isActive }) {
   const [gausbckg, setGausbckg]         = useState(false);
   const [circmask, setCircmask]         = useState('Off (-1)');
   const [circmaskRadius, setCircmaskRadius] = useState(30);
+  // Raw hyperspy signal_shape (width, height) of the active dataset.
+  const [signalShape, setSignalShape] = useState(null);
+  // Camera geometry of the loaded dataset, straight from its EBSDDetector.
+  // Dictionary generation MUST use these: simulating at detector_tilt 0 for a
+  // 3.44 deg detector gives NCC ~0.02 against the correct pattern.
+  const [detectorGeom, setDetectorGeom] = useState({ sampleTilt: 70, detectorTilt: 0, azimuthal: 0 });
   // Backend selector: "spherical_gpu" runs the in-process PyTorch pipeline
   // (~11x faster than EMSphInx CPU on identical data, GPU required).
   // "emsphinx" is the original WSL EMSphInx path (CPU, slower, more battle-
@@ -1577,6 +1587,15 @@ export default function IndexingPage({ isActive }) {
   const [showGenDictDialog, setShowGenDictDialog] = useState(false);
   const [genDictTaskId, setGenDictTaskId] = useState(null);
   const [genDictProgress, setGenDictProgress] = useState(null);
+  // Master the dialog opens on. Set by the per-phase button on a phase card so
+  // "generate for Si" really means Si — the page-level button falls back to
+  // genDictMaster below.
+  const [genDictMasterOverride, setGenDictMasterOverride] = useState('');
+
+  const handleGenerateDictForPhase = useCallback((phase, masterPath) => {
+    setGenDictMasterOverride(masterPath || '');
+    setShowGenDictDialog(true);
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Helpers
@@ -1617,6 +1636,9 @@ export default function IndexingPage({ isActive }) {
           if (info.signal_shape && info.signal_shape.length >= 2) {
             const minDim = Math.min(info.signal_shape[0], info.signal_shape[1]);
             setCircmaskRadius(Math.floor(minDim / 2));
+            // Kept so dictionary generation can target the REAL detector
+            // instead of the old hardcoded 60x60.
+            setSignalShape(info.signal_shape);
           }
         }
       }
@@ -1629,6 +1651,19 @@ export default function IndexingPage({ isActive }) {
     ebsdApi.overview('bc').then(r => {
       if (r.data?.image) setNavImage(r.data.image);
     }).catch(() => {});
+
+    // Camera geometry — always taken from the EBSD viewer detector, which
+    // reports the vendor's sample_tilt / camera_tilt / azimuthal verbatim.
+    // (The PC refinement controller only refines the PC, not the tilts.)
+    const applyGeom = (d) => {
+      if (!d?.has_detector) return;
+      setDetectorGeom({
+        sampleTilt: Number.isFinite(d.sample_tilt) ? d.sample_tilt : 70,
+        detectorTilt: Number.isFinite(d.camera_tilt) ? d.camera_tilt : 0,
+        azimuthal: Number.isFinite(d.azimuthal) ? d.azimuthal : 0,
+      });
+    };
+    ebsdApi.getDetector().then(r => applyGeom(r.data)).catch(() => {});
 
     // Try PC refinement controller first, fall back to EBSD viewer detector
     pcApi.detectorInfo().then(r => {
@@ -2202,18 +2237,57 @@ export default function IndexingPage({ isActive }) {
   // EDS chemistry prior — phase paths, pre-flight check
   // ---------------------------------------------------------------------------
 
+  // The PC shown in the Pattern Center box, parsed once and shared by the phase
+  // cards (PC-delta badges), the dictionary resolver and the generate dialog.
+  const currentPcVec = useMemo(() => {
+    if (!pcValues) return null;
+    const m = pcValues.match(/PC:\s*\(([\d.]+),\s*([\d.]+),\s*([\d.]+)\)/);
+    return m ? [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3])] : null;
+  }, [pcValues]);
+
+  // Detector geometry of the loaded dataset. Used both to seed dictionary
+  // generation and to reject dictionaries built for a different detector.
+  const genDictDetectorShape = useMemo(
+    () => detectorShapeFromSignalShape(signalShape),
+    [signalShape]
+  );
+
   // The phase paths EXACTLY as they land in cif_paths / master_h5_paths /
   // sht_paths. For Dictionary the selected dictionary path replaces the master
   // path, and the backend looks the chemistry weight up by that substituted key
   // — so the pre-flight request and eds_phase_strengths must both use this list
   // or every dictionary lookup would miss and the prior would silently drop.
+  //
+  // Goes through resolvePhasePaths, the SAME call the phase card's "chosen"
+  // badge uses. It used to read `selectedDictPaths` alone, which only holds an
+  // entry when the user clicked a Dict row (or when the phase was added while
+  // dictionaries already existed). A phase whose dictionary was generated
+  // afterwards therefore displayed "chosen" while the request shipped its
+  // MASTER path — kp.load then returned a master pattern with no xmap and the
+  // run died with "phase_list required for Dictionary indexing".
   const effectivePhasePaths = useMemo(() => {
     const base = phaseFiles.length > 0 ? phaseFiles : (fileInput ? [fileInput] : []);
-    if (method === 'dictionary' && Object.keys(selectedDictPaths).length > 0) {
-      return base.map(f => selectedDictPaths[f] || f);
-    }
-    return base;
-  }, [phaseFiles, fileInput, method, selectedDictPaths]);
+    if (method !== 'dictionary') return base;
+    return resolvePhasePaths(base, phases, discoveredFiles, {
+      explicit: selectedDictPaths,
+      currentPc: currentPcVec,
+      detectorShape: genDictDetectorShape,
+      geom: detectorGeom,
+    });
+  }, [phaseFiles, fileInput, method, selectedDictPaths, phases, discoveredFiles,
+      currentPcVec, genDictDetectorShape, detectorGeom]);
+
+  // Phases that would go into the run without a usable dictionary. Reported
+  // before starting instead of failing per-phase inside the backend.
+  const dictPhasesWithoutDict = useMemo(() => {
+    if (method !== 'dictionary') return [];
+    return unresolvedDictPhases(phases, discoveredFiles, {
+      explicit: selectedDictPaths,
+      currentPc: currentPcVec,
+      detectorShape: genDictDetectorShape,
+      geom: detectorGeom,
+    });
+  }, [method, phases, discoveredFiles, selectedDictPaths, currentPcVec, genDictDetectorShape, detectorGeom]);
 
   // Human-readable label per effective path, for the pre-flight table. Keyed on
   // the SUBSTITUTED path so a Dictionary row still shows the phase's label
@@ -2615,11 +2689,21 @@ export default function IndexingPage({ isActive }) {
   // Phases list — prefer a true master, fall back to any .h5. Without this the
   // Generate button greys out the moment the master is moved into the phase
   // list (which clears fileInput), even though a master is clearly selected.
+  //
+  // NOTE this only ever finds ONE master (the first). It is the fallback for
+  // the page-level button; per-phase generation goes through
+  // handleGenerateDictForPhase, which passes that phase's own master.
   const genDictMaster =
     fileInput ||
     phaseFiles.find(f => /\.(h5|hdf5)$/i.test(f) && !/_dict_/i.test(f)) ||
     phaseFiles.find(f => /\.(h5|hdf5)$/i.test(f)) ||
     '';
+
+  // One entry per selected phase for the dialog's phase dropdown.
+  const genDictPhaseTargets = useMemo(
+    () => dictionaryTargets(phases, discoveredFiles),
+    [phases, discoveredFiles]
+  );
 
   // ---------------------------------------------------------------------------
   // Render
@@ -2834,14 +2918,37 @@ export default function IndexingPage({ isActive }) {
           degeneracy={phaseDegeneracy}
           onReducePhases={handleReducePhases}
           onAddClick={() => setPhasePanelOpen(true)}
-          currentPc={(() => {
-            if (!pcValues) return null;
-            const m = pcValues.match(/PC:\s*\(([\d.]+),\s*([\d.]+),\s*([\d.]+)\)/);
-            return m ? [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3])] : null;
-          })()}
+          currentPc={currentPcVec}
           onSelectDict={handleSelectDict}
           selectedDictPaths={selectedDictPaths}
+          onGenerateDict={handleGenerateDictForPhase}
+          detectorShape={genDictDetectorShape}
+          geom={detectorGeom}
         />
+        {dictPhasesWithoutDict.length > 0 && (
+          <div
+            role="alert"
+            style={{
+              marginTop: 6, padding: '5px 8px', borderRadius: 4,
+              border: `1px solid ${C.yellow}`, background: 'rgba(255,203,107,0.08)',
+              color: C.yellow, fontSize: '8.5pt',
+            }}
+          >
+            {dictPhasesWithoutDict.map(p => (
+              <div key={p.label}>
+                {p.reason === 'shape'
+                  ? t('dictCard.blockedShape', {
+                      label: p.label, shapes: p.shapes.join(', '), needed: p.needed,
+                    })
+                  : p.reason === 'tilt'
+                  ? t('dictCard.blockedTilt', {
+                      label: p.label, tilts: p.tilts.join(', '), needed: p.neededTilt,
+                    })
+                  : t('dictCard.blockedNone', { label: p.label })}
+              </div>
+            ))}
+          </div>
+        )}
         <StatusLabel color={fileStatusColor} style={{ marginTop: 4 }}>{fileStatus}</StatusLabel>
       </GroupBox>
 
@@ -2899,33 +3006,13 @@ export default function IndexingPage({ isActive }) {
               title={t('dict.keepNTip')}
             />
           </Row>
-          <Row gap={8} style={{ flexWrap: 'wrap' }}>
-            <InlineLabel>{t('dict.resolution')}</InlineLabel>
-            <NumberInput
-              value={resolution}
-              onChange={e => setResolution(Number(e.target.value))}
-              min={1} max={10} step={0.5}
-              style={{ width: 64 }}
-              title={t('dict.resolutionTip')}
-            />
-            <InlineLabel>{t('dict.energy')}</InlineLabel>
-            <NumberInput
-              value={energy}
-              onChange={e => setEnergy(Number(e.target.value))}
-              min={1} max={40} step={1}
-              style={{ width: 56 }}
-              title={t('dict.energyTip')}
-            />
-            <InlineLabel>{t('dict.kv')}</InlineLabel>
-            <button
-              style={btnSmall(C.border, C.text, !genDictMaster)}
-              disabled={!genDictMaster}
-              onClick={() => setShowGenDictDialog(true)}
-              title={t('dict.generateDictionaryTip')}
-            >
-              {t('dict.generateDictionary')}
-            </button>
-          </Row>
+          {/* Angular resolution, beam energy and the Generate button used to
+              live here. They are GENERATION settings, they are handled per
+              phase in the generate dialog now, and the backend never read
+              `resolution` / `energy_kv` from an indexing request anyway
+              (IndexingStartRequest has neither field). What remains below is
+              exactly what the run actually uses. The energy the user picks in
+              the dialog is remembered on the page for the kV-mismatch check. */}
           {/* Compute toggle (Auto / GPU / CPU). The GPU radio is disabled when
               /api/system/gpu reports no CUDA device. When the user explicitly
               picks GPU and the backend raises GpuDictError, the toast shows
@@ -3555,8 +3642,21 @@ export default function IndexingPage({ isActive }) {
 
       <GenerateDictionaryDialog
         isOpen={showGenDictDialog}
-        onClose={() => setShowGenDictDialog(false)}
-        initialMasterPath={genDictMaster}
+        onClose={() => { setShowGenDictDialog(false); setGenDictMasterOverride(''); }}
+        initialMasterPath={genDictMasterOverride || genDictMaster}
+        phaseTargets={genDictPhaseTargets}
+        detectorShape={genDictDetectorShape}
+        pc={currentPcVec}
+        sampleTilt={detectorGeom.sampleTilt}
+        detectorTilt={detectorGeom.detectorTilt}
+        azimuthal={detectorGeom.azimuthal}
+        energyKv={energy}
+        resolutionDeg={resolution}
+        onSettingsUsed={({ energyKv, resolutionDeg }) => {
+          if (Number.isFinite(energyKv) && energyKv > 0) setEnergy(energyKv);
+          if (Number.isFinite(resolutionDeg) && resolutionDeg > 0) setResolution(resolutionDeg);
+        }}
+        datasetName={selectedDataset}
         taskId={genDictTaskId}
         setTaskId={setGenDictTaskId}
         progress={genDictProgress}
