@@ -17,6 +17,11 @@ export default function GenerateProgress({ progress }) {
   const { status, progress: pct, message, result, error } = progress;
   const n_patterns = result?.n_orientations;
   const output_path = result?.output_path;
+  // Throughput of the finished run. Kept on screen (and in the sidecar next to
+  // the .h5) so a CPU and a GPU run can be compared and the figure written down.
+  const rate = result?.patterns_per_second;
+  const elapsed = result?.elapsed_s;
+  const device = result?.device;
   const isError = status === 'error';
   const isDone = status === 'done';
   const isRunning = status === 'running' || status === 'pending';
@@ -62,6 +67,19 @@ export default function GenerateProgress({ progress }) {
                 components={[<b style={{ color: colors.text }} />]}
               />
             </span>
+          )}
+          {rate > 0 && (
+            <div data-throughput style={{ marginTop: 2 }}>
+              <b style={{ color: colors.text }}>
+                {t('progress.throughput', {
+                  rate: Math.round(rate).toLocaleString(),
+                  seconds: Number(elapsed).toFixed(1),
+                })}
+              </b>
+              {device && (
+                <span style={{ opacity: 0.75 }}>{t('progress.onDevice', { device })}</span>
+              )}
+            </div>
           )}
           {output_path && (
             <div

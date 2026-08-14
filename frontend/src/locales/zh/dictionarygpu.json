@@ -58,7 +58,9 @@
     "statusIdle": "空闲",
     "submitting": "正在提交…",
     "generatedPatterns": "已生成 <0>{{count}}</0> 个花样",
-    "polling": "每 500 ms 轮询一次…"
+    "polling": "每 500 ms 轮询一次…",
+    "throughput": "{{rate}} 花样/秒 · {{seconds}} 秒",
+    "onDevice": "（{{device}}）"
   },
   "list": {
     "groupTitle": "现有字典",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -26,11 +27,37 @@ logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 TASKS_DIR = PROJECT_ROOT / "tasks"
 
+# Orientations per get_patterns() call on the CPU path. Small enough that the
+# rate counter updates a few times a second on a coarse grid, large enough
+# that per-call overhead stays negligible.
+CPU_CHUNK_SIZE = 256
+
 
 @dataclass
 class GenerationResult:
     output_path: Path
     metadata: GPUDictionaryMetadata
+
+
+def _rate_message(done: int, total: int, started: float) -> str:
+    """"1024/6579 patterns · 210 pat/s" — the live throughput counter.
+
+    Averaged over the whole run rather than the last chunk: the first chunk
+    carries the one-off kernel/JIT warm-up and an instantaneous figure would
+    swing wildly because of it.
+    """
+    elapsed = max(time.perf_counter() - started, 1e-9)
+    return f"{done}/{total} patterns · {done / elapsed:,.0f} pat/s"
+
+
+def _throughput(n: int, started: float):
+    """(elapsed seconds, patterns per second) for a finished run."""
+    elapsed = max(time.perf_counter() - started, 1e-9)
+    return elapsed, n / elapsed
+
+
+def _summary_message(n: int, elapsed: float, rate: float, device: str) -> str:
+    return f"Saved {n:,} patterns in {elapsed:,.1f} s · {rate:,.0f} pat/s ({device})"
 
 
 def generate_dictionary_gpu(
@@ -102,6 +129,7 @@ def generate_dictionary_gpu(
     logger.info("dictionary-gpu: batch_size=%d (avail=%d MB)", batch_size, avail // (1 << 20))
 
     cursor = 0
+    started = time.perf_counter()
     while cursor < n_total:
         end = min(cursor + batch_size, n_total)
         quats = torch.from_numpy(quat_np[cursor:end]).to(device)
@@ -110,12 +138,14 @@ def generate_dictionary_gpu(
             patterns = normalize_patterns(patterns)
         writer.append(patterns)
         cursor = end
-        _emit(cursor / n_total, f"{cursor}/{n_total} patterns")
+        _emit(cursor / n_total, _rate_message(cursor, n_total, started))
 
     # The rotations MUST travel with the patterns: indexing maps a best-match
     # index back to an orientation through them.
     writer.finalize(rotations=rotations, phase=phase)
-    _emit(1.0, "Saved")
+    elapsed, rate = _throughput(n_total, started)
+    logger.info("dictionary-gpu: %d patterns in %.1f s (%.0f pat/s, %s)",
+                n_total, elapsed, rate, device)
 
     meta = GPUDictionaryMetadata(
         master_path=master_path,
@@ -132,9 +162,13 @@ def generate_dictionary_gpu(
         n_orientations=n_total,
         created_at=datetime.now().isoformat(),
         dictionary_path=str(out_path),
+        elapsed_s=elapsed,
+        patterns_per_second=rate,
+        device=device,
     )
     json_path = out_path.with_suffix(".json")
     json_path.write_text(meta.to_json(), encoding="utf-8")
+    _emit(1.0, _summary_message(n_total, elapsed, rate, device))
 
     return GenerationResult(output_path=out_path, metadata=meta)
 
@@ -159,10 +193,10 @@ def generate_dictionary_cpu(
     routine that produced every dictionary already in the library, so a CPU and
     a GPU dictionary are interchangeable downstream.
 
-    Two honest differences from the GPU path:
-      * ``get_patterns(compute=True)`` is one blocking call, so progress can
-        only be reported per stage, not per batch.
-      * it materialises the whole dictionary in RAM (n x H x W x 4 bytes).
+    Runs ``get_patterns`` in chunks so it reports the same live
+    patterns/second counter as the GPU path; one unchunked call is a single
+    blocking operation with nothing to count. It still materialises the whole
+    dictionary in RAM (n x H x W x 4 bytes).
     """
     from kikuchipy.detectors import EBSDDetector
     from simulation.dictionary_generator import generate_dictionary
@@ -182,17 +216,25 @@ def generate_dictionary_cpu(
     stage = {"frac": 0.05}
 
     def _relay(msg: str) -> None:
-        # get_patterns gives no sub-progress; map its stage messages onto a
-        # monotonic fraction so the bar moves instead of looking frozen.
+        # Stage messages from the loader / sampler, before any pattern exists.
         if msg.startswith("Sampling"):
             stage["frac"] = 0.10
         elif msg.startswith("Sampled"):
             stage["frac"] = 0.15
         elif msg.startswith("Simulating"):
             stage["frac"] = 0.20
-        elif msg.startswith("Dictionary ready"):
-            stage["frac"] = 0.90
         _emit(stage["frac"], msg)
+
+    # Projection runs from 0.20 to 0.90 of the bar; loading and sampling own
+    # the head, saving the tail.
+    started = time.perf_counter()
+    projection_started = {"t": None}
+
+    def _on_chunk(done: int, total: int) -> None:
+        if projection_started["t"] is None:
+            projection_started["t"] = started
+        frac = 0.20 + 0.70 * (done / max(total, 1))
+        _emit(frac, _rate_message(done, total, projection_started["t"]))
 
     dictionary, meta_cpu = generate_dictionary(
         master_path=master_path,
@@ -200,6 +242,8 @@ def generate_dictionary_cpu(
         energy=float(energy_kv) if energy_kv else 0.0,
         resolution=resolution_deg,
         progress_callback=_relay,
+        chunk_size=CPU_CHUNK_SIZE,
+        chunk_progress=_on_chunk,
     )
 
     if normalize:
@@ -217,6 +261,10 @@ def generate_dictionary_cpu(
         else TASKS_DIR / f"dict_cpu_{datetime.now().strftime('%Y%m%d_%H%M%S')}.h5"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    elapsed, rate = _throughput(int(meta_cpu.n_orientations), started)
+    logger.info("dictionary-cpu: %d patterns in %.1f s (%.0f pat/s)",
+                meta_cpu.n_orientations, elapsed, rate)
 
     _emit(0.95, f"Saving {out_path.name}")
     dictionary.save(str(out_path), overwrite=True)
@@ -238,8 +286,11 @@ def generate_dictionary_cpu(
         created_at=datetime.now().isoformat(),
         dictionary_path=str(out_path),
         backend="cpu",
+        elapsed_s=elapsed,
+        patterns_per_second=rate,
+        device="cpu",
     )
     out_path.with_suffix(".json").write_text(meta.to_json(), encoding="utf-8")
-    _emit(1.0, "Saved")
+    _emit(1.0, _summary_message(int(meta_cpu.n_orientations), elapsed, rate, "cpu"))
 
     return GenerationResult(output_path=out_path, metadata=meta)

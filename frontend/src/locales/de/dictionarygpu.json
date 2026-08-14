@@ -58,7 +58,9 @@
     "statusIdle": "inaktiv",
     "submitting": "Wird übermittelt…",
     "generatedPatterns": "<0>{{count}}</0> Beugungsmuster erzeugt",
-    "polling": "Abfrage alle 500 ms…"
+    "polling": "Abfrage alle 500 ms…",
+    "throughput": "{{rate}} Muster/s · {{seconds}} s",
+    "onDevice": " auf {{device}}"
   },
   "list": {
     "groupTitle": "Vorhandene Wörterbücher",

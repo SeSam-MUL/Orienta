@@ -180,6 +180,8 @@ def generate_dictionary(
     energy: float = 0.0,
     resolution: float = 5.0,
     progress_callback: Optional[Callable[[str], None]] = None,
+    chunk_size: Optional[int] = None,
+    chunk_progress: Optional[Callable[[int, int], None]] = None,
 ):
     """Generate a dictionary of simulated patterns from a master pattern.
 
@@ -260,13 +262,47 @@ def generate_dictionary(
     det_shape = detector.shape
     _emit(f"Simulating {n_ori} patterns ({det_shape[0]}x{det_shape[1]})...")
 
-    dictionary = mp.get_patterns(
-        rotations=rotations,
-        detector=detector,
-        energy=energy,
-        dtype_out=np.float32,
-        compute=True,
-    )
+    if chunk_size and chunk_size > 0 and n_ori > chunk_size:
+        # Chunked so the caller can report progress and a patterns/second rate.
+        # One get_patterns() call over the whole grid is a single blocking
+        # operation with no sub-progress at all, which made the CPU backend
+        # look frozen and gave nothing to count.
+        import kikuchipy as _kp
+        from orix.crystal_map import CrystalMap, PhaseList
+
+        buf = None
+        done = 0
+        for start in range(0, n_ori, chunk_size):
+            part = mp.get_patterns(
+                rotations=rotations[start:start + chunk_size],
+                detector=detector,
+                energy=energy,
+                dtype_out=np.float32,
+                compute=True,
+            )
+            arr = np.asarray(part.data, dtype=np.float32)
+            if arr.ndim == 4 and arr.shape[0] == 1:
+                arr = arr[0]
+            if buf is None:
+                buf = np.empty((n_ori, *arr.shape[1:]), dtype=np.float32)
+            buf[start:start + arr.shape[0]] = arr
+            done += arr.shape[0]
+            if chunk_progress:
+                chunk_progress(done, n_ori)
+        dictionary = _kp.signals.EBSD(buf)
+        # get_patterns attaches this itself; rebuild it so a chunked run is
+        # indistinguishable from an unchunked one downstream.
+        dictionary.xmap = CrystalMap(
+            rotations=rotations, phase_list=PhaseList(phase)
+        )
+    else:
+        dictionary = mp.get_patterns(
+            rotations=rotations,
+            detector=detector,
+            energy=energy,
+            dtype_out=np.float32,
+            compute=True,
+        )
     logger.info(f"Dictionary generated: {dictionary.data.shape}")
     _emit(f"Dictionary ready: {dictionary.data.shape}")
 

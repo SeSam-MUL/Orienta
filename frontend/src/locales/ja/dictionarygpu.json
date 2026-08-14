@@ -58,7 +58,9 @@
     "statusIdle": "アイドル",
     "submitting": "送信中…",
     "generatedPatterns": "<0>{{count}}</0> 個のパターンを生成しました",
-    "polling": "500 ms ごとに取得中…"
+    "polling": "500 ms ごとに取得中…",
+    "throughput": "{{rate}} パターン/秒 · {{seconds}} 秒",
+    "onDevice": "（{{device}}）"
   },
   "list": {
     "groupTitle": "既存の辞書",

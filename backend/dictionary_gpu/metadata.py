@@ -32,6 +32,12 @@ class GPUDictionaryMetadata:
     created_at: str = ""
     dictionary_path: str = ""
     backend: str = "gpu"
+    # Throughput of the run that produced this file. Recorded so a CPU and a
+    # GPU dictionary can be compared later without re-timing them, and so the
+    # number survives the session in the sidecar next to the .h5.
+    elapsed_s: float = 0.0
+    patterns_per_second: float = 0.0
+    device: str = ""
 
     def to_json(self) -> str:
         d = asdict(self)

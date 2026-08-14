@@ -58,7 +58,9 @@
     "statusIdle": "idle",
     "submitting": "Submitting…",
     "generatedPatterns": "Generated <0>{{count}}</0> patterns",
-    "polling": "Polling every 500 ms…"
+    "polling": "Polling every 500 ms…",
+    "throughput": "{{rate}} patterns/s · {{seconds}} s",
+    "onDevice": " on {{device}}"
   },
   "list": {
     "groupTitle": "Existing Dictionaries",

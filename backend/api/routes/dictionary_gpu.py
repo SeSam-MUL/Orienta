@@ -97,6 +97,11 @@ def _run_job(task_id: str, payload: GenerateRequest) -> None:
             result={
                 "output_path": str(result.output_path),
                 "n_orientations": result.metadata.n_orientations,
+                # Throughput of this run, so CPU and GPU can be compared in the
+                # dialog and the figure written down. Also in the sidecar.
+                "elapsed_s": round(float(result.metadata.elapsed_s), 3),
+                "patterns_per_second": round(float(result.metadata.patterns_per_second), 1),
+                "device": result.metadata.device,
             },
         )
     except Exception as e:
