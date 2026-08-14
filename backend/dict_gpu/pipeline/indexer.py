@@ -354,12 +354,12 @@ def run_dictionary_index(
             if need_pca_for_memory:
                 reasons.append(f"memory pressure ({fp32_bytes/1e9:.1f} GB dict > {decision_budget/1e9:.1f} GB pre-upload budget)")
             if worth_pca_for_speed:
-                reasons.append(f"large selection ({n_exp_est} >= {PCA_PAYOFF_MIN_PATTERNS})")
+                reasons.append(f"large selection ({n_exp_est} patterns)")
             _p(f"Dict-GPU: PCA enabled — " + " AND ".join(reasons))
         else:
-            _p(f"Dict-GPU: PCA skipped — small selection ({n_exp_est} < {PCA_PAYOFF_MIN_PATTERNS}) "
-               f"and dict fits in VRAM ({fp32_bytes/1e9:.1f} GB <= {decision_budget/1e9:.1f} GB pre-upload budget). "
-               f"~38s of SVD overhead avoided.")
+            _p(f"Dict-GPU: PCA off — dictionary fits in VRAM "
+               f"({fp32_bytes/1e9:.1f} GB <= {decision_budget/1e9:.1f} GB pre-upload budget), "
+               f"so the score is an exact NCC.")
 
     use_quant_effective = (
         use_quantization is True
@@ -514,14 +514,16 @@ def run_dictionary_index(
     if pca is not None:
         _check_cancel()
         flat_idx = best_indices.reshape(-1).clamp_min(0)
-        exact = torch.empty_like(best_scores).reshape(-1)
-        # Both gathers materialise (tile, feat_dim) floats, so the tile must be
-        # sized from the feature dimension — not from a row count. A fixed
-        # 1e6 rows would be 8 GB at feat_dim 3600, on a run that reached this
-        # branch precisely because memory was tight. 256 MB of transient
-        # instead, which at 3600 features is ~8900 rows per pass.
-        RESCORE_BUDGET_BYTES = 256 << 20
-        rescore_tile = max(1, RESCORE_BUDGET_BYTES // (feat_dim * 4 * 2))
+        exact = torch.empty_like(best_scores).view(-1)
+        # Three (tile, feat_dim) fp32 tensors are live at once — the two
+        # gathers and their product — so the tile must be sized from the
+        # feature dimension, not from a row count. A fixed 1e6 rows would be
+        # 8 GB at feat_dim 3600, on a run that reached this branch precisely
+        # because memory was tight. Measured transient with the divisor below:
+        # 384 MiB at feat_dim 3600 and 379 MiB at 19,968, i.e. the budget is
+        # met, and at 3600 features it is ~5900 rows per pass.
+        RESCORE_BUDGET_BYTES = 384 << 20
+        rescore_tile = max(1, RESCORE_BUDGET_BYTES // (feat_dim * 4 * 3))
         for s in range(0, flat_idx.numel(), rescore_tile):
             e = min(s + rescore_tile, flat_idx.numel())
             rows = flat_idx[s:e]

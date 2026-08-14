@@ -78,9 +78,10 @@ def _projection_batch(pattern_dim: int, dtype, device) -> int:
 
     ``project_master_to_detector`` materialises the rotated directions as
     ``(n, pattern_dim, 3)`` and ``sample_master`` builds roughly a dozen more
-    tensors of ``n * pattern_dim``, so the transient cost is ~20x the output
-    while the output itself is only ``n * pattern_dim``. Handing it every
-    rotation at once therefore asks for far more than the dictionary needs:
+    tensors of ``n * pattern_dim``. Measured peak against output size: **26.2x**,
+    flat across n = 1024..4096 (28.6x at n=256, where fixed costs still show).
+    Handing it every rotation at once therefore asks for far more than the
+    dictionary needs:
     measured at 100,347 rotations on a 60x60 detector, peak allocation was
     36,191 MiB on a 12,282 MiB card. It still finished, because the caching
     allocator falls back to host memory, but with the experimental map also
@@ -89,8 +90,8 @@ def _projection_batch(pattern_dim: int, dtype, device) -> int:
 
     Chunking is pure loop restructuring — the output is bit-identical.
     """
-    itemsize = 2 if dtype == torch.float16 else 4
-    transient_per_rotation = pattern_dim * itemsize * 20
+    itemsize = torch.empty((), dtype=dtype).element_size()
+    transient_per_rotation = pattern_dim * itemsize * 27
     if device.type == "cuda":
         free, _ = torch.cuda.mem_get_info(device)
         budget = int(free * 0.25)

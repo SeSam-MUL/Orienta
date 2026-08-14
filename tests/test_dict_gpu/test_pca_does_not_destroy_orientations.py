@@ -61,11 +61,29 @@ def test_pca_is_not_auto_enabled_for_speed_alone():
     )
 
 
-def test_memory_pressure_still_allows_pca():
-    """Without it a dictionary that does not fit in VRAM cannot run at all."""
+def test_memory_pressure_is_the_only_auto_trigger_left():
+    """Known limitation, recorded rather than claimed away.
+
+    A previous version of this test said "without it a dictionary that does not
+    fit in VRAM cannot run at all". That is not true as the code stands:
+    ``dict_flat`` and ``dict_norm`` are both built at FULL dimension before
+    ``GpuPCA.fit`` ever runs, and the measured cost to reach the fit is a flat
+    3.0x ``fp32_bytes`` peak (2.0x resident) at 20k/60k entries and at
+    feature dimensions 3600 and 19,968. So the branch fires exactly when 1x
+    already exceeds the budget, and then asks for 3x — it does not rescue the
+    run, it only reaches the wall more slowly via host spill.
+
+    Making it actually work means fitting the PCA on a subsample or in chunks,
+    which is a bigger change than this session's. Until then the honest
+    statement is: PCA is a caller-controlled option (``use_pca=True``), and the
+    auto path effectively never chooses it.
+    """
     src = inspect.getsource(indexer_mod.run_dictionary_index)
     assert "need_pca_for_memory" in src
     assert "need_pca_for_memory or worth_pca_for_speed" in src
+    # the full-dimension tensors that make the trigger self-defeating
+    assert "dict_flat = dict_data.reshape(n_dict, pattern_dim)" in src
+    assert "dict_norm = _normalise_rows(dict_flat)" in src
 
 
 def test_component_count_keeps_most_of_the_variance():

@@ -6,11 +6,20 @@ Three service modules used to thread only ``tilt_deg`` (the SAMPLE tilt) down
 to the renderer, so every pattern they simulated came out rotated by exactly
 the detector elevation of the dataset — silently, because 0 is a legal value.
 
-Measured on real data at a FIXED (correct) orientation: rendering with the
-correct detector tilt raised NCC by +0.210, while a 3 deg tilt error raised it
-by only +0.001. The render-NCC peak is ~2 deg FWHM, so a wrong camera
-elevation lands off the peak entirely. Oxford detectors commonly ship a
-non-zero elevation, so this is not an exotic configuration.
+It is not an exotic configuration: ``backend/api/routes/indexing.py`` builds
+its detector dict with ``'tilt': 10.0`` as the default before overwriting it
+from the detector, and Oxford systems commonly ship a non-zero elevation.
+
+How much that costs follows from how sharp the render-NCC peak is. Measured on
+the 7050 dataset (CLAUDE.md, 2026-06-30): 0.69 at the correct orientation,
+0.56 at 1 deg off, 0.32 at 2 deg, 0.06 at 3 deg. A 10 deg error in the
+elevation therefore puts the simulated pattern off the peak entirely, which
+drags the diagnostic maps toward "everything is anomalous" and starves the
+refinement gradients.
+
+(An earlier version of this docstring put a number on it — "+0.210 NCC for the
+correct tilt against +0.001 for a 3 deg error". That figure is not traceable to
+any script or test in this repo and has been withdrawn rather than repeated.)
 
 These tests monkeypatch the renderer and inspect the kwargs it receives.
 """

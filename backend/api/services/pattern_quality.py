@@ -182,15 +182,28 @@ def get_quality_map(
 # ---------------------------------------------------------------------------
 
 # Median FFT image quality below which dictionary (template) indexing cannot
-# work. Measured 2026-08-14, same master / geometry / code, best achievable NCC
-# over 52,607 orientations:
+# work. The "image quality" column is what THIS function reports — i.e. after
+# the static + dynamic background removal it performs. An earlier version of
+# this table quoted the RAW figures (0.374 / 0.037), which are not what the
+# thresholds below are compared against; re-measured through the shipped
+# function 2026-08-14:
 #
-#   dataset                 image quality   best NCC
-#   LoGainNi.h5                  0.374        0.430   works
-#   kikuchipy nickel_ebsd_large  0.328        (0.32 in their tutorial)
-#   HiGainNi.h5                  0.037        0.115   noise
-#   AL_SI_x3000 (raw)            0.022        0.045   noise
-#   AL_SI_x3000 (3x3 averaged)   0.082        0.075   noise
+#   dataset                 image quality   raw    best NCC
+#   LoGainNi.h5                  0.3616     0.379   0.469   works
+#   HiGainNi.h5                  0.0285     0.036   0.115   noise
+#   AL_SI_x3000 (raw)            ~0.022             0.045   noise
+#   AL_SI_x3000 (3x3 averaged)   ~0.082             0.075   noise
+#
+# The LoGainNi NCC is from the full-map 2 deg acceptance run against Hough
+# (28,086 px, 100,347 orientations); the AL_SI figures predate this function
+# and are raw-IQ, kept as an order-of-magnitude marker rather than a
+# calibration point.
+#
+# Caveat when reading a "marginal" verdict: preprocessing moves this number.
+# On LoGainNi, dynamic background alone gives 0.358, but the app's own
+# "Recommended Pipeline" (dynamic + CLAHE) gives 0.272 — most of the headroom
+# above the 0.25 threshold. A dataset can be flagged for how it was processed
+# rather than for what it is.
 #
 # Hough and spherical indexing tolerate this data because they integrate over
 # band positions; template matching correlates pixel-by-pixel and cannot.

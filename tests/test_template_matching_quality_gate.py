@@ -1,13 +1,16 @@
 """Dictionary indexing must say when the patterns are too noisy for it.
 
-Measured 2026-08-14 with the same Ni master, the same geometry and the same
-code, best achievable NCC over 52,607 orientations:
+Image quality as THIS function reports it — after the background removal it
+performs, which is what the thresholds are compared against:
 
-    LoGainNi.h5                  image quality 0.374  ->  NCC 0.430   works
-    kikuchipy nickel_ebsd_large                0.328  ->  (0.32 in their docs)
-    HiGainNi.h5                                0.037  ->  NCC 0.115   noise
-    AL_SI_x3000 raw                            0.022  ->  NCC 0.045   noise
-    AL_SI_x3000 3x3 averaged                   0.082  ->  NCC 0.075   noise
+    LoGainNi.h5    image quality 0.3616  ->  NCC 0.469   works
+    HiGainNi.h5                  0.0285  ->  NCC 0.115   noise
+    AL_SI_x3000 raw             ~0.022   ->  NCC 0.045   noise
+
+The LoGainNi NCC is the full-map 2 deg run against Hough (28,086 px). An
+earlier version of this docstring quoted 0.374 / 0.037 — those are the RAW
+image qualities, measured without the background removal, so they were not the
+numbers the gate actually sees.
 
 Hough and spherical indexing produce correct grain maps on all of these,
 because they integrate over band positions. Template matching correlates whole
@@ -78,7 +81,7 @@ def test_logain_ni_is_good_enough():
 @pytest.mark.skipif(not HIGAIN.is_file(), reason="HiGainNi.h5 not available")
 def test_higain_ni_is_flagged():
     """Despite the name, HiGain = high camera gain = short exposure = noisy.
-    Its best achievable NCC is 0.115; the map collapses to one orientation."""
+    Its best achievable NCC is 0.115."""
     import kikuchipy as kp
 
     out = assess_for_template_matching(kp.load(str(HIGAIN), lazy=True))

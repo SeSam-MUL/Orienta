@@ -859,6 +859,13 @@ def dictionary_index_patterns(
     # from noise, and on noisy data it silently returns a near-uniform map of
     # meaningless orientations. Say so up front instead of letting the user
     # discover it from a single-colour IPF map. Never blocks the run.
+    #
+    # It samples up to 64 patterns, which is 1-2 s in memory and much worse on
+    # a lazily-loaded file (this project measured 510-944 ms per random pattern
+    # read on a 27 GB Oxford scan). So say what is happening and give Stop a
+    # chance before it, instead of a silent stall.
+    _check_cancel()
+    _progress("Checking pattern quality for template matching...")
     try:
         from backend.api.services.pattern_quality import assess_for_template_matching
         _q = assess_for_template_matching(signal)
@@ -885,14 +892,28 @@ def dictionary_index_patterns(
     # 2 deg grid, inscribed disc = 2828 of 3600 detector px): NCC 0.461 -> 0.518.
     # The orientations do not move on data this clean (0.95 deg to Hough either
     # way) — what the mask buys here is a score that means what it says.
+    # The mask belongs to the VIEWER's active file, not necessarily to the
+    # signal being indexed — the batch manager loads its own signal per file.
+    # Applying one dataset's disc to another dataset's detector is meaningless,
+    # so it is scoped to a matching pattern shape here rather than handed on
+    # and rejected deep inside the indexer, which would kill a batch job on a
+    # file the user never masked.
     sig_mask_kp = None
     try:
         from backend.api.routes.ebsd_viewer import get_active_include_mask
         include = get_active_include_mask()
         if include is not None:
-            sig_mask_kp = ~include
-            _progress(f"Dictionary: circular signal mask active "
-                      f"({int((~sig_mask_kp).sum())}/{sig_mask_kp.size} px used)")
+            sig_shape = tuple(int(v) for v in np.shape(signal.data)[-2:])
+            if tuple(include.shape) != sig_shape:
+                logger.info(
+                    "Detector mask %s does not match this dataset's patterns %s "
+                    "— indexing without it", tuple(include.shape), sig_shape)
+                _progress(f"Dictionary: detector mask is for {tuple(include.shape)} "
+                          f"patterns, this dataset is {sig_shape} — mask not applied")
+            else:
+                sig_mask_kp = ~include
+                _progress(f"Dictionary: circular signal mask active "
+                          f"({int((~sig_mask_kp).sum())}/{sig_mask_kp.size} px used)")
     except Exception:
         logger.debug("Could not fetch active signal mask", exc_info=True)
 

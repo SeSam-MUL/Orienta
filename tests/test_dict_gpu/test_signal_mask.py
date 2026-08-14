@@ -66,10 +66,14 @@ def test_mask_convention_is_true_equals_exclude():
     )
 
 
-@pytest.mark.parametrize("bad_shape", [(59, 60), (60, 61), (3600,)])
-def test_wrong_mask_shape_fails_loud(bad_shape):
+def test_wrong_mask_shape_fails_loud():
     """A silently ignored mask is how the first bug survived; a mismatched one
-    must not be silently ignored either."""
+    must not be silently ignored either.
+
+    (This was three parametrised cases that all ignored the parameter — the
+    behavioural cover now lives in test_rescore_behaviour.py, which runs the
+    indexer with a real mask and checks the correlation against numpy.)
+    """
     src = inspect.getsource(indexer_mod.run_dictionary_index)
     assert "signal_mask shape" in src and "GpuDictError" in src
     # the shape check compares against the detector shape, not the flat size
@@ -141,6 +145,59 @@ def test_torch_column_gather_matches_numpy():
     data = rng.normal(size=(5, 64)).astype(np.float32)
     t = torch.from_numpy(data)[:, torch.from_numpy(keep)]
     np.testing.assert_allclose(t.numpy(), data[:, keep])
+
+
+# --------------------------------------------------------------------------
+# the mask is global viewer state — it must not follow a batch onto other files
+# --------------------------------------------------------------------------
+def _fake_signal(h, w):
+    class _Sig:
+        data = np.zeros((2, 2, h, w), dtype=np.float32)
+    return _Sig()
+
+
+@pytest.mark.parametrize("mask_shape,pattern_shape,expect_applied", [
+    ((60, 60), (60, 60), True),      # the viewer's own file
+    ((60, 60), (128, 156), False),   # a batch over differently shaped patterns
+    ((128, 156), (60, 60), False),
+])
+def test_mask_is_scoped_to_matching_patterns(mask_shape, pattern_shape,
+                                             expect_applied, monkeypatch):
+    """`get_active_include_mask` returns the VIEWER's mask. The batch manager
+    loads its own signal per file, so without this scoping a masked file open
+    in the viewer made every batch run over other geometries die with
+    "signal_mask shape (60, 60) != detector shape (128, 156)".
+    """
+    import backend.api.routes.ebsd_viewer as viewer
+
+    monkeypatch.setattr(viewer, "get_active_include_mask",
+                        lambda: np.ones(mask_shape, dtype=bool), raising=False)
+
+    captured = {}
+
+    def _fake_gpu(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop here — we only want the arguments")
+
+    import backend.dict_gpu.api as gpu_api
+    monkeypatch.setattr(gpu_api, "gpu_dictionary_index_patterns", _fake_gpu)
+
+    from indexing_controller import IndexingConfig, IndexingMethod
+    cfg = IndexingConfig(method=IndexingMethod.DICTIONARY, compute_mode="gpu")
+    try:
+        indexing_controller.dictionary_index_patterns(
+            signal=_fake_signal(*pattern_shape), dictionary=object(), config=cfg,
+            detector=object())
+    except Exception:
+        pass  # the fake raises, or CUDA is absent; we assert on what it got
+
+    if not captured:
+        pytest.skip("GPU dispatcher not reached in this environment")
+    got = captured.get("signal_mask")
+    assert (got is not None) is expect_applied, (
+        f"mask {mask_shape} on {pattern_shape} patterns: "
+        f"{'applied' if got is not None else 'skipped'}, expected the opposite"
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover

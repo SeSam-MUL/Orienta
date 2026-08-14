@@ -14,9 +14,9 @@ this repo (`_pcadi` for the indexer, `dictionary_gpu` for the generator).
     scores 0.1 apart with nothing saying why.
 
 (b) The on-the-fly projection never batched. `project_master_to_detector`
-    materialises ~20x the output size in transients, so handing it every
-    rotation at once asked for 36,191 MiB on a 12,282 MiB card at 100,347
-    rotations. It completed via host fallback, but with the experimental map
+    materialises 26.2x the output size in transients (measured, flat across
+    n = 1024..4096), so handing it every rotation at once asked for 36,191 MiB
+    on a 12,282 MiB card at 100,347 rotations. It completed via host fallback, but with the experimental map
     also resident a full-map run took 474 s where the same dictionary read
     from disk took 6.4 s.
 """
@@ -64,7 +64,7 @@ def test_rescore_tile_is_sized_from_the_feature_dimension():
     the wrong unit: 1e6 rows at 3600 features is 8 GB — on a branch reached
     precisely because memory was tight."""
     src = inspect.getsource(indexer_mod.run_dictionary_index)
-    assert "rescore_tile = max(1, RESCORE_BUDGET_BYTES // (feat_dim * 4 * 2))" in src, (
+    assert "rescore_tile = max(1, RESCORE_BUDGET_BYTES // (feat_dim * 4 * 3))" in src, (
         "the re-score tile must be derived from feat_dim, not a constant row count"
     )
     ns: dict = {}
@@ -75,11 +75,13 @@ def test_rescore_tile_is_sized_from_the_feature_dimension():
             break
     budget = ns["RESCORE_BUDGET_BYTES"]
     assert 16 << 20 <= budget <= 512 << 20, f"{budget} bytes is not a sane transient"
-    # a realistic full map: 28,086 px x keep_n 20 at a 60x60 detector
+    # Three (tile, feat_dim) fp32 tensors are live: the two gathers and their
+    # product. Counting two was a 1.5x undercount — measured 384 MiB against a
+    # stated 256 MB — so the divisor and the budget both had to move.
     feat_dim = 3600
-    tile = max(1, budget // (feat_dim * 4 * 2))
+    tile = max(1, budget // (feat_dim * 4 * 3))
     assert tile >= 1000, "tile so small the loop dominates"
-    assert tile * feat_dim * 4 * 2 <= budget
+    assert tile * feat_dim * 4 * 3 <= budget
 
 
 def test_rescore_math_matches_a_plain_ncc():
@@ -116,9 +118,11 @@ def test_projection_is_chunked():
     assert "torch.empty(" in src, "output must be preallocated, not concatenated"
 
 
+# Expectations follow from the measured 26.2x transient factor (rounded to 27
+# in the code): batch = clamp(free * 0.25 // (pattern_dim * itemsize * 27)).
 @pytest.mark.parametrize("pattern_dim,free_bytes,expect", [
     (60 * 60, 8_000_000_000, 4096),      # plenty free -> clamped at the cap
-    (60 * 60, 100_000_000, 86),          # tight -> small but workable
+    (60 * 60, 1_000_000_000, 643),       # tight -> small but workable
     (60 * 60, 1_000, 64),                # absurdly tight -> floor, never 0
     (1024 * 1024, 8_000_000_000, 64),    # huge detector -> floor
 ])
