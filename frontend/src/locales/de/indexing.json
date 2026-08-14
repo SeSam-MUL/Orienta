@@ -113,7 +113,7 @@
     "shapeMismatch": "Für einen {{got}}-Detektor gebaut, deine Muster sind {{needed}} — dieses Dictionary ist nicht verwendbar.",
     "blockedShape": "{{label}}: alle Dictionaries sind für einen anderen Detektor ({{shapes}}), deine Muster sind {{needed}}. Erzeuge eines für {{needed}}.",
     "blockedNone": "{{label}}: noch kein Dictionary — „+ Dictionary erzeugen“ auf der Karte benutzen.",
-    "tiltMismatch": "Für Kameraneigung {{got}} simuliert, dein Detektor steht auf {{needed}} — schon 1° Fehler halbiert die Übereinstimmung.",
+    "tiltMismatch": "Simuliert für Probenneigung {{gotSample}} / Kameraneigung {{gotCam}}; dein Detektor steht auf {{needSample}} / {{needCam}}. Zwei Ni-Dictionaries der Bibliothek tragen die Kameraneigung im Probenneigungs-Feld — damit kippt die ganze Karte auf eine Orientierung.",
     "tiltBadge": "falsche Neigung",
     "blockedTilt": "{{label}}: die Dictionaries wurden für Kameraneigung {{tilts}} simuliert, dein Detektor steht auf {{needed}}. Erzeuge eines für {{needed}}.",
     "tiltUnknownBadge": "Neigung ?",

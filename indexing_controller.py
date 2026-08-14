@@ -303,7 +303,9 @@ def discover_files_for_method(
                     entry["detector_shape"] = meta.get("detector_shape", [])
                     entry["resolution_deg"] = meta.get("resolution_deg", 0)
                     entry["n_orientations"] = meta.get("n_orientations", 0)
-                    entry["sample_tilt"] = meta.get("sample_tilt", 70)
+                    # None, not 70: "unknown" and "explicitly 70 deg" must not
+                    # look the same to the UI's geometry check.
+                    entry["sample_tilt"] = meta.get("sample_tilt")
                     # Camera geometry. Missing on older sidecars — surfaced as
                     # None (unknown) rather than 0, because "unknown" and
                     # "explicitly flat" must not be confused when the UI decides

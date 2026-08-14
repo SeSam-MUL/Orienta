@@ -104,6 +104,19 @@ export const TILT_TOLERANCE_DEG = 0.5;
  */
 export function dictGeometryMatches(entry, geom) {
   if (!geom) return true;
+
+  // SAMPLE tilt. Two Ni dictionaries in the library record sample_tilt = 10
+  // while the data was taken at 75.7 — the CAMERA tilt written into the
+  // sample-tilt slot. A 65.7 deg error in the geometry; indexing against them
+  // collapsed the whole map onto one orientation while Hough and Spherical
+  // resolved the grains fine. Checked FIRST because it is the larger error.
+  const st = entry?.sample_tilt;
+  const wantSample = Number(geom.sampleTilt);
+  if (st !== null && st !== undefined && Number.isFinite(wantSample)
+      && Math.abs(Number(st) - wantSample) > TILT_TOLERANCE_DEG) {
+    return false;
+  }
+
   const t = entry?.detector_tilt;
   if (t === null || t === undefined) return true;       // unknown -> can't judge
   const want = Number(geom.detectorTilt ?? 0);

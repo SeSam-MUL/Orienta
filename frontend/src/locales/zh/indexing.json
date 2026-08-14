@@ -113,7 +113,7 @@
     "shapeMismatch": "为 {{got}} 探测器构建，而你的图样是 {{needed}} — 该字典无法使用。",
     "blockedShape": "{{label}}：所有字典都对应其他探测器（{{shapes}}），你的图样是 {{needed}}。请为 {{needed}} 生成一个。",
     "blockedNone": "{{label}}：尚无字典 — 请使用卡片上的“+ 生成字典”。",
-    "tiltMismatch": "按相机倾角 {{got}} 模拟，而你的探测器为 {{needed}} — 仅 1° 误差就会使匹配度减半。",
+    "tiltMismatch": "按试样倾角 {{gotSample}} / 相机倾角 {{gotCam}} 模拟，而你的探测器为 {{needSample}} / {{needCam}}。库中两个 Ni 字典把相机倾角写进了试样倾角字段 — 用它标定会使整幅图塌缩为单一取向。",
     "tiltBadge": "倾角不符",
     "blockedTilt": "{{label}}：字典按相机倾角 {{tilts}} 模拟，你的探测器为 {{needed}}。请为 {{needed}} 生成一个。",
     "tiltUnknownBadge": "倾角 ?",

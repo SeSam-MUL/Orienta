@@ -172,6 +172,7 @@ export default function DictPhaseCard({ phase, allFiles = [], currentPc = null, 
             tiltUnknown={dictGeometryUnknown(d, geom)}
             neededShape={detectorShape}
             neededTilt={geom?.detectorTilt}
+            neededSampleTilt={geom?.sampleTilt}
             onClick={() => onSelectDict && onSelectDict(phase, d)}
             t={t}
           />
@@ -281,7 +282,7 @@ function MasterRow({ entry, t }) {
 // DictRow
 // ---------------------------------------------------------------------------
 
-function DictRow({ entry, formula, currentPc, isSelected, onClick, t, fitsDetector = true, fitsGeometry = true, tiltUnknown = false, neededShape = null, neededTilt = null }) {
+function DictRow({ entry, formula, currentPc, isSelected, onClick, t, fitsDetector = true, fitsGeometry = true, tiltUnknown = false, neededShape = null, neededTilt = null, neededSampleTilt = null }) {
   const filename  = entry?.filename || entry?.path?.split(/[\\/]/).pop() || '—';
   const shortName = abbreviateFilename(filename, formula);
   // Discovery reports `resolution_deg`; only older/inline entries use
@@ -372,8 +373,10 @@ function DictRow({ entry, formula, currentPc, isSelected, onClick, t, fitsDetect
             color: PC_COLORS.bad, fontSize: '7.5pt', flexShrink: 0, fontWeight: 700,
           }}
           title={t('dictCard.tiltMismatch', {
-            got: entry?.detector_tilt != null ? `${Number(entry.detector_tilt).toFixed(2)}°` : '?',
-            needed: neededTilt != null ? `${Number(neededTilt).toFixed(2)}°` : '?',
+            gotSample: entry?.sample_tilt != null ? `${Number(entry.sample_tilt).toFixed(1)}°` : '?',
+            gotCam: entry?.detector_tilt != null ? `${Number(entry.detector_tilt).toFixed(2)}°` : '?',
+            needSample: neededSampleTilt != null ? `${Number(neededSampleTilt).toFixed(1)}°` : '?',
+            needCam: neededTilt != null ? `${Number(neededTilt).toFixed(2)}°` : '?',
           })}
         >
           {t('dictCard.tiltBadge')} ⚠

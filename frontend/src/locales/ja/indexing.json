@@ -113,7 +113,7 @@
     "shapeMismatch": "{{got}} の検出器用に作られていますが、あなたのパターンは {{needed}} です — この辞書は使えません。",
     "blockedShape": "{{label}}: すべての辞書が別の検出器用（{{shapes}}）です。あなたのパターンは {{needed}} — {{needed}} 用に生成してください。",
     "blockedNone": "{{label}}: まだ辞書がありません — カードの「+ 辞書を生成」を使ってください。",
-    "tiltMismatch": "カメラ傾斜 {{got}} 用にシミュレートされていますが、検出器は {{needed}} です — 1° の誤差でも一致度は半減します。",
+    "tiltMismatch": "試料傾斜 {{gotSample}} / カメラ傾斜 {{gotCam}} 用にシミュレートされていますが、検出器は {{needSample}} / {{needCam}} です。ライブラリの Ni 辞書 2 件は試料傾斜の欄にカメラ傾斜が入っており、指数付けすると地図全体が 1 つの方位に潰れます。",
     "tiltBadge": "傾斜が不一致",
     "blockedTilt": "{{label}}: 辞書はカメラ傾斜 {{tilts}} 用です。検出器は {{needed}} — {{needed}} 用に生成してください。",
     "tiltUnknownBadge": "傾斜 ?",

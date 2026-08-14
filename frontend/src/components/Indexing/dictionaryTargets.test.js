@@ -358,3 +358,48 @@ describe('dictionaries written before the tilt fix', () => {
     expect(got.path).toBe(NO_TILT_FIELD.path);
   });
 });
+
+describe('the Ni library dictionaries that collapsed the map', () => {
+  // Verbatim from Database/Dictionary_Library/Ni/*.json and HiGainNi.h5.
+  const HIGAIN_NI = { sampleTilt: 75.7, detectorTilt: 10.0, azimuthal: 0 };
+  const BROKEN = {          // camera tilt written into the sample-tilt slot
+    path: '/lib/Ni/Ni_master_E20kV_npx500_dict_20kV_60x60_2.0deg.h5',
+    file_type: 'dictionary', formula: 'Ni',
+    detector_shape: [60, 60], pc: [0.507, 0.262, 0.558],
+    sample_tilt: 10.0, detector_tilt: null, resolution_deg: 2.0,
+  };
+  const GOOD = {            // written by the fixed generator
+    path: '/lib/Ni/Ni_master_E20kV_npx500_dict_20kV_60x60_pc513_267_555_2.0deg.h5',
+    file_type: 'dictionary', formula: 'Ni',
+    detector_shape: [60, 60], pc: [0.513, 0.267, 0.555],
+    sample_tilt: 75.7, detector_tilt: 10.0, resolution_deg: 2.0,
+  };
+  const NI = { path: '/db/Ni_master_E20kV_npx500.h5', formula: 'Ni',
+               display_label: 'Ni', file_type: 'master' };
+
+  it('rejects a 65.7 deg sample-tilt error', () => {
+    // Indexing against this produced a single-orientation map while Hough and
+    // Spherical resolved the grains on the same file.
+    expect(dictGeometryMatches(BROKEN, HIGAIN_NI)).toBe(false);
+    expect(dictGeometryMatches(GOOD, HIGAIN_NI)).toBe(true);
+  });
+
+  it('picks the correct dictionary over the two broken ones', () => {
+    const files = [NI, BROKEN, { ...BROKEN, path: '/lib/Ni/5deg.h5', resolution_deg: 5.0 }, GOOD];
+    expect(resolveDictPathForPhase(NI, files, {
+      detectorShape: [60, 60], geom: HIGAIN_NI, currentPc: [0.507, 0.262, 0.558],
+    })).toBe(GOOD.path);
+  });
+
+  it('blocks the run when only the broken ones exist', () => {
+    const bad = unresolvedDictPhases([NI], [NI, BROKEN],
+      { detectorShape: [60, 60], geom: HIGAIN_NI });
+    expect(bad).toHaveLength(1);
+    expect(bad[0].reason).toBe('tilt');
+  });
+
+  it('still accepts a dictionary that records no sample tilt at all', () => {
+    const { sample_tilt, ...noTilt } = BROKEN;
+    expect(dictGeometryMatches({ ...noTilt, detector_tilt: 10.0 }, HIGAIN_NI)).toBe(true);
+  });
+});

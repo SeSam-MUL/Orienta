@@ -113,7 +113,7 @@
     "shapeMismatch": "Built for a {{got}} detector, your patterns are {{needed}} — this dictionary cannot be used.",
     "blockedShape": "{{label}}: every dictionary is for a different detector ({{shapes}}), your patterns are {{needed}}. Generate one for {{needed}}.",
     "blockedNone": "{{label}}: no dictionary yet — use \"+ Generate dictionary\" on its card.",
-    "tiltMismatch": "Simulated for a {{got}} camera tilt, your detector is at {{needed}} — a 1° error already halves the match quality.",
+    "tiltMismatch": "Simulated for sample tilt {{gotSample}} / camera tilt {{gotCam}}; your detector is at {{needSample}} / {{needCam}}. Two Ni dictionaries in the library carry the camera tilt in the sample-tilt field — indexing against those collapses the whole map onto one orientation.",
     "tiltBadge": "wrong tilt",
     "blockedTilt": "{{label}}: the dictionaries were simulated for camera tilt {{tilts}}, your detector is at {{needed}}. Generate one for {{needed}}.",
     "tiltUnknownBadge": "tilt ?",
