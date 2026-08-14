@@ -87,8 +87,22 @@ def run_dictionary_index(
     metric: str = "ncc",
     keep_n: int = 1,
     selection_mask: Optional[np.ndarray] = None,
+    # Detector mask in kikuchipy's convention: True = EXCLUDE (the dark corners
+    # outside the phosphor disc), False = keep. Same meaning and same effect as
+    # the ``signal_mask`` argument of ``EBSD.dictionary_indexing``.
+    signal_mask: Optional[np.ndarray] = None,
     use_pca: Union[str, bool] = "auto",
-    pca_components: int = 256,
+    # Only reached when memory pressure forces PCA (see below). 256 components
+    # keep ~32 % of the dictionary variance; in that truncated subspace the
+    # correlation is dominated by structure common to every pattern of the
+    # phase, so the score it reports is not comparable to the full one.
+    # Measured on LoGainNi (7440 px, 2 deg grid, 100,347 orientations) against
+    # Hough as ground truth, which indexes this dataset at 0.27 deg median fit:
+    #     no PCA    median 0.95 deg to Hough, 95.9 % <2 deg, reports 0.469
+    #     k=256     median 1.06 deg to Hough, 93.9 % <2 deg, reports 0.603
+    #     k=1024    median 0.94 deg to Hough, 97.3 % <2 deg, reports 0.564
+    # The orientations survive truncation; the reported NCC does not.
+    pca_components: int = 1024,
     use_quantization: Union[str, bool] = "auto",
     vram_budget_gb: Optional[float] = None,
     progress_callback=None,
@@ -240,6 +254,30 @@ def run_dictionary_index(
     n_dict = dict_data.shape[0]
     pat_h, pat_w = dict_data.shape[-2:]
     pattern_dim = pat_h * pat_w
+
+    # Circular detector mask (kikuchipy convention: True = EXCLUDE). Applied by
+    # dropping the masked columns from BOTH the dictionary and the experimental
+    # patterns before normalisation, which is exactly what kikuchipy's
+    # ``signal_mask`` does on the CPU path — the mean and the L2 norm are then
+    # taken over the disc only, instead of being dragged down by the dark
+    # corners that carry no diffraction signal.
+    keep_cols = None
+    feat_dim = pattern_dim
+    if signal_mask is not None:
+        sm = np.asarray(signal_mask, dtype=bool)
+        if sm.shape != (pat_h, pat_w):
+            raise GpuDictError(
+                f"signal_mask shape {sm.shape} != detector shape {(pat_h, pat_w)}"
+            )
+        keep_flat = ~sm.reshape(-1)
+        feat_dim = int(keep_flat.sum())
+        if feat_dim == 0:
+            raise GpuDictError("signal_mask excludes every detector pixel")
+        if feat_dim < pattern_dim:
+            keep_cols = torch.from_numpy(np.flatnonzero(keep_flat)).to(device)
+            _p(f"Dict-GPU: signal mask keeps {feat_dim}/{pattern_dim} detector px")
+        else:
+            signal_mask = None
     # Sync CUDA so the timing reflects the actual GPU upload completion
     # rather than the async-launch return. Without this the upload time
     # gets attributed to the next phase.
@@ -263,7 +301,7 @@ def run_dictionary_index(
         decision_budget = initial_budget_bytes
         tile_budget = vram_budget_bytes()
     budget = tile_budget  # kept name for compute_tile_size compatibility
-    fp32_bytes = n_dict * pattern_dim * 4
+    fp32_bytes = n_dict * feat_dim * 4
 
     # Estimate how many experimental patterns this run will match.
     # Used for the PCA cost/benefit decision below.
@@ -291,7 +329,15 @@ def run_dictionary_index(
     #
     # Auto-trigger only when EITHER memory pressure OR clear speed win
     # exists. Explicit True/False from the caller overrides everything.
-    PCA_PAYOFF_MIN_PATTERNS = 2000
+    # PCA is a LOSSY approximation. It may be traded for memory — without it a
+    # large dictionary simply does not fit — but not for speed it does not buy.
+    # This threshold used to auto-enable PCA for any selection >= 2000 px,
+    # which is every full map, so every full-map dictionary run was
+    # approximated whether or not it needed to be. Measured on LoGainNi
+    # (7440 px, 100,347 orientations): 37.5 s without PCA, 39.0 s with k=256,
+    # 75.4 s with k=1024 — no win to pay for, and the truncated run reports a
+    # score that is not comparable to the full one (see pca_components).
+    PCA_PAYOFF_MIN_PATTERNS = float("inf")
     need_pca_for_memory = fp32_bytes > decision_budget
     worth_pca_for_speed = n_exp_est >= PCA_PAYOFF_MIN_PATTERNS
 
@@ -325,7 +371,10 @@ def run_dictionary_index(
         use_quant_effective = False
 
     # ---- 5. Normalise dictionary (and optionally PCA) ------------------------
-    dict_flat = dict_data.reshape(n_dict, pattern_dim).contiguous()
+    dict_flat = dict_data.reshape(n_dict, pattern_dim)
+    if keep_cols is not None:
+        dict_flat = dict_flat[:, keep_cols]
+    dict_flat = dict_flat.contiguous()
     # Fail loud on NaN/Inf in the source dictionary BEFORE the SVD step
     # below — torch.linalg.svd surfaces NaN as a generic CUSOLVER error
     # ("CUSOLVER_STATUS_INVALID_VALUE") with no hint about the real cause.
@@ -361,14 +410,14 @@ def run_dictionary_index(
     _phase_done("5a. dictionary normalisation + finite check")
     pca = None
     if use_pca_effective:
-        k = min(pca_components, n_dict, pattern_dim)
+        k = min(pca_components, n_dict, feat_dim)
         pca = GpuPCA(n_components=k).fit(dict_norm)
         dict_proj = pca.transform(dict_norm)
         # PCA breaks unit-norm; renormalise so NCC interpretation holds
         dict_proj = _normalise_rows(dict_proj)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        _p(f"Dict-GPU: PCA reduced dictionary {pattern_dim} -> {k}")
+        _p(f"Dict-GPU: PCA reduced dictionary {feat_dim} -> {k}")
         _phase_done("5b. PCA fit + transform")
     else:
         dict_proj = dict_norm
@@ -402,6 +451,8 @@ def run_dictionary_index(
 
     exp_selected = exp_arr[sel_idx[:, 0], sel_idx[:, 1]].reshape(n_sel, pattern_dim)
     exp_t = torch.from_numpy(exp_selected).to(device)
+    if keep_cols is not None:
+        exp_t = exp_t[:, keep_cols].contiguous()
     exp_norm = _normalise_rows(exp_t)
     if pca is not None:
         exp_proj = pca.transform(exp_norm)

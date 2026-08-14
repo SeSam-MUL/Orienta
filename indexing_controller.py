@@ -854,6 +854,48 @@ def dictionary_index_patterns(
     # fail fast before we touch the GPU.
     _check_cancel()
 
+    # Dictionary indexing needs far better patterns than Hough or spherical:
+    # it correlates whole patterns pixel-by-pixel, so it cannot recover bands
+    # from noise, and on noisy data it silently returns a near-uniform map of
+    # meaningless orientations. Say so up front instead of letting the user
+    # discover it from a single-colour IPF map. Never blocks the run.
+    try:
+        from backend.api.services.pattern_quality import assess_for_template_matching
+        _q = assess_for_template_matching(signal)
+        if _q.get("verdict") == "too_noisy":
+            logger.warning("Dictionary indexing on noisy patterns: %s", _q["detail"])
+            _progress(f"⚠ {_q['detail']}")
+        elif _q.get("verdict") == "marginal":
+            logger.info("Dictionary indexing: %s", _q["detail"])
+            _progress(f"⚠ {_q['detail']}")
+        elif _q.get("image_quality") is not None:
+            _progress(f"Pattern quality {_q['image_quality']:.3f} — fine for template matching")
+    except Exception:
+        logger.warning("Pattern-quality pre-check failed", exc_info=True)
+
+    # Pull the active circular signal mask, if the user enabled one in the
+    # viewer. Converted to kikuchipy's ``signal_mask`` convention here:
+    # True = EXCLUDE (corners), False = include (disc).
+    #
+    # This MUST happen before the GPU dispatcher below — it used to sit further
+    # down, next to the kikuchipy call, where the GPU branch had already
+    # returned. So the mask the user set in the viewer reached the CPU path and
+    # was silently dropped on the GPU path, which then correlated the dark
+    # detector corners along with the pattern. Measured on LoGainNi (3720 px,
+    # 2 deg grid, inscribed disc = 2828 of 3600 detector px): NCC 0.461 -> 0.518.
+    # The orientations do not move on data this clean (0.95 deg to Hough either
+    # way) — what the mask buys here is a score that means what it says.
+    sig_mask_kp = None
+    try:
+        from backend.api.routes.ebsd_viewer import get_active_include_mask
+        include = get_active_include_mask()
+        if include is not None:
+            sig_mask_kp = ~include
+            _progress(f"Dictionary: circular signal mask active "
+                      f"({int((~sig_mask_kp).sum())}/{sig_mask_kp.size} px used)")
+    except Exception:
+        logger.debug("Could not fetch active signal mask", exc_info=True)
+
     # GPU dispatcher — when CUDA is present and compute_mode is "auto" or
     # "gpu", route to backend/dict_gpu/api.gpu_dictionary_index_patterns.
     # When compute_mode is "gpu" but no CUDA device is available, raise.
@@ -878,7 +920,18 @@ def dictionary_index_patterns(
                     detector=detector if detector is not None else getattr(signal, "detector", None),
                     metric=config.metric,
                     keep_n=config.keep_n,
+                    # Only used when ``dictionary`` is a raw master that still
+                    # has to be projected — it used to be dropped here, so the
+                    # GPU path always sampled at its own 1.5 deg default no
+                    # matter what the config said. Not the app's usual flow:
+                    # the page substitutes a pre-generated dictionary file per
+                    # phase, and that file's own grid governs. It IS reached by
+                    # API callers, and by the page's fallback when a phase has
+                    # no matching dictionary — that only warns, it does not
+                    # block, so the phase's master goes into the run as-is.
+                    angular_step_deg=config.angular_step_deg,
                     selection_mask=selection_mask,
+                    signal_mask=sig_mask_kp,
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
                 )
@@ -926,19 +979,8 @@ def dictionary_index_patterns(
             self.original.flush()
 
     _check_cancel()
-    # Pull the active circular signal mask, if the user enabled one in the
-    # viewer. Converted to kikuchipy's ``signal_mask`` convention here:
-    # True = EXCLUDE (corners), False = include (disc).
-    sig_mask_kp = None
-    try:
-        from backend.api.routes.ebsd_viewer import get_active_include_mask
-        include = get_active_include_mask()
-        if include is not None:
-            sig_mask_kp = ~include
-            _progress(f"Dictionary: circular signal mask active "
-                      f"({int((~sig_mask_kp).sum())}/{sig_mask_kp.size} px used)")
-    except Exception:
-        logger.debug("Could not fetch active signal mask", exc_info=True)
+    # ``sig_mask_kp`` was fetched above, before the GPU dispatcher, so both
+    # paths see the same mask.
 
     # kikuchipy's dictionary_indexing needs a simulated DICTIONARY whose pattern
     # shape matches the experimental detector. The indexing route loads a raw

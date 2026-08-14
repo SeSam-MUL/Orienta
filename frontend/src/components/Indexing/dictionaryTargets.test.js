@@ -359,7 +359,7 @@ describe('dictionaries written before the tilt fix', () => {
   });
 });
 
-describe('the Ni library dictionaries that collapsed the map', () => {
+describe('the Ni library dictionaries with the wrong sample tilt', () => {
   // Verbatim from Database/Dictionary_Library/Ni/*.json and HiGainNi.h5.
   const HIGAIN_NI = { sampleTilt: 75.7, detectorTilt: 10.0, azimuthal: 0 };
   const BROKEN = {          // camera tilt written into the sample-tilt slot
@@ -378,8 +378,11 @@ describe('the Ni library dictionaries that collapsed the map', () => {
                display_label: 'Ni', file_type: 'master' };
 
   it('rejects a 65.7 deg sample-tilt error', () => {
-    // Indexing against this produced a single-orientation map while Hough and
-    // Spherical resolved the grains on the same file.
+    // Measured on LoGainNi against Hough: this error does not break the map
+    // visibly, it rotates it rigidly. Grain structure and NCC both survive
+    // (neighbours 0.00 deg, NCC 0.278 -> 0.321) while every orientation ends
+    // up wrong by the tilt error — 65.7 deg in, 45.5 deg out, the cubic
+    // maximum. Nothing in the result would tell the user, hence a hard gate.
     expect(dictGeometryMatches(BROKEN, HIGAIN_NI)).toBe(false);
     expect(dictGeometryMatches(GOOD, HIGAIN_NI)).toBe(true);
   });

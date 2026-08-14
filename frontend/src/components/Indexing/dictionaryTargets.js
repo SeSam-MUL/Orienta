@@ -107,9 +107,17 @@ export function dictGeometryMatches(entry, geom) {
 
   // SAMPLE tilt. Two Ni dictionaries in the library record sample_tilt = 10
   // while the data was taken at 75.7 — the CAMERA tilt written into the
-  // sample-tilt slot. A 65.7 deg error in the geometry; indexing against them
-  // collapsed the whole map onto one orientation while Hough and Spherical
-  // resolved the grains fine. Checked FIRST because it is the larger error.
+  // sample-tilt slot, a 65.7 deg error in the geometry.
+  //
+  // What that error does, measured on LoGainNi against Hough: it rotates the
+  // whole map RIGIDLY. The grain structure survives intact (neighbouring
+  // pixels stay within 0.00 deg, ~150 distinct orientations either way) but
+  // every orientation is wrong by about the tilt error — 5.7 deg error gave a
+  // 6.2 deg offset, 10.7 gave 10.8, and the full 65.7 saturated at 45.5, the
+  // most two cubic orientations can differ by. NCC barely moves (0.278 ->
+  // 0.321), so nothing in the result flags it. A plausible-looking map in
+  // which every orientation is wrong is worse than a visibly broken one,
+  // which is why this is a hard gate. Checked FIRST: it is the larger error.
   const st = entry?.sample_tilt;
   const wantSample = Number(geom.sampleTilt);
   if (st !== null && st !== undefined && Number.isFinite(wantSample)

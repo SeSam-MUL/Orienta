@@ -175,3 +175,94 @@ def get_quality_map(
         return QualityMap(iq, "computed", "image_quality", LABEL_COMPUTED, (0, 1))
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Is this data good enough for template matching?
+# ---------------------------------------------------------------------------
+
+# Median FFT image quality below which dictionary (template) indexing cannot
+# work. Measured 2026-08-14, same master / geometry / code, best achievable NCC
+# over 52,607 orientations:
+#
+#   dataset                 image quality   best NCC
+#   LoGainNi.h5                  0.374        0.430   works
+#   kikuchipy nickel_ebsd_large  0.328        (0.32 in their tutorial)
+#   HiGainNi.h5                  0.037        0.115   noise
+#   AL_SI_x3000 (raw)            0.022        0.045   noise
+#   AL_SI_x3000 (3x3 averaged)   0.082        0.075   noise
+#
+# Hough and spherical indexing tolerate this data because they integrate over
+# band positions; template matching correlates pixel-by-pixel and cannot.
+# The band between the two thresholds is "expect a poor result", below the
+# lower one it is "the map will be meaningless".
+DICT_IQ_GOOD = 0.25
+DICT_IQ_MINIMUM = 0.15
+
+
+def assess_for_template_matching(signal, n_sample: int = 64) -> dict:
+    """Can dictionary indexing work on these patterns?
+
+    Samples up to ``n_sample`` patterns spread over the scan, removes the
+    static (sample mean) and dynamic background — the same preparation
+    dictionary indexing needs — and reports the median FFT image quality.
+
+    Returns a dict with ``image_quality``, ``verdict`` ("good" | "marginal" |
+    "too_noisy" | "unknown") and a human-readable ``detail``. Never raises:
+    a failed assessment must not block indexing, only inform it.
+    """
+    import kikuchipy as kp
+
+    out = {"image_quality": None, "verdict": "unknown", "detail": ""}
+    try:
+        data = signal.data
+        if getattr(data, "ndim", 0) != 4:
+            return out
+        n_rows, n_cols = int(data.shape[0]), int(data.shape[1])
+        step_r = max(n_rows // 8, 1)
+        step_c = max(n_cols // 8, 1)
+        pats = []
+        for r in range(0, n_rows, step_r):
+            for c in range(0, n_cols, step_c):
+                pats.append(np.asarray(data[r, c], dtype=np.float32))
+                if len(pats) >= n_sample:
+                    break
+            if len(pats) >= n_sample:
+                break
+        if len(pats) < 4:
+            return out
+
+        stack = np.stack(pats)
+        # Static background is not stored for EDAX files, so subtract the
+        # sample mean — that is what static removal amounts to here.
+        s = kp.signals.EBSD((stack - stack.mean(0)).astype(np.float32))
+        s.remove_dynamic_background()
+        iq = float(np.median(np.asarray(s.get_image_quality()).ravel()))
+    except Exception:
+        logger.warning("Could not assess pattern quality", exc_info=True)
+        return out
+
+    out["image_quality"] = round(iq, 4)
+    if iq >= DICT_IQ_GOOD:
+        out["verdict"] = "good"
+        out["detail"] = f"pattern quality {iq:.3f} — fine for template matching"
+    elif iq >= DICT_IQ_MINIMUM:
+        out["verdict"] = "marginal"
+        out["detail"] = (
+            f"pattern quality {iq:.3f} is marginal for template matching "
+            f"(good from {DICT_IQ_GOOD:.2f}). Expect low correlation scores; "
+            "frame averaging or a longer exposure would help."
+        )
+    else:
+        out["verdict"] = "too_noisy"
+        out["detail"] = (
+            f"pattern quality {iq:.3f} is far below what template matching "
+            f"needs ({DICT_IQ_MINIMUM:.2f} minimum, {DICT_IQ_GOOD:.2f} for a "
+            "good result). Dictionary indexing correlates whole patterns "
+            "pixel-by-pixel and cannot recover bands from noise; it will "
+            "return a near-uniform map with meaningless orientations. "
+            "Hough and Spherical indexing integrate over band positions and "
+            "still work on this data — use one of those, or acquire with a "
+            "longer exposure / more frame averaging."
+        )
+    return out
