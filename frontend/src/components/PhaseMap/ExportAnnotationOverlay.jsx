@@ -37,9 +37,10 @@ export default function ExportAnnotationOverlay({
       data-export-annotations
       style={{
         position: 'absolute',
-        // Placed on the MAP, which may sit to the right of a colour-bar column.
+        // Placed on the MAP, which may sit to the right of a colour-bar column
+        // and below the sheet's top edge once the figure has a margin.
         left: rect?.left ?? 0,
-        top: 0,
+        top: rect?.top ?? 0,
         width: rect?.width ?? '100%',
         height: rect?.height ?? '100%',
         // The layer itself is transparent to the pointer; its widgets are not.

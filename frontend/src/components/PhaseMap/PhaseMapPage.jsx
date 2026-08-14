@@ -57,7 +57,10 @@ import GrainBoundaryPanel from './GrainBoundaryPanel';
 import ScaleLegend from './ScaleLegend';
 import { defaultBands as defaultGbBands } from './grainBoundaryBands';
 import { drawAnnotationsOnto } from './annotations/composeExport';
-import { applyPatch, withAdded, withRemoved } from './annotations/exportAnnotEdits';
+import {
+  applyPatch, withAdded, withRemoved, withScaleBody, scaleMargins,
+} from './annotations/exportAnnotEdits';
+import ExportScalePanel from './ExportScalePanel';
 import { buildPanelSheet } from '../common/imageExport';
 // Layer-stack canvases are shape-compatible between EDS and PhaseMap, so
 // the same builders serve both rather than a near-duplicate set.
@@ -1623,7 +1626,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [mapExportSel, setMapExportSel] = useState(null);
   const [mapExportError, setMapExportError] = useState(null);
   const openMapExport = useCallback(async (build, name, label,
-    { autoCrop = false, withAnnotations = false } = {}) => {
+    { autoCrop = false, withAnnotations = false, extraAnnots = null } = {}) => {
     try {
       setMapExportError(null);
       const built = await build();
@@ -1650,8 +1653,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           mapWidth: built?.mapWidth ?? canvas.width,
           mapHeight: built?.mapHeight ?? canvas.height,
           // Where the map starts inside the picture: the colour bars sit to
-          // its left, and annotations are placed against the MAP.
-          mapLeft: built?.legendWidth ?? 0,
+          // its left, the key to its right, and both are held off by a gutter
+          // — annotations are placed against the MAP, not against the sheet.
+          mapLeft: built?.mapLeft ?? 0,
+          mapTop: built?.mapTop ?? 0,
           // In SCAN columns/rows — the frame may be cropped to the indexed
           // region, and the scale bar measures in scan steps.
           mapCols: built?.mapCols ?? null,
@@ -1659,7 +1664,13 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         },
       });
       setMapExportAnnots(withAnnotations
-        ? (annotRef.current || []).map((a) => ({ ...a, props: { ...a.props } }))
+        ? [
+          ...(annotRef.current || []).map((a) => ({ ...a, props: { ...a.props } })),
+          // The scales the page is showing right now, so the figure opens as
+          // the view looks. Every one of them is a body the user can move or
+          // switch off again in the dialog.
+          ...(extraAnnots || []),
+        ]
         : null);
     } catch (err) {
       setMapExportError(err?.message || String(err));
@@ -2338,54 +2349,71 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const effectiveTitle = mapTitle.trim() || autoTitle;
 
 
-  // The map export's picture. Called by the context menu and again whenever
-  // the user switches the colour-key column on or off — the key is drawn INTO
-  // the canvas, so that choice means composing a different picture.
-  const [mapExportWithKey, setMapExportWithKey] = useState(true);
-  const mapExportKeyRef = useRef(true);
-  mapExportKeyRef.current = mapExportWithKey;
-
-  const composeMapExport = useCallback(async (withKey) => {
+  // The map export's picture: the data, and nothing else. The colour key and
+  // the value scales are bodies laid ON this picture in the dialog, so they no
+  // longer change what has to be composed.
+  const composeMapExport = useCallback(async () => {
     const { composeMapCanvas } = await import('./annotations/composeExport');
     return composeMapCanvas({
       layers: layerStack.layers,
       bitmaps: layerStack.bitmaps,
       shape: stackShape ? { rows: stackShape[0], cols: stackShape[1] } : null,
       scale: 2,
-      ipfKey: (withKey && hasIpfLayer && ipfKeyImage) ? ipfKeyImage : null,
-      // The same bars the map shows beside it, on the opposite side of the
-      // figure — a reader gets the numbers without the app.
-      scaleLegends: scaleLegends.map((l) => ({ label: l.label, scale: l.scale })),
       // The same frame the screen shows, so the annotations land where they
       // were put.
       contentBbox: mapContentBbox,
     });
-  }, [layerStack.layers, layerStack.bitmaps, stackShape, hasIpfLayer, ipfKeyImage,
-      mapContentBbox, scaleLegends]);
+  }, [layerStack.layers, layerStack.bitmaps, stackShape, mapContentBbox]);
 
-  // Switching the colour key redraws the source picture but leaves everything
-  // the user has arranged in the dialog alone — annotations, chosen format,
-  // resolution. Only `src` and the extents change.
-  const applyMapExportKey = useCallback(async (next) => {
-    setMapExportWithKey(next);
-    try {
-      const built = await composeMapExport(next);
-      const canvas = built?.canvas ?? built;
-      setMapExport((cur) => (cur ? {
-        ...cur,
-        src: canvasToDataUrl(canvas),
-        source: {
-          width: canvas.width, height: canvas.height,
-          mapWidth: built?.mapWidth ?? canvas.width,
-          mapHeight: built?.mapHeight ?? canvas.height,
-          mapCols: built?.mapCols ?? null,
-          mapRows: built?.mapRows ?? null,
-        },
-      } : cur));
-    } catch (err) {
-      setMapExportError(err?.message || String(err));
+  // The IPF key as a ready <img>. The annotation drawers run synchronously at
+  // save time and cannot await a decode, so it is loaded as soon as the key
+  // itself changes.
+  const ipfKeyImgRef = useRef(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (!ipfKeyImage) { ipfKeyImgRef.current = null; return undefined; }
+    import('./annotations/composeExport')
+      .then(({ loadKeyImage }) => loadKeyImage(ipfKeyImage))
+      .then((img) => { if (!cancelled) ipfKeyImgRef.current = img; });
+    return () => { cancelled = true; };
+  }, [ipfKeyImage]);
+
+  // Every scale this figure could carry, in the order the reader meets them.
+  const exportScaleEntries = useMemo(() => {
+    const out = [];
+    if (hasIpfLayer && ipfKeyImage) {
+      out.push({ type: 'colorkey', label: t('phasemap:ipfKeyPanel.title') });
     }
-  }, [composeMapExport]);
+    for (const l of scaleLegends) {
+      out.push({ type: 'valuescale', layerId: l.id, label: l.label });
+    }
+    return out;
+  }, [hasIpfLayer, ipfKeyImage, scaleLegends, t]);
+
+  // The border the exported sheet needs, plus a key naming the set of scale
+  // bodies it was measured for. The dialog re-fits only when that key changes.
+  const mapExportMargins = useMemo(() => {
+    const bodies = (mapExportAnnots || []).filter(
+      (a) => a.type === 'colorkey' || a.type === 'valuescale',
+    );
+    return {
+      margins: scaleMargins(bodies),
+      key: bodies.map((a) => `${a.type}:${a.props?.layerId ?? ''}`).sort().join('|'),
+    };
+  }, [mapExportAnnots]);
+
+  // What the export opens with: a body for each scale whose column is open
+  // beside the map. Built through the same helper the checkboxes use, so the
+  // bodies land in the same tidy column instead of on top of each other.
+  const initialScaleBodies = useCallback(() => {
+    let list = [];
+    for (const entry of exportScaleEntries) {
+      const shownOnPage = entry.type === 'colorkey' ? ipfKeyOpen : scaleLegendOpen;
+      if (!shownOnPage) continue;
+      list = withScaleBody(list, entry, true).annotations;
+    }
+    return list;
+  }, [exportScaleEntries, ipfKeyOpen, scaleLegendOpen]);
 
   // Menu for a right-click on the map. In grid view `layer` is the tile that
   // was hit; in stacked view it is null and only the composite makes sense.
@@ -2407,36 +2435,26 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       // and are burnt in at save time. No auto-crop either: the composed
       // picture already IS the figure, and cropping it would move the
       // annotations the user arranged on it.
-      const openMap = (withKey) => {
-        setMapExportWithKey(withKey);
-        openMapExport(
-          () => composeMapExport(withKey),
-          withKey ? stem : `${stem}_map`,
+      // ONE way in. Which scales the figure carries is decided in the dialog,
+      // where they can also be moved and switched again — asking here forced
+      // the choice before the user had seen the figure, and could not be
+      // undone without starting over.
+      items.push({
+        id: 'map',
+        label: t('imageexport:menuExportMap'),
+        onSelect: () => openMapExport(
+          () => composeMapExport(),
+          stem,
           effectiveTitle || 'Phase map',
-          { autoCrop: false, withAnnotations: true },
-        );
-      };
-      // With a colour key on screen the two sensible figures are "the whole
-      // panel" and "the map alone" — asking here saves opening the dialog to
-      // find out. Without a key there is only one thing to export.
-      if (hasIpfLayer && ipfKeyImage) {
-        items.push({
-          id: 'map',
-          label: t('imageexport:menuExportMapWithKey'),
-          onSelect: () => openMap(true),
-        });
-        items.push({
-          id: 'map-only',
-          label: t('imageexport:menuExportMapOnly'),
-          onSelect: () => openMap(false),
-        });
-      } else {
-        items.push({
-          id: 'map',
-          label: t('imageexport:menuExportMap'),
-          onSelect: () => openMap(false),
-        });
-      }
+          {
+            autoCrop: false,
+            withAnnotations: true,
+            // Opens showing what the page shows: the scales whose columns are
+            // open beside the map.
+            extraAnnots: initialScaleBodies(),
+          },
+        ),
+      });
     }
     // "All maps on one sheet" only earns its place where several maps are
     // actually on screen — in the grid view. In the stacked view the user sees
@@ -2459,7 +2477,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       });
     }
     return items;
-  }, [t, openMapExport, layerStack, stackShape, effectiveTitle]);
+  }, [t, openMapExport, layerStack, stackShape, effectiveTitle,
+      composeMapExport, initialScaleBodies]);
 
   // Calibration
   const [stepX, setStepX] = useState(1.0);
@@ -4612,6 +4631,11 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             title={mapExport.label}
             defaultBaseName={mapExport.name}
             defaultCrop={mapExport.crop}
+            // The scales stand beside the map, so the sheet needs room for
+            // them. Keyed on WHICH scales are in the figure, not on where they
+            // sit — dragging one must not resize the picture mid-gesture.
+            fitMargins={mapExportMargins.margins}
+            fitMarginsKey={mapExportMargins.key}
             overlay={mapExportAnnots ? ((rect) => (
               <ExportAnnotationOverlay
                 rect={{
@@ -4619,6 +4643,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                   // IPF key sit in columns beside it and must stay out of their
                   // coordinates.
                   left: rect.width * ((mapExport.source.mapLeft ?? 0) / mapExport.source.width),
+                  top: rect.height * ((mapExport.source.mapTop ?? 0) / mapExport.source.height),
                   width: rect.width * (mapExport.source.mapWidth / mapExport.source.width),
                   height: rect.height * (mapExport.source.mapHeight / mapExport.source.height),
                 }}
@@ -4633,6 +4658,13 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                   mapNativeSize: mapExport.source.mapCols
                     ? { w: mapExport.source.mapCols, h: mapExport.source.mapRows }
                     : (stackShape ? { w: stackShape[1], h: stackShape[0] } : null),
+                  // What the scale bodies show, live from the layer stack.
+                  scaleLegends,
+                  ipfKeyImage,
+                  // Here — unlike on the map — a body may be dragged off the
+                  // picture into the border, which is where a colour key
+                  // belongs in most figures.
+                  allowOutside: true,
                 }}
               />
             )) : null}
@@ -4644,34 +4676,26 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 width: src.mapWidth * geom.sx,
                 height: src.mapHeight * geom.sy,
                 offsetX: geom.origin.x + (src.mapLeft ?? 0) * geom.sx - geom.crop.x * geom.sx,
-                offsetY: geom.origin.y - geom.crop.y * geom.sy,
+                offsetY: geom.origin.y + (src.mapTop ?? 0) * geom.sy - geom.crop.y * geom.sy,
                 phaseStats: phaseStatsForAnnot,
                 stepX,
                 scanCols: src.mapCols ?? (stackShape ? stackShape[1] : null),
                 // Text grows with the picture, otherwise a 4x figure gets
                 // hairline captions.
                 textScale: geom.sx,
+                // The same two sources the preview draws from.
+                scaleLegends,
+                ipfKeyImg: ipfKeyImgRef.current,
               });
             }) : null}
             sidePanel={mapExportAnnots ? (
               <>
-                {hasIpfLayer && ipfKeyImage && (
-                  <label
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      fontSize: '9pt', color: colors.text, marginBottom: 6, cursor: 'pointer',
-                    }}
-                    title={t('phasemap:hoverTips.exportWithKey')}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={mapExportWithKey}
-                      onChange={(e) => applyMapExportKey(e.target.checked)}
-                      style={{ margin: 0 }}
-                    />
-                    {t('phasemap:exportWithKey')}
-                  </label>
-                )}
+                <ExportScalePanel
+                  entries={exportScaleEntries}
+                  annotations={mapExportAnnots}
+                  onChange={setMapExportAnnots}
+                  onSelect={setMapExportSel}
+                />
               <AnnotationToolbar
                 annotations={mapExportAnnots}
                 selectedId={mapExportSel}

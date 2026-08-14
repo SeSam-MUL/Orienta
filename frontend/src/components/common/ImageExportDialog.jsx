@@ -285,6 +285,14 @@ export default function ImageExportDialog({
   // Caller-supplied controls, rendered at the top of the settings column.
   // The overlay's own editor lives here so it does not cover the picture.
   sidePanel = null,
+  // A border the picture NEEDS, as per-side fractions of the image: the phase
+  // map places its colour key and value scales beside the map, and without the
+  // room for them the file would cut off what the preview shows. Applied
+  // whenever `fitMarginsKey` changes — that key names the set of things being
+  // fitted, so ticking a scale re-fits the border while merely dragging one
+  // does not resize the picture under the user's hand.
+  fitMargins = null,
+  fitMarginsKey = null,
   // Hands this dialog's scale-bar controls to a bar the CALLER owns — the one
   // the user placed on the map. There is then exactly one bar in the figure,
   // reachable from both places, instead of the dialog adding a second one.
@@ -376,6 +384,18 @@ export default function ImageExportDialog({
       setMargins(NO_MARGINS);
     }
   }, [open, annotations?.label]);
+
+  // Fit the border to whatever sits beside the picture. Deliberately keyed on
+  // WHICH things are out there rather than on where they are, so the sheet
+  // does not resize on every mouse-move of a drag.
+  useEffect(() => {
+    if (!open || !fitMargins) return;
+    setMargins({
+      top: fitMargins.top || 0, right: fitMargins.right || 0,
+      bottom: fitMargins.bottom || 0, left: fitMargins.left || 0,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, fitMarginsKey]);
 
   // --- geometry of the preview ---------------------------------------------
   const measurePreview = useCallback(() => {

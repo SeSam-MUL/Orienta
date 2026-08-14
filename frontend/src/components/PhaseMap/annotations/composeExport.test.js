@@ -44,6 +44,62 @@ const OPTS = {
   scale: 2, stepX: 0.2, scanCols: 145,
 };
 
+const SCALE_LEGENDS = [
+  { id: 'bc', label: 'Band Contrast', scale: { min: 12, max: 214, unit: 'a.u.', stops: ['#000', '#fff'] } },
+];
+
+describe('scale bodies', () => {
+  const fakeImg = { width: 200, height: 260 };
+
+  it('draws a value scale from the LIVE layer, not from the annotation', () => {
+    const ctx = recordingCtx();
+    const annot = { id: 'v', type: 'valuescale', x: 0.7, y: 0.1, w: 0.2, h: 0.4, props: { layerId: 'bc' } };
+    drawAnnotationsOnto(ctx, [annot], { ...OPTS, scaleLegends: SCALE_LEGENDS });
+    const texts = ctx.calls.filter((c) => c[0] === 'fillText').map((c) => c[1]);
+    // Caption, the two ends, the middle and the unit — the numbers come from
+    // the layer's own range.
+    // '12.0' not '12': the same formatter the on-screen legend uses.
+    expect(texts).toEqual(expect.arrayContaining(['Band Contrast', '214', '113', '12.0', 'a.u.']));
+  });
+
+  it('draws nothing when the layer it belongs to is gone', () => {
+    // A stale bar would keep claiming a range nobody can check.
+    const ctx = recordingCtx();
+    const annot = { id: 'v', type: 'valuescale', x: 0.7, y: 0.1, w: 0.2, h: 0.4, props: { layerId: 'vanished' } };
+    drawAnnotationsOnto(ctx, [annot], { ...OPTS, scaleLegends: SCALE_LEGENDS });
+    expect(ctx.calls.some((c) => c[0] === 'fillText')).toBe(false);
+  });
+
+  it('contain-fits the colour key inside its box', () => {
+    const ctx = recordingCtx();
+    const annot = { id: 'k', type: 'colorkey', x: 0.1, y: 0.1, w: 0.25, h: 0.25, props: {} };
+    drawAnnotationsOnto(ctx, [annot], { ...OPTS, ipfKeyImg: fakeImg });
+    const draw = ctx.calls.find((c) => c[0] === 'drawImage');
+    expect(draw).toBeTruthy();
+    const [, , , , dw, dh] = draw;
+    // 200x260 into 200x150 minus padding: height is the binding side, and the
+    // aspect ratio survives.
+    expect(dh).toBeLessThanOrEqual(0.25 * OPTS.height);
+    expect(dw / dh).toBeCloseTo(200 / 260, 5);
+  });
+
+  it('draws no key at all when none was loaded', () => {
+    const ctx = recordingCtx();
+    const annot = { id: 'k', type: 'colorkey', x: 0.1, y: 0.1, w: 0.25, h: 0.25, props: {} };
+    drawAnnotationsOnto(ctx, [annot], OPTS);
+    expect(ctx.calls.some((c) => c[0] === 'drawImage')).toBe(false);
+  });
+
+  it('puts a body dragged off the map outside the map box', () => {
+    // Negative coordinates are how a body sits in the dialog's border.
+    const ctx = recordingCtx();
+    const annot = { id: 'k', type: 'colorkey', x: -0.3, y: 0.1, w: 0.25, h: 0.25, props: {} };
+    drawAnnotationsOnto(ctx, [annot], { ...OPTS, ipfKeyImg: fakeImg, offsetX: 500 });
+    const translate = ctx.calls.find((c) => c[0] === 'translate');
+    expect(translate[1]).toBe(500 + -0.3 * OPTS.width);
+  });
+});
+
 describe('drawAnnotationsOnto', () => {
   it('draws every annotation type without blowing up', () => {
     // Each drawer takes its own parameter list. One of them once read an

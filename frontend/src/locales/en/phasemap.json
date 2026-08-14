@@ -521,6 +521,7 @@
     "removeAria": "×",
     "propertiesHeading": "{{type}} properties",
     "fontSize": "Font size",
+    "textScale": "Text size",
     "background": "Background",
     "lengthUm": "Length (µm)",
     "barColor": "Bar color",
@@ -534,6 +535,8 @@
     "typeScalebar": "Scalebar",
     "typeTitle": "Title",
     "typeArrow": "Arrow",
+    "typeColorKey": "Colour key",
+    "typeValueScale": "Value scale",
     "noPhasesYet": "(no phases yet)",
     "scalebarUnit": "{{length}} µm",
     "defaultTitle": "Title",
@@ -601,6 +604,7 @@
     "selectAnnotation": "Select this annotation to edit or reposition it",
     "removeAnnotation": "Delete this annotation",
     "annotFontSize": "Font size of this annotation",
+    "annotTextScale": "Nudge the lettering. It is derived from the body itself — resize the body and the numbers follow — so the preview and the exported file agree.",
     "annotBackground": "Background colour of the legend box (CSS colour)",
     "annotLengthUm": "Physical length of the scalebar in µm",
     "annotBarColor": "Colour of the scalebar bar",
@@ -611,7 +615,7 @@
     "matchesClearMarkers": "Remove all numbered markers from the comparison panels",
     "zoomReset": "Click to reset the zoom",
     "changeLayerType": "Show a different map in this layer — opacity, blend mode and position stay as they are",
-    "exportWithKey": "Draw the colour-key column beside the map in the exported image. Off exports the map alone.",
+    "exportScaleToggle": "Put this scale into the figure as a body of its own — move it, resize it, give it a background, and drag it off the map into the border if that reads better.",
     "gbClassOn": "Draw this class of boundary",
     "gbFrom": "Lower angle of this class — moves the class below with it",
     "gbTo": "Upper angle of this class — moves the class above with it",
@@ -660,7 +664,12 @@
   "advanced": {
     "title": "Advanced tools"
   },
-  "exportWithKey": "Include IPF colour key",
+  "exportScales": {
+    "title": "Scales in the figure",
+    "hint": "Tick a scale to put it on the figure, then drag it where you want it.",
+    "none": "This map has no scale to show.",
+    "edit": "select"
+  },
   "grainBoundaries": {
     "sub": "Sub-boundaries",
     "lagb": "Low-angle GB",

@@ -521,6 +521,7 @@
     "removeAria": "×",
     "propertiesHeading": "{{type}} のプロパティ",
     "fontSize": "フォントサイズ",
+    "textScale": "文字サイズ",
     "background": "背景",
     "lengthUm": "長さ (µm)",
     "barColor": "バーの色",
@@ -534,6 +535,8 @@
     "typeScalebar": "スケールバー",
     "typeTitle": "タイトル",
     "typeArrow": "矢印",
+    "typeColorKey": "カラーキー",
+    "typeValueScale": "数値スケール",
     "noPhasesYet": "（まだ相がありません）",
     "scalebarUnit": "{{length}} µm",
     "defaultTitle": "タイトル",
@@ -601,6 +604,7 @@
     "selectAnnotation": "この注釈を選択して編集または再配置",
     "removeAnnotation": "この注釈を削除",
     "annotFontSize": "この注釈のフォントサイズ",
+    "annotTextScale": "文字の微調整。サイズは要素自体から決まるため（要素を拡大すれば数字も大きくなります）、プレビューと書き出したファイルが一致します。",
     "annotBackground": "凡例ボックスの背景色（CSS カラー）",
     "annotLengthUm": "スケールバーの物理的な長さ（µm）",
     "annotBarColor": "スケールバーのバーの色",
@@ -611,7 +615,7 @@
     "matchesClearMarkers": "比較パネルからすべての番号付きマーカーを削除します",
     "zoomReset": "クリックでズームをリセット",
     "changeLayerType": "このレイヤーに別のマップを表示します（不透明度・ブレンド・並び順はそのまま）",
-    "exportWithKey": "書き出す画像にカラーキーの列をマップの横へ描画します。オフならマップのみ。",
+    "exportScaleToggle": "このスケールを独立した要素として図に置きます。移動・サイズ変更・背景色の設定ができ、マップの外（余白）へ出すこともできます。",
     "gbClassOn": "この区分の境界を描画",
     "gbFrom": "この区分の下限角（下の区分も追従）",
     "gbTo": "この区分の上限角（上の区分も追従）",
@@ -660,7 +664,12 @@
   "advanced": {
     "title": "高度なツール"
   },
-  "exportWithKey": "IPFカラーキーを含める",
+  "exportScales": {
+    "title": "図に入れるスケール",
+    "hint": "チェックすると図に置かれます。あとは好きな位置へドラッグしてください。",
+    "none": "このマップに表示できるスケールはありません。",
+    "edit": "選択"
+  },
   "grainBoundaries": {
     "sub": "亜粒界",
     "lagb": "小角粒界",

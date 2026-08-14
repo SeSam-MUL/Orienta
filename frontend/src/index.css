@@ -296,6 +296,61 @@ input[type="range"]:active::-webkit-slider-thumb {
   cursor: grabbing;
 }
 
+/* Opacity slider — the track IS the preview.
+   The element's own background (set inline: the colour fading over a
+   checkerboard) paints the whole box; track and thumb are transparent so it
+   shows through. Native <input type=range> underneath, so arrow keys, Home/End
+   and click-to-jump keep working. */
+/* `input[type="range"]` above is an element + attribute selector and outranks
+   a bare class, which silently held this at that rule's 16px height. Matching
+   the element here puts the two in the right order. */
+input[type="range"].alpha-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 22px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  /* Chrome paints a focus ring around the whole box; keep it, just tidy. */
+  outline-offset: 2px;
+}
+.alpha-slider::-webkit-slider-runnable-track {
+  height: 100%;
+  background: transparent;
+}
+.alpha-slider::-moz-range-track {
+  height: 100%;
+  background: transparent;
+}
+/* A full-height handle, like a colour picker's — visible on a light track and
+   on a dark one, because it carries both a dark outline and a light inset. */
+.alpha-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 20px;
+  border-radius: 3px;
+  background: #f8f8f2;
+  border: 1px solid #14161e;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.65) inset, 0 1px 2px rgba(0, 0, 0, 0.55);
+  cursor: grab;
+}
+.alpha-slider::-moz-range-thumb {
+  width: 10px;
+  height: 20px;
+  border-radius: 3px;
+  background: #f8f8f2;
+  border: 1px solid #14161e;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.65) inset, 0 1px 2px rgba(0, 0, 0, 0.55);
+  cursor: grab;
+}
+.alpha-slider:active::-webkit-slider-thumb { cursor: grabbing; }
+.alpha-slider:active::-moz-range-thumb { cursor: grabbing; }
+.alpha-slider:hover { border-color: var(--accent-purple); }
+
 /* Color picker border for dark theme */
 input[type="color"] {
   cursor: pointer;

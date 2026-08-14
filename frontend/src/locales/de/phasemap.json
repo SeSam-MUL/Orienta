@@ -521,6 +521,7 @@
     "removeAria": "×",
     "propertiesHeading": "{{type}}-Eigenschaften",
     "fontSize": "Schriftgröße",
+    "textScale": "Textgröße",
     "background": "Hintergrund",
     "lengthUm": "Länge (µm)",
     "barColor": "Balkenfarbe",
@@ -534,6 +535,8 @@
     "typeScalebar": "Maßstab",
     "typeTitle": "Titel",
     "typeArrow": "Pfeil",
+    "typeColorKey": "Farbschlüssel",
+    "typeValueScale": "Wertskala",
     "noPhasesYet": "(noch keine Phasen)",
     "scalebarUnit": "{{length}} µm",
     "defaultTitle": "Titel",
@@ -601,6 +604,7 @@
     "selectAnnotation": "Diese Annotation auswählen, um sie zu bearbeiten oder neu zu positionieren",
     "removeAnnotation": "Diese Annotation löschen",
     "annotFontSize": "Schriftgröße dieser Annotation",
+    "annotTextScale": "Feinjustierung der Beschriftung. Sie ergibt sich aus dem Körper selbst — Körper vergrößern, Zahlen wachsen mit — damit Vorschau und exportierte Datei übereinstimmen.",
     "annotBackground": "Hintergrundfarbe der Legendenbox (CSS-Farbe)",
     "annotLengthUm": "Physische Länge des Maßstabs in µm",
     "annotBarColor": "Farbe des Maßstabsbalkens",
@@ -611,7 +615,7 @@
     "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
     "zoomReset": "Klicken, um den Zoom zurückzusetzen",
     "changeLayerType": "Eine andere Karte in dieser Ebene anzeigen — Deckkraft, Mischmodus und Position bleiben erhalten",
-    "exportWithKey": "Die Farbskala-Spalte neben der Karte ins Exportbild zeichnen. Aus: nur die Karte.",
+    "exportScaleToggle": "Diese Skala als eigenen Körper in die Abbildung legen — bewegen, Größe ändern, Hintergrundfarbe geben, und bei Bedarf aus der Karte heraus in den Rand ziehen.",
     "gbClassOn": "Diese Grenzklasse zeichnen",
     "gbFrom": "Untere Winkelgrenze — zieht die Klasse darunter mit",
     "gbTo": "Obere Winkelgrenze — zieht die Klasse darüber mit",
@@ -660,7 +664,12 @@
   "advanced": {
     "title": "Erweiterte Werkzeuge"
   },
-  "exportWithKey": "IPF-Farbskala einbeziehen",
+  "exportScales": {
+    "title": "Skalen in der Abbildung",
+    "hint": "Skala ankreuzen, dann an ihren Platz ziehen.",
+    "none": "Diese Karte hat keine Skala.",
+    "edit": "auswählen"
+  },
   "grainBoundaries": {
     "sub": "Subgrenzen",
     "lagb": "Kleinwinkelkorngrenze",

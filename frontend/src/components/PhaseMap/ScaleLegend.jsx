@@ -1,4 +1,5 @@
 import { colors } from '../../theme/components';
+import { formatScaleValue, stopsToGradient } from './scaleFormat';
 
 /**
  * The colour bar for a layer whose colours mean a number.
@@ -11,21 +12,9 @@ import { colors } from '../../theme/components';
  * bar cannot drift from the picture (no second implementation of viridis).
  */
 
-export function formatScaleValue(v) {
-  if (!Number.isFinite(v)) return '—';
-  const a = Math.abs(v);
-  if (a === 0) return '0';
-  if (a >= 1000 || a < 0.01) return v.toExponential(1);
-  if (a >= 100) return v.toFixed(0);
-  if (a >= 10) return v.toFixed(1);
-  return v.toFixed(a >= 1 ? 2 : 3);
-}
-
-/** CSS gradient string for a set of colour stops, bottom = min. */
-export function stopsToGradient(stops, direction = 'to top') {
-  const list = Array.isArray(stops) && stops.length >= 2 ? stops : ['#000000', '#ffffff'];
-  return `linear-gradient(${direction}, ${list.join(', ')})`;
-}
+// Re-exported so the long-standing importers of this module keep working; the
+// canvas exporter takes them straight from `scaleFormat`.
+export { formatScaleValue, stopsToGradient };
 
 /**
  * `height` accepts a number of pixels or 'fill' — the latter stretches the bar

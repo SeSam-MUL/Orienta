@@ -39,7 +39,31 @@ export const DEFAULTS = {
     x: 0.88, y: 0.05, w: 0.1, h: 0.1, rotation: 0,
     props: { label: 'ND', color: '#ffb86c', fontSize: 11 },
   },
+  // The IPF colour key. The picture comes from the backend and is handed in
+  // through the drawing context — storing it in the annotation would freeze a
+  // key for one direction into a figure that later shows another.
+  //
+  // x > 1: it starts BESIDE the map, not on top of it. Coordinates are
+  // fractions of the map, so anything outside [0..1] lives in the border.
+  colorkey: {
+    // Vertically centred against the map (0.3 + 0.4 → middle at 0.5) rather
+    // than pinned to the top, which left the column looking half empty.
+    x: 1.04, y: 0.3, w: 0.4, h: 0.4, rotation: 0,
+    // The key is drawn in dark ink, so it needs a light plate to sit on.
+    props: { bgColor: '#ffffff', bgOpacity: 0.92 },
+  },
+  // One colour bar for one layer. `layerId` says WHICH layer — the numbers and
+  // the stops are looked up live, so a bar cannot outlive the range it claims.
+  valuescale: {
+    x: -0.26, y: 0.02, w: 0.22, h: 0.96, rotation: 0,
+    // `textScale` rather than a point size: the lettering is derived from the
+    // body so the preview and the exported file cannot disagree.
+    props: { layerId: null, textScale: 1, textColor: '#ffffff', bgColor: '#14161e', bgOpacity: 0.65 },
+  },
 };
+
+/** The types that show a scale rather than something the user typed. */
+export const SCALE_TYPES = Object.freeze(['colorkey', 'valuescale']);
 
 export function makeId(type) {
   return `${type}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`;

@@ -1,6 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { umToScreenPx, niceLength } from '../scalebarGeometry';
+import { formatScaleValue, stopsToGradient } from '../scaleFormat';
+import { valueScaleFontPx } from './composeExport';
 
 /**
  * How much room a scale bar actually needs, in pixels.
@@ -88,6 +90,22 @@ const ROT_OFFSET = 22;  // px — rotation handle distance above box
 function clamp01(v) {
   if (!Number.isFinite(v)) return 0;
   return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * On the map an annotation stays on the map — dragged off, it would simply be
+ * invisible. In the export dialog the picture can have a border around it, and
+ * putting the colour key BESIDE the data instead of on top of it is the normal
+ * way to compose a figure, so there the box opens up.
+ *
+ * Still bounded: a body that ran away by a whole picture width could not be
+ * grabbed again. Coordinates stay relative to the MAP either way, so widening
+ * the border does not move anything.
+ */
+const OUTSIDE_REACH = 1.5;
+function clampOutside(v) {
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(-OUTSIDE_REACH, Math.min(1 + OUTSIDE_REACH, v));
 }
 
 /** Convert a mouse event to normalised (x, y) inside the container. */
@@ -256,15 +274,102 @@ function ArrowBody({ annot }) {
   );
 }
 
-function renderBody(annot, ctx, containerSize) {
+/**
+ * The IPF colour key as a body you can move.
+ *
+ * The picture is the very PNG the backend rendered for THIS map (direction,
+ * phase filter and the user's colour picks are already in it), handed down
+ * through the context — never stored on the annotation, which would freeze a
+ * key that later belongs to a different map.
+ */
+function ColorKeyBody({ annot, ctx }) {
+  const raw = ctx?.ipfKeyImage;
+  const src = raw ? (raw.startsWith('data:') ? raw : `data:image/png;base64,${raw}`) : null;
+  return (
+    <div style={{
+      width: '100%', height: '100%', boxSizing: 'border-box',
+      background: backgroundCss(annot.props), borderRadius: PLATE_RADIUS,
+      padding: 4, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      overflow: 'hidden',
+    }}>
+      {src ? (
+        <img
+          src={src} alt=""
+          draggable={false}
+          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', display: 'block' }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * One value scale as a body you can move: caption, colour bar, ends + middle.
+ *
+ * Mirrors what `drawValueScale` burns into the file, and reads its numbers from
+ * the same live layer, so the preview cannot promise a bar the export does not
+ * draw.
+ */
+function ValueScaleBody({ annot, ctx, box }) {
+  const p = annot.props || {};
+  const entry = (ctx?.scaleLegends || []).find((e) => e?.id === p.layerId);
+  const scale = entry?.scale;
+  // Sized from the body, exactly as the exporter sizes it — so what is on
+  // screen is what lands in the file.
+  const fontSize = valueScaleFontPx(box?.w ?? 0, box?.h ?? 0, p.textScale);
+  const color = p.textColor ?? '#ffffff';
+  const plate = {
+    width: '100%', height: '100%', boxSizing: 'border-box',
+    background: backgroundCss(annot.props), borderRadius: PLATE_RADIUS,
+    padding: 4, overflow: 'hidden',
+  };
+  if (!scale || !Number.isFinite(scale.min) || !Number.isFinite(scale.max)) {
+    return <div style={{ ...plate, color: '#888', fontSize: fontSize * 0.9 }}>—</div>;
+  }
+  return (
+    <div style={{
+      ...plate,
+      display: 'flex', flexDirection: 'column', gap: 2,
+      color, fontSize, fontFamily: 'sans-serif', lineHeight: 1.2,
+    }}>
+      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>
+        {entry.label}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: 4, flex: 1, minHeight: 0 }}>
+        <div style={{
+          width: '34%', minWidth: 6,
+          border: '1px solid rgba(0,0,0,0.55)', borderRadius: 1,
+          background: stopsToGradient(scale.stops),
+        }} />
+        <div style={{
+          display: 'flex', flexDirection: 'column', justifyContent: 'space-between',
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          <span>{formatScaleValue(scale.max)}</span>
+          <span>{formatScaleValue((scale.min + scale.max) / 2)}</span>
+          <span>{formatScaleValue(scale.min)}</span>
+        </div>
+      </div>
+      {scale.unit ? (
+        <div style={{ flexShrink: 0 }}>{scale.unit}</div>
+      ) : null}
+    </div>
+  );
+}
+
+// `box` is the widget's own size in screen pixels — the scale body sizes its
+// lettering from it, the way the exporter sizes it from the box in the file.
+function renderBody(annot, ctx, containerSize, box) {
   switch (annot.type) {
     case 'legend':   return <LegendBody annot={annot} phaseStats={ctx.phaseStats} />;
     case 'scalebar': return (
       <ScalebarBody annot={annot} ctx={ctx} containerSize={containerSize} />
     );
-    case 'title':    return <TitleBody annot={annot} />;
-    case 'arrow':    return <ArrowBody annot={annot} />;
-    default:         return <div style={{ color: '#888' }}>?{annot.type}</div>;
+    case 'title':      return <TitleBody annot={annot} />;
+    case 'arrow':      return <ArrowBody annot={annot} />;
+    case 'colorkey':   return <ColorKeyBody annot={annot} ctx={ctx} />;
+    case 'valuescale': return <ValueScaleBody annot={annot} ctx={ctx} box={box} />;
+    default:           return <div style={{ color: '#888' }}>?{annot.type}</div>;
   }
 }
 
@@ -349,6 +454,7 @@ function AnnotationWidget({
     window.addEventListener('mouseup', winUp);
   };
 
+  const clampPos = ctx?.allowOutside ? clampOutside : clamp01;
   const onWindowMove = useCallback((ev) => {
     const d = dragRef.current;
     if (!d) return;
@@ -359,8 +465,8 @@ function AnnotationWidget({
       const dx = (ev.clientX - d.startX) / rect2.width;
       const dy = (ev.clientY - d.startY) / rect2.height;
       onUpdate(annot.id, {
-        x: clamp01(d.startAx + dx),
-        y: clamp01(d.startAy + dy),
+        x: clampPos(d.startAx + dx),
+        y: clampPos(d.startAy + dy),
       });
     } else if (d.mode === 'resize') {
       // A scale bar has no free width — its length is µm through the step
@@ -383,8 +489,8 @@ function AnnotationWidget({
       let nx = d.startAx, ny = d.startAy, nw = d.startAw, nh = d.startAh;
       if (d.corner.includes('e')) nw = Math.max(0.02, d.startAw + dx);
       if (d.corner.includes('s')) nh = Math.max(0.02, d.startAh + dy);
-      if (d.corner.includes('w')) { nx = clamp01(d.startAx + dx); nw = Math.max(0.02, d.startAw - dx); }
-      if (d.corner.includes('n')) { ny = clamp01(d.startAy + dy); nh = Math.max(0.02, d.startAh - dy); }
+      if (d.corner.includes('w')) { nx = clampPos(d.startAx + dx); nw = Math.max(0.02, d.startAw - dx); }
+      if (d.corner.includes('n')) { ny = clampPos(d.startAy + dy); nh = Math.max(0.02, d.startAh - dy); }
       onUpdate(annot.id, { x: nx, y: ny, w: nw, h: nh });
     } else if (d.mode === 'rotate') {
       const ang = Math.atan2(
@@ -393,7 +499,7 @@ function AnnotationWidget({
       ) * 180 / Math.PI;
       onUpdate(annot.id, { rotation: d.startRot + (ang - d.startAngle) });
     }
-  }, [annot.id, containerRef, onUpdate]);
+  }, [annot.id, containerRef, onUpdate, clampPos]);
 
   const onWindowUp = useCallback(() => {
     dragRef.current = null;
@@ -438,7 +544,7 @@ function AnnotationWidget({
 
   return (
     <div data-annotation-widget style={wrapperStyle} onMouseDown={onMouseDownBody}>
-      {renderBody(annot, ctx, containerSize)}
+      {renderBody(annot, ctx, containerSize, { w: width, h: height })}
       {isSelected && (
         <>
           {/* Corner handles */}

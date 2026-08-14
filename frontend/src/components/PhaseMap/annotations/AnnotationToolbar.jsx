@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, spacing, CollapsibleGroup } from '../../../theme/components';
+import OpacitySlider from '../../common/OpacitySlider';
 
 /**
  * Toolbar for adding / editing canvas annotations (Legend, Scalebar,
@@ -9,6 +10,26 @@ import { colors, spacing, CollapsibleGroup } from '../../../theme/components';
  * Layout: Add row (four buttons) + selected-annotation props panel.
  * The props panel adapts to the selected annotation's type.
  */
+/**
+ * One labelled row of the properties panel.
+ *
+ * Defined at module level ON PURPOSE. While it lived inside the component it
+ * was a new function on every render, so React tore the row down and built it
+ * again each time a value changed — and a remounted <input> loses the pointer
+ * capture the browser gives it on mousedown. That is why the sliders could be
+ * clicked but not dragged: the first mouse-move ended the gesture.
+ */
+function Row({ label, children }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+      <span style={{ fontSize: '8.5pt', color: colors.textSecondary, minWidth: 76 }}>
+        {label}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
+    </div>
+  );
+}
+
 function AnnotationToolbar({
   annotations,
   selectedId,
@@ -24,6 +45,8 @@ function AnnotationToolbar({
     scalebar: t('phasemap:annotations.typeScalebar'),
     title: t('phasemap:annotations.typeTitle'),
     arrow: t('phasemap:annotations.typeArrow'),
+    colorkey: t('phasemap:annotations.typeColorKey'),
+    valuescale: t('phasemap:annotations.typeValueScale'),
   };
   const selected = annotations.find((a) => a.id === selectedId) || null;
   const btn = {
@@ -46,14 +69,6 @@ function AnnotationToolbar({
     boxSizing: 'border-box',
     fontVariantNumeric: 'tabular-nums',
   };
-  const Row = ({ label, children }) => (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-      <span style={{ fontSize: '8.5pt', color: colors.textSecondary, minWidth: 76 }}>
-        {label}
-      </span>
-      <div style={{ flex: 1, minWidth: 0 }}>{children}</div>
-    </div>
-  );
 
   let propsPanel = null;
   if (selected) {
@@ -75,19 +90,15 @@ function AnnotationToolbar({
           />
         </Row>
         <Row label={t('phasemap:annotations.bgOpacity')}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <input
-              type="range" min={0} max={1} step={0.05}
-              value={p.bgOpacity ?? (selected.type === 'legend' && p.background ? 0.85 : 0)}
-              onChange={(e) => patchProp('bgOpacity', Number(e.target.value))}
-              style={{ flex: 1 }}
-              title={t('phasemap:hoverTips.annotBgOpacity')}
-              data-annot-bg-opacity
-            />
-            <span style={{ fontSize: '8pt', color: colors.textSecondary, width: 34, textAlign: 'right' }}>
-              {Math.round((p.bgOpacity ?? (selected.type === 'legend' && p.background ? 0.85 : 0)) * 100)}%
-            </span>
-          </div>
+          {/* The track shows this very colour fading in, so the plate can be
+              judged here instead of on the map. */}
+          <OpacitySlider
+            value={p.bgOpacity ?? (selected.type === 'legend' && p.background ? 0.85 : 0)}
+            onChange={(next) => patchProp('bgOpacity', next)}
+            color={p.bgColor ?? '#14161e'}
+            title={t('phasemap:hoverTips.annotBgOpacity')}
+            data-annot-bg-opacity
+          />
         </Row>
       </>
     );
@@ -225,6 +236,38 @@ function AnnotationToolbar({
           </>
         );
         break;
+      // The colour key is a picture: nothing to style but the plate it sits on
+      // (and that one matters — the key is drawn in dark ink).
+      case 'colorkey':
+        propsPanel = backgroundRows;
+        break;
+      case 'valuescale':
+        propsPanel = (
+          <>
+            {/* Not a point size: the lettering follows the body, so that the
+                preview and the exported file agree. This nudges it. */}
+            <Row label={t('phasemap:annotations.textScale')}>
+              <input
+                type="number" min={0.4} max={3} step={0.1}
+                value={p.textScale ?? 1}
+                onChange={(e) => patchProp('textScale', Number(e.target.value) || 1)}
+                style={inputStyle}
+                title={t('phasemap:hoverTips.annotTextScale')}
+              />
+            </Row>
+            <Row label={t('phasemap:annotations.textColor')}>
+              <input
+                type="color"
+                value={p.textColor ?? '#ffffff'}
+                onChange={(e) => patchProp('textColor', e.target.value)}
+                style={{ ...inputStyle, padding: 0, width: '100%', height: 26 }}
+                title={t('phasemap:hoverTips.annotTextColor')}
+              />
+            </Row>
+            {backgroundRows}
+          </>
+        );
+        break;
       default:
         propsPanel = null;
     }
@@ -278,6 +321,7 @@ function AnnotationToolbar({
                     {TYPE_LABELS[a.type] || a.type}
                     {a.type === 'title' ? `: ${(a.props?.text || '').slice(0, 18)}` : ''}
                     {a.type === 'arrow' ? ` (${a.props?.label || 'ND'})` : ''}
+                    {a.type === 'valuescale' ? `: ${a.props?.layerId ?? ''}` : ''}
                   </span>
                   <button
                     onClick={(e) => { e.stopPropagation(); onRemove(a.id); }}

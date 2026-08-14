@@ -98,7 +98,5 @@
   "captureFailed": "このビューを取得できませんでした。",
   "menuExportThisPanel": "このパネルをエクスポート…",
   "menuExportBothPanels": "両方のパネルを1枚に書き出す…",
-  "menuExportMapWithKey": "カラーキー付きでマップを書き出す…",
-  "menuExportMapOnly": "マップのみ書き出す…",
   "scalebarShared": "これはマップのスケールバーです。ここでの変更はマップにも反映されます。プレビュー上でドラッグして移動できます。"
 }

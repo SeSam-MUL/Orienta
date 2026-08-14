@@ -521,6 +521,7 @@
     "removeAria": "×",
     "propertiesHeading": "{{type}} 属性",
     "fontSize": "字号",
+    "textScale": "文字大小",
     "background": "背景",
     "lengthUm": "长度 (µm)",
     "barColor": "比例条颜色",
@@ -534,6 +535,8 @@
     "typeScalebar": "比例尺",
     "typeTitle": "标题",
     "typeArrow": "箭头",
+    "typeColorKey": "色标",
+    "typeValueScale": "数值标尺",
     "noPhasesYet": "（暂无相）",
     "scalebarUnit": "{{length}} µm",
     "defaultTitle": "标题",
@@ -601,6 +604,7 @@
     "selectAnnotation": "选择此注释以编辑或重新定位",
     "removeAnnotation": "删除此注释",
     "annotFontSize": "此注释的字号",
+    "annotTextScale": "微调文字。字号由元素本身决定（放大元素，数字随之变大），因此预览与导出文件一致。",
     "annotBackground": "图例框的背景色（CSS 颜色）",
     "annotLengthUm": "比例尺的物理长度（µm）",
     "annotBarColor": "比例尺条的颜色",
@@ -611,7 +615,7 @@
     "matchesClearMarkers": "从比较面板中移除所有编号标记",
     "zoomReset": "点击以重置缩放",
     "changeLayerType": "在此图层中显示另一种图 — 不透明度、混合模式和顺序保持不变",
-    "exportWithKey": "在导出图像中于图旁绘制色标列。关闭则仅导出图本身。",
+    "exportScaleToggle": "将该标尺作为独立元素放入图中：可移动、可缩放、可设置底色，也可拖到图外的留白处。",
     "gbClassOn": "绘制该类边界",
     "gbFrom": "该类下限角 — 下方类别随之移动",
     "gbTo": "该类上限角 — 上方类别随之移动",
@@ -660,7 +664,12 @@
   "advanced": {
     "title": "高级工具"
   },
-  "exportWithKey": "包含 IPF 色标",
+  "exportScales": {
+    "title": "图中的标尺",
+    "hint": "勾选后即放入图中，可拖到任意位置。",
+    "none": "此图没有可显示的标尺。",
+    "edit": "选择"
+  },
   "grainBoundaries": {
     "sub": "亚晶界",
     "lagb": "小角度晶界",

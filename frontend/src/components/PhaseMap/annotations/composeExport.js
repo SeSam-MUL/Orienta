@@ -17,78 +17,32 @@
  */
 
 import { BLEND_MAP } from '../layerSources';
+import { formatScaleValue, scaleStops } from '../scaleFormat';
 
 const TYPE_DRAWERS = {
-  legend:   drawLegend,
-  scalebar: drawScalebar,
-  title:    drawTitle,
-  arrow:    drawArrow,
+  legend:     drawLegend,
+  scalebar:   drawScalebar,
+  title:      drawTitle,
+  arrow:      drawArrow,
+  colorkey:   drawColorKey,
+  valuescale: drawValueScale,
 };
 
 /**
  * The map itself as a canvas: the layer stack at native resolution, times
- * `scale`, with the IPF colour key beside it when one is shown.
+ * `scale`. Nothing else.
  *
- * Annotations are deliberately NOT drawn here. The export dialog keeps them
- * editable on top of this picture and burns them in at save time, so dragging
- * one does not mean re-composing the whole map.
+ * The colour key and the value scales used to be welded on as fixed columns.
+ * They are annotations now — free bodies the user switches on, moves, resizes
+ * and can drag off the map into the export dialog's border — so this function
+ * produces the data and only the data.
+ *
+ * Annotations are deliberately NOT drawn here either. The export dialog keeps
+ * them editable on top of this picture and burns them in at save time, so
+ * dragging one does not mean re-composing the whole map.
  */
-/** Draw one colour bar with its numbers into an export canvas. */
-function drawScaleBar(ctx, entry, x, y, w, h, textScale) {
-  const stops = Array.isArray(entry.scale?.stops) && entry.scale.stops.length >= 2
-    ? entry.scale.stops : ['#000000', '#ffffff'];
-  const barW = Math.max(6, Math.round(w * 0.32));
-  const font = Math.max(7, Math.round(9 * textScale));
-  const labelH = font * 1.4;
-
-  ctx.save();
-  ctx.font = `${font}px sans-serif`;
-  ctx.fillStyle = '#1a1a2e';
-  ctx.textBaseline = 'top';
-  ctx.textAlign = 'left';
-  ctx.fillText(entry.label ?? '', x, y);
-
-  const barY = y + labelH;
-  const barH = Math.max(20, h - labelH);
-  // Bottom = min, like the on-screen legend.
-  const grad = ctx.createLinearGradient(0, barY + barH, 0, barY);
-  stops.forEach((c, i) => grad.addColorStop(i / (stops.length - 1), c));
-  ctx.fillStyle = grad;
-  ctx.fillRect(x, barY, barW, barH);
-  ctx.strokeStyle = '#44475a';
-  ctx.lineWidth = Math.max(1, textScale * 0.5);
-  ctx.strokeRect(x, barY, barW, barH);
-
-  const fmt = (v) => {
-    if (!Number.isFinite(v)) return '';
-    const a = Math.abs(v);
-    if (a === 0) return '0';
-    if (a >= 1000 || a < 0.01) return v.toExponential(1);
-    if (a >= 100) return v.toFixed(0);
-    if (a >= 10) return v.toFixed(1);
-    return v.toFixed(a >= 1 ? 2 : 3);
-  };
-  ctx.fillStyle = '#1a1a2e';
-  const tx = x + barW + Math.max(3, textScale * 2);
-  ctx.textBaseline = 'top';
-  ctx.fillText(fmt(entry.scale.max), tx, barY);
-  ctx.textBaseline = 'middle';
-  ctx.fillText(fmt((entry.scale.min + entry.scale.max) / 2), tx, barY + barH / 2);
-  ctx.textBaseline = 'bottom';
-  ctx.fillText(fmt(entry.scale.min), tx, barY + barH);
-  if (entry.scale.unit) {
-    ctx.textBaseline = 'top';
-    ctx.fillText(entry.scale.unit, x, barY + barH + 2);
-  }
-  ctx.restore();
-  return labelH + barH + (entry.scale.unit ? font * 1.4 : 0);
-}
-
 export async function composeMapCanvas({
-  layers, bitmaps, shape, scale = 2, ipfKey = null, contentBbox = null,
-  // Colour bars for the layers whose colours mean a number. They go on the
-  // LEFT, opposite the IPF key, so the figure reads legend - map - key.
-  scaleLegends = [],
+  layers, bitmaps, shape, scale = 2, contentBbox = null,
 }) {
   if (!shape?.rows || !shape?.cols) throw new Error('composeMapCanvas: invalid shape');
   // Frame what the screen frames. The view auto-zooms to the indexed region,
@@ -101,15 +55,8 @@ export async function composeMapCanvas({
   const mapW = Math.round(src.w * scale);
   const mapH = Math.round(src.h * scale);
 
-  // The key rides in a column to the right, on its own light plate — the same
-  // arrangement as on screen, so the exported figure reads like the view.
-  const keyImg = ipfKey ? await loadKeyImage(ipfKey) : null;
-  const keyW = keyImg ? Math.round(mapW * 0.24) : 0;
-  const bars = Array.isArray(scaleLegends) ? scaleLegends.filter((e) => e?.scale) : [];
-  const legendW = bars.length > 0 ? Math.round(Math.max(70, mapW * 0.16)) : 0;
-
   const canvas = document.createElement('canvas');
-  canvas.width = legendW + mapW + keyW;
+  canvas.width = mapW;
   canvas.height = mapH;
   const ctx = canvas.getContext('2d');
 
@@ -122,55 +69,29 @@ export async function composeMapCanvas({
     if (!bmp) continue;
     ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity ?? 1));
     ctx.globalCompositeOperation = BLEND_MAP[layer.blend] || 'source-over';
-    ctx.drawImage(bmp, src.x, src.y, src.w, src.h, legendW, 0, mapW, mapH);
+    ctx.drawImage(bmp, src.x, src.y, src.w, src.h, 0, 0, mapW, mapH);
   }
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
 
-  if (legendW > 0) {
-    // Its own light plate, like the key column, so dark bars stay readable.
-    ctx.fillStyle = '#f5f5f5';
-    ctx.fillRect(0, 0, legendW, mapH);
-    const pad = Math.round(legendW * 0.08);
-    const textScale = Math.max(1, mapW / 400);
-    // The bars share the WHOLE height of the picture, like the map beside
-    // them. Capping each at a third left them stranded at the top of an empty
-    // column.
-    const each = (mapH - 2 * pad) / bars.length;
-    let y = pad;
-    for (const entry of bars) {
-      drawScaleBar(ctx, entry, pad, y, legendW - 2 * pad, each - pad, textScale);
-      y += each;
-    }
-  }
-
-  if (keyImg) {
-    ctx.fillStyle = '#f5f5f5';
-    ctx.fillRect(legendW + mapW, 0, keyW, mapH);
-    // Contain-fit with a margin, pinned to the top like the on-screen panel.
-    const pad = Math.round(keyW * 0.06);
-    const availW = keyW - 2 * pad;
-    const availH = mapH - 2 * pad;
-    const k = Math.min(availW / keyImg.width, availH / keyImg.height);
-    const w = keyImg.width * k;
-    const h = keyImg.height * k;
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(keyImg, legendW + mapW + pad + (availW - w) / 2, pad, w, h);
-    ctx.imageSmoothingEnabled = false;
-  }
-
   // `mapCols/mapRows` say how many SCAN columns the picture spans — the scale
   // bar needs that, not the full grid, once the frame is cropped.
   return {
-    canvas, mapWidth: mapW, mapHeight: mapH, keyWidth: keyW,
-    legendWidth: legendW,
+    canvas, mapWidth: mapW, mapHeight: mapH,
+    mapLeft: 0, mapTop: 0,
     mapCols: src.w, mapRows: src.h,
   };
 }
 
-function loadKeyImage(src) {
+/**
+ * Load a base64 / data-URL picture for drawing into a canvas.
+ *
+ * The annotation drawers are synchronous, so whoever hosts them preloads the
+ * key with this and hands the ready <img> down in the drawing context.
+ */
+export function loadKeyImage(src) {
   return new Promise((resolve) => {
+    if (!src) { resolve(null); return; }
     const img = new Image();
     img.onload = () => resolve(img);
     // A missing key must not sink the export — the map is the point.
@@ -239,6 +160,10 @@ export function drawAnnotationsOnto(ctx, annotations, {
   // dialog passes the magnification so a 4x figure gets 4x text instead of
   // hairline captions on a huge picture.
   textScale = 1,
+  // What the scale bodies show. `scaleLegends` is [{ id, label, scale }] as the
+  // layer stack reports it; `ipfKeyImg` is a preloaded <img> (the drawers run
+  // synchronously and cannot await one).
+  scaleLegends = null, ipfKeyImg = null,
 } = {}) {
   const W = width;
   const H = height;
@@ -274,7 +199,7 @@ export function drawAnnotationsOnto(ctx, annotations, {
     drawer(ctx, annot, aw, ah, {
       phaseStats, scale, stepX, textScale,
       canvasWidthPx: W, canvasHeightPx: H,
-      scanCols,
+      scanCols, scaleLegends, ipfKeyImg,
     });
     ctx.restore();
   }
@@ -403,6 +328,118 @@ function drawTitle(ctx, annot, w, h, opts) {
   ctx.shadowBlur = 4;
   ctx.fillText(text, 6, h / 2);
   ctx.shadowBlur = 0;
+}
+
+/**
+ * The IPF colour key, contain-fitted into the body's box.
+ *
+ * Nothing is drawn without the picture: the key is fetched per direction and
+ * per phase filter, and inventing a stand-in would put a key in the figure
+ * that belongs to a different map.
+ */
+function drawColorKey(ctx, annot, w, h, opts) {
+  const img = opts?.ipfKeyImg;
+  if (!img?.width || !img?.height) return;
+  const pad = Math.max(2, Math.min(w, h) * 0.05);
+  const availW = Math.max(1, w - 2 * pad);
+  const availH = Math.max(1, h - 2 * pad);
+  const k = Math.min(availW / img.width, availH / img.height);
+  const dw = img.width * k;
+  const dh = img.height * k;
+  ctx.save();
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, pad + (availW - dw) / 2, pad + (availH - dh) / 2, dw, dh);
+  ctx.restore();
+}
+
+/**
+ * One value scale: caption, colour bar, the two ends and the middle.
+ *
+ * The stops and the range are looked up from the LIVE layer, never stored on
+ * the annotation — a bar that outlived its layer would keep claiming numbers
+ * nobody can check. When the layer is gone the body draws nothing rather than
+ * a bar with no meaning.
+ */
+function drawValueScale(ctx, annot, w, h, opts) {
+  const p = annot.props || {};
+  const entry = (opts?.scaleLegends || []).find((e) => e?.id === p.layerId);
+  const scale = entry?.scale;
+  if (!scale || !Number.isFinite(scale.min) || !Number.isFinite(scale.max)) return;
+
+  const fontSize = valueScaleFontPx(w, h, p.textScale);
+  const color = p.textColor ?? '#ffffff';
+  const pad = Math.max(2, fontSize * 0.45);
+  const stops = scaleStops(scale.stops);
+
+  ctx.save();
+  ctx.font = `${fontSize}px sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = 'left';
+
+  // Caption on top, unit at the bottom; the bar takes what is left.
+  const capH = fontSize * 1.35;
+  const unitH = scale.unit ? fontSize * 1.3 : 0;
+  ctx.textBaseline = 'top';
+  ctx.fillText(ellipsiseText(ctx, entry.label ?? '', w - 2 * pad), pad, pad * 0.6);
+
+  const barX = pad;
+  const barY = pad * 0.6 + capH;
+  const barW = Math.max(4, Math.min(w * 0.34, w - 2 * pad));
+  const barH = Math.max(8, h - barY - unitH - pad * 0.8);
+
+  const grad = ctx.createLinearGradient(0, barY + barH, 0, barY);
+  stops.forEach((c, i) => grad.addColorStop(i / (stops.length - 1), c));
+  ctx.fillStyle = grad;
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+  ctx.lineWidth = Math.max(1, fontSize * 0.06);
+  ctx.strokeRect(barX, barY, barW, barH);
+
+  // Ticks: the two ends are the claim, the middle is a reading aid.
+  ctx.fillStyle = color;
+  const tx = barX + barW + Math.max(2, fontSize * 0.3);
+  ctx.textBaseline = 'top';
+  ctx.fillText(formatScaleValue(scale.max), tx, barY);
+  ctx.textBaseline = 'middle';
+  ctx.fillText(formatScaleValue((scale.min + scale.max) / 2), tx, barY + barH / 2);
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(formatScaleValue(scale.min), tx, barY + barH);
+  if (scale.unit) {
+    ctx.textBaseline = 'top';
+    ctx.fillText(scale.unit, barX, barY + barH + pad * 0.3);
+  }
+  ctx.restore();
+}
+
+/**
+ * Lettering for a value scale, derived from the BODY, not from a nominal point
+ * size.
+ *
+ * Every other annotation multiplies its stored font size by the export
+ * magnification, which means the text grows 4x on a 4x export while the box —
+ * a fraction of the map — grows only as much as the preview was already
+ * scaled. The preview and the file then disagree: measured on a real figure,
+ * a caption that fitted on screen came out ellipsised in the file and the
+ * numbers dwarfed the bar.
+ *
+ * Tying the size to the box makes the two agree by construction, and makes
+ * dragging a corner do the obvious thing: a bigger bar gets bigger numbers.
+ * `textScale` is the user's nudge on top, 1 = as computed.
+ */
+export function valueScaleFontPx(boxW, boxH, textScale = 1) {
+  const k = Number.isFinite(textScale) && textScale > 0 ? textScale : 1;
+  const base = Math.min(Math.max(1, boxW) * 0.13, Math.max(1, boxH) * 0.12);
+  return Math.max(4, base * k);
+}
+
+/** Trim with a trailing ellipsis so a long layer name cannot overrun its box. */
+function ellipsiseText(ctx, text, maxWidth) {
+  const s = String(text ?? '');
+  if (!(maxWidth > 0) || ctx.measureText(s).width <= maxWidth) return s;
+  let out = s;
+  while (out.length > 1 && ctx.measureText(`${out}…`).width > maxWidth) out = out.slice(0, -1);
+  return `${out}…`;
 }
 
 function drawArrow(ctx, annot, w, h, opts) {

@@ -98,7 +98,5 @@
   "captureFailed": "无法捕获此视图。",
   "menuExportThisPanel": "导出此面板…",
   "menuExportBothPanels": "将两个面板导出到一张图…",
-  "menuExportMapWithKey": "导出图（含色标）…",
-  "menuExportMapOnly": "仅导出图…",
   "scalebarShared": "这是图自身的比例尺 — 此处的更改同样作用于图。可在预览中拖动移动。"
 }
