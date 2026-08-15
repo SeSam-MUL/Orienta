@@ -475,7 +475,15 @@ def run_dictionary_index(
     best_indices = torch.full((n_sel, keep_n), -1, dtype=torch.int64, device=device)
     tile_dict = s_tile = i_tile = merged_scores = merged_idx = top_pos = None
     s_pad = i_pad = None
-    for sl in iter_tiles(n_dict, tile):
+    # Live throughput. Every experimental pattern is compared against every
+    # dictionary tile, so after k of n tiles the work done is n_sel * k/n
+    # patterns' worth — that is the honest running rate, and it converges to
+    # the final one. Reported at most once a second so a fast run does not
+    # drown the log.
+    _match_t0 = time.perf_counter()
+    _n_tiles = max(1, -(-n_dict // tile))   # ceil
+    _last_report = _match_t0
+    for _tile_i, sl in enumerate(iter_tiles(n_dict, tile), start=1):
         _check_cancel()
         tile_dict = dict_proj[sl]
         # Tile may be smaller than keep_n on the very last slab; clamp k.
@@ -495,8 +503,19 @@ def run_dictionary_index(
         merged_idx = torch.cat([best_indices, i_tile], dim=1)
         best_scores, top_pos = torch.topk(merged_scores, k=keep_n, dim=1)
         best_indices = merged_idx.gather(1, top_pos)
+        _now = time.perf_counter()
+        if _now - _last_report >= 1.0 and _tile_i < _n_tiles:
+            _last_report = _now
+            _done = n_sel * _tile_i / _n_tiles
+            _p(f"Dict-GPU: matching {_tile_i}/{_n_tiles} tiles "
+               f"· {_done / max(_now - _match_t0, 1e-9):,.0f} pat/s")
     if torch.cuda.is_available():
         torch.cuda.synchronize()
+    _match_dt = time.perf_counter() - _match_t0
+    _p(f"Dictionary: {n_sel:,} patterns in {_match_dt:,.1f} s "
+       f"· {n_sel / max(_match_dt, 1e-9):,.0f} pat/s (GPU, {n_dict:,} entries)"
+       if _match_dt >= 1e-3 else
+       f"Dictionary: {n_sel:,} patterns in {_match_dt * 1e3:.1f} ms (GPU)")
     _phase_done("7. tiled top-k NCC matching")
 
     # In the PCA subspace the score is the cosine between the PROJECTIONS: the

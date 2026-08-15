@@ -530,6 +530,28 @@ RAY_MIN_PATTERNS = 10000
 RAY_MAX_WORKERS = 4
 
 
+def indexing_rate_line(method: str, n_patterns: int, seconds: float,
+                       device: str = "") -> str:
+    """One wording for the throughput of every indexing method.
+
+    Spherical has reported ``pat/s`` for a while; Hough and Dictionary did not,
+    so the three could not be compared. Same sentence everywhere, and the same
+    definition: patterns divided by the wall-clock of the matching step only —
+    not the file read, not the dictionary projection, not the CrystalMap build.
+    Those are reported separately, and folding them in would make a fast method
+    on a big dictionary look slow for the wrong reason.
+
+    A run too short to time (< 1 ms) reports the count without a rate rather
+    than a division that says more about the clock than the code.
+    """
+    n = int(n_patterns)
+    dev = f" ({device})" if device else ""
+    if seconds < 1e-3:
+        return f"{method}: {n:,} patterns in {seconds * 1e3:.1f} ms{dev}"
+    return (f"{method}: {n:,} patterns in {seconds:,.1f} s "
+            f"· {n / seconds:,.0f} pat/s{dev}")
+
+
 def _hough_use_ray(n_selected, pc_rows, ray_available, min_patterns=RAY_MIN_PATTERNS):
     """Decide whether to use PyEBSDIndex's Ray distributed Hough path.
 
@@ -700,6 +722,11 @@ def hough_index_patterns(
         pass
     use_ray = _hough_use_ray(n_selected, pc_rows, ray_available)
 
+    # Wall-clock of the matching step only, so the number is comparable with
+    # the Dictionary and Spherical ones (see indexing_rate_line).
+    import time as _t
+    _rate_t0 = _t.perf_counter()
+
     if use_ray:
         import os, logging as _logging
         _logging.getLogger("ray.worker").setLevel(_logging.ERROR)
@@ -723,6 +750,10 @@ def hough_index_patterns(
             index_data, band_data, _, _ = indexer.index_pats(
                 patsin=patterns, verbose=0, chunksize=528,
             )
+
+    _progress(indexing_rate_line(
+        "Hough", n_selected, _t.perf_counter() - _rate_t0,
+        f"{ncpu} Ray workers" if use_ray else "single thread"), 0.84)
 
     _check_cancel()
 
@@ -1016,12 +1047,26 @@ def dictionary_index_patterns(
     _di_logger = _logging.getLogger("indexing.dictionary")
 
     class _StdoutCapture(io.TextIOBase):
-        """Tee stdout to both original stream and logger."""
+        """Tee stdout to both original stream and logger.
+
+        kikuchipy prints its own throughput as
+        ``Indexing speed: 2026.19698 patterns/s, 24182660.93713 comparisons/s``.
+        That went to the Python log only, so the user never saw it in the app.
+        Forward that one line to the progress callback as well — it is the
+        engine's own measurement, worth having next to ours.
+        """
         def __init__(self, original):
             self.original = original
         def write(self, s):
             if s and s.strip():
                 _di_logger.info(s.strip())
+                if "Indexing speed:" in s:
+                    try:
+                        rate = float(s.split("Indexing speed:", 1)[1]
+                                     .split("patterns/s", 1)[0].strip())
+                        _progress(f"Dictionary (kikuchipy): {rate:,.0f} pat/s")
+                    except Exception:
+                        pass
             return self.original.write(s)
         def flush(self):
             self.original.flush()
@@ -1059,9 +1104,16 @@ def dictionary_index_patterns(
         )
         if sig_mask_kp is not None:
             di_kwargs["signal_mask"] = sig_mask_kp
+        import time as _t
+        _rate_t0 = _t.perf_counter()
         xmap_raw = signal.dictionary_indexing(dictionary, **di_kwargs)
+        _rate_dt = _t.perf_counter() - _rate_t0
     finally:
         sys.stdout = old_stdout
+
+    _n_entries = len(dictionary.data) if hasattr(dictionary, "data") else 0
+    _progress(indexing_rate_line("Dictionary", n_selected, _rate_dt,
+                                 f"CPU, {_n_entries:,} entries"))
 
     # Cancel after the kikuchipy call too — the user may have hit Stop
     # while the Dask loop was running (we can't interrupt that loop from
@@ -2295,10 +2347,15 @@ def spherical_gpu_index_patterns(
         _release_cuda_cache()
     n_indexed = int(result.euler_xyz.shape[0])
     rate_total = (n_indexed * n_phases) / max(result.runtime_seconds, 1e-3)
+    # Same sentence as Hough and Dictionary (indexing_rate_line) so the three
+    # can be read side by side in the log. "effective" because a multi-phase
+    # run compares every pattern against every phase, so the work is
+    # n_indexed x n_phases while the map only has n_indexed points.
     _progress(
-        f"Spherical-GPU: indexing complete — {n_indexed} patterns × "
-        f"{n_phases} phase{'s' if n_phases > 1 else ''} in "
-        f"{result.runtime_seconds:.1f}s ({rate_total:.0f} pat/s effective).",
+        indexing_rate_line(
+            "Spherical", n_indexed * n_phases, result.runtime_seconds,
+            f"{backend.runtime.device_name}"
+            + (f", {n_phases} phases" if n_phases > 1 else "")),
         0.90,
     )
 
@@ -2560,7 +2617,7 @@ def spherical_gpu_index_patterns(
         # detector_params didn't carry grid hints — fall back to the mask shape
         # so downstream callers can still reconstruct the original frame.
         n_rows, n_cols = selection_mask.shape
-    _progress(f"Spherical-GPU: done — {rate_total:.0f} pat/s effective", 1.0)
+    _progress(f"Spherical-GPU: done — {rate_total:,.0f} pat/s effective", 1.0)
     return IndexingResult(
         xmap=xmap,
         selection_mask=selection_mask,
