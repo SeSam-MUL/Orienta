@@ -181,6 +181,19 @@ def compute_ipf_colors(xmap, direction_str: str = "Z", r_user=None,
         subset = xmap[mask]
         base_rot = (Rotation(np.asarray(rotations_override)[mask])
                     if rotations_override is not None else subset.rotations)
+        # A CrystalMap may carry several candidate rotations per point —
+        # kikuchipy's dictionary_indexing stores all keep_n of them, so
+        # base_rot is (n_phase, keep_n) and orientation2color would return
+        # (n_phase, keep_n, 3), which numpy then refuses to assign:
+        #   "value array of shape (561720,3) could not be broadcast to
+        #    indexing result of shape (28086,3)"       (28086 px x keep_n 20)
+        # The best match is rank 0. New results are collapsed at the source
+        # (indexing_controller._best_match_only); this keeps results saved
+        # before that renderable instead of erroring out.
+        if len(getattr(base_rot, "shape", ())) > 1:
+            logger.info("IPF: collapsing %s candidate rotations per point to the "
+                        "best match", base_rot.shape[1])
+            base_rot = base_rot[:, 0]
         if r_user is not None and not np.allclose(
             np.asarray(r_user.data), np.asarray(Rotation.identity().data)
         ):

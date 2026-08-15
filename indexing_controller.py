@@ -814,6 +814,33 @@ def _dictionary_signal_from_master(master, detector, angular_step_deg, *,
                           energy=energy, compute=True)
 
 
+def _best_match_only(xmap):
+    """Reduce a keep_n-deep CrystalMap to its best match per point.
+
+    kikuchipy's ``dictionary_indexing`` stores every kept candidate as a map
+    rotation, so ``xmap.rotations`` is ``(n, keep_n)``. The rest of this
+    project — and the GPU dictionary path — treats a CrystalMap as one
+    orientation per point, with the other candidates in ``prop`` (``scores``,
+    ``simulation_indices``, both ``(n, keep_n)``, which this preserves).
+
+    A map that already has one rotation per point is returned unchanged.
+    """
+    from orix.crystal_map import CrystalMap
+
+    rot = xmap.rotations
+    if getattr(rot, "shape", ()) in ((xmap.size,), ()) or len(rot.shape) < 2:
+        return xmap
+    return CrystalMap(
+        rotations=rot[:, 0],
+        phase_id=xmap.phase_id,
+        x=xmap.x,
+        y=xmap.y,
+        phase_list=xmap.phases_in_data,
+        prop={k: v for k, v in xmap.prop.items()},
+        scan_unit=xmap.scan_unit,
+    )
+
+
 def dictionary_index_patterns(
     signal,
     dictionary,
@@ -1040,6 +1067,18 @@ def dictionary_index_patterns(
     # while the Dask loop was running (we can't interrupt that loop from
     # outside, but at least we skip the back-mapping + result assembly).
     _check_cancel()
+    # kikuchipy returns a CrystalMap carrying ALL keep_n rotations per point,
+    # so with the default keep_n=20 `xmap.rotations` is (n, 20). Everything
+    # downstream — the IPF layers, the exporters, the analysis module — assumes
+    # one orientation per point, and the GPU path already returns that shape
+    # (see backend/dict_gpu/pipeline/output.build_crystal_map, which keeps the
+    # best rotation and puts the rest in `prop`). Left as-is, the phase map
+    # rejects the result outright:
+    #   "ipf-z: shape mismatch: value array of shape (561720,3) could not be
+    #    broadcast to indexing result of shape (28086,3)"   (28086 x 20)
+    # So collapse to the best match here and make the two paths interchangeable.
+    xmap_raw = _best_match_only(xmap_raw)
+
     _progress("Dictionary: extracting NCC scores from best matches...")
     # Extract scores from the first (best) match
     scores = None
