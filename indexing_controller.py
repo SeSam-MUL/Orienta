@@ -543,6 +543,22 @@ def indexing_rate_line(method: str, n_patterns: int, seconds: float,
 
     A run too short to time (< 1 ms) reports the count without a rate rather
     than a division that says more about the clock than the code.
+
+    What one of these numbers is and is not, measured on a full 28,086 px map
+    against the same 100,347-entry dictionary:
+
+      Dictionary GPU   11.1 s   2,531 pat/s     on a card shared with other apps
+      Dictionary GPU    5.3 s   5,250 pat/s     same work, idle card
+      Dictionary CPU   30.0 s     937 pat/s     kikuchipy's own figure: 947
+      Hough            19.6 s   1,434 pat/s     4 Ray workers
+
+    Two things follow. **A single reading is not a benchmark**: four runs of
+    identical work on an idle card spanned 3,716-5,250 pat/s (±30 %), most of
+    it the CUDA/cuBLAS warm-up the first run pays. Take a median of a few runs
+    on a quiet GPU. And **pat/s alone does not compare two dictionary runs** —
+    it scales with the dictionary size, which is why the entry count is part of
+    the line. Checked and found NOT to matter: ``keep_n`` (20 was no slower
+    than 1) and the detector mask.
     """
     n = int(n_patterns)
     dev = f" ({device})" if device else ""

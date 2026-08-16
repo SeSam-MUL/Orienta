@@ -15,6 +15,16 @@ LoGainNi, 3720 px, in one run:
 All three time the MATCHING step only — not the file read, not the dictionary
 projection, not the CrystalMap build. Folding those in would make a fast
 method on a big dictionary look slow for the wrong reason.
+
+Two caveats, both measured rather than assumed:
+
+  - A single reading is not a benchmark. Four runs of identical work on an
+    idle card spanned 3,716-5,250 pat/s (±30 %), most of it the CUDA warm-up
+    the first run pays. A user reported 2,531 pat/s where an idle card gave
+    5,250 — the difference was other programs on the GPU, not a setting.
+  - pat/s does not compare two dictionary runs on its own; it scales with the
+    dictionary size. Hence the entry count in the line. Checked and found NOT
+    to matter: keep_n (20 was no slower than 1) and the detector mask.
 """
 import inspect
 import re
