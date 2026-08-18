@@ -16,6 +16,7 @@ import api, {
   phaseMapApi, analysisApi, ebsdApi, indexApi, h5Api, pcApi,
   forwardDiagApi, refinementApi,
 } from '../../services/api';
+import { wouldSwitchFile } from './autoAdoptGuard';
 import {
   colors, spacing,
   Button, Input, NumberInput, Select, GroupBox, CollapsibleGroup,
@@ -2945,7 +2946,31 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         setSelectedGalleryIdx((cur) => (cur === idx ? cur : idx));
         // Already the active one → it is on screen already; only a result that
         // is merely stored needs activating.
-        if (!active) adoptEntry(merged[idx]);
+        //
+        // But activating a result AUTO-SWITCHES the loaded file to that
+        // result's source. Fine when the user clicks a chip — that IS the
+        // intent — not on a mere page visit: "nothing active" can also mean
+        // "the user just loaded a DIFFERENT file" (loading resets the active
+        // result), and adopting then silently threw that file away and
+        // re-loaded the old result's source (user-hit 2026-08-17: fresh
+        // .h5oina load + Hough run gone because the visit-sync re-activated
+        // a stale import). Auto-adopt ONLY when it cannot switch the file;
+        // otherwise leave the backend alone and just repaint — the renderer
+        // falls back to the newest stored result for display anyway, and a
+        // deliberate chip click still switches like before.
+        if (!active) {
+          ebsdApi.info()
+            .then((info) => {
+              if (cancelled) return;
+              if (wouldSwitchFile(shown.source_file, info?.data?.file_path)) {
+                handleRefreshPreview();
+              } else {
+                adoptEntry(merged[idx]);
+              }
+            })
+            // Can't tell what is loaded → do nothing destructive, repaint only.
+            .catch(() => { if (!cancelled) handleRefreshPreview(); });
+        }
         else handleRefreshPreview();
       })
       .catch(() => { /* no results yet — nothing to show */ });
