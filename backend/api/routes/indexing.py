@@ -6233,10 +6233,31 @@ async def import_h5_result(req: ImportH5Request):
     # Restore the SPHERICAL session metadata so pattern-match / variants /
     # phase tools work on an imported result exactly like on a fresh run.
     # sht_paths_by_phase + detector_geometry live only in backend memory
-    # during a session; reconstruct them from the SHT library (matched by
-    # phase name) and the freshly loaded signal. Fail-soft per part — the
-    # import itself never blocks on this.
+    # during a session. The export persists BOTH (restored above by
+    # _restore_render_geometry) — and that persisted geometry is what the
+    # run ACTUALLY used, so it must win. Reconstruction from the freshly
+    # loaded signal is a FALLBACK for older exports only: the reloaded
+    # signal's detector loses the run's calibration (measured on a real
+    # export: tilt 0.0 instead of 4.31°, px_size 55 instead of 70 µm),
+    # which shifted the rendered pattern ~8 px vertically and collapsed
+    # the pattern-match R from ~0.37 to -0.09 on a correctly indexed
+    # pixel. Fail-soft per part — the import itself never blocks on this.
     if method == IndexingMethod.SPHERICAL:
+        # The restored top-level sht map is keyed by the LIVE run's phase ids
+        # (1-based; 0 = unindexed), but the loader re-keys the imported xmap
+        # to orix 0-based ids. Left as-is it would resolve every pixel to the
+        # WRONG phase's SHT (off by one). Demote it to per-phase hints (same
+        # -1 shift as the /Indexing/Phases/<id> attrs) and let the matcher —
+        # which keys by the imported xmap's own ids and prefers exact-path
+        # hints — build the map with correct keys.
+        restored_sht = result.metadata.pop("sht_paths_by_phase", None) or {}
+        for k_, v_ in restored_sht.items():
+            try:
+                pid0 = int(k_) - 1
+            except (TypeError, ValueError):
+                continue
+            if pid0 >= 0 and "sht_path" not in sht_hints.get(pid0, {}):
+                sht_hints.setdefault(pid0, {})["sht_path"] = str(v_)
         try:
             sht_map = _match_library_shts_for_xmap(xmap, sht_hints)
             if sht_map:
@@ -6253,7 +6274,7 @@ async def import_h5_result(req: ImportH5Request):
         except Exception:
             logger.warning("import-h5: SHT library matching failed",
                            exc_info=True)
-        if ebsd_signal_loaded:
+        if ebsd_signal_loaded and "detector_geometry" not in result.metadata:
             try:
                 from backend.api.routes.ebsd_viewer import _get_active_signal
                 signal = _get_active_signal()
