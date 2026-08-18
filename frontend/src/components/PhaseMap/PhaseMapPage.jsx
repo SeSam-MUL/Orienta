@@ -1685,6 +1685,19 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const resultsList = useResultStore((s) => s.resultsList);
   const { stepSize: storeStepSize } = useDataStore();
   const syncFromBackend = useDataStore((s) => s.syncFromBackend);
+  // The result the backend would draw right now, whether or not this browser
+  // session produced it. The result store only holds runs made here, so it is
+  // empty for a result adopted on arrival — and everything keyed off it (the
+  // layer picker's availability, the per-result gates, the phase legend)
+  // would read as "nothing loaded" while a map is plainly on screen.
+  // (Declared up here so the annotation + legend hooks below can use it;
+  // the fetch that fills it lives further down, next to the other syncs.)
+  const [backendResultId, setBackendResultId] = useState(null);
+  // Whichever result is on screen: a run made in this session wins, else
+  // the backend's active/last result. Every phase-facing gate (legend,
+  // adjacency, annotation stats, layer picker) keys off THIS — gating on
+  // the store alone showed "load a result first" beside a drawn map.
+  const shownResultId = indexingResult?.result_id ?? backendResultId;
 
   // Coordinate-system frame — drives IPF re-render (frameSig threads into
   // useLayerStack) and the Pole-Figure popout / CS panel.
@@ -1702,7 +1715,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // — keyed off the active result id so each result keeps its own
   // layout. localStorage-backed; survives backend restarts (not result
   // metadata) so the user's publication-figure setup sticks.
-  const annotState = useAnnotations(indexingResult?.result_id ?? null);
+  const annotState = useAnnotations(shownResultId ?? null);
   // Read by the export opener; a ref so that callback need not rebuild
   // whenever an annotation moves.
   const annotRef = useRef(annotState.annotations);
@@ -1722,7 +1735,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // in sync with the side-panel legend.
   const [phaseStatsForAnnot, setPhaseStatsForAnnot] = useState(null);
   useEffect(() => {
-    if (!indexingResult?.result_id) {
+    if (!shownResultId) {
       setPhaseStatsForAnnot(null);
       return;
     }
@@ -1733,7 +1746,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         .catch(() => { if (!cancelled) setPhaseStatsForAnnot(null); });
     });
     return () => { cancelled = true; };
-  }, [indexingResult?.result_id, phaseColorOverrides]);
+  }, [shownResultId, phaseColorOverrides]);
 
   // Phase B: Original/Refined view toggle. The original result id is the
   // CrystalMap that came out of indexing; `refinementInfo` is populated
@@ -1890,12 +1903,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // The indexed region of the result on screen, as the backend reports it.
   // Null for a full-scan run — then nothing is cropped, exactly as before.
   const [activeRoiBbox, setActiveRoiBbox] = useState(null);
-  // The result the backend would draw right now, whether or not this browser
-  // session produced it. The result store only holds runs made here, so it is
-  // empty for a result adopted on arrival — and everything keyed off it (the
-  // layer picker's availability, the per-result gates) would read as "nothing
-  // loaded" while a map is plainly on screen.
-  const [backendResultId, setBackendResultId] = useState(null);
+  // (backendResultId — the backend's answer to "which result is on screen" —
+  // is declared at the top of the component, beside the result store read.)
   // Wheel zoom for the map. One store serves both views: the stacked composite
   // keeps a single entry, the grid keeps one per tile.
   const zoom = useZoomViews(SYNC_ALL);
@@ -2190,7 +2199,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // Which derived layers can draw anything yet. Keyed off whichever result is
   // on screen — a result adopted from the backend has no entry under the
   // store's (empty) id.
-  const gateResultId = originalResultId ?? backendResultId;
+  const gateResultId = shownResultId;
   const diagStoreFlag = useDataStore((s) => !!s.diagnosticsComputed[gateResultId]);
   const refStoreFlag = useDataStore((s) => !!s.refinementComputed[gateResultId]);
 
@@ -3832,7 +3841,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       <CollapsibleGroup title={t('phasemap:advanced.title')} defaultCollapsed>
 
       <ComputeDiagnosticsPanel
-        resultId={indexingResult?.result_id}
+        resultId={shownResultId}
         onOpenBrowser={() => setBrowserOpen(true)}
       />
 
@@ -4019,8 +4028,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           LAYER is a transparent-bg composite with no baked-in legend, so this
           panel is the only place the user can read which colour is which
           phase. Re-fetches whenever the active result changes. */}
-      <PhaseLegend resultId={indexingResult?.result_id ?? null} />
-      <PhaseAdjacencyPanel resultId={indexingResult?.result_id ?? null} />
+      <PhaseLegend resultId={shownResultId ?? null} />
+      <PhaseAdjacencyPanel resultId={shownResultId ?? null} />
       <AnnotationToolbar
         annotations={annotState.annotations}
         selectedId={selectedAnnotId}
@@ -4590,7 +4599,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         <AnomalyBrowserDrawer
           open={browserOpen}
           onClose={() => setBrowserOpen(false)}
-          resultId={indexingResult?.result_id}
+          resultId={shownResultId}
           onSelectPixel={(r, c) => {
             setMatchesInitialPixel({ row: r, col: c });
             setShowMatchesDialog(true);
