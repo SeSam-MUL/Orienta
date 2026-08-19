@@ -137,11 +137,36 @@ at your own H5OINA/H5 files. (See `Test_data/` rules in `.gitignore`.)
   [tools/](tools/README.md), and [docs/](docs/README.md) describe each part of
   the codebase.
 
+## Disclaimer
+
+Orienta is **research software**, provided **free of charge** and **without any
+warranty**, under the GNU GPL-3.0-or-later (see [LICENSE](LICENSE), §15
+*Disclaimer of Warranty* and §16 *Limitation of Liability*). In particular:
+
+- The software is provided **"as is"**; the entire risk as to its quality and
+  performance is with you.
+- To the maximum extent permitted by applicable law, the authors, copyright
+  holders, and their institutions accept **no liability for any damages**
+  arising from the use of (or inability to use) this software — including,
+  without limitation, **loss of or damage to data**, inaccurate results, or any
+  direct, indirect, incidental, or consequential losses.
+- All processing happens **locally on your own machine**. Your data is never
+  transmitted to the authors; there is no hosted service behind this
+  application.
+- Orienta is designed to treat your measurement files as **read-only** —
+  analysis results, exports, and simulation outputs are written to separate
+  files. Nevertheless, no software is free of defects: **always keep backups of
+  your original data**.
+- Results produced by automated indexing, phase identification, and
+  quantification **must be independently validated** before you rely on them in
+  publications, engineering, or any safety-relevant decisions.
+
 ## License
 
 **GPL-3.0-or-later** — see [LICENSE](LICENSE). Third-party and derived-code
 attributions are in [NOTICE.md](NOTICE.md). This project derives from GPL-3.0
-code (kikuchipy), so the combined work is GPL-3.0.
+code (kikuchipy), so the combined work is GPL-3.0. Use of the software is
+subject to the warranty disclaimer and liability limitation above.
 
 ## How to cite
 
