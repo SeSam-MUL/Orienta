@@ -235,6 +235,16 @@
       "alreadyInstalled": "EMsoft 二进制文件已安装并在 PATH 中可用。"
     }
   },
+  "about": {
+      "title": "关于 Orienta",
+      "copyright": "Orienta — EBSD 花样分析 · Copyright © 2026 Orienta authors",
+      "licenseLine": "本程序是自由软件：您可以依据 GNU 通用公共许可证第 3 版（或您选择的任何更高版本）的条款再分发和/或修改它。",
+      "noWarranty": "本程序不提供任何担保（按“现状”提供）。在适用法律允许的最大范围内，作者、版权持有人及其所属机构对使用本软件造成的任何损害（包括数据丢失或损坏、结果不准确）概不负责。",
+      "dataNote": "所有处理均在本机本地进行，您的数据绝不会传输给作者。Orienta 以只读方式打开测量文件，结果写入单独的文件——但仍请保留原始数据的备份，并在依赖自动结果（标定、物相识别、定量）之前进行独立验证。",
+      "viewLicense": "完整许可证文本 (GPL-3.0)",
+      "sourceCode": "源代码",
+      "authoritative": "以随源代码分发的英文 LICENSE 文件为准。"
+    },
   "hoverTips": {
     "confirmPassword": "重新输入新的 WSL 用户密码以确认一致。",
     "newPassword": "为现有的 WSL 用户输入新密码。",

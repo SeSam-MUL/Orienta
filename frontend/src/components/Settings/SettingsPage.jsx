@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { simApi, settingsApi } from '../../services/api';
 import InstallWizardSection from './InstallWizardSection';
 import ApiKeysSection from './ApiKeysSection';
+import AboutSection from './AboutSection';
 import {
   colors, alpha, spacing,
   Button, Input, GroupBox, Label,
@@ -665,6 +666,7 @@ export default function SettingsPage({ isActive = false, onNavigate }) {
       <ApiKeysSection />
       <ManualPathsSection />
       <ServerModeSection />
+      <AboutSection />
     </div>
   );
 }

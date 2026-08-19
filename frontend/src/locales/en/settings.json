@@ -235,6 +235,16 @@
       "alreadyInstalled": "EMsoft binaries are already installed and available in PATH."
     }
   },
+  "about": {
+      "title": "About Orienta",
+      "copyright": "Orienta — EBSD pattern analysis · Copyright © 2026 the Orienta authors",
+      "licenseLine": "This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version.",
+      "noWarranty": "This program comes with ABSOLUTELY NO WARRANTY. It is provided “as is”; to the maximum extent permitted by applicable law, the authors, copyright holders, and their institutions accept no liability for any damages arising from its use — including loss of or damage to data, or inaccurate results.",
+      "dataNote": "All processing happens locally on this machine; your data is never transmitted to the authors. Orienta opens measurement files read-only and writes results to separate files — still, keep backups of your original data and independently validate automated results (indexing, phase identification, quantification) before relying on them.",
+      "viewLicense": "Full license text (GPL-3.0)",
+      "sourceCode": "Source code",
+      "authoritative": "The English LICENSE file distributed with the source code is authoritative."
+    },
   "hoverTips": {
     "confirmPassword": "Re-enter the new WSL user password to confirm it matches.",
     "newPassword": "Enter a new password for the existing WSL user.",
