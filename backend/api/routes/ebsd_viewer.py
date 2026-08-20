@@ -60,7 +60,7 @@ _signal_masks: dict = {}  # name -> {"enabled": bool, "radius_fraction": float}
 # so a round-trip A -> B -> A is non-destructive and the user's BG-removal /
 # CLAHE / frame-average work (minutes of compute, NOT on disk) survives.
 # Each value: {"raw_signals", "positions", "dirty", "masks", "active",
-# "calibration"}. Signal objects are stored by reference; a lazily-loaded
+# "calibration", "crops"}. Signal objects are stored by reference; a lazily-loaded
 # kikuchipy signal keeps its own h5 handle open, so stashed datasets stay
 # readable on restore.
 _registry_by_file: dict = {}
@@ -1819,17 +1819,44 @@ async def crop_dataset(req: CropRequest):
     window = (crop_window_service.compose(parent_window, local_window)
               if parent_window is not None else local_window)
 
+    # Register BEFORE publishing the dataset. register_cropped cuts the
+    # parent's per-pixel PC map and raises when that map is not on the grid
+    # this window was cut from; publishing first would leave a dataset in
+    # _raw_signals that IS a crop but carries no crop window — the "looks
+    # like a full scan" state the whole window registry exists to prevent.
+    # Everything after this point is dict writes, which cannot fail.
+    try:
+        calibration_store.register_cropped(new_name, parent_name, local_window)
+    except ValueError as e:
+        parent_entry = calibration_store.get_entry(parent_name)
+        pc_grid = (tuple(np.shape(parent_entry.pc_map)[:2])
+                   if parent_entry is not None and parent_entry.pc_map is not None
+                   else None)
+        logger.warning("Crop registration refused for '%s': %s", new_name, e)
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The per-pixel pattern-centre map of '{parent_name}' is on a "
+                    f"{pc_grid} grid but the selection was drawn on a "
+                    f"{tuple(local_window.original_shape)} grid — reload the file "
+                    f"before cropping"),
+        )
+    crop_window_service.set_crop(new_name, window)
+
     _raw_signals[new_name] = new_signal
     _positions[new_name] = (0, 0)
     if parent_name and parent_name in _signal_masks:
         _signal_masks[new_name] = dict(_signal_masks[parent_name])
-    if parent_name in _dirty_datasets:
-        _dirty_datasets.add(new_name)
-    calibration_store.register_cropped(new_name, parent_name, local_window)
-    crop_window_service.set_crop(new_name, window)
+    # A crop is ALWAYS dirty, even when its parent is clean: "dirty" means the
+    # in-memory patterns differ from the raw file on disk, and a crop's do — by
+    # grid, if not by value. Without this, is_active_signal_dirty() is False and
+    # indexing re-reads the file, i.e. indexes the full scan instead of the
+    # cut-out the user drew.
+    _dirty_datasets.add(new_name)
 
     _active_dataset = new_name
     _ebsd_signal = new_signal
+    # The name is fresh in _raw_signals, but delete_dataset does not purge the
+    # overview cache, so a recycled name can still find a stale entry here.
     for key in [k for k in _overview_cache if k[0] == new_name]:
         _overview_cache.pop(key, None)
 
