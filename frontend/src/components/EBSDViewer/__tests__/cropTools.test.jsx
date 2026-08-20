@@ -88,15 +88,20 @@ describe('maskForTool', () => {
   // than three points, which would earn the user an HTTP 400 for a drag that
   // looked fine. maskForTool is where that is made to agree with the
   // three-point collinear case — what was traced is what is selected.
-  it('a two-point lasso selects the line it traced, not nothing', () => {
+  it('a two-point lasso selects the line it traced, and only that', () => {
     const path = [{ r: 0, c: 0 }, { r: 3, c: 3 }];
     const b = boundsOf(path);
     const mask = maskForTool('lasso', path, b);
-    expect(mask[0 * b.cols + 0]).toBe(1);
-    expect(mask[1 * b.cols + 1]).toBe(1);
-    expect(mask[2 * b.cols + 2]).toBe(1);
-    expect(mask[3 * b.cols + 3]).toBe(1);
-    expect(mask[0 * b.cols + 3]).toBe(0); // off the line
+    // Every cell on the traced diagonal...
+    for (let i = 0; i < 4; i += 1) expect(mask[i * b.cols + i]).toBe(1);
+    // ...and nothing off it. This is the outline pass doing the work: the
+    // even-odd fill does not reliably cancel for a padded path, so an
+    // assertion that only checked the line would not notice a stray cell.
+    for (let r = 0; r < b.rows; r += 1) {
+      for (let c = 0; c < b.cols; c += 1) {
+        if (r !== c) expect(mask[r * b.cols + c]).toBe(0);
+      }
+    }
   });
 
   it('a one-point lasso selects that single pixel', () => {

@@ -309,14 +309,28 @@ export function selectionPointsFor(tool, lassoPoints, roi) {
  * not.
  *
  * So a short path is padded with repeats of its last point rather than being
- * refused. Repeating a vertex makes every edge appear twice in the even-odd
- * fill, which cancels it exactly, leaving the outline pass to mark the traced
- * segment and nothing else. A two-point drag therefore selects the line it
- * traced and a lone click selects its one pixel — the same rule as the
- * three-point collinear case, and in every case "what you traced is what you
- * get". Padding here rather than in `lassoMask` keeps that builder's tested
- * behaviour bit-identical; this is the layer that turns a tool into a mask,
- * and the degenerate drag is a tool concern.
+ * refused. A two-point drag then selects the line it traced and a lone click
+ * selects its one pixel — the same rule as the three-point collinear case, and
+ * in every case "what you traced is what you get".
+ *
+ * WHAT MAKES THAT WORK is the OUTLINE pass, not the fill. Repeating a vertex
+ * puts the same segment in the edge list twice, in opposite orders, and the
+ * even-odd fill *usually* cancels it — but not always: `xCross` is computed
+ * from the `i` vertex, so the two orderings are not bit-identical, and a cell
+ * can end up with a net toggle. Swept over 65 280 two-point paths with
+ * coordinates up to 767, 1152 of them leave cells standing in the fill. Every
+ * such cell is a lattice point ON the segment, which the outline pass marks
+ * regardless, so the result is unchanged — over the same 65 280 paths the mask
+ * is EXACTLY the segment rasterised in both directions (the forward edge and
+ * the closing one), with nothing else.
+ *
+ * Do not read this as "padding cancels the fill" and extend it: padding a
+ * four-point path with two repeats is a different question, and the argument
+ * above does not cover it. Padding is only ever used to reach three points.
+ *
+ * Padding here rather than in `lassoMask` keeps that builder's tested behaviour
+ * bit-identical; this is the layer that turns a tool into a mask, and the
+ * degenerate drag is a tool concern.
  *
  * @param {'rect'|'ellipse'|'lasso'} tool
  * @param {{r:number,c:number}[]|null} points

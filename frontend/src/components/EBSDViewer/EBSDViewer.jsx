@@ -28,6 +28,7 @@ import {
   boundsOf, bytesPerSample, maskForTool, selectionPointsFor,
 } from './navSelection';
 import { datasetGeometry } from './datasetGeometry';
+import { useSettledPath } from './useSettledPath';
 // Same zoom mechanics as the EDS analysis maps — imported rather than copied so
 // the two pages cannot drift apart. See ../EDS/zoomView.js for the derivation.
 import {
@@ -49,10 +50,14 @@ import {
 // EDS tiles use for click-to-quantify.
 const CLICK_SLOP_PX = 3;
 
-// How long a traced lasso path must stop growing before its mask is rebuilt.
-// Long enough that a continuous drag never triggers a rebuild, short enough
-// that the count is already right by the time the hand reaches the button.
-const LASSO_SETTLE_MS = 120;
+// How long an ABANDONED lasso drag may hold the previous mask — a release we
+// never heard about, e.g. over another application. Not a debounce interval:
+// the mask settles the moment a drag ends, and this timer fires at most once
+// per drag (see ./useSettledPath.js). Comfortably above the slowest realistic
+// per-pixel interval of a careful trace, so an ordinary drag never reaches it,
+// and short enough that a lost mouse-up cannot leave a stale mask standing
+// while the hand travels to the Crop button.
+const LASSO_BACKSTOP_MS = 2000;
 
 // ---------------------------------------------------------------------------
 // Small local helpers that have no equivalent in shared components
@@ -330,9 +335,11 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // The freehand path, kept apart from `roi` on purpose: the image export reads
   // `roi` as a crop rectangle, and a lasso is not one.
   const [lassoPoints, setLassoPoints] = useState([]);
-  // The same path once it has stopped growing — the copy the MASK is built
-  // from. See LASSO_SETTLE_MS for why the mask may not follow every mouse-move.
-  const [lassoMaskPath, setLassoMaskPath] = useState([]);
+  // Whether a lasso drag is in progress. The MASK is rebuilt when this goes
+  // false, not while the path grows — see ./useSettledPath.js. Set true by
+  // mouse-down; set false only by the window listener below, so that flag has
+  // exactly one owner and cannot be left standing by a code path that forgot.
+  const [lassoDrawing, setLassoDrawing] = useState(false);
 
   // --- Crop to selection ---
   const [cropTool, setCropTool] = useState('rect');
@@ -1191,6 +1198,12 @@ export default function EBSDViewer({ onNavigate, isActive }) {
 
   const cropBbox = useMemo(() => boundsOf(selectionPoints), [selectionPoints]);
 
+  // The lasso path as it stands once the hand has let go. Rebuilding a mask
+  // costs O(rows·cols·points) — 392 ms for a 361×461 selection with 1200
+  // sampled points on this machine, 3.0 s at 693×923 — and nothing needs it
+  // before the drag ends, so it is not paid until then.
+  const lassoMaskPath = useSettledPath(lassoPoints, lassoDrawing, LASSO_BACKSTOP_MS);
+
   // The points the MASK is built from. For the box tools that is the very same
   // drag; for the lasso it is the SETTLED copy of the path, so the mask does
   // not have to be rebuilt from scratch on every mouse-move. The crop WINDOW
@@ -1206,30 +1219,29 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     [cropTool, maskPoints, cropBbox],
   );
 
-  // Let the traced path stop growing before rebuilding the mask from it.
-  //
-  // A lasso mask is rebuilt from the WHOLE path — the even-odd fill tests every
-  // cell of the box against every edge, so it costs O(rows·cols·points).
-  // Measured on this machine: 31 ms for a 136×169 selection with 400 sampled
-  // points, 392 ms at 361×461 with 1200, and 3.0 s for a 693×923 one. That runs
-  // on the thread carrying the drag, so rebuilding on every new pixel would
-  // turn a lasso over a large scan into a frozen tab. The delay is invisible in
-  // the hand: it ends LASSO_SETTLE_MS after the last new pixel, long before
-  // anyone can travel to the Crop button, and the outline the user is watching
-  // never waits for it.
+  // A lasso drag ends wherever the button is released — over the sidebar, over
+  // the log, outside the window entirely. The overview's own onMouseUp only
+  // hears about a release ON it, and a drag that stayed "in progress" would
+  // hold the mask at the shape it had when the hand left. Listening on the
+  // window makes the end of a drag a fact rather than a hope; the backstop in
+  // useSettledPath covers only what even this misses (a mouse-up the browser
+  // never delivers, e.g. released over another application).
   useEffect(() => {
-    if (cropTool !== 'lasso') return undefined;
-    const id = setTimeout(() => setLassoMaskPath(lassoPoints), LASSO_SETTLE_MS);
-    return () => clearTimeout(id);
-  }, [cropTool, lassoPoints]);
+    if (!lassoDrawing) return undefined;
+    const end = () => setLassoDrawing(false);
+    window.addEventListener('mouseup', end);
+    return () => window.removeEventListener('mouseup', end);
+  }, [lassoDrawing]);
 
-  // Drop the drawn selection — all of it. One function rather than a handful of
-  // setters at each site, because forgetting one leaves a stale path that the
-  // next tool switch would resurrect.
+  // Drop the drawn selection — both halves of it. One function rather than a
+  // pair of setters at each site, because forgetting the second leaves a stale
+  // path that the next tool switch would resurrect. It deliberately does NOT
+  // touch `lassoDrawing`: that flag has one owner (the window mouse-up above),
+  // and clearing it from here would let a still-live drag settle its mask on
+  // every mouse-move — the exact cost useSettledPath exists to avoid.
   const clearSelection = useCallback(() => {
     setRoi(null);
     setLassoPoints([]);
-    setLassoMaskPath([]);
   }, []);
 
   // Switching tools. A path and a box cannot be read as each other, so moving
@@ -2325,9 +2337,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                 roiStartRef.current = { row: pos.r, col: pos.c };
                 if (cropTool === 'lasso') {
                   setLassoPoints([{ r: pos.r, c: pos.c }]);
-                  // The previous shape must not be reported against the new
-                  // box while the fresh path settles.
-                  setLassoMaskPath([]);
+                  setLassoDrawing(true);
                 }
               }
             } else if (ovZoomed && e.button === 0) {
@@ -2342,12 +2352,6 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           onMouseUp={() => {
             ovPanRef.current = null;
             roiStartRef.current = null;
-            // The path is finished, so pay for the exact mask now rather than
-            // leaving the timer to do it: releasing and clicking Crop inside
-            // LASSO_SETTLE_MS would otherwise send the whole box. A release
-            // outside this element skips this line, which is what the timer is
-            // still there for.
-            if (cropTool === 'lasso') setLassoMaskPath(lassoPoints);
             loadPattern(row, col);
             fetchEds(row, col);
           }}
