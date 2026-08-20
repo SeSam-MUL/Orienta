@@ -386,6 +386,10 @@ class CropRequest(BaseModel):
     materialise: bool = True
 
 
+class CropMaskRequest(BaseModel):
+    enabled: bool
+
+
 class FrameAverageRequest(BaseModel):
     window_size: int = 3
 
@@ -1930,6 +1934,24 @@ async def get_crop_window():
         "dataset": _active_dataset,
         "window": window.to_dict() if window is not None else None,
     }
+
+
+@router.post("/crop/mask")
+async def set_crop_mask(req: CropMaskRequest):
+    """Turn the crop's navigation mask on or off without losing the crop.
+
+    Off means the whole bounding box counts as selected. The mask itself is
+    kept so it can be switched back on and comes back exactly as drawn.
+    """
+    if not _active_dataset:
+        raise HTTPException(status_code=400, detail="No dataset active")
+    window = crop_window_service.get_crop(_active_dataset)
+    if window is None:
+        raise HTTPException(
+            status_code=400, detail=f"'{_active_dataset}' is not a cropped dataset")
+
+    updated = crop_window_service.set_mask_enabled(_active_dataset, req.enabled)
+    return {"success": True, "window": updated.to_dict()}
 
 
 @router.delete("/dataset/{name}")

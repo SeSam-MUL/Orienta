@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -162,6 +162,12 @@ def compose(outer: CropWindow, inner: CropWindow) -> CropWindow:
 _lock = threading.RLock()
 _windows: Dict[str, CropWindow] = {}
 
+# Masks switched OFF are parked here, keyed by dataset name, so "off" does not
+# destroy what the user drew: the window on file loses its nav_mask (the whole
+# bounding box counts as selected again) while the drawn shape waits here to be
+# handed back verbatim when the mask is switched on again.
+_stashed_masks: Dict[str, np.ndarray] = {}
+
 
 def set_crop(name: str, window: CropWindow) -> None:
     with _lock:
@@ -179,11 +185,41 @@ def get_crop(name: str) -> Optional[CropWindow]:
         return _windows.get(name)
 
 
+def set_mask_enabled(name: str, enabled: bool) -> CropWindow:
+    """Switch a crop's navigation mask on or off, keeping it either way.
+
+    Off means the whole bounding box counts as selected — the crop itself,
+    including its ``shape_kind`` label, is untouched. Raises ``KeyError`` for a
+    dataset that has no crop window: there is nothing to toggle, and answering
+    silently would let a caller believe it had changed something.
+    """
+    with _lock:
+        window = _windows[name]
+        if enabled:
+            mask = _stashed_masks.pop(name, None)
+            if mask is None:
+                return window          # already on, or there never was one
+            updated = replace(window, nav_mask=mask)
+        else:
+            if window.nav_mask is None:
+                return window
+            _stashed_masks[name] = window.nav_mask
+            updated = replace(window, nav_mask=None)
+        _windows[name] = updated
+    logger.info("navigation mask for %r: %s (%d selected)",
+                name, "on" if enabled else "off", updated.n_selected)
+    return updated
+
+
 def clear_crop(name: str) -> None:
     with _lock:
         _windows.pop(name, None)
+        # A parked mask outlives its window otherwise, and would be handed to
+        # whatever crop next claims the same dataset name.
+        _stashed_masks.pop(name, None)
 
 
 def clear_all() -> None:
     with _lock:
         _windows.clear()
+        _stashed_masks.clear()

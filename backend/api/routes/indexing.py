@@ -153,6 +153,45 @@ def _euler_ndarray_to_vendor(euler_arr, vendor: str, r_user=None):
 NO_SCAN_OFFSET = {"scan_row_offset": 0, "scan_col_offset": 0, "scan_shape": None}
 
 
+def _active_crop_window():
+    """The crop window of the active dataset, or None.
+
+    A function rather than a direct import at each call site: it is the one way
+    into the window from this module, and it is the seam tests substitute to
+    exercise crop-dependent behaviour without loading a file.
+    """
+    try:
+        from backend.api.routes.ebsd_viewer import get_active_crop_window
+        return get_active_crop_window()
+    except Exception:
+        logger.debug("could not read the active crop window", exc_info=True)
+        return None
+
+
+def _apply_crop_mask(selection_mask):
+    """AND the crop's navigation mask into the run's own selection.
+
+    A lasso or ellipse crop keeps every pattern in its bounding box — the mask
+    is what says which of them the user actually drew around. Indexing has to
+    honour it, or a lasso would silently behave like a rectangle.
+
+    Returns the input untouched when nothing is cropped and when the crop is a
+    rectangle (which carries no mask), so the no-crop path is unchanged.
+    """
+    window = _active_crop_window()
+    if window is None or window.nav_mask is None:
+        return selection_mask
+
+    sel = np.asarray(selection_mask, dtype=bool)
+    nav = np.asarray(window.nav_mask, dtype=bool)
+    if sel.shape != nav.shape:
+        raise ValueError(
+            f"the selection mask is {sel.shape} but the crop's navigation mask "
+            f"is {nav.shape} — they must describe the same grid"
+        )
+    return sel & nav
+
+
 def _scan_provenance_fields() -> dict:
     """Where the active dataset sits in the original scan.
 
@@ -167,12 +206,7 @@ def _scan_provenance_fields() -> dict:
     picture begins (their local ``crop_r0``) — and they predate this feature.
     These say where a result sits in the ORIGINAL measurement.
     """
-    try:
-        from backend.api.routes.ebsd_viewer import get_active_crop_window
-        window = get_active_crop_window()
-    except Exception:
-        logger.debug("could not read the active crop window", exc_info=True)
-        window = None
+    window = _active_crop_window()
     if window is None:
         return dict(NO_SCAN_OFFSET)
     return {
@@ -1184,6 +1218,12 @@ async def start_indexing(req: IndexingStartRequest):
                     region=region,
                     chemistry_mask=chemistry_mask,
                 )
+                selection_mask = _apply_crop_mask(selection_mask)
+                if not selection_mask.any():
+                    raise ValueError(
+                        "The crop's selection leaves no pixels to index. "
+                        "Disable the crop mask or draw a larger selection."
+                    )
 
             _indexing_tasks[task_id]["progress"] = 0.1
 
