@@ -138,16 +138,21 @@ export function bytesPerSample(dtype) {
  * Using (rows-1)/2 instead would put the axis extremes exactly on the rim and
  * leave them at the mercy of floating-point rounding.
  *
- * @param {{row0:number,col0:number,rows:number,cols:number}} bbox
+ * A null bbox means nothing was drawn — `boundsOf` returns null for an empty
+ * path — and yields an empty mask, so this agrees with `countSelected`, which
+ * answers 0 for the same input instead of throwing.
+ *
+ * @param {{row0:number,col0:number,rows:number,cols:number}|null} bbox
  * @returns {Uint8Array}
  */
 export function ellipseMask(bbox) {
+  if (!bbox) return new Uint8Array(0);
   const { rows, cols } = bbox;
   const mask = new Uint8Array(rows * cols);
   const cy = (rows - 1) / 2;
   const cx = (cols - 1) / 2;
-  const ry = Math.max(rows / 2, 0.5);
-  const rx = Math.max(cols / 2, 0.5);
+  const ry = rows / 2;
+  const rx = cols / 2;
   for (let r = 0; r < rows; r += 1) {
     for (let c = 0; c < cols; c += 1) {
       const dy = (r - cy) / ry;
@@ -159,37 +164,85 @@ export function ellipseMask(bbox) {
 }
 
 /**
- * The freehand polygon, filled by the even-odd rule.
+ * Bresenham walk from (r0,c0) to (r1,c1), marking every cell the line touches.
+ *
+ * Endpoints are rounded: the walk steps by whole cells and stops on equality,
+ * so a fractional endpoint would never be reached and the loop would not
+ * terminate. Drag coordinates are already whole scan pixels; the rounding is
+ * insurance. Non-finite input bails for the same reason — Task 10 derives grid
+ * coordinates by dividing by a container size, and a container that is still
+ * 0 wide on its first render would otherwise hang the tab rather than draw
+ * nothing.
+ *
+ * Cells outside the box are dropped rather than wrapped: a caller may hand us
+ * a box narrower than the hull of the points, and a wrap would paint the
+ * opposite edge of the map.
+ */
+function markLine(mask, bbox, r0, c0, r1, c1) {
+  if (!Number.isFinite(r0) || !Number.isFinite(c0)
+      || !Number.isFinite(r1) || !Number.isFinite(c1)) return;
+  const { row0, col0, rows, cols } = bbox;
+  let r = Math.round(r0);
+  let c = Math.round(c0);
+  const rEnd = Math.round(r1);
+  const cEnd = Math.round(c1);
+  const dr = Math.abs(rEnd - r);
+  const dc = Math.abs(cEnd - c);
+  const sr = r < rEnd ? 1 : -1;
+  const sc = c < cEnd ? 1 : -1;
+  let err = dc - dr;
+  for (;;) {
+    const mr = r - row0;
+    const mc = c - col0;
+    if (mr >= 0 && mr < rows && mc >= 0 && mc < cols) mask[mr * cols + mc] = 1;
+    if (r === rEnd && c === cEnd) break;
+    const e2 = 2 * err;
+    if (e2 > -dr) { err -= dr; c += sc; }
+    if (e2 < dc) { err += dc; r += sr; }
+  }
+}
+
+/**
+ * The freehand polygon: the even-odd fill, plus the traced outline.
  *
  * The path is closed automatically — a user who lifts the mouse near the start
- * means a closed shape. Pixel centres decide again, for the same reason as the
- * ellipse.
+ * means a closed shape. Pixel centres decide the fill, for the same reason as
+ * the ellipse.
  *
- * On the boundary: this plain even-odd test needs no help. A drawn vertex is
- * NOT automatically outside — the triangle (0,0)-(0,4)-(4,0) reports its
- * (0,0) corner as selected, because the crossing count at that centre is 1
- * (the hypotenuse crosses to its right). The rule is half-open, and it is
- * half-open consistently on the LOW side: `(yi > y) !== (yj > y)` counts an
- * edge on the row where it starts but not the row where it ends, and
- * `x < xCross` counts a cell left of a crossing but not on it. So the top and
- * left boundary of a shape falls inside and the bottom and right boundary
- * falls outside. The visible consequence is that the last row and last column
- * of a lasso's bounding box come back unselected when the user drew along
- * them; the patterns are still in the crop, they are simply not marked. That
- * is why there is no edge-rasterisation pass here — nothing needs one, and an
- * extra pass would only add the far edges while leaving the rule asymmetric
- * everywhere else.
+ * WHY THE SECOND PASS. The even-odd fill alone is inset by one on the bottom
+ * and right, and not occasionally — always. At the last row of the box every
+ * vertex has `r <= maxR`, so `(yi > y) !== (yj > y)` is false for every edge:
+ * zero crossings, the whole row unselected. At the last column every `xCross`
+ * is a convex combination of two vertex columns and therefore `<= maxC`, so
+ * `x < xCross` is false: the whole column unselected. Since `boundsOf` makes
+ * maxR and maxC the last row and column, EVERY lasso mask would be one
+ * smaller than its own bounding box on two sides — a traced 4x4 square would
+ * return 9 of its 16 pixels, and a lasso one row tall would return nothing at
+ * all and earn the user an HTTP 400 for a drag that looked fine. The loss is
+ * proportionally worst on small ROIs, which are the whole point of cropping.
+ *
+ * So the polygon edges are rasterised and OR-ed in. That is not a lopsided
+ * patch: on the top and left the outline adds nothing, because those cells are
+ * already inside the fill; on the bottom and right it adds exactly what the
+ * half-open rule drops. The result is symmetric — every cell the user traced
+ * is selected, whichever side of the shape it lies on.
+ *
+ * The one-character alternative does NOT work: `x <= xCross` makes the corner
+ * (0,0) of the triangle (0,0)-(0,4)-(4,0) count both the vertical edge and the
+ * hypotenuse — an even count, hence outside — losing a corner the user drew.
  *
  * @param {{r:number,c:number}[]|null} points
- * @param {{row0:number,col0:number,rows:number,cols:number}} bbox
+ * @param {{row0:number,col0:number,rows:number,cols:number}|null} bbox
  * @returns {Uint8Array}
  */
 export function lassoMask(points, bbox) {
+  if (!bbox) return new Uint8Array(0);
   const { row0, col0, rows, cols } = bbox;
   const mask = new Uint8Array(rows * cols);
   if (!points || points.length < 3) return mask;
 
   const n = points.length;
+  // The interior, by the even-odd rule.
   for (let r = 0; r < rows; r += 1) {
     const y = row0 + r;
     for (let c = 0; c < cols; c += 1) {
@@ -207,6 +260,11 @@ export function lassoMask(points, bbox) {
       }
       if (inside) mask[r * cols + c] = 1;
     }
+  }
+
+  // The traced outline, closing edge included. See WHY THE SECOND PASS above.
+  for (let i = 0, j = n - 1; i < n; j = i, i += 1) {
+    markLine(mask, bbox, points[j].r, points[j].c, points[i].r, points[i].c);
   }
   return mask;
 }

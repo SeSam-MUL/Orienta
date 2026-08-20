@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   boundsOf, rectMask, countSelected, estimateBytes, formatBytes, bytesPerSample,
+  ellipseMask, lassoMask,
 } from './navSelection';
 
 describe('boundsOf', () => {
@@ -79,8 +80,6 @@ describe('bytesPerSample', () => {
     expect(bytesPerSample('uint4')).toBe(1);   // sub-byte: never less than 1
   });
 });
-
-import { ellipseMask, lassoMask } from './navSelection';
 
 const at = (mask, bbox, r, c) => mask[(r - bbox.row0) * bbox.cols + (c - bbox.col0)];
 
@@ -161,10 +160,41 @@ describe('lassoMask', () => {
     expect(bbox).toEqual({ row0: 10, col0: 20, rows: 4, cols: 8 });
     const mask = lassoMask(pts, bbox);
     expect(at(mask, bbox, 10, 20)).toBe(1);   // the wide top edge
-    expect(at(mask, bbox, 10, 26)).toBe(1);
-    expect(at(mask, bbox, 11, 20)).toBe(0);   // left of the hypotenuse
-    expect(at(mask, bbox, 11, 23)).toBe(1);   // right of it
-    expect(at(mask, bbox, 12, 24)).toBe(0);
-    expect(at(mask, bbox, 12, 25)).toBe(1);   // narrowing towards the apex
+    expect(at(mask, bbox, 10, 27)).toBe(1);   // its far corner, on the outline
+    expect(at(mask, bbox, 11, 24)).toBe(1);   // interior, right of the hypotenuse
+    expect(at(mask, bbox, 11, 20)).toBe(0);   // left of it
+    expect(at(mask, bbox, 12, 21)).toBe(0);
+    expect(at(mask, bbox, 13, 20)).toBe(0);   // the corner nobody traced
+  });
+
+  it('selects every pixel of a traced square — the box is not inset', () => {
+    // A 4x4 square. The even-odd fill alone stops one short on the bottom and
+    // the right and returns 9 of the 16 pixels the user drew around; the
+    // traced outline is what puts the user's own path into the selection.
+    const pts = [{ r: 0, c: 0 }, { r: 0, c: 3 }, { r: 3, c: 3 }, { r: 3, c: 0 }];
+    const bbox = boundsOf(pts);
+    expect(bbox).toEqual({ row0: 0, col0: 0, rows: 4, cols: 4 });
+    expect(countSelected(lassoMask(pts, bbox), bbox)).toBe(16);
+  });
+
+  it('selects the row of a one-row lasso rather than nothing', () => {
+    // Zero area: the fill finds no crossings at all on that single row. Without
+    // the outline this returns an all-zero mask, and the backend answers HTTP
+    // 400 for a drag that looked perfectly fine to the user. ellipseMask
+    // already handles a one-row box, so the two tools have to agree.
+    const pts = [{ r: 2, c: 0 }, { r: 2, c: 5 }, { r: 2, c: 3 }];
+    const bbox = boundsOf(pts);
+    expect(bbox).toEqual({ row0: 2, col0: 0, rows: 1, cols: 6 });
+    expect(countSelected(lassoMask(pts, bbox), bbox)).toBe(6);
+  });
+});
+
+describe('a null bbox — nothing drawn', () => {
+  it('yields an empty mask from both tools', () => {
+    // boundsOf answers null for an empty path and countSelected answers 0 for
+    // a null bbox rather than throwing; the mask builders agree with their
+    // neighbour instead of dying on the destructure.
+    expect(ellipseMask(boundsOf([])).length).toBe(0);
+    expect(lassoMask([{ r: 1, c: 1 }, { r: 2, c: 2 }, { r: 3, c: 3 }], boundsOf(null)).length).toBe(0);
   });
 });
