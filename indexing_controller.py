@@ -2766,6 +2766,81 @@ def _make_processed_temp_h5(h5_path: str, progress_callback=None) -> Optional[st
         return None
 
 
+def _emsphinx_crop_refusal(h5_path: str, detector_params: Dict) -> Optional[str]:
+    """Why EMSphInx cannot index this run, or None.
+
+    EMSphInx is an external binary: it reads patterns from a FILE, in the
+    file's own flat order, and lays them out on the ``scandims`` we hand it —
+    which come from ``detector_params['n_rows'/'n_cols']``, i.e. from the
+    ACTIVE signal. For a cropped dataset those two describe different things:
+    the file holds the whole scan, the grid describes the cut-out. The binary
+    then reads the first ``rows*cols`` patterns of the file and lays them out
+    as the window, producing a map of the right SHAPE from the WRONG REGION —
+    which ``_store_result`` then stamps with the crop's origin. Nothing in the
+    run looks wrong, and there is no full-scan map to compare it against.
+
+    ``_make_processed_temp_h5`` does notice — its shape guard raises — but its
+    ``except`` demotes that to a progress line ("indexing the raw file
+    instead") and returns None, so the run continued against the whole file.
+    Refuse instead.
+
+    The three conditions together are what makes this the interactive crop and
+    not a batch that merely happens to run while a crop is live:
+
+    * a crop window is active at all;
+    * ``h5_path`` IS that window's source file. The batch route re-points the
+      active dataset at its own load (so the window is already None there),
+      but the v1 ``batch_manager`` loads through ``safe_loader`` without
+      touching the viewer registry — this check carries that path;
+    * the grid we were handed is the WINDOW's, not the file's. A batch over
+      the crop's own source file passes the full file's grid and is indexing
+      that file honestly; only a run that claims the window's grid against the
+      whole file is the broken one.
+    """
+    try:
+        from backend.api.routes.ebsd_viewer import (
+            get_active_crop_window, _canonical_path,
+        )
+    except Exception:
+        # A missing IMPORT means there is no crop registry to consult, so there
+        # is nothing to refuse. A failed READ is different and must propagate —
+        # hence only the import sits inside the try.
+        return None
+
+    window = get_active_crop_window()
+    if window is None:
+        return None
+
+    src = str(getattr(window, "source_file", "") or "")
+    if not src or not h5_path:
+        return None
+    if _canonical_path(src) != _canonical_path(h5_path):
+        return None
+
+    n_rows = int(detector_params.get("n_rows", 0) or 0)
+    n_cols = int(detector_params.get("n_cols", 0) or 0)
+    if (n_rows, n_cols) != (int(window.rows), int(window.cols)):
+        return None
+    if (n_rows, n_cols) == tuple(int(v) for v in window.original_shape):
+        # A "crop" covering the whole scan: file order and grid agree, so the
+        # binary reads exactly the right pixels.
+        return None
+
+    return (
+        "The EMSphInx (CPU) spherical backend cannot index a cropped dataset. "
+        "It runs as an external program that reads the patterns from the file "
+        "on disk — the whole "
+        f"{int(window.original_shape[0])}x{int(window.original_shape[1])} scan — "
+        f"while this dataset is the {int(window.rows)}x{int(window.cols)} cut-out "
+        f"at row {int(window.row0)}, column {int(window.col0)}. It would return "
+        "a map of the right size built from the wrong pixels. "
+        "Hough, Dictionary and the spherical GPU backend all index the cropped "
+        "patterns that are already in memory — use one of those. To use "
+        "EMSphInx on this region, export the crop to its own file first and "
+        "index that file."
+    )
+
+
 def spherical_index_patterns(
     h5_path: str,
     config: IndexingConfig,
@@ -2780,7 +2855,14 @@ def spherical_index_patterns(
     removal / autocontrast), it first writes the processed patterns to a
     temporary H5 so the external EMSphInx binary indexes those instead of the
     stale raw file. The temp file is always deleted afterwards.
+
+    A CROPPED dataset is refused outright before any of that — see
+    :func:`_emsphinx_crop_refusal`.
     """
+    refusal = _emsphinx_crop_refusal(h5_path, detector_params)
+    if refusal:
+        raise ValueError(refusal)
+
     temp_h5 = _make_processed_temp_h5(h5_path, progress_callback)
     try:
         return _spherical_index_patterns_impl(
