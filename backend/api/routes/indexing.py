@@ -148,12 +148,24 @@ def _euler_ndarray_to_vendor(euler_arr, vendor: str, r_user=None):
     return rot.to_euler().reshape(shp).astype(np.float32)
 
 
+#: The no-crop answer: this dataset IS the whole scan. Also what an imported
+#: result gets when its file records no provenance — see _read_scan_provenance.
+NO_SCAN_OFFSET = {"scan_row_offset": 0, "scan_col_offset": 0, "scan_shape": None}
+
+
 def _crop_provenance_fields() -> dict:
     """Where the active dataset sits in the original scan.
 
     Zeros when nothing is cropped, so consumers can add the offset
     unconditionally. A missing window is not an error — it is the ordinary
     "this is the whole scan" case.
+
+    The keys are ``scan_*``, NOT ``crop_*``. Do not conflate them with the
+    ``crop_row_offset`` / ``crop_col_offset`` that ``get_ncc_heatmap`` and
+    ``get_forward_ncc_heatmap`` return further down this file: those are a
+    different concept entirely — where the all-NaN border trim of that one
+    picture begins (their local ``crop_r0``) — and they predate this feature.
+    These say where a result sits in the ORIGINAL measurement.
     """
     try:
         from backend.api.routes.ebsd_viewer import get_active_crop_window
@@ -162,12 +174,11 @@ def _crop_provenance_fields() -> dict:
         logger.debug("could not read the active crop window", exc_info=True)
         window = None
     if window is None:
-        return {"crop_row_offset": 0, "crop_col_offset": 0,
-                "crop_original_shape": None}
+        return dict(NO_SCAN_OFFSET)
     return {
-        "crop_row_offset": int(window.row0),
-        "crop_col_offset": int(window.col0),
-        "crop_original_shape": [int(v) for v in window.original_shape],
+        "scan_row_offset": int(window.row0),
+        "scan_col_offset": int(window.col0),
+        "scan_shape": [int(v) for v in window.original_shape],
     }
 
 
@@ -5625,12 +5636,12 @@ async def list_results():
             # Where this result's dataset sat in the original scan, as stamped
             # by _store_result when the run happened. Read from the stored
             # result, never re-read live: the user may have loaded something
-            # else since. An entry stored before crop provenance existed has
+            # else since. An entry stored before this provenance existed has
             # none of the three keys and gets the no-crop answer — correct by
             # construction, since nothing could be cropped back then.
-            "crop_row_offset": int(meta.get("crop_row_offset", 0) or 0),
-            "crop_col_offset": int(meta.get("crop_col_offset", 0) or 0),
-            "crop_original_shape": meta.get("crop_original_shape"),
+            "scan_row_offset": int(meta.get("scan_row_offset", 0) or 0),
+            "scan_col_offset": int(meta.get("scan_col_offset", 0) or 0),
+            "scan_shape": meta.get("scan_shape"),
             "is_active": rid == _active_result_id,
             "source_file": source_file,
             "phases": [],
@@ -6066,6 +6077,12 @@ async def import_h5_result(req: ImportH5Request):
     except Exception:
         logger.debug("import-h5: render-geometry restore failed", exc_info=True)
 
+    # Where this result sat in ITS original scan, from the file it came from.
+    # Set BEFORE _store_result: unseeded, that function's setdefault would
+    # stamp whatever crop is active in this session onto a result the user
+    # merely loaded, which is the failure the source_file tagging already had.
+    result.metadata.update(_read_scan_provenance(p))
+
     # Carry per-phase CI maps over from the xmap (loader stashes them) so
     # subsequent re-exports re-emit /Indexing/PerPhase/ unchanged.
     per_phase = getattr(xmap, "_per_phase_data", None)
@@ -6464,6 +6481,37 @@ def _restore_render_geometry(h5_path) -> dict:
     except Exception:
         logger.debug("import: could not restore render geometry from %s",
                      h5_path, exc_info=True)
+    return out
+
+
+def _read_scan_provenance(h5_path) -> dict:
+    """Read scan_row_offset / scan_col_offset / scan_shape back out of an
+    export's /Indexing group (written by result_exporter._write_scan_provenance).
+
+    ALWAYS returns all three keys. An imported result's provenance belongs to
+    the file it came from, never to whatever happens to be cropped in this
+    session — so a file that records nothing gets the honest "whole scan"
+    answer rather than the live window. Seeding these before _store_result is
+    what stops its setdefault from reaching for the active crop, exactly as the
+    importer already seeds source_file (see the comment in _store_result; the
+    unseeded version of that was a user-hit bug on 2026-07-20).
+    """
+    import h5py
+    out = dict(NO_SCAN_OFFSET)
+    try:
+        with h5py.File(str(h5_path), "r") as f:
+            idxg = f.get("Indexing")
+            if idxg is None:
+                return out
+            for key in ("scan_row_offset", "scan_col_offset"):
+                if key in idxg.attrs:
+                    out[key] = int(idxg.attrs[key])
+            if "scan_shape" in idxg.attrs:
+                out["scan_shape"] = [int(v) for v in idxg.attrs["scan_shape"]]
+    except Exception:
+        logger.debug("import: could not read scan provenance from %s",
+                     h5_path, exc_info=True)
+        return dict(NO_SCAN_OFFSET)
     return out
 
 
