@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  boundsOf, rectMask, countSelected, estimateBytes, formatBytes,
+  boundsOf, rectMask, countSelected, estimateBytes, formatBytes, bytesPerSample,
 } from './navSelection';
 
 describe('boundsOf', () => {
@@ -59,5 +59,23 @@ describe('formatBytes', () => {
     expect(formatBytes(1536)).toBe('1.5 KB');
     expect(formatBytes(256 * 1024 * 1024)).toBe('256.0 MB');
     expect(formatBytes(3 * 1024 ** 3)).toBe('3.0 GB');
+  });
+});
+
+describe('bytesPerSample', () => {
+  it('reads the width out of the numpy dtype name', () => {
+    expect(bytesPerSample('uint8')).toBe(1);
+    expect(bytesPerSample('uint16')).toBe(2);
+    expect(bytesPerSample('int16')).toBe(2);
+    expect(bytesPerSample('float32')).toBe(4);
+    expect(bytesPerSample('float64')).toBe(8);
+  });
+
+  it('falls back to 1 when the dtype is unknown — the pre-dtype assumption', () => {
+    expect(bytesPerSample(null)).toBe(1);
+    expect(bytesPerSample(undefined)).toBe(1);
+    expect(bytesPerSample('')).toBe(1);
+    expect(bytesPerSample('bool')).toBe(1);
+    expect(bytesPerSample('uint4')).toBe(1);   // sub-byte: never less than 1
   });
 });

@@ -115,6 +115,19 @@ const useDataStore = create((set, get) => ({
     ebsdInfo: info,
   }),
 
+  // The navigation grid alone, for when it changes WITHOUT the file changing.
+  // Cropping is the first thing that does that: a deepcopy kept its parent's
+  // grid, so `gridShape` used to be written once by setFileData and never
+  // again. Deliberately narrower than setFileData — it must not touch
+  // filePath, the EDS/electron-image flags or anything else about the file,
+  // and staying narrow means a field added to setFileData later cannot be
+  // silently cleared here.
+  setNavigationGrid: ({ gridShape, patternShape, patternCount }) => set((st) => ({
+    gridShape,
+    patternCount,
+    patternShape: patternShape || st.patternShape,
+  })),
+
   setPendingChemMask: (val) => set({ pendingChemMask: val }),
   setPendingSimXtal: (path) => set({ pendingSimXtal: path }),
   setPendingPhaseMapIndexing: (val) => set({ pendingPhaseMapIndexing: val }),

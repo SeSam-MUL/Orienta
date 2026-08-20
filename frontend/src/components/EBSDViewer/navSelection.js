@@ -104,3 +104,22 @@ export function formatBytes(n) {
   }
   return unit === 0 ? `${Math.round(value)} B` : `${value.toFixed(1)} ${UNITS[unit]}`;
 }
+
+/**
+ * Bytes per detector sample, from the dtype string the backend reports.
+ *
+ * `/api/ebsd/datasets` carries `dtype` per dataset ("uint8", "uint16",
+ * "float32"), so the size estimate does not have to assume 8-bit patterns —
+ * a uint16 detector would otherwise be reported at half its real size.
+ * Unknown or unparseable input falls back to 1, which is what the estimate
+ * assumed before dtype was available.
+ *
+ * @param {string|null|undefined} dtype
+ * @returns {number}
+ */
+export function bytesPerSample(dtype) {
+  const bits = /(\d+)$/.exec(String(dtype ?? ''));
+  if (!bits) return 1;
+  const n = Number(bits[1]) / 8;
+  return Number.isFinite(n) && n >= 1 ? n : 1;
+}

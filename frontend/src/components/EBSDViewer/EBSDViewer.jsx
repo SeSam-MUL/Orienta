@@ -24,7 +24,8 @@ import InfoTooltip from '../common/InfoTooltip';
 import { qualityProvenanceKey } from '../common/qualityProvenance';
 import LoadProgressModal from './LoadProgressModal';
 import CropPanel from './CropPanel';
-import { boundsOf } from './navSelection';
+import { boundsOf, bytesPerSample } from './navSelection';
+import { datasetGeometry } from './datasetGeometry';
 // Same zoom mechanics as the EDS analysis maps — imported rather than copied so
 // the two pages cannot drift apart. See ../EDS/zoomView.js for the derivation.
 import {
@@ -186,7 +187,8 @@ import { disambiguateNames } from './disambiguateNames';
 
 export default function EBSDViewer({ onNavigate, isActive }) {
   const { t } = useTranslation(['ebsdviewer', 'imageexport', 'common']);
-  const { ebsdLoaded, ebsdInfo, setEBSDLoaded, setFileData, setMetadata, setPendingChemMask, stepSize } = useDataStore();
+  const { ebsdLoaded, ebsdInfo, setEBSDLoaded, setFileData, setMetadata,
+          setNavigationGrid, setPendingChemMask, stepSize } = useDataStore();
   const [askConfirm, confirmProps] = useConfirm();
   const [askPrompt, promptProps] = usePrompt();
 
@@ -572,13 +574,19 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     }
   }, []);
 
+  // Returns the list as well as storing it: setDatasets is async, so a caller
+  // that has just changed the active dataset cannot read the fresh entry back
+  // out of state in the same tick.
   const fetchDatasets = useCallback(async () => {
     try {
       const res = await ebsdApi.datasets();
       const list = res.data?.datasets || [];
-      setDatasets(Array.isArray(list) ? list : []);
+      const arr = Array.isArray(list) ? list : [];
+      setDatasets(arr);
       if (res.data?.active) setActiveDataset(res.data.active);
+      return arr;
     } catch { /* endpoint may not exist */ }
+    return null;
   }, []);
 
 
@@ -1140,6 +1148,15 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     ]) : null
   ), [roi]);
 
+  // Sample width for the crop-size estimate. /api/ebsd/datasets reports dtype
+  // per dataset and is already fetched on load, so the estimate is right for a
+  // uint16 detector from the first file — no extra request, no assumed 8 bits.
+  // ebsdInfo.dtype is the fallback (applyGrid puts it there after a crop).
+  const activeDtype = useMemo(
+    () => datasets.find((d) => d.name === activeDataset)?.dtype || ebsdInfo?.dtype || null,
+    [datasets, activeDataset, ebsdInfo],
+  );
+
   const ovZoomed = isZoomed(ovView);
   const patZoomed = isZoomed(patView);
   // The ROI box and crosshair sit in an untransformed overlay so their border
@@ -1221,6 +1238,34 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     refreshCropWindow();
   }, [ebsdLoaded, activeDataset, refreshCropWindow]);
 
+  // Publish a new navigation grid to BOTH places that hold one. They are
+  // separate store fields — ebsdInfo (this page's own geometry) and gridShape
+  // (written by setFileData, read by the status bar and, critically, by
+  // PCRefinement, which turns row/col into flat backend indices with
+  // `row * gridShape[1] + col`). The file-load path keeps them in step;
+  // cropping is the first operation that changes the grid WITHOUT a load, so
+  // it has to keep them in step itself. Updating only one leaves the pattern
+  // centre — the value this application is most sensitive to — optimised
+  // against the wrong pixels.
+  const applyGrid = useCallback((geom) => {
+    if (!geom) return false;
+    setEBSDLoaded({
+      ...(ebsdInfo || {}),
+      grid_shape: geom.gridShape,
+      navigation_shape: geom.navigationShape,
+      pattern_shape: geom.patternShape || ebsdInfo?.pattern_shape,
+      n_patterns: geom.patternCount,
+      pattern_count: geom.patternCount,
+      dtype: geom.dtype || ebsdInfo?.dtype,
+    });
+    setNavigationGrid({
+      gridShape: geom.gridShape,
+      patternShape: geom.patternShape,
+      patternCount: geom.patternCount,
+    });
+    return true;
+  }, [ebsdInfo, setEBSDLoaded, setNavigationGrid]);
+
   // Cut the active dataset down to the drawn selection. The backend makes the
   // crop the active dataset, so everything on screen has to be re-read: the
   // dataset list, the metadata, the overview, the atlas and the pattern.
@@ -1233,24 +1278,32 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       const res = await ebsdApi.crop(payload);
       // NOT destructured as `window`: that shadows the global object this
       // file uses elsewhere (window.electronAPI, window.Image).
-      const { name, n_selected: nSel, materialised, window: cropWin } = res.data || {};
+      const { name, n_selected: nSel, materialised, window: cropWin,
+              n_patterns: nPx } = res.data || {};
       log(t('crop.done', { name, selected: nSel }));
       if (!materialised) log(t('crop.notMaterialised'));
       setRoi(null);
       setActiveDataset(name);
       setCropWindow(cropWin || null);
-      const nPx = payload.rows * payload.cols;
-      setEBSDLoaded({
-        ...(ebsdInfo || {}),
-        grid_shape: [payload.rows, payload.cols],
-        navigation_shape: [payload.cols, payload.rows],
-        n_patterns: nPx,
-        pattern_count: nPx,
-      });
       // The old position may lie outside the cut-out entirely.
       setRow(0);
       setCol(0);
-      await fetchDatasets();
+      // The datasets list reads the grid off the live signal, so it is the
+      // authority. The crop RESPONSE is the fallback (fetchDatasets swallows
+      // its errors); the crop REQUEST is never used — it says what was asked
+      // for, and only the backend's refusal-rather-than-clamp makes the two
+      // agree today.
+      const list = await fetchDatasets();
+      const applied = applyGrid(datasetGeometry(list?.find((d) => d.name === name)));
+      if (!applied && cropWin) {
+        applyGrid({
+          gridShape: [cropWin.rows, cropWin.cols],
+          navigationShape: [cropWin.cols, cropWin.rows],
+          patternShape: null,
+          patternCount: nPx ?? cropWin.rows * cropWin.cols,
+          dtype: null,
+        });
+      }
       await fetchMetadata();
       setOverviewImage(null);
       fetchOverview(overviewMode);
@@ -1261,14 +1314,27 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } finally {
       setCropBusy(false);
     }
-  }, [log, t, ebsdInfo, setEBSDLoaded, fetchDatasets, fetchMetadata,
+  }, [log, t, applyGrid, fetchDatasets, fetchMetadata,
       fetchOverview, fetchAtlas, overviewMode, loadPattern]);
 
   const switchDataset = async (name) => {
     try {
       await ebsdApi.selectDataset(name);
       setActiveDataset(name);
-      await loadPattern(row, col);
+      // Before crops every dataset shared its parent's grid, so switching one
+      // could never change it. A crop can, and leaving the old grid up
+      // mis-maps every click, puts the crosshair in the wrong place, and lets
+      // a new drag produce a window the backend refuses with a 400.
+      const geom = datasetGeometry(datasets.find((d) => d.name === name));
+      applyGrid(geom);
+      // A selection drawn on one grid means nothing on another.
+      setRoi(null);
+      // ...and the current position can lie outside the dataset switched to.
+      const r = geom ? Math.min(row, geom.gridShape[0] - 1) : row;
+      const c = geom ? Math.min(col, geom.gridShape[1] - 1) : col;
+      setRow(r);
+      setCol(c);
+      await loadPattern(r, c);
       fetchOverview(overviewMode);
       fetchAtlas(); // re-build atlas for new dataset
       log(t('logMessages.switchedDataset', { name }));
@@ -2256,7 +2322,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                backend) sets signal_shape but not pattern_shape — both are the
                detector [h, w], and estimateBytes only multiplies them. */
             patternShape={ebsdInfo?.pattern_shape || ebsdInfo?.signal_shape || null}
-            bytesPerPixel={1}
+            bytesPerPixel={bytesPerSample(activeDtype)}
             shape="rect"
             busy={cropBusy}
             origin={cropWindow}
