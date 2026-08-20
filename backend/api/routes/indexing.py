@@ -7533,6 +7533,13 @@ async def start_batch_indexing(req: BatchRequest):
 
                 # 4. Run indexing
                 result = None
+                # Only the spherical branch below builds det_params, but
+                # _attach_indexing_metadata reads it unconditionally after the
+                # chain. Without this, every Hough or Dictionary dataset died
+                # with UnboundLocalError before its result was ever stored.
+                # _attach_indexing_metadata guards with `if det_params:`, so
+                # None means "no detector geometry to record" for those two.
+                det_params = None
                 if indexing_method == IndexingMethod.HOUGH:
                     if not ds_config.cif_paths:
                         raise ValueError("Hough requires CIF files")
