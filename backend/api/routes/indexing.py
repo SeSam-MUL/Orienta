@@ -247,6 +247,27 @@ def _scan_provenance_fields() -> dict:
     }
 
 
+def _stored_scan_provenance(result) -> dict:
+    """The scan_* fields as STAMPED ON THIS RESULT when it ran.
+
+    Deliberately not ``_scan_provenance_fields()``: that reads the crop window
+    that is active NOW. A result indexed before the user cropped — or on a
+    different dataset entirely — would then be exported claiming a window it
+    never ran in. ``_store_result`` already recorded the truth at run time;
+    this reads it back.
+
+    A result stored before this provenance existed carries none of the three
+    keys and gets the no-crop answer, which is correct by construction: nothing
+    could be cropped back then.
+    """
+    meta = getattr(result, "metadata", None) or {}
+    return {
+        "scan_row_offset": int(meta.get("scan_row_offset", 0) or 0),
+        "scan_col_offset": int(meta.get("scan_col_offset", 0) or 0),
+        "scan_shape": meta.get("scan_shape"),
+    }
+
+
 def _store_result(result, method_name: str) -> str:
     """Store a result and make it active. Returns the result_id.
 
@@ -5708,9 +5729,7 @@ async def list_results():
             # else since. An entry stored before this provenance existed has
             # none of the three keys and gets the no-crop answer — correct by
             # construction, since nothing could be cropped back then.
-            "scan_row_offset": int(meta.get("scan_row_offset", 0) or 0),
-            "scan_col_offset": int(meta.get("scan_col_offset", 0) or 0),
-            "scan_shape": meta.get("scan_shape"),
+            **_stored_scan_provenance(res),
             "is_active": rid == _active_result_id,
             "source_file": source_file,
             "phases": [],
@@ -6757,6 +6776,15 @@ async def export_indexing_result(req: ExportRequest):
                 # Persist spherical render geometry so a re-imported result can
                 # still render simulated patterns (detector geometry + SHT refs).
                 _write_render_geometry_attrs(idx, getattr(active, "metadata", None))
+                # Where this result sat in the original scan. Read back by
+                # _read_scan_provenance on re-import, so a crop -> index ->
+                # "Save result" -> re-import round trip no longer claims the
+                # result covers the whole scan. Both export branches duplicate
+                # the /Indexing writers by design, so both have to call this.
+                from backend.api.services.result_exporter import (
+                    _write_scan_provenance,
+                )
+                _write_scan_provenance(idx, _stored_scan_provenance(active))
 
                 # Export-frame conversion (see orientation_frame): write Euler
                 # in the source vendor's stored frame so MTEX/Aztec read it
@@ -7041,6 +7069,15 @@ async def export_indexing_result(req: ExportRequest):
                 # Persist spherical render geometry so a re-imported result can
                 # still render simulated patterns (detector geometry + SHT refs).
                 _write_render_geometry_attrs(idx, getattr(active, "metadata", None))
+                # Where this result sat in the original scan. Read back by
+                # _read_scan_provenance on re-import, so a crop -> index ->
+                # "Save result" -> re-import round trip no longer claims the
+                # result covers the whole scan. Both export branches duplicate
+                # the /Indexing writers by design, so both have to call this.
+                from backend.api.services.result_exporter import (
+                    _write_scan_provenance,
+                )
+                _write_scan_provenance(idx, _stored_scan_provenance(active))
                 idx.attrs["format_version"] = _LIGHT_FMT_VERSION
 
                 # step_size_um resolved above (before the file was opened).

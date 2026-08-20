@@ -317,14 +317,17 @@ def export_result_h5(
         dataset sat in the original scan. Written as attributes on /Indexing
         and /Documentation. ``None`` writes nothing.
 
-        ONLY pass this when the checkpoint being exported is the ACTIVE
-        dataset's, because the only source of the value is the active crop
-        window. A caller that exports files from a queue (the batch manager)
-        must leave it ``None``: its files are not the active dataset, so
-        stamping the live window on them would claim provenance they do not
-        have. That is why the parameter currently has no caller — it is
-        waiting for an export path that runs on the active dataset, not an
-        oversight to be "finished".
+        ONLY pass this for a checkpoint that belongs to the result whose
+        provenance it is. A caller that exports files from a queue (the batch
+        manager, ``export_all``) must leave it ``None``: its files are not the
+        active dataset, so stamping a window on them would claim provenance
+        they do not have — which is why ``export_all`` passes nothing and this
+        parameter still has no caller that fills it.
+
+        The interactive route (``POST /api/indexing/export``) does NOT come
+        through here — it duplicates the /Indexing writers inline, by design —
+        and calls :func:`_write_scan_provenance` directly with the stored
+        result's own ``scan_*`` fields.
 
     Returns
     -------
