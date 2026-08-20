@@ -322,6 +322,16 @@ def set_mask_enabled(name: str, enabled: bool) -> CropWindow:
         if enabled:
             mask = _stashed_masks.pop(name, None)
             if mask is None:
+                if window.nav_mask is None and window.shape_kind != "rect":
+                    # The window still calls itself a lasso/ellipse but neither
+                    # a live nor a parked mask exists — the drawn shape is gone.
+                    # Answering "success, nothing changed" told the user their
+                    # shape was back when it was not.
+                    raise KeyError(
+                        f"the navigation mask drawn for {name!r} "
+                        f"({window.shape_kind}) is no longer held, so it "
+                        f"cannot be switched back on — draw the shape again"
+                    )
                 return window          # already on, or there never was one
             updated = replace(window, nav_mask=mask)
         else:
@@ -333,6 +343,33 @@ def set_mask_enabled(name: str, enabled: bool) -> CropWindow:
     logger.info("navigation mask for %r: %s (%d selected)",
                 name, "on" if enabled else "off", updated.n_selected)
     return updated
+
+
+def snapshot_stashed_masks(names) -> Dict[str, np.ndarray]:
+    """The parked (switched-off) masks for ``names``.
+
+    A switched-off mask lives HERE, not on the window, so anything that saves
+    "the crop" by saving ``get_crop(name)`` saves the window WITHOUT it. The
+    per-file dataset stash did exactly that, and the load path calls
+    ``clear_all()``, which wipes this table — so a file A -> B -> A round trip
+    restored a maskless window whose ``shape_kind`` still said "lasso", and
+    switching the mask back on returned success having changed nothing. The
+    drawn shape was gone for good.
+    """
+    with _lock:
+        return {n: _stashed_masks[n] for n in names if n in _stashed_masks}
+
+
+def restore_stashed_masks(masks: Dict[str, np.ndarray]) -> None:
+    """Put parked masks back, as saved by :func:`snapshot_stashed_masks`.
+
+    Restores only names that have no parked mask already: a live session's
+    answer beats a restored one, the same rule the surrounding registry
+    restore follows for the freshly re-read raw dataset.
+    """
+    with _lock:
+        for name, mask in (masks or {}).items():
+            _stashed_masks.setdefault(name, mask)
 
 
 def clear_crop(name: str) -> None:

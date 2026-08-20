@@ -526,6 +526,11 @@ def _stash_registry_for_file(file_path) -> None:
         window = crop_window_service.get_crop(name)
         if window is not None:
             crops[name] = window
+    # A mask the user switched OFF is not on its window — it is parked in the
+    # crop service's side table, which the load path's clear_all() wipes. Save
+    # it beside the windows or the shape is destroyed by a file round trip,
+    # while shape_kind goes on claiming "lasso".
+    crop_masks = crop_window_service.snapshot_stashed_masks(list(_raw_signals))
     _registry_by_file[key] = {
         "raw_signals": raw_snapshot,
         "positions": dict(_positions),
@@ -534,6 +539,7 @@ def _stash_registry_for_file(file_path) -> None:
         "active": _active_dataset,
         "calibration": calibration_store.snapshot(list(_raw_signals.keys())),
         "crops": crops,
+        "crop_masks": crop_masks,
     }
     logger.info(
         "Stashed %d dataset(s) for %s (derived: %s)",
@@ -574,6 +580,11 @@ def _restore_registry_for_file(file_path, fresh_raw_name: str) -> bool:
     for name, window in snap["crops"].items():
         if name != fresh_raw_name:
             crop_window_service.set_crop(name, window)
+    # .get(): a stash written before crop_masks existed has no such key.
+    crop_window_service.restore_stashed_masks({
+        name: mask for name, mask in (snap.get("crop_masks") or {}).items()
+        if name != fresh_raw_name
+    })
 
     # Restore the previously-active dataset selection if it still exists
     # (e.g. the user was viewing 'Scan1_bg_clahe' when they switched away).
@@ -1951,7 +1962,8 @@ async def set_crop_mask(req: CropMaskRequest):
     """Turn the crop's navigation mask on or off without losing the crop.
 
     Off means the whole bounding box counts as selected. The mask itself is
-    kept so it can be switched back on and comes back exactly as drawn.
+    kept so it can be switched back on and comes back exactly as drawn — it is
+    parked in the crop service and travels with the per-file dataset stash.
     """
     if not _active_dataset:
         raise HTTPException(status_code=400, detail="No dataset active")
@@ -1960,7 +1972,13 @@ async def set_crop_mask(req: CropMaskRequest):
         raise HTTPException(
             status_code=400, detail=f"'{_active_dataset}' is not a cropped dataset")
 
-    updated = crop_window_service.set_mask_enabled(_active_dataset, req.enabled)
+    try:
+        updated = crop_window_service.set_mask_enabled(_active_dataset, req.enabled)
+    except KeyError as exc:
+        # The drawn shape is no longer held. Reporting success here — which is
+        # what this did — told the user their lasso was back when the window
+        # had silently become its own bounding box.
+        raise HTTPException(status_code=400, detail=str(exc.args[0])) from exc
     return {"success": True, "window": updated.to_dict()}
 
 
