@@ -297,6 +297,12 @@ def load_ebsd_file(path: str) -> bool:
         _positions.clear()
         _dirty_datasets.clear()
         _signal_masks.clear()
+        # Same as the async load path (which already does this): the crop
+        # registry describes datasets that no longer exist, and a navigation
+        # mask parked by "mask off" must never survive into another file.
+        # _restore_registry_for_file re-registers the windows that belong to
+        # THIS file a few lines below.
+        crop_window_service.clear_all()
         dataset_name = Path(path).stem
         _raw_signals[dataset_name] = signal
         _positions[dataset_name] = (0, 0)

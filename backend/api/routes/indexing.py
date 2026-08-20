@@ -159,13 +159,16 @@ def _active_crop_window():
     A function rather than a direct import at each call site: it is the one way
     into the window from this module, and it is the seam tests substitute to
     exercise crop-dependent behaviour without loading a file.
+
+    A FAILED read raises. The two callers want different things from that:
+    ``_scan_provenance_fields`` can honestly fall back to "no offset" and
+    catches it, but ``_apply_crop_mask`` cannot — swallowing the error there
+    would silently degrade a lasso to a rectangle, which is exactly the
+    failure this feature exists to prevent. Returning None on error would have
+    forced the tolerant policy on both.
     """
-    try:
-        from backend.api.routes.ebsd_viewer import get_active_crop_window
-        return get_active_crop_window()
-    except Exception:
-        logger.debug("could not read the active crop window", exc_info=True)
-        return None
+    from backend.api.routes.ebsd_viewer import get_active_crop_window
+    return get_active_crop_window()
 
 
 def _apply_crop_mask(selection_mask):
@@ -192,6 +195,27 @@ def _apply_crop_mask(selection_mask):
     return sel & nav
 
 
+def _crop_masked_selection(selection_mask):
+    """``_apply_crop_mask`` plus the refusal to start a run with nothing left.
+
+    The guard is gated on the selection having been non-empty BEFORE the AND,
+    so it only ever speaks about a crop that actually emptied it. A run can
+    arrive here already empty with no crop in sight — an empty region
+    (``row_start == row_end``), an all-false chemistry mask — and on that path
+    ``_apply_crop_mask`` returned its input untouched and the run must behave
+    exactly as it did before this feature existed. Blaming a crop the user does
+    not have would be worse than the old silence.
+    """
+    n_before = int(np.count_nonzero(np.asarray(selection_mask, dtype=bool)))
+    out = _apply_crop_mask(selection_mask)
+    if n_before and not np.asarray(out).any():
+        raise ValueError(
+            "The crop's selection leaves no pixels to index. "
+            "Disable the crop mask or draw a larger selection."
+        )
+    return out
+
+
 def _scan_provenance_fields() -> dict:
     """Where the active dataset sits in the original scan.
 
@@ -206,7 +230,14 @@ def _scan_provenance_fields() -> dict:
     picture begins (their local ``crop_r0``) — and they predate this feature.
     These say where a result sits in the ORIGINAL measurement.
     """
-    window = _active_crop_window()
+    try:
+        window = _active_crop_window()
+    except Exception:
+        # Provenance degrades honestly: "we do not know where this sits" reads
+        # the same as "it is the whole scan" to every consumer, and blocking a
+        # whole indexing run over a missing offset would be the worse answer.
+        logger.debug("could not read the active crop window", exc_info=True)
+        window = None
     if window is None:
         return dict(NO_SCAN_OFFSET)
     return {
@@ -1218,12 +1249,7 @@ async def start_indexing(req: IndexingStartRequest):
                     region=region,
                     chemistry_mask=chemistry_mask,
                 )
-                selection_mask = _apply_crop_mask(selection_mask)
-                if not selection_mask.any():
-                    raise ValueError(
-                        "The crop's selection leaves no pixels to index. "
-                        "Disable the crop mask or draw a larger selection."
-                    )
+                selection_mask = _crop_masked_selection(selection_mask)
 
             _indexing_tasks[task_id]["progress"] = 0.1
 
@@ -7559,6 +7585,14 @@ async def start_batch_indexing(req: BatchRequest):
                     n_rows=n_rows, n_cols=n_cols,
                     mode=selection_mode, region=region,
                 )
+                # The batch loop reloads each file itself, and load_ebsd_file
+                # restores that file's stashed datasets and re-selects the one
+                # that was active — so batching a file the user had cropped
+                # runs on THE CROP, on the crop's grid (n_rows/n_cols above
+                # come from the active signal, same as the interactive path).
+                # Without this the lasso would silently behave as a rectangle
+                # here while working everywhere else.
+                selection_mask = _crop_masked_selection(selection_mask)
 
                 config = IndexingConfig(
                     method=indexing_method,
