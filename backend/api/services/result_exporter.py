@@ -269,6 +269,21 @@ Libraries: kikuchipy, orix, diffsims, EMSphInx
 """
 
 
+def _write_crop_provenance(group, crop_provenance: Optional[Dict]) -> None:
+    """Stamp where the indexed dataset sat in its original scan.
+
+    ``crop_provenance`` is the dict ``indexing._crop_provenance_fields``
+    returns: ``crop_row_offset``, ``crop_col_offset``, ``crop_original_shape``.
+    ``None`` — the default at every call site — writes nothing, so a file
+    exported without it is identical to one exported before this existed.
+    ``None`` values inside the dict are skipped too: h5py has no way to store
+    one, and "no original shape" is exactly the absent attribute.
+    """
+    for key, value in (crop_provenance or {}).items():
+        if value is not None:
+            group.attrs[key] = value
+
+
 def export_result_h5(
     source_h5_path: str,
     checkpoint_path: str,
@@ -278,6 +293,7 @@ def export_result_h5(
     sample_tilt: float = 70.0,
     detector_shape: Optional[Tuple[int, int]] = None,
     step_size: Optional[float] = None,
+    crop_provenance: Optional[Dict] = None,
 ) -> str:
     """Create a rich H5 result file: original data + indexing results.
 
@@ -295,6 +311,10 @@ def export_result_h5(
         Pattern center [PCx, PCy, PCz].
     sample_tilt : float
     detector_shape : tuple (height, width)
+    crop_provenance : dict, optional
+        ``{crop_row_offset, crop_col_offset, crop_original_shape}`` — where the
+        indexed dataset sat in the original scan. Written as attributes on
+        /Indexing and /Documentation. ``None`` writes nothing.
 
     Returns
     -------
@@ -391,6 +411,7 @@ def export_result_h5(
         idx.attrs["grid_shape"] = list(grid_shape)
         idx.attrs["step_size_um"] = float(step_size)
         idx.attrs["format_version"] = FORMAT_VERSION
+        _write_crop_provenance(idx, crop_provenance)
 
         # --- Per-Phase Results ---
         per_phase = idx.create_group("PerPhase")
@@ -529,6 +550,7 @@ def export_result_h5(
             del f["Documentation"]
         doc = f.create_group("Documentation")
         doc.attrs["format_version"] = FORMAT_VERSION
+        _write_crop_provenance(doc, crop_provenance)
         doc.attrs["description"] = "EBSD indexing results + original experimental data"
         doc.create_dataset("README", data=README_TEXT)
 
@@ -1308,6 +1330,7 @@ def export_result_h5_light(
     detector_shape: Optional[Tuple[int, int]] = None,
     include_eds: bool = True,
     step_size: Optional[float] = None,
+    crop_provenance: Optional[Dict] = None,
 ) -> str:
     """Create a lightweight H5 result file: indexing data only, no source copy.
 
@@ -1425,6 +1448,7 @@ def export_result_h5_light(
         idx.attrs["grid_shape"] = list(grid_shape)
         idx.attrs["format"] = "light"
         idx.attrs["format_version"] = FORMAT_VERSION
+        _write_crop_provenance(idx, crop_provenance)
         # Store the µm step size on /Indexing AND /Detector below so any
         # reader path finds it without guessing. The reader in
         # analysis.py uses this to scale CrystalMap.x/y from pixel units
@@ -1565,6 +1589,7 @@ def export_result_h5_light(
         # /Documentation/
         doc = f.create_group("Documentation")
         doc.attrs["format_version"] = FORMAT_VERSION
+        _write_crop_provenance(doc, crop_provenance)
         doc.attrs["format"] = "light"
         doc.attrs["description"] = (
             "Lightweight indexing result. Original pattern data is NOT included — "
@@ -1603,6 +1628,7 @@ def export_all(
     step_size: Optional[float] = None,
     formats: Optional[List[str]] = None,
     include_eds: bool = True,
+    crop_provenance: Optional[Dict] = None,
 ) -> Dict[str, Optional[str]]:
     """Export selected formats: rich .h5, light .h5, .ang, .ctf.
 
@@ -1614,6 +1640,10 @@ def export_all(
         _multiphase.h5 from batch indexing.
     output_dir : str, optional
         Output directory. Defaults to same dir as source file.
+    crop_provenance : dict, optional
+        Where the indexed dataset sat in the original scan; passed to the two
+        .h5 writers. ``None`` writes nothing. The .ang/.ctf writers have no
+        place for it and ignore it.
     formats : list of str, optional
         Subset of {"h5_rich", "h5_light", "ang", "ctf"}. Default:
         ["h5_light", "ang", "ctf"] — the small-output set, safe for
@@ -1656,6 +1686,7 @@ def export_all(
                 indexing_params=indexing_params, pc=pc,
                 sample_tilt=sample_tilt, detector_shape=detector_shape,
                 step_size=step_size,
+                crop_provenance=crop_provenance,
             )
         except Exception as e:
             logger.exception("Rich H5 export failed: %s", e)
@@ -1669,6 +1700,7 @@ def export_all(
                 sample_tilt=sample_tilt, detector_shape=detector_shape,
                 include_eds=include_eds,
                 step_size=step_size,
+                crop_provenance=crop_provenance,
             )
         except Exception as e:
             logger.exception("Light H5 export failed: %s", e)

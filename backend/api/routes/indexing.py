@@ -148,6 +148,29 @@ def _euler_ndarray_to_vendor(euler_arr, vendor: str, r_user=None):
     return rot.to_euler().reshape(shp).astype(np.float32)
 
 
+def _crop_provenance_fields() -> dict:
+    """Where the active dataset sits in the original scan.
+
+    Zeros when nothing is cropped, so consumers can add the offset
+    unconditionally. A missing window is not an error — it is the ordinary
+    "this is the whole scan" case.
+    """
+    try:
+        from backend.api.routes.ebsd_viewer import get_active_crop_window
+        window = get_active_crop_window()
+    except Exception:
+        logger.debug("could not read the active crop window", exc_info=True)
+        window = None
+    if window is None:
+        return {"crop_row_offset": 0, "crop_col_offset": 0,
+                "crop_original_shape": None}
+    return {
+        "crop_row_offset": int(window.row0),
+        "crop_col_offset": int(window.col0),
+        "crop_original_shape": [int(v) for v in window.original_shape],
+    }
+
+
 def _store_result(result, method_name: str) -> str:
     """Store a result and make it active. Returns the result_id.
 
@@ -189,6 +212,13 @@ def _store_result(result, method_name: str) -> str:
                 "source_file",
                 str(_ebsd_file_path) if _ebsd_file_path else None,
             )
+            # Where the dataset this ran on sits in the original scan. Stamped
+            # here, not read at list time, so the answer survives the user
+            # loading something else afterwards. setdefault for the same reason
+            # source_file uses it: a caller that already knows its own
+            # provenance (the grain-reassign path deep-copies it along) keeps it.
+            for _key, _value in _crop_provenance_fields().items():
+                result.metadata.setdefault(_key, _value)
     except Exception:
         logger.debug("could not tag result with source_file", exc_info=True)
     # Result is now registered + active → tell polling clients to refetch.
@@ -5578,9 +5608,8 @@ async def list_results():
     """List all stored indexing results with metadata."""
     results = []
     for rid, res in _result_registry.items():
-        source_file = None
-        if hasattr(res, "metadata") and isinstance(res.metadata, dict):
-            source_file = res.metadata.get("source_file")
+        meta = res.metadata if isinstance(getattr(res, "metadata", None), dict) else {}
+        source_file = meta.get("source_file")
         entry = {
             "id": rid,
             "method": res.method.value,
@@ -5593,6 +5622,15 @@ async def list_results():
             # Measuring it from the drawn layers cannot work — an EDS map or an
             # electron image exists at full scan size regardless of the run.
             "roi_bbox": _selection_bbox(res),
+            # Where this result's dataset sat in the original scan, as stamped
+            # by _store_result when the run happened. Read from the stored
+            # result, never re-read live: the user may have loaded something
+            # else since. An entry stored before crop provenance existed has
+            # none of the three keys and gets the no-crop answer — correct by
+            # construction, since nothing could be cropped back then.
+            "crop_row_offset": int(meta.get("crop_row_offset", 0) or 0),
+            "crop_col_offset": int(meta.get("crop_col_offset", 0) or 0),
+            "crop_original_shape": meta.get("crop_original_shape"),
             "is_active": rid == _active_result_id,
             "source_file": source_file,
             "phases": [],
