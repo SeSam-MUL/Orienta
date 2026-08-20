@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 
 import numpy as np
@@ -38,7 +38,51 @@ class CropWindow:
     cols: int
     original_shape: Tuple[int, int]
     shape_kind: str = "rect"           # "rect" | "ellipse" | "lasso"
-    nav_mask: Optional[np.ndarray] = None   # (rows, cols) bool, window-local
+    # Window-local (rows, cols) bool. Excluded from comparison: an array field
+    # would make the generated __eq__ raise "truth value of an array is
+    # ambiguous" and __hash__ fail on the unhashable array.
+    nav_mask: Optional[np.ndarray] = field(default=None, compare=False)
+
+    def __post_init__(self) -> None:
+        """Reject a window that cannot be cut, at the point it is built.
+
+        Numpy slicing truncates a window that runs off the grid and WRAPS a
+        negative origin to the opposite edge — both silently, both producing
+        data from the wrong place. The window is authoritative for every
+        consumer, so it has to be impossible to build a wrong one.
+
+        ``shape_kind`` is deliberately not validated: the label is descriptive,
+        and a new selection tool should not have to edit this module.
+        """
+        grid_rows, grid_cols = (int(self.original_shape[0]),
+                                int(self.original_shape[1]))
+        if self.rows <= 0 or self.cols <= 0:
+            raise ValueError(
+                f"a crop window must select at least one pixel, got "
+                f"rows={self.rows}, cols={self.cols}"
+            )
+        if self.row0 < 0 or self.col0 < 0:
+            raise ValueError(
+                f"a crop window starts inside the grid, got row0={self.row0}, "
+                f"col0={self.col0}"
+            )
+        if self.row0 + self.rows > grid_rows:
+            raise ValueError(
+                f"crop window covers rows {self.row0}-{self.row0 + self.rows} "
+                f"but the grid has {grid_rows} rows"
+            )
+        if self.col0 + self.cols > grid_cols:
+            raise ValueError(
+                f"crop window covers cols {self.col0}-{self.col0 + self.cols} "
+                f"but the grid has {grid_cols} cols"
+            )
+        if self.nav_mask is not None:
+            mask_shape = tuple(np.shape(self.nav_mask))
+            if mask_shape != (self.rows, self.cols):
+                raise ValueError(
+                    f"nav_mask has shape {mask_shape} but this crop window is "
+                    f"{(self.rows, self.cols)}"
+                )
 
     @property
     def shape(self) -> Tuple[int, int]:
