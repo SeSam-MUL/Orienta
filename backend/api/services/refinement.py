@@ -1184,6 +1184,17 @@ def compute_full_refinement(
         "detector_geometry": dict(det),
         "pc_per_pixel": pc_per_pixel,
     }
+    # A refinement inherits its parent's origin by definition: same pixels,
+    # same measurement. Copied off the parent rather than left to
+    # _store_result's setdefault, which reads the crop LIVE — clear or change
+    # the crop between indexing and refining and parent and child would report
+    # different origins for the very same pixels.
+    parent_meta = getattr(result, "metadata", None)
+    if not isinstance(parent_meta, dict):
+        parent_meta = {}
+    for _key, _default in ind_routes.NO_SCAN_OFFSET.items():
+        refined_result.metadata[_key] = parent_meta.get(_key, _default)
+
     refined_rid = ind_routes._store_result(refined_result, "refinement")
     # _store_result already bumps; bump again is harmless but the explicit
     # call here keeps the refinement path self-documenting as a state change.

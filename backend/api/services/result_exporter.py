@@ -272,7 +272,7 @@ Libraries: kikuchipy, orix, diffsims, EMSphInx
 def _write_scan_provenance(group, scan_provenance: Optional[Dict]) -> None:
     """Stamp where the indexed dataset sat in its original scan.
 
-    ``scan_provenance`` is the dict ``indexing._crop_provenance_fields``
+    ``scan_provenance`` is the dict ``indexing._scan_provenance_fields``
     returns: ``scan_row_offset``, ``scan_col_offset``, ``scan_shape``.
     ``None`` — the default at every call site — writes nothing, so a file
     exported without it is identical to one exported before this existed.

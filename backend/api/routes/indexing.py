@@ -153,7 +153,7 @@ def _euler_ndarray_to_vendor(euler_arr, vendor: str, r_user=None):
 NO_SCAN_OFFSET = {"scan_row_offset": 0, "scan_col_offset": 0, "scan_shape": None}
 
 
-def _crop_provenance_fields() -> dict:
+def _scan_provenance_fields() -> dict:
     """Where the active dataset sits in the original scan.
 
     Zeros when nothing is cropped, so consumers can add the offset
@@ -228,10 +228,13 @@ def _store_result(result, method_name: str) -> str:
             # loading something else afterwards. setdefault for the same reason
             # source_file uses it: a caller that already knows its own
             # provenance (the grain-reassign path deep-copies it along) keeps it.
-            for _key, _value in _crop_provenance_fields().items():
+            for _key, _value in _scan_provenance_fields().items():
                 result.metadata.setdefault(_key, _value)
     except Exception:
-        logger.debug("could not tag result with source_file", exc_info=True)
+        # source_file is assigned above this, so in practice the only thing
+        # that can land here is a failed read of the scan provenance.
+        logger.debug("could not tag result with its scan provenance",
+                     exc_info=True)
     # Result is now registered + active → tell polling clients to refetch.
     state_version.bump()
     return result_id
@@ -7602,6 +7605,16 @@ async def start_batch_indexing(req: BatchRequest):
                     ),
                     det_params=det_params,
                 )
+
+                # No scan-provenance seed here, deliberately. The loop's own
+                # load_ebsd_file (above) re-points _active_dataset at the file
+                # it is about to index, together with THAT file's crop if it
+                # has one — so _store_result's setdefault already describes the
+                # dataset that was actually indexed. Measured both ways: a
+                # batch over another file sees window=None; a batch over a file
+                # the user cropped sees that crop AND indexes it (active signal
+                # nav shape 4x4, not 90x120), so its offsets are the right
+                # answer. Forcing zeros here would erase true provenance.
 
                 _store_result(result, ds_config.method)
                 n_indexed = int(result.selection_mask.sum())
