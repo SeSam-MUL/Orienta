@@ -387,7 +387,14 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       const list = res.data?.datasets || [];
       if (list.length > 0) {
         const active = list.find(d => d.active) || list[0];
-        const gridShape = active.navigation_shape ? [active.navigation_shape[1], active.navigation_shape[0]] : [0, 0];
+        // Same hyperspy (x, y) -> (rows, cols) flip as everywhere else, from
+        // the one tested place. pattern_shape used to be written as the RAW
+        // signal_shape, i.e. [w, h], while every other writer and both readers
+        // (HDF5Viewer SummaryModal, PatternPanel) use [h, w] — so a pattern was
+        // reported transposed whenever the viewer was entered with a file
+        // already open in the backend.
+        const geom = datasetGeometry(active);
+        const gridShape = geom?.gridShape || [0, 0];
         setEBSDLoaded({
           grid_shape: gridShape,
           signal_shape: active.signal_shape || [0, 0],
@@ -399,7 +406,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           format_type: 'h5oina',
           grid_shape: gridShape,
           pattern_count: active.n_patterns || 0,
-          pattern_shape: active.signal_shape || [0, 0],
+          pattern_shape: geom?.patternShape || [0, 0],
           has_patterns: true,
           has_raw_patterns: false,
           has_eds: !!active.has_eds,
@@ -415,8 +422,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           setFilePath(backendPath);
           addRecentFile(backendPath);
         }
-        const shape = active.navigation_shape || [0, 0];
-        log(t('logMessages.syncedBackend', { name: active.name || 'dataset', cols: shape[1], rows: shape[0] }));
+        log(t('logMessages.syncedBackend', {
+          name: active.name || 'dataset', rows: gridShape[0], cols: gridShape[1],
+        }));
         fetchOverview(overviewMode);
         loadPattern(row, col);
         loadDetector();
@@ -1266,6 +1274,25 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     return true;
   }, [ebsdInfo, setEBSDLoaded, setNavigationGrid]);
 
+  // Move the viewer onto a (possibly different) dataset's grid: publish it,
+  // drop a selection drawn on the old one, and pull the cursor inside the new
+  // bounds. Returns the position to load, because setRow/setCol are async.
+  // Both paths that hand the viewer a dataset it did not choose a position
+  // for — switching and deleting — go through here, so a grid change cannot
+  // be forgotten in one of them again. handleCrop calls applyGrid directly
+  // instead: it knows where to land (the origin of the cut-out) rather than
+  // clamping the old position to an arbitrary corner of it.
+  const adoptGrid = useCallback((geom) => {
+    applyGrid(geom);
+    // A selection drawn on one grid means nothing on another.
+    setRoi(null);
+    const r = geom ? Math.min(row, geom.gridShape[0] - 1) : row;
+    const c = geom ? Math.min(col, geom.gridShape[1] - 1) : col;
+    setRow(r);
+    setCol(c);
+    return [r, c];
+  }, [applyGrid, row, col]);
+
   // Cut the active dataset down to the drawn selection. The backend makes the
   // crop the active dataset, so everything on screen has to be re-read: the
   // dataset list, the metadata, the overview, the atlas and the pattern.
@@ -1325,15 +1352,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       // could never change it. A crop can, and leaving the old grid up
       // mis-maps every click, puts the crosshair in the wrong place, and lets
       // a new drag produce a window the backend refuses with a 400.
-      const geom = datasetGeometry(datasets.find((d) => d.name === name));
-      applyGrid(geom);
-      // A selection drawn on one grid means nothing on another.
-      setRoi(null);
-      // ...and the current position can lie outside the dataset switched to.
-      const r = geom ? Math.min(row, geom.gridShape[0] - 1) : row;
-      const c = geom ? Math.min(col, geom.gridShape[1] - 1) : col;
-      setRow(r);
-      setCol(c);
+      const [r, c] = adoptGrid(datasetGeometry(datasets.find((d) => d.name === name)));
       await loadPattern(r, c);
       fetchOverview(overviewMode);
       fetchAtlas(); // re-build atlas for new dataset
@@ -1573,11 +1592,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                   try {
                     const res = await ebsdApi.deleteDataset(activeDataset);
                     log(t('logMessages.removedDataset', { name: activeDataset }));
+                    // The backend hands back a DIFFERENT dataset, which
+                    // since crops exist can be on a different grid — same
+                    // reason switchDataset has to adopt it.
                     const newActive = res.data?.active || '';
                     setActiveDataset(newActive);
-                    await fetchDatasets();
+                    const list = await fetchDatasets();
                     if (newActive) {
-                      await loadPattern(row, col);
+                      const [r, c] = adoptGrid(
+                        datasetGeometry(list?.find((d) => d.name === newActive)));
+                      await loadPattern(r, c);
                       fetchOverview(overviewMode);
                       fetchAtlas();
                     }
