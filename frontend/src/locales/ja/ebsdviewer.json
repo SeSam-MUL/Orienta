@@ -178,6 +178,22 @@
       "Entropy": "エントロピー"
     }
   },
+  "crop": {
+    "apply": "選択範囲で切り抜く",
+    "working": "切り抜き中…",
+    "summary": "{{total}} ピクセル中 {{selected}} ピクセル · 約 {{size}}",
+    "summaryNoSize": "{{total}} ピクセル中 {{selected}} ピクセル",
+    "nothingSelected": "概要図上で領域を選択してください",
+    "tool": {
+      "rect": "矩形",
+      "ellipse": "楕円",
+      "lasso": "なげなわ"
+    },
+    "origin": "{{parent}} の切り抜き · 行 {{row0}}–{{row1}}、列 {{col0}}–{{col1}}",
+    "failed": "切り抜きに失敗しました: {{message}}",
+    "done": "'{{name}}' に切り抜きました ({{selected}} px)",
+    "notMaterialised": "メモリに入りきらないため、切り抜きは遅延読み込みのままです"
+  },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",
     "stdDevQuality": "Std Dev (Quality)",

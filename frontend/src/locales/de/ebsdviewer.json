@@ -178,6 +178,22 @@
       "Entropy": "Entropie"
     }
   },
+  "crop": {
+    "apply": "Auf Auswahl zuschneiden",
+    "working": "Schneide zu…",
+    "summary": "{{selected}} von {{total}} Pixeln · ~{{size}}",
+    "summaryNoSize": "{{selected}} von {{total}} Pixeln",
+    "nothingSelected": "Auswahl auf der Übersicht zeichnen",
+    "tool": {
+      "rect": "Rechteck",
+      "ellipse": "Ellipse",
+      "lasso": "Lasso"
+    },
+    "origin": "Ausschnitt aus {{parent}} · Zeile {{row0}}–{{row1}}, Spalte {{col0}}–{{col1}}",
+    "failed": "Zuschneiden fehlgeschlagen: {{message}}",
+    "done": "Zugeschnitten auf '{{name}}' ({{selected}} px)",
+    "notMaterialised": "Ausschnitt blieb lazy — zu groß für den Speicher"
+  },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",
     "stdDevQuality": "Std Dev (Quality)",

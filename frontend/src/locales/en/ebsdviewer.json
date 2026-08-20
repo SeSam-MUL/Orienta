@@ -178,6 +178,22 @@
       "Entropy": "Entropy"
     }
   },
+  "crop": {
+    "apply": "Crop to selection",
+    "working": "Cropping…",
+    "summary": "{{selected}} of {{total}} pixels · ~{{size}}",
+    "summaryNoSize": "{{selected}} of {{total}} pixels",
+    "nothingSelected": "Draw a selection on the overview",
+    "tool": {
+      "rect": "Rectangle",
+      "ellipse": "Ellipse",
+      "lasso": "Lasso"
+    },
+    "origin": "Crop of {{parent}} · rows {{row0}}–{{row1}}, cols {{col0}}–{{col1}}",
+    "failed": "Crop failed: {{message}}",
+    "done": "Cropped to '{{name}}' ({{selected}} px)",
+    "notMaterialised": "Crop stayed lazy — too large for memory"
+  },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",
     "stdDevQuality": "Std Dev (Quality)",

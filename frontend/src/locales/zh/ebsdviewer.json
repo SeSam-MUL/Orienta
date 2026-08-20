@@ -178,6 +178,22 @@
       "Entropy": "熵"
     }
   },
+  "crop": {
+    "apply": "裁剪至选区",
+    "working": "正在裁剪…",
+    "summary": "{{total}} 个像素中的 {{selected}} 个 · 约 {{size}}",
+    "summaryNoSize": "{{total}} 个像素中的 {{selected}} 个",
+    "nothingSelected": "请在概览图上绘制选区",
+    "tool": {
+      "rect": "矩形",
+      "ellipse": "椭圆",
+      "lasso": "套索"
+    },
+    "origin": "{{parent}} 的裁剪 · 行 {{row0}}–{{row1}}，列 {{col0}}–{{col1}}",
+    "failed": "裁剪失败：{{message}}",
+    "done": "已裁剪为 '{{name}}'（{{selected}} px）",
+    "notMaterialised": "裁剪保持惰加载——内存不足"
+  },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",
     "stdDevQuality": "Std Dev (Quality)",

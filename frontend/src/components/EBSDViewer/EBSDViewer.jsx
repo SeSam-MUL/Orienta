@@ -23,6 +23,8 @@ import FileSwitcher from '../common/FileSwitcher';
 import InfoTooltip from '../common/InfoTooltip';
 import { qualityProvenanceKey } from '../common/qualityProvenance';
 import LoadProgressModal from './LoadProgressModal';
+import CropPanel from './CropPanel';
+import { boundsOf } from './navSelection';
 // Same zoom mechanics as the EDS analysis maps — imported rather than copied so
 // the two pages cannot drift apart. See ../EDS/zoomView.js for the derivation.
 import {
@@ -308,8 +310,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const [compareRightImg, setCompareRightImg] = useState(null);
 
   // --- ROI selection (Shift+Drag on overview) ---
+  // Two consumers: the image export (which reads `roi` for its crop rectangle)
+  // and the crop panel below the overview. Both only READ it, so neither
+  // changes the other's behaviour.
   const [roi, setRoi] = useState(null);
   const roiStartRef = useRef(null);
+
+  // --- Crop to selection ---
+  const [cropBusy, setCropBusy] = useState(false);
+  // Where the ACTIVE dataset was cut from, or null when it is a full scan.
+  const [cropWindow, setCropWindow] = useState(null);
 
   // --- Pattern atlas (for instant drag navigation) ---
   const [atlasInfo, setAtlasInfo] = useState(null); // {thumb_h, thumb_w, grid_rows, grid_cols}
@@ -1118,6 +1128,18 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     ? { x: ((col + 0.5) / gridShape[1]) * 100, y: ((row + 0.5) / gridShape[0]) * 100 }
     : null;
 
+  // The drawn ROI as a crop window. The drag endpoints are INCLUSIVE and
+  // already clamped to the grid by calcOverviewPos, so the hull boundsOf
+  // returns always fits the scan — which is what keeps the backend from
+  // refusing the window with a 400. CropPanel still rejects a non-finite box
+  // on its own; see its isUsableBbox.
+  const cropBbox = useMemo(() => (
+    roi ? boundsOf([
+      { r: roi.startRow, c: roi.startCol },
+      { r: roi.endRow, c: roi.endCol },
+    ]) : null
+  ), [roi]);
+
   const ovZoomed = isZoomed(ovView);
   const patZoomed = isZoomed(patView);
   // The ROI box and crosshair sit in an untransformed overlay so their border
@@ -1184,6 +1206,63 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     };
   }, [exportFor, exportStem, overviewImage, overviewMode, gridShape, roi, row, col,
       pattern, gamma, stepSize, t]);
+
+  // The active dataset's origin. Re-read on every dataset change because
+  // switching moves between a crop and its parent.
+  const refreshCropWindow = useCallback(async () => {
+    try {
+      const res = await ebsdApi.getCrop();
+      setCropWindow(res.data?.window || null);
+    } catch { setCropWindow(null); }
+  }, []);
+
+  useEffect(() => {
+    if (!ebsdLoaded) { setCropWindow(null); return; }
+    refreshCropWindow();
+  }, [ebsdLoaded, activeDataset, refreshCropWindow]);
+
+  // Cut the active dataset down to the drawn selection. The backend makes the
+  // crop the active dataset, so everything on screen has to be re-read: the
+  // dataset list, the metadata, the overview, the atlas and the pattern.
+  // ebsdInfo goes with them — unlike a deepcopy, a crop CHANGES the navigation
+  // grid, and a stale grid_shape would leave calcOverviewPos mapping every
+  // click onto the parent's grid.
+  const handleCrop = useCallback(async (payload) => {
+    setCropBusy(true);
+    try {
+      const res = await ebsdApi.crop(payload);
+      // NOT destructured as `window`: that shadows the global object this
+      // file uses elsewhere (window.electronAPI, window.Image).
+      const { name, n_selected: nSel, materialised, window: cropWin } = res.data || {};
+      log(t('crop.done', { name, selected: nSel }));
+      if (!materialised) log(t('crop.notMaterialised'));
+      setRoi(null);
+      setActiveDataset(name);
+      setCropWindow(cropWin || null);
+      const nPx = payload.rows * payload.cols;
+      setEBSDLoaded({
+        ...(ebsdInfo || {}),
+        grid_shape: [payload.rows, payload.cols],
+        navigation_shape: [payload.cols, payload.rows],
+        n_patterns: nPx,
+        pattern_count: nPx,
+      });
+      // The old position may lie outside the cut-out entirely.
+      setRow(0);
+      setCol(0);
+      await fetchDatasets();
+      await fetchMetadata();
+      setOverviewImage(null);
+      fetchOverview(overviewMode);
+      fetchAtlas();
+      loadPattern(0, 0);
+    } catch (e) {
+      log(t('crop.failed', { message: e?.response?.data?.detail || e?.message || String(e) }));
+    } finally {
+      setCropBusy(false);
+    }
+  }, [log, t, ebsdInfo, setEBSDLoaded, fetchDatasets, fetchMetadata,
+      fetchOverview, fetchAtlas, overviewMode, loadPattern]);
 
   const switchDataset = async (name) => {
     try {
@@ -2165,6 +2244,25 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           )}
           </div>
         </div>
+
+        {/* Crop to selection — reads the very ROI rectangle drawn above.
+            Hidden until a file is loaded: with no data there is nothing to
+            crop, and the empty viewer stays exactly as it was. */}
+        {ebsdLoaded && (
+          <CropPanel
+            bbox={cropBbox}
+            mask={null}
+            /* The dataset-sync path (page re-entry with data already in the
+               backend) sets signal_shape but not pattern_shape — both are the
+               detector [h, w], and estimateBytes only multiplies them. */
+            patternShape={ebsdInfo?.pattern_shape || ebsdInfo?.signal_shape || null}
+            bytesPerPixel={1}
+            shape="rect"
+            busy={cropBusy}
+            origin={cropWindow}
+            onCrop={handleCrop}
+          />
+        )}
         </div>
 
         {/* Pattern column */}

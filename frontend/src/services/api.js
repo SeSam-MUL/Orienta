@@ -261,6 +261,13 @@ export const ebsdApi = {
   clearLoadedFiles: () => api.post('/api/ebsd/loaded-files/clear'),
   clearAllLoadedFiles: () => api.post('/api/ebsd/loaded-files/clear-all'),
   deepcopy: (name = '') => api.post('/api/ebsd/deepcopy', { name }),
+
+  // Cut the active dataset down to a drawn selection. `mask` is null for a
+  // rectangle — the backend reads that as "no mask, take the whole box" —
+  // and a flat row-major boolean array of rows*cols for a free shape.
+  crop: (payload) => api.post('/api/ebsd/crop', payload),
+  // The active dataset's crop window, or { window: null } when it is a full scan.
+  getCrop: () => api.get('/api/ebsd/crop'),
   deleteDataset: (name) => api.delete(`/api/ebsd/dataset/${encodeURIComponent(name)}`),
 
   // Signal processing (operate on active dataset in-place)
