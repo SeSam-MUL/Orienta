@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 from backend.api.services.image_utils import array_to_base64_raw, array_to_base64_png
 from backend.api.services.calibration_store import calibration_store
+from backend.api.services import crop_window as crop_window_service
 from backend.api.services import state_version
 
 logger = logging.getLogger(__name__)
@@ -321,6 +322,17 @@ def _get_active_signal():
     return _ebsd_signal
 
 
+def get_active_crop_window():
+    """The crop window of the ACTIVE dataset, or None if it is not a crop.
+
+    This is the single question every consumer asks: "is what I am looking at
+    a cut-out, and if so, where from?"
+    """
+    if not _active_dataset:
+        return None
+    return crop_window_service.get_crop(_active_dataset)
+
+
 def is_active_signal_dirty() -> bool:
     """True if the active in-memory signal was modified in the viewer and so
     differs from the raw file on disk. Spherical indexing uses this to decide
@@ -361,6 +373,17 @@ class PatternSelectionRequest(BaseModel):
 
 class DeepCopyRequest(BaseModel):
     name: str = ""  # Name for the new dataset; auto-generated if empty
+
+
+class CropRequest(BaseModel):
+    shape: str = "rect"           # "rect" | "ellipse" | "lasso"
+    row0: int
+    col0: int
+    rows: int
+    cols: int
+    mask: Optional[List[bool]] = None   # rows*cols, row-major, window-local
+    name: str = ""
+    materialise: bool = True
 
 
 class FrameAverageRequest(BaseModel):
@@ -479,6 +502,16 @@ def _stash_registry_for_file(file_path) -> None:
             raw_snapshot[name] = _materialise_for_stash(name, sig)
         else:
             raw_snapshot[name] = sig
+    # Crop windows travel with the datasets they belong to. The load path
+    # clears the whole crop registry (the live datasets go with it), so a
+    # cropped dataset restored on switch-back would otherwise come back
+    # looking like a full scan — and every consumer would map its pixels to
+    # the wrong place in the original grid.
+    crops = {}
+    for name in _raw_signals:
+        window = crop_window_service.get_crop(name)
+        if window is not None:
+            crops[name] = window
     _registry_by_file[key] = {
         "raw_signals": raw_snapshot,
         "positions": dict(_positions),
@@ -486,6 +519,7 @@ def _stash_registry_for_file(file_path) -> None:
         "masks": {k: dict(v) for k, v in _signal_masks.items()},
         "active": _active_dataset,
         "calibration": calibration_store.snapshot(list(_raw_signals.keys())),
+        "crops": crops,
     }
     logger.info(
         "Stashed %d dataset(s) for %s (derived: %s)",
@@ -523,6 +557,9 @@ def _restore_registry_for_file(file_path, fresh_raw_name: str) -> bool:
     for name, mask in snap["masks"].items():
         _signal_masks[name] = dict(mask)
     calibration_store.restore(snap["calibration"], skip=fresh_raw_name)
+    for name, window in snap["crops"].items():
+        if name != fresh_raw_name:
+            crop_window_service.set_crop(name, window)
 
     # Restore the previously-active dataset selection if it still exists
     # (e.g. the user was viewing 'Scan1_bg_clahe' when they switched away).
@@ -569,6 +606,7 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
     _dirty_datasets.clear()
     _signal_masks.clear()
     _overview_cache.clear()
+    crop_window_service.clear_all()
     _active_dataset = None
     calibration_store.clear()
 
@@ -733,6 +771,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     _dirty_datasets.clear()
     _signal_masks.clear()
     _overview_cache.clear()
+    crop_window_service.clear_all()
     dataset_name = Path(path).stem
     _raw_signals[dataset_name] = signal
     _positions[dataset_name] = (0, 0)
@@ -1688,6 +1727,139 @@ async def deepcopy_dataset(req: DeepCopyRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# A crop pulled into RAM must not blow the process up. Same ceiling the
+# per-file stash uses, from the same constant, so the two limits cannot drift.
+_CROP_MATERIALIZE_MAX_BYTES = _STASH_MATERIALIZE_MAX_BYTES
+
+
+@router.post("/crop")
+async def crop_dataset(req: CropRequest):
+    """Cut the active dataset down to a drawn selection.
+
+    The EBSD side is one ``inav`` slice — kikuchipy carries the per-pixel PC
+    map and the xmap along with it (see ``_update_custom_attributes`` in
+    kikuchipy/signals/ebsd.py). Everything else this endpoint does is
+    bookkeeping so the rest of the app knows where the cut-out came from.
+    """
+    global _active_dataset, _ebsd_signal
+
+    signal = _get_active_signal()
+    if signal is None:
+        raise HTTPException(status_code=400, detail="No EBSD data loaded")
+
+    nav_shape = signal.axes_manager.navigation_shape
+    n_cols = int(nav_shape[0]) if len(nav_shape) >= 1 else 1
+    n_rows = int(nav_shape[1]) if len(nav_shape) >= 2 else 1
+
+    r0, c0, rows, cols = int(req.row0), int(req.col0), int(req.rows), int(req.cols)
+    if rows <= 0 or cols <= 0:
+        raise HTTPException(
+            status_code=400, detail=f"Empty selection: {rows}x{cols} pixels")
+    if r0 < 0 or c0 < 0 or r0 + rows > n_rows or c0 + cols > n_cols:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The selection (rows {r0}-{r0 + rows}, cols {c0}-{c0 + cols}) "
+                    f"does not fit the scan ({n_rows}x{n_cols})"),
+        )
+
+    nav_mask = None
+    if req.mask is not None:
+        arr = np.asarray(req.mask, dtype=bool)
+        if arr.size != rows * cols:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"The mask has {arr.size} entries but the selection is "
+                        f"{rows}x{cols} = {rows * cols} pixels"),
+            )
+        nav_mask = arr.reshape(rows, cols)
+        if not nav_mask.any():
+            raise HTTPException(
+                status_code=400, detail="The selection contains no pixels")
+
+    parent_name = _active_dataset
+    parent_window = crop_window_service.get_crop(parent_name)
+
+    def _cut():
+        # hyperspy indexes navigation as [x, y] — columns first.
+        new = signal.inav[c0:c0 + cols, r0:r0 + rows]
+        nbytes = int(np.prod(new.data.shape)) * int(new.data.dtype.itemsize)
+        materialised = False
+        if req.materialise and nbytes <= _CROP_MATERIALIZE_MAX_BYTES:
+            if hasattr(new, "compute"):
+                try:
+                    new.compute(show_progressbar=False)
+                    materialised = True
+                except TypeError:
+                    new.compute()
+                    materialised = True
+            else:
+                materialised = True   # already in memory
+        return new, nbytes, materialised
+
+    try:
+        new_signal, nbytes, materialised = await asyncio.to_thread(_cut)
+    except Exception as e:
+        logger.exception("Crop failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    base_name = req.name.strip() or f"{parent_name or 'dataset'}_crop"
+    new_name = base_name
+    counter = 1
+    while new_name in _raw_signals:
+        new_name = f"{base_name}{counter}"
+        counter += 1
+
+    local_window = crop_window_service.CropWindow(
+        source_file=str(_ebsd_file_path or ""),
+        row0=r0, col0=c0, rows=rows, cols=cols,
+        original_shape=(n_rows, n_cols),
+        shape_kind=req.shape,
+        nav_mask=nav_mask,
+    )
+    window = (crop_window_service.compose(parent_window, local_window)
+              if parent_window is not None else local_window)
+
+    _raw_signals[new_name] = new_signal
+    _positions[new_name] = (0, 0)
+    if parent_name and parent_name in _signal_masks:
+        _signal_masks[new_name] = dict(_signal_masks[parent_name])
+    if parent_name in _dirty_datasets:
+        _dirty_datasets.add(new_name)
+    calibration_store.register_cropped(new_name, parent_name, local_window)
+    crop_window_service.set_crop(new_name, window)
+
+    _active_dataset = new_name
+    _ebsd_signal = new_signal
+    for key in [k for k in _overview_cache if k[0] == new_name]:
+        _overview_cache.pop(key, None)
+
+    logger.info(
+        "Cropped '%s' -> '%s': %dx%d px (%d selected), %.1f MB, materialised=%s",
+        parent_name, new_name, rows, cols, window.n_selected,
+        nbytes / 1e6, materialised,
+    )
+    return {
+        "success": True,
+        "name": new_name,
+        "parent": parent_name,
+        "window": window.to_dict(),
+        "n_patterns": rows * cols,
+        "n_selected": window.n_selected,
+        "materialised": materialised,
+        "bytes": nbytes,
+    }
+
+
+@router.get("/crop")
+async def get_crop_window():
+    """The active dataset's crop window, or null when it is not a crop."""
+    window = get_active_crop_window()
+    return {
+        "dataset": _active_dataset,
+        "window": window.to_dict() if window is not None else None,
+    }
+
+
 @router.delete("/dataset/{name}")
 async def delete_dataset(name: str):
     """Remove a dataset from memory to free RAM."""
@@ -1700,6 +1872,7 @@ async def delete_dataset(name: str):
     _signal_masks.pop(name, None)
     _dirty_datasets.discard(name)
     calibration_store.remove(name)
+    crop_window_service.clear_crop(name)
     logger.info("Deleted dataset: '%s'", name)
 
     # If deleted the active dataset, switch to the first remaining one
