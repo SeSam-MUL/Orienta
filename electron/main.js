@@ -319,6 +319,10 @@ ipcMain.handle('dialog:openFolder', async () => {
 
 ipcMain.handle('dialog:saveFile', async (event, options) => {
   const result = await dialog.showSaveDialog(mainWindow, {
+    // Every caller passes a suggested name (phase-map export, analysis
+    // export, crop export); without this line the dialog silently opened
+    // with an empty one. `dialog:saveImage` below has always forwarded it.
+    defaultPath: options?.defaultPath || undefined,
     filters: options?.filters || [
       { name: 'PNG Image', extensions: ['png'] },
       { name: 'Excel', extensions: ['xlsx'] },
