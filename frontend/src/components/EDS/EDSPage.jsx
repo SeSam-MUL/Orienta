@@ -26,6 +26,7 @@ import TileGrid from './TileGrid';
 import LayerStackPanel from '../PhaseMap/LayerStackPanel';
 import FileSwitcher from '../common/FileSwitcher';
 import { qualityProvenanceKey } from '../common/qualityProvenance';
+import CropWarningChip from '../common/CropWarningChip';
 import HoverProbeOverlay from './HoverProbeOverlay';
 import ThresholdHistogram from './ThresholdHistogram';
 import LinescanProfilePlot from './LinescanProfilePlot';
@@ -572,6 +573,11 @@ export default function EDSPage({ onNavigate }) {
   // categorical colour map doesn't carry physical meaning. Mask layers
   // (kind='mask') also skip — they already represent a binary selection.
   const renderLayerExtras = useCallback((layer) => {
+    // Ahead of the kind filter: an electron image has none of the controls
+    // below, but it is the one layer that can fail to follow a crop, and the
+    // warning has to reach the user rather than only the log.
+    const cropWarn = stack.layerCropStatus?.get(layer.id);
+    if (cropWarn) return <CropWarningChip status={cropWarn} />;
     if (!['eds-element', 'bc', 'vbse'].includes(layer.kind)) return null;
     // BC provenance: the /band-contrast endpoint returns "h5oina" (native
     // per-pixel Band Contrast) or "computed" (FFT pattern-quality fallback).

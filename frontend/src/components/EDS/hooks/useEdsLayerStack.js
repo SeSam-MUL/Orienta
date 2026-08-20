@@ -42,7 +42,10 @@ async function fetchLayer(layer, displayMode) {
     return edsApi.getMap(layer.element, displayMode, 'gray', color);
   }
   if (layer.kind === 'electron') {
-    return h5Api.getElectronImage(layer.electronName);
+    // 'dataset' — this stack renders the ACTIVE dataset, so under a crop the
+    // electron image must arrive cut to the same physical region as the EDS
+    // maps beside it.
+    return h5Api.getElectronImage(layer.electronName, 'dataset');
   }
   if (layer.kind === 'vbse') return ebsdApi.virtualBSE('gray');
   if (layer.kind === 'bc')   return ebsdApi.bandContrast('gray');
@@ -64,6 +67,12 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
   const fetchingRef = useRef(new Set());     // ids currently in-flight
   const errorRef    = useRef(new Map());     // layerId → error string
   const sourceRef   = useRef(new Map());     // layerId → backend `source` (provenance)
+  // layerId → the backend's `crop` verdict, kept ONLY where a layer could not
+  // follow the active crop. An electron image lives on its own, finer grid, so
+  // a file that does not place both areas in microns hands back the FULL
+  // image — and the user has to be told, or they read a whole-sample image as
+  // a cut-out of the region they selected.
+  const cropRef     = useRef(new Map());     // layerId → { cropped: false, reason }
   const displayModeRef = useRef(displayMode);
   const shapeRef    = useRef(null);          // [H, W] — the page's interaction grid
   const shapeFromGridRef = useRef(false);    // true once `shapeRef` came from a scan-grid layer
@@ -122,6 +131,9 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
     // (REPLACE_ALL flush) or removeLayer never shows a previous file's source.
     for (const id of [...srcs.keys()]) {
       if (predicate(id)) srcs.delete(id);
+    }
+    for (const id of [...cropRef.current.keys()]) {
+      if (predicate(id)) cropRef.current.delete(id);
     }
     force();
   }, []);
@@ -242,6 +254,13 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
       // Record provenance (e.g. BC layer's "h5oina" native vs "computed" FFT
       // pattern-quality) so the panel can surface which one is displayed.
       if (res?.data?.source) sourceRef.current.set(layer.id, res.data.source);
+      // Only the failure is worth keeping: "cropped" is the answer for every
+      // layer whether or not a crop is active, so it would say nothing.
+      if (res?.data?.crop && res.data.crop.cropped === false) {
+        cropRef.current.set(layer.id, res.data.crop);
+      } else {
+        cropRef.current.delete(layer.id);
+      }
     } catch (err) {
       errorRef.current.set(
         layer.id,
@@ -301,6 +320,7 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
     bitmapVersion,
     errors: errorRef.current,
     layerSources: sourceRef.current,
+    layerCropStatus: cropRef.current,
     shape: shapeRef.current,
     addLayer,
     removeLayer,

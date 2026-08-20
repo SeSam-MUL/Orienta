@@ -98,8 +98,13 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
       }
       if (layer.id.startsWith('se:')) {
         const name = layer.id.slice(3);
-        const res = await h5Api.getElectronImage(name);
-        return { base64: res.data.image, keyToAlpha: true };
+        // 'dataset': same reason as in useEdsLayerStack — the phase map is
+        // the active dataset's, so its SE underlay must follow the crop.
+        const res = await h5Api.getElectronImage(name, 'dataset');
+        // `crop` says whether the image could follow the active crop. Passed
+        // on so the layer row can warn; a full-scan image silently stacked
+        // under a cropped phase map would misplace every feature on it.
+        return { base64: res.data.image, keyToAlpha: true, crop: res.data.crop };
       }
       throw new Error(`Unsupported h5 layer: ${layer.id}`);
     }
@@ -114,6 +119,10 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
   // layerId → { min, max, unit, cmap, stops } for layers whose colours mean a
   // number. Kept beside the bitmaps so a legend can never outlive its map.
   const scaleRef = useRef(new Map());
+  // layerId → the backend's `crop` verdict, kept ONLY where a layer could not
+  // follow the active crop (today: an electron image on a file that does not
+  // place both acquisition areas in microns).
+  const cropRef = useRef(new Map());
   const cacheOrderRef = useRef([]);             // LRU order (most recent at end)
   const fetchingRef = useRef(new Set());        // layer ids currently in-flight
   const errorRef = useRef(new Map());           // layerId → error string
@@ -193,6 +202,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
         // The legend goes with the map it describes: a bar left behind would
         // state the range of a picture that is no longer on screen.
         scaleRef.current.delete(id);
+        cropRef.current.delete(id);
         const idx = order.indexOf(id);
         if (idx !== -1) order.splice(idx, 1);
       }
@@ -211,7 +221,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     fetchingRef.current.add(layer.id);
     const epoch = epochRef.current;  // snapshot; a flush mid-flight bumps this
     try {
-      const { base64, keyToAlpha, scale } = await fetchLayerImage({ layer, cleanupParams, colorOverrides });
+      const { base64, keyToAlpha, scale, crop } = await fetchLayerImage({ layer, cleanupParams, colorOverrides });
       if (!base64) throw new Error('Empty image payload');
       const bitmap = await pngBase64ToBitmap(base64, { keyToAlpha });
       // Result/file switched while we were fetching → this bitmap belongs to
@@ -231,6 +241,9 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
       cacheSet(layer.id, bitmap);
       if (scale) scaleRef.current.set(layer.id, scale);
       else scaleRef.current.delete(layer.id);
+      // Only the failure is worth keeping — see cropRef's declaration.
+      if (crop && crop.cropped === false) cropRef.current.set(layer.id, crop);
+      else cropRef.current.delete(layer.id);
       errorRef.current.delete(layer.id);
     } catch (err) {
       errorRef.current.set(layer.id, err?.response?.data?.detail ?? err.message ?? 'fetch failed');
@@ -484,6 +497,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     layers: state.layers,
     bitmaps: cacheRef.current,
     scales: scaleRef.current,
+    cropStatus: cropRef.current,
     bitmapVersion,
     fetching: fetchingRef.current,
     errors: errorRef.current,

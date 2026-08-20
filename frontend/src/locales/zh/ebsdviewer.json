@@ -198,7 +198,8 @@
     "origin": "{{parent}} 的裁剪 · 行 {{row0}}–{{row1}}，列 {{col0}}–{{col1}}",
     "failed": "裁剪失败：{{message}}",
     "done": "已裁剪为 '{{name}}'（{{selected}} px）",
-    "notMaterialised": "裁剪保持惰加载——内存不足"
+    "notMaterialised": "裁剪保持惰加载——内存不足",
+    "electronImageNotCropped": "此图像无法跟随裁剪，因此显示为完整图像。"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

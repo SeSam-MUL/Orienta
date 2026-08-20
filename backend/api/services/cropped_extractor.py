@@ -16,6 +16,13 @@ RETURNS a grid-shaped array — CUT to the window:
     get_element_map, get_element_map_2d, get_band_contrast_map,
     detect_available_features
 
+PROJECTED — cut, but not by row and column number:
+    get_electron_image. An electron image is a separate acquisition area on
+    its own, finer grid over a slightly different field of view, so the window
+    travels into it through MICRONS (``crop_window.project_to_area``). Where
+    the file does not carry both areas' geometry the FULL image comes back
+    with ``last_crop_status(name)["cropped"] is False`` and a reason.
+
 TAKES a per-pixel index — TRANSLATED (a crop-local index goes in, the
 corresponding original pixel is read out):
     get_pattern_at_index, get_aztec_pixel, get_eds_spectrum,
@@ -23,11 +30,10 @@ corresponding original pixel is read out):
 
 NEITHER: everything else forwards through ``__getattr__``, binds to the raw
 extractor and knows nothing about the window — while this object advertises a
-cropped grid. As of Task 4 the untreated ones are all in the returns-a-grid
-column: ``get_scalar_map``, ``get_phase_map``, ``compute_ipf_map`` and
-``get_electron_image`` (the electron images are Task 12's). No index-taker is
-left untranslated, and a test holds that line. Do not put one of the untreated
-reads behind a cropped route until its own task has landed.
+cropped grid. As of Task 12 the untreated ones are all in the returns-a-grid
+column: ``get_scalar_map``, ``get_phase_map`` and ``compute_ipf_map``. No
+index-taker is left untranslated, and a test holds that line. Do not put one of
+the untreated reads behind a cropped route until its own task has landed.
 
 What this proxy does NOT do: apply the navigation mask. The mask says which
 pixels the user selected, not which data exists. A value outside the lasso is
@@ -214,6 +220,69 @@ class CroppedExtractor:
         features["cropped"] = True
         features["crop_window"] = self._window.to_dict()
         return features
+
+    # --- electron images ------------------------------------------------
+    def get_electron_image(self, image_name):
+        """Cut an electron image to the crop — through um, not row numbers.
+
+        Three cases, in order:
+        1. The image is already on the scan grid -> cut by index.
+        2. Both areas expose their step size -> project and cut.
+        3. Anything else -> hand back the FULL image and record why. A
+           silently mis-cut image would misplace every feature on it.
+
+        The navigation mask is deliberately NOT applied: an electron image has
+        no pixel-for-pixel correspondence with the scan grid, so there is no
+        honest way to blank "the pixels outside the lasso" on it.
+        """
+        from backend.api.services.crop_window import project_to_area
+
+        img = self._ext.get_electron_image(image_name)
+        if img is None:
+            return None
+        arr = np.asarray(img)
+
+        if (arr.ndim >= 2
+                and tuple(arr.shape[:2]) == tuple(self._window.original_shape)):
+            self._crop_status[image_name] = {"cropped": True, "reason": None}
+            return self._window.apply(arr)
+
+        geoms: Dict[str, Any] = {}
+        try:
+            geoms = self._ext.get_pixel_sizes() or {}
+        except Exception:
+            logger.debug("get_pixel_sizes failed for %r", image_name,
+                         exc_info=True)
+
+        # The scan grid this window is cut from is the EBSD grid where there
+        # is one and the EDS grid otherwise — the same precedence
+        # ``get_grid_dimensions`` uses, so an EDS-only acquisition (no EBSD
+        # header at all) still places its window.
+        scan_geom = geoms.get("ebsd") or geoms.get("eds")
+
+        rect = None
+        if arr.ndim >= 2:
+            rect = project_to_area(
+                self._window, scan_geom, geoms.get("electron_image"),
+                arr.shape[:2],
+            )
+        if rect is None:
+            reason = (
+                "the file does not give both the scan and the electron image "
+                "a step size or bounding box, so this crop has no geometry to "
+                "follow into that image"
+            )
+            self._crop_status[image_name] = {"cropped": False, "reason": reason}
+            logger.warning("electron image %r not cropped: %s",
+                           image_name, reason)
+            return arr
+
+        self._crop_status[image_name] = {
+            "cropped": True,
+            "reason": None if rect["exact"] else "clamped to the image bounds",
+        }
+        return arr[rect["row0"]:rect["row0"] + rect["rows"],
+                   rect["col0"]:rect["col0"] + rect["cols"]]
 
     # --- provenance for things that could not be cut --------------------
     def last_crop_status(self, key: str) -> Dict[str, Any]:

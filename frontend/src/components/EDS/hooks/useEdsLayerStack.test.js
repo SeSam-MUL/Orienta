@@ -213,6 +213,37 @@ describe('useEdsLayerStack', () => {
     expect(result.current.layerSources.has('bc')).toBe(false);
   });
 
+  // --- crop scope ------------------------------------------------------
+  it('asks for the DATASET view of an electron image, so it follows a crop', async () => {
+    const initial = [
+      { id: 'electron-SE1', kind: 'electron', electronName: 'SE/Elektronenbild 1',
+        label: 'SE', visible: true, opacity: 1, blend: 'normal' },
+    ];
+    const { result } = renderHook(() => useEdsLayerStack({ initialLayers: initial, displayMode: 'at_pct' }));
+    await waitFor(() => expect(result.current.bitmaps.has('electron-SE1')).toBe(true));
+    expect(h5Api.getElectronImage).toHaveBeenCalledWith('SE/Elektronenbild 1', 'dataset');
+  });
+
+  it('keeps a "could not be cropped" verdict, and only that one', async () => {
+    h5Api.getElectronImage.mockResolvedValue({
+      data: { image: TINY_PNG, shape: [768, 1024],
+              crop: { cropped: false, reason: 'no geometry' } },
+    });
+    const initial = [
+      { id: 'electron-SE1', kind: 'electron', electronName: 'SE/Elektronenbild 1',
+        label: 'SE', visible: true, opacity: 1, blend: 'normal' },
+      { id: 'bc', kind: 'bc', label: 'BC', visible: true, opacity: 0.5, blend: 'multiply' },
+    ];
+    const { result } = renderHook(() => useEdsLayerStack({ initialLayers: initial, displayMode: 'at_pct' }));
+    await waitFor(() => expect(result.current.layerCropStatus.get('electron-SE1')).toEqual(
+      { cropped: false, reason: 'no geometry' }));
+    // A layer that DID follow the crop says nothing — "cropped" is the norm.
+    expect(result.current.layerCropStatus.has('bc')).toBe(false);
+    // Removing the layer takes its verdict with it.
+    act(() => { result.current.removeLayer('electron-SE1'); });
+    expect(result.current.layerCropStatus.has('electron-SE1')).toBe(false);
+  });
+
   it('setThreshold attaches a threshold to the targeted layer', async () => {
     const initial = [
       { id: 'bc', kind: 'bc', label: 'BC', visible: true, opacity: 0.5, blend: 'multiply' },

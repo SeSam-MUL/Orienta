@@ -198,7 +198,8 @@
     "origin": "Ausschnitt aus {{parent}} · Zeile {{row0}}–{{row1}}, Spalte {{col0}}–{{col1}}",
     "failed": "Zuschneiden fehlgeschlagen: {{message}}",
     "done": "Zugeschnitten auf '{{name}}' ({{selected}} px)",
-    "notMaterialised": "Ausschnitt blieb lazy — zu groß für den Speicher"
+    "notMaterialised": "Ausschnitt blieb lazy — zu groß für den Speicher",
+    "electronImageNotCropped": "Dieses Bild konnte dem Ausschnitt nicht folgen — es wird vollständig gezeigt."
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

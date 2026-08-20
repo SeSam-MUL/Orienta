@@ -198,7 +198,8 @@
     "origin": "{{parent}} の切り抜き · 行 {{row0}}–{{row1}}、列 {{col0}}–{{col1}}",
     "failed": "切り抜きに失敗しました: {{message}}",
     "done": "'{{name}}' に切り抜きました ({{selected}} px)",
-    "notMaterialised": "メモリに入りきらないため、切り抜きは遅延読み込みのままです"
+    "notMaterialised": "メモリに入りきらないため、切り抜きは遅延読み込みのままです",
+    "electronImageNotCropped": "この画像は切り抜きに追従できなかったため、全体を表示しています。"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

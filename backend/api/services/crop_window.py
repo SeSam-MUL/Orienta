@@ -155,6 +155,75 @@ def compose(outer: CropWindow, inner: CropWindow) -> CropWindow:
     )
 
 
+def project_to_area(window: CropWindow, src_geom, dst_geom, dst_shape):
+    """Carry a crop window from one acquisition area into another, via um.
+
+    Electron images do not share the scan grid — measured on the SampleB file
+    in this project, 1024x768 at 0.05897 um against 120x90 at 0.5 um, a factor
+    of 8.478 on a slightly wider field of view. Row and column numbers
+    therefore mean nothing across areas; physical size does.
+
+    The two areas are assumed to start at the same physical origin. On every
+    Oxford file measured here both areas report ``Relative Offset (0, 0)`` of
+    the same site, so they do; a file that offset one area against the other
+    would need that offset, which ``get_pixel_sizes()`` does not carry today.
+
+    Each axis uses ITS OWN step ratio: X Step and Y Step are separate numbers
+    and sharing one of them would stretch the window on the other axis.
+
+    Returns ``{"row0","col0","rows","cols","exact"}`` or ``None`` when either
+    area lacks the geometry to place the window. ``exact`` is False when the
+    projected rectangle had to be clamped to the destination.
+    """
+    def _steps(geom):
+        if not geom:
+            return None
+        try:
+            sx = float(geom.get("x") or 0.0)
+            sy = float(geom.get("y") or sx)
+        except (TypeError, ValueError, AttributeError):
+            return None
+        if sx <= 0 or sy <= 0:
+            return None
+        return sx, sy
+
+    src = _steps(src_geom)
+    dst = _steps(dst_geom)
+    if src is None or dst is None:
+        return None
+
+    src_x, src_y = src
+    dst_x, dst_y = dst
+    dst_rows, dst_cols = int(dst_shape[0]), int(dst_shape[1])
+
+    col0 = int(round(window.col0 * src_x / dst_x))
+    row0 = int(round(window.row0 * src_y / dst_y))
+    cols = int(round(window.cols * src_x / dst_x))
+    rows = int(round(window.rows * src_y / dst_y))
+
+    exact = True
+    if col0 < 0 or row0 < 0:
+        col0, row0 = max(0, col0), max(0, row0)
+        exact = False
+    if col0 >= dst_cols or row0 >= dst_rows:
+        # The window starts past the far edge of the other area: there is no
+        # cut-out at all, and clamping would hand back a rectangle from the
+        # wrong place.
+        return None
+    if row0 + rows > dst_rows:
+        rows = dst_rows - row0
+        exact = False
+    if col0 + cols > dst_cols:
+        cols = dst_cols - col0
+        exact = False
+
+    if rows <= 0 or cols <= 0:
+        return None
+
+    return {"row0": row0, "col0": col0, "rows": rows, "cols": cols,
+            "exact": exact}
+
+
 # --- Per-dataset registry -------------------------------------------------
 # In-memory like every other session registry in this app. Keyed by the
 # dataset name used in ebsd_viewer._raw_signals.

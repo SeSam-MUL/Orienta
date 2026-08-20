@@ -32,7 +32,9 @@ export function useDefaultLayers(isFileOpen, filePath) {
     (async () => {
       const [elemsRes, electronRes, bcRes] = await Promise.allSettled([
         edsApi.elements(),
-        h5Api.getElectronList(),
+        // 'dataset': this list feeds the EDS layer stack, which shows the
+        // ACTIVE dataset — cropped or not.
+        h5Api.getElectronList('dataset'),
         ebsdApi.bandContrast('gray'),
       ]);
       if (cancelled) return;

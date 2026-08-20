@@ -198,7 +198,8 @@
     "origin": "Crop of {{parent}} · rows {{row0}}–{{row1}}, cols {{col0}}–{{col1}}",
     "failed": "Crop failed: {{message}}",
     "done": "Cropped to '{{name}}' ({{selected}} px)",
-    "notMaterialised": "Crop stayed lazy — too large for memory"
+    "notMaterialised": "Crop stayed lazy — too large for memory",
+    "electronImageNotCropped": "This image could not follow the crop — it is shown in full."
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

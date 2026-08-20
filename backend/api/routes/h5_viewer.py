@@ -338,21 +338,58 @@ async def get_eds_pixel(row: int, col: int):
 
 # --- Electron Images ---
 
+def _electron_extractor(scope: str):
+    """The extractor these two endpoints should read from.
+
+    ``scope="file"`` (the default) shows the image as the FILE holds it — that
+    is what the H5 cockpit, this module's main tenant, wants. ``scope="dataset"``
+    shows it as the ACTIVE DATASET sees it, so a cropped dataset gets the
+    matching cut-out; that is what the EDS and Phase Map layer stacks want.
+
+    The two cannot be reconciled into one choice: the same endpoint serves both
+    kinds of consumer, so the caller has to say which view it means.
+    """
+    from backend.api.services.h5_session import get_active_extractor
+    return get_active_extractor() if scope == "dataset" else get_extractor()
+
+
+def _crop_status_of(ext, key: str) -> dict:
+    """Whether ``key``'s last read could follow the crop, and why not.
+
+    A raw extractor has no such notion — nothing was cut, nothing failed to be
+    cut — so it answers "cropped" the same way an uncropped read does.
+    """
+    reader = getattr(ext, "last_crop_status", None)
+    if reader is None:
+        return {"cropped": True, "reason": None}
+    return reader(key)
+
+
 @router.get("/electron/list")
-async def get_electron_list():
-    """Get list of available electron images."""
+async def get_electron_list(scope: str = "file"):
+    """Get list of available electron images. See ``_electron_extractor``.
+
+    The names themselves do not depend on the crop; the parameter exists so a
+    caller can use one scope for the list and the images it then fetches.
+    """
     if not is_open():
         raise HTTPException(status_code=400, detail="No HDF5 file is open")
-    ext = get_extractor()
+    ext = _electron_extractor(scope)
     return {"images": ext.get_available_electron_images()}
 
 
 @router.get("/electron/{image_name:path}")
-async def get_electron_image(image_name: str):
-    """Get an electron image as Base64 PNG."""
+async def get_electron_image(image_name: str, scope: str = "file"):
+    """Get an electron image as Base64 PNG. See ``_electron_extractor``.
+
+    ``crop`` reports whether the image could follow the active crop. Under
+    ``scope="dataset"`` a file that does not place both acquisition areas in
+    microns yields ``{"cropped": false, "reason": ...}`` and the FULL image —
+    never a guessed cut-out, which would misplace every feature on it.
+    """
     if not is_open():
         raise HTTPException(status_code=400, detail="No HDF5 file is open")
-    ext = get_extractor()
+    ext = _electron_extractor(scope)
     data = ext.get_electron_image(image_name)
     if data is None:
         raise HTTPException(status_code=404, detail=f"Electron image '{image_name}' not found")
@@ -361,6 +398,7 @@ async def get_electron_image(image_name: str):
         "image": array_to_base64_raw(data),
         "name": image_name,
         "shape": list(data.shape),
+        "crop": _crop_status_of(ext, image_name),
     }
 
 

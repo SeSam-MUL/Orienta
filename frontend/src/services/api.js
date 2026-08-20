@@ -43,8 +43,15 @@ export const h5Api = {
   getEDSMap: (element, cmap = 'hot', color = '') =>
     api.get(`/api/h5/eds/map/${element}`, { params: { cmap, color } }),
   getEDSPixel: (row, col) => api.get(`/api/h5/eds/pixel/${row}/${col}`),
-  getElectronList: () => api.get('/api/h5/electron/list'),
-  getElectronImage: (name) => api.get(`/api/h5/electron/${name}`),
+  // `scope` picks WHICH view of the electron image you get. Omit it (the
+  // default, 'file') for the H5 cockpit: the image exactly as the file holds
+  // it. Pass 'dataset' from the EDS / Phase Map layer stacks: under a crop the
+  // image comes back cut to the same physical region as every other layer, so
+  // an SE image no longer shows the whole sample under a cropped EDS map.
+  getElectronList: (scope) =>
+    api.get('/api/h5/electron/list', { params: scope ? { scope } : undefined }),
+  getElectronImage: (name, scope) =>
+    api.get(`/api/h5/electron/${name}`, { params: scope ? { scope } : undefined }),
   getMinimap: () => api.get('/api/h5/minimap'),
   getTree: (maxDepth = 5) => api.get('/api/h5/tree', { params: { max_depth: maxDepth } }),
   getTreeNode: (path) => api.get('/api/h5/tree/node', { params: { path } }),
