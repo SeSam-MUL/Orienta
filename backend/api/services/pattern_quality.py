@@ -5,6 +5,10 @@ Precedence: native Oxford "Band Contrast" (from the file, uint8 0..255) →
 ``get_image_quality`` (0..1). No std/mean CoV, no CI×255 surrogate. The
 returned ``source`` lets every caller show whether the value is measured
 (native) or computed, and never fakes a value it doesn't have.
+
+The two file-based readers are CROP-AWARE: when the active dataset is a cut-out
+of the file being read, and the caller asked for the cut-out's grid, the
+channel comes back cut to the same window — see ``_cut_to_active_crop``.
 """
 from __future__ import annotations
 
@@ -28,6 +32,67 @@ class QualityMap:
     metric: str                  # "band_contrast" | "image_quality"
     label: str
     value_range: tuple
+
+
+def _cut_to_active_crop(arr, source_file, n_rows, n_cols):
+    """Cut a FULL-SCAN channel to the active crop window, when it applies.
+
+    The two other native-BC readers were made crop-aware
+    (``virtual_images._native_band_contrast_for_active_dataset`` and
+    ``eds._bc_grid_for``); this one was not. It reshapes to the FILE header's
+    ``X Cells`` / ``Y Cells`` — correct, the file always holds the whole scan —
+    and so always answered with the full scan. Its callers guard by shape and
+    drop it, and in ``get_quality_map`` the native branch RETURNS that full-scan
+    array, shadowing its own computed fallback: on a crop of an Oxford file the
+    BC layer ended up with no file-based source at all and the endpoint 400'd
+    with "this file has neither Band Contrast (Oxford) nor IQ (EDAX), and no
+    patterns are loaded" — three claims, none of them true.
+
+    Cut only when every one of these holds, so nothing else changes:
+
+    * the caller named a grid (all real callers do);
+    * a crop window is active;
+    * it was cut from THIS file — the caller may be reading a result's own
+      source file, which need not be the one that is open;
+    * the array really is the full scan the window describes;
+    * and the grid asked for is the window's. A result indexed BEFORE the crop
+      asks for the full grid and must keep getting the full scan.
+
+    A failed lookup returns ``None``: a read may degrade to "no value", but it
+    may not degrade to "here is the full scan", which is the outcome this
+    exists to prevent. ``None`` sends ``get_quality_map`` on to the computed
+    fallback, which is derived from the ACTIVE signal and cannot show the wrong
+    region.
+    """
+    if arr is None or not n_rows or not n_cols:
+        return arr
+    try:
+        from backend.api.routes.ebsd_viewer import (
+            get_active_crop_window, _canonical_path,
+        )
+    except ImportError:
+        logger.debug("ebsd_viewer not importable — no crop window", exc_info=True)
+        return arr
+    try:
+        window = get_active_crop_window()
+    except Exception:
+        logger.warning("could not read the active crop window — reporting no "
+                       "native quality channel rather than the full scan",
+                       exc_info=True)
+        return None
+    if window is None:
+        return arr
+
+    src = str(getattr(window, "source_file", "") or "")
+    if not src or not source_file:
+        return arr
+    if _canonical_path(src) != _canonical_path(str(source_file)):
+        return arr
+    if tuple(arr.shape[:2]) != tuple(int(v) for v in window.original_shape):
+        return arr
+    if (int(window.rows), int(window.cols)) != (int(n_rows), int(n_cols)):
+        return arr
+    return np.asarray(window.apply(arr))
 
 
 def read_native_band_contrast(
@@ -66,7 +131,8 @@ def read_native_band_contrast(
                         bc = bc.reshape(r, c)
                     else:
                         continue
-                return bc.astype(np.float64)
+                return _cut_to_active_crop(
+                    bc.astype(np.float64), source_file, n_rows, n_cols)
     except Exception:
         logger.debug("native BC read failed for %s", source_file, exc_info=True)
         return None
@@ -116,7 +182,8 @@ def read_native_image_quality(
                     if not (r and c and iq.size == r * c):
                         continue
                     iq = iq.reshape(r, c)
-                return iq.astype(np.float64)
+                return _cut_to_active_crop(
+                    iq.astype(np.float64), source_file, n_rows, n_cols)
     except Exception:
         logger.debug("native IQ read failed for %s", source_file, exc_info=True)
         return None
