@@ -189,6 +189,12 @@
       "ellipse": "Ellipse",
       "lasso": "Lasso"
     },
+    "toolLabel": "Selection:",
+    "toolHint": {
+      "rect": "Shift+Drag a rectangle on the overview",
+      "ellipse": "Shift+Drag a box; the inscribed ellipse is selected",
+      "lasso": "Shift+Drag to trace a freehand outline"
+    },
     "origin": "Crop of {{parent}} · rows {{row0}}–{{row1}}, cols {{col0}}–{{col1}}",
     "failed": "Crop failed: {{message}}",
     "done": "Cropped to '{{name}}' ({{selected}} px)",

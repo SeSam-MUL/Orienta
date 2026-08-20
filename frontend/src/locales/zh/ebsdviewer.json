@@ -189,6 +189,12 @@
       "ellipse": "椭圆",
       "lasso": "套索"
     },
+    "toolLabel": "选区：",
+    "toolHint": {
+      "rect": "Shift+拖动在概览图上绘制矩形",
+      "ellipse": "Shift+拖动绘制方框，选中其内接椭圆",
+      "lasso": "Shift+拖动手绘轮廓"
+    },
     "origin": "{{parent}} 的裁剪 · 行 {{row0}}–{{row1}}，列 {{col0}}–{{col1}}",
     "failed": "裁剪失败：{{message}}",
     "done": "已裁剪为 '{{name}}'（{{selected}} px）",

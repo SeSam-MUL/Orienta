@@ -189,6 +189,12 @@
       "ellipse": "Ellipse",
       "lasso": "Lasso"
     },
+    "toolLabel": "Auswahl:",
+    "toolHint": {
+      "rect": "Umschalt+Ziehen zeichnet ein Rechteck auf der Übersicht",
+      "ellipse": "Umschalt+Ziehen zeichnet einen Kasten; ausgewählt wird die eingeschriebene Ellipse",
+      "lasso": "Umschalt+Ziehen zeichnet eine freie Kontur"
+    },
     "origin": "Ausschnitt aus {{parent}} · Zeile {{row0}}–{{row1}}, Spalte {{col0}}–{{col1}}",
     "failed": "Zuschneiden fehlgeschlagen: {{message}}",
     "done": "Zugeschnitten auf '{{name}}' ({{selected}} px)",

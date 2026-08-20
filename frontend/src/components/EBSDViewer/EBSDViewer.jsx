@@ -24,7 +24,9 @@ import InfoTooltip from '../common/InfoTooltip';
 import { qualityProvenanceKey } from '../common/qualityProvenance';
 import LoadProgressModal from './LoadProgressModal';
 import CropPanel from './CropPanel';
-import { boundsOf, bytesPerSample } from './navSelection';
+import {
+  boundsOf, bytesPerSample, maskForTool, selectionPointsFor,
+} from './navSelection';
 import { datasetGeometry } from './datasetGeometry';
 // Same zoom mechanics as the EDS analysis maps — imported rather than copied so
 // the two pages cannot drift apart. See ../EDS/zoomView.js for the derivation.
@@ -46,6 +48,11 @@ import {
 // zoomed overview never navigates to a pattern by accident. Same slop as the
 // EDS tiles use for click-to-quantify.
 const CLICK_SLOP_PX = 3;
+
+// How long a traced lasso path must stop growing before its mask is rebuilt.
+// Long enough that a continuous drag never triggers a rebuild, short enough
+// that the count is already right by the time the hand reaches the button.
+const LASSO_SETTLE_MS = 120;
 
 // ---------------------------------------------------------------------------
 // Small local helpers that have no equivalent in shared components
@@ -316,9 +323,19 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // and the crop panel below the overview. Both only READ it, so neither
   // changes the other's behaviour.
   const [roi, setRoi] = useState(null);
+  // Doubles as the "a Shift+Drag is in progress" sentinel for ALL three tools:
+  // cleared on mouse-up, so a later move with Shift still held cannot extend a
+  // finished selection. The lasso sets it without reading its value.
   const roiStartRef = useRef(null);
+  // The freehand path, kept apart from `roi` on purpose: the image export reads
+  // `roi` as a crop rectangle, and a lasso is not one.
+  const [lassoPoints, setLassoPoints] = useState([]);
+  // The same path once it has stopped growing — the copy the MASK is built
+  // from. See LASSO_SETTLE_MS for why the mask may not follow every mouse-move.
+  const [lassoMaskPath, setLassoMaskPath] = useState([]);
 
   // --- Crop to selection ---
+  const [cropTool, setCropTool] = useState('rect');
   const [cropBusy, setCropBusy] = useState(false);
   // Where the ACTIVE dataset was cut from, or null when it is a full scan.
   const [cropWindow, setCropWindow] = useState(null);
@@ -1129,6 +1146,21 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     if (e.buttons === 1 && e.shiftKey && gridShape) {
       const pos = calcOverviewPos(e);
       if (!pos || !roiStartRef.current) return;
+      if (cropTool === 'lasso') {
+        // Sampled at mouse-move rate, so a fast drag leaves gaps between
+        // consecutive points. That is fine and deliberate: lassoMask
+        // rasterises the segment BETWEEN neighbouring points, so the traced
+        // stroke is closed either way and the path stays short enough to
+        // re-fill the mask on every move. Only genuinely new grid cells are
+        // appended — a slow drag across one pixel must not push hundreds of
+        // identical points.
+        setLassoPoints((pts) => {
+          const last = pts[pts.length - 1];
+          if (last && last.r === pos.r && last.c === pos.c) return pts;
+          return [...pts, { r: pos.r, c: pos.c }];
+        });
+        return;
+      }
       setRoi({
         startRow: Math.min(roiStartRef.current.row, pos.r),
         startCol: Math.min(roiStartRef.current.col, pos.c),
@@ -1144,17 +1176,71 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     ? { x: ((col + 0.5) / gridShape[1]) * 100, y: ((row + 0.5) / gridShape[0]) * 100 }
     : null;
 
-  // The drawn ROI as a crop window. The drag endpoints are INCLUSIVE and
-  // already clamped to the grid by calcOverviewPos, so the hull boundsOf
+  // The drawn selection as a crop window. Every drag coordinate is INCLUSIVE
+  // and already clamped to the grid by calcOverviewPos, so the hull boundsOf
   // returns always fits the scan — which is what keeps the backend from
   // refusing the window with a 400. CropPanel still rejects a non-finite box
   // on its own; see its isUsableBbox.
-  const cropBbox = useMemo(() => (
-    roi ? boundsOf([
-      { r: roi.startRow, c: roi.startCol },
-      { r: roi.endRow, c: roi.endCol },
-    ]) : null
-  ), [roi]);
+  //
+  // The tool decides which drawn points count and which mask they build; both
+  // decisions live in navSelection.js so they can be checked without a canvas.
+  const selectionPoints = useMemo(
+    () => selectionPointsFor(cropTool, lassoPoints, roi),
+    [cropTool, lassoPoints, roi],
+  );
+
+  const cropBbox = useMemo(() => boundsOf(selectionPoints), [selectionPoints]);
+
+  // The points the MASK is built from. For the box tools that is the very same
+  // drag; for the lasso it is the SETTLED copy of the path, so the mask does
+  // not have to be rebuilt from scratch on every mouse-move. The crop WINDOW
+  // above — and with it the memory estimate, the number that decides whether a
+  // crop is a good idea — stays live either way.
+  const maskPoints = useMemo(
+    () => selectionPointsFor(cropTool, lassoMaskPath, roi),
+    [cropTool, lassoMaskPath, roi],
+  );
+
+  const cropMask = useMemo(
+    () => maskForTool(cropTool, maskPoints, cropBbox),
+    [cropTool, maskPoints, cropBbox],
+  );
+
+  // Let the traced path stop growing before rebuilding the mask from it.
+  //
+  // A lasso mask is rebuilt from the WHOLE path — the even-odd fill tests every
+  // cell of the box against every edge, so it costs O(rows·cols·points).
+  // Measured on this machine: 31 ms for a 136×169 selection with 400 sampled
+  // points, 392 ms at 361×461 with 1200, and 3.0 s for a 693×923 one. That runs
+  // on the thread carrying the drag, so rebuilding on every new pixel would
+  // turn a lasso over a large scan into a frozen tab. The delay is invisible in
+  // the hand: it ends LASSO_SETTLE_MS after the last new pixel, long before
+  // anyone can travel to the Crop button, and the outline the user is watching
+  // never waits for it.
+  useEffect(() => {
+    if (cropTool !== 'lasso') return undefined;
+    const id = setTimeout(() => setLassoMaskPath(lassoPoints), LASSO_SETTLE_MS);
+    return () => clearTimeout(id);
+  }, [cropTool, lassoPoints]);
+
+  // Drop the drawn selection — all of it. One function rather than a handful of
+  // setters at each site, because forgetting one leaves a stale path that the
+  // next tool switch would resurrect.
+  const clearSelection = useCallback(() => {
+    setRoi(null);
+    setLassoPoints([]);
+    setLassoMaskPath([]);
+  }, []);
+
+  // Switching tools. A path and a box cannot be read as each other, so moving
+  // in or out of the lasso drops both — which also keeps the image export from
+  // holding a rectangle the viewer has stopped drawing. Rectangle and ellipse
+  // keep the box: that is one drag read two ways, not a new selection.
+  const chooseTool = useCallback((tool) => {
+    if (tool === cropTool) return;
+    if (tool === 'lasso' || cropTool === 'lasso') clearSelection();
+    setCropTool(tool);
+  }, [cropTool, clearSelection]);
 
   // Sample width for the crop-size estimate. /api/ebsd/datasets reports dtype
   // per dataset and is already fetched on load, so the estimate is right for a
@@ -1285,13 +1371,13 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const adoptGrid = useCallback((geom) => {
     applyGrid(geom);
     // A selection drawn on one grid means nothing on another.
-    setRoi(null);
+    clearSelection();
     const r = geom ? Math.min(row, geom.gridShape[0] - 1) : row;
     const c = geom ? Math.min(col, geom.gridShape[1] - 1) : col;
     setRow(r);
     setCol(c);
     return [r, c];
-  }, [applyGrid, row, col]);
+  }, [applyGrid, row, col, clearSelection]);
 
   // Cut the active dataset down to the drawn selection. The backend makes the
   // crop the active dataset, so everything on screen has to be re-read: the
@@ -1309,7 +1395,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
               n_patterns: nPx } = res.data || {};
       log(t('crop.done', { name, selected: nSel }));
       if (!materialised) log(t('crop.notMaterialised'));
-      setRoi(null);
+      clearSelection();
       setActiveDataset(name);
       setCropWindow(cropWin || null);
       // The old position may lie outside the cut-out entirely.
@@ -1342,7 +1428,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       setCropBusy(false);
     }
   }, [log, t, applyGrid, fetchDatasets, fetchMetadata,
-      fetchOverview, fetchAtlas, overviewMode, loadPattern]);
+      fetchOverview, fetchAtlas, overviewMode, loadPattern, clearSelection]);
 
   const switchDataset = async (name) => {
     try {
@@ -2186,6 +2272,33 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             <span style={{ opacity: 0.7 }}>{t('overview.captionHint')}</span>
           </div>
 
+          {/* Selection tool — which shape a Shift+Drag draws. Shown on the
+              same condition as the crop panel it feeds, so a viewer with no
+              file loaded is untouched. */}
+          {ebsdLoaded && (
+            <div
+              data-crop-tools
+              style={{
+                display: 'flex', alignItems: 'center', gap: 3,
+                padding: '2px 8px', fontSize: '8pt', color: colors.textSecondary,
+                background: colors.bgSecondary, borderBottom: `1px solid ${colors.border}`,
+                flexShrink: 0,
+              }}
+            >
+              <span style={{ marginRight: 3 }}>{t('crop.toolLabel')}</span>
+              {['rect', 'ellipse', 'lasso'].map((tool) => (
+                <QuickModeBtn
+                  key={tool}
+                  label={t(`crop.tool.${tool}`)}
+                  active={cropTool === tool}
+                  onClick={() => chooseTool(tool)}
+                  title={t(`crop.toolHint.${tool}`)}
+                />
+              ))}
+              <div style={{ flex: 1 }} />
+            </div>
+          )}
+
         {/* Image container */}
         <div
           ref={overviewRef}
@@ -2205,7 +2318,18 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           onMouseDown={(e) => {
             if (e.shiftKey && gridShape) {
               const pos = calcOverviewPos(e);
-              if (pos) roiStartRef.current = { row: pos.r, col: pos.c };
+              if (pos) {
+                // A new drag replaces the old selection rather than adding to
+                // it — for the lasso that means starting a fresh path, not
+                // continuing the previous one.
+                roiStartRef.current = { row: pos.r, col: pos.c };
+                if (cropTool === 'lasso') {
+                  setLassoPoints([{ r: pos.r, c: pos.c }]);
+                  // The previous shape must not be reported against the new
+                  // box while the fresh path settles.
+                  setLassoMaskPath([]);
+                }
+              }
             } else if (ovZoomed && e.button === 0) {
               // Zoomed in, a plain drag pans. Navigation is left to onClick so
               // that a pan does not scrub through patterns on the way.
@@ -2218,6 +2342,12 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           onMouseUp={() => {
             ovPanRef.current = null;
             roiStartRef.current = null;
+            // The path is finished, so pay for the exact mask now rather than
+            // leaving the timer to do it: releasing and clicking Crop inside
+            // LASSO_SETTLE_MS would otherwise send the whole box. A release
+            // outside this element skips this line, which is what the timer is
+            // still there for.
+            if (cropTool === 'lasso') setLassoMaskPath(lassoPoints);
             loadPattern(row, col);
             fetchEds(row, col);
           }}
@@ -2270,9 +2400,11 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                   left: `${ovRectZoomed.left}%`, top: `${ovRectZoomed.top}%`,
                   width: `${ovRectZoomed.width}%`, height: `${ovRectZoomed.height}%`,
                 }}>
-                  {/* ROI selection rectangle */}
-                  {roi && gridShape && (
-                    <div style={{
+                  {/* ROI selection box — the rectangle, and the ellipse
+                      inscribed in the same drag. One shape drawn two ways,
+                      because that is exactly how the mask reads it. */}
+                  {roi && gridShape && cropTool !== 'lasso' && (
+                    <div data-roi-box style={{
                       position: 'absolute',
                       left: `${(roi.startCol / gridShape[1]) * 100}%`,
                       top: `${(roi.startRow / gridShape[0]) * 100}%`,
@@ -2280,6 +2412,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                       height: `${((roi.endRow - roi.startRow) / gridShape[0]) * 100}%`,
                       border: `2px solid ${colors.yellow}`,
                       background: alpha(colors.yellow, 8),
+                      borderRadius: cropTool === 'ellipse' ? '50%' : 0,
                     }}>
                       <span style={{
                         position: 'absolute', top: -14, left: 0,
@@ -2288,6 +2421,36 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                         {t('overview.roiLabel', { startRow: roi.startRow, startCol: roi.startCol, endRow: roi.endRow, endCol: roi.endCol })}
                       </span>
                     </div>
+                  )}
+                  {/* The traced lasso path. An <svg> in this same untransformed
+                      overlay rather than a second coordinate system: the
+                      percentages below are the ones the rectangle above
+                      already uses, so the zoom mathematics is shared.
+                      Drawn CLOSED because lassoMask closes the path too — what
+                      is outlined is what would be cropped on mouse-up.
+                      non-scaling-stroke keeps the line one constant width
+                      despite preserveAspectRatio="none" stretching the box. */}
+                  {cropTool === 'lasso' && gridShape && lassoPoints.length > 0 && (
+                    <svg
+                      data-lasso-path
+                      viewBox="0 0 100 100"
+                      preserveAspectRatio="none"
+                      style={{
+                        position: 'absolute', inset: 0,
+                        width: '100%', height: '100%', overflow: 'visible',
+                      }}
+                    >
+                      <polygon
+                        points={lassoPoints.map((p) => (
+                          `${((p.c + 0.5) / gridShape[1]) * 100},${((p.r + 0.5) / gridShape[0]) * 100}`
+                        )).join(' ')}
+                        fill={alpha(colors.yellow, 8)}
+                        stroke={colors.yellow}
+                        strokeWidth={2}
+                        strokeLinejoin="round"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    </svg>
                   )}
                   {/* Crosshair */}
                   {crosshair && (
@@ -2341,13 +2504,13 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         {ebsdLoaded && (
           <CropPanel
             bbox={cropBbox}
-            mask={null}
+            mask={cropMask}
             /* The dataset-sync path (page re-entry with data already in the
                backend) sets signal_shape but not pattern_shape — both are the
                detector [h, w], and estimateBytes only multiplies them. */
             patternShape={ebsdInfo?.pattern_shape || ebsdInfo?.signal_shape || null}
             bytesPerPixel={bytesPerSample(activeDtype)}
-            shape="rect"
+            shape={cropTool}
             busy={cropBusy}
             origin={cropWindow}
             onCrop={handleCrop}

@@ -268,3 +268,71 @@ export function lassoMask(points, bbox) {
   }
   return mask;
 }
+
+/**
+ * Which drawn points the ACTIVE tool owns.
+ *
+ * The viewer keeps two selections side by side: `roi`, the Shift+Drag
+ * rectangle (which the image export also reads, and which therefore may not be
+ * repurposed), and `lassoPoints`, the freehand path. This is the one place
+ * that decides which of them a tool reads, so a tool can only ever be handed
+ * its own geometry — a lasso with no path is an empty selection even while a
+ * rectangle from an earlier drag is still in `roi`.
+ *
+ * Rectangle and ellipse share the box deliberately: switching between them
+ * re-reads one drag two ways rather than making the user draw it again.
+ *
+ * @param {'rect'|'ellipse'|'lasso'} tool
+ * @param {{r:number,c:number}[]|null} lassoPoints
+ * @param {{startRow:number,startCol:number,endRow:number,endCol:number}|null} roi
+ * @returns {{r:number,c:number}[]}
+ */
+export function selectionPointsFor(tool, lassoPoints, roi) {
+  if (tool === 'lasso') return lassoPoints || [];
+  if (!roi) return [];
+  return [
+    { r: roi.startRow, c: roi.startCol },
+    { r: roi.endRow, c: roi.endCol },
+  ];
+}
+
+/**
+ * The mask the active tool builds from its points — null meaning "the whole
+ * box", the contract every consumer here already speaks.
+ *
+ * DEGENERATE LASSO PATHS. `lassoMask` needs three points before it draws
+ * anything: with fewer, its outline pass has no edges to walk and it returns
+ * an all-zero mask. The user traced a short stroke, saw an outline, and gets
+ * "0 of N pixels" with the Crop button dead — and were it sent anyway the
+ * backend answers HTTP 400, "the selection contains no pixels". It also
+ * disagrees with itself: three collinear points DO select their line, two do
+ * not.
+ *
+ * So a short path is padded with repeats of its last point rather than being
+ * refused. Repeating a vertex makes every edge appear twice in the even-odd
+ * fill, which cancels it exactly, leaving the outline pass to mark the traced
+ * segment and nothing else. A two-point drag therefore selects the line it
+ * traced and a lone click selects its one pixel — the same rule as the
+ * three-point collinear case, and in every case "what you traced is what you
+ * get". Padding here rather than in `lassoMask` keeps that builder's tested
+ * behaviour bit-identical; this is the layer that turns a tool into a mask,
+ * and the degenerate drag is a tool concern.
+ *
+ * @param {'rect'|'ellipse'|'lasso'} tool
+ * @param {{r:number,c:number}[]|null} points
+ * @param {{row0:number,col0:number,rows:number,cols:number}|null} bbox
+ * @returns {Uint8Array|null}
+ */
+export function maskForTool(tool, points, bbox) {
+  if (!bbox) return null;
+  if (tool === 'ellipse') return ellipseMask(bbox);
+  if (tool === 'lasso') {
+    const path = points || [];
+    if (path.length === 0) return null;
+    const padded = path.length >= 3
+      ? path
+      : [...path, ...Array(3 - path.length).fill(path[path.length - 1])];
+    return lassoMask(padded, bbox);
+  }
+  return rectMask(bbox);
+}

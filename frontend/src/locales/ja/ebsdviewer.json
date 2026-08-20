@@ -189,6 +189,12 @@
       "ellipse": "楕円",
       "lasso": "なげなわ"
     },
+    "toolLabel": "選択:",
+    "toolHint": {
+      "rect": "Shift+ドラッグで概要図に矩形を描きます",
+      "ellipse": "Shift+ドラッグで矩形を描くと、その内接楕円が選択されます",
+      "lasso": "Shift+ドラッグで自由な輪郭をなぞります"
+    },
     "origin": "{{parent}} の切り抜き · 行 {{row0}}–{{row1}}、列 {{col0}}–{{col1}}",
     "failed": "切り抜きに失敗しました: {{message}}",
     "done": "'{{name}}' に切り抜きました ({{selected}} px)",
