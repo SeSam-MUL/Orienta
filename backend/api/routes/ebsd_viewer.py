@@ -1508,7 +1508,10 @@ async def get_metadata():
             has_eds = features.get('has_eds', False)
             eds_elements = [str(e) for e in features.get('eds_elements', [])]
     except Exception:
-        pass
+        # get_active_extractor() raises on a crop/file grid mismatch. Without
+        # this line that fail-loud degrades to a silent "this file has no EDS".
+        logger.warning("Could not read EDS features for the active dataset — "
+                       "reporting no EDS", exc_info=True)
 
     # Phases from signal if available
     phases = []
@@ -1650,7 +1653,10 @@ async def list_datasets():
             has_eds = len(elems) > 0
             eds_elements = [str(e) for e in elems]
     except Exception:
-        pass
+        # Same reason as in get_metadata(): a crop/file grid mismatch must not
+        # look like "this file has no EDS" with nothing in the log.
+        logger.warning("Could not read EDS elements for the active dataset — "
+                       "reporting no EDS", exc_info=True)
 
     datasets = []
     for name, sig in _raw_signals.items():

@@ -918,6 +918,36 @@ def _read_native_bc_safe() -> Optional[np.ndarray]:
         return None
 
 
+def _bc_grid_for(ext) -> "Optional[np.ndarray]":
+    """Native Band Contrast on the ACTIVE dataset's grid, or None.
+
+    The probe and the linescan index this grid with coordinates that belong to
+    ``ext`` — crop-local when the active dataset is a crop.
+    ``_read_native_bc_safe`` reads the raw HDF5 file and always returns the
+    FULL scan, so under a crop the same (row, col) lands on a different pixel
+    than the element maps do. A half-cropped response is worse than either
+    alternative, so on the crop path read BC through the proxy, which cuts it
+    to the same window.
+
+    Off the crop path this is literally ``_read_native_bc_safe()`` — same
+    reader, same values, still monkeypatchable by the existing tests.
+    """
+    from backend.api.services.cropped_extractor import CroppedExtractor
+
+    if not isinstance(ext, CroppedExtractor):
+        return _read_native_bc_safe()
+    try:
+        bc = ext.get_band_contrast_map()
+    except Exception:
+        # The extractor's reader is fail-loud on a header/data mismatch. A
+        # hover tooltip must not 500, but it must not show the full scan's
+        # value either — report "no BC" and say why in the log.
+        logger.warning("cropped Band Contrast read failed — reporting no BC",
+                       exc_info=True)
+        return None
+    return None if bc is None else np.asarray(bc)
+
+
 def _probe_phase_at_safe(row: int, col: int) -> Optional[dict]:
     """Return ``{ 'id': int, 'name': str }`` for the phase at (row, col), or None.
 
@@ -931,6 +961,21 @@ def _probe_phase_at_safe(row: int, col: int) -> Optional[dict]:
         if state is None:
             return None
         grid = state.phase_grid  # rows × cols int32; -1 = unclassified
+        # The stored map is on whatever grid it was classified on. If that is
+        # not the grid the caller is indexing — a full-scan map probed
+        # with crop-local coordinates, say — an in-range (row, col) would
+        # return a DIFFERENT pixel's phase. Say "no phase" instead.
+        try:
+            active_shape = tuple(int(v) for v in get_extractor().get_grid_dimensions())
+        except Exception:
+            active_shape = None
+        if active_shape is not None and tuple(grid.shape[:2]) != active_shape:
+            logger.warning(
+                "phase map is %s but the active dataset is %s — omitting the "
+                "phase from the probe rather than reading the wrong pixel",
+                tuple(grid.shape[:2]), active_shape,
+            )
+            return None
         if not (0 <= row < grid.shape[0] and 0 <= col < grid.shape[1]):
             return None
         phase_idx = int(grid[row, col])
@@ -1018,7 +1063,7 @@ async def probe(req: ProbeRequest):
 
     # --- BC (native) ---
     bc_value: Optional[float] = None
-    bc_grid = _read_native_bc_safe()
+    bc_grid = _bc_grid_for(ext)
     # Only ever "native" or None here — a hover tooltip must stay cheap, so we
     # never compute BC on the probe path. Computed BC surfaces via the BC layer
     # (the /band-contrast endpoint), not the probe.
@@ -1108,7 +1153,7 @@ async def linescan(req: LinescanRequest):
     # Pre-load BC once if requested (any 'bc' layer).
     bc_grid = None
     if "bc" in req.layers:
-        bc_grid = _read_native_bc_safe()
+        bc_grid = _bc_grid_for(ext)
 
     # Pre-quantify the full EDS grids for the requested elements + display_mode.
     # Cheaper than per-pixel quantify for n samples — single matrix conversion

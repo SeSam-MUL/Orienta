@@ -7560,6 +7560,13 @@ async def start_batch_indexing(req: BatchRequest):
                                 # when it is a crop.
                                 from backend.api.services.h5_session import get_active_extractor, is_open
                                 if is_open():
+                                    # If this raises the crop/file grid
+                                    # mismatch, the surrounding except drops
+                                    # the /EDS group. That is deliberate here:
+                                    # a batch run can have the h5 session on a
+                                    # different file than the viewer's crop,
+                                    # and a missing /EDS group beats writing
+                                    # another scan's maps beside this result.
                                     ext = get_active_extractor()
                                     elements = ext.get_available_elements()
                                     if elements:

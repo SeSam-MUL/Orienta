@@ -719,11 +719,10 @@ def _collect_neighbour_patterns(
       - the center pattern itself is always included if loadable.
     """
     if radius <= 0:
-        try:
-            p = h5_session.get_cached_pattern(center_idx, pattern_type=pattern_type)
-            return [np.asarray(p, dtype=np.float32)] if p is not None else []
-        except Exception:
-            return []
+        # Same source preference as the radius > 0 branch below — without it
+        # this branch reads a crop-local index out of the full scan.
+        p = _region_pattern(center_idx, pattern_type)
+        return [np.asarray(p, dtype=np.float32)] if p is not None else []
 
     dims = _get_scan_dimensions()
     if dims is None:
@@ -759,6 +758,30 @@ def _collect_neighbour_patterns(
         if arr.ndim == 2:
             patterns.append(arr)
     return patterns
+
+
+def _region_pattern(idx: int, pattern_type: str = "processed") -> Optional[np.ndarray]:
+    """The pattern at flat index ``idx`` on the ACTIVE dataset's grid.
+
+    ``idx`` is built from ``_get_scan_dimensions()``, which reports the active
+    dataset's grid — the CROPPED grid when the user is working on a cut-out.
+    ``h5_session.get_cached_pattern`` resolves through the raw extractor and
+    would read that index out of the FULL scan, i.e. a different pixel.
+
+    So use the same source preference ``_collect_neighbour_patterns`` already
+    uses:
+    the active EBSD-viewer signal first (it IS the cropped signal, and it is
+    also what the user sees), the raw file only as a fallback. Off the crop
+    path the two agree, so nothing changes there.
+    """
+    p = _fetch_active_pattern(idx)
+    if p is not None:
+        return p
+    try:
+        return h5_session.get_cached_pattern(idx, pattern_type=pattern_type)
+    except Exception:
+        logger.debug("pattern fetch failed for flat index %d", idx, exc_info=True)
+        return None
 
 
 def _gather_detector_geom() -> Optional[dict]:
@@ -958,9 +981,8 @@ def analyze_region_endpoint(req: AnalyzeRegionRequest):
     detector_geom = _gather_detector_geom()
 
     def _get_pattern(row: int, col: int):
-        # Convert (row, col) → flat index and reuse get_cached_pattern
         idx = row * n_cols + col
-        return h5_session.get_cached_pattern(idx, pattern_type="processed")
+        return _region_pattern(idx)
 
     result = analyze_region(
         get_pattern=_get_pattern,
@@ -1097,7 +1119,7 @@ def quality_check_endpoint(req: QualityCheckRequest):
 
     def _get_pattern(row: int, col: int):
         idx = row * n_cols + col
-        return h5_session.get_cached_pattern(idx, pattern_type="processed")
+        return _region_pattern(idx)
 
     qresult = quality_check_region(
         get_pattern=_get_pattern,

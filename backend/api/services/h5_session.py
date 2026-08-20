@@ -129,12 +129,19 @@ def get_active_extractor():
 
     # Lazy import: ebsd_viewer imports services, so a module-level import here
     # would close a cycle. Same pattern as close_file's phase_map_store import.
+    #
+    # ONLY the import is allowed to fail soft. Swallowing an error out of
+    # get_active_crop_window() would return the FULL-SCAN extractor for a
+    # dataset that IS a crop, and every switched route would then serve
+    # full-scan data with nothing in the log — exactly the silently-wrong
+    # mode this design exists to prevent. Let anything else propagate.
     try:
         from backend.api.routes.ebsd_viewer import get_active_crop_window
-        window = get_active_crop_window()
-    except Exception:
-        logger.debug("crop window lookup failed (ignored)", exc_info=True)
+    except ImportError:
+        logger.debug("ebsd_viewer not importable — no crop window", exc_info=True)
         return extractor
+
+    window = get_active_crop_window()
 
     if window is None:
         return extractor
