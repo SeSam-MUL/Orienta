@@ -1059,6 +1059,14 @@ def _probe_phase_at_safe(row: int, col: int) -> Optional[dict]:
             return {"id": phase_idx, "name": str(name)}
         return {"id": phase_idx, "name": f"Phase {phase_idx}"}
     except Exception:
+        # The explicit mismatch above logs; this catch did not, and it is the
+        # branch that swallows a RAISED mismatch — `_phase_grid_mismatch` asks
+        # `get_active_extractor`, which is deliberately fail-loud when the crop
+        # window does not fit the open file. Degrading a read to "no value" is
+        # allowed; doing it in silence is the one thing the spec forbids, and
+        # this was the only place left doing it.
+        logger.warning("could not read the phase at (%s, %s) — omitting it "
+                       "from the probe", row, col, exc_info=True)
         return None
 
 

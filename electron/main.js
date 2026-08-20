@@ -319,9 +319,12 @@ ipcMain.handle('dialog:openFolder', async () => {
 
 ipcMain.handle('dialog:saveFile', async (event, options) => {
   const result = await dialog.showSaveDialog(mainWindow, {
-    // Every caller passes a suggested name (phase-map export, analysis
-    // export, crop export); without this line the dialog silently opened
-    // with an empty one. `dialog:saveImage` below has always forwarded it.
+    // Forwarded when the caller supplies one (phase-map export, crop export);
+    // without this line the dialog silently opened with an empty name even
+    // then. Not every caller does — AnalysisPage's two "Browse" buttons pass
+    // only `filters` — hence the `|| undefined`, which leaves the dialog to
+    // its own default rather than passing it an empty string.
+    // `dialog:saveImage` below has always forwarded it.
     defaultPath: options?.defaultPath || undefined,
     filters: options?.filters || [
       { name: 'PNG Image', extensions: ['png'] },
