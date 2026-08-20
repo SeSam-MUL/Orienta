@@ -729,6 +729,69 @@ async def clear_phase_map():
     return {"loaded": False, "cleared": True}
 
 
+def _phase_grid_mismatch(state):
+    """``(stored_shape, active_shape)`` when the stored phase map is NOT on the
+    grid of the active dataset, else ``None``.
+
+    The map lives on whatever grid it was classified on, while every caller
+    below indexes it with coordinates belonging to the ACTIVE dataset — and
+    those became crop-local the moment that dataset is a crop. When the two
+    grids disagree, an in-range ``(row, col)`` names a DIFFERENT pixel, so the
+    read and both writes have to notice. One helper for all three so they
+    cannot drift apart; what they DO about it differs (see
+    ``_refuse_write_on_grid_mismatch``).
+
+    With no file open there is no active grid to compare against, and nothing
+    can be cropped either: ``None``, which leaves every caller exactly where it
+    stood before there was such a thing as a crop. Anything else that goes
+    wrong PROPAGATES — ``get_active_extractor`` is deliberately fail-loud when
+    the crop window does not fit the open file, and swallowing that here would
+    hand the caller a grid nobody can name.
+    """
+    stored = tuple(int(v) for v in np.shape(state.phase_grid)[:2])
+    if not is_open():
+        return None
+    active = tuple(int(v) for v in get_extractor().get_grid_dimensions())
+    return None if stored == active else (stored, active)
+
+
+def _refuse_write_on_grid_mismatch(state) -> None:
+    """Abort a phase-map write whose coordinates belong to another grid.
+
+    The read side (``_probe_phase_at_safe``) degrades to "no value" on exactly
+    this condition — its own ``except`` also turns a fail-loud grid lookup into
+    "no phase". A write may not: a wrong read is a wrong pixel on screen for as
+    long as the tooltip is open, a wrong write is persistent state painted over
+    a region of the scan the user never looked at and cannot see is wrong.
+    """
+    try:
+        mismatch = _phase_grid_mismatch(state)
+    except Exception as exc:
+        logger.warning("refusing a phase-map write: the grid of the active "
+                       "dataset could not be determined", exc_info=True)
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The grid of the active dataset could not be determined "
+                    f"({exc}) — refusing to edit the phase map until it can."),
+        )
+    if mismatch is None:
+        return
+    stored, active = mismatch
+    logger.warning(
+        "refusing a phase-map write: the stored map is %s but the active "
+        "dataset is %s", stored, active,
+    )
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"The stored phase map is {stored[0]}x{stored[1]} but the active "
+            f"dataset is {active[0]}x{active[1]} — the coordinates of this "
+            f"edit belong to a different grid. Re-run auto-classify on the "
+            f"dataset you are looking at before painting it."
+        ),
+    )
+
+
 class AssignRegionRequest(BaseModel):
     """Paint a rectangular region with a phase id (-1 = unclassified)."""
     row_start: int
@@ -771,6 +834,7 @@ async def assign_polygon(req: AssignPolygonRequest):
     state = store.get_state()
     if state is None:
         raise HTTPException(status_code=400, detail="No phase map loaded — run auto-classify first")
+    _refuse_write_on_grid_mismatch(state)
 
     try:
         from matplotlib.path import Path as _MplPath
@@ -809,8 +873,10 @@ async def assign_polygon(req: AssignPolygonRequest):
 async def assign_region(req: AssignRegionRequest):
     """Manually overwrite a rectangle of pixels with a chosen phase id."""
     store = get_phase_map_store()
-    if not store.is_set():
+    state = store.get_state()
+    if state is None:
         raise HTTPException(status_code=400, detail="No phase map loaded — run auto-classify first")
+    _refuse_write_on_grid_mismatch(state)
     try:
         n_overwritten = store.assign_region(
             row_start=req.row_start,
@@ -964,16 +1030,14 @@ def _probe_phase_at_safe(row: int, col: int) -> Optional[dict]:
         # The stored map is on whatever grid it was classified on. If that is
         # not the grid the caller is indexing — a full-scan map probed
         # with crop-local coordinates, say — an in-range (row, col) would
-        # return a DIFFERENT pixel's phase. Say "no phase" instead.
-        try:
-            active_shape = tuple(int(v) for v in get_extractor().get_grid_dimensions())
-        except Exception:
-            active_shape = None
-        if active_shape is not None and tuple(grid.shape[:2]) != active_shape:
+        # return a DIFFERENT pixel's phase. A READ may degrade to "no value";
+        # the two writes share this check and refuse outright instead.
+        mismatch = _phase_grid_mismatch(state)
+        if mismatch is not None:
             logger.warning(
                 "phase map is %s but the active dataset is %s — omitting the "
                 "phase from the probe rather than reading the wrong pixel",
-                tuple(grid.shape[:2]), active_shape,
+                mismatch[0], mismatch[1],
             )
             return None
         if not (0 <= row < grid.shape[0] and 0 <= col < grid.shape[1]):

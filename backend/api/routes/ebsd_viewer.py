@@ -1709,6 +1709,19 @@ async def deepcopy_dataset(req: DeepCopyRequest):
             new_name = f"{base_name}_copy{counter}"
             counter += 1
 
+        # A deepcopy of a crop is still that same cut-out, so it carries the
+        # parent's window unchanged (the window is relative to the ORIGINAL
+        # scan, and the copy sits exactly where the parent does). Registered
+        # BEFORE publishing the signal, for the reason the crop endpoint states
+        # at length: a dataset that IS a crop but reports no window looks like
+        # a full scan, and every dataset-facing reader then serves it full-scan
+        # side data with no error. This is the last path of that kind — the
+        # per-file stash already carries crop windows across a file switch.
+        parent_window = (crop_window_service.get_crop(parent_name)
+                         if parent_name else None)
+        if parent_window is not None:
+            crop_window_service.set_crop(new_name, parent_window)
+
         _raw_signals[new_name] = new_signal
         _positions[new_name] = (0, 0)
         # Inherit mask state from parent so visual + processing behavior stays
@@ -1716,7 +1729,14 @@ async def deepcopy_dataset(req: DeepCopyRequest):
         if parent_name and parent_name in _signal_masks:
             _signal_masks[new_name] = dict(_signal_masks[parent_name])
 
-        # Inherit calibration from parent (CalibrationStore is immune to deepcopy bug)
+        # Inherit calibration from parent (CalibrationStore is immune to deepcopy bug).
+        #
+        # register_derived, NOT register_cropped, even when the parent is a
+        # crop: the copy's navigation grid IS the parent's, and a cropped
+        # parent's pc_map was already cut to that grid when the crop was
+        # registered. register_cropped(window over the parent's own grid) is
+        # the identity — window.apply() would hand back the same values by a
+        # longer route. Verbatim inheritance is what a copy means.
         calibration_store.register_derived(new_name, parent_name)
 
         nav_shape = new_signal.axes_manager.navigation_shape

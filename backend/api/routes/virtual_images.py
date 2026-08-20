@@ -220,6 +220,55 @@ def _read_native_band_contrast_from(path) -> Optional[np.ndarray]:
     return None
 
 
+def _native_band_contrast_for_active_dataset():
+    """Native Band Contrast on the ACTIVE dataset's grid, or ``None``.
+
+    Band Contrast is per-dataset data, so this endpoint is dataset-facing: when
+    the active dataset is a crop, the BC layer has to be the crop. It was not —
+    ``_read_native_band_contrast`` reads the raw HDF5 file and always answers
+    with the FULL scan, so in the EDS and Phase-Map layer stacks the BC layer
+    showed the whole sample while every EDS layer beside it showed the cut-out.
+    Two layers of one stack, two different regions, composited on top of each
+    other.
+
+    On the crop path read through the proxy, which cuts BC to the same window
+    the element maps get. Off it this is literally ``_read_native_band_contrast()``
+    — same reader, same bytes. (``eds._bc_grid_for`` does the same thing for the
+    probe and the linescan; it keeps its own copy because those two are wired
+    to a test-mockable wrapper this endpoint does not use.)
+    """
+    from backend.api.services.cropped_extractor import CroppedExtractor
+    from backend.api.services.h5_session import get_active_extractor
+
+    try:
+        ext = get_active_extractor()
+    except Exception:
+        # Two ways here: no extractor is registered (which the caller already
+        # excluded with is_open() — the two are set and cleared together), or
+        # the window does not fit the open file, which get_active_extractor is
+        # deliberately fail-loud about. A read may degrade to "no value"; it
+        # may NOT degrade to "here is the full scan", which is the one outcome
+        # this function exists to prevent. None sends the endpoint to the
+        # computed quality map, which is derived from the ACTIVE (cropped)
+        # signal and so cannot show the wrong region.
+        logger.warning("could not resolve the active extractor — reporting no "
+                       "native Band Contrast rather than the full scan",
+                       exc_info=True)
+        return None
+    if not isinstance(ext, CroppedExtractor):
+        return _read_native_band_contrast()
+    try:
+        bc = ext.get_band_contrast_map()
+    except Exception:
+        logger.warning("cropped Band Contrast read failed — falling through to "
+                       "the computed quality map rather than showing the full "
+                       "scan under a crop", exc_info=True)
+        return None
+    # float64 like the raw reader, so the values a caller compares against are
+    # produced the same way on both paths.
+    return None if bc is None else np.asarray(bc, dtype=np.float64)
+
+
 @router.get("/band-contrast")
 async def band_contrast(
     cmap: str = "gray",
@@ -234,7 +283,7 @@ async def band_contrast(
     if not is_open():
         raise HTTPException(status_code=400, detail="No HDF5 file is open")
 
-    bc = _read_native_band_contrast()
+    bc = _native_band_contrast_for_active_dataset()
     if bc is not None:
         image_b64 = _render_2d_image(bc, cmap, color)
         return {
