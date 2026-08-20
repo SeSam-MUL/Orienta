@@ -5,24 +5,29 @@ through H5OINADataExtractor. That makes it the one place where a crop can be
 honoured: this proxy cuts what comes out, and the call sites that read those
 need no change at all.
 
-Read this list before wiring anything to a CroppedExtractor.
+A method needs this proxy's attention for one of two independent reasons: it
+RETURNS a grid-shaped array, or it TAKES a per-pixel flat index. Grouping by
+return shape alone is how ``get_eds_spectrum`` was missed once already, so the
+list below is split by both. Check both columns before wiring anything to a
+CroppedExtractor.
 
-CUT to the window:
+RETURNS a grid-shaped array — CUT to the window:
     get_grid_dimensions, flat_point_count, get_pattern_count, _flat_to_map,
     get_element_map, get_element_map_2d, get_band_contrast_map,
     detect_available_features
 
-TRANSLATED (a crop-local index goes in, the corresponding original pixel is
-read out):
-    get_pattern_at_index, get_aztec_pixel, index_to_position,
-    position_to_index
+TAKES a per-pixel index — TRANSLATED (a crop-local index goes in, the
+corresponding original pixel is read out):
+    get_pattern_at_index, get_aztec_pixel, get_eds_spectrum,
+    index_to_position, position_to_index
 
-EVERY OTHER grid-shaped read still returns the FULL scan. It forwards through
-``__getattr__``, binds to the raw extractor and knows nothing about the
-window — while this object advertises a cropped grid. As of Task 4 that is
-``get_scalar_map``, ``get_phase_map``, ``compute_ipf_map`` and
-``get_electron_image`` (the electron images are Task 12's). Do not put one of
-those behind a cropped route until its own task has landed.
+NEITHER: everything else forwards through ``__getattr__``, binds to the raw
+extractor and knows nothing about the window — while this object advertises a
+cropped grid. As of Task 4 the untreated ones are all in the returns-a-grid
+column: ``get_scalar_map``, ``get_phase_map``, ``compute_ipf_map`` and
+``get_electron_image`` (the electron images are Task 12's). No index-taker is
+left untranslated, and a test holds that line. Do not put one of the untreated
+reads behind a cropped route until its own task has landed.
 
 What this proxy does NOT do: apply the navigation mask. The mask says which
 pixels the user selected, not which data exists. A value outside the lasso is
@@ -185,6 +190,15 @@ class CroppedExtractor:
         all it needs.
         """
         return self._ext.get_aztec_pixel(self._original_flat_index(index))
+
+    def get_eds_spectrum(self, index):
+        """The EDS spectrum of the pixel at a CROP-local flat index.
+
+        Same family as ``get_aztec_pixel``: the raw method takes a flat index
+        over the display grid and reads the per-point datasets at that offset,
+        so only the index needs translating.
+        """
+        return self._ext.get_eds_spectrum(self._original_flat_index(index))
 
     # --- feature report -------------------------------------------------
     def detect_available_features(self) -> Dict[str, Any]:
