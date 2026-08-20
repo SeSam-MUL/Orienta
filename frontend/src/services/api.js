@@ -39,9 +39,10 @@ export const h5Api = {
     api.get(`/api/h5/pattern/${index}/binary`, { responseType: 'blob' }),
   getPatternByPos: (row, col) => api.get(`/api/h5/pattern/pos/${row}/${col}`),
   navigate: (row, col) => api.post('/api/h5/navigate', { row, col }),
-  getEDSElements: () => api.get('/api/h5/eds/elements'),
-  getEDSMap: (element, cmap = 'hot', color = '') =>
-    api.get(`/api/h5/eds/map/${element}`, { params: { cmap, color } }),
+  getEDSElements: (scope = 'file') =>
+    api.get('/api/h5/eds/elements', { params: { scope } }),
+  getEDSMap: (element, cmap = 'hot', color = '', scope = 'file') =>
+    api.get(`/api/h5/eds/map/${element}`, { params: { cmap, color, scope } }),
   getEDSPixel: (row, col) => api.get(`/api/h5/eds/pixel/${row}/${col}`),
   // `scope` picks WHICH view of the electron image you get. Omit it (the
   // default, 'file') for the H5 cockpit: the image exactly as the file holds

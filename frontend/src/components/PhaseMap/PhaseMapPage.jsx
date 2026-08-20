@@ -2113,7 +2113,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     // EDS elements from h5 session — only relevant when source is linked
     if (sourceLink.linked) {
       promises.push(
-        h5Api.getEDSElements().then((res) => {
+        h5Api.getEDSElements('dataset').then((res) => {
           const elements = res.data?.elements ?? [];
           return elements.map((el) => ({
             id: `eds:${el}`, label: `EDS: ${el}`, source: 'h5',

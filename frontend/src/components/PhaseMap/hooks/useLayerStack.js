@@ -94,7 +94,11 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
     case 'h5': {
       if (layer.id.startsWith('eds:')) {
         const element = layer.id.slice(4);
-        const res = await h5Api.getEDSMap(element, 'hot', '');
+        // 'dataset': same reason as the SE underlay below — this element map
+        // is composited onto the active dataset's phase map, so it has to be
+        // cut to the same window. A full-scan map stretched onto a cropped
+        // grid puts every feature in the wrong place, silently.
+        const res = await h5Api.getEDSMap(element, 'hot', '', 'dataset');
         return { base64: res.data.image, keyToAlpha: true };
       }
       if (layer.id.startsWith('se:')) {

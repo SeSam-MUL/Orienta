@@ -9,7 +9,7 @@ import { renderHook, act } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
   phaseMapApi: { layer: vi.fn(() => Promise.resolve({ data: { image: 'Zm9v' } })) },
-  h5Api: { getElectronImage: vi.fn() },
+  h5Api: { getElectronImage: vi.fn(), getEDSMap: vi.fn() },
   ebsdApi: {}, analysisApi: {},
 }));
 vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ blob: () => Promise.resolve({}) })));
@@ -100,5 +100,26 @@ describe('useLayerStack — electron images and the crop', () => {
     expect(result.current.cropStatus.has(SE_ID)).toBe(true);
     act(() => { result.current.removeLayer(SE_ID); });
     expect(result.current.cropStatus.has(SE_ID)).toBe(false);
+  });
+});
+
+// The EDS element layer sits in the SAME composite as the phase map above it,
+// and LayeredCanvas scales every bitmap onto the first layer's native size.
+// A file-scope element map under a cropped phase map is therefore not merely
+// "extra data" — it is stretched onto the crop's grid and every feature on it
+// is displaced, with no warning anywhere.
+describe('useLayerStack — EDS element layers and the crop', () => {
+  beforeEach(() => {
+    h5Api.getEDSMap.mockReset();
+    h5Api.getEDSMap.mockResolvedValue({ data: { image: 'Zm9v' } });
+  });
+
+  it('requests the dataset scope, not the file', async () => {
+    const hook = renderHook(() =>
+      useLayerStack({ cleanupParams: CLEANUP, resetSignal: 'r1', frameSig: null }));
+    act(() => { hook.result.current.setSingleLayer('phase'); });
+    act(() => { hook.result.current.addLayer('eds:Al'); });
+    await settle();
+    expect(h5Api.getEDSMap).toHaveBeenCalledWith('Al', 'hot', '', 'dataset');
   });
 });

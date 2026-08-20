@@ -253,14 +253,50 @@ async def navigate(req: NavigateRequest):
     return result
 
 
+# --- Scoped reads: the file as it is, or the dataset the user is on ---
+
+ReadScope = Literal["file", "dataset"]
+
+# Kept as an alias: the electron endpoints introduced the parameter and the
+# name still reads correctly at their call sites.
+ElectronScope = ReadScope
+
+
+def _scoped_extractor(scope: ReadScope):
+    """The extractor a grid-shaped read should come from.
+
+    ``scope="file"`` (the default) shows the data as the FILE holds it — that
+    is what the H5 cockpit, this module's main tenant, wants. ``scope="dataset"``
+    shows it as the ACTIVE DATASET sees it, so a cropped dataset gets the
+    matching cut-out; that is what the EDS and Phase Map layer stacks want.
+
+    The two cannot be reconciled into one choice: the same endpoint serves both
+    kinds of consumer, so the caller has to say which view it means — and the
+    parameter is a ``Literal`` so a typo is a 422 rather than a silent fall
+    back to the file view.
+    """
+    from backend.api.services.h5_session import get_active_extractor
+    return get_active_extractor() if scope == "dataset" else get_extractor()
+
+
+# Historical name; the electron endpoints call it.
+_electron_extractor = _scoped_extractor
+
+
 # --- EDS ---
 
 @router.get("/eds/elements")
-async def get_eds_elements():
-    """Get list of available EDS elements."""
+async def get_eds_elements(scope: ReadScope = "file"):
+    """Get list of available EDS elements. See ``_scoped_extractor``.
+
+    The names themselves do not depend on the crop; the parameter exists so a
+    caller can use one scope for the list and the maps it then fetches — and
+    so a caller that means "the dataset" gets the crop-window guard rather
+    than a full-scan answer that merely happens to be right today.
+    """
     if not is_open():
         raise HTTPException(status_code=400, detail="No HDF5 file is open")
-    ext = get_extractor()
+    ext = _scoped_extractor(scope)
     return {"elements": ext.get_available_elements()}
 
 
@@ -270,6 +306,7 @@ async def get_eds_map(
     cmap: str = "hot",
     line: str | None = None,
     color: str = "",
+    scope: ReadScope = "file",
 ):
     """Get an EDS element map as Base64 PNG.
 
@@ -278,10 +315,15 @@ async def get_eds_map(
     `color` (hex like "#8be9fd") switches to a single-color RGBA overlay
     using the user's chosen element colour from the global colour
     store; when empty the legacy ``cmap`` heatmap is rendered instead.
+    `scope` — see ``_scoped_extractor``. The default "file" keeps the H5
+    cockpit's view; the Phase Map layer stack asks for "dataset" so its
+    element map is cut to the same window as the phase map it sits under.
+    Without that the two are composited on different grids and every feature
+    on one of them is displaced.
     """
     if not is_open():
         raise HTTPException(status_code=400, detail="No HDF5 file is open")
-    ext = get_extractor()
+    ext = _scoped_extractor(scope)
     available = ext.get_available_elements()
     try:
         resolved = _resolve_element(element, available, line)
@@ -337,26 +379,6 @@ async def get_eds_pixel(row: int, col: int):
 
 
 # --- Electron Images ---
-
-ElectronScope = Literal["file", "dataset"]
-
-
-def _electron_extractor(scope: ElectronScope):
-    """The extractor these two endpoints should read from.
-
-    ``scope="file"`` (the default) shows the image as the FILE holds it — that
-    is what the H5 cockpit, this module's main tenant, wants. ``scope="dataset"``
-    shows it as the ACTIVE DATASET sees it, so a cropped dataset gets the
-    matching cut-out; that is what the EDS and Phase Map layer stacks want.
-
-    The two cannot be reconciled into one choice: the same endpoint serves both
-    kinds of consumer, so the caller has to say which view it means — and the
-    parameter is a ``Literal`` so a typo is a 422 rather than a silent fall
-    back to the file view.
-    """
-    from backend.api.services.h5_session import get_active_extractor
-    return get_active_extractor() if scope == "dataset" else get_extractor()
-
 
 def _crop_status_of(ext, key: str) -> dict:
     """Whether ``key``'s last read could follow the crop, and why not.
