@@ -1850,10 +1850,15 @@ def _get_processed_patterns_if_dirty(
     active signal is flagged dirty this returns the processed patterns (full
     grid, or the ROI subset when ``roi_mode``); otherwise returns ``None`` and
     callers read the original H5 exactly as before.
+
+    Raises when the patterns are still lazy and would not fit in memory — see
+    the ceiling check below. ``None`` would be the wrong answer there: it means
+    "read the file", and for a cropped dataset the file is the whole scan.
     """
     try:
         from backend.api.routes.ebsd_viewer import (
             is_active_signal_dirty, _get_active_signal,
+            _CROP_MATERIALIZE_MAX_BYTES,
         )
     except Exception:
         return None
@@ -1863,6 +1868,26 @@ def _get_processed_patterns_if_dirty(
     data = getattr(signal, "data", None)
     if data is None:
         return None
+    # `np.asarray` on a still-lazy signal ALLOCATES the whole stack. A crop
+    # above the ceiling was deliberately left lazy by POST /api/ebsd/crop, and
+    # POST /api/ebsd/crop/export refuses rather than make that allocation — so
+    # making it here, uncapped, would kill the backend with a bare MemoryError
+    # (empty str(), i.e. a 500 with no message) on exactly the data the rest of
+    # the feature protects.
+    #
+    # This RAISES rather than returning None. None means "the signal is not
+    # dirty, read the file" — and for a crop the file is the whole scan, so a
+    # None here would quietly index the wrong region. Data already in RAM is
+    # not affected: np.asarray on an ndarray is a free view, no matter its size.
+    if not isinstance(data, np.ndarray):
+        nbytes = int(getattr(data, "nbytes", 0) or 0)
+        if nbytes > _CROP_MATERIALIZE_MAX_BYTES:
+            raise ValueError(
+                f"These patterns are {nbytes / 1024 ** 3:.1f} GiB and are still "
+                f"lazy, above the {_CROP_MATERIALIZE_MAX_BYTES / 1024 ** 3:.0f} "
+                f"GiB that can be held in memory at once. Crop a smaller region "
+                f"and index that."
+            )
     data = np.asarray(data)
     if data.ndim != 4:
         return None
