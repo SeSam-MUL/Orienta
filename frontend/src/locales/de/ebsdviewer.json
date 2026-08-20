@@ -200,7 +200,18 @@
     "done": "Zugeschnitten auf '{{name}}' ({{selected}} px)",
     "notMaterialised": "Ausschnitt blieb lazy — zu groß für den Speicher",
     "electronImageNotCropped": "Dieses Bild konnte dem Ausschnitt nicht folgen — es wird vollständig gezeigt.",
-    "electronImageClamped": "Dieses Bild endet vor dem Ausschnitt — es hat nicht mehr dessen Form."
+    "electronImageClamped": "Dieses Bild endet vor dem Ausschnitt — es hat nicht mehr dessen Form.",
+    "saveCrop": "Ausschnitt speichern…",
+    "saveCropWorking": "Speichere…",
+    "saveCropHint": "Diesen Ausschnitt als eigene Datei schreiben — Muster wie verarbeitet, EDS-Karten und Elektronenbilder passend zugeschnitten.",
+    "saveCropDone": "{{points}} Pixel gespeichert: {{path}}",
+    "saveCropDetail": "{{cut}} pixelweise Datensätze zugeschnitten, {{copied}} kopiert, {{images}} Elektronenbilder zugeschnitten",
+    "saveCropElectronFull": "{{count}} Elektronenbilder konnten dem Ausschnitt nicht folgen und wurden vollständig geschrieben",
+    "saveCropFailed": "Speichern des Ausschnitts fehlgeschlagen: {{message}}",
+    "savePromptTitle": "Ausschnitt speichern",
+    "savePromptMessage": "Vollständigen Pfad für die Ausschnittdatei eingeben (.h5oina):",
+    "savePromptPlaceholder": "/pfad/zu/ausschnitt.h5oina",
+    "savePromptSubmit": "Speichern"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

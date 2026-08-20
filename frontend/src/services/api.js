@@ -275,6 +275,10 @@ export const ebsdApi = {
   crop: (payload) => api.post('/api/ebsd/crop', payload),
   // The active dataset's crop window, or { window: null } when it is a full scan.
   getCrop: () => api.get('/api/ebsd/crop'),
+  // Write the active crop to `path` as a standalone file. The BACKEND does the
+  // writing — this only hands it a destination — so `path` must be a real
+  // filesystem path, not a download name.
+  exportCrop: (path) => api.post('/api/ebsd/crop/export', { path }),
   deleteDataset: (name) => api.delete(`/api/ebsd/dataset/${encodeURIComponent(name)}`),
 
   // Signal processing (operate on active dataset in-place)

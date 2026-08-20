@@ -344,6 +344,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // --- Crop to selection ---
   const [cropTool, setCropTool] = useState('rect');
   const [cropBusy, setCropBusy] = useState(false);
+  const [cropSaving, setCropSaving] = useState(false);
   // Where the ACTIVE dataset was cut from, or null when it is a full scan.
   const [cropWindow, setCropWindow] = useState(null);
 
@@ -1459,6 +1460,65 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   }, [log, t, applyGrid, fetchDatasets, fetchMetadata,
       fetchOverview, fetchAtlas, overviewMode, loadPattern, clearSelection]);
 
+  // Write the active crop to a file. The BACKEND writes it — the dialog only
+  // supplies a destination — so this uses `saveFile` (returns a path), not
+  // `saveImage` (shows a dialog AND writes renderer bytes).
+  const doExportCrop = useCallback(async (path) => {
+    setCropSaving(true);
+    try {
+      const res = await ebsdApi.exportCrop(path);
+      const d = res.data || {};
+      log(t('crop.saveCropDone', {
+        points: (d.n_points ?? 0).toLocaleString(), path: d.path || path,
+      }));
+      // Say what actually went into the file. "Saved" alone leaves the user
+      // to open it to find out whether the EDS maps and the electron image
+      // came along.
+      log(t('crop.saveCropDetail', {
+        cut: d.datasets_cut ?? 0,
+        copied: d.datasets_copied ?? 0,
+        images: d.electron_images_cut ?? 0,
+      }));
+      if (d.electron_images_full > 0) {
+        log(t('crop.saveCropElectronFull', { count: d.electron_images_full }));
+      }
+    } catch (e) {
+      log(t('crop.saveCropFailed', {
+        message: e?.response?.data?.detail || e?.message || String(e),
+      }));
+    } finally {
+      setCropSaving(false);
+    }
+  }, [log, t]);
+
+  const handleExportCrop = useCallback(async () => {
+    // Suggest a name, but never invent a directory: the Electron dialog and
+    // the prompt fallback both let the user say where it goes.
+    const suggested = `${String(activeDataset || 'crop').replace(/[^\w.-]+/g, '_')}.h5oina`;
+    if (window.electronAPI?.saveFile) {
+      const selected = await window.electronAPI.saveFile({
+        defaultPath: suggested,
+        filters: [
+          { name: 'Oxford H5OINA', extensions: ['h5oina'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      });
+      if (selected) doExportCrop(selected);
+      return;
+    }
+    // Plain-browser mode (start_app.py): no native dialog, so ask for the
+    // path the same way the file-open button does. It is the backend's
+    // filesystem either way, so a typed path is as valid as a picked one.
+    askPrompt({
+      title: t('crop.savePromptTitle'),
+      message: t('crop.savePromptMessage'),
+      defaultValue: suggested,
+      placeholder: t('crop.savePromptPlaceholder'),
+      submitLabel: t('crop.savePromptSubmit'),
+      onSubmit: (p) => { if (p && p.trim()) doExportCrop(p.trim()); },
+    });
+  }, [activeDataset, askPrompt, doExportCrop, t]);
+
   const switchDataset = async (name) => {
     try {
       await ebsdApi.selectDataset(name);
@@ -2535,6 +2595,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             busy={cropBusy}
             origin={cropWindow}
             onCrop={handleCrop}
+            onExport={handleExportCrop}
+            saving={cropSaving}
           />
         )}
         </div>

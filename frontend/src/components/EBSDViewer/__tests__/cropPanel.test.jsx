@@ -13,6 +13,7 @@
  *      produce when the overview container measures 0 wide) is treated as
  *      "nothing drawn" — NOT as a valid selection of size 0 B.
  *   7. Busy → button disabled and says so.
+ *   8. Save-crop button: only for a crop, and only when a handler exists.
  */
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
@@ -123,5 +124,32 @@ describe('CropPanel', () => {
     render(<CropPanel bbox={null} mask={null} patternShape={[128, 156]}
                       bytesPerPixel={1} onCrop={() => {}} origin={null} />);
     expect(screen.queryByTestId('crop-origin')).toBeNull();
+  });
+  it('offers Save crop only for a cropped dataset', () => {
+    const onExport = vi.fn();
+    render(<CropPanel bbox={null} mask={null} patternShape={[128, 156]}
+                      bytesPerPixel={1} onCrop={() => {}} onExport={onExport}
+                      origin={{ source_file: 'D:/scans/Scan1.h5oina',
+                                row0: 4, col0: 6, rows: 8, cols: 10 }} />);
+    fireEvent.click(screen.getByTestId('crop-export'));
+    expect(onExport).toHaveBeenCalled();
+  });
+
+  it('shows no Save crop button for a full scan', () => {
+    render(<CropPanel bbox={null} mask={null} patternShape={[128, 156]}
+                      bytesPerPixel={1} onCrop={() => {}}
+                      onExport={() => {}} origin={null} />);
+    expect(screen.queryByTestId('crop-export')).toBeNull();
+  });
+
+  it('disables the Save crop button and says so while a save is running', () => {
+    render(<CropPanel bbox={null} mask={null} patternShape={[128, 156]}
+                      bytesPerPixel={1} onCrop={() => {}} onExport={() => {}}
+                      saving
+                      origin={{ source_file: 'D:/scans/Scan1.h5oina',
+                                row0: 4, col0: 6, rows: 8, cols: 10 }} />);
+    const button = screen.getByTestId('crop-export');
+    expect(button).toBeDisabled();
+    expect(button.textContent).toMatch(/Saving/i);
   });
 });

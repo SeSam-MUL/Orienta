@@ -50,6 +50,30 @@ describe('CropPanel wiring in EBSDViewer', () => {
   it('is handed the box derived from the active tool', () => {
     expect(el).toContain('bbox={cropBbox}');
   });
+
+  it('is handed the save-crop handler, so a crop can leave the process', () => {
+    // Same class of silent regression as the mask: the panel hides the button
+    // when `onExport` is missing, so dropping this prop removes the ONLY way
+    // to get a crop onto disk — with nothing failing and nothing on screen to
+    // say the feature went away.
+    expect(el).toContain('onExport={handleExportCrop}');
+    expect(el).toContain('saving={cropSaving}');
+  });
+});
+
+describe('crop export in EBSDViewer', () => {
+  it('asks for a PATH, because the backend does the writing', () => {
+    // `saveImage` shows a dialog AND writes renderer bytes; the cropped file
+    // is written by Python from a path. Using the wrong channel here would
+    // write an empty file over the user's chosen name.
+    const open = source.indexOf('const handleExportCrop');
+    expect(open, 'the viewer should have a crop-export handler').toBeGreaterThan(-1);
+    const body = source.slice(open, source.indexOf('  const switchDataset', open));
+    expect(body).toContain('window.electronAPI?.saveFile');
+    expect(body).not.toContain('saveImage');
+    // ...and it still works without Electron (plain browser via start_app.py).
+    expect(body).toContain('askPrompt(');
+  });
 });
 
 describe('selection state in EBSDViewer', () => {

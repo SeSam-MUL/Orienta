@@ -396,6 +396,10 @@ class CropMaskRequest(BaseModel):
     enabled: bool
 
 
+class CropExportRequest(BaseModel):
+    path: str
+
+
 class FrameAverageRequest(BaseModel):
     window_size: int = 3
 
@@ -1958,6 +1962,69 @@ async def set_crop_mask(req: CropMaskRequest):
 
     updated = crop_window_service.set_mask_enabled(_active_dataset, req.enabled)
     return {"success": True, "window": updated.to_dict()}
+
+
+@router.post("/crop/export")
+async def export_crop(req: CropExportRequest):
+    """Write the active crop out as a standalone file.
+
+    The patterns written are the ones the dataset holds RIGHT NOW — with any
+    background removal or frame averaging already applied. Saving the raw
+    source patterns instead would hand back a file that does not match what
+    the user was looking at (the lesson of 2026-07-20).
+
+    Everything else — every EBSD channel, every EDS element, the electron
+    image — is cut straight out of the source file, per window row, so the
+    peak memory of an export does not scale with the source's size.
+    """
+    from backend.api.services.crop_export import write_cropped_h5oina
+
+    window = get_active_crop_window()
+    if window is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"'{_active_dataset}' is not a cropped dataset — there is no "
+                    f"window to export"),
+        )
+
+    signal = _get_active_signal()
+    if signal is None:
+        raise HTTPException(status_code=400, detail="No EBSD data loaded")
+
+    # The window's row0/col0 are indices into the file it was cut from, so
+    # that file is the only one they mean anything in. _ebsd_file_path is the
+    # fallback for a window that never recorded one; it is NOT preferred, or a
+    # crop left active across a file switch would cut the wrong measurement.
+    source_path = str(window.source_file or _ebsd_file_path or "")
+    if not source_path or not Path(source_path).exists():
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The file this crop was cut from is not reachable, so there "
+                    f"is nothing to copy the EDS and electron-image data from: "
+                    f"{source_path or '(unknown)'}"),
+        )
+
+    def _write():
+        # The crop's own patterns, not the source's. asarray computes a lazy
+        # crop; that is bounded by the cut-out, not by the measurement.
+        data = np.asarray(signal.data)
+        return write_cropped_h5oina(source_path, req.path, window, patterns=data)
+
+    try:
+        report = await asyncio.to_thread(_write)
+    except ValueError as e:
+        # The writer's own refusals — a hex scan, patterns whose detector
+        # shape no longer matches the file's — are all user-facing.
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not write '{req.path}': {e}")
+    except Exception as e:
+        logger.exception("Crop export failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"success": True, "dataset": _active_dataset, **report}
 
 
 @router.delete("/dataset/{name}")

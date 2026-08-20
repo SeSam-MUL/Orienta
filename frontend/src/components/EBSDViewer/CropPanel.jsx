@@ -30,7 +30,7 @@ function isUsableBbox(bbox) {
 
 export default function CropPanel({
   bbox, mask, patternShape, bytesPerPixel = 1, shape = 'rect',
-  busy = false, origin = null, onCrop,
+  busy = false, origin = null, onCrop, onExport, saving = false,
 }) {
   const { t } = useTranslation('ebsdviewer');
 
@@ -84,6 +84,28 @@ export default function CropPanel({
       >
         {busy ? t('crop.working') : t('crop.apply')}
       </button>
+      {/* Gated on `origin`, i.e. on the backend saying this dataset IS a crop
+          — the same fact the endpoint checks. A crop lives in memory and dies
+          with the backend; this is the only way out of the process. */}
+      {origin && onExport && (
+        <button
+          type="button"
+          data-testid="crop-export"
+          disabled={saving}
+          onClick={onExport}
+          title={t('crop.saveCropHint')}
+          style={{
+            padding: '3px 10px', borderRadius: 4, fontSize: '8pt', fontWeight: 500,
+            border: `1px solid ${colors.border}`,
+            background: colors.bgTertiary,
+            color: saving ? colors.textSecondary : colors.text,
+            cursor: saving ? 'wait' : 'pointer',
+            opacity: saving ? 0.55 : 1,
+          }}
+        >
+          {saving ? t('crop.saveCropWorking') : t('crop.saveCrop')}
+        </button>
+      )}
       <span style={{ flex: 1 }} />
       {origin && (
         <span data-testid="crop-origin" style={{ fontSize: '8pt', color: colors.yellow }}>

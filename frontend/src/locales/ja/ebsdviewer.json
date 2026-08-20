@@ -200,7 +200,18 @@
     "done": "'{{name}}' に切り抜きました ({{selected}} px)",
     "notMaterialised": "メモリに入りきらないため、切り抜きは遅延読み込みのままです",
     "electronImageNotCropped": "この画像は切り抜きに追従できなかったため、全体を表示しています。",
-    "electronImageClamped": "この画像は自身の端で切り詰められ、切り抜きの形状と一致していません。"
+    "electronImageClamped": "この画像は自身の端で切り詰められ、切り抜きの形状と一致していません。",
+    "saveCrop": "切り抜きを保存…",
+    "saveCropWorking": "保存中…",
+    "saveCropHint": "この切り抜きを単独のファイルとして書き出します — パターンは処理後のもの、EDS マップと電子像も合わせて切り抜きます。",
+    "saveCropDone": "{{points}} ピクセルを {{path}} に保存しました",
+    "saveCropDetail": "ピクセル単位データセット {{cut}} 件を切り抜き、{{copied}} 件をコピー、電子像 {{images}} 件を切り抜きました",
+    "saveCropElectronFull": "{{count}} 件の電子像は切り抜きに追従できず、全体を書き出しました",
+    "saveCropFailed": "切り抜きの保存に失敗しました: {{message}}",
+    "savePromptTitle": "切り抜きを保存",
+    "savePromptMessage": "切り抜きファイルの完全なパスを入力してください（.h5oina）:",
+    "savePromptPlaceholder": "/path/to/crop.h5oina",
+    "savePromptSubmit": "保存"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",
