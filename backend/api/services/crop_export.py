@@ -9,9 +9,18 @@ h5oina is regular enough for one generic rule: under the scan's own data
 groups, anything whose first axis is as long as the scan has points is
 per-pixel data and gets cut; everything else is copied verbatim. That covers
 the patterns, every EBSD channel, every EDS element and the per-pixel spectra
-without naming any of them, and it copies -- never mangles -- a dataset the
-rule cannot recognise. Copying is the safe direction: a full-size dataset in
-a cropped file is visibly odd, a wrongly-cut one is not.
+without naming any of them, and a dataset the rule cannot recognise is copied
+rather than mangled. Copying is the safe direction: a full-size dataset in a
+cropped file is visibly odd, a wrongly-cut one is not.
+
+The rule has one unsafe direction, stated here because it cannot be tested
+away: a dataset under those groups that is NOT per-pixel but whose first axis
+happens to equal the point count -- a lookup table with one row per scan point
+by coincidence -- would be cut. Both files in ``Test_data/`` were enumerated
+and every dataset under ``/EBSD/Data/`` and ``/EDS/Data/`` is genuinely
+per-pixel -- 30 of them on SampleB, 28 on HIgh_MG -- so nothing misclassifies
+today; a format that puts something else there would need the rule tightened,
+not this comment widened.
 
 Three things the generic rule alone would get wrong, each handled explicitly:
 
@@ -38,12 +47,19 @@ hex rectangle while the crop window is defined on the resampled square display
 grid, so a subset of the file is not well defined. We refuse instead of
 writing something wrong.
 
-Known limitation, recorded rather than guessed at: ``Relative Offset`` and
-``Relative Size`` -- where an area's field of view sits inside the site -- are
-copied unchanged. Every area therefore keeps agreeing with every other, which
-is the property ``project_to_area`` checks when the written file is opened
-again; but the pair no longer says where the crop sits in the original site.
-The ``CropProvenance`` group carries that, exactly and in scan pixels.
+Deliberate, not an oversight: the written file mixes two coordinate frames.
+``Relative Offset`` / ``Relative Size`` and ``Bounding Box Size`` describe the
+cut-out relative to itself (measured on a real export: offset ``[0, 0]``, box
+``[20, 15]`` um), while the per-pixel ``EBSD/Data/X`` and ``Y`` keep their
+ABSOLUTE stage coordinates (10.0 -> 13.5 um for the same crop). Neither is
+rebased, for three reasons: absolute stage coordinates are the honest record
+of where the beam was, and inventing new ones throws that away; every area
+keeps agreeing with every other, which is the property ``project_to_area``
+checks when the file is opened again, and rewriting one area's offset without
+the others would arm that guard against the file's own electron image; and
+cross-area co-registration survives because both areas were cut to the same
+physical region. ``CropProvenance`` records where the crop sat, exactly, in
+scan pixels -- so nothing is lost, it just is not in the site frame.
 """
 from __future__ import annotations
 
@@ -55,6 +71,7 @@ import h5py
 import numpy as np
 
 from backend.api.services.crop_window import CropWindow, project_to_area
+from edax_hex import is_edax_hex_file
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +123,11 @@ def write_cropped_h5oina(
         removal, frame averaging): what gets saved must be what the work was
         done on, not the raw material it started from.
     is_hex
-        The source is a hexagonal scan. Refused -- see the module docstring.
+        Force the hex refusal. The file is checked anyway
+        (``edax_hex.is_edax_hex_file``, the same ``Grid Type == "HexGrid"``
+        header ``H5OINADataExtractor.hex_map`` reads), so this only exists for
+        a caller that knows something the file does not say. Leaving it False
+        is safe.
 
     Returns
     -------
@@ -114,7 +135,11 @@ def write_cropped_h5oina(
         ``{"path", "n_points", "datasets_cut", "datasets_copied",
         "electron_images_cut", "electron_images_full"}``.
     """
-    if is_hex:
+    # Asked of the FILE, not only of the caller. A default of False on a
+    # parameter is a wrong answer waiting for someone to forget it, and this
+    # is the one failure mode of this module a caller cannot see: a hex scan
+    # written as if it were square opens cleanly and is silently sheared.
+    if is_hex or is_edax_hex_file(source_path):
         raise ValueError(
             "Cropped file export supports square scan grids only. This is a hex "
             "scan: the file stores the padded hex rectangle while the crop window "
@@ -478,7 +503,7 @@ def _electron_grid(h5file: h5py.File) -> Optional[Tuple[int, int]]:
     for root in h5file:
         if not isinstance(h5file[root], h5py.Group):
             continue
-        path = f"{root}/{_ELECTRON_DATA}"
+        path = f"{root}{_ELECTRON_DATA}".rstrip("/")
         if path not in h5file:
             continue
         found: list = []
