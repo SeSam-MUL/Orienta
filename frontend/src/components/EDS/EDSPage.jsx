@@ -30,6 +30,7 @@ import CropWarningChip, { cropWarningFor } from '../common/CropWarningChip';
 import HoverProbeOverlay from './HoverProbeOverlay';
 import ThresholdHistogram from './ThresholdHistogram';
 import LinescanProfilePlot from './LinescanProfilePlot';
+import { useActiveDatasetKey } from './hooks/useActiveDatasetKey';
 import { useDefaultLayers } from './hooks/useDefaultLayers';
 import { useEdsLayerStack } from './hooks/useEdsLayerStack';
 import { allMapsLayersFor } from './edsLayerSources';
@@ -288,7 +289,7 @@ function HoverProbeLayer({ probe, error, displayMode, requestProbe, clearProbe }
   );
 }
 
-export default function EDSPage({ onNavigate }) {
+export default function EDSPage({ onNavigate, isActive = true }) {
   const { t } = useTranslation(['eds', 'imageexport']);
   const isFileOpen = useDataStore((s) => s.isFileOpen);
   const filePath = useDataStore((s) => s.filePath);
@@ -302,9 +303,16 @@ export default function EDSPage({ onNavigate }) {
   const [displayMode, setDisplayMode] = useState('at_pct');
   const [overlayW, setOverlayW] = useState(360);    // splitter-controlled
 
+  // Which DATASET the maps below belong to. Not the same question as which
+  // file: a crop is a new dataset cut from the file already open, and every
+  // map on this page comes from the ACTIVE dataset while the probe endpoints
+  // resolve coordinates on its grid. Keyed into both hooks so the two can
+  // never describe different datasets — see useActiveDatasetKey.
+  const datasetKey = useActiveDatasetKey(isFileOpen, filePath, isActive);
+
   // Default-layer probe + stack hook.
-  const def = useDefaultLayers(isFileOpen, filePath);
-  const stack = useEdsLayerStack({ initialLayers: def.layers, displayMode });
+  const def = useDefaultLayers(isFileOpen, filePath, datasetKey);
+  const stack = useEdsLayerStack({ initialLayers: def.layers, displayMode, datasetKey });
 
   // "All Maps" tile grid is DECOUPLED from the curated composite overlay: it
   // shows EVERY detected map (all elements + electron images + BC) via its own
@@ -318,7 +326,9 @@ export default function EDSPage({ onNavigate }) {
     }),
     [def.elements, def.electronImages, def.layers],
   );
-  const allMaps = useEdsLayerStack({ initialLayers: allMapsLayers, displayMode, cacheSize: 64 });
+  const allMaps = useEdsLayerStack({
+    initialLayers: allMapsLayers, displayMode, cacheSize: 64, datasetKey,
+  });
 
   // PhaseMap handoff (lifted from today).
   const handlePhaseMapHandoff = useCallback(() => {

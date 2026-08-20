@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { edsApi, ebsdApi, h5Api } from '../../../services/api';
 import { defaultLayersFor, pickPreferredElectronImage } from '../edsLayerSources';
+import { DATASET_UNKNOWN } from './useActiveDatasetKey';
 
 /**
  * Probe hasBC / electron-image list / EDS-element list and seed the initial
@@ -18,12 +19,27 @@ import { defaultLayersFor, pickPreferredElectronImage } from '../edsLayerSources
  * `filePath` is in the effect deps so a file *switch* (isFileOpen stays true,
  * only the path changes) re-runs the probe and re-seeds the layer stack for
  * the new file's elements / electron images.
+ *
+ * `datasetKey` is the NAME of the active EBSD dataset ('Scan1',
+ * 'Scan1_crop1', ...). It is in the deps for the same reason the path is, and
+ * it is not redundant with it: cropping changes WHICH DATASET the maps come
+ * from without changing the file. Both probes below read the active dataset —
+ * `edsApi.elements()` and `getElectronList('dataset')` — so a crop moves them
+ * both while `isFileOpen` and `filePath` sit perfectly still. Without this the
+ * page kept serving the PARENT's full-scan maps while every probe coordinate
+ * (hover, linescan, region) was resolved on the crop's grid.
+ *
+ * {@link DATASET_UNKNOWN} means "the caller does not know the dataset yet" and
+ * suppresses the probe, so a file-open does not probe once on the unknown key
+ * and again on the resolved one — the second probe would flush and refetch
+ * every bitmap the first had just decoded. `null` (no named dataset) is a
+ * legitimate key and does probe.
  */
-export function useDefaultLayers(isFileOpen, filePath) {
+export function useDefaultLayers(isFileOpen, filePath, datasetKey = null) {
   const [state, setState] = useState({ ready: false, layers: [], elements: [], electronImages: [] });
 
   useEffect(() => {
-    if (!isFileOpen) {
+    if (!isFileOpen || datasetKey === DATASET_UNKNOWN) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- file-close reset must clear state synchronously; the alternative (derived useMemo) breaks the async probe flow.
       setState({ ready: false, layers: [], elements: [], electronImages: [] });
       return;
@@ -64,7 +80,7 @@ export function useDefaultLayers(isFileOpen, filePath) {
       setState({ ready: true, layers, elements, electronImages });
     })();
     return () => { cancelled = true; };
-  }, [isFileOpen, filePath]);
+  }, [isFileOpen, filePath, datasetKey]);
 
   return state;
 }

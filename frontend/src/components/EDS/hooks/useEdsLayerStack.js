@@ -61,7 +61,20 @@ async function fetchLayer(layer, displayMode) {
   throw new Error(`Unsupported EDS layer kind: ${layer.kind || layer.id}`);
 }
 
-export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE_SIZE }) {
+/**
+ * @param initialLayers  seed stack; a NEW ARRAY re-seeds (see the effect below)
+ * @param displayMode    counts | wt_pct | at_pct — bakes into the EDS fetches
+ * @param cacheSize      LRU bitmap cap
+ * @param datasetKey     name of the active EBSD dataset, or null. Re-seeding
+ *   on `initialLayers` identity alone was never enough: a crop produces a new
+ *   dataset with the SAME file and the same layer ids, so a stack seeded from
+ *   the parent kept serving the parent's bitmaps — and `shapeRef`, the page's
+ *   interaction grid, stayed the parent's while probe coordinates were
+ *   resolved on the crop's. Passing the identity makes the flush answer to
+ *   what changed rather than to who happened to build a new array.
+ */
+export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE_SIZE,
+                                   datasetKey = null }) {
   const [state, dispatch] = useReducer(layerStackReducer, initialState);
   const cacheRef    = useRef(new Map());     // layerId → ImageBitmap
   const orderRef    = useRef([]);            // LRU order (most-recent at end)
@@ -144,24 +157,32 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
     cacheFlush((cid) => cid === id);
   }, [cacheFlush]);
 
-  // Seed / re-seed on initialLayers reference change (EDS page feeds this
-  // from useDefaultLayers — each file-open produces a fresh array).
+  // Seed / re-seed when the DATASET changes, or when the caller hands over a
+  // fresh initialLayers array (useDefaultLayers builds one per probe).
+  //
+  // The old comment here claimed "a fresh initialLayers array means a new file
+  // (or file switch)". That stopped being true the moment cropping existed: a
+  // crop changes the dataset without changing the file, and the EDS page's
+  // probe deps did not move, so neither did this array — which is why the page
+  // went on showing the parent's full-scan maps. `datasetKey` is in the deps
+  // so the flush answers to identity, not to array authorship.
   useEffect(() => {
     if (Array.isArray(initialLayers)) {
-      // A fresh initialLayers array means a new file (or file switch) — the
-      // scan grid may differ, so drop the cached interaction shape and let
-      // the next scan-grid fetch re-establish it.
+      // The scan grid may differ (it certainly does for a crop), so drop the
+      // cached interaction shape and let the next scan-grid fetch re-establish
+      // it. Leaving it would resolve every click, hover and linescan on the
+      // previous dataset's grid.
       shapeRef.current = null;
       shapeFromGridRef.current = false;
-      // Flush ALL cached bitmaps. Layer ids are stable across files
-      // (`eds-Al`, `bc`, `electron-SE1`, …), so without this the fetch loop
-      // would skip every re-seeded layer (`cacheRef.has(l.id)` is true) and
-      // keep rendering the PREVIOUS file's pixels under the new file's labels.
+      // Flush ALL cached bitmaps. Layer ids are stable across files AND across
+      // datasets (`eds-Al`, `bc`, `electron-SE1`, …), so without this the fetch
+      // loop would skip every re-seeded layer (`cacheRef.has(l.id)` is true)
+      // and keep rendering the PREVIOUS dataset's pixels under the new labels.
       cacheFlush(() => true);
       dispatch({ type: 'REPLACE_ALL', layers: initialLayers });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialLayers]);
+  }, [initialLayers, datasetKey]);
 
   // Mirror displayMode into a ref so async fetches can detect a mode change
   // that happened between fetch-start and bitmap-decode.
