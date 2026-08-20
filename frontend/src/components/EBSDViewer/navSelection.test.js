@@ -79,3 +79,92 @@ describe('bytesPerSample', () => {
     expect(bytesPerSample('uint4')).toBe(1);   // sub-byte: never less than 1
   });
 });
+
+import { ellipseMask, lassoMask } from './navSelection';
+
+const at = (mask, bbox, r, c) => mask[(r - bbox.row0) * bbox.cols + (c - bbox.col0)];
+
+describe('ellipseMask', () => {
+  it('fills the inscribed ellipse of the box', () => {
+    const bbox = { row0: 0, col0: 0, rows: 5, cols: 5 };
+    const mask = ellipseMask(bbox);
+    expect(at(mask, bbox, 2, 2)).toBe(1);   // centre
+    expect(at(mask, bbox, 2, 0)).toBe(1);   // on the horizontal axis
+    expect(at(mask, bbox, 0, 2)).toBe(1);   // on the vertical axis
+    expect(at(mask, bbox, 0, 0)).toBe(0);   // corner is outside
+    expect(at(mask, bbox, 4, 4)).toBe(0);
+  });
+
+  it('handles a one-pixel box', () => {
+    const mask = ellipseMask({ row0: 0, col0: 0, rows: 1, cols: 1 });
+    expect(mask.length).toBe(1);
+    expect(mask[0]).toBe(1);
+  });
+
+  it('is wide for a wide box — the radii are not transposed', () => {
+    // 3 rows x 9 cols. The middle row must reach both ends; the corners must
+    // not. Swapping rx and ry would fill a tall sliver down the middle
+    // instead, and the square boxes above could never tell the difference.
+    const bbox = { row0: 0, col0: 0, rows: 3, cols: 9 };
+    const mask = ellipseMask(bbox);
+    expect(at(mask, bbox, 1, 0)).toBe(1);
+    expect(at(mask, bbox, 1, 8)).toBe(1);
+    expect(at(mask, bbox, 0, 0)).toBe(0);
+    expect(at(mask, bbox, 2, 8)).toBe(0);
+  });
+});
+
+describe('lassoMask', () => {
+  it('fills a drawn triangle and leaves the rest out', () => {
+    // Triangle with corners (0,0), (0,4), (4,0) in grid coordinates.
+    const pts = [{ r: 0, c: 0 }, { r: 0, c: 4 }, { r: 4, c: 0 }];
+    const bbox = boundsOf(pts);
+    const mask = lassoMask(pts, bbox);
+    expect(at(mask, bbox, 0, 0)).toBe(1);
+    expect(at(mask, bbox, 1, 1)).toBe(1);
+    expect(at(mask, bbox, 3, 3)).toBe(0);   // beyond the hypotenuse
+    expect(at(mask, bbox, 4, 4)).toBe(0);
+  });
+
+  it('handles a concave shape — the notch stays out', () => {
+    // A "C": a 5x5 box with the middle-right bitten out.
+    const pts = [
+      { r: 0, c: 0 }, { r: 0, c: 4 }, { r: 1, c: 4 }, { r: 1, c: 1 },
+      { r: 3, c: 1 }, { r: 3, c: 4 }, { r: 4, c: 4 }, { r: 4, c: 0 },
+    ];
+    const bbox = boundsOf(pts);
+    const mask = lassoMask(pts, bbox);
+    expect(at(mask, bbox, 0, 2)).toBe(1);   // top bar
+    expect(at(mask, bbox, 2, 0)).toBe(1);   // spine
+    expect(at(mask, bbox, 2, 3)).toBe(0);   // the notch
+  });
+
+  it('closes an open path automatically', () => {
+    const open = [{ r: 0, c: 0 }, { r: 0, c: 3 }, { r: 3, c: 3 }, { r: 3, c: 0 }];
+    const bbox = boundsOf(open);
+    expect(at(lassoMask(open, bbox), bbox, 1, 1)).toBe(1);
+  });
+
+  it('selects nothing for fewer than three points', () => {
+    const bbox = { row0: 0, col0: 0, rows: 2, cols: 2 };
+    expect(Array.from(lassoMask([{ r: 0, c: 0 }], bbox))).toEqual([0, 0, 0, 0]);
+  });
+
+  it('fills an asymmetric shape at a non-zero origin', () => {
+    // Right triangle (10,20)-(10,27)-(13,27): 4 rows x 8 cols, drawn far from
+    // the origin. The hypotenuse runs from (10,20) to (13,27), so at row 11 it
+    // sits at column 20 + 7/3 = 22.33 and at row 12 at 20 + 14/3 = 24.67 —
+    // the filled part of each row starts just right of that. An off-by-one in
+    // the origin, or a transposed axis, breaks this shape immediately.
+    const pts = [{ r: 10, c: 20 }, { r: 10, c: 27 }, { r: 13, c: 27 }];
+    const bbox = boundsOf(pts);
+    expect(bbox).toEqual({ row0: 10, col0: 20, rows: 4, cols: 8 });
+    const mask = lassoMask(pts, bbox);
+    expect(at(mask, bbox, 10, 20)).toBe(1);   // the wide top edge
+    expect(at(mask, bbox, 10, 26)).toBe(1);
+    expect(at(mask, bbox, 11, 20)).toBe(0);   // left of the hypotenuse
+    expect(at(mask, bbox, 11, 23)).toBe(1);   // right of it
+    expect(at(mask, bbox, 12, 24)).toBe(0);
+    expect(at(mask, bbox, 12, 25)).toBe(1);   // narrowing towards the apex
+  });
+});

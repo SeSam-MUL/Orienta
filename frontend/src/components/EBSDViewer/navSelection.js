@@ -123,3 +123,90 @@ export function bytesPerSample(dtype) {
   const n = Number(bits[1]) / 8;
   return Number.isFinite(n) && n >= 1 ? n : 1;
 }
+
+/**
+ * The ellipse inscribed in the bounding box.
+ *
+ * Tested at pixel CENTRES: a scan pixel is a cell, not a point, so the cell at
+ * (r, c) counts as inside when its middle is inside the ellipse. That is what
+ * makes the axis pixels of an odd-sized box land inside and the corners not.
+ *
+ * The radii are half the box in CELLS (rows/2), while the centres only span
+ * rows-1. That mismatch is deliberate: it is the ellipse inscribed in the box
+ * as an area, so the outermost cell ON an axis still has its centre inside
+ * (in a 5x5 box, (0,2) sits at 0.8 of the radius) while a corner does not.
+ * Using (rows-1)/2 instead would put the axis extremes exactly on the rim and
+ * leave them at the mercy of floating-point rounding.
+ *
+ * @param {{row0:number,col0:number,rows:number,cols:number}} bbox
+ * @returns {Uint8Array}
+ */
+export function ellipseMask(bbox) {
+  const { rows, cols } = bbox;
+  const mask = new Uint8Array(rows * cols);
+  const cy = (rows - 1) / 2;
+  const cx = (cols - 1) / 2;
+  const ry = Math.max(rows / 2, 0.5);
+  const rx = Math.max(cols / 2, 0.5);
+  for (let r = 0; r < rows; r += 1) {
+    for (let c = 0; c < cols; c += 1) {
+      const dy = (r - cy) / ry;
+      const dx = (c - cx) / rx;
+      if (dy * dy + dx * dx <= 1) mask[r * cols + c] = 1;
+    }
+  }
+  return mask;
+}
+
+/**
+ * The freehand polygon, filled by the even-odd rule.
+ *
+ * The path is closed automatically — a user who lifts the mouse near the start
+ * means a closed shape. Pixel centres decide again, for the same reason as the
+ * ellipse.
+ *
+ * On the boundary: this plain even-odd test needs no help. A drawn vertex is
+ * NOT automatically outside — the triangle (0,0)-(0,4)-(4,0) reports its
+ * (0,0) corner as selected, because the crossing count at that centre is 1
+ * (the hypotenuse crosses to its right). The rule is half-open, and it is
+ * half-open consistently on the LOW side: `(yi > y) !== (yj > y)` counts an
+ * edge on the row where it starts but not the row where it ends, and
+ * `x < xCross` counts a cell left of a crossing but not on it. So the top and
+ * left boundary of a shape falls inside and the bottom and right boundary
+ * falls outside. The visible consequence is that the last row and last column
+ * of a lasso's bounding box come back unselected when the user drew along
+ * them; the patterns are still in the crop, they are simply not marked. That
+ * is why there is no edge-rasterisation pass here — nothing needs one, and an
+ * extra pass would only add the far edges while leaving the rule asymmetric
+ * everywhere else.
+ *
+ * @param {{r:number,c:number}[]|null} points
+ * @param {{row0:number,col0:number,rows:number,cols:number}} bbox
+ * @returns {Uint8Array}
+ */
+export function lassoMask(points, bbox) {
+  const { row0, col0, rows, cols } = bbox;
+  const mask = new Uint8Array(rows * cols);
+  if (!points || points.length < 3) return mask;
+
+  const n = points.length;
+  for (let r = 0; r < rows; r += 1) {
+    const y = row0 + r;
+    for (let c = 0; c < cols; c += 1) {
+      const x = col0 + c;
+      let inside = false;
+      for (let i = 0, j = n - 1; i < n; j = i, i += 1) {
+        const yi = points[i].r; const xi = points[i].c;
+        const yj = points[j].r; const xj = points[j].c;
+        // Half-open crossing test: counts an edge once even when a vertex
+        // lands exactly on the scan line.
+        if ((yi > y) !== (yj > y)) {
+          const xCross = xi + ((y - yi) / (yj - yi)) * (xj - xi);
+          if (x < xCross) inside = !inside;
+        }
+      }
+      if (inside) mask[r * cols + c] = 1;
+    }
+  }
+  return mask;
+}
