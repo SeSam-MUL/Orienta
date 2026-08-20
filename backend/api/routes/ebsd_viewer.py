@@ -1729,6 +1729,25 @@ async def deepcopy_dataset(req: DeepCopyRequest):
         if parent_name and parent_name in _signal_masks:
             _signal_masks[new_name] = dict(_signal_masks[parent_name])
 
+        # Inherit the parent's dirty flag. "Dirty" means the in-memory patterns
+        # differ from the raw file on disk, and a copy of a modified dataset
+        # differs from the file in exactly the way its parent does — deepcopy
+        # changes no pixel. Two decisions read this: indexing chooses between
+        # the in-memory patterns and re-reading the source H5, and the rich
+        # export chooses between writing the processed patterns and copying the
+        # source file verbatim. Both used to answer "the raw file" for a copy of
+        # a crop, i.e. index and save the FULL scan for a dataset the user had
+        # cut down, with no error anywhere.
+        #
+        # CONDITIONAL, unlike the unconditional add in the crop endpoint just
+        # below — the difference is deliberate and the two are easy to confuse.
+        # A crop is dirty even when its parent is clean, because its grid
+        # differs from the file's by construction. A deepcopy's does not: a copy
+        # of a clean dataset really is still identical to the file, so it stays
+        # clean and keeps the cheap re-read path.
+        if parent_name and parent_name in _dirty_datasets:
+            _dirty_datasets.add(new_name)
+
         # Inherit calibration from parent (CalibrationStore is immune to deepcopy bug).
         #
         # register_derived, NOT register_cropped, even when the parent is a
