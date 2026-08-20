@@ -205,6 +205,7 @@
     "saveCropWorking": "保存中…",
     "saveCropHint": "この切り抜きを単独のファイルとして書き出します — パターンは処理後のもの、EDS マップと電子像も合わせて切り抜きます。",
     "saveCropDone": "{{points}} ピクセルを {{path}} に保存しました",
+    "saveCropBoxIncludesUnselected": "これは {{rows}}×{{cols}} の領域全体です — 描いた形の内側は {{selected}} ピクセルで、残りの {{unselected}} も一緒に保存されました",
     "saveCropDetail": "ピクセル単位データセット {{cut}} 件を切り抜き、{{copied}} 件をコピー、電子像 {{images}} 件を切り抜きました",
     "saveCropElectronFull": "{{count}} 件の電子像は切り抜きに追従できず、全体を書き出しました",
     "saveCropFailed": "切り抜きの保存に失敗しました: {{message}}",

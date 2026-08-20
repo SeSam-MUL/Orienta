@@ -205,6 +205,7 @@
     "saveCropWorking": "Saving…",
     "saveCropHint": "Write this crop to its own file — patterns as processed, EDS maps and electron images cut to match.",
     "saveCropDone": "Saved {{points}} pixels to {{path}}",
+    "saveCropBoxIncludesUnselected": "That is the whole {{rows}}×{{cols}} box — {{selected}} pixels were inside the drawn shape and the other {{unselected}} came along with them",
     "saveCropDetail": "{{cut}} per-pixel datasets cut, {{copied}} copied, {{images}} electron images cut",
     "saveCropElectronFull": "{{count}} electron images could not follow the crop and were written in full",
     "saveCropFailed": "Saving the crop failed: {{message}}",

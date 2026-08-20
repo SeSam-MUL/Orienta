@@ -1479,6 +1479,17 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         copied: d.datasets_copied ?? 0,
         images: d.electron_images_cut ?? 0,
       }));
+      // For a masked crop the file holds the whole bounding box — the mask
+      // never removes data — so n_points differs from the selected count the
+      // panel showed at crop time. Say which is which instead of letting the
+      // two numbers silently disagree.
+      if (d.n_selected != null && d.n_selected < d.n_points) {
+        log(t('crop.saveCropBoxIncludesUnselected', {
+          rows: cropWindow?.rows ?? '?', cols: cropWindow?.cols ?? '?',
+          selected: d.n_selected.toLocaleString(),
+          unselected: (d.n_points - d.n_selected).toLocaleString(),
+        }));
+      }
       if (d.electron_images_full > 0) {
         log(t('crop.saveCropElectronFull', { count: d.electron_images_full }));
       }
@@ -1489,7 +1500,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } finally {
       setCropSaving(false);
     }
-  }, [log, t]);
+  }, [log, t, cropWindow]);
 
   const handleExportCrop = useCallback(async () => {
     // Suggest a name, but never invent a directory: the Electron dialog and

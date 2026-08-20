@@ -1979,6 +1979,13 @@ async def export_crop(req: CropExportRequest):
     """
     from backend.api.services.crop_export import write_cropped_h5oina
 
+    # Signal first: with nothing loaded the window is None too, and reporting
+    # "'' is not a cropped dataset" to someone who has not opened a file yet
+    # sends them looking for a crop instead of for the Load button.
+    signal = _get_active_signal()
+    if signal is None:
+        raise HTTPException(status_code=400, detail="No EBSD data loaded")
+
     window = get_active_crop_window()
     if window is None:
         raise HTTPException(
@@ -1987,9 +1994,22 @@ async def export_crop(req: CropExportRequest):
                     f"window to export"),
         )
 
-    signal = _get_active_signal()
-    if signal is None:
-        raise HTTPException(status_code=400, detail="No EBSD data loaded")
+    # write_cropped_h5oina takes the patterns as an in-memory array, so an
+    # export has to hold the whole crop at once. A crop above the ceiling was
+    # deliberately LEFT LAZY by the crop endpoint rather than risk an
+    # out-of-memory kill of the backend (see _CROP_MATERIALIZE_MAX_BYTES), and
+    # np.asarray here would make exactly the allocation that refusal avoided —
+    # and fail as a bare MemoryError, whose str() is usually empty, i.e. a 500
+    # with no message. Refuse in the same terms the user already saw.
+    nbytes = int(getattr(signal.data, "nbytes", 0) or 0)
+    if nbytes > _CROP_MATERIALIZE_MAX_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"This crop is {nbytes / 1024 ** 3:.1f} GiB, above the "
+                    f"{_CROP_MATERIALIZE_MAX_BYTES / 1024 ** 3:.0f} GiB an export "
+                    f"can hold in memory at once — it is still lazy for that "
+                    f"reason. Crop a smaller region to save it to a file."),
+        )
 
     # The window's row0/col0 are indices into the file it was cut from, so
     # that file is the only one they mean anything in. _ebsd_file_path is the
@@ -2006,7 +2026,7 @@ async def export_crop(req: CropExportRequest):
 
     def _write():
         # The crop's own patterns, not the source's. asarray computes a lazy
-        # crop; that is bounded by the cut-out, not by the measurement.
+        # crop; the ceiling checked above is what bounds that allocation.
         data = np.asarray(signal.data)
         return write_cropped_h5oina(source_path, req.path, window, patterns=data)
 
@@ -2024,7 +2044,13 @@ async def export_crop(req: CropExportRequest):
         logger.exception("Crop export failed")
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"success": True, "dataset": _active_dataset, **report}
+    # n_selected alongside the writer's n_points, because for a masked crop
+    # they differ: the file holds the whole bounding box (the mask never
+    # removes data), while the number the user was shown at crop time was the
+    # selected count. Reporting only one of them would silently disagree with
+    # the panel.
+    return {"success": True, "dataset": _active_dataset,
+            "n_selected": int(window.n_selected), **report}
 
 
 @router.delete("/dataset/{name}")
