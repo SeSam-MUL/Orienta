@@ -136,7 +136,9 @@ def get_active_extractor():
     # full-scan data with nothing in the log — exactly the silently-wrong
     # mode this design exists to prevent. Let anything else propagate.
     try:
-        from backend.api.routes.ebsd_viewer import get_active_crop_window
+        from backend.api.routes.ebsd_viewer import (
+            get_active_crop_window, _canonical_path,
+        )
     except ImportError:
         logger.debug("ebsd_viewer not importable — no crop window", exc_info=True)
         return extractor
@@ -146,13 +148,45 @@ def get_active_extractor():
     if window is None:
         return extractor
 
-    if tuple(extractor.get_grid_dimensions()) != tuple(window.original_shape):
-        # The open file is not the one this window was cut from. Fail loud
-        # rather than cutting the wrong scan.
-        raise RuntimeError(
-            f"crop window was cut from {tuple(window.original_shape)} but the "
-            f"open file is {tuple(extractor.get_grid_dimensions())}"
-        )
+    # Two independent ways the open file can be the wrong one, and the shape
+    # check alone catches only the first. This project ships LoGainNi and
+    # HiGainNi — different measurements, both 28 086 pixels — so a cockpit
+    # `POST /api/h5/open` of the sibling file would have passed the grid test
+    # and handed back a cropped view of the WRONG MEASUREMENT. The message
+    # names which check failed: "same size, different file" and "different
+    # size" call for different things from the user.
+    grid = tuple(extractor.get_grid_dimensions())
+    want_grid = tuple(int(v) for v in window.original_shape)
+
+    source = str(getattr(window, "source_file", "") or "")
+    open_path = get_current_path()
+    # Only a comparison of two KNOWN paths can fail. An unrecorded source or a
+    # session with no path is "unknown", not "mismatched" — refusing there
+    # would break every in-memory-only path that never had a file name.
+    wrong_file = bool(
+        source and open_path
+        and _canonical_path(source) != _canonical_path(open_path)
+    )
+
+    if wrong_file or grid != want_grid:
+        # Fail loud rather than cutting the wrong scan.
+        if wrong_file and grid == want_grid:
+            reason = (
+                f"the grids match ({grid}) but the files do not: the window "
+                f"was cut from {source!r} and the open file is {open_path!r}"
+            )
+        elif wrong_file:
+            reason = (
+                f"neither the file nor the grid matches: the window was cut "
+                f"from {source!r} at {want_grid} and the open file is "
+                f"{open_path!r} at {grid}"
+            )
+        else:
+            reason = (
+                f"the window was cut from a {want_grid} scan but the open "
+                f"file is {grid}"
+            )
+        raise RuntimeError(f"crop window does not belong to the open file — {reason}")
 
     from backend.api.services.cropped_extractor import CroppedExtractor
     return CroppedExtractor(extractor, window)
