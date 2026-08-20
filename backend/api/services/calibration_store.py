@@ -182,6 +182,50 @@ class CalibrationStore:
         )
         return entry
 
+    def register_cropped(
+        self, name: str, parent_name: str, window
+    ) -> Optional[CalibrationEntry]:
+        """Register a CROPPED dataset: same geometry, per-pixel PC map cut.
+
+        ``register_derived`` inherits ``pc_map`` verbatim, which is right for a
+        deepcopy and wrong for a crop — the map is indexed by navigation
+        position, so on a cropped grid every entry would be off by the crop
+        offset. ``window`` is a ``crop_window.CropWindow``.
+        """
+        with self._lock:
+            parent = self._entries.get(parent_name)
+            if parent is None:
+                logger.warning(
+                    "register_cropped(%r): parent %r not in store", name, parent_name
+                )
+                return None
+
+            pc_map = None
+            if parent.pc_map is not None:
+                pc_map = np.array(window.apply(parent.pc_map), copy=True)
+
+            entry = CalibrationEntry(
+                dataset_name=name,
+                detector_shape=parent.detector_shape,
+                pc_single=parent.pc_single.copy(),
+                pc_map=pc_map,
+                pc_source="inherited",
+                sample_tilt=parent.sample_tilt,
+                tilt=parent.tilt,
+                azimuthal=parent.azimuthal,
+                parent_name=parent_name,
+            )
+            self._entries[name] = entry
+
+        logger.info(
+            "register_cropped(%r) from %r: window rows %d-%d cols %d-%d, "
+            "pc_map %s",
+            name, parent_name, window.row0, window.row0 + window.rows,
+            window.col0, window.col0 + window.cols,
+            "cut" if pc_map is not None else "absent",
+        )
+        return entry
+
     # ------------------------------------------------------------------
     # Updates
     # ------------------------------------------------------------------
