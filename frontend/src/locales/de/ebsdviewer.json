@@ -199,7 +199,8 @@
     "failed": "Zuschneiden fehlgeschlagen: {{message}}",
     "done": "Zugeschnitten auf '{{name}}' ({{selected}} px)",
     "notMaterialised": "Ausschnitt blieb lazy — zu groß für den Speicher",
-    "electronImageNotCropped": "Dieses Bild konnte dem Ausschnitt nicht folgen — es wird vollständig gezeigt."
+    "electronImageNotCropped": "Dieses Bild konnte dem Ausschnitt nicht folgen — es wird vollständig gezeigt.",
+    "electronImageClamped": "Dieses Bild endet vor dem Ausschnitt — es hat nicht mehr dessen Form."
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

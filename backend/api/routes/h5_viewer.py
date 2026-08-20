@@ -11,7 +11,7 @@ Wraps H5OINADataExtractor to provide:
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
 import h5py
 import numpy as np
@@ -338,7 +338,10 @@ async def get_eds_pixel(row: int, col: int):
 
 # --- Electron Images ---
 
-def _electron_extractor(scope: str):
+ElectronScope = Literal["file", "dataset"]
+
+
+def _electron_extractor(scope: ElectronScope):
     """The extractor these two endpoints should read from.
 
     ``scope="file"`` (the default) shows the image as the FILE holds it — that
@@ -347,7 +350,9 @@ def _electron_extractor(scope: str):
     matching cut-out; that is what the EDS and Phase Map layer stacks want.
 
     The two cannot be reconciled into one choice: the same endpoint serves both
-    kinds of consumer, so the caller has to say which view it means.
+    kinds of consumer, so the caller has to say which view it means — and the
+    parameter is a ``Literal`` so a typo is a 422 rather than a silent fall
+    back to the file view.
     """
     from backend.api.services.h5_session import get_active_extractor
     return get_active_extractor() if scope == "dataset" else get_extractor()
@@ -361,12 +366,12 @@ def _crop_status_of(ext, key: str) -> dict:
     """
     reader = getattr(ext, "last_crop_status", None)
     if reader is None:
-        return {"cropped": True, "reason": None}
+        return {"cropped": True, "exact": True, "reason": None}
     return reader(key)
 
 
 @router.get("/electron/list")
-async def get_electron_list(scope: str = "file"):
+async def get_electron_list(scope: ElectronScope = "file"):
     """Get list of available electron images. See ``_electron_extractor``.
 
     The names themselves do not depend on the crop; the parameter exists so a
@@ -379,13 +384,15 @@ async def get_electron_list(scope: str = "file"):
 
 
 @router.get("/electron/{image_name:path}")
-async def get_electron_image(image_name: str, scope: str = "file"):
+async def get_electron_image(image_name: str, scope: ElectronScope = "file"):
     """Get an electron image as Base64 PNG. See ``_electron_extractor``.
 
-    ``crop`` reports whether the image could follow the active crop. Under
-    ``scope="dataset"`` a file that does not place both acquisition areas in
-    microns yields ``{"cropped": false, "reason": ...}`` and the FULL image —
-    never a guessed cut-out, which would misplace every feature on it.
+    ``crop`` is ``{"cropped", "exact", "reason"}``. Under ``scope="dataset"``
+    a file that cannot place the two acquisition areas against each other
+    yields ``cropped: false`` and the FULL image — never a guessed cut-out,
+    which would misplace every feature on it. A cut-out clamped at the edge of
+    the image keeps ``cropped: true`` but reports ``exact: false``: it is real
+    data, but no longer the window's shape.
     """
     if not is_open():
         raise HTTPException(status_code=400, detail="No HDF5 file is open")

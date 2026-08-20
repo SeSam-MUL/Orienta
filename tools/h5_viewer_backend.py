@@ -145,10 +145,19 @@ class H5OINADataExtractor:
         Returns
         -------
         dict
-            ``{"ebsd"|"eds"|"electron_image": {"x", "y", "units", "source"}}``,
-            with ``None`` for an area that is absent or carries no geometry —
-            never a guessed value, because a wrong scale bar is worse than no
-            scale bar.
+            ``{"ebsd"|"eds"|"electron_image": {"x", "y", "units", "source",
+            "relative_offset"}}``, with ``None`` for an area that is absent or
+            carries no geometry — never a guessed value, because a wrong scale
+            bar is worse than no scale bar.
+
+            ``relative_offset`` is the area's ``Relative Offset`` header datum
+            (``[x, y]`` floats, or ``None`` where the file does not store it):
+            where this area's field of view starts inside the site. Two areas
+            reporting the SAME offset start at the same physical point, which
+            is what lets a region be carried from one area's grid into the
+            other's by pixel size alone. It is reported, never applied — see
+            ``crop_window.project_to_area``, which refuses rather than
+            correcting when two areas disagree.
         """
         out = {}
         for key, group in self._AREA_GROUPS.items():
@@ -162,11 +171,14 @@ class H5OINADataExtractor:
         if header not in self.h5file:
             return None
 
+        offset = self._relative_offset(header)
+
         sx = self._safe_read(header, "X Step")
         sy = self._safe_read(header, "Y Step", sx)
         if sx is not None and float(sx) > 0:
             return {"x": float(sx), "y": float(sy if sy else sx),
-                    "units": "um", "source": "step"}
+                    "units": "um", "source": "step",
+                    "relative_offset": offset}
 
         # Older exports: derive from the field of view and the cell count.
         bbox = self._safe_read(header, "Bounding Box Size")
@@ -177,10 +189,33 @@ class H5OINADataExtractor:
                 bw, bh = float(bbox[0]), float(bbox[1])
                 if bw > 0 and bh > 0 and int(n_cols) > 0 and int(n_rows) > 0:
                     return {"x": bw / int(n_cols), "y": bh / int(n_rows),
-                            "units": "um", "source": "bounding_box"}
+                            "units": "um", "source": "bounding_box",
+                            "relative_offset": offset}
         except (TypeError, IndexError, ValueError):
             pass
         return None
+
+    def _relative_offset(self, header):
+        """``Relative Offset`` as a plain ``[x, y]`` of floats, or ``None``.
+
+        Read out of the SAME Header group as ``X Step``, so an area that
+        reports a pixel size reports where that pixel grid starts too. Kept a
+        plain list because ``get_pixel_sizes()`` is serialised into API
+        responses and a numpy array is not JSON-safe.
+
+        ``None`` means the file does not store the datum — which is NOT the
+        same as "starts at the origin", and callers must not read it that way.
+        """
+        raw = self._safe_read(header, "Relative Offset")
+        if raw is None:
+            return None
+        try:
+            flat = np.asarray(raw).ravel()
+            if flat.size < 2:
+                return None
+            return [float(flat[0]), float(flat[1])]
+        except (TypeError, ValueError):
+            return None
 
     def get_pattern_count(self):
         """Get total number of patterns"""

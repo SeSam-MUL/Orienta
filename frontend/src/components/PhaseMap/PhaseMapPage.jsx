@@ -37,7 +37,7 @@ import FileSwitcher from '../common/FileSwitcher';
 import CoordinateSystemPanel from '../common/CoordinateSystemPanel';
 import PseudoSymmetryPanel from '../common/PseudoSymmetryPanel';
 import NeighbourhoodZoom from '../common/NeighbourhoodZoom';
-import CropWarningChip from '../common/CropWarningChip';
+import CropWarningChip, { cropWarningFor } from '../common/CropWarningChip';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
@@ -1957,7 +1957,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     // else its row carries. Today only the electron images can (they sit on
     // their own acquisition grid), and a full-scan image stacked under a
     // cropped map is invisible to the eye.
-    const cropWarn = layerStack.cropStatus?.get(layer.id);
+    const cropWarn = cropWarningFor(layerStack.cropStatus, layer.id);
     if (cropWarn) return <CropWarningChip status={cropWarn} />;
     // IPF layers: optional grain-stabilised colouring. For low-symmetry Laue
     // groups (e.g. m-3 approximants) the IPF colour key is discontinuous at

@@ -12,6 +12,7 @@
 import { useReducer, useRef, useCallback, useEffect, useState } from 'react';
 import { layerStackReducer, initialState } from '../layerStackReducer';
 import { findLayerDef } from '../layerSources';
+import { isCropWarning } from '../../common/CropWarningChip';
 import { applyPreset } from '../presets';
 import { phaseMapApi, ebsdApi, h5Api, analysisApi } from '../../../services/api';
 
@@ -120,8 +121,8 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
   // number. Kept beside the bitmaps so a legend can never outlive its map.
   const scaleRef = useRef(new Map());
   // layerId → the backend's `crop` verdict, kept ONLY where a layer could not
-  // follow the active crop (today: an electron image on a file that does not
-  // place both acquisition areas in microns).
+  // follow the active crop faithfully — refused outright, or clamped at the
+  // edge of its own acquisition area (today: the electron images).
   const cropRef = useRef(new Map());
   const cacheOrderRef = useRef([]);             // LRU order (most recent at end)
   const fetchingRef = useRef(new Set());        // layer ids currently in-flight
@@ -241,8 +242,8 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
       cacheSet(layer.id, bitmap);
       if (scale) scaleRef.current.set(layer.id, scale);
       else scaleRef.current.delete(layer.id);
-      // Only the failure is worth keeping — see cropRef's declaration.
-      if (crop && crop.cropped === false) cropRef.current.set(layer.id, crop);
+      // Only a complaint is worth keeping — see cropRef's declaration.
+      if (isCropWarning(crop)) cropRef.current.set(layer.id, crop);
       else cropRef.current.delete(layer.id);
       errorRef.current.delete(layer.id);
     } catch (err) {

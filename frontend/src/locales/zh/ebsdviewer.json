@@ -199,7 +199,8 @@
     "failed": "裁剪失败：{{message}}",
     "done": "已裁剪为 '{{name}}'（{{selected}} px）",
     "notMaterialised": "裁剪保持惰加载——内存不足",
-    "electronImageNotCropped": "此图像无法跟随裁剪，因此显示为完整图像。"
+    "electronImageNotCropped": "此图像无法跟随裁剪，因此显示为完整图像。",
+    "electronImageClamped": "此图像在自身边缘处被截断，已不再与裁剪区域的形状一致。"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

@@ -63,19 +63,27 @@ describe('useLayerStack — electron images and the crop', () => {
     expect(h5Api.getElectronImage).toHaveBeenCalledWith('SE/Elektronenbild 1', 'dataset');
   });
 
-  it('keeps only a "could not be cropped" verdict', async () => {
-    h5Api.getElectronImage.mockResolvedValue({
-      data: { image: 'Zm9v', crop: { cropped: false, reason: 'no geometry' } },
-    });
+  it('keeps a "could not be cropped" verdict', async () => {
+    const verdict = { cropped: false, exact: false, reason: 'no geometry' };
+    h5Api.getElectronImage.mockResolvedValue({ data: { image: 'Zm9v', crop: verdict } });
     const { result } = mount();
     await settle();
-    expect(result.current.cropStatus.get(SE_ID))
-      .toEqual({ cropped: false, reason: 'no geometry' });
+    expect(result.current.cropStatus.get(SE_ID)).toEqual(verdict);
+  });
+
+  it('keeps a CLAMPED verdict too, though the image WAS cropped', async () => {
+    // LayeredCanvas stretches every layer to the composite size, so a cut-out
+    // that is no longer the window's aspect ratio moves every feature on it.
+    const verdict = { cropped: true, exact: false, reason: 'clamped' };
+    h5Api.getElectronImage.mockResolvedValue({ data: { image: 'Zm9v', crop: verdict } });
+    const { result } = mount();
+    await settle();
+    expect(result.current.cropStatus.get(SE_ID)).toEqual(verdict);
   });
 
   it('records nothing for an image that did follow the crop', async () => {
     h5Api.getElectronImage.mockResolvedValue({
-      data: { image: 'Zm9v', crop: { cropped: true, reason: null } },
+      data: { image: 'Zm9v', crop: { cropped: true, exact: true, reason: null } },
     });
     const { result } = mount();
     await settle();
@@ -84,7 +92,8 @@ describe('useLayerStack — electron images and the crop', () => {
 
   it('drops the verdict when the layer goes away', async () => {
     h5Api.getElectronImage.mockResolvedValue({
-      data: { image: 'Zm9v', crop: { cropped: false, reason: 'no geometry' } },
+      data: { image: 'Zm9v',
+              crop: { cropped: false, exact: false, reason: 'no geometry' } },
     });
     const { result } = mount();
     await settle();

@@ -155,7 +155,21 @@ def compose(outer: CropWindow, inner: CropWindow) -> CropWindow:
     )
 
 
-def project_to_area(window: CropWindow, src_geom, dst_geom, dst_shape):
+# Two ``Relative Offset`` values closer than this count as the same origin.
+# The datum is a fraction of the site, so on the widest file measured here
+# (604 um) this is 6e-4 um — far below one pixel of any area, in either
+# reading of the unit — while any offset a real sub-region would carry is
+# orders of magnitude larger. It exists only to absorb float noise, not to
+# tolerate a difference.
+_SAME_ORIGIN_TOL = 1e-6
+
+
+def project_to_area(
+    window: CropWindow,
+    src_geom: Optional[dict],
+    dst_geom: Optional[dict],
+    dst_shape: Tuple[int, int],
+) -> Optional[Dict[str, object]]:
     """Carry a crop window from one acquisition area into another, via um.
 
     Electron images do not share the scan grid — measured on the SampleB file
@@ -163,17 +177,27 @@ def project_to_area(window: CropWindow, src_geom, dst_geom, dst_shape):
     of 8.478 on a slightly wider field of view. Row and column numbers
     therefore mean nothing across areas; physical size does.
 
-    The two areas are assumed to start at the same physical origin. On every
-    Oxford file measured here both areas report ``Relative Offset (0, 0)`` of
-    the same site, so they do; a file that offset one area against the other
-    would need that offset, which ``get_pixel_sizes()`` does not carry today.
+    Pixel size alone only places the window if the two areas START at the same
+    physical point. That is a fact about the file, not an assumption to make:
+    each area's ``Relative Offset`` header says where its field of view begins
+    inside the site, and ``get_pixel_sizes()`` reports it. Where both areas
+    state an offset and the two DISAGREE, this returns ``None`` — the caller
+    then shows the full image and says why. Mapping a sub-region inside a wider
+    SE field is a routine Aztec workflow, and correcting for the offset is a
+    harder problem than refusing to guess at it.
+
+    Where one or both areas do NOT state an offset the window is projected as
+    before: an absent datum is no evidence of disagreement, and refusing on it
+    would strand every older export that omits the key.
 
     Each axis uses ITS OWN step ratio: X Step and Y Step are separate numbers
     and sharing one of them would stretch the window on the other axis.
 
-    Returns ``{"row0","col0","rows","cols","exact"}`` or ``None`` when either
-    area lacks the geometry to place the window. ``exact`` is False when the
-    projected rectangle had to be clamped to the destination.
+    Returns ``{"row0","col0","rows","cols","exact"}`` or ``None`` when the two
+    areas cannot place the window between them. ``exact`` is False when the
+    projected rectangle had to be clamped to the destination — the cut-out is
+    then real data but no longer the window's aspect ratio, which matters
+    because the layer compositor stretches every layer to the map's size.
     """
     def _steps(geom):
         if not geom:
@@ -192,6 +216,15 @@ def project_to_area(window: CropWindow, src_geom, dst_geom, dst_shape):
     if src is None or dst is None:
         return None
 
+    if not _same_origin(src_geom, dst_geom):
+        logger.warning(
+            "acquisition areas start at different points (%r vs %r); a window "
+            "cannot be carried between them by pixel size alone",
+            (src_geom or {}).get("relative_offset"),
+            (dst_geom or {}).get("relative_offset"),
+        )
+        return None
+
     src_x, src_y = src
     dst_x, dst_y = dst
     dst_rows, dst_cols = int(dst_shape[0]), int(dst_shape[1])
@@ -201,10 +234,10 @@ def project_to_area(window: CropWindow, src_geom, dst_geom, dst_shape):
     cols = int(round(window.cols * src_x / dst_x))
     rows = int(round(window.rows * src_y / dst_y))
 
+    # No lower clamp: ``CropWindow`` validates row0/col0 as non-negative and
+    # both ratios are strictly positive, so the projected origin cannot be
+    # negative.
     exact = True
-    if col0 < 0 or row0 < 0:
-        col0, row0 = max(0, col0), max(0, row0)
-        exact = False
     if col0 >= dst_cols or row0 >= dst_rows:
         # The window starts past the far edge of the other area: there is no
         # cut-out at all, and clamping would hand back a rectangle from the
@@ -222,6 +255,28 @@ def project_to_area(window: CropWindow, src_geom, dst_geom, dst_shape):
 
     return {"row0": row0, "col0": col0, "rows": rows, "cols": cols,
             "exact": exact}
+
+
+def _same_origin(src_geom: Optional[dict], dst_geom: Optional[dict]) -> bool:
+    """Do these two areas' fields of view start at the same physical point?
+
+    True unless BOTH state a ``Relative Offset`` and the two differ. An absent
+    datum is not a claim that the area starts at the origin, so it is not
+    evidence of disagreement either — see ``project_to_area``.
+    """
+    a = (src_geom or {}).get("relative_offset")
+    b = (dst_geom or {}).get("relative_offset")
+    if a is None or b is None:
+        return True
+    try:
+        av = [float(v) for v in a]
+        bv = [float(v) for v in b]
+    except (TypeError, ValueError):
+        # Unreadable is not the same as different; fall back to projecting.
+        return True
+    if len(av) != len(bv):
+        return True
+    return all(abs(x - y) <= _SAME_ORIGIN_TOL for x, y in zip(av, bv))
 
 
 # --- Per-dataset registry -------------------------------------------------

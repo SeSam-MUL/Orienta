@@ -225,9 +225,9 @@ describe('useEdsLayerStack', () => {
   });
 
   it('keeps a "could not be cropped" verdict, and only that one', async () => {
+    const verdict = { cropped: false, exact: false, reason: 'no geometry' };
     h5Api.getElectronImage.mockResolvedValue({
-      data: { image: TINY_PNG, shape: [768, 1024],
-              crop: { cropped: false, reason: 'no geometry' } },
+      data: { image: TINY_PNG, shape: [768, 1024], crop: verdict },
     });
     const initial = [
       { id: 'electron-SE1', kind: 'electron', electronName: 'SE/Elektronenbild 1',
@@ -235,12 +235,40 @@ describe('useEdsLayerStack', () => {
       { id: 'bc', kind: 'bc', label: 'BC', visible: true, opacity: 0.5, blend: 'multiply' },
     ];
     const { result } = renderHook(() => useEdsLayerStack({ initialLayers: initial, displayMode: 'at_pct' }));
-    await waitFor(() => expect(result.current.layerCropStatus.get('electron-SE1')).toEqual(
-      { cropped: false, reason: 'no geometry' }));
+    await waitFor(() => expect(result.current.layerCropStatus.get('electron-SE1')).toEqual(verdict));
     // A layer that DID follow the crop says nothing — "cropped" is the norm.
     expect(result.current.layerCropStatus.has('bc')).toBe(false);
     // Removing the layer takes its verdict with it.
     act(() => { result.current.removeLayer('electron-SE1'); });
+    expect(result.current.layerCropStatus.has('electron-SE1')).toBe(false);
+  });
+
+  it('keeps a CLAMPED verdict too, though the image was cropped', async () => {
+    // cropped:true but the wrong shape — the compositor stretches it, so the
+    // user has to be told just as loudly as for an outright refusal.
+    const verdict = { cropped: true, exact: false, reason: 'clamped' };
+    h5Api.getElectronImage.mockResolvedValue({
+      data: { image: TINY_PNG, shape: [40, 40], crop: verdict },
+    });
+    const initial = [
+      { id: 'electron-SE1', kind: 'electron', electronName: 'SE/Elektronenbild 1',
+        label: 'SE', visible: true, opacity: 1, blend: 'normal' },
+    ];
+    const { result } = renderHook(() => useEdsLayerStack({ initialLayers: initial, displayMode: 'at_pct' }));
+    await waitFor(() => expect(result.current.layerCropStatus.get('electron-SE1')).toEqual(verdict));
+  });
+
+  it('says nothing for an image that followed the crop faithfully', async () => {
+    h5Api.getElectronImage.mockResolvedValue({
+      data: { image: TINY_PNG, shape: [128, 156],
+              crop: { cropped: true, exact: true, reason: null } },
+    });
+    const initial = [
+      { id: 'electron-SE1', kind: 'electron', electronName: 'SE/Elektronenbild 1',
+        label: 'SE', visible: true, opacity: 1, blend: 'normal' },
+    ];
+    const { result } = renderHook(() => useEdsLayerStack({ initialLayers: initial, displayMode: 'at_pct' }));
+    await waitFor(() => expect(result.current.bitmaps.has('electron-SE1')).toBe(true));
     expect(result.current.layerCropStatus.has('electron-SE1')).toBe(false);
   });
 

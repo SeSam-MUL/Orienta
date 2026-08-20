@@ -199,7 +199,8 @@
     "failed": "Crop failed: {{message}}",
     "done": "Cropped to '{{name}}' ({{selected}} px)",
     "notMaterialised": "Crop stayed lazy — too large for memory",
-    "electronImageNotCropped": "This image could not follow the crop — it is shown in full."
+    "electronImageNotCropped": "This image could not follow the crop — it is shown in full.",
+    "electronImageClamped": "This image was clipped at its own edge — it no longer matches the crop's shape."
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

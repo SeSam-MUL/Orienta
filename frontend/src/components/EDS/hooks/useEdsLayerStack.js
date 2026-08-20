@@ -20,6 +20,7 @@ import { useReducer, useRef, useCallback, useEffect } from 'react';
 import { layerStackReducer, initialState } from '../../PhaseMap/layerStackReducer';
 import { edsApi, ebsdApi, h5Api, phaseMapApi } from '../../../services/api';
 import useEdsColorStore from '../../../stores/useEdsColorStore';
+import { isCropWarning } from '../../common/CropWarningChip';
 
 const CACHE_SIZE = 16;
 
@@ -68,11 +69,12 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
   const errorRef    = useRef(new Map());     // layerId → error string
   const sourceRef   = useRef(new Map());     // layerId → backend `source` (provenance)
   // layerId → the backend's `crop` verdict, kept ONLY where a layer could not
-  // follow the active crop. An electron image lives on its own, finer grid, so
-  // a file that does not place both areas in microns hands back the FULL
-  // image — and the user has to be told, or they read a whole-sample image as
-  // a cut-out of the region they selected.
-  const cropRef     = useRef(new Map());     // layerId → { cropped: false, reason }
+  // follow the active crop faithfully. An electron image lives on its own,
+  // finer grid: a file that cannot place the two areas hands back the FULL
+  // image, and a window running past that area's edge yields a clamped
+  // cut-out. Either way the user has to be told — neither is visible in the
+  // picture.
+  const cropRef     = useRef(new Map());     // layerId → { cropped, exact, reason }
   const displayModeRef = useRef(displayMode);
   const shapeRef    = useRef(null);          // [H, W] — the page's interaction grid
   const shapeFromGridRef = useRef(false);    // true once `shapeRef` came from a scan-grid layer
@@ -254,9 +256,10 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
       // Record provenance (e.g. BC layer's "h5oina" native vs "computed" FFT
       // pattern-quality) so the panel can surface which one is displayed.
       if (res?.data?.source) sourceRef.current.set(layer.id, res.data.source);
-      // Only the failure is worth keeping: "cropped" is the answer for every
-      // layer whether or not a crop is active, so it would say nothing.
-      if (res?.data?.crop && res.data.crop.cropped === false) {
+      // Only a complaint is worth keeping: "cropped and exact" is the answer
+      // for every layer whether or not a crop is active, so it would say
+      // nothing. `exact: false` counts as a complaint — see CropWarningChip.
+      if (isCropWarning(res?.data?.crop)) {
         cropRef.current.set(layer.id, res.data.crop);
       } else {
         cropRef.current.delete(layer.id);

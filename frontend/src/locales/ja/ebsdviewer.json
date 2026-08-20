@@ -199,7 +199,8 @@
     "failed": "切り抜きに失敗しました: {{message}}",
     "done": "'{{name}}' に切り抜きました ({{selected}} px)",
     "notMaterialised": "メモリに入りきらないため、切り抜きは遅延読み込みのままです",
-    "electronImageNotCropped": "この画像は切り抜きに追従できなかったため、全体を表示しています。"
+    "electronImageNotCropped": "この画像は切り抜きに追従できなかったため、全体を表示しています。",
+    "electronImageClamped": "この画像は自身の端で切り詰められ、切り抜きの形状と一致していません。"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

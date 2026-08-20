@@ -20,8 +20,11 @@ PROJECTED — cut, but not by row and column number:
     get_electron_image. An electron image is a separate acquisition area on
     its own, finer grid over a slightly different field of view, so the window
     travels into it through MICRONS (``crop_window.project_to_area``). Where
-    the file does not carry both areas' geometry the FULL image comes back
-    with ``last_crop_status(name)["cropped"] is False`` and a reason.
+    the file does not carry both areas' geometry, or says they start at
+    different points, the FULL image comes back with
+    ``last_crop_status(name)["cropped"] is False`` and a reason. A cut that
+    ran off the far edge and had to be clamped keeps ``cropped`` True but sets
+    ``exact`` False — real data, no longer the window's aspect ratio.
 
 TAKES a per-pixel index — TRANSLATED (a crop-local index goes in, the
 corresponding original pixel is read out):
@@ -244,7 +247,8 @@ class CroppedExtractor:
 
         if (arr.ndim >= 2
                 and tuple(arr.shape[:2]) == tuple(self._window.original_shape)):
-            self._crop_status[image_name] = {"cropped": True, "reason": None}
+            self._crop_status[image_name] = {
+                "cropped": True, "exact": True, "reason": None}
             return self._window.apply(arr)
 
         geoms: Dict[str, Any] = {}
@@ -268,18 +272,31 @@ class CroppedExtractor:
             )
         if rect is None:
             reason = (
-                "the file does not give both the scan and the electron image "
-                "a step size or bounding box, so this crop has no geometry to "
-                "follow into that image"
+                "the file does not give the scan and the electron image a "
+                "common geometry: one of them has no step size or bounding "
+                "box, or the two areas start at different points"
             )
-            self._crop_status[image_name] = {"cropped": False, "reason": reason}
+            self._crop_status[image_name] = {
+                "cropped": False, "exact": False, "reason": reason}
             logger.warning("electron image %r not cropped: %s",
                            image_name, reason)
             return arr
 
+        if not rect["exact"]:
+            # Handing back the FULL image instead would be worse, not safer:
+            # the compositor stretches every layer to the map's size either
+            # way, and the full image is further from the window than the
+            # clamped cut-out is. So keep the cut-out and say it is short.
+            logger.warning(
+                "electron image %r cropped short: the window runs past the "
+                "edge of that area, so the cut-out is not the window's shape",
+                image_name)
         self._crop_status[image_name] = {
             "cropped": True,
-            "reason": None if rect["exact"] else "clamped to the image bounds",
+            "exact": bool(rect["exact"]),
+            "reason": None if rect["exact"] else (
+                "the window runs past the edge of the electron image, so the "
+                "cut-out had to be clamped and is not the window's shape"),
         }
         return arr[rect["row0"]:rect["row0"] + rect["rows"],
                    rect["col0"]:rect["col0"] + rect["cols"]]
@@ -288,7 +305,8 @@ class CroppedExtractor:
     def last_crop_status(self, key: str) -> Dict[str, Any]:
         """Whether the last read of ``key`` could be cut, and why not.
 
-        Filled by the electron-image path (Task 12); returns "cropped" for
-        anything that never had a problem.
+        Filled by the electron-image path (Task 12); returns "cropped and
+        exact" for anything that never had a problem.
         """
-        return self._crop_status.get(key, {"cropped": True, "reason": None})
+        return self._crop_status.get(
+            key, {"cropped": True, "exact": True, "reason": None})
