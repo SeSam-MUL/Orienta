@@ -10,6 +10,7 @@ the third-party works listed below. Each retains its own license.
 |-----------|----------|--------|---------|
 | pcadi (pattern-center–aware dictionary indexing core) | `backend/dict_gpu/_pcadi/` | Vendored from the `pcadi` project | MIT |
 | GPU dictionary / spherical projection math | `backend/dict_gpu/`, `backend/spherical_gpu/` | Translated/adapted from **kikuchipy** 0.11.3 (Lambert & detector projection) | GPL-3.0-or-later |
+| Spherical-harmonic math kernels (Wigner-d, SHT, cubochoric grids) | `backend/spherical_gpu/_math/` | Vendored/adapted from **ebsdtorch** (Zachary Varley, 2024); see `LICENSE.ebsdtorch` there | MIT |
 
 Because parts of this project are derived from GPL-3.0 code (kikuchipy), the
 combined work is distributed under GPL-3.0-or-later. The MIT-licensed pcadi code
