@@ -635,13 +635,13 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
     try:
         from backend.api.services.h5_session import (
             open_file as h5_open, is_open as h5_is_open,
-            get_extractor, close_file as h5_close, get_current_path,
+            get_active_extractor, close_file as h5_close, get_current_path,
         )
         if h5_is_open() and get_current_path() != path:
             h5_close()
         if not h5_is_open():
             h5_open(path)
-        features = get_extractor().detect_available_features()
+        features = get_active_extractor().detect_available_features()
         ext_elements = [str(e) for e in features.get('eds_elements', [])]
         ext_images = [str(e) for e in features.get('electron_images', [])]
         # The extractor is the authority once open — it is also what the EDS
@@ -867,7 +867,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
         try:
             from backend.api.services.h5_session import (
                 open_file as h5_open, is_open as h5_is_open,
-                get_extractor, close_file as h5_close, get_current_path,
+                get_active_extractor, close_file as h5_close, get_current_path,
             )
             # Reopen h5_session if it's pointing at a different file — otherwise
             # EDS / element / electron-image queries keep returning data for
@@ -877,7 +877,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
                 h5_close()
             if not h5_is_open():
                 h5_open(path)
-            ext = get_extractor()
+            ext = get_active_extractor()
             features = ext.detect_available_features()
             has_eds = features.get('has_eds', False)
             has_electron = features.get('has_electron_images', False)
@@ -1347,9 +1347,9 @@ def _extract_step_size(signal, file_path=None):
 def _pixel_sizes_from_session():
     """Per-area pixel size from the open h5 session, or {} when unavailable."""
     try:
-        from backend.api.services.h5_session import is_open as h5_is_open, get_extractor
+        from backend.api.services.h5_session import is_open as h5_is_open, get_active_extractor
         if h5_is_open():
-            return get_extractor().get_pixel_sizes() or {}
+            return get_active_extractor().get_pixel_sizes() or {}
     except Exception:
         logger.warning("Could not read per-area pixel sizes", exc_info=True)
     return {}
@@ -1374,9 +1374,9 @@ def _eds_only_metadata(path: str) -> dict:
     has_eds, eds_elements = False, []
     grid = [0, 0]
     try:
-        from backend.api.services.h5_session import is_open as h5_is_open, get_extractor
+        from backend.api.services.h5_session import is_open as h5_is_open, get_active_extractor
         if h5_is_open():
-            ext = get_extractor()
+            ext = get_active_extractor()
             features = ext.detect_available_features()
             has_eds = features.get("has_eds", False)
             eds_elements = [str(e) for e in features.get("eds_elements", [])]
@@ -1501,9 +1501,9 @@ async def get_metadata():
     has_eds = False
     eds_elements = []
     try:
-        from backend.api.services.h5_session import is_open as h5_is_open, get_extractor
+        from backend.api.services.h5_session import is_open as h5_is_open, get_active_extractor
         if h5_is_open():
-            ext = get_extractor()
+            ext = get_active_extractor()
             features = ext.detect_available_features()
             has_eds = features.get('has_eds', False)
             eds_elements = [str(e) for e in features.get('eds_elements', [])]
@@ -1643,9 +1643,9 @@ async def list_datasets():
     has_eds = False
     eds_elements = []
     try:
-        from backend.api.services.h5_session import is_open, get_extractor
+        from backend.api.services.h5_session import is_open, get_active_extractor
         if is_open():
-            ext = get_extractor()
+            ext = get_active_extractor()
             elems = ext.get_available_elements()
             has_eds = len(elems) > 0
             eds_elements = [str(e) for e in elems]

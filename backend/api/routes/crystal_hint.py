@@ -676,7 +676,11 @@ def _get_scan_dimensions() -> Optional[tuple[int, int]]:
     The H5OINADataExtractor exposes `get_grid_dimensions()`; tests with
     MagicMock often patch `get_metadata()` instead, so we try both APIs.
     """
-    ext = h5_session.get_extractor()
+    # The pixel indices this feeds (neighbourhood gathering, ROI masks) are
+    # flat indices over the ACTIVE dataset's grid, which is the cropped grid
+    # when the user is working on a cut-out. Off the crop path
+    # get_active_extractor() returns the raw extractor unchanged.
+    ext = h5_session.get_active_extractor()
     if ext is None:
         return None
     if hasattr(ext, "get_grid_dimensions"):
@@ -927,7 +931,7 @@ def analyze_region_endpoint(req: AnalyzeRegionRequest):
     if not h5_session.is_open():
         raise HTTPException(status_code=400, detail="No EBSD file loaded — open one first")
 
-    if h5_session.get_extractor() is None:
+    if h5_session.get_active_extractor() is None:
         raise HTTPException(status_code=500, detail="EBSD extractor not available")
 
     dims = _get_scan_dimensions()
@@ -1081,7 +1085,7 @@ def quality_check_endpoint(req: QualityCheckRequest):
             detail="No active indexing result — run /api/indexing first.",
         )
 
-    if h5_session.get_extractor() is None:
+    if h5_session.get_active_extractor() is None:
         raise HTTPException(status_code=500, detail="EBSD extractor not available")
     dims = _get_scan_dimensions()
     if dims is None:

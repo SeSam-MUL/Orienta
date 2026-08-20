@@ -20,8 +20,12 @@ def _is_open() -> bool:
 
 
 def _get_extractor():
-    from backend.api.services.h5_session import get_extractor
-    return get_extractor()
+    # The pixel index this module is handed is a flat index over the ACTIVE
+    # dataset's grid (it is cross-checked against the EBSD nav shape below),
+    # so the extractor has to be the active dataset's view. Off the crop path
+    # get_active_extractor() is the raw extractor, so nothing changes there.
+    from backend.api.services.h5_session import get_active_extractor
+    return get_active_extractor()
 
 
 def _get_active_signal():

@@ -17,7 +17,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.api.services.image_utils import colormap_array_to_base64, element_color_overlay_to_base64
-from backend.api.services.h5_session import get_extractor, is_open
+# EDS is per-dataset data: when the active dataset is a crop, every map here
+# must be the cropped map. h5_session.get_active_extractor() is the raw
+# extractor when nothing is cropped, so this is a no-op off the crop path.
+from backend.api.services.h5_session import get_active_extractor as get_extractor, is_open
 from backend.api.services.cif_phase_library import (
     auto_classify_pixels,
     load_cif_phase_library,

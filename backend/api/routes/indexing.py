@@ -7554,9 +7554,13 @@ async def start_batch_indexing(req: BatchRequest):
                                 idx_grp.create_dataset("y", data=np.array(result.xmap.y))
                             # EDS
                             try:
-                                from backend.api.services.h5_session import get_extractor, is_open
+                                # The EDS maps written here sit next to an
+                                # indexing result on the dataset's grid, so
+                                # they must be that dataset's maps — cropped
+                                # when it is a crop.
+                                from backend.api.services.h5_session import get_active_extractor, is_open
                                 if is_open():
-                                    ext = get_extractor()
+                                    ext = get_active_extractor()
                                     elements = ext.get_available_elements()
                                     if elements:
                                         eds_grp = f.create_group("EDS")

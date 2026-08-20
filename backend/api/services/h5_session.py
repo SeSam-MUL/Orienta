@@ -113,6 +113,44 @@ def get_extractor():
         return _current_extractor
 
 
+def get_active_extractor():
+    """The extractor as the ACTIVE DATASET sees it.
+
+    If the active dataset is a crop, this is a ``CroppedExtractor`` view whose
+    every grid-shaped read is cut to the crop window. Otherwise it is the very
+    same object ``get_extractor()`` returns — the non-crop path is unchanged,
+    not merely equivalent.
+
+    Use this from anything that works on "the dataset the user is looking at".
+    Use ``get_extractor()`` from anything that must show the FILE as it is —
+    the h5 viewer, format probing, preflight checks.
+    """
+    extractor = get_extractor()
+
+    # Lazy import: ebsd_viewer imports services, so a module-level import here
+    # would close a cycle. Same pattern as close_file's phase_map_store import.
+    try:
+        from backend.api.routes.ebsd_viewer import get_active_crop_window
+        window = get_active_crop_window()
+    except Exception:
+        logger.debug("crop window lookup failed (ignored)", exc_info=True)
+        return extractor
+
+    if window is None:
+        return extractor
+
+    if tuple(extractor.get_grid_dimensions()) != tuple(window.original_shape):
+        # The open file is not the one this window was cut from. Fail loud
+        # rather than cutting the wrong scan.
+        raise RuntimeError(
+            f"crop window was cut from {tuple(window.original_shape)} but the "
+            f"open file is {tuple(extractor.get_grid_dimensions())}"
+        )
+
+    from backend.api.services.cropped_extractor import CroppedExtractor
+    return CroppedExtractor(extractor, window)
+
+
 def get_h5_file():
     """Return the open h5py.File handle, or raise RuntimeError if no file is open.
 
