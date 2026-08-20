@@ -1154,6 +1154,15 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       const pos = calcOverviewPos(e);
       if (!pos || !roiStartRef.current) return;
       if (cropTool === 'lasso') {
+        // Only ever extend a path belonging to a drag that STARTED here.
+        // `roiStartRef` alone is not enough: it survives a release outside the
+        // overview, and a stale anchor would let a press that begins off-image
+        // append to the path with `lassoDrawing` false — which makes
+        // useSettledPath a passthrough and rebuilds the whole mask on every
+        // single mouse-move, the exact freeze the settle exists to prevent.
+        // Gating on the flag the hook itself reads keeps the two in step: a
+        // path can only grow while the mask is frozen.
+        if (!lassoDrawing) return;
         // Sampled at mouse-move rate, so a fast drag leaves gaps between
         // consecutive points. That is fine and deliberate: lassoMask
         // rasterises the segment BETWEEN neighbouring points, so the traced
@@ -1228,7 +1237,15 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // never delivers, e.g. released over another application).
   useEffect(() => {
     if (!lassoDrawing) return undefined;
-    const end = () => setLassoDrawing(false);
+    const end = () => {
+      setLassoDrawing(false);
+      // Both sentinels, cleared by the same event. The overview's own
+      // onMouseUp never runs for a release over the sidebar, so without this
+      // `roiStartRef` keeps the anchor of a finished drag — and a later press
+      // that begins OUTSIDE the overview and drags in would find it still set
+      // and carry on extending that drag.
+      roiStartRef.current = null;
+    };
     window.addEventListener('mouseup', end);
     return () => window.removeEventListener('mouseup', end);
   }, [lassoDrawing]);

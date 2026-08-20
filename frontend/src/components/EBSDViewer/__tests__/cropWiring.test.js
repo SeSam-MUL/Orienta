@@ -72,4 +72,30 @@ describe('selection state in EBSDViewer', () => {
     expect(source).toContain("window.addEventListener('mouseup', end)");
     expect(source).toContain("window.removeEventListener('mouseup', end)");
   });
+
+  it('clears BOTH drag sentinels on that window mouse-up', () => {
+    // They are set together at mouse-down, so they must be cleared together.
+    // Clearing only `lassoDrawing` leaves `roiStartRef` holding the anchor of
+    // a finished drag; a later press beginning off-image then extends it.
+    const open = source.indexOf('const end = () => {');
+    expect(open, 'the window mouse-up handler should be a block').toBeGreaterThan(-1);
+    const body = source.slice(open, source.indexOf('};', open));
+    expect(body).toContain('setLassoDrawing(false)');
+    expect(body).toContain('roiStartRef.current = null');
+  });
+
+  it('extends the lasso path only while a drag it started is live', () => {
+    // The invariant that makes the per-move rebuild unreachable rather than
+    // unlikely: a path can only grow while `lassoDrawing` — which is exactly
+    // when useSettledPath is holding the mask still. Appending with the flag
+    // false makes the hook a passthrough and rebuilds the full mask on every
+    // mouse-move (392 ms each at 361x461).
+    const branch = source.indexOf("if (cropTool === 'lasso') {");
+    expect(branch).toBeGreaterThan(-1);
+    const head = source.slice(branch, branch + 1600);
+    expect(head).toContain('if (!lassoDrawing) return;');
+    // ...and the guard comes BEFORE the append, not after it.
+    expect(head.indexOf('if (!lassoDrawing) return;'))
+      .toBeLessThan(head.indexOf('setLassoPoints('));
+  });
 });
