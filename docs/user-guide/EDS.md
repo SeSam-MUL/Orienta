@@ -128,6 +128,10 @@ not as a certified composition measurement.
 
 ## Tips & notes
 
+- **Maps follow a crop.** If the active dataset is a cut-out from the EBSD Viewer
+  (see `EBSDViewer.md`), the element maps, Band Contrast, hover probe, line scan
+  and region statistics all describe the cut-out — the coordinates you see and
+  the values you get come from the same grid.
 - **Match phases on At.%, not counts.** Counts are raw detector readings; the
   At.% conversion is what makes chemistry comparable to a crystal formula. The UI
   defaults to At.% for exactly this reason.

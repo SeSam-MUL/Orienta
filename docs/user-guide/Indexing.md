@@ -124,6 +124,13 @@ Typical entry points:
 
 ## Tips & notes
 
+- **Cropping restricts what gets indexed.** If you cut the dataset down in the
+  EBSD Viewer (see `EBSDViewer.md`), indexing runs on the cut-out, and an
+  ellipse or lasso restricts it further to the pixels you drew — the ones
+  outside keep their patterns but are left unindexed. The result records where
+  in the original scan it came from. **Hough**, **Dictionary** and **Spherical
+  (GPU)** all honour this; **Spherical with the EMSphInx (CPU) backend refuses a
+  cropped dataset** rather than silently indexing the wrong region of the file.
 - **The pattern centre dominates quality.** Calibrate it in PC Refinement first;
   an uncalibrated PC is the most common cause of poor or wrong indexing.
 - **GPU vs. CPU.** Dictionary and Spherical have GPU paths (PyTorch/CUDA). The

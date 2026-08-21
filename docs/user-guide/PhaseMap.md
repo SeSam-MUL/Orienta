@@ -137,6 +137,11 @@ All of these live in the collapsed **Advanced tools** group in the sidebar:
 
 ## Tips & notes
 
+- **Layers follow a crop.** If the active dataset is a cut-out from the EBSD
+  Viewer (see `EBSDViewer.md`), the EDS element maps, Band Contrast and the phase
+  and IPF layers all show the same region. An electron image that cannot be
+  placed from the file's own geometry is shown whole with a warning chip in its
+  layer row, rather than being cut to a guessed position.
 - **Per-phase CI is a within-phase measure.** A degenerate or near-degenerate phase
   can win pixels by CI alone; trust the **Forward NCC** layer (spherical) and the
   [Pattern Match](PatternMatch.md) R score for true correctness, and reduce the

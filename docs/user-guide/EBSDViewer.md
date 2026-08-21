@@ -58,32 +58,65 @@ This is normally the **first** module you open in a session. Use it to:
 7. Zoom the pattern with the mouse wheel and pan by dragging; press `R` or
    double-click to reset.
 
+### Crop to a selection
+
+Cropping cuts the loaded scan down to a region you draw, as a new dataset. Do it
+*before* preprocessing and indexing: on a large file that turns a background
+removal from minutes into seconds, and an indexing run from hours into minutes.
+Nothing is lost — the original dataset stays in the **Datasets** list.
+
+8. In the **Selection** bar above the overview, click **Rectangle**, **Ellipse**
+   or **Lasso**. The tools are toggles: while one is armed a plain drag draws the
+   shape and clicking no longer jumps to a pixel. Press the armed tool again to
+   turn it off and get click-to-navigate back. With no tool armed you can still
+   draw with **Shift+drag**, and while a tool is armed **Ctrl+drag** pans a
+   zoomed overview.
+9. Drag on the overview. The line under it reports how many pixels the selection
+   covers and roughly how much memory the crop will need — for an ellipse or a
+   lasso it counts the pixels *inside the shape*, not the box around it.
+10. Click **Crop to selection**. The cut-out appears in the **Datasets** list and
+    becomes active, the overview redraws to it, and the selection tool disarms so
+    the next click navigates. Everything downstream now works on the cut-out.
+11. To keep it, click **Save crop…** and choose a filename. That writes a
+    standalone measurement file — patterns as they are *now* (with any background
+    removal already applied), the EDS maps, Band Contrast and electron images —
+    which you can load again like any other file.
+
+**What follows a crop, and what does not.** EDS element maps, Band Contrast,
+electron images, the phase and IPF layers, hover probes, line scans and region
+statistics all show the cut-out. Indexing with **Hough**, **Dictionary** and
+**Spherical (GPU)** runs on it, and an ellipse or lasso restricts indexing to the
+pixels you drew. **Spherical with the EMSphInx (CPU) backend refuses a cropped
+dataset** and says so — it cannot address a subset of the file, and would
+otherwise index the wrong pixels. Cropping a crop is allowed and composes: the
+result is recorded relative to the original scan, not to the intermediate.
+
 ### Process patterns
 
-8. In **Pattern Processing**, apply (in any order): **BG Dynamic** / **BG
-   Static** (background removal), **Frame Average** (with a window-size input),
-   **Auto-Contrast**, or **CLAHE** (adaptive histogram equalisation, with a
-   kernel-size input). Use **Recommended Pipeline** to run Static BG → Dynamic BG
-   → CLAHE in one click.
-9. With **Auto-deepcopy** ticked (default), each destructive step is applied to a
-   new derived dataset (e.g. `dataset_bg_dyn`) so your original stays intact. The
-   **Datasets** list lets you switch between the original and derived versions,
-   compare two side by side, or remove a derived dataset.
-10. The **Brightness**, **Filter** (Sobel/Canny/Sharpen/…), and **Interpolation**
+12. In **Pattern Processing**, apply (in any order): **BG Dynamic** / **BG
+    Static** (background removal), **Frame Average** (with a window-size input),
+    **Auto-Contrast**, or **CLAHE** (adaptive histogram equalisation, with a
+    kernel-size input). Use **Recommended Pipeline** to run Static BG → Dynamic BG
+    → CLAHE in one click.
+13. With **Auto-deepcopy** ticked (default), each destructive step is applied to a
+    new derived dataset (e.g. `dataset_bg_dyn`) so your original stays intact. The
+    **Datasets** list lets you switch between the original and derived versions,
+    compare two side by side, or remove a derived dataset.
+14. The **Brightness**, **Filter** (Sobel/Canny/Sharpen/…), and **Interpolation**
     controls are display-only adjustments to the on-screen pattern (they do not
     alter the stored data).
 
 ### Detector mask, EDS, and PC hand-off
 
-11. **Detector Signal Mask** applies a circular aperture. It is auto-enabled for
+15. **Detector Signal Mask** applies a circular aperture. It is auto-enabled for
     EDAX-style files (whose corners are blank) and off for Oxford H5OINA (whose
     full rectangular frame carries real signal). Adjust the radius slider if
     needed.
-12. **EDS Composition** (if the file has EDS) shows the element composition at the
+16. **EDS Composition** (if the file has EDS) shows the element composition at the
     current pixel; switch the unit between **Counts / Wt.% / At.%** and optionally
     overlay the top elements on the pattern. **Send to Indexing** forwards a
     chemistry-based pixel filter to the Indexing page.
-13. To calibrate the pattern centre, navigate to a good pattern and click
+17. To calibrate the pattern centre, navigate to a good pattern and click
     **+ Add current pattern to PC Refinement** (in the highlighted PC Refinement
     box or the pattern action footer). The first add jumps you to the PC
     Refinement page; the badge counts how many patterns you have collected.
@@ -93,15 +126,33 @@ This is normally the **first** module you open in a session. Use it to:
 - **Inputs:** an Oxford H5OINA or EDAX/Bruker HDF5 EBSD file. Optional EDS data
   inside the same file enables the composition panel.
 - **In-session outputs:**
-  - The loaded EBSD signal and any derived (processed) datasets, held in backend
-    memory for use by Indexing, PC Refinement, EDS, and Phase Maps.
+  - The loaded EBSD signal and any derived (processed or cropped) datasets, held
+    in backend memory for use by Indexing, PC Refinement, EDS, and Phase Maps.
   - The list of patterns sent to PC Refinement.
   - A chemistry mask forwarded to Indexing (when you use **Send to Indexing**).
-- **File outputs:** **Export Pattern** saves the currently displayed pattern as a
-  PNG. (There is no scan-data export from this page.)
+- **File outputs:**
+  - **Export Pattern** saves the currently displayed pattern as a PNG.
+  - **Save crop…** writes the active cut-out as a standalone measurement file
+    (patterns in their current, processed state, plus EDS, Band Contrast and
+    electron images), which loads again like any other file.
 
 ## Tips & notes
 
+- **Crop first, then preprocess.** The point of cropping is that everything after
+  it is small: the cut-out is pulled into memory (up to 4 GiB — above that it
+  stays lazy and the log says so), so a background removal or an indexing run
+  costs a fraction of what the full scan would. Cropping *after* a long
+  preprocessing run wastes that run on pixels you then throw away.
+- **A saved lasso comes back as its bounding rectangle.** The drawn shape is
+  recorded in the exported file, but reloading it does not restore the selection
+  — you get the rectangle around it, with every pattern present. Nothing is lost
+  or wrong; you would redraw the shape to restrict indexing again.
+- **Electron images can decline to follow a crop.** They sit on their own, finer
+  pixel grid, so the crop travels to them through physical micrometres. If the
+  file does not state both areas' step size and origin — or states origins that
+  disagree — the image is shown **whole** with a warning chip in the layer row,
+  rather than being cut to a guessed position. A wrongly placed cut-out would
+  misplace every feature on it.
 - **Vendor matters for the mask.** Leave the detector mask off for Oxford H5OINA
   — enabling it would discard real diffraction data in the corners. It is
   correctly on by default for EDAX-style files.
