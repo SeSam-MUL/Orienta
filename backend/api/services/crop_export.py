@@ -71,11 +71,38 @@ import h5py
 import numpy as np
 
 from backend.api.services.crop_window import CropWindow, project_to_area
-from edax_hex import is_edax_hex_file
 
 logger = logging.getLogger(__name__)
 
 FORMAT_VERSION = "1.0"
+
+
+def _looks_like_hex(source_path) -> bool:
+    """Whether the FILE says it is a hexagonally sampled EDAX scan.
+
+    Imported lazily, like every other consumer of ``edax_hex`` in this code
+    base (``pattern_quality``, ``h5_viewer_backend``, ``safe_loader``). It was
+    a module-level import until a port to the public repository — which ships
+    without ``edax_hex.py`` — turned "this build cannot auto-detect hex" into
+    "importing this module raises", i.e. the crop export vanished with a
+    ModuleNotFoundError at the moment the user pressed Save.
+
+    Returns False when the detector is unavailable, and says so once in the
+    log. That is not a silent weakening of the guard: a build without
+    ``edax_hex`` also has no hex support anywhere, so it never resamples a hex
+    scan onto a square display grid — and the square-vs-padded mismatch this
+    guard exists to catch cannot arise. The ``is_hex`` parameter stays as the
+    override for a caller that knows better.
+    """
+    try:
+        from edax_hex import is_edax_hex_file
+    except ImportError:
+        logger.warning(
+            "edax_hex is unavailable, so a hex scan cannot be detected from the "
+            "file; relying on the caller's is_hex flag"
+        )
+        return False
+    return bool(is_edax_hex_file(source_path))
 
 #: Data groups whose per-pixel datasets get cut. Everything else is copied.
 #: Slash-delimited on both sides and matched against ``"/" + path + "/"``, so
@@ -139,7 +166,7 @@ def write_cropped_h5oina(
     # parameter is a wrong answer waiting for someone to forget it, and this
     # is the one failure mode of this module a caller cannot see: a hex scan
     # written as if it were square opens cleanly and is silently sheared.
-    if is_hex or is_edax_hex_file(source_path):
+    if is_hex or _looks_like_hex(source_path):
         raise ValueError(
             "Cropped file export supports square scan grids only. This is a hex "
             "scan: the file stores the padded hex rectangle while the crop window "
