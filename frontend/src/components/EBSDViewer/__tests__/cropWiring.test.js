@@ -181,3 +181,40 @@ describe('a selection tool overrules the crosshair', () => {
       .toMatch(/if \(tool === cropTool\) \{\s*clearSelection\(\);/);
   });
 });
+
+/**
+ * A successful crop disarms the tool.
+ *
+ * Asked for from the running app, and it follows from the gesture model rather
+ * than being a preference: after the crop the overview shows the CUT-OUT, and
+ * an armed tool both takes the plain drag and suppresses navigate-on-click. So
+ * the very next thing a user does — click through the patterns of what they
+ * just cut — would instead start drawing a crop of the crop.
+ */
+describe('cropping disarms the selection tool', () => {
+  const body = (() => {
+    const open = source.indexOf('const handleCrop');
+    expect(open, 'the viewer should have a handleCrop').toBeGreaterThan(-1);
+    const close = source.indexOf('setCropBusy(false)', open);
+    expect(close).toBeGreaterThan(open);
+    return source.slice(open, close);
+  })();
+
+  it('disarms inside handleCrop, not somewhere a failed crop would also reach', () => {
+    expect(body).toContain('setCropTool(null)');
+  });
+
+  it('disarms only after the request resolved, so a failed crop keeps the drawing', () => {
+    const awaitAt = body.indexOf('await ebsdApi.crop(');
+    const disarmAt = body.indexOf('setCropTool(null)');
+    expect(awaitAt).toBeGreaterThan(-1);
+    expect(disarmAt).toBeGreaterThan(awaitAt);
+  });
+
+  it('drops the selection with it, so no box outlives the tool that drew it', () => {
+    const clearAt = body.indexOf('clearSelection()');
+    const disarmAt = body.indexOf('setCropTool(null)');
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(Math.abs(disarmAt - clearAt)).toBeLessThan(600);
+  });
+});

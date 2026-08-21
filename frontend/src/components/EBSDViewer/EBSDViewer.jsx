@@ -1442,7 +1442,15 @@ export default function EBSDViewer({ onNavigate, isActive }) {
               n_patterns: nPx } = res.data || {};
       log(t('crop.done', { name, selected: nSel }));
       if (!materialised) log(t('crop.notMaterialised'));
+      // Disarm on success. The overview now shows the cut-out, so an armed
+      // tool sits over it inviting a second selection — and because an armed
+      // tool takes the plain drag and suppresses navigate-on-click, the first
+      // thing a user does after cropping (click through the patterns of what
+      // they just cut) would instead draw a crop of the crop. Cropping again
+      // is a real gesture, so re-arming is one click; doing it by accident
+      // is not.
       clearSelection();
+      setCropTool(null);
       setActiveDataset(name);
       setCropWindow(cropWin || null);
       // The old position may lie outside the cut-out entirely.
