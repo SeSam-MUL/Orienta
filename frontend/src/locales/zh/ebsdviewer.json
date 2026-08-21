@@ -212,7 +212,9 @@
     "savePromptTitle": "保存裁剪",
     "savePromptMessage": "请输入裁剪文件的完整路径（.h5oina）：",
     "savePromptPlaceholder": "/path/to/crop.h5oina",
-    "savePromptSubmit": "保存"
+    "savePromptSubmit": "保存",
+    "toolArmed": "拖动即可绘制 · 再次点击工具可关闭",
+    "toolIdle": "点击工具以绘制选区"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

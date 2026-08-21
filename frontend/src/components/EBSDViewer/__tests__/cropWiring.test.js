@@ -123,3 +123,61 @@ describe('selection state in EBSDViewer', () => {
       .toBeLessThan(head.indexOf('setLassoPoints('));
   });
 });
+
+/**
+ * The selection tool must OVERRULE the crosshair.
+ *
+ * Reported from the running app: with the tool bar visible, no rectangle,
+ * ellipse or lasso could be drawn — the gesture still required Shift, which
+ * this feature inherited from the image-export ROI and never re-examined once
+ * an explicit tool picker existed. A visible tool that does nothing when you
+ * drag on it is the worst of both: it advertises a mode the app is not in.
+ *
+ * The fix makes the tools armable toggles, so these four facts hang together
+ * and none can be changed alone without the others becoming wrong:
+ *   - no tool is armed by default (otherwise click-to-navigate is gone for
+ *     everyone who never crops),
+ *   - an armed tool draws on a PLAIN drag,
+ *   - an armed tool suppresses navigate-on-click,
+ *   - and pressing the armed tool disarms it, so navigation comes back.
+ */
+describe('a selection tool overrules the crosshair', () => {
+  it('arms no tool by default, so navigation is the untouched default', () => {
+    // Anchored on the cropTool declaration itself: the file holds 22 other
+    // useState(null) calls, and a bare search for one would pass whatever
+    // this line said.
+    expect(source).toMatch(/const \[cropTool, setCropTool\] = useState\(null\)/);
+    expect(source, 'rect must not be armed on mount')
+      .not.toMatch(/const \[cropTool, setCropTool\] = useState\(['"]rect['"]\)/);
+  });
+
+  it('draws on a plain drag, not only on Shift+drag', () => {
+    expect(source).toContain('e.buttons === 1 && (cropTool || e.shiftKey) && gridShape');
+  });
+
+  it('stops the plain drag from scrubbing while a tool is armed', () => {
+    expect(source).toContain("e.buttons === 1 && !e.shiftKey && !cropTool");
+  });
+
+  it('suppresses navigate-on-click while a tool is armed', () => {
+    expect(source).toContain('if (!e.shiftKey && !cropTool) handleOverviewPointer(e);');
+  });
+
+  it('starts a drag from the tool alone, with no modifier', () => {
+    expect(source).toContain("(cropTool || e.shiftKey) && gridShape && e.button === 0");
+  });
+
+  it('keeps a way to pan a zoomed overview once the plain drag is taken', () => {
+    expect(source).toContain('ovZoomed && e.ctrlKey && e.button === 0');
+  });
+
+  it('disarms when the armed tool is pressed again, and drops the selection', () => {
+    const open = source.indexOf('const chooseTool');
+    expect(open).toBeGreaterThan(-1);
+    const body = source.slice(open, source.indexOf('}, [cropTool, clearSelection]);', open));
+    expect(body).toContain('if (tool === cropTool)');
+    expect(body).toContain('setCropTool(null)');
+    expect(body, 'a disarmed tool must not leave a box nothing is drawing')
+      .toMatch(/if \(tool === cropTool\) \{\s*clearSelection\(\);/);
+  });
+});

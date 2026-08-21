@@ -212,7 +212,9 @@
     "savePromptTitle": "Ausschnitt speichern",
     "savePromptMessage": "Vollständigen Pfad für die Ausschnittdatei eingeben (.h5oina):",
     "savePromptPlaceholder": "/pfad/zu/ausschnitt.h5oina",
-    "savePromptSubmit": "Speichern"
+    "savePromptSubmit": "Speichern",
+    "toolArmed": "Ziehen zeichnet · Werkzeug erneut klicken zum Abschalten",
+    "toolIdle": "Werkzeug klicken, um eine Auswahl zu zeichnen"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

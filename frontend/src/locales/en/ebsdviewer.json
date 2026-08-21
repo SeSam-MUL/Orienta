@@ -212,7 +212,9 @@
     "savePromptTitle": "Save Crop",
     "savePromptMessage": "Enter the full path to write the cropped file to (.h5oina):",
     "savePromptPlaceholder": "/path/to/crop.h5oina",
-    "savePromptSubmit": "Save"
+    "savePromptSubmit": "Save",
+    "toolArmed": "drag to draw · click a tool to turn it off",
+    "toolIdle": "click a tool to draw a selection"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

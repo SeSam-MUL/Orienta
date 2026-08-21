@@ -212,7 +212,9 @@
     "savePromptTitle": "切り抜きを保存",
     "savePromptMessage": "切り抜きファイルの完全なパスを入力してください（.h5oina）:",
     "savePromptPlaceholder": "/path/to/crop.h5oina",
-    "savePromptSubmit": "保存"
+    "savePromptSubmit": "保存",
+    "toolArmed": "ドラッグで描画 · ツールを再クリックで解除",
+    "toolIdle": "ツールをクリックすると選択を描けます"
   },
   "overviewModes": {
     "meanIntensity": "Mean Intensity",

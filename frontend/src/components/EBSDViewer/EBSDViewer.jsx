@@ -342,7 +342,12 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const [lassoDrawing, setLassoDrawing] = useState(false);
 
   // --- Crop to selection ---
-  const [cropTool, setCropTool] = useState('rect');
+  // Which shape a drag draws, or null for "no selection tool — the overview
+  // navigates". Null is the default deliberately: a selection tool OVERRULES
+  // the crosshair (a plain drag draws instead of scrubbing, and a click no
+  // longer navigates), so leaving one permanently armed would take
+  // click-to-navigate away from every user who never crops.
+  const [cropTool, setCropTool] = useState(null);
   const [cropBusy, setCropBusy] = useState(false);
   const [cropSaving, setCropSaving] = useState(false);
   // Where the ACTIVE dataset was cut from, or null when it is a full scan.
@@ -1151,7 +1156,11 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       setOvView((v) => panBy(v, dx / box.width, dy / box.height));
       return;
     }
-    if (e.buttons === 1 && e.shiftKey && gridShape) {
+    // A selection tool overrules the crosshair: while one is armed a plain
+    // left-drag draws. Shift still works so the gesture people already have in
+    // their fingers keeps drawing, and it is the only way to draw with no tool
+    // armed — which is what the image export has always used.
+    if (e.buttons === 1 && (cropTool || e.shiftKey) && gridShape) {
       const pos = calcOverviewPos(e);
       if (!pos || !roiStartRef.current) return;
       if (cropTool === 'lasso') {
@@ -1184,7 +1193,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         endRow: Math.max(roiStartRef.current.row, pos.r),
         endCol: Math.max(roiStartRef.current.col, pos.c),
       });
-    } else if (e.buttons === 1 && !e.shiftKey) {
+    } else if (e.buttons === 1 && !e.shiftKey && !cropTool) {
       handleOverviewPointer(e, true);
     }
   };
@@ -1266,8 +1275,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // in or out of the lasso drops both — which also keeps the image export from
   // holding a rectangle the viewer has stopped drawing. Rectangle and ellipse
   // keep the box: that is one drag read two ways, not a new selection.
+  //
+  // The buttons are TOGGLES: pressing the active one turns selection off and
+  // hands the overview back to click-to-navigate. Turning off also drops the
+  // selection, so a box cannot linger invisibly once nothing is drawing it.
   const chooseTool = useCallback((tool) => {
-    if (tool === cropTool) return;
+    if (tool === cropTool) {
+      clearSelection();
+      setCropTool(null);
+      return;
+    }
     if (tool === 'lasso' || cropTool === 'lasso') clearSelection();
     setCropTool(tool);
   }, [cropTool, clearSelection]);
@@ -2372,9 +2389,10 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             <span style={{ opacity: 0.7 }}>{t('overview.captionHint')}</span>
           </div>
 
-          {/* Selection tool — which shape a Shift+Drag draws. Shown on the
-              same condition as the crop panel it feeds, so a viewer with no
-              file loaded is untouched. */}
+          {/* Selection tool — which shape a drag draws, and whether a drag
+              draws at all. Toggles: pressing the armed one disarms it. Shown
+              on the same condition as the crop panel it feeds, so a viewer
+              with no file loaded is untouched. */}
           {ebsdLoaded && (
             <div
               data-crop-tools
@@ -2395,6 +2413,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                   title={t(`crop.toolHint.${tool}`)}
                 />
               ))}
+              <span data-crop-tool-state style={{ marginLeft: 6, opacity: 0.75 }}>
+                {cropTool ? t('crop.toolArmed') : t('crop.toolIdle')}
+              </span>
               <div style={{ flex: 1 }} />
             </div>
           )}
@@ -2405,7 +2426,11 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           style={{
             flex: 1, minHeight: 0, position: 'relative',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            cursor: ebsdLoaded ? (ovZoomed ? 'grab' : 'crosshair') : 'default',
+            // With a tool armed the drag draws, so the grab hand would promise
+            // a pan the plain drag no longer performs.
+            cursor: ebsdLoaded
+              ? (cropTool ? 'crosshair' : (ovZoomed ? 'grab' : 'crosshair'))
+              : 'default',
             overflow: 'hidden', padding: 4,
           }}
           onClick={(e) => {
@@ -2413,10 +2438,17 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             // CLICK_SLOP_PX) never set this, so click-to-navigate keeps working
             // while zoomed in.
             if (ovSuppressClickRef.current) { ovSuppressClickRef.current = false; return; }
-            if (!e.shiftKey) handleOverviewPointer(e);
+            // A tool overrules the crosshair, so a click inside a selection
+            // gesture must not also jump the pattern view somewhere else.
+            if (!e.shiftKey && !cropTool) handleOverviewPointer(e);
           }}
           onMouseDown={(e) => {
-            if (e.shiftKey && gridShape) {
+            // Ctrl is the escape hatch: with a tool armed the plain drag is
+            // taken, so panning a zoomed overview needs its own modifier.
+            if (ovZoomed && e.ctrlKey && e.button === 0) {
+              ovPanRef.current = { x: e.clientX, y: e.clientY, moved: 0 };
+              ovSuppressClickRef.current = false;
+            } else if ((cropTool || e.shiftKey) && gridShape && e.button === 0) {
               const pos = calcOverviewPos(e);
               if (pos) {
                 // A new drag replaces the old selection rather than adding to
