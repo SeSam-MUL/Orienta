@@ -319,7 +319,11 @@
     "snapTooltip": "Jede Grenze auf die nächste starke Chemie-Kante relaxieren lassen. Der Regler bestimmt, wie breit das Band um jede Grenze ist, das neu entschieden wird; die Kerne der Strukturen behalten immer ihre Identität, es kann also nichts verschwinden oder tauschen.",
     "handTools": "Von Hand malen",
     "handToolsHint": "Eine ganze Struktur zu benennen ist ein Klick. Die Handwerkzeuge stehen unten für alles, was sich über die Gruppierung nicht ausdrücken lässt.",
-    "handToolsTooltip": "Rechteck, Polygon, Zauberstab und phasenweites Ersetzen. Sie gehören zur Phasenansicht; beim Gruppieren sind sie eingeklappt, damit sich nicht zwei Werkzeugsätze dieselbe Spalte teilen."
+    "handToolsTooltip": "Rechteck, Polygon, Zauberstab und phasenweites Ersetzen. Sie gehören zur Phasenansicht; beim Gruppieren sind sie eingeklappt, damit sich nicht zwei Werkzeugsätze dieselbe Spalte teilen.",
+    "howTitle": "Wie diese Seite funktioniert",
+    "howStep1": "1 — Die Karte wird allein nach Elementverhältnis in STRUKTUREN zerlegt. Eine Struktur heißt nur „diese Pixel haben dieselbe Chemie“; sie hat noch keinen Namen, und ihre Farbe bedeutet nichts außer der Unterscheidung von den Nachbarn.",
+    "howStep2": "2 — Du gibst jeder Struktur eine Phase. Mehrere Strukturen dürfen DIESELBE Phase bekommen — das ist der Normalfall, und deshalb steht ein Phasenname mehrfach in der Liste.",
+    "howStep3": "3 — Auf „Phasen“ umschalten zeigt das Ergebnis: eine Farbe je Phase, zwei benachbarte Bereiche mit derselben Phase werden dort zu einer durchgehenden Fläche. Viele Strukturen, wenige Phasen."
   },
   "inspector": {
     "title": "Struktur-Inspektor",
@@ -339,7 +343,20 @@
     "neighbourTooltip": "Größter Einzelelement-Unterschied: {{gap}} at%, über {{edge}} px gemeinsame Grenze. Klicken zum Ansehen. Ein kleiner Abstand bei langer gemeinsamer Grenze heißt meist: eine Struktur wurde zerschnitten.",
     "candidates": "Nächste Phasen",
     "candidateTooltip": "{{name}} liegt im Mittel {{gap}} at% daneben. Klicken, um sie auf die ganze Struktur zu legen.",
-    "candidateHint": "Die Zahl ist die mittlere at%-Abweichung — kleiner ist näher.",
-    "clearName": "Unbenannt lassen"
+    "clearName": "Unbenannt lassen",
+    "compositionHint": "Mittel über alle Pixel dieser Struktur. ± ist, wie stark die Pixel davon abweichen — ein großes ± heißt, die Struktur ist nicht eine Sache.",
+    "neighboursHint": "Strukturen, an die diese grenzt. Die Zahl ist der größte Unterschied in einem einzelnen Element. Eine kleine Zahl bei langer Grenze heißt meist: ein Bereich wurde zerschnitten — verschmelzen.",
+    "candidatesHint": "Phasen aus der Bibliothek, sortiert danach, wie nah ihre Formel an der gemessenen Zusammensetzung liegt. Anklicken legt sie auf die ganze Struktur.",
+    "scaleLegend": "geg. Untergrund: 1,0× heißt, dieses Element ist hier nicht häufiger als sonst irgendwo auf der Karte. Über 1,3× ist es hier wirklich angereichert, unter 0,8× verarmt."
+  },
+  "rollup": {
+    "headline": "{{structures}} Strukturen → {{phases}} Phasen",
+    "explain": "Die Liste oben nennt die Phase einmal je Struktur — eine Phase über vier Strukturen steht also viermal da. Hier wird sie einmal gezählt.",
+    "unnamed": "{{count}} noch unbenannt",
+    "unnamedTooltip": "Strukturen ohne Phase. In der Phasenansicht erscheinen sie als nicht zugeordnet.",
+    "fromStructures": "{{count}} Strukturen",
+    "rowTooltip": "{{name}} — {{structures}} Strukturen, zusammen {{px}} px",
+    "showPhases": "Phasenkarte anzeigen →",
+    "showPhasesTooltip": "Eine Farbe je Phase. Benachbarte Bereiche, denen du dieselbe Phase gegeben hast, werden dort zu einer durchgehenden Fläche."
   }
 }

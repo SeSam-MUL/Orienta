@@ -37,12 +37,20 @@ export function enrichmentKind(factor) {
   return 'flat';
 }
 
-function Column({ title, children, grow = 1 }) {
+function Column({ title, hint, children, grow = 1 }) {
   return (
     <div style={{ flex: `${grow} 1 220px`, minWidth: 0 }}>
-      <Label secondary small style={{ display: 'block', marginBottom: 3 }}>
+      <Label secondary small style={{ display: 'block' }}>
         {title}
       </Label>
+      {/* Always visible. A tooltip only helps someone who already
+          suspects there is something to learn. */}
+      {hint && (
+        <div style={{ fontSize: '7.5pt', color: C.textSecondary,
+                      marginBottom: 3, lineHeight: 1.3 }}>
+          {hint}
+        </div>
+      )}
       {children}
     </div>
   );
@@ -100,7 +108,8 @@ export default function StructureInspector({
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap',
                     alignItems: 'flex-start' }}>
         {/* --- composition ---------------------------------------------- */}
-        <Column title={t('inspector.composition')} grow={2}>
+        <Column title={t('inspector.composition')}
+                hint={t('inspector.compositionHint')} grow={2}>
           <table style={{ width: '100%', borderCollapse: 'collapse',
                           fontSize: '8.5pt', fontVariantNumeric: 'tabular-nums' }}>
             <thead>
@@ -168,10 +177,15 @@ export default function StructureInspector({
               })}
             </tbody>
           </table>
+          <div style={{ fontSize: '7.5pt', color: C.textSecondary,
+                        marginTop: 3, lineHeight: 1.35 }}>
+            {t('inspector.scaleLegend')}
+          </div>
         </Column>
 
         {/* --- neighbours ----------------------------------------------- */}
-        <Column title={t('inspector.neighbours')}>
+        <Column title={t('inspector.neighbours')}
+                hint={t('inspector.neighboursHint')}>
           {neighbours.length === 0 ? (
             <Label secondary small>{t('inspector.noNeighbours')}</Label>
           ) : (
@@ -208,7 +222,8 @@ export default function StructureInspector({
         </Column>
 
         {/* --- candidates ----------------------------------------------- */}
-        <Column title={t('inspector.candidates')} grow={1.4}>
+        <Column title={t('inspector.candidates')}
+                hint={t('inspector.candidatesHint')} grow={1.4}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
             {candidates.map((c) => {
               const current = c.phase_index === phaseIndex;
@@ -252,9 +267,6 @@ export default function StructureInspector({
               </Button>
             )}
           </div>
-          <Label secondary small style={{ display: 'block', marginTop: 3 }}>
-            {t('inspector.candidateHint')}
-          </Label>
         </Column>
       </div>
     </div>

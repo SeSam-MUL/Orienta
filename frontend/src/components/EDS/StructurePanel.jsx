@@ -20,6 +20,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Button, Label, colors as C, alpha } from '../../theme/components';
+import PhaseRollup from './PhaseRollup';
 
 /** Short, readable composition: the elements that actually carry signal. */
 export function describeComposition(meanAtPct, maxElements = 4) {
@@ -51,6 +52,7 @@ export default function StructurePanel({ handle }) {
     nClusters, setNClusters,
     handleMergeStructures, handleSplitStructure,
     handleGrowStructure, handleSnapEdges,
+    setMapView,
   } = handle;
 
   const [mergeInto, setMergeInto] = useState(null);
@@ -79,6 +81,22 @@ export default function StructurePanel({ handle }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {/* --- what this page is doing, in three sentences. Open by
+          default: the user's report was "ich habe keine Ahnung was ich
+          hier sehe", and a closed box does not fix that. --- */}
+      <details open style={{ marginBottom: 2 }}>
+        <summary style={{ cursor: 'pointer', fontSize: '8.5pt',
+                          color: C.cyan, userSelect: 'none' }}>
+          {t('structures.howTitle')}
+        </summary>
+        <div style={{ fontSize: '8pt', color: C.textSecondary,
+                      lineHeight: 1.45, marginTop: 3 }}>
+          <div>{t('structures.howStep1')}</div>
+          <div style={{ marginTop: 3 }}>{t('structures.howStep2')}</div>
+          <div style={{ marginTop: 3 }}>{t('structures.howStep3')}</div>
+        </div>
+      </details>
+
       {/* --- how the grouping was made ---------------------------------- */}
       <ToolRow title={t('structures.scaleTooltip')}>
         <Label secondary small style={{ minWidth: 62 }}>
@@ -182,6 +200,14 @@ export default function StructurePanel({ handle }) {
           );
         })}
       </div>
+
+      {/* --- many regions, few phases: the collapse made visible -------- */}
+      <PhaseRollup
+        structures={structures}
+        allPhases={phaseMap?.all_phases}
+        totalPixels={(phaseMap?.n_rows || 0) * (phaseMap?.n_cols || 0)}
+        onShowPhases={() => setMapView?.('phases')}
+      />
 
       {/* --- what to do with the selected one ---------------------------- */}
       {selected && (

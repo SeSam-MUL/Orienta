@@ -319,7 +319,11 @@
     "snapTooltip": "Let every boundary relax onto the nearest strong chemistry edge. The slider is how wide a band around each boundary is put up for re-decision; the structures' interiors always keep their identity, so nothing can vanish or swap.",
     "handTools": "Paint by hand",
     "handToolsHint": "Naming a whole structure is one click. The hand tools are below for anything the grouping cannot express.",
-    "handToolsTooltip": "Rectangle, polygon, wand and map-wide replacement. These belong to the phase view; while grouping they are folded away so both toolsets do not compete for the same column."
+    "handToolsTooltip": "Rectangle, polygon, wand and map-wide replacement. These belong to the phase view; while grouping they are folded away so both toolsets do not compete for the same column.",
+    "howTitle": "How this page works",
+    "howStep1": "1 — The map is cut into STRUCTURES by element ratio alone. A structure is just \"these pixels have the same chemistry\"; it has no name yet, and its colour means nothing beyond telling it apart from its neighbours.",
+    "howStep2": "2 — You give each structure a phase. Several structures may get the SAME phase — that is normal and expected, which is why one phase name appears on several rows in the list.",
+    "howStep3": "3 — Switch to “Phases” to see the result: one colour per phase, so two neighbouring regions you gave the same phase become one uninterrupted area. Many structures, few phases."
   },
   "inspector": {
     "title": "Structure inspector",
@@ -339,7 +343,20 @@
     "neighbourTooltip": "Largest single-element difference: {{gap}} at%, over {{edge}} px of shared edge. Click to inspect it. A small gap on a long shared edge usually means one structure cut in two.",
     "candidates": "Closest phases",
     "candidateTooltip": "{{name}} is {{gap}} at% off on average. Click to put it on the whole structure.",
-    "candidateHint": "Number is the mean at% difference — smaller is closer.",
-    "clearName": "Leave unnamed"
+    "clearName": "Leave unnamed",
+    "compositionHint": "Average of every pixel in this structure. ± is how much the pixels differ from that average — a large ± means the structure is not one thing.",
+    "neighboursHint": "Structures this one borders on. The number is the biggest difference in any single element. A small number on a long border usually means one region got cut in two — merge it.",
+    "candidatesHint": "Library phases sorted by how close their formula is to the measured composition. Click one to put it on the whole structure.",
+    "scaleLegend": "vs background: 1.0× means this element is no more common here than anywhere else on the map. Above 1.3× it is genuinely concentrated here; below 0.8× it is depleted."
+  },
+  "rollup": {
+    "headline": "{{structures}} structures → {{phases}} phases",
+    "explain": "The list above names a phase once per structure, so a phase covering four structures is written four times. Here it is counted once.",
+    "unnamed": "{{count}} still unnamed",
+    "unnamedTooltip": "Structures with no phase yet. They are drawn as unclassified in the phase view.",
+    "fromStructures": "{{count}} structures",
+    "rowTooltip": "{{name}} — {{structures}} structures, {{px}} px in total",
+    "showPhases": "Show the phase map →",
+    "showPhasesTooltip": "One colour per phase. Neighbouring regions you gave the same phase become one uninterrupted area there."
   }
 }
