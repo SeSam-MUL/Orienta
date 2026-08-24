@@ -130,23 +130,72 @@ class PhaseMapStore:
         tolerance: float,
         min_score: float,
         file_path: Optional[str] = None,
+        preserve_locked: bool = True,
     ) -> None:
         """Replace the stored classification with a freshly computed one.
+
+        ``preserve_locked`` carries the user's hand-assigned pixels across
+        the re-classify. ``locked_mask`` has been written on every manual
+        edit since M4 and read by NOTHING: this method used to hardcode
+        ``locked_mask=None``, so every re-classify silently destroyed the
+        corrections the mask exists to protect. The docstring on the field
+        says it is there "so the next auto-classify round does not silently
+        revert them" — that consumer is this.
+
+        Preserving requires the phase INDICES to still mean the same thing.
+        They are positions in ``phase_entries``, so a run over a different
+        candidate list re-numbers them; the pixels are therefore carried by
+        their entry KEY, not by their index, and a locked pixel whose phase
+        is no longer a candidate is dropped rather than silently repointed
+        at whatever now sits at that index.
+
+        Pass ``preserve_locked=False`` for a deliberate "start over".
 
         Auto-saves a sidecar when ``file_path`` is known, so a backend
         restart doesn't lose the classification.
         """
         with self._lock:
             n_rows, n_cols = phase_grid.shape
+            new_grid = phase_grid.astype(np.int32, copy=True)
+            new_scores = score_grid.astype(np.float32, copy=True)
+            carried_mask = None
+
+            prev = self._state
+            if (preserve_locked and prev is not None
+                    and prev.locked_mask is not None
+                    and prev.locked_mask.shape == new_grid.shape):
+                key_to_new = {e.key: i for i, e in enumerate(phase_entries)}
+                carried_mask = np.zeros_like(prev.locked_mask)
+                rows, cols = np.nonzero(prev.locked_mask)
+                for r, c in zip(rows.tolist(), cols.tolist()):
+                    old_idx = int(prev.phase_grid[r, c])
+                    if old_idx < 0:
+                        # Hand-marked as unclassified — that is a decision too.
+                        new_grid[r, c] = -1
+                        carried_mask[r, c] = True
+                        continue
+                    if old_idx >= len(prev.phase_entries):
+                        continue
+                    new_idx = key_to_new.get(prev.phase_entries[old_idx].key)
+                    if new_idx is None:
+                        # The phase left the candidate list; keeping the old
+                        # index would point at an unrelated phase.
+                        continue
+                    new_grid[r, c] = new_idx
+                    new_scores[r, c] = float(prev.score_grid[r, c])
+                    carried_mask[r, c] = True
+                if not carried_mask.any():
+                    carried_mask = None
+
             self._state = PhaseMapState(
-                phase_grid=phase_grid.astype(np.int32, copy=True),
-                score_grid=score_grid.astype(np.float32, copy=True),
+                phase_grid=new_grid,
+                score_grid=new_scores,
                 phase_entries=list(phase_entries),
                 n_rows=int(n_rows),
                 n_cols=int(n_cols),
                 tolerance=float(tolerance),
                 min_score=float(min_score),
-                locked_mask=None,
+                locked_mask=carried_mask,
             )
             self._file_path = file_path
         self._autosave()

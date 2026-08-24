@@ -291,6 +291,43 @@ async def region_quantify(req: RegionQuantifyRequest):
                 "n_pixels": int(len(linear_indices)), "data": raw}
 
 
+def _map_phase_at(row: int, col: int) -> Optional[dict]:
+    """What the CURRENT phase map says about this pixel, and how it decided.
+
+    The suggestion list ranks THIS ONE PIXEL. The map, in its default
+    cluster mode, assigns by the mean of the pixel's whole composition
+    group. Both are internally correct and they disagree on roughly half
+    the pixels of SampleB (measured: 53 % in cluster mode, 1 % in pixel
+    mode) — because they answer different questions.
+
+    Nothing on screen used to say so, so the panel appeared to contradict
+    the map. It returns the map's verdict alongside the per-pixel ranking
+    so the UI can lead with the map and show the single pixel as the
+    diagnostic detail it is. The map's answer is the more reliable of the
+    two: a single pixel's composition carries several at% of error, which
+    is the whole reason the grouping exists.
+    """
+    store = get_phase_map_store()
+    state = store.get_state()
+    if state is None:
+        return None
+    if not (0 <= row < state.n_rows and 0 <= col < state.n_cols):
+        return None
+    idx = int(state.phase_grid[row, col])
+    locked = bool(state.locked_mask[row, col]) if state.locked_mask is not None else False
+    if idx < 0:
+        return {"phase_index": -1, "cif_filename": None, "formula": None,
+                "unclassified": True, "hand_set": locked}
+    entry = state.phase_entries[idx]
+    return {
+        "phase_index": idx,
+        "cif_filename": entry.cif_filename,
+        "formula": entry.formula,
+        "unclassified": False,
+        "hand_set": locked,
+    }
+
+
 @router.post("/suggest-phases")
 async def suggest_phases(req: PhaseSuggestionRequest):
     """Suggest crystal phases based on EDS chemistry at a pixel.
@@ -374,6 +411,7 @@ async def suggest_phases(req: PhaseSuggestionRequest):
                     "atomic_pct": at_scalar,
                     "library_source": "cif",
                     "library_size": len(cif_library),
+                    "map_phase": _map_phase_at(req.row, req.col),
                 }
 
         # 2) Fall back to the hardcoded library so the feature isn't
@@ -618,6 +656,10 @@ class AutoClassifyRequest(BaseModel):
     # None -> chosen by the spatial coherence of the resulting phase map
     n_clusters: Optional[int] = None
     phase_keys: Optional[List[str]] = None  # None -> every library phase
+    # Carry hand-assigned pixels across the re-classify. Default True: the
+    # old behaviour silently destroyed them, which is the bug, not the
+    # feature. Send False for a deliberate "start over".
+    keep_manual_edits: bool = True
 
 
 def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
@@ -695,6 +737,30 @@ def _state_to_response(include_image: bool = True) -> dict:
         "n_classified": int((state.phase_grid >= 0).sum()),
         "n_unclassified": int((state.phase_grid < 0).sum()),
     }
+    # EVERY candidate, not only the ones that won pixels. `phase_summary`
+    # deliberately skips empty phases (the legend does not need them), but
+    # the legend is also the only phase PICKER — so a phase the classifier
+    # placed nowhere could not be hand-assigned, which is exactly the case
+    # a manual correction exists for ("this particle is beta-AlFeSi, the
+    # classifier missed it").
+    counts = np.bincount((state.phase_grid + 1).ravel(),
+                         minlength=len(state.phase_entries) + 1)
+    response["all_phases"] = [
+        {
+            "phase_index": i,
+            "cif_filename": e.cif_filename,
+            "formula": e.formula,
+            "space_group": e.space_group,
+            "crystal_system": e.crystal_system,
+            "n_pixels": int(counts[i + 1]),
+            "color": palette[i] if i < len(palette) else "#3c3c3c",
+        }
+        for i, e in enumerate(state.phase_entries)
+    ]
+    # Which pixels the user set by hand. Their epistemic status differs from
+    # a measured assignment and downstream (indexing) consumes both.
+    response["n_locked"] = (int(state.locked_mask.sum())
+                            if state.locked_mask is not None else 0)
     if include_image:
         response["image"] = render_phase_map_to_base64(state)
     return response
@@ -827,6 +893,7 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
         tolerance=req.tolerance,
         min_score=req.min_score,
         file_path=file_path,
+        preserve_locked=bool(req.keep_manual_edits),
     )
     response = _state_to_response(include_image=True)
     response["mode"] = mode
