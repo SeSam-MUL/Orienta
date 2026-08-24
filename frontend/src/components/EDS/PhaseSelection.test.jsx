@@ -14,6 +14,7 @@ vi.mock('../../services/api', () => ({
     autoClassify: vi.fn(() => Promise.resolve({ data: { loaded: true, summary: [] } })),
     getPhaseMap: vi.fn(() => Promise.resolve({ data: { loaded: false } })),
     clearPhaseMap: vi.fn(() => Promise.resolve({ data: {} })),
+    setPhaseColors: vi.fn(() => Promise.resolve({ data: { loaded: false } })),
     cifPhases: vi.fn(() => Promise.resolve({
       data: {
         phases: [

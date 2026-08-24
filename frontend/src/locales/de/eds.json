@@ -232,7 +232,10 @@
     "replaceButton": "Ersetzen",
     "replaceGo": "Jedes Pixel dieser Phase durch die in der Legende gewählte ersetzen",
     "replaceNeedTarget": "Zuerst die Zielphase in der Legende wählen",
-    "replaceHint": "Ziel ist die in der Legende gewählte Phase."
+    "replaceHint": "Ziel ist die in der Legende gewählte Phase.",
+    "colorTooltip": "Klicken, um {{name}} umzufärben, Rechtsklick setzt zurück. Die Farbe gilt auch für die EBSD-Phasenkarte.",
+    "colorAria": "Farbe für {{name}}",
+    "colorHint": "Farbfeld anklicken zum Ändern · Rechtsklick setzt zurück"
   },
   "periodicTable": {
     "title": "Periodensystem — EDS-Elementfarben",

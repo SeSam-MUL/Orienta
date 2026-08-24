@@ -232,7 +232,10 @@
     "replaceButton": "置き換え",
     "replaceGo": "この相のすべてのピクセルを凡例で選択した相に置き換えます",
     "replaceNeedTarget": "先に凡例で対象の相を選んでください",
-    "replaceHint": "対象は凡例で選択されている相です。"
+    "replaceHint": "対象は凡例で選択されている相です。",
+    "colorTooltip": "クリックで {{name}} の色を変更、右クリックでリセット。色は EBSD 相マップと共有されます。",
+    "colorAria": "{{name}} の色",
+    "colorHint": "色見本をクリックして変更 · 右クリックでリセット"
   },
   "periodicTable": {
     "title": "周期表 — EDS 元素カラー",

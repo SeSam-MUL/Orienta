@@ -885,6 +885,8 @@ export const edsApi = {
     api.post('/api/eds/phase-map/replace-phase',
       { from_phase_index: fromIdx, to_phase_index: toIdx }),
   phaseMapUndo: () => api.post('/api/eds/phase-map/undo'),
+  setPhaseColors: (overrides) =>
+    api.post('/api/eds/phase-map/colors', { overrides }),
   phaseMapIndexingConfig: () => api.get('/api/eds/phase-map/indexing-config'),
   displayModes: () => api.get('/api/eds/display-modes'),
   chemistryMask: (filters, combine = 'and', margin_px = 0) =>

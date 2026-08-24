@@ -30,6 +30,19 @@ import {
   Button, NumberInput, GroupBox, Label,
 } from '../../theme/components';
 import useDataStore from '../../stores/useDataStore';
+import usePhaseColorStore from '../../stores/usePhaseColorStore';
+
+/** Store key for a phase colour.
+ *
+ * The EBSD phase map names a phase by the file stem, the EDS candidate list
+ * carries the full filename. Stripping `.cif` makes them the same key, so a
+ * colour picked on either page shows on both. The backend normalises the
+ * same way (`phase_map_store._norm_phase_name`).
+ */
+export function phaseNameKey(cifFilename) {
+  const n = String(cifFilename || '').trim();
+  return n.toLowerCase().endsWith('.cif') ? n.slice(0, -4) : n;
+}
 import WandOverlay from './WandOverlay';
 import { useEdsWand } from './hooks/useEdsWand';
 
@@ -63,6 +76,11 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   const [paintMode, setPaintMode] = useState('rectangle');  // 'rectangle' | 'polygon' | 'wand'
   const wand = useEdsWand();
   const [replaceFrom, setReplaceFrom] = useState(null);
+  // The SAME store the EBSD phase map uses, so a phase keeps its colour on
+  // both pages and the user's choice survives a reload.
+  const colorOverrides = usePhaseColorStore((s) => s.overrides);
+  const setPhaseColor = usePhaseColorStore((s) => s.setColor);
+  const resetPhaseColor = usePhaseColorStore((s) => s.resetColor);
   const [polygonVertices, setPolygonVertices] = useState([]);  // [[col, row], ...]
 
   // Last clicked pixel (for the readout under the canvas)
@@ -109,6 +127,19 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       .catch(() => { /* 4xx is fine — just means nothing classified yet */ });
     return () => { cancelled = true; };
   }, [filePath]);
+
+  // Push the colour choices to the backend, which renders the PNG. Runs on
+  // mount too: the store is persisted, so a returning user's colours must
+  // reach a freshly started backend before the first render.
+  useEffect(() => {
+    let cancelled = false;
+    edsApi.setPhaseColors(colorOverrides)
+      .then((res) => {
+        if (!cancelled && res.data?.loaded) setPhaseMap(res.data);
+      })
+      .catch(() => { /* colours are a preference; never break the map */ });
+    return () => { cancelled = true; };
+  }, [colorOverrides]);
 
   const handleAutoClassify = useCallback(async () => {
     // "None selected" must not run the whole library — that inverts the
@@ -242,6 +273,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     tolerance, setTolerance, minScore, setMinScore,
     mode, setMode, nClusters, setNClusters,
     cifPhases, loadCifPhases,
+    colorOverrides, setPhaseColor, resetPhaseColor,
     selectedPhaseKeys, setSelectedPhaseKeys,
     selectedPhaseIndex, setSelectedPhaseIndex,
     replaceFrom, setReplaceFrom,
@@ -611,6 +643,7 @@ export function PhaseMapControls({ handle }) {
     handleAssignRegion, handleAssignPixel, handleUndo, handleReplacePhase,
     handleClosePolygon, handleCancelPolygon,
     handleSendToIndexing,
+    colorOverrides, setPhaseColor, resetPhaseColor,
   } = handle;
 
   const hasMap = !!phaseMap?.loaded;
@@ -869,6 +902,11 @@ export function PhaseMapControls({ handle }) {
             maxHeight: 220, overflowY: 'auto',
             border: `1px solid ${C.border}`, borderRadius: 4, padding: 4,
           }}>
+            {/* Without this the swatch reads as decoration and nobody
+                discovers the picker. */}
+            <div style={{ fontSize: '7.5pt', color: C.textSecondary, padding: '0 2px 2px' }}>
+              {t('phaseMap.colorHint')}
+            </div>
             {realPhases.map((s) => {
               const active = selectedPhaseIndex === s.phase_index;
               return (
@@ -892,11 +930,37 @@ export function PhaseMapControls({ handle }) {
                   }}
                   title={t('phaseMap.legendTooltip', { cif: s.cif_filename, formula: s.formula, pct: s.percentage })}
                 >
-                  <span style={{
-                    width: 14, height: 14, borderRadius: 3, flexShrink: 0,
-                    background: s.color || '#3c3c3c',
-                    border: `1px solid ${C.border}`,
-                  }} />
+                  {/* Swatch doubles as the colour picker, exactly as on the
+                      EBSD phase map: click to pick, right-click to reset.
+                      Keyed on the phase name WITHOUT the .cif, which is what
+                      the EBSD page uses, so one choice covers both pages. */}
+                  <span
+                    style={{
+                      width: 14, height: 14, borderRadius: 3, flexShrink: 0,
+                      display: 'inline-block', position: 'relative',
+                      background: s.color || '#3c3c3c',
+                      border: phaseNameKey(s.cif_filename) in colorOverrides
+                        ? `1px solid ${C.text}` : `1px solid ${C.border}`,
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      resetPhaseColor(phaseNameKey(s.cif_filename));
+                    }}
+                    title={t('phaseMap.colorTooltip', { name: s.cif_filename })}
+                  >
+                    <input
+                      type="color"
+                      value={s.color || '#3c3c3c'}
+                      onChange={(e) => setPhaseColor(phaseNameKey(s.cif_filename), e.target.value)}
+                      style={{
+                        position: 'absolute', inset: 0, width: '100%', height: '100%',
+                        opacity: 0, cursor: 'pointer', border: 'none', padding: 0,
+                      }}
+                      aria-label={t('phaseMap.colorAria', { name: s.cif_filename })}
+                    />
+                  </span>
                   <span style={{
                     flex: 1, minWidth: 0, fontSize: '9pt',
                     color: active ? C.text : C.textSecondary,

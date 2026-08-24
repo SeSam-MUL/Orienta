@@ -232,7 +232,10 @@
     "replaceButton": "替换",
     "replaceGo": "将该相的所有像素替换为图例中选中的相",
     "replaceNeedTarget": "请先在图例中选择目标相",
-    "replaceHint": "目标是图例中选中的相。"
+    "replaceHint": "目标是图例中选中的相。",
+    "colorTooltip": "单击为 {{name}} 换色，右键重置。颜色与 EBSD 相图共享。",
+    "colorAria": "{{name}} 的颜色",
+    "colorHint": "单击色块换色 · 右键重置"
   },
   "periodicTable": {
     "title": "周期表 — EDS 元素颜色",

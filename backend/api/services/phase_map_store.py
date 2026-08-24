@@ -617,11 +617,12 @@ class PhaseMapStore:
 
 
 def phase_palette(n: int) -> List[Tuple[int, int, int]]:
-    """Return ``n`` visually distinct RGB colours, deterministic.
+    """``n`` visually distinct RGB colours, deterministic by POSITION.
 
-    Uses golden-ratio rotation in HSV space so any prefix of the
-    sequence remains well-distributed — adding a phase doesn't
-    re-shuffle the colours for the existing ones.
+    Kept for callers that have no names to key on. Prefer
+    :func:`phase_colours_for` — a positional palette means unticking one
+    phase recolours the others, so two runs of the same sample are not
+    visually comparable.
     """
     import colorsys
     golden = 0.618033988749895
@@ -636,7 +637,125 @@ def phase_palette(n: int) -> List[Tuple[int, int, int]]:
     return colours
 
 
-def render_phase_map_to_base64(state: PhaseMapState) -> str:
+def _norm_phase_name(name: str) -> str:
+    """The key both pages agree on.
+
+    The EBSD phase map names a phase by the file STEM
+    (``routes/indexing._smart_phase_name_from_path``), the EDS candidate
+    list carries the full filename. Dropping the ``.cif`` extension makes
+    "Al.cif" and "Al" the same phase, so the default colour matches across
+    pages and one override covers both.
+    """
+    n = (name or "").strip()
+    if n.lower().endswith(".cif"):
+        n = n[:-4]
+    return n.lower()
+
+
+def phase_colours_for(
+    names: List[str], overrides: Optional[Dict[str, str]] = None,
+    priority: Optional[List[int]] = None,
+) -> List[Tuple[int, int, int]]:
+    """Colours keyed on the phase NAME, plus the user's own choices.
+
+    Two reasons this replaces the positional palette:
+
+    1. Position is not identity. The candidate list depends on which phases
+       the user ticked and on which elements the file measured, so unticking
+       one phase used to recolour unrelated ones - measured: removing a
+       single entry recoloured 23 of 29, and colours SWAPPED between phases.
+       Two runs of the same sample were not comparable, which is the one
+       thing a phase map has to be.
+    2. The same phase should look the same everywhere in the app. This uses
+       the identical name hash and Dracula palette as the EBSD phase map
+       (``routes/phase_map.stable_color_idx``), so Al is the same green on
+       both pages, and the user's saved overrides - already persisted by the
+       frontend for the EBSD side - apply here too.
+    """
+    from backend.api.routes.phase_map import PHASE_COLORS, stable_color_idx
+
+    def _stem(n: str) -> str:
+        n = (n or "").strip()
+        return n[:-4] if n.lower().endswith(".cif") else n
+
+    ov = {_norm_phase_name(k): v for k, v in (overrides or {}).items()}
+    stems = [_stem(n) for n in names]
+
+    # Who gets shade 0 when two phases share a palette slot. The caller
+    # passes the phases the map actually SHOWS first: a candidate that
+    # covers no pixel never appears on the map, so it must not push a
+    # visible phase off the colour the EBSD page paints for it.
+    order = list(priority) if priority is not None else list(range(len(names)))
+    seen_order = set(order)
+    order += [i for i in range(len(names)) if i not in seen_order]
+
+    used: set = set()
+    out: List[Optional[Tuple[int, int, int]]] = [None] * len(names)
+    for i in order:
+        stem = stems[i]
+        hexed = ov.get(stem.lower())
+        if hexed:
+            rgb = _parse_hex(hexed)
+            if rgb is not None:
+                out[i] = rgb
+                continue
+        if not stem:
+            base = PHASE_COLORS[i % len(PHASE_COLORS)]
+        else:
+            base = PHASE_COLORS[stable_color_idx(stem)]
+        rgb = tuple(int(c * 255) for c in base)
+        # The palette has eight slots and a library can hold far more phases.
+        # Shade 0 is the untouched slot colour, so a phase that does not
+        # collide gets EXACTLY what the EBSD phase map paints; only a phase
+        # that would otherwise be indistinguishable from an earlier one is
+        # moved, and then by a fixed ladder so the result stays deterministic.
+        for factor in _SHADE_LADDER:
+            cand = tuple(int(max(0, min(255, round(c * factor)))) for c in rgb)
+            if cand not in used:
+                rgb = cand
+                break
+        else:
+            rgb = tuple(int(max(0, min(255, round(c * _SHADE_LADDER[-1])))) for c in rgb)
+        used.add(rgb)
+        out[i] = rgb
+    return [c for c in out if c is not None]
+
+
+# Alternating lighter/darker so a shifted phase stays legible on the dark
+# canvas either way. Index 0 is 1.0: no collision means no change.
+_SHADE_LADDER = (1.0, 0.70, 1.30, 0.55, 1.45, 0.42, 0.85, 1.15)
+
+
+def _parse_hex(value: str) -> Optional[Tuple[int, int, int]]:
+    """``#rrggbb`` -> RGB. Returns None for anything else, so a malformed
+    override falls back to the stable colour instead of raising."""
+    v = (value or "").strip().lstrip("#")
+    if len(v) != 6:
+        return None
+    try:
+        return (int(v[0:2], 16), int(v[2:4], 16), int(v[4:6], 16))
+    except ValueError:
+        return None
+
+
+def _shade_priority(state: PhaseMapState) -> List[int]:
+    """Phase indices, the ones the map shows first and the biggest first.
+
+    Only matters when more phases than palette slots share a slot: whoever
+    comes first keeps the untouched colour, which is the one the EBSD phase
+    map paints. A candidate covering no pixel is invisible on the map, so it
+    yields.
+    """
+    counts = np.bincount(
+        state.phase_grid[state.phase_grid >= 0].ravel(),
+        minlength=len(state.phase_entries),
+    ) if state.phase_grid.size else np.zeros(len(state.phase_entries), dtype=int)
+    return sorted(range(len(state.phase_entries)), key=lambda i: (-int(counts[i]), i))
+
+
+def render_phase_map_to_base64(
+    state: PhaseMapState, overrides: Optional[Dict[str, str]] = None,
+) -> str:
     """Encode the phase grid as a PNG with one fixed colour per phase.
 
     Unclassified pixels (-1) are rendered as a dark grey so the
@@ -649,7 +768,9 @@ def render_phase_map_to_base64(state: PhaseMapState) -> str:
     import io
     from PIL import Image  # already a project dep via image_utils
 
-    palette = phase_palette(len(state.phase_entries))
+    palette = phase_colours_for(
+        [e.cif_filename for e in state.phase_entries], overrides,
+        _shade_priority(state))
     rgb = np.zeros((state.n_rows, state.n_cols, 3), dtype=np.uint8)
     rgb[...] = (60, 60, 60)  # unclassified
 
@@ -667,9 +788,18 @@ def render_phase_map_to_base64(state: PhaseMapState) -> str:
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def palette_hex_for_state(state: PhaseMapState) -> List[str]:
-    """Hex strings for the legend — one per ``phase_entries`` slot."""
-    return [f"#{r:02x}{g:02x}{b:02x}" for (r, g, b) in phase_palette(len(state.phase_entries))]
+def palette_hex_for_state(
+    state: PhaseMapState, overrides: Optional[Dict[str, str]] = None,
+) -> List[str]:
+    """Hex strings for the legend — one per ``phase_entries`` slot.
+
+    Keyed on the phase name, so the legend, the rendered map and the EBSD
+    phase map all agree, and the user's saved colour choices apply.
+    """
+    names = [e.cif_filename for e in state.phase_entries]
+    return [f"#{r:02x}{g:02x}{b:02x}"
+            for (r, g, b) in phase_colours_for(
+                names, overrides, _shade_priority(state))]
 
 
 # Singleton — one phase map per backend process is enough for now.

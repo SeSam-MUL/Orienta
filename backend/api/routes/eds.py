@@ -44,6 +44,14 @@ from backend.api.services.phase_map_store import (
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# The user's phase-colour choices, keyed on phase name. The frontend already
+# persists these for the EBSD phase map; the EDS map honours the same ones so
+# a phase looks the same on both pages. Held per process rather than threaded
+# through every endpoint: the colours are a display preference, not part of
+# the classification, and every response that carries an image or a legend
+# needs them.
+_COLOR_OVERRIDES: Dict[str, str] = {}
+
 
 def _project_root() -> Path:
     """Project root — ``backend/api/routes/eds.py`` is 3 levels deep."""
@@ -720,7 +728,7 @@ def _state_to_response(include_image: bool = True) -> dict:
     state = store.get_state()
     if state is None:
         return {"loaded": False}
-    palette = palette_hex_for_state(state)
+    palette = palette_hex_for_state(state, _COLOR_OVERRIDES)
     summary = store.phase_summary()
     # Inject the matching colour into each summary entry so the legend
     # and the rendered preview agree without the frontend having to
@@ -768,7 +776,7 @@ def _state_to_response(include_image: bool = True) -> dict:
     # asking the user to remember.
     response["undo_label"] = store.undo_label
     if include_image:
-        response["image"] = render_phase_map_to_base64(state)
+        response["image"] = render_phase_map_to_base64(state, _COLOR_OVERRIDES)
     return response
 
 
@@ -1645,3 +1653,26 @@ async def undo_endpoint():
     if not store.undo():
         raise HTTPException(status_code=400, detail="Nothing to undo.")
     return _state_to_response(include_image=True)
+
+
+class PhaseColorsRequest(BaseModel):
+    """Phase-name -> "#rrggbb". An empty dict clears every override."""
+    overrides: Dict[str, str]
+
+
+@router.post("/phase-map/colors")
+async def set_phase_colors(req: PhaseColorsRequest):
+    """Pin colours to phase names for the EDS map.
+
+    Same names and the same defaults as the EBSD phase map, so a phase keeps
+    its colour across both pages. A malformed value is ignored rather than
+    rejected — a bad colour should not cost the user their classification.
+    """
+    global _COLOR_OVERRIDES
+    _COLOR_OVERRIDES = {str(k): str(v) for k, v in (req.overrides or {}).items()}
+    state = get_phase_map_store().get_state()
+    if state is None:
+        return {"loaded": False, "n_overrides": len(_COLOR_OVERRIDES)}
+    response = _state_to_response(include_image=True)
+    response["n_overrides"] = len(_COLOR_OVERRIDES)
+    return response

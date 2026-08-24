@@ -232,7 +232,10 @@
     "replaceButton": "Replace",
     "replaceGo": "Replace every pixel of that phase with the one selected in the legend",
     "replaceNeedTarget": "Pick the target phase in the legend first",
-    "replaceHint": "Target is whichever phase is selected in the legend."
+    "replaceHint": "Target is whichever phase is selected in the legend.",
+    "colorTooltip": "Click to recolour {{name}}, right-click to reset. The colour is shared with the EBSD phase map.",
+    "colorAria": "Colour for {{name}}",
+    "colorHint": "Click a swatch to recolour · right-click resets"
   },
   "periodicTable": {
     "title": "Periodic Table — EDS Element Colors",
