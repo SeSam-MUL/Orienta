@@ -32,6 +32,9 @@ from backend.api.services.chemistry_score import (
     background_levels, infer_matrix_element,
 )
 from backend.api.services.eds_clustering import cluster_and_match
+from backend.api.services.eds_wand import (
+    flood_from, selection_stats, wand_field,
+)
 from backend.api.services.phase_map_store import (
     get_phase_map_store,
     palette_hex_for_state,
@@ -1477,3 +1480,125 @@ async def linescan(req: LinescanRequest):
         "series": series,
         "display_mode": req.display_mode,
     }
+
+
+# =============================================================================
+# Seeded selection ("magic wand")
+# =============================================================================
+
+
+class WandFieldRequest(BaseModel):
+    """Seed a selection at one pixel."""
+    row: int
+    col: int
+    smooth: int = 5     # composition smoothing window; see eds_wand's docstring
+
+
+class WandAssignRequest(BaseModel):
+    """Commit a previewed selection.
+
+    ``mask_b64`` is the exact selection the user saw, packed with
+    ``np.packbits``. Re-deriving it here from (row, col, threshold) would be
+    smaller, but it would also mean the committed region is whatever THIS
+    code computes rather than what the preview showed — and for a manual
+    correction, what-you-saw-is-what-you-get matters more than the bytes.
+    """
+    mask_b64: str
+    phase_index: int    # -1 marks the region unclassified
+
+
+@router.post("/phase-map/wand-field")
+async def wand_field_endpoint(req: WandFieldRequest):
+    """Distance-from-seed field for a live selection preview.
+
+    Returned once per click; the client then thresholds and flood-fills it
+    locally on every slider tick (measured ~2.8 ms for 485 k px), so the
+    preview needs no round trip and no debouncing.
+    """
+    at_maps, n_rows, n_cols, _fp = _build_at_pct_maps_for_loaded_file()
+    if not (0 <= req.row < n_rows and 0 <= req.col < n_cols):
+        raise HTTPException(
+            status_code=400,
+            detail=f"pixel ({req.row},{req.col}) outside scan {n_rows}x{n_cols}",
+        )
+    try:
+        field, scale, growth, seed_comp = await asyncio.to_thread(
+            wand_field, at_maps, n_rows, n_cols, req.row, req.col,
+            max(1, int(req.smooth)),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not growth or growth[-1]["n_pixels"] == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This pixel has no EDS measurement, so nothing can be "
+                "selected from it."
+            ),
+        )
+
+    import base64
+    return {
+        "n_rows": n_rows,
+        "n_cols": n_cols,
+        "seed": {"row": req.row, "col": req.col},
+        "seed_at_pct": {el: round(v, 2) for el, v in seed_comp.items() if v >= 0.05},
+        # uint8 field, row-major. Real distance in at% = value * scale.
+        "field_b64": base64.b64encode(field.tobytes()).decode("ascii"),
+        "scale": scale,
+        "growth": growth,
+    }
+
+
+@router.post("/phase-map/wand-stats")
+async def wand_stats_endpoint(req: WandAssignRequest):
+    """Composition and enrichment of a previewed selection, before committing."""
+    at_maps, n_rows, n_cols, _fp = _build_at_pct_maps_for_loaded_file()
+    mask = _unpack_mask(req.mask_b64, n_rows, n_cols)
+    bg = background_levels(at_maps)
+    return selection_stats(at_maps, mask, background=bg)
+
+
+@router.post("/phase-map/wand-assign")
+async def wand_assign_endpoint(req: WandAssignRequest):
+    """Commit the selection to the phase map."""
+    store = get_phase_map_store()
+    state = store.get_state()
+    if state is None:
+        raise HTTPException(
+            status_code=400, detail="No phase map loaded — run auto-classify first")
+    # Same guard the rectangle and polygon writes use: a write whose
+    # coordinates belong to another grid paints a region of the scan the
+    # user never looked at.
+    _refuse_write_on_grid_mismatch(state)
+    mask = _unpack_mask(req.mask_b64, state.n_rows, state.n_cols)
+    try:
+        n = store.assign_mask(mask, int(req.phase_index))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    response = _state_to_response(include_image=True)
+    response["n_assigned"] = n
+    return response
+
+
+def _unpack_mask(mask_b64: str, n_rows: int, n_cols: int) -> np.ndarray:
+    """Bit-packed selection -> (n_rows, n_cols) bool.
+
+    Fails loud on a size mismatch: a silently truncated or padded mask would
+    paint a region of the scan the user never selected.
+    """
+    import base64
+    try:
+        raw = base64.b64decode(mask_b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="mask_b64 is not valid base64")
+    bits = np.unpackbits(np.frombuffer(raw, dtype=np.uint8))
+    n_px = n_rows * n_cols
+    if bits.size < n_px:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"selection covers {bits.size} pixels, the map has {n_px} — "
+                    f"reload the map and try again"),
+        )
+    return bits[:n_px].astype(bool).reshape(n_rows, n_cols)
