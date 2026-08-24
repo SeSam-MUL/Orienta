@@ -881,6 +881,10 @@ export const edsApi = {
   wandAssign: (maskB64, phaseIndex) =>
     api.post('/api/eds/phase-map/wand-assign',
       { mask_b64: maskB64, phase_index: phaseIndex }),
+  replacePhase: (fromIdx, toIdx) =>
+    api.post('/api/eds/phase-map/replace-phase',
+      { from_phase_index: fromIdx, to_phase_index: toIdx }),
+  phaseMapUndo: () => api.post('/api/eds/phase-map/undo'),
   phaseMapIndexingConfig: () => api.get('/api/eds/phase-map/indexing-config'),
   displayModes: () => api.get('/api/eds/display-modes'),
   chemistryMask: (filters, combine = 'and', margin_px = 0) =>

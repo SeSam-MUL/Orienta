@@ -62,6 +62,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   // outlines).
   const [paintMode, setPaintMode] = useState('rectangle');  // 'rectangle' | 'polygon' | 'wand'
   const wand = useEdsWand();
+  const [replaceFrom, setReplaceFrom] = useState(null);
   const [polygonVertices, setPolygonVertices] = useState([]);  // [[col, row], ...]
 
   // Last clicked pixel (for the readout under the canvas)
@@ -169,6 +170,32 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     }
   }, [t]);
 
+  const handleUndo = useCallback(async () => {
+    setError(null);
+    try {
+      const res = await edsApi.phaseMapUndo();
+      setPhaseMap(res.data);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || t('phaseMap.errorAssign'));
+    }
+  }, [t]);
+
+  // The correction a seeded selection cannot make: the recorded case is
+  // "sd_0302719 won 55 % of my map and it should be Al". Lassoing 55 % of a
+  // map by hand is not a workflow.
+  const handleReplacePhase = useCallback(async (fromIdx, toIdx) => {
+    if (fromIdx == null || toIdx == null || fromIdx === toIdx) return;
+    setAssignBusy(true); setError(null);
+    try {
+      const res = await edsApi.replacePhase(Number(fromIdx), Number(toIdx));
+      setPhaseMap(res.data);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || t('phaseMap.errorAssign'));
+    } finally {
+      setAssignBusy(false);
+    }
+  }, [t]);
+
   const handleAssignRegion = useCallback(async (phaseIndex) => {
     if (!phaseMap) return;
     const r = region;
@@ -217,6 +244,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     cifPhases, loadCifPhases,
     selectedPhaseKeys, setSelectedPhaseKeys,
     selectedPhaseIndex, setSelectedPhaseIndex,
+    replaceFrom, setReplaceFrom,
     region, setRegion,
     assignBusy,
     hoveredPixel, setHoveredPixel,
@@ -224,7 +252,8 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     wand,
     polygonVertices, setPolygonVertices,
     handleAutoClassify, handleClearMap,
-    handleAssignRegion, handleAssignPixel, handleClosePolygon, handleCancelPolygon,
+    handleAssignRegion, handleAssignPixel, handleUndo, handleReplacePhase,
+    handleClosePolygon, handleCancelPolygon,
     handleSendToIndexing,
   };
 }
@@ -573,12 +602,14 @@ export function PhaseMapControls({ handle }) {
     mode, setMode, nClusters, setNClusters,
     cifPhases, selectedPhaseKeys, setSelectedPhaseKeys,
     selectedPhaseIndex, setSelectedPhaseIndex,
+    replaceFrom, setReplaceFrom,
     region, setRegion,
     assignBusy,
     paintMode, setPaintMode,
     polygonVertices,
     handleAutoClassify, handleClearMap,
-    handleAssignRegion, handleAssignPixel, handleClosePolygon, handleCancelPolygon,
+    handleAssignRegion, handleAssignPixel, handleUndo, handleReplacePhase,
+    handleClosePolygon, handleCancelPolygon,
     handleSendToIndexing,
   } = handle;
 
@@ -908,6 +939,62 @@ export function PhaseMapControls({ handle }) {
           }}>
             {/* Mode toggle: rectangle (drag) vs polygon (click vertices) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* Undo — one level, and it redoes. Every mutation snapshots first, so
+            this covers a re-classify as well as a paint. */}
+        {hasMap && phaseMap.undo_label && (
+          <Button
+            variant="secondary"
+            onClick={handleUndo}
+            style={{ width: '100%', marginTop: 2 }}
+            title={t('phaseMap.undoTooltip', { what: phaseMap.undo_label })}
+          >
+            {t('phaseMap.undo', { what: phaseMap.undo_label })}
+          </Button>
+        )}
+        {/* Replace one phase with another, map-wide. The wand is a feature-scale
+            instrument; this is the map-scale one. */}
+        {hasMap && realPhases.length > 0 && (
+          <details style={{ marginTop: 2 }}>
+            <summary style={{ cursor: 'pointer', fontSize: '8.5pt',
+                              color: C.textSecondary, userSelect: 'none' }}
+                     title={t('phaseMap.replaceTooltip')}>
+              {t('phaseMap.replaceTitle')}
+            </summary>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4,
+                          flexWrap: 'wrap' }}>
+              <select
+                value={replaceFrom ?? ''}
+                onChange={(e) => setReplaceFrom(e.target.value === '' ? null : Number(e.target.value))}
+                aria-label={t('phaseMap.replaceFrom')}
+                style={{ flex: 1, minWidth: 0, fontSize: '8.5pt', padding: '2px 4px',
+                         background: 'transparent', color: C.text,
+                         border: `1px solid ${alpha(C.purple, 25)}`, borderRadius: 3 }}
+              >
+                <option value="">{t('phaseMap.replaceFrom')}</option>
+                {realPhases.map((s) => (
+                  <option key={s.phase_index} value={s.phase_index}>
+                    {s.cif_filename} ({s.percentage}%)
+                  </option>
+                ))}
+                <option value={-1}>{t('phaseMap.unclassified')}</option>
+              </select>
+              <span style={{ fontSize: '9pt', color: C.textSecondary }}>{'→'}</span>
+              <Button
+                variant="warning"
+                disabled={replaceFrom == null || selectedPhaseIndex == null
+                          || replaceFrom === selectedPhaseIndex || assignBusy}
+                onClick={() => handleReplacePhase(replaceFrom, selectedPhaseIndex)}
+                title={selectedPhaseIndex == null
+                  ? t('phaseMap.replaceNeedTarget') : t('phaseMap.replaceGo')}
+              >
+                {t('phaseMap.replaceButton')}
+              </Button>
+            </div>
+            <Label secondary small style={{ display: 'block', marginTop: 3 }}>
+              {t('phaseMap.replaceHint')}
+            </Label>
+          </details>
+        )}
         {/* --- Seeded selection (wand) --- */}
         {isWandMode && wand.seed && wand.growth.length > 0 && (
           <div style={{
@@ -915,6 +1002,26 @@ export function PhaseMapControls({ handle }) {
             background: alpha(C.cyan, 8),
             border: `1px solid ${alpha(C.cyan, 25)}`,
           }}>
+            {/* A phase is rarely one blob. "Connected" grows from the seed;
+                "everywhere" takes every pixel like it across the whole map — a
+                chemistry-space selection rather than a spatial one. */}
+            <div style={{ display: 'flex', marginBottom: 3 }} role="group" aria-label={t('wand.scope')}>
+              {[['connected', t('wand.scopeConnected')], ['all', t('wand.scopeAll')]].map(([id, label], i) => (
+                <button
+                  key={id} type="button"
+                  onClick={() => wand.setScope(id)}
+                  aria-pressed={wand.scope === id}
+                  title={id === 'all' ? t('wand.scopeAllTooltip') : t('wand.scopeConnectedTooltip')}
+                  style={{
+                    padding: '1px 8px', fontSize: '8pt', cursor: 'pointer',
+                    border: `1px solid ${alpha(C.cyan, wand.scope === id ? 60 : 22)}`,
+                    background: wand.scope === id ? alpha(C.cyan, 25) : 'transparent',
+                    color: wand.scope === id ? C.text : C.textSecondary,
+                    borderRadius: i === 0 ? '3px 0 0 3px' : '0 3px 3px 0',
+                  }}
+                >{label}</button>
+              ))}
+            </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
               <Label secondary small>{t('wand.selection')}</Label>
               <span style={{ fontSize: '9pt', fontWeight: 700, color: C.cyan,

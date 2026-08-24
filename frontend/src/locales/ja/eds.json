@@ -223,7 +223,16 @@
     "kUsed": "{{k}} クラスタ",
     "noneSelected": "少なくとも 1 つの相を選択してください。",
     "nClusterCount": "個数",
-    "unplaced": "マップにない相 ({{count}})"
+    "unplaced": "マップにない相 ({{count}})",
+    "undo": "{{what}} を元に戻す",
+    "undoTooltip": "直前の変更（{{what}}）を取り消します。1 段階。",
+    "replaceTitle": "相を全体で置き換え",
+    "replaceTooltip": "ある相のすべてのピクセルを別の相に振り替えます。マップの大部分に及ぶ分類誤りで、手動選択が現実的でない場合に使います。",
+    "replaceFrom": "置き換え…",
+    "replaceButton": "置き換え",
+    "replaceGo": "この相のすべてのピクセルを凡例で選択した相に置き換えます",
+    "replaceNeedTarget": "先に凡例で対象の相を選んでください",
+    "replaceHint": "対象は凡例で選択されている相です。"
   },
   "periodicTable": {
     "title": "周期表 — EDS 元素カラー",
@@ -264,6 +273,11 @@
     "assignTooltip": "選択した相をこれらのピクセルに割り当てます",
     "assignTooltipNoPhase": "先に凡例から相を選んでください",
     "cancel": "キャンセル",
-    "cancelTooltip": "この選択を破棄"
+    "cancelTooltip": "この選択を破棄",
+    "scope": "選択範囲",
+    "scopeConnected": "連結",
+    "scopeAll": "全体",
+    "scopeConnectedTooltip": "クリックしたピクセルから外側へ広げ、特徴の縁で止めます。",
+    "scopeAllTooltip": "この特徴だけでなく、マップ上で組成が近いすべてのピクセルを選択します。相が単一の塊であることはまれです。"
   }
 }

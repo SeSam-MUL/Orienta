@@ -223,7 +223,16 @@
     "kUsed": "{{k}} Cluster",
     "noneSelected": "Mindestens eine Phase auswählen.",
     "nClusterCount": "Anzahl",
-    "unplaced": "Phasen ohne Pixel auf der Karte ({{count}})"
+    "unplaced": "Phasen ohne Pixel auf der Karte ({{count}})",
+    "undo": "{{what}} rückgängig",
+    "undoTooltip": "Die letzte Änderung zurücknehmen ({{what}}). Eine Stufe.",
+    "replaceTitle": "Phase überall ersetzen",
+    "replaceTooltip": "Jedes Pixel einer Phase auf eine andere umstellen. Für einen Klassifizierungsfehler, der einen großen Teil der Karte betrifft und sich von Hand nicht auswählen lässt.",
+    "replaceFrom": "Ersetzen…",
+    "replaceButton": "Ersetzen",
+    "replaceGo": "Jedes Pixel dieser Phase durch die in der Legende gewählte ersetzen",
+    "replaceNeedTarget": "Zuerst die Zielphase in der Legende wählen",
+    "replaceHint": "Ziel ist die in der Legende gewählte Phase."
   },
   "periodicTable": {
     "title": "Periodensystem — EDS-Elementfarben",
@@ -264,6 +273,11 @@
     "assignTooltip": "Die gewählte Phase diesen Pixeln zuweisen",
     "assignTooltipNoPhase": "Zuerst eine Phase aus der Legende wählen",
     "cancel": "Abbrechen",
-    "cancelTooltip": "Diese Auswahl verwerfen"
+    "cancelTooltip": "Diese Auswahl verwerfen",
+    "scope": "Auswahlbereich",
+    "scopeConnected": "Zusammenhängend",
+    "scopeAll": "Überall",
+    "scopeConnectedTooltip": "Vom angeklickten Pixel nach außen wachsen und am Rand des Merkmals stoppen.",
+    "scopeAllTooltip": "Jedes Pixel der Karte mit ähnlicher Zusammensetzung auswählen, nicht nur dieses eine Merkmal. Eine Phase ist selten ein einzelner Fleck."
   }
 }

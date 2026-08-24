@@ -33,7 +33,7 @@ from backend.api.services.chemistry_score import (
 )
 from backend.api.services.eds_clustering import cluster_and_match
 from backend.api.services.eds_wand import (
-    flood_from, selection_stats, wand_field,
+    flood_from, global_growth_curve, selection_stats, wand_field,
 )
 from backend.api.services.phase_map_store import (
     get_phase_map_store,
@@ -764,6 +764,9 @@ def _state_to_response(include_image: bool = True) -> dict:
     # a measured assignment and downstream (indexing) consumes both.
     response["n_locked"] = (int(state.locked_mask.sum())
                             if state.locked_mask is not None else 0)
+    # What an undo would take back, so the button can name it instead of
+    # asking the user to remember.
+    response["undo_label"] = store.undo_label
     if include_image:
         response["image"] = render_phase_map_to_base64(state)
     return response
@@ -1548,6 +1551,9 @@ async def wand_field_endpoint(req: WandFieldRequest):
         "field_b64": base64.b64encode(field.tobytes()).decode("ascii"),
         "scale": scale,
         "growth": growth,
+        # "every pixel like this one", ignoring connectivity — a phase is
+        # rarely one blob, and the connected fill needs a pass per particle.
+        "growth_all": global_growth_curve(field),
     }
 
 
@@ -1602,3 +1608,40 @@ def _unpack_mask(mask_b64: str, n_rows: int, n_cols: int) -> np.ndarray:
                     f"reload the map and try again"),
         )
     return bits[:n_px].astype(bool).reshape(n_rows, n_cols)
+
+
+class ReplacePhaseRequest(BaseModel):
+    """Repoint every pixel of one phase at another, map-wide."""
+    from_phase_index: int
+    to_phase_index: int
+
+
+@router.post("/phase-map/replace-phase")
+async def replace_phase_endpoint(req: ReplacePhaseRequest):
+    """The correction a seeded selection cannot make.
+
+    The recorded case is "sd_0302719 won 55 % of my map and it should be
+    Al" — lassoing 55 % of a map by hand is not a workflow.
+    """
+    store = get_phase_map_store()
+    state = store.get_state()
+    if state is None:
+        raise HTTPException(
+            status_code=400, detail="No phase map loaded — run auto-classify first")
+    _refuse_write_on_grid_mismatch(state)
+    try:
+        n = store.replace_phase(int(req.from_phase_index), int(req.to_phase_index))
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    response = _state_to_response(include_image=True)
+    response["n_replaced"] = n
+    return response
+
+
+@router.post("/phase-map/undo")
+async def undo_endpoint():
+    """Take back the last phase-map change. One level, and it redoes."""
+    store = get_phase_map_store()
+    if not store.undo():
+        raise HTTPException(status_code=400, detail="Nothing to undo.")
+    return _state_to_response(include_image=True)

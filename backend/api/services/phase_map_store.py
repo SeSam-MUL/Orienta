@@ -104,12 +104,74 @@ class PhaseMapStore:
         self._lock = threading.RLock()
         self._state: Optional[PhaseMapState] = None
         self._file_path: Optional[str] = None  # tag so we can detect file switches
+        # One-level undo. Every mutation snapshots the whole state first, so
+        # undo restores phase ids, scores, the locked mask AND the candidate
+        # list together — restoring the grid alone would leave phase ids
+        # pointing into a different list, which is the same class of bug the
+        # locked-mask carry-over had to avoid. Deliberately one level: a deep
+        # history on a 485 k-px map costs real memory, and the operations
+        # this guards are single deliberate acts, not typing.
+        self._undo: Optional[PhaseMapState] = None
+        self._undo_label: Optional[str] = None
+
+    def _snapshot(self, label: str) -> None:
+        """Remember the current state so :meth:`undo` can put it back.
+
+        Caller must already hold the lock.
+        """
+        st = self._state
+        if st is None:
+            self._undo = None
+            self._undo_label = None
+            return
+        self._undo = PhaseMapState(
+            phase_grid=st.phase_grid.copy(),
+            score_grid=st.score_grid.copy(),
+            phase_entries=list(st.phase_entries),
+            n_rows=st.n_rows,
+            n_cols=st.n_cols,
+            tolerance=st.tolerance,
+            min_score=st.min_score,
+            locked_mask=(st.locked_mask.copy()
+                         if st.locked_mask is not None else None),
+        )
+        self._undo_label = label
+
+    @property
+    def undo_label(self) -> Optional[str]:
+        """What :meth:`undo` would take back, for the button's label."""
+        with self._lock:
+            return self._undo_label if self._undo is not None else None
+
+    def undo(self) -> bool:
+        """Restore the state from before the last mutation. One level.
+
+        Returns False when there is nothing to undo, so the route can say so
+        rather than pretending it did something.
+        """
+        with self._lock:
+            if self._undo is None:
+                return False
+            # Swap rather than drop: undo of an undo is a redo, which is what
+            # a user expects from a single-level control after a misclick.
+            current, self._state = self._state, self._undo
+            self._undo = current
+            # Undoing an undo is a redo — what a user expects from a single
+            # control after a misclick.
+            self._undo_label = "redo" if self._undo_label != "redo" else "undo"
+        self._autosave()
+        return True
 
     # --- Lifecycle ---
 
     def clear(self) -> None:
         with self._lock:
             self._state = None
+            # Drop the undo slot with it: clearing means starting over,
+            # and an undo afterwards would restore a map belonging to a
+            # file that is no longer the active one.
+            self._undo = None
+            self._undo_label = None
             self._file_path = None
 
     def is_set(self) -> bool:
@@ -155,6 +217,7 @@ class PhaseMapStore:
         restart doesn't lose the classification.
         """
         with self._lock:
+            self._snapshot("re-classify")
             n_rows, n_cols = phase_grid.shape
             new_grid = phase_grid.astype(np.int32, copy=True)
             new_scores = score_grid.astype(np.float32, copy=True)
@@ -239,6 +302,7 @@ class PhaseMapStore:
             c1 = min(st.n_cols - 1, int(col_end))
             if r0 > r1 or c0 > c1:
                 return 0
+            self._snapshot("assign region")
 
             sub = st.phase_grid[r0:r1 + 1, c0:c1 + 1]
             n = int(sub.size)
@@ -257,6 +321,46 @@ class PhaseMapStore:
             # downstream consumers can still threshold sensibly.
             score_sub = st.score_grid[r0:r1 + 1, c0:c1 + 1]
             score_sub[:] = 1.0 if target_phase_index != -1 else 0.0
+        self._autosave()
+        return n
+
+    def replace_phase(self, from_phase_index: int, to_phase_index: int) -> int:
+        """Repoint every pixel of one phase at another, map-wide.
+
+        The correction a wand cannot make. The recorded case is "sd_0302719
+        won 55 % of my map and it should be Al": lassoing 55 % of a map by
+        hand is not a workflow, and the wand is a feature-scale instrument.
+
+        Both ids may be -1 (unclassified), so this also serves "everything
+        the classifier gave up on is actually X" and its reverse, "that
+        phase is not real, drop it".
+
+        Pixels changed this way are marked hand-set like any other manual
+        edit — the assertion is the user's, not the measurement's.
+        """
+        with self._lock:
+            if self._state is None:
+                raise RuntimeError("No phase map loaded — run auto-classify first")
+            st = self._state
+            n_phases = len(st.phase_entries)
+            for idx, name in ((from_phase_index, "from"), (to_phase_index, "to")):
+                if idx != -1 and not (0 <= idx < n_phases):
+                    raise ValueError(
+                        f"{name}-phase index {idx} out of range (0..{n_phases - 1})")
+            if from_phase_index == to_phase_index:
+                return 0
+
+            mask = st.phase_grid == int(from_phase_index)
+            n = int(mask.sum())
+            if n == 0:
+                return 0
+            self._snapshot("replace phase")
+
+            st.phase_grid[mask] = int(to_phase_index)
+            if st.locked_mask is None:
+                st.locked_mask = np.zeros((st.n_rows, st.n_cols), dtype=bool)
+            st.locked_mask[mask] = True
+            st.score_grid[mask] = 1.0 if to_phase_index != -1 else 0.0
         self._autosave()
         return n
 
@@ -293,6 +397,9 @@ class PhaseMapStore:
             n = int(bool_mask.sum())
             if n == 0:
                 return 0
+            # Snapshot only once the write is certain to happen, so a
+            # rejected call cannot consume the user's one undo slot.
+            self._snapshot("assign selection")
             st.phase_grid[bool_mask] = int(target_phase_index)
             if st.locked_mask is None:
                 st.locked_mask = np.zeros((st.n_rows, st.n_cols), dtype=bool)

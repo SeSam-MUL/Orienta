@@ -30,6 +30,10 @@ const reply = {
       { threshold: 0, n_pixels: 4 },
       { threshold: 200, n_pixels: 35 },
     ],
+    growth_all: [
+      { threshold: 0, n_pixels: 4 },
+      { threshold: 200, n_pixels: 35 },
+    ],
   },
 };
 
@@ -128,5 +132,30 @@ describe('useEdsWand', () => {
       await Promise.all([stale, fresh]);
     });
     expect(result.current.stats.n_pixels).toBe(4);
+  });
+
+  it('defaults to the connected region', async () => {
+    const { result } = renderHook(() => useEdsWand());
+    await seed(result);
+    expect(result.current.scope).toBe('connected');
+  });
+
+  it('everywhere ignores connectivity and takes every matching pixel', async () => {
+    // A phase is rarely one blob - dispersoids and precipitates are
+    // scattered, and the connected fill would need a pass per particle.
+    const { result } = renderHook(() => useEdsWand());
+    await seed(result);
+    act(() => { result.current.setStep(1); });
+    const connected = result.current.mask.reduce((a, b) => a + b, 0);
+    act(() => { result.current.setScope('all'); });
+    const everywhere = result.current.mask.reduce((a, b) => a + b, 0);
+    expect(everywhere).toBeGreaterThanOrEqual(connected);
+  });
+
+  it('everywhere still never takes an unmeasured pixel', async () => {
+    const { result } = renderHook(() => useEdsWand());
+    await seed(result);
+    act(() => { result.current.setScope('all'); result.current.setStep(1); });
+    expect(result.current.mask[4 * C + 4]).toBe(0);
   });
 });

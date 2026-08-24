@@ -16,8 +16,14 @@ import { edsApi } from '../../../services/api';
  */
 export function useEdsWand() {
   const [seed, setSeed] = useState(null);        // { row, col }
-  const [growth, setGrowth] = useState([]);      // [{ threshold, n_pixels }]
+  const [growth, setGrowth] = useState([]);      // connected, [{ threshold, n_pixels }]
+  const [growthAll, setGrowthAll] = useState([]);  // ignoring connectivity
   const [step, setStep] = useState(0);           // index into growth
+  // 'connected' fills outward from the seed; 'all' takes every pixel like
+  // it, anywhere on the map. A phase is rarely one blob — dispersoids and
+  // precipitates are scattered — so the connected fill would need one pass
+  // per particle. This is a chemistry-space selection, not a spatial one.
+  const [scope, setScope] = useState('connected');
   const [shape, setShape] = useState(null);      // { n_rows, n_cols }
   const [seedAtPct, setSeedAtPct] = useState(null);
   const [stats, setStats] = useState(null);
@@ -32,7 +38,7 @@ export function useEdsWand() {
     fieldRef.current = null;
     maskRef.current = null;
     statsTokenRef.current = null;
-    setSeed(null); setGrowth([]); setStep(0); setShape(null);
+    setSeed(null); setGrowth([]); setGrowthAll([]); setStep(0); setShape(null);
     setSeedAtPct(null); setStats(null); setError(null); setLoading(false);
   }, []);
 
@@ -51,6 +57,7 @@ export function useEdsWand() {
       setSeed({ row, col });
       setSeedAtPct(d.seed_at_pct || null);
       setGrowth(d.growth || []);
+      setGrowthAll(d.growth_all || []);
       // Start on the step nearest a small, obviously-a-feature selection
       // rather than at either extreme: 1 px tells the user nothing and the
       // last step is usually the whole map.
@@ -69,11 +76,20 @@ export function useEdsWand() {
   }, [clear]);
 
   /** 4-connected fill from the seed over `field <= threshold`. */
+  const curve = scope === 'all' && growthAll.length ? growthAll : growth;
+
   const mask = useMemo(() => {
     const field = fieldRef.current;
-    if (!field || !seed || !shape || !growth.length) return null;
+    if (!field || !seed || !shape || !curve.length) return null;
     const { n_rows: R, n_cols: C } = shape;
-    const thr = growth[Math.min(step, growth.length - 1)].threshold;
+    const thr = curve[Math.min(step, curve.length - 1)].threshold;
+    if (scope === 'all') {
+      // No connectivity: every measured pixel within the threshold.
+      const out = new Uint8Array(R * C);
+      for (let i = 0; i < out.length; i++) out[i] = field[i] <= thr ? 1 : 0;
+      maskRef.current = out;
+      return out;
+    }
     const start = seed.row * C + seed.col;
     const out = new Uint8Array(R * C);
     if (field[start] > thr) { maskRef.current = out; return out; }
@@ -94,10 +110,10 @@ export function useEdsWand() {
     }
     maskRef.current = out;
     return out;
-  }, [seed, shape, growth, step]);
+  }, [seed, shape, curve, step, scope]);
 
-  const nSelected = growth.length
-    ? growth[Math.min(step, growth.length - 1)].n_pixels : 0;
+  const nSelected = curve.length
+    ? curve[Math.min(step, curve.length - 1)].n_pixels : 0;
 
   /** Pack the mask the way the backend unpacks it (np.packbits order). */
   const packMask = useCallback(() => {
@@ -144,7 +160,8 @@ export function useEdsWand() {
   }, [packMask, clear]);
 
   return {
-    seed, seedAtPct, growth, step, setStep, shape, mask, nSelected,
+    seed, seedAtPct, growth: curve, step, setStep, shape, mask, nSelected,
+    scope, setScope,
     stats, refreshStats, loading, error,
     seedAt, commit, clear,
   };

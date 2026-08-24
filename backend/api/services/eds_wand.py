@@ -115,6 +115,33 @@ def wand_field(
     return field, scale, growth, seed_comp
 
 
+def global_growth_curve(field: np.ndarray) -> List[Dict]:
+    """Growth curve for "every pixel like this one", ignoring connectivity.
+
+    A phase rarely occurs as one blob: dispersoids, precipitates and second
+    phases are scattered across the scan. The connected fill needs one pass
+    per particle; this selects them all at once. It is a chemistry-space
+    selection, not a spatial one, so it has no seed component — just a
+    threshold on the same field, which makes it a cumulative histogram.
+    """
+    reachable = field[field < 255]
+    if reachable.size == 0:
+        return []
+    hist = np.bincount(reachable.ravel(), minlength=255)[:255]
+    cum = np.cumsum(hist)
+    qs = np.unique(np.quantile(
+        reachable, np.linspace(0.0, 1.0, GROWTH_STEPS)).astype(int))
+    out: List[Dict] = []
+    seen = set()
+    for t in qs:
+        n = int(cum[int(t)])
+        if n in seen:
+            continue
+        seen.add(n)
+        out.append({"threshold": int(t), "n_pixels": n})
+    return out
+
+
 def _growth_curve(field: np.ndarray, seed_row: int, seed_col: int) -> List[Dict]:
     """How many pixels the fill reaches at each threshold.
 

@@ -223,7 +223,16 @@
     "kUsed": "{{k}} 个聚类",
     "noneSelected": "请至少选择一个相。",
     "nClusterCount": "数量",
-    "unplaced": "图上没有的相 ({{count}})"
+    "unplaced": "图上没有的相 ({{count}})",
+    "undo": "撤销{{what}}",
+    "undoTooltip": "撤销上一次更改（{{what}}）。仅一级。",
+    "replaceTitle": "全图替换某个相",
+    "replaceTooltip": "将某个相的所有像素改为另一个相。适用于覆盖大部分图面、无法手动选择的分类错误。",
+    "replaceFrom": "替换…",
+    "replaceButton": "替换",
+    "replaceGo": "将该相的所有像素替换为图例中选中的相",
+    "replaceNeedTarget": "请先在图例中选择目标相",
+    "replaceHint": "目标是图例中选中的相。"
   },
   "periodicTable": {
     "title": "周期表 — EDS 元素颜色",
@@ -264,6 +273,11 @@
     "assignTooltip": "将所选相指定给这些像素",
     "assignTooltipNoPhase": "请先从图例中选择一个相",
     "cancel": "取消",
-    "cancelTooltip": "放弃此选择"
+    "cancelTooltip": "放弃此选择",
+    "scope": "选择范围",
+    "scopeConnected": "连通",
+    "scopeAll": "全图",
+    "scopeConnectedTooltip": "从点击的像素向外扩展，在特征边缘停止。",
+    "scopeAllTooltip": "选中图上所有成分相近的像素，而不仅是这一处特征。相很少是单个斑块。"
   }
 }

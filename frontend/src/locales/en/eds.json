@@ -223,7 +223,16 @@
     "kUsed": "{{k}} clusters",
     "noneSelected": "Select at least one phase.",
     "nClusterCount": "Count",
-    "unplaced": "Phases not on the map ({{count}})"
+    "unplaced": "Phases not on the map ({{count}})",
+    "undo": "Undo {{what}}",
+    "undoTooltip": "Take back the last change ({{what}}). One level.",
+    "replaceTitle": "Replace a phase everywhere",
+    "replaceTooltip": "Repoint every pixel of one phase at another. For a classifier error that covers a large part of the map, where selecting by hand is not practical.",
+    "replaceFrom": "Replace…",
+    "replaceButton": "Replace",
+    "replaceGo": "Replace every pixel of that phase with the one selected in the legend",
+    "replaceNeedTarget": "Pick the target phase in the legend first",
+    "replaceHint": "Target is whichever phase is selected in the legend."
   },
   "periodicTable": {
     "title": "Periodic Table — EDS Element Colors",
@@ -264,6 +273,11 @@
     "assignTooltip": "Assign the selected phase to these pixels",
     "assignTooltipNoPhase": "Pick a phase from the legend first",
     "cancel": "Cancel",
-    "cancelTooltip": "Discard this selection"
+    "cancelTooltip": "Discard this selection",
+    "scope": "Selection scope",
+    "scopeConnected": "Connected",
+    "scopeAll": "Everywhere",
+    "scopeConnectedTooltip": "Grow outward from the pixel you clicked, stopping at the feature's edge.",
+    "scopeAllTooltip": "Select every pixel on the map with a similar composition, not just this one feature. A phase is rarely a single blob."
   }
 }

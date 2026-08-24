@@ -104,3 +104,54 @@ def test_field_without_an_open_file_is_refused():
     r = client.post("/api/eds/phase-map/wand-field", json={"row": 0, "col": 0})
     assert r.status_code in (400, 500)
     assert r.status_code == 400 or "detail" in r.json()
+
+
+# --- undo / replace endpoints ----------------------------------------------
+
+def test_undo_with_nothing_to_undo_is_a_clean_400():
+    get_phase_map_store().clear()
+    r = client.post("/api/eds/phase-map/undo")
+    assert r.status_code == 400
+    assert "undo" in r.json()["detail"].lower()
+
+
+def test_undo_takes_back_an_assignment_through_the_api(loaded_map):
+    mask = np.zeros((4, 4), bool)
+    mask[0, 0] = True
+    client.post("/api/eds/phase-map/wand-assign",
+                json={"mask_b64": _packed(mask), "phase_index": 1})
+    assert loaded_map.get_state().phase_grid[0, 0] == 1
+    r = client.post("/api/eds/phase-map/undo")
+    assert r.status_code == 200, r.text
+    assert loaded_map.get_state().phase_grid[0, 0] == 0
+
+
+def test_the_response_names_what_undo_would_take_back(loaded_map):
+    mask = np.zeros((4, 4), bool)
+    mask[0, 0] = True
+    r = client.post("/api/eds/phase-map/wand-assign",
+                    json={"mask_b64": _packed(mask), "phase_index": 1})
+    assert r.json()["undo_label"] == "assign selection"
+
+
+def test_replace_swaps_a_phase_map_wide(loaded_map):
+    grid = loaded_map.get_state().phase_grid
+    grid[0, :] = 1                                  # a row of Si
+    r = client.post("/api/eds/phase-map/replace-phase",
+                    json={"from_phase_index": 1, "to_phase_index": 0})
+    assert r.status_code == 200, r.text
+    assert r.json()["n_replaced"] == 4
+    assert not (loaded_map.get_state().phase_grid == 1).any()
+
+
+def test_replace_rejects_an_unknown_phase(loaded_map):
+    r = client.post("/api/eds/phase-map/replace-phase",
+                    json={"from_phase_index": 0, "to_phase_index": 99})
+    assert r.status_code == 400
+
+
+def test_replace_without_a_map_is_refused():
+    get_phase_map_store().clear()
+    r = client.post("/api/eds/phase-map/replace-phase",
+                    json={"from_phase_index": 0, "to_phase_index": 1})
+    assert r.status_code == 400
