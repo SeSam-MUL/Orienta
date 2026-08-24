@@ -316,6 +316,30 @@
     "growTooltip": "Die Kante dieser Struktur um ein Pixel hinausschieben oder hereinziehen. Blind gegenüber der Chemie — dafür ist „Schnappen“ da.",
     "snap": "Kanten schnappen",
     "snapGo": "Schnappen",
-    "snapTooltip": "Jede Grenze auf die nächste starke Chemie-Kante relaxieren lassen. Der Regler bestimmt, wie breit das Band um jede Grenze ist, das neu entschieden wird; die Kerne der Strukturen behalten immer ihre Identität, es kann also nichts verschwinden oder tauschen."
+    "snapTooltip": "Jede Grenze auf die nächste starke Chemie-Kante relaxieren lassen. Der Regler bestimmt, wie breit das Band um jede Grenze ist, das neu entschieden wird; die Kerne der Strukturen behalten immer ihre Identität, es kann also nichts verschwinden oder tauschen.",
+    "handTools": "Von Hand malen",
+    "handToolsHint": "Eine ganze Struktur zu benennen ist ein Klick. Die Handwerkzeuge stehen unten für alles, was sich über die Gruppierung nicht ausdrücken lässt.",
+    "handToolsTooltip": "Rechteck, Polygon, Zauberstab und phasenweites Ersetzen. Sie gehören zur Phasenansicht; beim Gruppieren sind sie eingeklappt, damit sich nicht zwei Werkzeugsätze dieselbe Spalte teilen."
+  },
+  "inspector": {
+    "title": "Struktur-Inspektor",
+    "empty": "Region in der Karte anklicken oder eine Zeile in der Liste, um sie anzusehen.",
+    "loading": "Struktur wird gelesen…",
+    "headline": "{{px}} px · {{pct}}% der Karte",
+    "pieces": "{{count}} zusammenhängende Stücke",
+    "piecesTooltip": "In wie vielen getrennten Teilen diese Struktur vorliegt, größtes zuerst. Drei konzentrische Ringe eines Partikels erscheinen hier als drei ähnlich große Stücke — das ist das Zeichen zum Verschmelzen.",
+    "composition": "Zusammensetzung",
+    "element": "Element",
+    "spreadTooltip": "Standardabweichung innerhalb der Struktur. Eine Struktur, die nicht homogen ist, ist entweder zweierlei oder ein Verlauf.",
+    "enrichment": "geg. Untergrund",
+    "enrichmentTooltip": "Wievielfach dieses Element hier den Untergrund der Karte selbst erreicht. Dieselbe Größe, auf die der Klassifikator prüft — Anzeige und Klassifikator können sich also nicht widersprechen. Unter etwa 1,3× kann auch er Merkmal nicht von Untergrund trennen.",
+    "neighbours": "Grenzt an",
+    "noNeighbours": "Grenzt an nichts.",
+    "neighbourGap": "{{gap}} at% entfernt",
+    "neighbourTooltip": "Größter Einzelelement-Unterschied: {{gap}} at%, über {{edge}} px gemeinsame Grenze. Klicken zum Ansehen. Ein kleiner Abstand bei langer gemeinsamer Grenze heißt meist: eine Struktur wurde zerschnitten.",
+    "candidates": "Nächste Phasen",
+    "candidateTooltip": "{{name}} liegt im Mittel {{gap}} at% daneben. Klicken, um sie auf die ganze Struktur zu legen.",
+    "candidateHint": "Die Zahl ist die mittlere at%-Abweichung — kleiner ist näher.",
+    "clearName": "Unbenannt lassen"
   }
 }

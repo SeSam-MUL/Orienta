@@ -316,6 +316,30 @@
     "growTooltip": "Push this structure's edge out or pull it in by one pixel. Blind to the chemistry — use Snap for that.",
     "snap": "Snap edges",
     "snapGo": "Snap",
-    "snapTooltip": "Let every boundary relax onto the nearest strong chemistry edge. The slider is how wide a band around each boundary is put up for re-decision; the structures' interiors always keep their identity, so nothing can vanish or swap."
+    "snapTooltip": "Let every boundary relax onto the nearest strong chemistry edge. The slider is how wide a band around each boundary is put up for re-decision; the structures' interiors always keep their identity, so nothing can vanish or swap.",
+    "handTools": "Paint by hand",
+    "handToolsHint": "Naming a whole structure is one click. The hand tools are below for anything the grouping cannot express.",
+    "handToolsTooltip": "Rectangle, polygon, wand and map-wide replacement. These belong to the phase view; while grouping they are folded away so both toolsets do not compete for the same column."
+  },
+  "inspector": {
+    "title": "Structure inspector",
+    "empty": "Click a region on the map, or a row in the list, to inspect it.",
+    "loading": "Reading the structure…",
+    "headline": "{{px}} px · {{pct}}% of the map",
+    "pieces": "{{count}} connected pieces",
+    "piecesTooltip": "How many separate parts this structure is in, largest first. Three concentric rings of one particle show up here as three pieces of similar size — that is the sign to merge.",
+    "composition": "Composition",
+    "element": "Element",
+    "spreadTooltip": "Standard deviation inside the structure. A structure that is not homogeneous is either two things or a gradient.",
+    "enrichment": "vs background",
+    "enrichmentTooltip": "How many times the map's own background level this element reaches here. The same quantity the classifier gates on, so this readout and the classifier cannot disagree. Below about 1.3× the classifier itself cannot tell feature from background.",
+    "neighbours": "Touches",
+    "noNeighbours": "Touches nothing else.",
+    "neighbourGap": "{{gap}} at% apart",
+    "neighbourTooltip": "Largest single-element difference: {{gap}} at%, over {{edge}} px of shared edge. Click to inspect it. A small gap on a long shared edge usually means one structure cut in two.",
+    "candidates": "Closest phases",
+    "candidateTooltip": "{{name}} is {{gap}} at% off on average. Click to put it on the whole structure.",
+    "candidateHint": "Number is the mean at% difference — smaller is closer.",
+    "clearName": "Leave unnamed"
   }
 }

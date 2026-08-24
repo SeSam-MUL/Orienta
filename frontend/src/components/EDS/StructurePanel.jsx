@@ -30,31 +30,6 @@ export function describeComposition(meanAtPct, maxElements = 4) {
   return entries.map(([el, v]) => `${el} ${v.toFixed(1)}`).join(' · ');
 }
 
-/**
- * Rank the candidate phases for one structure by how well their nominal
- * composition matches its mean.
- *
- * Deliberately a display aid, not a second classifier: the backend already
- * decided, and this only orders the picker so the plausible names are near the
- * top. Score is the mean absolute at% difference over the union of elements,
- * turned into "smaller is better" — the same quantity a person reads off the
- * two compositions side by side.
- */
-export function rankCandidates(structure, allPhases) {
-  const mean = structure?.mean_at_pct || {};
-  const measured = Object.keys(mean).filter((el) => mean[el] >= 0.5);
-  if (measured.length === 0) return allPhases || [];
-  return [...(allPhases || [])]
-    .map((p) => {
-      const comp = p.composition || {};
-      const els = new Set([...measured, ...Object.keys(comp)]);
-      let sum = 0;
-      els.forEach((el) => { sum += Math.abs((mean[el] || 0) - (comp[el] || 0)); });
-      return { ...p, _gap: sum / Math.max(1, els.size) };
-    })
-    .sort((a, b) => a._gap - b._gap);
-}
-
 function ToolRow({ children, title }) {
   return (
     <div
@@ -74,7 +49,7 @@ export default function StructurePanel({ handle }) {
     selectedStructureId, setSelectedStructureId,
     scale, setScale,
     nClusters, setNClusters,
-    handleAssignStructure, handleMergeStructures, handleSplitStructure,
+    handleMergeStructures, handleSplitStructure,
     handleGrowStructure, handleSnapEdges,
   } = handle;
 
@@ -82,14 +57,9 @@ export default function StructurePanel({ handle }) {
   const [snapStrength, setSnapStrength] = useState(2);
 
   const structures = phaseMap?.structures || [];
-  const allPhases = phaseMap?.all_phases || [];
   const selected = useMemo(
     () => structures.find((s) => s.structure_id === selectedStructureId) || null,
     [structures, selectedStructureId],
-  );
-  const ranked = useMemo(
-    () => rankCandidates(selected, allPhases).slice(0, 8),
-    [selected, allPhases],
   );
 
   const pick = useCallback((sid) => {
@@ -217,56 +187,10 @@ export default function StructurePanel({ handle }) {
       {selected && (
         <div style={{ marginTop: 4, padding: '4px 6px', borderRadius: 4,
                       border: `1px solid ${alpha(C.cyan, 30)}` }}>
-          <Label secondary small style={{ display: 'block' }}>
-            {t('structures.selected', {
-              px: selected.n_pixels,
-              comp: describeComposition(selected.mean_at_pct) || '—',
-            })}
-          </Label>
-
-          {/* Name it — the whole point of the layer. */}
-          <Label secondary small style={{ display: 'block', marginTop: 4 }}>
-            {t('structures.nameIt')}
-          </Label>
-          <div className="thin-scrollbar"
-               style={{ display: 'flex', flexDirection: 'column', gap: 1,
-                        maxHeight: 120, overflowY: 'auto' }}>
-            {ranked.map((p) => (
-              <button
-                key={p.phase_index}
-                type="button"
-                disabled={structureBusy}
-                onClick={() => handleAssignStructure(selected.structure_id,
-                                                     p.phase_index)}
-                title={t('structures.nameTooltip', { name: p.cif_filename })}
-                style={{
-                  textAlign: 'left', fontSize: '8.5pt', padding: '2px 4px',
-                  borderRadius: 3, cursor: structureBusy ? 'wait' : 'pointer',
-                  background: p.phase_index === selected.phase_index
-                    ? alpha(C.green, 20) : 'transparent',
-                  border: '1px solid transparent', color: C.text,
-                }}
-              >
-                {p.cif_filename}
-                <span style={{ color: C.textSecondary, marginLeft: 6 }}>
-                  {p.formula}
-                </span>
-              </button>
-            ))}
-            <button
-              type="button"
-              disabled={structureBusy}
-              onClick={() => handleAssignStructure(selected.structure_id, -1)}
-              title={t('structures.clearNameTooltip')}
-              style={{ textAlign: 'left', fontSize: '8.5pt', padding: '2px 4px',
-                       borderRadius: 3, background: 'transparent',
-                       border: '1px solid transparent', color: C.textSecondary,
-                       cursor: structureBusy ? 'wait' : 'pointer' }}
-            >
-              {t('structures.clearName')}
-            </button>
-          </div>
-
+          {/* The composition, the candidates and the neighbours live in the
+              inspector under the map, where they fit side by side. Repeating
+              them here cost a second ranking definition that could disagree
+              with the backend's. */}
           {/* Merge — the tool this data needs most. */}
           <ToolRow title={t('structures.mergeTooltip')}>
             <Label secondary small style={{ minWidth: 62 }}>

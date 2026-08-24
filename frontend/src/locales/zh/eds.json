@@ -316,6 +316,30 @@
     "growTooltip": "将此结构的边缘向外推或向内收 1 像素。不看化学成分。",
     "snap": "边界吸附",
     "snapGo": "吸附",
-    "snapTooltip": "让每条边界松弛到最近的强化学边缘。结构内部始终保持身份。"
+    "snapTooltip": "让每条边界松弛到最近的强化学边缘。结构内部始终保持身份。",
+    "handTools": "手动绘制",
+    "handToolsHint": "命名整个结构只需一次点击。分组无法表达的情况请用下面的手动工具。",
+    "handToolsTooltip": "矩形、多边形、魔棒和全图替换。它们属于物相视图；分组时折叠起来，避免两套工具争夺同一列。"
+  },
+  "inspector": {
+    "title": "结构检视器",
+    "empty": "点击图上的区域，或列表中的一行来查看。",
+    "loading": "正在读取结构…",
+    "headline": "{{px}} px · 占图的 {{pct}}%",
+    "pieces": "{{count}} 个连通部分",
+    "piecesTooltip": "该结构分为多少个独立部分（从大到小）。一个颗粒的三层同心环在这里表现为三个大小相近的部分 — 这就是该合并的信号。",
+    "composition": "成分",
+    "element": "元素",
+    "spreadTooltip": "结构内的标准差。不均匀的结构要么是两种东西，要么是一个梯度。",
+    "enrichment": "相对背景",
+    "enrichmentTooltip": "该元素在此处达到本图背景水平的多少倍。与分类器判定所用的是同一个量。低于约 1.3 倍时，分类器本身也无法区分特征与背景。",
+    "neighbours": "相邻",
+    "noNeighbours": "不与其他结构相邻。",
+    "neighbourGap": "相差 {{gap}} at%",
+    "neighbourTooltip": "最大单元素差：{{gap}} at%，共享边界 {{edge}} px。点击查看。边界很长而差异很小，通常意味着一个结构被切成了两个。",
+    "candidates": "最接近的物相",
+    "candidateTooltip": "{{name}} 平均相差 {{gap}} at%。点击应用于整个结构。",
+    "candidateHint": "数字是平均 at% 差 — 越小越接近。",
+    "clearName": "保持未命名"
   }
 }

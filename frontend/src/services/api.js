@@ -903,6 +903,13 @@ export const edsApi = {
       { structure_id: structureId, n_pixels: nPixels }),
   snapStructureEdges: ({ strength }) =>
     api.post('/api/eds/phase-map/structure/snap', { strength }),
+  // Full description of one structure, for the inspector.
+  structureDetail: (structureId) =>
+    api.get(`/api/eds/phase-map/structure/${structureId}`),
+  // Which structure is under this pixel, described in full — one round
+  // trip for the whole click.
+  structureAt: (row, col) =>
+    api.post('/api/eds/phase-map/structure-at', { row, col }),
   phaseMapIndexingConfig: () => api.get('/api/eds/phase-map/indexing-config'),
   displayModes: () => api.get('/api/eds/display-modes'),
   chemistryMask: (filters, combine = 'and', margin_px = 0) =>

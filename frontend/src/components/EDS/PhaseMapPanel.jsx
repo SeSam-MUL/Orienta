@@ -86,6 +86,10 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   // to hide that - measured at k=8 on SampleB: 3491 pieces, median size 1 px.
   const [scale, setScale] = useState(null);
   const [structureBusy, setStructureBusy] = useState(false);
+  // Bumped by anything that changes the grouping. Merging renumbers
+  // ids, splitting adds them, a boundary move changes the pixels — the
+  // inspector has to re-read or it describes a structure that is gone.
+  const [mapVersion, setMapVersion] = useState(0);
   // The SAME store the EBSD phase map uses, so a phase keeps its colour on
   // both pages and the user's choice survives a reload.
   const colorOverrides = usePhaseColorStore((s) => s.overrides);
@@ -160,6 +164,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     try {
       const res = await fn(args);
       if (res.data?.loaded) setPhaseMap(res.data);
+      setMapVersion((v) => v + 1);
       return res.data;
     } catch (e) {
       setError(e.response?.data?.detail || String(e));
@@ -326,7 +331,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     colorOverrides, setPhaseColor, resetPhaseColor,
     mapView, setMapView,
     selectedStructureId, setSelectedStructureId,
-    scale, setScale, structureBusy,
+    scale, setScale, structureBusy, mapVersion,
     handleAssignStructure, handleMergeStructures, handleSplitStructure,
     handleGrowStructure, handleSnapEdges,
     selectedPhaseKeys, setSelectedPhaseKeys,
@@ -395,7 +400,8 @@ function pixelFromClick(e) {
  * No phase map → empty placeholder so the parent can still slot the
  * canvas into the layout without flicker.
  */
-export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand }) {
+export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
+                                onPickStructure }) {
   const { t } = useTranslation('eds');
   const {
     phaseMap, hoveredPixel, setHoveredPixel,
@@ -446,7 +452,13 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand }) {
       // a user clicking a Cu-rich region got the candidate list for
       // wherever they last clicked a tile.
       onInspect?.(endRow, endCol);
-      if (isWand) {
+      if (onPickStructure) {
+        // Structure view: the click selects the region under it. It must NOT
+        // fall through to the single-pixel paint below — that is the phase
+        // view's gesture, and here it would quietly hand-edit one pixel
+        // instead of picking the structure the user aimed at.
+        onPickStructure(endRow, endCol);
+      } else if (isWand) {
         // Wand mode: the click seeds a selection instead of assigning.
         wand?.seedAt(endRow, endCol);
       } else {
@@ -462,7 +474,8 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand }) {
       setHoveredPixel(null);
     }
     setDrag(null);
-  }, [drag, setHoveredPixel, setRegion, onInspect, onAssignPixel, isWand, wand]);
+  }, [drag, setHoveredPixel, setRegion, onInspect, onAssignPixel, isWand, wand,
+      onPickStructure]);
 
   const handleMouseLeave = useCallback(() => {
     // Cancel the drag if the mouse leaves the image — otherwise a
@@ -1099,6 +1112,20 @@ export function PhaseMapControls({ handle }) {
           </div>
         )}
 
+        {/* --- Hand tools. Collapsed while grouping, because they belong to
+            the phase view and stacking both toolsets is what made this rail
+            unreadable. --- */}
+        {hasMap && showStructures && (
+          <Label secondary small style={{ display: 'block', marginTop: 6 }}>
+            {t('structures.handToolsHint')}
+          </Label>
+        )}
+        <details open={!showStructures} style={{ marginTop: 2 }}>
+          <summary style={{ cursor: 'pointer', fontSize: '8.5pt',
+                            color: C.textSecondary, userSelect: 'none' }}
+                   title={t('structures.handToolsTooltip')}>
+            {t('structures.handTools')}
+          </summary>
         {/* --- Region painting (M4) --- */}
         {hasMap && (
           <div style={{
@@ -1428,6 +1455,8 @@ export function PhaseMapControls({ handle }) {
             )}
           </div>
         )}
+
+        </details>
 
         {/* --- Send to indexing (M5 entry point) --- */}
         {hasMap && realPhases.length > 0 && (

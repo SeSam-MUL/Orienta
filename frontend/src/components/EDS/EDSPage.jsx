@@ -39,6 +39,8 @@ import { useLinescan } from './hooks/useLinescan';
 import { useSuggestPhases } from './hooks/useSuggestPhases';
 import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from './hooks/useZoomViews';
 import { usePhaseMap, PhaseMapCanvas, PhaseMapControls } from './PhaseMapPanel';
+import StructureInspector from './StructureInspector';
+import useStructureInspector from './hooks/useStructureInspector';
 import { exportComposite } from './compositeExporter';
 import ContextMenu from '../common/ContextMenu';
 import ImageExportDialog from '../common/ImageExportDialog';
@@ -337,6 +339,16 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     onNavigate?.('indexing');
   }, [onNavigate, setPendingPhaseMap]);
   const phaseMapHandle = usePhaseMap({ onIndexingHandoff: handlePhaseMapHandoff });
+  // The inspector follows whichever structure is selected, from the map or
+  // from the list, and re-reads after anything that changes the grouping
+  // (merge renumbers ids, split adds them).
+  const inspector = useStructureInspector({
+    selectedStructureId: phaseMapHandle.selectedStructureId,
+    setSelectedStructureId: phaseMapHandle.setSelectedStructureId,
+    mapVersion: phaseMapHandle.mapVersion,
+  });
+  const inStructureView = phaseMapHandle.mapView === 'structures'
+    && (phaseMapHandle.phaseMap?.structures || []).length > 0;
 
   // Pixel Quantification state (lifted).
   const [pixelRow, setPixelRow] = useState(0);
@@ -936,12 +948,36 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                   handle={phaseMapHandle}
                   onInspect={onPixelClick}
                   wand={phaseMapHandle.wand}
+                  /* In the structure view a click picks the region under it
+                     rather than painting a single pixel. */
+                  onPickStructure={inStructureView
+                    ? inspector.inspectPixel : undefined}
                   /* A click assigns only when a phase is armed in the
                      legend; otherwise it inspects, as before. */
                   onAssignPixel={phaseMapHandle.selectedPhaseIndex != null
                     ? ((row, col) => phaseMapHandle.handleAssignPixel(
                         row, col, phaseMapHandle.selectedPhaseIndex))
                     : undefined}
+                />
+              </GroupBox>
+            )}
+            {/* Under the map, not in the rail: the composition, the
+                neighbours and the candidates are columns, and 300 px of rail
+                turns each of them into its own scroll box. */}
+            {inStructureView && (
+              <GroupBox
+                title={t('inspector.title')}
+                style={{ marginBottom: spacing.outerSpacing, flexShrink: 0 }}
+              >
+                <StructureInspector
+                  detail={inspector.detail}
+                  loading={inspector.loading}
+                  error={inspector.error}
+                  busy={phaseMapHandle.structureBusy}
+                  phaseIndex={inspector.detail?.phase_index}
+                  onAssign={(phaseIndex) => phaseMapHandle.handleAssignStructure(
+                    inspector.detail.structure_id, phaseIndex)}
+                  onSelectStructure={phaseMapHandle.setSelectedStructureId}
                 />
               </GroupBox>
             )}

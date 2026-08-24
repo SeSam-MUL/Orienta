@@ -1875,3 +1875,153 @@ async def snap_edges_endpoint(req: SnapEdgesRequest):
     """Let every boundary relax onto the nearest strong chemistry edge."""
     store = get_phase_map_store()
     return _structure_op(store.snap_structure_edges, req.strength)
+
+
+class StructureAtRequest(BaseModel):
+    row: int
+    col: int
+
+
+def _structure_detail(state, sid: int) -> dict:
+    """Everything worth knowing about one structure.
+
+    Computed on demand rather than for every structure on every response: the
+    composition spread and the neighbour scan are O(pixels x elements) each,
+    which is nothing for one structure and real work for twenty on a 485k-px
+    map.
+    """
+    from scipy import ndimage as _ndi
+
+    from backend.api.services.chemistry_score import background_levels
+    from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
+    from backend.api.services.eds_wand import selection_stats
+
+    grid = state.structure_grid
+    mask2d = grid == sid
+    n_px = int(mask2d.sum())
+    detail = {
+        "structure_id": sid,
+        "n_pixels": n_px,
+        "percentage": round(n_px / max(1, state.n_rows * state.n_cols) * 100, 2),
+        "color": structure_color_hex(sid),
+        "phase_index": int(state.structure_phase[sid]),
+        "elements": [],
+        "pieces": [],
+        "neighbours": [],
+        "candidates": [],
+    }
+    if n_px == 0:
+        return detail
+
+    # --- connected pieces: three rings of one particle look like three
+    # structures, and this is where that becomes visible.
+    labelled, n_pieces = _ndi.label(mask2d)
+    sizes = sorted((int(v) for v in np.bincount(labelled.ravel())[1:]), reverse=True)
+    detail["n_pieces"] = int(n_pieces)
+    detail["pieces"] = sizes[:12]
+
+    try:
+        at_maps, n_rows, n_cols, _fp = _build_at_pct_maps_for_loaded_file()
+    except Exception:
+        at_maps = None
+    if at_maps is None or n_rows != state.n_rows or n_cols != state.n_cols:
+        return detail
+
+    flat = mask2d.ravel()
+    # Mean and enrichment come from the wand's own reporter, not a second
+    # implementation. Enrichment needs the composition renormalised over the
+    # scored elements before dividing by the background - doing that by hand
+    # here produced "Al 49.68x" on a map whose background IS aluminium.
+    stats = selection_stats(at_maps, mask2d, background=background_levels(at_maps))
+    means = {el: v for el, v in stats["mean_at_pct"].items()
+             if el not in _CHEM_IGNORE}
+    els = []
+    for el, mean in means.items():
+        vals = np.asarray(at_maps[el], dtype=float).ravel()[flat]
+        els.append({
+            "element": el,
+            "at_pct": round(float(mean), 2),
+            # Spread inside the structure: one that is not homogeneous is
+            # either two things or a gradient, and both are worth seeing.
+            "spread": round(float(vals.std()), 2),
+            "enrichment": stats["enrichment"].get(el),
+        })
+    els.sort(key=lambda d: -d["at_pct"])
+    detail["elements"] = els
+
+    # --- neighbours: who this structure touches, and how far away it is
+    # chemically. The decision basis for merging.
+    struct = _ndi.generate_binary_structure(2, 1)
+    rim = _ndi.binary_dilation(mask2d, structure=struct) & ~mask2d
+    touching = sorted({int(v) for v in grid[rim] if v >= 0 and v != sid})
+    for other in touching:
+        om = (grid == other).ravel()
+        if not om.any():
+            continue
+        gap = 0.0
+        for el, mean in means.items():
+            ov = float(np.asarray(at_maps[el], dtype=float).ravel()[om].mean())
+            gap = max(gap, abs(mean - ov))
+        detail["neighbours"].append({
+            "structure_id": other,
+            "color": structure_color_hex(other),
+            "shared_edge_px": int((grid[rim] == other).sum()),
+            # Largest single-element difference, in at% - the same measure the
+            # cluster count is chosen by, so "2 at% apart" means the same
+            # thing here as it does there.
+            "gap_at_pct": round(gap, 2),
+        })
+    detail["neighbours"].sort(key=lambda d: d["gap_at_pct"])
+
+    # --- candidates, with the distance spelled out. ONE ranking definition,
+    # here, so the inspector and any other view cannot disagree.
+    for i, e in enumerate(state.phase_entries):
+        comp = e.composition or {}
+        keys = set(means) | set(comp)
+        if not keys:
+            continue
+        gap = sum(abs(means.get(k, 0.0) - float(comp.get(k, 0.0))) for k in keys)
+        detail["candidates"].append({
+            "phase_index": i,
+            "cif_filename": e.cif_filename,
+            "formula": e.formula,
+            "gap_at_pct": round(gap / len(keys), 2),
+        })
+    detail["candidates"].sort(key=lambda d: d["gap_at_pct"])
+    return detail
+
+
+@router.get("/phase-map/structure/{structure_id}")
+async def get_structure_detail(structure_id: int):
+    """Full description of one structure, for the inspector."""
+    state = get_phase_map_store().get_state()
+    if state is None or state.structure_grid is None:
+        raise HTTPException(status_code=400, detail="No structures on this map")
+    if not (0 <= structure_id < len(state.structure_phase)):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Structure {structure_id} out of range "
+                   f"(0..{len(state.structure_phase) - 1})")
+    return await asyncio.to_thread(_structure_detail, state, int(structure_id))
+
+
+@router.post("/phase-map/structure-at")
+async def structure_at(req: StructureAtRequest):
+    """Which structure is under this pixel, described in full.
+
+    One round trip for the whole click: the map has no structure ids on the
+    client, and fetching the id and then its detail would be two.
+    """
+    state = get_phase_map_store().get_state()
+    if state is None or state.structure_grid is None:
+        raise HTTPException(status_code=400, detail="No structures on this map")
+    if not (0 <= req.row < state.n_rows and 0 <= req.col < state.n_cols):
+        raise HTTPException(
+            status_code=400,
+            detail=f"pixel ({req.row},{req.col}) outside scan "
+                   f"{state.n_rows}x{state.n_cols}")
+    sid = int(state.structure_grid[req.row, req.col])
+    if sid < 0:
+        # No data here - say so rather than returning structure 0.
+        return {"structure_id": None}
+    return await asyncio.to_thread(_structure_detail, state, sid)

@@ -15,7 +15,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k, o) => (o ? `${k}:${JSON.stringify(o)}` : k) }),
 }));
 
-import StructurePanel, { describeComposition, rankCandidates } from './StructurePanel';
+import StructurePanel, { describeComposition } from './StructurePanel';
 
 const STRUCTURES = [
   { structure_id: 0, n_pixels: 3036, percentage: 28.1, color: '#aabbcc',
@@ -47,7 +47,6 @@ function makeHandle(over = {}) {
     setSelectedStructureId: vi.fn(),
     scale: 5, setScale: vi.fn(),
     nClusters: null, setNClusters: vi.fn(),
-    handleAssignStructure: vi.fn(),
     handleMergeStructures: vi.fn(),
     handleSplitStructure: vi.fn(),
     handleGrowStructure: vi.fn(),
@@ -74,35 +73,9 @@ describe('describeComposition', () => {
   });
 });
 
-describe('rankCandidates', () => {
-  it('puts the closest nominal composition first', () => {
-    const ranked = rankCandidates(
-      { mean_at_pct: { Al: 50, Si: 50 } }, ALL_PHASES);
-    expect(ranked[0].cif_filename).toBe('AlSi.cif');
-  });
-
-  it('ranks a nearly pure structure onto the pure phase', () => {
-    const ranked = rankCandidates({ mean_at_pct: { Al: 97, Si: 1.2 } }, ALL_PHASES);
-    expect(ranked[0].cif_filename).toBe('Al.cif');
-  });
-
-  it('offers phases the classifier placed nowhere', () => {
-    // The whole point of naming by hand: AlSi.cif holds 0 px and must still
-    // be offered, or the correction the user wants is impossible.
-    const ranked = rankCandidates({ mean_at_pct: { Al: 50, Si: 50 } }, ALL_PHASES);
-    expect(ranked.map((p) => p.cif_filename)).toContain('AlSi.cif');
-  });
-
-  it('keeps every candidate when the structure has no chemistry to rank by', () => {
-    expect(rankCandidates({ mean_at_pct: {} }, ALL_PHASES)).toHaveLength(3);
-  });
-
-  it('does not mutate the list it was given', () => {
-    const before = ALL_PHASES.map((p) => p.cif_filename);
-    rankCandidates({ mean_at_pct: { Si: 90 } }, ALL_PHASES);
-    expect(ALL_PHASES.map((p) => p.cif_filename)).toEqual(before);
-  });
-});
+// Candidate ranking moved to the backend (`_structure_detail`) when the
+// inspector started showing the at% gap: two rankings could disagree about
+// which phase sits under the user's cursor. The inspector's tests cover it.
 
 describe('the panel', () => {
   it('lists every structure with its composition, not its phase name', () => {
@@ -119,21 +92,7 @@ describe('the panel', () => {
     expect(h.setSelectedStructureId).toHaveBeenCalledWith(1);
   });
 
-  it('names the selected structure in one click', () => {
-    const h = makeHandle({ selectedStructureId: 1 });
-    render(<StructurePanel handle={h} />);
-    fireEvent.click(screen.getByTitle('structures.nameTooltip:{"name":"AlSi.cif"}'));
-    expect(h.handleAssignStructure).toHaveBeenCalledWith(1, 2);
-  });
-
-  it('can take a name off again', () => {
-    const h = makeHandle({ selectedStructureId: 1 });
-    render(<StructurePanel handle={h} />);
-    fireEvent.click(screen.getByText('structures.clearName'));
-    expect(h.handleAssignStructure).toHaveBeenCalledWith(1, -1);
-  });
-
-  it('merges the selected structure with another', () => {
+      it('merges the selected structure with another', () => {
     const h = makeHandle({ selectedStructureId: 1 });
     render(<StructurePanel handle={h} />);
     fireEvent.change(screen.getByLabelText('structures.merge'), {
