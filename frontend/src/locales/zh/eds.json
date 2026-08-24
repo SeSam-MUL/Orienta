@@ -248,5 +248,22 @@
     "paintModePolygon": "通过点击多边形顶点来绘制区域",
     "colorInput": "为此元素选择新的显示颜色",
     "resetColors": "将所有元素颜色重置为默认值"
+  },
+  "wand": {
+    "mode": "魔棒",
+    "modeTooltip": "点击某个特征以选中所有化学上相似的像素，然后调整选择范围。",
+    "hint": "点击图上的特征以选中它。",
+    "selection": "选择",
+    "pixels": "{{count}} px",
+    "sliderAria": "选择范围大小",
+    "sliderTooltip": "选择延伸多远。坐标轴是像素数，因为直接用化学阈值存在死区。数值突然跳升表示选择已漏入基体。",
+    "enrichment": "富集",
+    "enrichmentNone": "没有高于背景的元素",
+    "enrichmentTooltip": "该选择中各元素达到本图自身背景值的倍数。低于约 1.3 倍时，分类器自身也无法区分特征与背景。",
+    "assign": "指定",
+    "assignTooltip": "将所选相指定给这些像素",
+    "assignTooltipNoPhase": "请先从图例中选择一个相",
+    "cancel": "取消",
+    "cancelTooltip": "放弃此选择"
   }
 }

@@ -248,5 +248,22 @@
     "paintModePolygon": "ポリゴンの頂点をクリックして領域を塗る",
     "colorInput": "この元素の新しい表示色を選択",
     "resetColors": "すべての元素カラーをデフォルトに戻す"
+  },
+  "wand": {
+    "mode": "ワンド",
+    "modeTooltip": "特徴をクリックすると化学的に似た領域を選択し、範囲を調整できます。",
+    "hint": "マップ上の特徴をクリックして選択します。",
+    "selection": "選択",
+    "pixels": "{{count}} px",
+    "sliderAria": "選択範囲の大きさ",
+    "sliderTooltip": "選択がどこまで広がるか。軸はピクセル数です（化学しきい値には不感帯があるため）。急な増加は選択がマトリクスへ漏れた合図です。",
+    "enrichment": "濃化",
+    "enrichmentNone": "背景を超えるものなし",
+    "enrichmentTooltip": "この選択で各元素がマップ自身の背景値の何倍に達しているか。約 1.3 倍を下回ると、分類器自体も特徴と背景を区別できません。",
+    "assign": "割り当て",
+    "assignTooltip": "選択した相をこれらのピクセルに割り当てます",
+    "assignTooltipNoPhase": "先に凡例から相を選んでください",
+    "cancel": "キャンセル",
+    "cancelTooltip": "この選択を破棄"
   }
 }

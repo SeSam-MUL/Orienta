@@ -30,6 +30,8 @@ import {
   Button, NumberInput, GroupBox, Label,
 } from '../../theme/components';
 import useDataStore from '../../stores/useDataStore';
+import WandOverlay from './WandOverlay';
+import { useEdsWand } from './hooks/useEdsWand';
 
 const DEFAULT_TOLERANCE = 15.0;
 const DEFAULT_MIN_SCORE = 0.3;
@@ -58,7 +60,8 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   // click-to-add-vertex with explicit close (added later — rectangle is
   // good for axis-aligned regions, polygon for irregular grain
   // outlines).
-  const [paintMode, setPaintMode] = useState('rectangle');
+  const [paintMode, setPaintMode] = useState('rectangle');  // 'rectangle' | 'polygon' | 'wand'
+  const wand = useEdsWand();
   const [polygonVertices, setPolygonVertices] = useState([]);  // [[col, row], ...]
 
   // Last clicked pixel (for the readout under the canvas)
@@ -218,6 +221,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     assignBusy,
     hoveredPixel, setHoveredPixel,
     paintMode, setPaintMode,
+    wand,
     polygonVertices, setPolygonVertices,
     handleAutoClassify, handleClearMap,
     handleAssignRegion, handleAssignPixel, handleClosePolygon, handleCancelPolygon,
@@ -275,7 +279,7 @@ function pixelFromClick(e) {
  * No phase map → empty placeholder so the parent can still slot the
  * canvas into the layout without flicker.
  */
-export function PhaseMapCanvas({ handle, onInspect, onAssignPixel }) {
+export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand }) {
   const { t } = useTranslation('eds');
   const {
     phaseMap, hoveredPixel, setHoveredPixel,
@@ -285,6 +289,7 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel }) {
   const [drag, setDrag] = useState(null);  // { startRow, startCol, endRow, endCol } | null
 
   const isPolygon = paintMode === 'polygon';
+  const isWand = paintMode === 'wand';
 
   const handleMouseDown = useCallback((e) => {
     if (isPolygon) return;  // polygon mode uses click-to-add-vertex, not drag
@@ -317,8 +322,13 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel }) {
       // a user clicking a Cu-rich region got the candidate list for
       // wherever they last clicked a tile.
       onInspect?.(endRow, endCol);
-      // Armed phase -> the click also assigns that single pixel.
-      onAssignPixel?.(endRow, endCol);
+      if (isWand) {
+        // Wand mode: the click seeds a selection instead of assigning.
+        wand?.seedAt(endRow, endCol);
+      } else {
+        // Armed phase -> the click also assigns that single pixel.
+        onAssignPixel?.(endRow, endCol);
+      }
     } else {
       const r0 = Math.min(drag.startRow, endRow);
       const r1 = Math.max(drag.startRow, endRow);
@@ -328,7 +338,7 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel }) {
       setHoveredPixel(null);
     }
     setDrag(null);
-  }, [drag, setHoveredPixel, setRegion, onInspect, onAssignPixel]);
+  }, [drag, setHoveredPixel, setRegion, onInspect, onAssignPixel, isWand, wand]);
 
   const handleMouseLeave = useCallback(() => {
     // Cancel the drag if the mouse leaves the image — otherwise a
@@ -444,6 +454,9 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel }) {
             userSelect: 'none',
           }}
         />
+        {isWand && wand?.mask && (
+          <WandOverlay mask={wand.mask} shape={wand.shape} seed={wand.seed} />
+        )}
         {(liveRect || (isPolygon && polygonVertices.length > 0)) && (
           <svg
             viewBox={`0 0 ${nCols} ${nRows}`}
@@ -574,6 +587,7 @@ export function PhaseMapControls({ handle }) {
   const realPhases = summary.filter(s => !s.is_unclassified);
   const unclassifiedRow = summary.find(s => s.is_unclassified);
   const clusters = phaseMap?.clusters || [];
+  const isWandMode = paintMode === 'wand';
   // The legend doubles as the phase PICKER, and `summary` deliberately omits
   // phases with zero pixels. That made the one phase a manual correction is
   // usually FOR — "this particle is beta-AlFeSi, the classifier missed it" —
@@ -894,6 +908,81 @@ export function PhaseMapControls({ handle }) {
           }}>
             {/* Mode toggle: rectangle (drag) vs polygon (click vertices) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* --- Seeded selection (wand) --- */}
+        {isWandMode && wand.seed && wand.growth.length > 0 && (
+          <div style={{
+            marginTop: 4, padding: '7px 8px', borderRadius: 4,
+            background: alpha(C.cyan, 8),
+            border: `1px solid ${alpha(C.cyan, 25)}`,
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+              <Label secondary small>{t('wand.selection')}</Label>
+              <span style={{ fontSize: '9pt', fontWeight: 700, color: C.cyan,
+                             fontVariantNumeric: 'tabular-nums' }}>
+                {t('wand.pixels', { count: wand.nSelected })}
+              </span>
+            </div>
+            {/* The slider walks a growth curve sampled where pixels actually are.
+                Thresholding the chemistry directly has dead bands — 2 % through
+                10 % of the range returned an identical selection on real data —
+                so the axis is the pixel count instead. The count is also the leak
+                detector: a jump from 300 to 48 000 announces itself here. */}
+            <input
+              type="range" min={0} max={wand.growth.length - 1} step={1}
+              value={wand.step}
+              onChange={(e) => wand.setStep(Number(e.target.value))}
+              onMouseUp={wand.refreshStats}
+              onKeyUp={wand.refreshStats}
+              aria-label={t('wand.sliderAria')}
+              title={t('wand.sliderTooltip')}
+              style={{ width: '100%', accentColor: C.cyan, marginTop: 2 }}
+            />
+            {wand.stats && wand.stats.n_pixels > 0 && (
+              <div style={{ fontSize: '8pt', color: C.textSecondary, marginTop: 2 }}>
+                {Object.entries(wand.stats.mean_at_pct)
+                  .sort((a, b) => b[1] - a[1]).slice(0, 5)
+                  .map(([el, v]) => el + ' ' + v).join(' · ')}
+              </div>
+            )}
+            {wand.stats && Object.keys(wand.stats.enrichment || {}).length > 0 && (
+              <div style={{ fontSize: '8pt', color: C.textSecondary, marginTop: 1 }}
+                   title={t('wand.enrichmentTooltip')}>
+                {t('wand.enrichment')}
+                {': '}
+                {Object.entries(wand.stats.enrichment)
+                  .filter(([, v]) => v >= 1.3)
+                  .sort((a, b) => b[1] - a[1]).slice(0, 4)
+                  .map(([el, v]) => el + ' ' + v + 'x').join(' · ') || t('wand.enrichmentNone')}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <Button
+                variant="primary"
+                disabled={selectedPhaseIndex == null || wand.loading}
+                onClick={async () => {
+                  const res = await wand.commit(selectedPhaseIndex);
+                  if (res) setPhaseMap(res);
+                }}
+                style={{ flex: 1 }}
+                title={selectedPhaseIndex == null
+                  ? t('wand.assignTooltipNoPhase') : t('wand.assignTooltip')}
+              >
+                {t('wand.assign')}
+              </Button>
+              <Button variant="secondary" onClick={wand.clear} title={t('wand.cancelTooltip')}>
+                {t('wand.cancel')}
+              </Button>
+            </div>
+            {wand.error && (
+              <div role="alert" style={{ fontSize: '8pt', color: C.red, marginTop: 3 }}>
+                {wand.error}
+              </div>
+            )}
+          </div>
+        )}
+        {isWandMode && !wand.seed && (
+          <Label secondary small style={{ marginTop: 4 }}>{t('wand.hint')}</Label>
+        )}
         {/* Phases the classifier placed nowhere. The legend cannot show
             them (zero pixels) but they are exactly what a manual
             correction usually needs to assign. */}
@@ -937,6 +1026,7 @@ export function PhaseMapControls({ handle }) {
                 {[
                   { id: 'rectangle', label: t('phaseMap.rectangle'), tip: t('hoverTips.paintModeRectangle') },
                   { id: 'polygon', label: t('phaseMap.polygon'), tip: t('hoverTips.paintModePolygon') },
+                  { id: 'wand', label: t('wand.mode'), tip: t('wand.modeTooltip') },
                 ].map((m) => {
                   const active = paintMode === m.id;
                   return (

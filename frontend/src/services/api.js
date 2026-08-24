@@ -873,6 +873,14 @@ export const edsApi = {
     api.post('/api/eds/phase-map/assign-polygon', {
       vertices, phase_index: phaseIndex,
     }),
+  wandField: (row, col, smooth) =>
+    api.post('/api/eds/phase-map/wand-field',
+      { row, col, ...(smooth != null ? { smooth } : {}) }),
+  wandStats: (maskB64) =>
+    api.post('/api/eds/phase-map/wand-stats', { mask_b64: maskB64, phase_index: 0 }),
+  wandAssign: (maskB64, phaseIndex) =>
+    api.post('/api/eds/phase-map/wand-assign',
+      { mask_b64: maskB64, phase_index: phaseIndex }),
   phaseMapIndexingConfig: () => api.get('/api/eds/phase-map/indexing-config'),
   displayModes: () => api.get('/api/eds/display-modes'),
   chemistryMask: (filters, combine = 'and', margin_px = 0) =>

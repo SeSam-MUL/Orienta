@@ -935,6 +935,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                 <PhaseMapCanvas
                   handle={phaseMapHandle}
                   onInspect={onPixelClick}
+                  wand={phaseMapHandle.wand}
                   /* A click assigns only when a phase is armed in the
                      legend; otherwise it inspects, as before. */
                   onAssignPixel={phaseMapHandle.selectedPhaseIndex != null

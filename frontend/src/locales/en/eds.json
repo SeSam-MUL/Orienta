@@ -248,5 +248,22 @@
     "paintModePolygon": "Paint regions by clicking polygon vertices",
     "colorInput": "Pick a new display color for this element",
     "resetColors": "Reset all element colors to their defaults"
+  },
+  "wand": {
+    "mode": "Wand",
+    "modeTooltip": "Click a feature to select everything chemically like it, then set how far the selection reaches.",
+    "hint": "Click a feature on the map to select it.",
+    "selection": "Selection",
+    "pixels": "{{count}} px",
+    "sliderAria": "Selection size",
+    "sliderTooltip": "How far the selection reaches. The axis is the pixel count, because thresholding the chemistry directly has dead bands. A sudden jump means the selection has escaped into the matrix.",
+    "enrichment": "Enriched",
+    "enrichmentNone": "nothing above background",
+    "enrichmentTooltip": "How many times the map's own background level each element reaches in this selection. Below about 1.3x the classifier itself cannot tell feature from background.",
+    "assign": "Assign",
+    "assignTooltip": "Assign the selected phase to these pixels",
+    "assignTooltipNoPhase": "Pick a phase from the legend first",
+    "cancel": "Cancel",
+    "cancelTooltip": "Discard this selection"
   }
 }

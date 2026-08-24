@@ -248,5 +248,22 @@
     "paintModePolygon": "Regionen durch Klicken von Polygon-Eckpunkten bemalen",
     "colorInput": "Neue Anzeigefarbe für dieses Element wählen",
     "resetColors": "Alle Elementfarben auf die Standardwerte zurücksetzen"
+  },
+  "wand": {
+    "mode": "Zauberstab",
+    "modeTooltip": "Auf ein Merkmal klicken, um alles chemisch Gleichartige auszuwählen, dann die Reichweite einstellen.",
+    "hint": "Auf ein Merkmal der Karte klicken, um es auszuwählen.",
+    "selection": "Auswahl",
+    "pixels": "{{count}} px",
+    "sliderAria": "Größe der Auswahl",
+    "sliderTooltip": "Wie weit die Auswahl reicht. Die Achse ist die Pixelzahl, weil eine Chemie-Schwelle tote Bänder hat. Ein plötzlicher Sprung heißt, die Auswahl ist in die Matrix ausgebrochen.",
+    "enrichment": "Angereichert",
+    "enrichmentNone": "nichts über Untergrund",
+    "enrichmentTooltip": "Um welchen Faktor jedes Element in dieser Auswahl über dem eigenen Untergrund der Karte liegt. Unter etwa 1,3x kann der Klassifizierer selbst Merkmal und Untergrund nicht mehr trennen.",
+    "assign": "Zuweisen",
+    "assignTooltip": "Die gewählte Phase diesen Pixeln zuweisen",
+    "assignTooltipNoPhase": "Zuerst eine Phase aus der Legende wählen",
+    "cancel": "Abbrechen",
+    "cancelTooltip": "Diese Auswahl verwerfen"
   }
 }
