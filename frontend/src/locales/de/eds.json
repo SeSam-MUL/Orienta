@@ -358,5 +358,12 @@
     "rowTooltip": "{{name}} — {{structures}} Strukturen, zusammen {{px}} px",
     "showPhases": "Phasenkarte anzeigen →",
     "showPhasesTooltip": "Eine Farbe je Phase. Benachbarte Bereiche, denen du dieselbe Phase gegeben hast, werden dort zu einer durchgehenden Fläche."
+  },
+  "tabs": {
+    "elements": "Elementkarten",
+    "phaseMap": "Phasenkarte",
+    "elementsTooltip": "Composite-Overlay, Ebenenstapel und alle Elementkarten nebeneinander.",
+    "phaseMapTooltip": "Die Karte nach Chemie in Strukturen gruppieren und dann entscheiden, welche Phase jede ist.",
+    "noMapYet": "Noch keine Phasenkarte. Rechts auf „Re-classify“ eine aus der Chemie erzeugen."
   }
 }

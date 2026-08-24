@@ -358,5 +358,12 @@
     "rowTooltip": "{{name}} — {{structures}} structures, {{px}} px in total",
     "showPhases": "Show the phase map →",
     "showPhasesTooltip": "One colour per phase. Neighbouring regions you gave the same phase become one uninterrupted area there."
+  },
+  "tabs": {
+    "elements": "Element maps",
+    "phaseMap": "Phase map",
+    "elementsTooltip": "The composite overlay, the layer stack and every element map side by side.",
+    "phaseMapTooltip": "Group the map by chemistry into structures, then decide which phase each one is.",
+    "noMapYet": "No phase map yet. Use Re-classify on the right to build one from the chemistry."
   }
 }

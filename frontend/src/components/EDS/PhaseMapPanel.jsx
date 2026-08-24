@@ -1134,7 +1134,6 @@ export function PhaseMapControls({ handle }) {
             background: alpha(C.bgSecondary, 50),
           }}>
             {/* Mode toggle: rectangle (drag) vs polygon (click vertices) */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {/* Undo — one level, and it redoes. Every mutation snapshots first, so
             this covers a re-classify as well as a paint. */}
         {hasMap && phaseMap.undo_label && (
@@ -1321,6 +1320,9 @@ export function PhaseMapControls({ handle }) {
             </div>
           </details>
         )}
+            {/* Only the paint-mode label and its toggle belong on one
+                row; everything above stacks. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               <Label secondary small>{t('phaseMap.paintMode')}</Label>
               <div style={{
                 display: 'flex', border: `1px solid ${C.border}`, borderRadius: 4,

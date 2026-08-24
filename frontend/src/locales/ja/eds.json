@@ -358,5 +358,12 @@
     "rowTooltip": "{{name}} — {{structures}} 構造、合計 {{px}} px",
     "showPhases": "相マップを表示 →",
     "showPhasesTooltip": "相ごとに 1 色。同じ相を与えた隣接領域は、そこで途切れのない 1 つの領域になります。"
+  },
+  "tabs": {
+    "elements": "元素マップ",
+    "phaseMap": "相マップ",
+    "elementsTooltip": "合成オーバーレイ、レイヤースタック、すべての元素マップを並べて表示します。",
+    "phaseMapTooltip": "化学組成でマップを構造にグループ化し、それぞれがどの相かを決めます。",
+    "noMapYet": "相マップはまだありません。右の「Re-classify」で組成から作成してください。"
   }
 }

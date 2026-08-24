@@ -347,6 +347,11 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     setSelectedStructureId: phaseMapHandle.setSelectedStructureId,
     mapVersion: phaseMapHandle.mapVersion,
   });
+  // The phase map grew a tool set of its own - structures, the inspector,
+  // four boundary tools - and sharing one screen with the element overlay
+  // and the tile grid left neither usable. It gets its own tab; everything
+  // else on this page stays exactly where it was.
+  const [edsTab, setEdsTab] = useState('elements');
   const inStructureView = phaseMapHandle.mapView === 'structures'
     && (phaseMapHandle.phaseMap?.structures || []).length > 0;
 
@@ -792,7 +797,101 @@ export default function EDSPage({ onNavigate, isActive = true }) {
           </div>
         </div>
 
+        {/* --- Tabs --------------------------------------------------- */}
+        <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+          {[
+            { id: 'elements', label: t('tabs.elements'), tip: t('tabs.elementsTooltip') },
+            { id: 'phasemap', label: t('tabs.phaseMap'), tip: t('tabs.phaseMapTooltip') },
+          ].map((tab) => {
+            const active = edsTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setEdsTab(tab.id)}
+                title={tab.tip}
+                style={{
+                  fontSize: '9.5pt', padding: '5px 16px', cursor: 'pointer',
+                  borderRadius: '4px 4px 0 0',
+                  background: active ? colors.bgSecondary : 'transparent',
+                  color: active ? colors.cyan : colors.textSecondary,
+                  border: `1px solid ${active ? colors.border : 'transparent'}`,
+                  borderBottom: active
+                    ? `1px solid ${colors.bgSecondary}`
+                    : `1px solid ${colors.border}`,
+                  fontWeight: active ? 600 : 400,
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+          <div style={{ flex: 1, borderBottom: `1px solid ${colors.border}` }} />
+        </div>
+
+        {/* --- Tab: phase map ----------------------------------------- */}
+        {edsTab === 'phasemap' && (
+          <div style={{
+            display: 'grid', gridTemplateColumns: '1fr 300px',
+            gap: spacing.outerSpacing, flex: 1, minHeight: 0,
+          }}>
+            {/* The map gets the room it needs, and the inspector sits under
+                it where its three columns fit side by side. */}
+            {/* The column must NOT scroll: the map sizes itself to its
+                container, so an unbounded parent lets it grow past the
+                viewport instead of fitting. It takes the space the inspector
+                leaves, and the inspector scrolls if it needs to. */}
+            <div style={{ display: 'flex', flexDirection: 'column',
+                          minHeight: 0, gap: spacing.outerSpacing }}>
+              <GroupBox
+                title={t('phaseMap.mapTitle')}
+                style={{ flex: 1, display: 'flex', flexDirection: 'column',
+                         minHeight: 220 }}
+              >
+                {phaseMapHandle.phaseMap?.image ? (
+                  <PhaseMapCanvas
+                    handle={phaseMapHandle}
+                    onInspect={onPixelClick}
+                    wand={phaseMapHandle.wand}
+                    onPickStructure={inStructureView
+                      ? inspector.inspectPixel : undefined}
+                    onAssignPixel={phaseMapHandle.selectedPhaseIndex != null
+                      ? ((row, col) => phaseMapHandle.handleAssignPixel(
+                          row, col, phaseMapHandle.selectedPhaseIndex))
+                      : undefined}
+                  />
+                ) : (
+                  <Label secondary small>{t('tabs.noMapYet')}</Label>
+                )}
+              </GroupBox>
+              {inStructureView && (
+                <GroupBox
+                  title={t('inspector.title')}
+                  style={{ flexShrink: 0, maxHeight: '42vh',
+                           overflowY: 'auto' }}
+                >
+                  <StructureInspector
+                    detail={inspector.detail}
+                    loading={inspector.loading}
+                    error={inspector.error}
+                    busy={phaseMapHandle.structureBusy}
+                    phaseIndex={inspector.detail?.phase_index}
+                    onAssign={(phaseIndex) => phaseMapHandle.handleAssignStructure(
+                      inspector.detail.structure_id, phaseIndex)}
+                    onSelectStructure={phaseMapHandle.setSelectedStructureId}
+                  />
+                </GroupBox>
+              )}
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column',
+                          gap: spacing.outerSpacing, overflowY: 'auto' }}>
+              <PhaseMapControls handle={phaseMapHandle} />
+            </div>
+          </div>
+        )}
+
         {/* Main 3-col grid: overlay+layers | splitter | tile-grid | right rail */}
+        {edsTab === 'elements' && (
         <div style={{
           display: 'grid',
           gridTemplateColumns: `${overlayW}px 8px 1fr 280px`,
@@ -924,63 +1023,10 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             }} />
           </div>
 
-          {/* CENTER: phase map (when classified) + TileGrid */}
+          {/* CENTER: the element tile grid. The phase map moved to its own
+              tab - it brought a tool set of its own, and one screen could
+              not hold both. */}
           <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, paddingLeft: 4 }}>
-            {/* The canvas carries the rectangle/polygon paint gestures, so
-                mounting it is also what makes manual correction reachable. */}
-            {phaseMapHandle.phaseMap?.image && (
-              <GroupBox
-                title={t('phaseMap.mapTitle')}
-                /* Capped so the element-map tiles stay on screen beside it:
-                   comparing the phase map against Fe / BC is the whole point,
-                   and an uncapped panel pushed the tile grid below the fold. */
-                style={{
-                  marginBottom: spacing.outerSpacing,
-                  flexShrink: 0, maxHeight: '42vh',
-                  display: 'flex', flexDirection: 'column', minHeight: 0,
-                }}
-              >
-                {/* onInspect wires a click on the phase map to the same
-                    per-pixel panels every other map drives — quantification
-                    and phase suggestion. Without it the suggestion kept
-                    describing a pixel picked on a different map. */}
-                <PhaseMapCanvas
-                  handle={phaseMapHandle}
-                  onInspect={onPixelClick}
-                  wand={phaseMapHandle.wand}
-                  /* In the structure view a click picks the region under it
-                     rather than painting a single pixel. */
-                  onPickStructure={inStructureView
-                    ? inspector.inspectPixel : undefined}
-                  /* A click assigns only when a phase is armed in the
-                     legend; otherwise it inspects, as before. */
-                  onAssignPixel={phaseMapHandle.selectedPhaseIndex != null
-                    ? ((row, col) => phaseMapHandle.handleAssignPixel(
-                        row, col, phaseMapHandle.selectedPhaseIndex))
-                    : undefined}
-                />
-              </GroupBox>
-            )}
-            {/* Under the map, not in the rail: the composition, the
-                neighbours and the candidates are columns, and 300 px of rail
-                turns each of them into its own scroll box. */}
-            {inStructureView && (
-              <GroupBox
-                title={t('inspector.title')}
-                style={{ marginBottom: spacing.outerSpacing, flexShrink: 0 }}
-              >
-                <StructureInspector
-                  detail={inspector.detail}
-                  loading={inspector.loading}
-                  error={inspector.error}
-                  busy={phaseMapHandle.structureBusy}
-                  phaseIndex={inspector.detail?.phase_index}
-                  onAssign={(phaseIndex) => phaseMapHandle.handleAssignStructure(
-                    inspector.detail.structure_id, phaseIndex)}
-                  onSelectStructure={phaseMapHandle.setSelectedStructureId}
-                />
-              </GroupBox>
-            )}
             <GroupBox
               title={(
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 12 }}>
@@ -1150,8 +1196,6 @@ export default function EDSPage({ onNavigate, isActive = true }) {
               </div>
             </GroupBox>
 
-            {/* M3+M4: Phase-map builder (auto-classify, legend, region paint) */}
-            <PhaseMapControls handle={phaseMapHandle} />
 
             <GroupBox title={t('suggest.title')} style={{ flex: 1 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.innerSpacing }}>
@@ -1331,6 +1375,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             </GroupBox>
           </div>
         </div>
+        )}
 
         {/* Hover-probe wiring: subscriber + overlay live in one leaf so cursor
             moves only re-render the leaf, not the entire EDSPage subtree. */}

@@ -358,5 +358,12 @@
     "rowTooltip": "{{name}} — {{structures}} 个结构，共 {{px}} px",
     "showPhases": "显示物相图 →",
     "showPhasesTooltip": "每个物相一种颜色。你赋予同一物相的相邻区域会连成一片。"
+  },
+  "tabs": {
+    "elements": "元素图",
+    "phaseMap": "物相图",
+    "elementsTooltip": "合成叠加、图层堆栈以及所有元素图并排显示。",
+    "phaseMapTooltip": "按化学成分将图分组为结构，然后决定每个结构是哪个物相。",
+    "noMapYet": "尚无物相图。使用右侧的「Re-classify」从化学成分生成。"
   }
 }
