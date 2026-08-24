@@ -28,6 +28,9 @@ from backend.api.services.cif_phase_library import (
     load_cif_phase_library,
     suggest_phases_from_cif_library,
 )
+from backend.api.services.chemistry_score import (
+    background_levels, infer_matrix_element,
+)
 from backend.api.services.eds_clustering import cluster_and_match
 from backend.api.services.phase_map_store import (
     get_phase_map_store,
@@ -334,7 +337,21 @@ async def suggest_phases(req: PhaseSuggestionRequest):
         # 1) Try the user's curated CIF library first.
         cif_library = load_cif_phase_library(_crystal_db_path())
         if cif_library:
-            cif_hits = suggest_phases_from_cif_library(at_scalar, cif_library)
+            # The enrichment gate asks whether an element is enriched over
+            # THIS MAP's background, so a single-pixel caller has to supply
+            # the map-level statistics. Without them the median of one value
+            # is that value and every phase is vetoed.
+            try:
+                whole_map, _mr, _mc, _fp = _build_at_pct_maps_for_loaded_file()
+                matrix_element = infer_matrix_element(whole_map)
+                background = background_levels(whole_map)
+            except Exception:
+                logger.exception("could not derive map-level EDS statistics")
+                matrix_element, background = None, None
+            cif_hits = suggest_phases_from_cif_library(
+                at_scalar, cif_library,
+                matrix_element=matrix_element, background=background,
+            )
             if cif_hits:
                 # Adapter shape: keep `name` for backward-compat callers,
                 # add the rich CIF fields so the new EDS UI can show them.

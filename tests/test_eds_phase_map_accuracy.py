@@ -261,3 +261,111 @@ def test_unmeasured_pixels_are_never_assigned_a_phase(sampleb):
     cl_cands = [e for e in lib.values() if set(e.elements).issubset(measured)]
     pgrid, _cg, _m, _k = cluster_and_match(holed, n_rows, n_cols, cl_cands)
     assert (pgrid.ravel()[dead] == -1).all(), "cluster mode assigned a dead region"
+
+
+# ---------------------------------------------------------------------------
+# Ratio matching — the case the relative veto made impossible.
+# Spec: docs/superpowers/specs/2026-08-20-eds-ratio-matching-design.md
+# ---------------------------------------------------------------------------
+
+CU_FILE = ROOT / "Test_data" / "batch_test" / (
+    "7050EBSD 70502_R Arbeitsbereich 1 Elementverteilungsdaten 5.h5oina"
+)
+
+
+@pytest.mark.skipif(not (CU_FILE.is_file() and DB.is_file()),
+                    reason="7050 Cu test file not available")
+def test_a_copper_phase_is_assignable_again():
+    """`Al7FeCu2` scored 0.050 — the veto floor — on EVERY pixel of both
+    Cu-bearing test files under the relative-to-nominal veto. It needs
+    20 at% Cu nominally; the veto demanded 6 at% measured; a thin ring seen
+    through a large interaction volume never reads that.
+
+    Here it is scored on a real pixel where Cu and Fe are both enriched and
+    sit at roughly the nominal Cu/Fe = 2, while the absolute values are
+    about 6x below stoichiometry. That is the whole point of matching on
+    ratios: the dilution divides out.
+    """
+    import h5py
+    from eds_utils import (
+        parse_element_name, counts_to_weight_pct, weight_pct_to_atomic_pct,
+    )
+    from tools.h5_viewer_backend import H5OINADataExtractor
+    from backend.api.services.chemistry_score import (
+        background_levels, infer_matrix_element, score_phase_ratio,
+    )
+
+    with h5py.File(str(CU_FILE), "r") as f:
+        ext = H5OINADataExtractor(f, "Oxford")
+        counts = {}
+        for name in ext.get_available_elements():
+            d = ext.get_element_map(name)
+            if d is not None:
+                counts[parse_element_name(name)] = d.astype(np.float64)
+    at = weight_pct_to_atomic_pct(counts_to_weight_pct(counts))
+
+    fe = np.asarray(at["Fe"], dtype=float)
+    cu = np.asarray(at["Cu"], dtype=float)
+    both = (fe > np.percentile(fe, 95)) & (cu > np.percentile(cu, 95))
+    assert both.sum() > 10, "expected a Cu+Fe enriched population"
+
+    al7fecu2 = {"Al": 70.0, "Fe": 10.0, "Cu": 20.0}
+    matrix = infer_matrix_element(at)
+    bg = background_levels(at)
+    scores = [
+        float(score_phase_ratio(
+            {el: np.array([float(np.asarray(v)[j])]) for el, v in at.items()},
+            al7fecu2, matrix_element=matrix, no_data_score=0.0, background=bg)[0])
+        for j in np.where(both)[0]
+    ]
+    assert max(scores) > 0.5, (
+        f"best Al7FeCu2 score is {max(scores):.3f} — the Cu phase is still "
+        f"unassignable (it was pinned at the 0.050 veto floor before)"
+    )
+
+
+@pytest.mark.skipif(not (H5.is_file() and DB.is_file()),
+                    reason="SampleB test data not available")
+def test_the_map_and_the_suggestion_panel_agree():
+    """They used to disagree on the same pixel: the panel ran a
+    tolerance-based scorer and the map ran the vetoed one, so a Cu-rich
+    pixel read 0.415 in the panel and 0.050 on the map."""
+    import h5py
+    from eds_utils import (
+        parse_element_name, counts_to_weight_pct, weight_pct_to_atomic_pct,
+    )
+    from tools.h5_viewer_backend import H5OINADataExtractor
+    from backend.api.services.cif_phase_library import (
+        candidates_for, load_cif_phase_library, suggest_phases_from_cif_library,
+    )
+    from backend.api.services.chemistry_score import (
+        background_levels, infer_matrix_element, score_phase_ratio,
+    )
+
+    with h5py.File(str(H5), "r") as f:
+        ext = H5OINADataExtractor(f, "Oxford")
+        counts = {}
+        for name in ext.get_available_elements():
+            d = ext.get_element_map(name)
+            if d is not None:
+                counts[parse_element_name(name)] = d.astype(np.float64)
+    at = weight_pct_to_atomic_pct(counts_to_weight_pct(counts))
+    lib = load_cif_phase_library(DB)
+    matrix = infer_matrix_element(at)
+    bg = background_levels(at)
+
+    fe = np.asarray(at["Fe"], dtype=float)
+    for j in (int(np.argmax(fe)), int(np.argmin(fe))):
+        pix = {el: np.array([float(np.asarray(v)[j])]) for el, v in at.items()}
+        cands = candidates_for(lib, at.keys())
+        map_best = max(cands, key=lambda e: float(score_phase_ratio(
+            pix, e.composition, matrix_element=matrix,
+            no_data_score=0.0, background=bg)[0]))
+        panel = suggest_phases_from_cif_library(
+            {el: float(v[0]) for el, v in pix.items()}, lib,
+            min_score=0.0, matrix_element=matrix, background=bg)
+        assert panel, "the panel returned nothing"
+        assert panel[0]["cif_filename"] == map_best.cif_filename, (
+            f"panel says {panel[0]['cif_filename']}, "
+            f"map says {map_best.cif_filename}"
+        )

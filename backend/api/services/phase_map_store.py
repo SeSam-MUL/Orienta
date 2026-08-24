@@ -43,10 +43,12 @@ from backend.api.services.cif_phase_library import CifPhaseEntry
 # fork) get rejected cleanly instead of crashing the load. Bump only
 # on incompatible changes — adding optional fields is fine.
 # 2 (2026-08-19): the classifier's scoring rule changed from mean At.%
-# deviation to renormalised L1 with a relative missing-major veto. A
-# schema-1 sidecar was written by the old rule and would silently outlive
+# deviation to renormalised L1 with a relative missing-major veto.
+# 3 (2026-08-20): the relative veto was replaced by ratio matching plus an
+# enrichment gate measured against each map's own background. A sidecar
+# written by an older rule would silently outlive the rule that produced
 # it, so those files are ignored and the map is recomputed.
-_SIDECAR_SCHEMA = 2
+_SIDECAR_SCHEMA = 3
 
 
 def _sidecar_path_for(file_path: str) -> Path:

@@ -26,7 +26,8 @@ import numpy as np
 from scipy import ndimage
 
 from backend.api.services.chemistry_score import (
-    DEFAULT_REL_REQ, has_chemistry, score_phase_vectorised,
+    DEFAULT_REL_REQ, background_levels, has_chemistry, infer_matrix_element,
+    score_phase_ratio,
 )
 from backend.api.services.cif_phase_library import (
     TIE_TOLERANCE, CifPhaseEntry, group_degenerate_entries,
@@ -142,6 +143,8 @@ def _run_for_k(
     k: int,
     min_score: float,
     rel_req: float,
+    matrix_element: Optional[str] = None,
+    background: Optional[Dict[str, float]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch]]:
     """One full cluster-and-match pass at a fixed ``k``."""
     from sklearn.cluster import KMeans
@@ -169,8 +172,12 @@ def _run_for_k(
         # scoring a perfect 1.0 — the highest confidence anywhere on the map.
         one = {el: np.array([v], dtype=np.float64) for el, v in mean_at.items()}
         scored = [
-            (idx, float(score_phase_vectorised(
-                one, entry.composition, rel_req=rel_req, no_data_score=0.0)[0]))
+            # background comes from the WHOLE map, never from `one`: a
+            # single value is its own median, so the enrichment gate would
+            # compare the cluster mean against itself and veto everything.
+            (idx, float(score_phase_ratio(
+                one, entry.composition, matrix_element=matrix_element,
+                no_data_score=0.0, background=background)[0]))
             for idx, entry in enumerate(candidates)
         ]
         scored.sort(key=lambda t: -t[1])
@@ -241,6 +248,8 @@ def cluster_and_match(
     if not els:
         return empty, empty.copy(), [], 0
 
+    matrix_element = infer_matrix_element(at_pct_per_element)
+    background = background_levels(at_pct_per_element)
     group_of = np.zeros(len(candidates), dtype=np.int32)
     for gid, members in enumerate(group_degenerate_entries(candidates)):
         for m in members:
@@ -248,7 +257,8 @@ def cluster_and_match(
 
     def run(kk):
         return _run_for_k(X, at_pct_per_element, n_rows, n_cols, candidates,
-                          group_of, kk, min_score, rel_req)
+                          group_of, kk, min_score, rel_req, matrix_element,
+                          background)
 
     if k:
         k_used = max(1, min(int(k), n_px))

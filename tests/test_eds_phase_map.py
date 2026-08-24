@@ -183,22 +183,23 @@ def test_suggest_score_orders_by_closeness():
 
 
 def test_suggest_min_score_filters_low_matches():
-    """min_score must gate borderline matches without changing the hard
-    reject ``suggest_phases`` already does at ``max_dev > 2 * tolerance``.
+    """min_score must gate a borderline match.
 
-    Construct a measured composition that scores ~0.5 (deviation 7.5 At.%
-    against tolerance 15 → 1 - 7.5/15 = 0.5) so the score lives strictly
-    between the two thresholds we want to test.
+    The At.% must be a closed set summing to ~100. The 2026-08-20 scorer
+    renormalises before comparing, so a single-element map reading
+    "92.5 at% Fe" is by definition 100 % Fe and legitimately a perfect Fe
+    match — the deviation the old tolerance rule saw was an artefact of
+    comparing an unnormalised number against a stoichiometry.
     """
     lib = _make_library([("Fe.cif", "Fe", {"Fe": 100.0})])
-    measured = {"Fe": 92.5}  # deviation 7.5 → score ~0.5
+    measured = {"Fe": 70.0, "Al": 30.0}   # clearly not pure iron
 
     strict = suggest_phases_from_cif_library(measured, lib, min_score=0.99)
     assert strict == []
 
     relaxed = suggest_phases_from_cif_library(measured, lib, min_score=0.0)
     assert len(relaxed) == 1
-    assert relaxed[0]["score"] == pytest.approx(0.5, abs=0.05)
+    assert 0.0 < relaxed[0]["score"] < 0.99
 
 
 def test_suggest_empty_inputs_return_empty():

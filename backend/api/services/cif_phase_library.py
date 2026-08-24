@@ -25,7 +25,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from backend.api.services.chemistry_score import (
-    DEFAULT_REL_REQ, score_phase_vectorised,
+    DEFAULT_REL_REQ, infer_matrix_element, score_phase_ratio,
+    score_phase_vectorised,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,6 +188,8 @@ def suggest_phases_from_cif_library(
     tolerance: float = 15.0,
     min_score: float = 0.3,
     max_results: int = 20,
+    matrix_element: Optional[str] = None,
+    background: Optional[Dict[str, float]] = None,
 ) -> List[Dict]:
     """Match measured At.% against the CIF library.
 
@@ -200,41 +203,50 @@ def suggest_phases_from_cif_library(
     if not cif_library or not measured_at_pct:
         return []
 
-    measured_set = {el for el, val in measured_at_pct.items() if val > 0.0}
-    simple_lib: Dict[str, Dict[str, float]] = {}
-    meta_by_key: Dict[str, CifPhaseEntry] = {}
-    for key, entry in cif_library.items():
-        if not set(entry.elements).issubset(measured_set):
-            continue
-        simple_lib[key] = entry.composition
-        meta_by_key[key] = entry
-
-    if not simple_lib:
+    candidates = candidates_for(
+        cif_library, {el for el, v in measured_at_pct.items() if v > 0.0})
+    if not candidates:
         return []
 
-    # Lazy import keeps this module importable in test contexts that
-    # don't ship eds_utils (e.g. mocked smoke tests).
-    from eds_utils import suggest_phases  # noqa: PLC0415
+    # THE SAME SCORER THE MAP USES. These two used to disagree: the panel
+    # ran eds_utils.suggest_phases (absolute deviation against a tolerance)
+    # while the map ran the vetoed scorer, and on a Cu-rich pixel of the
+    # 7050 file the panel ranked Al7FeCu2 at 0.415 while the map vetoed it
+    # to 0.050. The user saw the right answer in one panel and a different
+    # map beside it, with no way to reconcile them.
+    #
+    # `background` and `matrix_element` are properties of the WHOLE map, so
+    # a caller scoring one pixel has to supply them; without them the median
+    # of a single value is that value and the enrichment gate vetoes
+    # everything.
+    one = {el: np.array([float(v)], dtype=np.float64)
+           for el, v in measured_at_pct.items()}
+    scored = []
+    for entry in candidates:
+        s_val = float(score_phase_ratio(
+            one, entry.composition,
+            matrix_element=matrix_element, no_data_score=0.0,
+            background=background,
+        )[0])
+        if s_val < min_score:
+            continue
+        scored.append((s_val, entry))
+    scored.sort(key=lambda t: (-t[0], t[1].cif_filename))
 
-    matches = suggest_phases(measured_at_pct, simple_lib, tolerance=tolerance)
-    enriched: List[Dict] = []
-    for m in matches:
-        if m.score < min_score:
-            continue
-        meta = meta_by_key.get(m.phase_name)
-        if meta is None:
-            continue
-        enriched.append({
-            "key": meta.key,
-            "cif_filename": meta.cif_filename,
-            "formula": meta.formula,
-            "space_group": meta.space_group,
-            "space_group_number": meta.space_group_number,
-            "crystal_system": meta.crystal_system,
-            "score": float(m.score),
-            "expected": dict(m.expected_composition),
-            "elements": list(meta.elements),
-        })
+    enriched: List[Dict] = [
+        {
+            "key": e.key,
+            "cif_filename": e.cif_filename,
+            "formula": e.formula,
+            "space_group": e.space_group,
+            "space_group_number": e.space_group_number,
+            "crystal_system": e.crystal_system,
+            "score": s_val,
+            "expected": dict(e.composition),
+            "elements": list(e.elements),
+        }
+        for s_val, e in scored
+    ]
     return enriched[:max_results]
 
 
@@ -376,13 +388,14 @@ def auto_classify_pixels(
     # Score every candidate phase for every pixel. The grid stays
     # (n_candidates, n_pixels) since we argmax along the candidate axis
     # per pixel at the end.
+    matrix_element = infer_matrix_element(at_pct_per_element)
     score_per_phase = np.zeros((len(candidates), n_pixels), dtype=np.float32)
     for i, entry in enumerate(candidates):
         # no_data_score=0.0: an unmeasured pixel must fall below min_score
         # and come out unclassified, never win argmax at a perfect 1.0.
-        score_per_phase[i] = score_phase_vectorised(
-            at_pct_per_element, entry.composition, rel_req=rel_req,
-            no_data_score=0.0,
+        score_per_phase[i] = score_phase_ratio(
+            at_pct_per_element, entry.composition,
+            matrix_element=matrix_element, no_data_score=0.0,
         )
 
     idx = np.arange(n_pixels)
