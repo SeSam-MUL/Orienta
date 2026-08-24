@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, layout } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeProvider';
+import { Wordmark, BrandMark } from '../common/Brand';
 import { setLanguage, LANGUAGES } from '../../i18n';
 import {
   LayoutDashboard, ScanLine, Atom, Crosshair, Gem, Cpu, HardDrive,
@@ -34,13 +35,12 @@ const S = {
     overflow: 'hidden',
     transition: 'background 0.3s ease, border-color 0.3s ease',
   },
-  title: {
-    fontSize: '16px',
-    fontWeight: 600,
-    color: colors.accent,
-    padding: '18px 20px 2px',
-    textAlign: 'center',
+  brand: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
     background: 'transparent',
+    flexShrink: 0,
   },
   subtitle: {
     fontSize: '11px',
@@ -173,8 +173,14 @@ export default function Sidebar({
       >
         {collapsed ? '\u25B6' : '\u25C0'}
       </button>
-      {/* Title */}
-      {!collapsed && <div style={S.title}>{t('shell:appTitle')}</div>}
+      {/* Brand — wordmark when open, bare IPF triangle when collapsed.
+          The collapsed mark is 34 px, not 26: the triangle fills only ~63% of the
+          icon viewBox, so a nominally 26 px mark reads smaller than the nav icons. */}
+      <div style={{ ...S.brand, padding: collapsed ? '14px 0 12px' : '18px 20px 6px' }}>
+        {collapsed
+          ? <BrandMark size={34} title={t('shell:appTitle')} />
+          : <Wordmark height={38} title={t('shell:appTitle')} />}
+      </div>
       {!collapsed && <div style={S.subtitle}>{t('shell:appSubtitle')}</div>}
       <div style={S.separator} />
 

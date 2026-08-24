@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Orienta">
+  <!-- One-colour app icon (teal outline) for monochrome contexts: stamps,
+       watermarks, single-ink print, engraving. Same triangle geometry as icon.svg. -->
+  <rect x="5" y="5" width="110" height="110" rx="27" fill="#0f141b" stroke="#222a33"/>
+  <path d="M60 25 98 91 22 91Z" fill="#3fb6c4" fill-opacity=".16" stroke="#3fb6c4" stroke-width="3" stroke-linejoin="round"/>
+</svg>

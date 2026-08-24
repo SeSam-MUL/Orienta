@@ -1,15 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100" width="300" height="100" role="img" aria-label="Orienta">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 228 86" width="228" height="86" role="img" aria-label="Orienta">
+  <!-- Wordmark "orienta" — the i is dotless (U+0131); its dot is the IPF triangle.
+       Triangle is centred on the i-stem ink (x=84.5); geometry measured, do not nudge. -->
   <defs>
-    <clipPath id="tw"><path d="M44 12 60 40 28 40Z"/></clipPath>
+    <clipPath id="tw"><path d="M84.5 12 100.5 40 68.5 40Z"/></clipPath>
     <radialGradient id="r" cx="50%" cy="0%" r="120%"><stop offset="0" stop-color="#ff3b3b"/><stop offset=".6" stop-color="#ff3b3b" stop-opacity="0"/></radialGradient>
     <radialGradient id="g" cx="92%" cy="100%" r="120%"><stop offset="0" stop-color="#22dd66"/><stop offset=".6" stop-color="#22dd66" stop-opacity="0"/></radialGradient>
     <radialGradient id="b" cx="8%" cy="100%" r="120%"><stop offset="0" stop-color="#2f7bff"/><stop offset=".6" stop-color="#2f7bff" stop-opacity="0"/></radialGradient>
   </defs>
   <text x="20" y="74" font-family="Segoe UI,Inter,system-ui,sans-serif" font-weight="680" font-size="58" letter-spacing="-1" fill="#e6edf3">or&#x131;enta</text>
   <g clip-path="url(#tw)">
-    <rect x="20" y="6" width="60" height="40" fill="#0f1830"/>
-    <rect x="20" y="6" width="60" height="40" fill="url(#r)" style="mix-blend-mode:screen"/>
-    <rect x="20" y="6" width="60" height="40" fill="url(#g)" style="mix-blend-mode:screen"/>
-    <rect x="20" y="6" width="60" height="40" fill="url(#b)" style="mix-blend-mode:screen"/>
+    <rect x="60.5" y="6" width="48" height="40" fill="#0f1830"/>
+    <rect x="60.5" y="6" width="48" height="40" fill="url(#r)" style="mix-blend-mode:screen"/>
+    <rect x="60.5" y="6" width="48" height="40" fill="url(#g)" style="mix-blend-mode:screen"/>
+    <rect x="60.5" y="6" width="48" height="40" fill="url(#b)" style="mix-blend-mode:screen"/>
   </g>
 </svg>

@@ -1,15 +1,18 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120" role="img" aria-label="Orienta">
+  <!-- Orienta browser-tab icon: the IPF orientation triangle, same geometry as
+       branding/icon.svg. The white outline is deliberately omitted here — at
+       16-32 px it muddies the apex instead of defining it. -->
   <defs>
-    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#bd93f9"/>
-      <stop offset="100%" style="stop-color:#50fa7b"/>
-    </linearGradient>
+    <clipPath id="fvTri"><path d="M60 25 98 91 22 91Z"/></clipPath>
+    <radialGradient id="fvR" cx="50%" cy="4%" r="105%"><stop offset="0" stop-color="#ff3b3b"/><stop offset=".42" stop-color="#ff3b3b" stop-opacity=".18"/><stop offset=".66" stop-color="#ff3b3b" stop-opacity="0"/></radialGradient>
+    <radialGradient id="fvG" cx="92%" cy="98%" r="105%"><stop offset="0" stop-color="#22dd66"/><stop offset=".42" stop-color="#22dd66" stop-opacity=".18"/><stop offset=".66" stop-color="#22dd66" stop-opacity="0"/></radialGradient>
+    <radialGradient id="fvB" cx="8%" cy="98%" r="105%"><stop offset="0" stop-color="#2f7bff"/><stop offset=".42" stop-color="#2f7bff" stop-opacity=".18"/><stop offset=".66" stop-color="#2f7bff" stop-opacity="0"/></radialGradient>
   </defs>
-  <rect width="64" height="64" rx="12" fill="#282a36"/>
-  <path d="M32 8 L56 24 L56 48 L32 56 L8 48 L8 24 Z" fill="none" stroke="url(#g)" stroke-width="3"/>
-  <path d="M32 16 L48 28 L48 44 L32 50 L16 44 L16 28 Z" fill="none" stroke="#ff79c6" stroke-width="2" opacity="0.6"/>
-  <circle cx="32" cy="32" r="6" fill="#bd93f9" opacity="0.8"/>
-  <line x1="32" y1="26" x2="32" y2="8" stroke="#50fa7b" stroke-width="1.5" opacity="0.5"/>
-  <line x1="37" y1="35" x2="48" y2="44" stroke="#50fa7b" stroke-width="1.5" opacity="0.5"/>
-  <line x1="27" y1="35" x2="16" y2="44" stroke="#50fa7b" stroke-width="1.5" opacity="0.5"/>
+  <rect x="5" y="5" width="110" height="110" rx="27" fill="#0f141b"/>
+  <g clip-path="url(#fvTri)">
+    <rect width="120" height="120" fill="#0f1830"/>
+    <rect width="120" height="120" fill="url(#fvR)" style="mix-blend-mode:screen"/>
+    <rect width="120" height="120" fill="url(#fvG)" style="mix-blend-mode:screen"/>
+    <rect width="120" height="120" fill="url(#fvB)" style="mix-blend-mode:screen"/>
+  </g>
 </svg>

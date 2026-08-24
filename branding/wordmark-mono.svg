@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 60" width="140" height="60" role="img" aria-label="Orienta">
+  <!-- One-colour variant (teal) for stamps, watermarks, monochrome print.
+       Solid triangle as the i-dot; recolour the whole mark as a unit or not at all. -->
+  <text x="6" y="50" font-family="Segoe UI,Inter,system-ui,sans-serif" font-weight="680" font-size="40" letter-spacing="-1" fill="#3fb6c4">or&#x131;enta</text>
+  <!-- Sits 3.5 units above the x-height — same gap ratio as the colour wordmark.
+       In one colour the triangle would otherwise fuse with the i-stem into one glyph. -->
+  <path d="M50.4 7.5 61.4 26.5 39.4 26.5Z" fill="#3fb6c4"/>
+</svg>

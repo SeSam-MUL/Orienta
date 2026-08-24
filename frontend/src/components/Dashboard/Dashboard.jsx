@@ -11,8 +11,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { colors } from '../../theme/tokens';
+import { colors, alpha } from '../../theme/tokens';
 import { Button, useConfirm, ConfirmDialog } from '../../theme/components';
+import { Wordmark } from '../common/Brand';
 import useDataStore from '../../stores/useDataStore';
 import useResultStore from '../../stores/useResultStore';
 import {
@@ -547,16 +548,13 @@ export default function Dashboard({ onNavigate, onFileOpen }) {
         boxSizing: 'border-box',
         overflowY: 'auto',
       }}>
-        {/* Title */}
-        <div style={{
-          fontSize: 30,
-          fontWeight: 700,
-          color: colors.accent,
-          textAlign: 'center',
-          textShadow: `0 0 60px ${colors.accent}33`,
-          letterSpacing: '-0.02em',
-        }}>
-          {t('dashboard:title')}
+        {/* Brand */}
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <Wordmark
+            height={78}
+            title={t('dashboard:title')}
+            style={{ filter: `drop-shadow(0 0 60px ${alpha(colors.accent, 20)})` }}
+          />
         </div>
 
         <div style={{
