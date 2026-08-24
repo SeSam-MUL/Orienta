@@ -39,6 +39,8 @@ from backend.api.services.phase_map_store import (
     get_phase_map_store,
     palette_hex_for_state,
     render_phase_map_to_base64,
+    render_structure_map_to_base64,
+    structure_color_hex,
 )
 
 logger = logging.getLogger(__name__)
@@ -666,11 +668,32 @@ class AutoClassifyRequest(BaseModel):
     mode: str = "cluster"
     # None -> chosen by the spatial coherence of the resulting phase map
     n_clusters: Optional[int] = None
+    # Box width in pixels for smoothing the composition before clustering.
+    # None = the module default. 0 reproduces the pre-2026-08-24 behaviour.
+    scale: Optional[int] = None
     phase_keys: Optional[List[str]] = None  # None -> every library phase
     # Carry hand-assigned pixels across the re-classify. Default True: the
     # old behaviour silently destroyed them, which is the bug, not the
     # feature. Send False for a deliberate "start over".
     keep_manual_edits: bool = True
+
+
+def _structure_feature_matrix(at_maps, n_rows: int, n_cols: int,
+                              scale: Optional[int]):
+    """The exact feature matrix the clustering used, for later re-splitting.
+
+    Built through the clustering module rather than re-derived here, because a
+    second implementation that drifts would split a structure on different
+    data than the one that created it.
+    """
+    from backend.api.services.eds_clustering import (
+        DEFAULT_SCALE, _feature_matrix, _smooth_maps,
+    )
+
+    sc = DEFAULT_SCALE if scale is None else int(scale)
+    smoothed = _smooth_maps(at_maps, n_rows, n_cols, sc)
+    _els, X = _feature_matrix(smoothed, n_rows * n_cols)
+    return X if X.size else None
 
 
 def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
@@ -765,6 +788,11 @@ def _state_to_response(include_image: bool = True) -> dict:
             "crystal_system": e.crystal_system,
             "n_pixels": int(counts[i + 1]),
             "color": palette[i] if i < len(palette) else "#3c3c3c",
+            # The nominal composition, so the structure picker can rank
+            # candidates against a structure's measured mean without a second
+            # round trip per structure.
+            "composition": {el: round(float(v), 2)
+                            for el, v in (e.composition or {}).items()},
         }
         for i, e in enumerate(state.phase_entries)
     ]
@@ -775,9 +803,71 @@ def _state_to_response(include_image: bool = True) -> dict:
     # What an undo would take back, so the button can name it instead of
     # asking the user to remember.
     response["undo_label"] = store.undo_label
+    response["structures"] = _structures_payload(state)
     if include_image:
         response["image"] = render_phase_map_to_base64(state, _COLOR_OVERRIDES)
+        if state.structure_grid is not None:
+            response["structure_image"] = render_structure_map_to_base64(state)
     return response
+
+
+def _structures_payload(state) -> list:
+    """One entry per structure: how big, what it is made of, what it is called.
+
+    The composition is the honest content of a structure - it is what grouped
+    those pixels in the first place - so the legend can show it without the
+    frontend recomputing anything. Ranked CIF candidates come with it, because
+    naming a structure is the one action the legend exists for.
+    """
+    if state.structure_grid is None:
+        return []
+    import numpy as _np
+
+    n_s = len(state.structure_phase)
+    if n_s == 0:
+        return []
+    flat = state.structure_grid.ravel()
+    counts = _np.bincount(flat[flat >= 0], minlength=n_s)
+    total = int(state.n_rows * state.n_cols) or 1
+
+    at_maps = None
+    try:
+        at_maps, n_rows, n_cols, _fp = _build_at_pct_maps_for_loaded_file()
+        if n_rows != state.n_rows or n_cols != state.n_cols:
+            at_maps = None      # a different file is open; do not mix them
+    except Exception:
+        at_maps = None
+
+    out = []
+    for sid in range(n_s):
+        m = flat == sid
+        mean = {}
+        if at_maps is not None and m.any():
+            # Only the elements the grouping actually used. C and O are
+            # excluded from the clustering (`_CHEM_IGNORE`), so listing them
+            # in a structure's description would imply they helped decide it.
+            from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
+            for el, arr in at_maps.items():
+                if el in _CHEM_IGNORE:
+                    continue
+                v = float(_np.asarray(arr, dtype=float).ravel()[m].mean())
+                if v >= 0.5:
+                    mean[el] = round(v, 2)
+        phase_idx = int(state.structure_phase[sid])
+        entry = (state.phase_entries[phase_idx]
+                 if 0 <= phase_idx < len(state.phase_entries) else None)
+        out.append({
+            "structure_id": sid,
+            "n_pixels": int(counts[sid]) if sid < len(counts) else 0,
+            "percentage": round((int(counts[sid]) if sid < len(counts) else 0)
+                                / total * 100, 2),
+            "mean_at_pct": dict(sorted(mean.items(), key=lambda kv: -kv[1])),
+            "phase_index": phase_idx,
+            "cif_filename": entry.cif_filename if entry else None,
+            "formula": entry.formula if entry else None,
+            "color": structure_color_hex(sid),
+        })
+    return out
 
 
 @router.post("/auto-classify")
@@ -857,6 +947,7 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
             candidates=candidates,
             k=req.n_clusters,
             min_score=req.min_score,
+            scale=req.scale,
         )
         score_grid = np.zeros((n_rows, n_cols), dtype=np.float32)
         ambiguous = np.zeros((n_rows, n_cols), dtype=bool)
@@ -899,6 +990,22 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
             ),
         )
 
+    # The structure layer: which pixels belong together by composition alone,
+    # before anything is named. Only cluster mode produces it - per-pixel
+    # matching has no notion of a group.
+    structure_grid = None
+    structure_phase = None
+    structure_features = None
+    if mode != "pixel":
+        structure_grid = np.asarray(cluster_grid).reshape(n_rows, n_cols)
+        n_struct = int(structure_grid.max()) + 1 if structure_grid.size else 0
+        structure_phase = [-1] * n_struct
+        for m in matches:
+            if 0 <= m.cluster_id < n_struct:
+                structure_phase[m.cluster_id] = int(m.phase_index)
+        structure_features = _structure_feature_matrix(at_maps, n_rows, n_cols,
+                                                       req.scale)
+
     store = get_phase_map_store()
     store.set_classification(
         phase_grid=phase_grid,
@@ -908,6 +1015,9 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
         min_score=req.min_score,
         file_path=file_path,
         preserve_locked=bool(req.keep_manual_edits),
+        structure_grid=structure_grid,
+        structure_phase=structure_phase,
+        structure_features=structure_features,
     )
     response = _state_to_response(include_image=True)
     response["mode"] = mode
@@ -1676,3 +1786,92 @@ async def set_phase_colors(req: PhaseColorsRequest):
     response = _state_to_response(include_image=True)
     response["n_overrides"] = len(_COLOR_OVERRIDES)
     return response
+
+
+# --- Structures (2026-08-24) ------------------------------------------------
+#
+# A structure is a group of pixels that belong together by composition alone,
+# before anything is named. Naming it is one click; the four tools below are
+# for the cases where the grouping itself is wrong.
+
+
+class AssignStructureRequest(BaseModel):
+    structure_id: int
+    phase_index: int          # -1 clears the name
+
+
+class MergeStructuresRequest(BaseModel):
+    keep_id: int
+    drop_id: int
+
+
+class SplitStructureRequest(BaseModel):
+    structure_id: int
+    n_parts: int = 2
+
+
+class GrowStructureRequest(BaseModel):
+    structure_id: int
+    n_pixels: int             # negative shrinks
+
+
+class SnapEdgesRequest(BaseModel):
+    strength: float = 1.0     # erosion radius in px: how wide a band is re-decided
+
+
+def _structure_op(fn, *args):
+    """Run one structure operation and return the refreshed map.
+
+    Every one of them shares the same failure surface, so they share the same
+    translation of it: a missing map or a stale composition is a 400 the
+    frontend can show, not a 500.
+    """
+    try:
+        n = fn(*args)
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    response = _state_to_response(include_image=True)
+    response["n_changed"] = int(n)
+    return response
+
+
+@router.post("/phase-map/structure/assign")
+async def assign_structure_endpoint(req: AssignStructureRequest):
+    """Name a structure: every pixel of it becomes that phase."""
+    store = get_phase_map_store()
+    return _structure_op(store.assign_structure, req.structure_id, req.phase_index)
+
+
+@router.post("/phase-map/structure/merge")
+async def merge_structures_endpoint(req: MergeStructuresRequest):
+    """Fold one structure into another.
+
+    The most-used boundary tool: over-segmentation is the expected error,
+    because a small particle reads as a dilution gradient rather than a
+    plateau and gets cut into concentric rings.
+    """
+    store = get_phase_map_store()
+    return _structure_op(store.merge_structures, req.keep_id, req.drop_id)
+
+
+@router.post("/phase-map/structure/split")
+async def split_structure_endpoint(req: SplitStructureRequest):
+    """Re-cluster one structure's own pixels, leaving the rest of the map alone."""
+    store = get_phase_map_store()
+    return _structure_op(store.split_structure, req.structure_id, req.n_parts)
+
+
+@router.post("/phase-map/structure/grow")
+async def grow_structure_endpoint(req: GrowStructureRequest):
+    """Move one structure's boundary out (positive) or in (negative)."""
+    store = get_phase_map_store()
+    return _structure_op(store.grow_structure, req.structure_id, req.n_pixels)
+
+
+@router.post("/phase-map/structure/snap")
+async def snap_edges_endpoint(req: SnapEdgesRequest):
+    """Let every boundary relax onto the nearest strong chemistry edge."""
+    store = get_phase_map_store()
+    return _structure_op(store.snap_structure_edges, req.strength)

@@ -48,6 +48,52 @@ class ClusterMatch:
     ambiguous: bool = False
 
 
+#: Box width, in pixels, for the smoothing applied before clustering.
+#: Zero disables it and reproduces the pre-2026-08-24 behaviour exactly.
+#:
+#: This is the single most important knob in this module, and leaving it at
+#: zero was a real defect. KMeans on raw per-pixel at% produces confetti, and
+#: the only lever against that was keeping ``k`` tiny — so ``k`` was doing
+#: smoothing's job and the map collapsed to three structures no matter what
+#: the element maps showed. Measured on SampleB (90x120, 8 elements), cluster
+#: coherence (fraction of 4-neighbour pairs in the same cluster):
+#:
+#:   smoothing |  k=3    k=4    k=6    k=8    k=10   k=12
+#:   ----------+------------------------------------------
+#:         raw |  0.947  0.665  0.573  0.457  0.346  0.305
+#:         3x3 |  0.976  0.974  0.803  0.778  0.703  0.670
+#:         5x5 |  0.978  0.958  0.936  0.831  0.808  0.751
+#:         7x7 |  0.979  0.960  0.940  0.938  0.838  0.811
+#:
+#: On the raw row coherence falls monotonically with k, so any criterion that
+#: maximises it is forced to the smallest k. Connected pieces at k=8: raw gives
+#: 3491 pieces with a MEDIAN SIZE OF ONE PIXEL; 5x5 gives 174, largest 3759.
+#:
+#: The cost is boundary resolution — features thinner than the box are absorbed
+#: — which is why this is a user-facing control and not a constant.
+DEFAULT_SCALE = 5
+
+
+def _smooth_maps(
+    at_pct_per_element: Dict[str, np.ndarray], n_rows: int, n_cols: int,
+    scale: int,
+) -> Dict[str, np.ndarray]:
+    """Box-average each element map. ``scale <= 1`` returns the input as-is.
+
+    Smoothing the COMPOSITION rather than the label map is deliberate: it
+    denoises the quantity the clustering actually reasons about, so cluster
+    means stay physically meaningful. Filtering labels afterwards would only
+    hide the speckle.
+    """
+    if scale is None or scale <= 1:
+        return at_pct_per_element
+    out: Dict[str, np.ndarray] = {}
+    for el, arr in at_pct_per_element.items():
+        a = np.asarray(arr, dtype=np.float64).reshape(n_rows, n_cols)
+        out[el] = ndimage.uniform_filter(a, size=int(scale), mode="nearest").ravel()
+    return out
+
+
 def _feature_matrix(
     at_pct_per_element: Dict[str, np.ndarray], n_px: int,
 ) -> Tuple[List[str], np.ndarray]:
@@ -88,6 +134,97 @@ def choose_k_by_bic(X: np.ndarray, k_range: Tuple[int, int] = (2, 12)) -> int:
         if bic < best_bic:
             best_bic, best_k = bic, k
     return best_k
+
+
+#: Two cluster means closer than this, in at% on their largest single-element
+#: difference, are the same chemistry as far as this data can tell.
+#:
+#: Calibrated on SampleB, where the minimum pairwise gap falls
+#: 14.16 (k=2) / 13.58 (k=4) / 7.16 (k=6) / 4.55 (k=7) / 1.37 (k=8) / 0.99 (k=12).
+#: Any threshold from 1.5 to 4.0 selects k=7 — a plateau, not a cliff. The
+#: value also has to sit above the measurement error: the same module docstring
+#: records the aluminium matrix reading 2.80 at% Fe where equilibrium solubility
+#: is ~0.05 at%, so differences of a few tenths of an at% are not evidence of a
+#: different chemistry.
+DISTINCT_AT_PCT = 2.0
+
+
+def _cluster_means(X: np.ndarray, labels: np.ndarray, k: int) -> np.ndarray:
+    """Mean feature vector per cluster, in at% (the features are fractions)."""
+    out = np.zeros((k, X.shape[1]), dtype=np.float64)
+    for c in range(k):
+        m = labels == c
+        if m.any():
+            out[c] = X[m].mean(axis=0) * 100.0
+    return out
+
+
+def min_pairwise_gap(X: np.ndarray, labels: np.ndarray, k: int) -> float:
+    """Smallest largest-single-element difference between any two clusters.
+
+    "Largest single element" rather than a Euclidean distance on purpose: two
+    structures differing by 3 at% Si and nothing else ARE different structures,
+    but that difference is diluted to near-nothing in a norm over eight
+    elements dominated by Al.
+    """
+    means = _cluster_means(X, labels, k)
+    gap = np.inf
+    for i in range(k):
+        for j in range(i):
+            gap = min(gap, float(np.abs(means[i] - means[j]).max()))
+    return 0.0 if not np.isfinite(gap) else gap
+
+
+def choose_k_by_distinctness(
+    X: np.ndarray, k_range: Tuple[int, int] = (2, 12),
+    min_gap: float = DISTINCT_AT_PCT,
+) -> int:
+    """Largest ``k`` whose clusters are all still chemically distinct.
+
+    Raise k while every cluster mean stays at least ``min_gap`` at% away from
+    every other on some element; stop when clusters start duplicating each
+    other. This asks the only question k should answer — "how many distinct
+    chemistries are on this map" — without letting map tidiness or cluster
+    area into the objective.
+
+    Two criteria were measured and rejected, both recorded so they are not
+    retried:
+
+    * **Map coherence** (the previous default) falls monotonically with k on
+      unsmoothed data, so maximising it is FORCED to the smallest k. SampleB
+      collapsed to 3 structures while the element maps plainly showed more.
+      Tidiness is what :data:`DEFAULT_SCALE` is for — one lever per problem.
+    * **Silhouette** peaks at k=3-4 here (0.834 / 0.838) because it averages
+      over pixels, and the structures that matter are 70 px out of 10 800.
+      Any area-weighted criterion is dominated by the matrix. Measured, not
+      assumed.
+
+    Over-segmentation is the safer error: on SampleB k=7 splits one Si
+    particle into three concentric rings (Si 24 / 36 / 52 at%) because the
+    interaction volume makes a small particle read as a gradient. Merging
+    those is one click; recovering a structure that was never separated is
+    not. So this deliberately errs high.
+    """
+    from sklearn.cluster import KMeans
+
+    lo, hi = max(2, int(k_range[0])), int(k_range[1])
+    n = X.shape[0]
+    if n <= lo or hi < lo:
+        return lo
+    hi = min(hi, n - 1)
+
+    best = lo
+    for k in range(lo, hi + 1):
+        try:
+            labels = KMeans(n_clusters=k, n_init=10, random_state=0).fit_predict(X)
+        except Exception:          # degenerate fit at this k
+            break
+        if len(np.unique(labels)) < k:
+            break
+        if min_pairwise_gap(X, labels, k) < min_gap:
+            break
+        best = k
+    return best
 
 
 def phase_coherence(phase_grid: np.ndarray) -> float:
@@ -220,19 +357,25 @@ def cluster_and_match(
     n_cols: int,
     candidates: List[CifPhaseEntry],
     k: Optional[int] = None,
-    k_range: Tuple[int, int] = (2, 8),
+    k_range: Tuple[int, int] = (2, 12),
     min_score: float = 0.3,
     rel_req: float = DEFAULT_REL_REQ,
+    scale: Optional[int] = None,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch], int]:
     """Cluster the composition, match each cluster, paint its pixels.
 
-    With ``k=None`` the cluster count is chosen by the spatial coherence of
-    the resulting phase map (see :func:`phase_coherence`), not by BIC —
-    picking the run that actually yields grain-like regions. Degenerate
-    solutions are excluded: a ``k`` collapsing the map to a single phase
-    scores perfect coherence and is never what the user wants, so only runs
-    producing at least two distinct phases compete. Ties go to the smaller
-    ``k``.
+    ``scale`` box-averages the composition first (default
+    :data:`DEFAULT_SCALE`; pass 0 to disable and reproduce the old behaviour).
+    Without it KMeans returns confetti — measured at k=8 on SampleB: 3491
+    connected pieces with a median size of ONE pixel.
+
+    With ``k=None`` the cluster count comes from
+    :func:`choose_k_by_distinctness`, which raises k while the cluster means
+    stay chemically distinguishable. It deliberately does NOT maximise :func:`phase_coherence`: coherence
+    falls monotonically with k on unsmoothed data, so maximising it forces the
+    smallest k and the map collapses however much structure the element maps
+    show. Coherence is still the right measure of a map's tidiness, and
+    smoothing is the knob for it — one lever per problem.
 
     Returns ``(phase_grid, cluster_grid, matches, k_used)``. A cluster whose
     best match scores below ``min_score`` is left unassigned (-1) and
@@ -244,7 +387,10 @@ def cluster_and_match(
     if not at_pct_per_element or n_px <= 0:
         return empty, empty.copy(), [], 0
 
-    els, X = _feature_matrix(at_pct_per_element, n_px)
+    scale_used = DEFAULT_SCALE if scale is None else int(scale)
+    smoothed = _smooth_maps(at_pct_per_element, n_rows, n_cols, scale_used)
+
+    els, X = _feature_matrix(smoothed, n_px)
     if not els:
         return empty, empty.copy(), [], 0
 
@@ -268,22 +414,13 @@ def cluster_and_match(
     lo, hi = k_range
     lo = max(2, lo)
     hi = max(lo, min(hi, n_px))
-    best = None
-    for kk in range(lo, hi + 1):
-        try:
-            pg, cg, ms = run(kk)
-        except Exception:      # degenerate fit at this k — try the next
-            continue
-        n_phases = len({int(v) for v in np.unique(pg) if v >= 0})
-        coh = phase_coherence(pg)
-        # Strictly greater keeps the smallest k on a tie.
-        if n_phases >= 2 and (best is None or coh > best[0]):
-            best = (coh, kk, pg, cg, ms)
-
-    if best is None:           # never resolved 2+ phases — fall back
+    k_used = choose_k_by_distinctness(X, (lo, hi))
+    k_used = max(1, min(k_used, n_px))
+    try:
+        phase_grid, cluster_grid, matches = run(k_used)
+    except Exception:
+        # A degenerate fit at the chosen k must not lose the map; the
+        # smallest k is always fittable when there are pixels at all.
         k_used = max(1, min(lo, n_px))
         phase_grid, cluster_grid, matches = run(k_used)
-        return phase_grid, cluster_grid, matches, k_used
-
-    _coh, k_used, phase_grid, cluster_grid, matches = best
     return phase_grid, cluster_grid, matches, k_used

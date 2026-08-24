@@ -45,6 +45,9 @@ import { usePhaseMap, PhaseMapControls, phaseNameKey } from './PhaseMapPanel';
 // The panel is a hook plus two components; the legend lives in the controls.
 function Harness() {
   const handle = usePhaseMap({});
+  // The colour picker lives in the phase legend, and the page now opens on
+  // the structure view. Switching here is what a user does with the toggle.
+  React.useEffect(() => { handle.setMapView('phases'); }, []);
   return <PhaseMapControls handle={handle} />;
 }
 

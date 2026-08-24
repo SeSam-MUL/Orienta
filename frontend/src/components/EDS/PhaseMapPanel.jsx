@@ -31,6 +31,7 @@ import {
 } from '../../theme/components';
 import useDataStore from '../../stores/useDataStore';
 import usePhaseColorStore from '../../stores/usePhaseColorStore';
+import StructurePanel from './StructurePanel';
 
 /** Store key for a phase colour.
  *
@@ -76,6 +77,15 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   const [paintMode, setPaintMode] = useState('rectangle');  // 'rectangle' | 'polygon' | 'wand'
   const wand = useEdsWand();
   const [replaceFrom, setReplaceFrom] = useState(null);
+  // Structures first: the classification groups pixels by composition alone,
+  // and naming them is a separate act. 'structures' | 'phases'.
+  const [mapView, setMapView] = useState('structures');
+  const [selectedStructureId, setSelectedStructureId] = useState(null);
+  // Smoothing box width for the clustering. null = the backend default (5).
+  // Without it KMeans returns confetti and the cluster count has to stay tiny
+  // to hide that - measured at k=8 on SampleB: 3491 pieces, median size 1 px.
+  const [scale, setScale] = useState(null);
+  const [structureBusy, setStructureBusy] = useState(false);
   // The SAME store the EBSD phase map uses, so a phase keeps its colour on
   // both pages and the user's choice survives a reload.
   const colorOverrides = usePhaseColorStore((s) => s.overrides);
@@ -91,7 +101,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   // default because per-pixel composition on real data carries several
   // at% of systematic error (see the 2026-08-19 design spec).
   const [mode, setMode] = useState('cluster');
-  const [nClusters, setNClusters] = useState(null);   // null -> chosen by BIC
+  const [nClusters, setNClusters] = useState(null);   // null -> backend picks it
 
   // Which library phases take part. Empty set = "not loaded yet"; the
   // request only narrows when a STRICT subset is ticked, so a stale list
@@ -141,6 +151,44 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     return () => { cancelled = true; };
   }, [colorOverrides]);
 
+  // Every structure tool answers with the whole refreshed map, so they share
+  // one caller. Keeping them separate would mean five copies of the same
+  // error handling and the same chance for one of them to drift.
+  const runStructureOp = useCallback(async (fn, args) => {
+    setStructureBusy(true);
+    setError(null);
+    try {
+      const res = await fn(args);
+      if (res.data?.loaded) setPhaseMap(res.data);
+      return res.data;
+    } catch (e) {
+      setError(e.response?.data?.detail || String(e));
+      return null;
+    } finally {
+      setStructureBusy(false);
+    }
+  }, []);
+
+  const handleAssignStructure = useCallback((structureId, phaseIndex) =>
+    runStructureOp(edsApi.assignStructure, { structureId, phaseIndex }),
+  [runStructureOp]);
+
+  const handleMergeStructures = useCallback((keepId, dropId) =>
+    runStructureOp(edsApi.mergeStructures, { keepId, dropId }),
+  [runStructureOp]);
+
+  const handleSplitStructure = useCallback((structureId, nParts = 2) =>
+    runStructureOp(edsApi.splitStructure, { structureId, nParts }),
+  [runStructureOp]);
+
+  const handleGrowStructure = useCallback((structureId, nPixels) =>
+    runStructureOp(edsApi.growStructure, { structureId, nPixels }),
+  [runStructureOp]);
+
+  const handleSnapEdges = useCallback((strength) =>
+    runStructureOp(edsApi.snapStructureEdges, { strength }),
+  [runStructureOp]);
+
   const handleAutoClassify = useCallback(async () => {
     // "None selected" must not run the whole library — that inverts the
     // clearest instruction the user can give. Refuse instead.
@@ -161,16 +209,18 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
         minScore,
         mode,
         nClusters,
+        ...(scale != null ? { scale } : {}),
         ...(isSubset ? { phaseKeys: [...selectedPhaseKeys] } : {}),
       });
       setPhaseMap(res.data);
       setSelectedPhaseIndex(null);
+      setSelectedStructureId(null);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || t('phaseMap.errorClassify'));
     } finally {
       setLoading(false);
     }
-  }, [tolerance, minScore, mode, nClusters, cifPhases, selectedPhaseKeys, t]);
+  }, [tolerance, minScore, mode, nClusters, scale, cifPhases, selectedPhaseKeys, t]);
 
   const handleClearMap = useCallback(async () => {
     setLoading(true); setError(null);
@@ -274,6 +324,11 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     mode, setMode, nClusters, setNClusters,
     cifPhases, loadCifPhases,
     colorOverrides, setPhaseColor, resetPhaseColor,
+    mapView, setMapView,
+    selectedStructureId, setSelectedStructureId,
+    scale, setScale, structureBusy,
+    handleAssignStructure, handleMergeStructures, handleSplitStructure,
+    handleGrowStructure, handleSnapEdges,
     selectedPhaseKeys, setSelectedPhaseKeys,
     selectedPhaseIndex, setSelectedPhaseIndex,
     replaceFrom, setReplaceFrom,
@@ -346,7 +401,15 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand }) {
     phaseMap, hoveredPixel, setHoveredPixel,
     region, setRegion,
     paintMode, polygonVertices, setPolygonVertices,
+    mapView,
   } = handle;
+
+  // The structure view draws its own image. Falling back to the phase image
+  // keeps a map made before structures existed (or a per-pixel run, which has
+  // no groups at all) visible instead of blank.
+  const shownImage = (mapView === 'structures' && phaseMap?.structure_image)
+    ? phaseMap.structure_image
+    : phaseMap?.image;
   const [drag, setDrag] = useState(null);  // { startRow, startCol, endRow, endCol } | null
 
   const isPolygon = paintMode === 'polygon';
@@ -494,7 +557,7 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand }) {
         position: 'relative', width: '100%', height: '100%',
       }}>
         <img
-          src={`data:image/png;base64,${phaseMap.image}`}
+          src={`data:image/png;base64,${shownImage}`}
           alt={t('phaseMap.canvasAltText')}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
@@ -644,6 +707,7 @@ export function PhaseMapControls({ handle }) {
     handleClosePolygon, handleCancelPolygon,
     handleSendToIndexing,
     colorOverrides, setPhaseColor, resetPhaseColor,
+    mapView, setMapView,
   } = handle;
 
   const hasMap = !!phaseMap?.loaded;
@@ -652,6 +716,11 @@ export function PhaseMapControls({ handle }) {
   const unclassifiedRow = summary.find(s => s.is_unclassified);
   const clusters = phaseMap?.clusters || [];
   const isWandMode = paintMode === 'wand';
+  // The structure view only exists when there ARE structures. A per-pixel run
+  // has no groups and an old map predates them; without this the toggle is
+  // hidden AND the phase legend is hidden, leaving no legend at all.
+  const showStructures = mapView === 'structures'
+    && (phaseMap?.structures || []).length > 0;
   // The legend doubles as the phase PICKER, and `summary` deliberately omits
   // phases with zero pixels. That made the one phase a manual correction is
   // usually FOR — "this particle is beta-AlFeSi, the classifier missed it" —
@@ -895,8 +964,44 @@ export function PhaseMapControls({ handle }) {
           </details>
         )}
 
+        {/* --- Structures vs phases ----------------------------------
+            Structures come first because that is the order of the work: the
+            data says which pixels belong together, the user says what they
+            are. The phase view is the same map seen through those names. */}
+        {hasMap && (phaseMap?.structures || []).length > 0 && (
+          <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+            {[
+              { id: 'structures', label: t('structures.viewStructures'),
+                tip: t('structures.viewStructuresTooltip') },
+              { id: 'phases', label: t('structures.viewPhases'),
+                tip: t('structures.viewPhasesTooltip') },
+            ].map((v) => {
+              const active = mapView === v.id;
+              return (
+                <button
+                  key={v.id}
+                  type="button"
+                  onClick={() => setMapView(v.id)}
+                  title={v.tip}
+                  style={{
+                    flex: 1, fontSize: '8.5pt', padding: '3px 6px',
+                    borderRadius: 3, cursor: 'pointer',
+                    background: active ? alpha(C.cyan, 22) : 'transparent',
+                    color: active ? C.text : C.textSecondary,
+                    border: `1px solid ${active ? alpha(C.cyan, 50) : C.border}`,
+                  }}
+                >
+                  {v.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {hasMap && showStructures && <StructurePanel handle={handle} />}
+
         {/* --- Legend --- */}
-        {hasMap && realPhases.length > 0 && (
+        {hasMap && !showStructures && realPhases.length > 0 && (
           <div style={{
             display: 'flex', flexDirection: 'column', gap: 2,
             maxHeight: 220, overflowY: 'auto',

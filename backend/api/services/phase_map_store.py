@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from scipy import ndimage
 
 from backend.api.services.cif_phase_library import CifPhaseEntry
 
@@ -48,7 +49,7 @@ from backend.api.services.cif_phase_library import CifPhaseEntry
 # enrichment gate measured against each map's own background. A sidecar
 # written by an older rule would silently outlive the rule that produced
 # it, so those files are ignored and the map is recomputed.
-_SIDECAR_SCHEMA = 3
+_SIDECAR_SCHEMA = 4
 
 
 def _sidecar_path_for(file_path: str) -> Path:
@@ -88,6 +89,20 @@ class PhaseMapState:
     # until the first manual edit (saves a 2D bool allocation when
     # nobody touches the map).
     locked_mask: Optional[np.ndarray] = field(default=None)
+    # --- Structures (2026-08-24) ---
+    # A structure is a group of pixels that belong together by composition
+    # alone, before anything is named. ``phase_grid`` stays authoritative —
+    # it has five consumers outside this module — and a structure assignment
+    # simply writes into it through the same path as any hand edit. That also
+    # keeps hand edits possible on pixel sets that respect no structure
+    # boundary at all (wand, rectangle, polygon).
+    structure_grid: Optional[np.ndarray] = field(default=None)   # int32, -1 = none
+    # structure id -> index into ``phase_entries``, or -1 for "not named yet".
+    structure_phase: List[int] = field(default_factory=list)
+
+    @property
+    def n_structures(self) -> int:
+        return len(self.structure_phase)
 
 
 class PhaseMapStore:
@@ -104,6 +119,12 @@ class PhaseMapStore:
         self._lock = threading.RLock()
         self._state: Optional[PhaseMapState] = None
         self._file_path: Optional[str] = None  # tag so we can detect file switches
+        # The composition the structures were clustered on, as the same
+        # feature matrix the clustering used (n_px x n_elements). Splitting a
+        # structure needs it; nothing else does, so it is held beside the
+        # state rather than inside it — it is derived data, it must not go in
+        # the sidecar, and it must not be restored by undo.
+        self._structure_features: Optional[np.ndarray] = None
         # One-level undo. Every mutation snapshots the whole state first, so
         # undo restores phase ids, scores, the locked mask AND the candidate
         # list together — restoring the grid alone would leave phase ids
@@ -134,6 +155,9 @@ class PhaseMapStore:
             min_score=st.min_score,
             locked_mask=(st.locked_mask.copy()
                          if st.locked_mask is not None else None),
+            structure_grid=(st.structure_grid.copy()
+                            if st.structure_grid is not None else None),
+            structure_phase=list(st.structure_phase),
         )
         self._undo_label = label
 
@@ -173,6 +197,7 @@ class PhaseMapStore:
             self._undo = None
             self._undo_label = None
             self._file_path = None
+            self._structure_features = None
 
     def is_set(self) -> bool:
         with self._lock:
@@ -193,6 +218,9 @@ class PhaseMapStore:
         min_score: float,
         file_path: Optional[str] = None,
         preserve_locked: bool = True,
+        structure_grid: Optional[np.ndarray] = None,
+        structure_phase: Optional[List[int]] = None,
+        structure_features: Optional[np.ndarray] = None,
     ) -> None:
         """Replace the stored classification with a freshly computed one.
 
@@ -259,6 +287,14 @@ class PhaseMapStore:
                 tolerance=float(tolerance),
                 min_score=float(min_score),
                 locked_mask=carried_mask,
+                structure_grid=(structure_grid.astype(np.int32, copy=True)
+                                if structure_grid is not None else None),
+                structure_phase=(list(structure_phase)
+                                 if structure_phase is not None else []),
+            )
+            self._structure_features = (
+                np.asarray(structure_features, dtype=np.float64)
+                if structure_features is not None else None
             )
             self._file_path = file_path
         self._autosave()
@@ -408,6 +444,273 @@ class PhaseMapStore:
         self._autosave()
         return n
 
+    # --- Structures (2026-08-24) ---
+
+    def _repaint_structures(self, st, sids) -> int:
+        """Paint the given structures onto ``phase_grid`` from their names.
+
+        Caller holds the lock and has already snapshotted. Pixels the user set
+        by hand are left alone: a boundary move must not silently undo a
+        decision the user made explicitly.
+        """
+        if st.structure_grid is None:
+            return 0
+        locked = (st.locked_mask if st.locked_mask is not None
+                  else np.zeros((st.n_rows, st.n_cols), dtype=bool))
+        n = 0
+        for sid in sids:
+            if not (0 <= sid < len(st.structure_phase)):
+                continue
+            m = (st.structure_grid == sid) & ~locked
+            if not m.any():
+                continue
+            st.phase_grid[m] = int(st.structure_phase[sid])
+            st.score_grid[m] = 0.0
+            n += int(m.sum())
+        return n
+
+    def assign_structure(self, structure_id: int, target_phase_index: int) -> int:
+        """Name one structure: every pixel of it becomes that phase.
+
+        This is the point of the structure layer - one click instead of
+        painting pixels. Unlike a hand paint it does NOT lock the pixels: the
+        structure is the record of the decision, so a later boundary change
+        keeps following it.
+        """
+        with self._lock:
+            st = self._state
+            if st is None:
+                raise RuntimeError("No phase map loaded - run auto-classify first")
+            if st.structure_grid is None:
+                raise RuntimeError(
+                    "This map has no structures - re-run the classification")
+            if not (0 <= structure_id < len(st.structure_phase)):
+                raise ValueError(
+                    f"Structure {structure_id} out of range "
+                    f"(0..{len(st.structure_phase) - 1})")
+            if target_phase_index != -1 and not (
+                    0 <= target_phase_index < len(st.phase_entries)):
+                raise ValueError(
+                    f"Phase index {target_phase_index} out of range "
+                    f"(0..{len(st.phase_entries) - 1})")
+            m = st.structure_grid == structure_id
+            n = int(m.sum())
+            if n == 0:
+                return 0
+            self._snapshot("name structure")
+            st.structure_phase[structure_id] = int(target_phase_index)
+            self._repaint_structures(st, [structure_id])
+        self._autosave()
+        return n
+
+    def merge_structures(self, keep_id: int, drop_id: int) -> int:
+        """Fold one structure into another.
+
+        The most-needed boundary tool, because over-segmentation is the
+        expected error: on SampleB the default splits one Si particle into
+        three concentric rings (Si 24 / 36 / 52 at%) - the interaction volume
+        makes a small particle read as a gradient rather than a plateau. How
+        much rim belongs to the particle is a judgement, not a computation.
+
+        Ids above ``drop_id`` shift down by one so the list stays dense.
+        """
+        with self._lock:
+            st = self._state
+            if st is None or st.structure_grid is None:
+                raise RuntimeError("No structures on this map")
+            n_s = len(st.structure_phase)
+            for name, sid in (("keep_id", keep_id), ("drop_id", drop_id)):
+                if not (0 <= sid < n_s):
+                    raise ValueError(f"{name} {sid} out of range (0..{n_s - 1})")
+            if keep_id == drop_id:
+                return 0
+            moved = int((st.structure_grid == drop_id).sum())
+            self._snapshot("merge structures")
+            st.structure_grid[st.structure_grid == drop_id] = keep_id
+            st.structure_grid[st.structure_grid > drop_id] -= 1
+            st.structure_phase.pop(drop_id)
+            new_keep = keep_id - 1 if keep_id > drop_id else keep_id
+            self._repaint_structures(st, [new_keep])
+        self._autosave()
+        return moved
+
+    def split_structure(self, structure_id: int, n_parts: int = 2) -> int:
+        """Re-cluster one structure's own pixels into ``n_parts``.
+
+        Local, so the rest of the map is untouched. Raising the global cluster
+        count instead would re-cut every other structure as well - which is
+        exactly why a global k is not a usable boundary tool.
+
+        The new parts inherit the original's phase; the user renames the ones
+        that should differ. Returns the number of parts actually created.
+        """
+        from sklearn.cluster import KMeans
+
+        with self._lock:
+            st = self._state
+            if st is None or st.structure_grid is None:
+                raise RuntimeError("No structures on this map")
+            if not (0 <= structure_id < len(st.structure_phase)):
+                raise ValueError(
+                    f"Structure {structure_id} out of range "
+                    f"(0..{len(st.structure_phase) - 1})")
+            n_parts = max(2, int(n_parts))
+            feats = self._structure_features
+            if feats is None:
+                raise RuntimeError(
+                    "The composition this map was built from is no longer in "
+                    "memory - re-run the classification before splitting")
+            m = (st.structure_grid == structure_id).ravel()
+            if int(m.sum()) < n_parts:
+                return 0
+            labels = KMeans(n_clusters=n_parts, n_init=10,
+                            random_state=0).fit_predict(feats[m])
+            n_new = len(np.unique(labels))
+            if n_new < 2:
+                return 0
+
+            self._snapshot("split structure")
+            phase = st.structure_phase[structure_id]
+            flat = st.structure_grid.ravel().copy()
+            idx = np.nonzero(m)[0]
+            new_ids = [structure_id]
+            for _ in range(1, n_new):
+                st.structure_phase.append(int(phase))
+                new_ids.append(len(st.structure_phase) - 1)
+            for part, sid in enumerate(new_ids):
+                flat[idx[labels == part]] = sid
+            st.structure_grid = flat.reshape(st.n_rows, st.n_cols)
+            self._repaint_structures(st, new_ids)
+        self._autosave()
+        return n_new
+
+    def grow_structure(self, structure_id: int, n_pixels: int) -> int:
+        """Push a structure's boundary out (or in) by ``n_pixels``.
+
+        Positive grows into whatever neighbours it; negative shrinks, and the
+        vacated pixels go to the nearest other structure - never to nothing,
+        which would punch holes in the map. Blind to the chemistry by design;
+        :meth:`snap_structure_edges` is the one that looks at the data.
+        """
+        with self._lock:
+            st = self._state
+            if st is None or st.structure_grid is None:
+                raise RuntimeError("No structures on this map")
+            if not (0 <= structure_id < len(st.structure_phase)):
+                raise ValueError(
+                    f"Structure {structure_id} out of range "
+                    f"(0..{len(st.structure_phase) - 1})")
+            steps = int(n_pixels)
+            if steps == 0:
+                return 0
+            before = st.structure_grid
+            grid = before.copy()
+            m = grid == structure_id
+            if not m.any():
+                return 0
+            struct = ndimage.generate_binary_structure(2, 1)
+            if steps > 0:
+                grown = ndimage.binary_dilation(m, structure=struct,
+                                                iterations=steps)
+                grid[grown & (grid >= 0)] = structure_id
+            else:
+                shrunk = ndimage.binary_erosion(m, structure=struct,
+                                                iterations=-steps,
+                                                border_value=0)
+                lost = m & ~shrunk
+                if lost.any():
+                    others = (grid >= 0) & ~m
+                    if not others.any():
+                        return 0
+                    _, (ri, ci) = ndimage.distance_transform_edt(
+                        ~others, return_indices=True)
+                    grid[lost] = grid[ri[lost], ci[lost]]
+            changed = int((grid != before).sum())
+            if changed == 0:
+                return 0
+            self._snapshot("move boundary")
+            st.structure_grid = grid
+            self._repaint_structures(st, range(len(st.structure_phase)))
+        self._autosave()
+        return changed
+
+    def snap_structure_edges(self, strength: float = 1.0) -> int:
+        """Let every boundary relax onto the nearest strong chemistry edge.
+
+        The other three boundary tools are blind to the data: merge and split
+        change which pixels are grouped, grow moves an edge by a fixed amount.
+        This one asks where the composition actually changes.
+
+        Method: a watershed on the gradient magnitude of the smoothed
+        composition, seeded by the structures' own eroded interiors. Interiors
+        are guaranteed to keep their label, so a structure can never vanish or
+        swap identity; only the contested band between them is re-decided, and
+        it is decided by following the steepest chemical change.
+
+        ``strength`` is the erosion radius in pixels: how wide a band around
+        each boundary is put up for re-decision. 0 changes nothing.
+
+        Deliberately NOT an active contour: a snake needs per-structure
+        parameters and can cross itself, and nothing here would tell the user
+        it had gone wrong. A seeded watershed either keeps the seeds or fails
+        loudly.
+        """
+        from skimage.segmentation import watershed
+
+        with self._lock:
+            st = self._state
+            if st is None or st.structure_grid is None:
+                raise RuntimeError("No structures on this map")
+            feats = self._structure_features
+            if feats is None:
+                raise RuntimeError(
+                    "The composition this map was built from is no longer in "
+                    "memory - re-run the classification before snapping")
+            radius = int(round(max(0.0, float(strength))))
+            if radius <= 0:
+                return 0
+
+            grid = st.structure_grid
+            n_s = len(st.structure_phase)
+
+            # Gradient magnitude over all elements: a boundary is wherever the
+            # composition changes fastest, whichever element carries it.
+            cube = feats.reshape(st.n_rows, st.n_cols, -1)
+            grad = np.zeros((st.n_rows, st.n_cols), dtype=np.float64)
+            for c in range(cube.shape[2]):
+                gy, gx = np.gradient(cube[:, :, c])
+                grad += gy * gy + gx * gx
+            grad = np.sqrt(grad)
+
+            struct = ndimage.generate_binary_structure(2, 1)
+            markers = np.zeros_like(grid)
+            for sid in range(n_s):
+                m = grid == sid
+                if not m.any():
+                    continue
+                core = ndimage.binary_erosion(m, structure=struct,
+                                              iterations=radius, border_value=0)
+                # A structure thinner than the band keeps its whole self as the
+                # seed rather than disappearing.
+                markers[core if core.any() else m] = sid + 1
+
+            if not markers.any():
+                return 0
+            valid = grid >= 0
+            new = watershed(grad, markers, mask=valid) - 1
+            # Anything the watershed could not reach keeps what it had.
+            new = np.where(new >= 0, new, grid).astype(np.int32)
+            new[~valid] = -1
+
+            changed = int((new != grid).sum())
+            if changed == 0:
+                return 0
+            self._snapshot("snap boundaries")
+            st.structure_grid = new
+            self._repaint_structures(st, range(n_s))
+        self._autosave()
+        return changed
+
     # --- Persistence ---
 
     def _autosave(self) -> None:
@@ -463,8 +766,12 @@ class PhaseMapStore:
                 "n_rows": state.n_rows,
                 "n_cols": state.n_cols,
                 "tolerance": state.tolerance,
-                "min_score": state.min_score,
+                    "min_score": state.min_score,
                 "entries": entries_payload,
+                # Which structure carries which phase. Small (one int per
+                # structure), so it rides in the JSON rather than as another
+                # array. The structure GRID is an array below.
+                "structure_phase": list(state.structure_phase),
             }
             sidecar = _sidecar_path_for(file_path)
             np.savez_compressed(
@@ -475,6 +782,11 @@ class PhaseMapStore:
                 # so the loader can detect "no manual edits" cheaply.
                 locked_mask=(state.locked_mask if state.locked_mask is not None
                              else np.zeros((0, 0), dtype=bool)),
+                # Same empty-array convention as locked_mask: a map from
+                # before structures existed simply has none.
+                structure_grid=(state.structure_grid
+                                if state.structure_grid is not None
+                                else np.zeros((0, 0), dtype=np.int32)),
                 meta=np.array(json.dumps(payload), dtype=str),
             )
         return sidecar
@@ -504,6 +816,9 @@ class PhaseMapStore:
                 phase_grid = data["phase_grid"]
                 score_grid = data["score_grid"]
                 locked_arr = data["locked_mask"]
+                struct_arr = (data["structure_grid"]
+                              if "structure_grid" in data.files
+                              else np.zeros((0, 0), dtype=np.int32))
         except Exception:
             logger.exception("Failed to load phase-map sidecar %s", sidecar)
             return False
@@ -538,6 +853,20 @@ class PhaseMapStore:
             return False
 
         locked = locked_arr if locked_arr.size > 0 else None
+        structures = struct_arr if struct_arr.size > 0 else None
+        struct_phase = list(meta.get("structure_phase") or [])
+        if structures is not None:
+            # A grid whose ids do not fit the assignment list would index out
+            # of range on the first repaint. Refusing the structures - not the
+            # whole map - keeps the classification usable.
+            n_ids = int(structures.max()) + 1 if structures.size else 0
+            if structures.shape != (n_rows, n_cols) or n_ids > len(struct_phase):
+                logger.warning(
+                    "Phase-map sidecar %s: structure grid does not match its "
+                    "assignment list - dropping the structures, keeping the map.",
+                    sidecar,
+                )
+                structures, struct_phase = None, []
         with self._lock:
             self._state = PhaseMapState(
                 phase_grid=phase_grid.astype(np.int32, copy=True),
@@ -548,7 +877,14 @@ class PhaseMapStore:
                 tolerance=float(meta.get("tolerance", 15.0)),
                 min_score=float(meta.get("min_score", 0.3)),
                 locked_mask=locked.astype(bool, copy=True) if locked is not None else None,
+                structure_grid=(structures.astype(np.int32, copy=True)
+                                if structures is not None else None),
+                structure_phase=struct_phase,
             )
+            # Splitting and snapping need the composition, which is derived
+            # data and deliberately not in the sidecar. Both fail loud with a
+            # "re-run the classification" message rather than guessing.
+            self._structure_features = None
             self._file_path = file_path
         logger.info("Phase-map sidecar restored from %s (%d phases, %dx%d)",
                     sidecar, len(entries), n_rows, n_cols)
@@ -751,6 +1087,60 @@ def _shade_priority(state: PhaseMapState) -> List[int]:
         minlength=len(state.phase_entries),
     ) if state.phase_grid.size else np.zeros(len(state.phase_entries), dtype=int)
     return sorted(range(len(state.phase_entries)), key=lambda i: (-int(counts[i]), i))
+
+
+#: Colours for the structure view. A structure is not a phase - it has no
+#: name yet - so it deliberately does NOT borrow the phase palette: seeing
+#: "the green one" on both views while they mean different things is worse
+#: than two unrelated colour schemes.
+#:
+#: Golden-angle hue walk at fixed saturation and value, so any number of
+#: structures stays distinguishable and structure 3 is always the same colour
+#: whether the map has five structures or fifteen.
+_STRUCTURE_GOLDEN_ANGLE = 0.61803398875
+
+
+def structure_color(structure_id: int) -> Tuple[int, int, int]:
+    """RGB for one structure id. Stable, and independent of how many exist."""
+    import colorsys
+
+    h = (0.08 + _STRUCTURE_GOLDEN_ANGLE * int(structure_id)) % 1.0
+    # Alternate value slightly so neighbouring ids differ in brightness too,
+    # which survives being printed in greyscale.
+    v = 0.95 if int(structure_id) % 2 == 0 else 0.78
+    r, g, b = colorsys.hsv_to_rgb(h, 0.62, v)
+    return (int(r * 255), int(g * 255), int(b * 255))
+
+
+def structure_color_hex(structure_id: int) -> str:
+    r, g, b = structure_color(structure_id)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def render_structure_map_to_base64(state: PhaseMapState) -> str:
+    """PNG of the structure grid, one colour per structure.
+
+    Same dark grey for "no data" as the phase map, so the two views line up
+    visually and only the coloured regions differ.
+    """
+    import base64
+    import io
+    from PIL import Image
+
+    if state.structure_grid is None:
+        raise ValueError("This map has no structures")
+
+    rgb = np.zeros((state.n_rows, state.n_cols, 3), dtype=np.uint8)
+    rgb[...] = (60, 60, 60)
+    for sid in range(len(state.structure_phase)):
+        m = state.structure_grid == sid
+        if m.any():
+            rgb[m] = structure_color(sid)
+
+    img = Image.fromarray(rgb)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def render_phase_map_to_base64(

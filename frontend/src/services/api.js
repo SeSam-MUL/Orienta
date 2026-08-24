@@ -858,6 +858,7 @@ export const edsApi = {
       min_score: opts.minScore ?? 0.3,
       ...(opts.mode ? { mode: opts.mode } : {}),
       ...(opts.nClusters != null ? { n_clusters: opts.nClusters } : {}),
+      ...(opts.scale != null ? { scale: opts.scale } : {}),
       ...(opts.phaseKeys ? { phase_keys: opts.phaseKeys } : {}),
     }),
   getPhaseMap: (includeImage = true) =>
@@ -887,6 +888,21 @@ export const edsApi = {
   phaseMapUndo: () => api.post('/api/eds/phase-map/undo'),
   setPhaseColors: (overrides) =>
     api.post('/api/eds/phase-map/colors', { overrides }),
+  // Structures: group by composition first, name afterwards.
+  assignStructure: ({ structureId, phaseIndex }) =>
+    api.post('/api/eds/phase-map/structure/assign',
+      { structure_id: structureId, phase_index: phaseIndex }),
+  mergeStructures: ({ keepId, dropId }) =>
+    api.post('/api/eds/phase-map/structure/merge',
+      { keep_id: keepId, drop_id: dropId }),
+  splitStructure: ({ structureId, nParts }) =>
+    api.post('/api/eds/phase-map/structure/split',
+      { structure_id: structureId, n_parts: nParts }),
+  growStructure: ({ structureId, nPixels }) =>
+    api.post('/api/eds/phase-map/structure/grow',
+      { structure_id: structureId, n_pixels: nPixels }),
+  snapStructureEdges: ({ strength }) =>
+    api.post('/api/eds/phase-map/structure/snap', { strength }),
   phaseMapIndexingConfig: () => api.get('/api/eds/phase-map/indexing-config'),
   displayModes: () => api.get('/api/eds/display-modes'),
   chemistryMask: (filters, combine = 'and', margin_px = 0) =>
