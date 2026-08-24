@@ -8,6 +8,7 @@ Wraps eds_utils for:
 - Pixel-level and region-level analysis
 """
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional, List, Dict
@@ -23,9 +24,11 @@ from backend.api.services.image_utils import colormap_array_to_base64, element_c
 from backend.api.services.h5_session import get_active_extractor as get_extractor, is_open
 from backend.api.services.cif_phase_library import (
     auto_classify_pixels,
+    candidates_for,
     load_cif_phase_library,
     suggest_phases_from_cif_library,
 )
+from backend.api.services.eds_clustering import cluster_and_match
 from backend.api.services.phase_map_store import (
     get_phase_map_store,
     palette_hex_for_state,
@@ -582,9 +585,22 @@ async def display_modes():
 
 
 class AutoClassifyRequest(BaseModel):
-    """Tunables for auto-classify; defaults match the suggest-phase scoring."""
-    tolerance: float = 15.0   # per-element At.% deviation that scores 0
+    """Tunables for auto-classify.
+
+    ``mode`` picks how pixels are grouped before a library phase is chosen:
+
+    - ``"cluster"`` (default): cluster the composition, then match each
+      cluster's eroded-interior mean. Per-pixel composition on this data
+      carries several at% of systematic error, so matching a single pixel
+      against nominal stoichiometries separated by ~1 at% is not reliable.
+    - ``"pixel"``: match every pixel independently. Kept for comparison.
+    """
+    tolerance: float = 15.0   # retained for API compatibility; unused by the scorer
     min_score: float = 0.3    # below this -> unclassified
+    mode: str = "cluster"
+    # None -> chosen by the spatial coherence of the resulting phase map
+    n_clusters: Optional[int] = None
+    phase_keys: Optional[List[str]] = None  # None -> every library phase
 
 
 def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
@@ -684,16 +700,98 @@ async def auto_classify(req: AutoClassifyRequest):
             detail="No CIF library available — build Database/crystal_database.xlsx first",
         )
 
+    # Restrict to the phases the user ticked. Only a strict subset filters —
+    # an empty or full selection means "use everything", so a stale UI can
+    # never silently narrow the run.
+    if req.phase_keys:
+        wanted = set(req.phase_keys)
+        subset = {k: v for k, v in cif_library.items() if k in wanted}
+        if not subset:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "None of the selected phases exist in the CIF library. "
+                    "Reload the phase list and try again."
+                ),
+            )
+        cif_library = subset
+
+    mode = (req.mode or "cluster").lower()
+    if mode not in ("cluster", "pixel"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown mode {req.mode!r} — expected 'cluster' or 'pixel'.",
+        )
+
+    # Synchronous HDF5 reads plus, in cluster mode, one KMeans fit per
+    # candidate k. Measured 3.5 s at the user's real scan size (53 868 px);
+    # on the event loop that stalls /health, the WebSocket pumps and every
+    # other request for the duration.
+    return await asyncio.to_thread(
+        _auto_classify_blocking, req, cif_library, mode,
+    )
+
+
+def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
+    """The CPU-bound body of :func:`auto_classify`, run off the event loop."""
     at_maps, n_rows, n_cols, file_path = _build_at_pct_maps_for_loaded_file()
 
-    phase_grid, score_grid, candidates = auto_classify_pixels(
-        at_pct_per_element=at_maps,
-        n_rows=n_rows,
-        n_cols=n_cols,
-        cif_library=cif_library,
-        tolerance=req.tolerance,
-        min_score=req.min_score,
-    )
+    clusters_payload: List[dict] = []
+    k_used = 0
+
+    if mode == "pixel":
+        phase_grid, score_grid, candidates, ambiguous = auto_classify_pixels(
+            at_pct_per_element=at_maps,
+            n_rows=n_rows,
+            n_cols=n_cols,
+            cif_library=cif_library,
+            tolerance=req.tolerance,
+            min_score=req.min_score,
+        )
+    else:
+        # Same helper auto_classify_pixels uses — the index into this list is
+        # the phase id persisted in the sidecar and handed to indexing, so
+        # the two modes must never build it differently.
+        candidates = candidates_for(cif_library, at_maps.keys())
+        phase_grid, cluster_grid, matches, k_used = cluster_and_match(
+            at_pct_per_element=at_maps,
+            n_rows=n_rows,
+            n_cols=n_cols,
+            candidates=candidates,
+            k=req.n_clusters,
+            min_score=req.min_score,
+        )
+        score_grid = np.zeros((n_rows, n_cols), dtype=np.float32)
+        ambiguous = np.zeros((n_rows, n_cols), dtype=bool)
+        for m in matches:
+            sel = (cluster_grid == m.cluster_id)
+            score_grid[sel] = m.score
+            if m.ambiguous:
+                ambiguous[sel] = True
+            clusters_payload.append({
+                "cluster_id": m.cluster_id,
+                "n_pixels": m.n_pixels,
+                "percentage": round(m.n_pixels / (n_rows * n_cols) * 100, 2),
+                # Only the elements that actually carry signal — a full
+                # dump of every trace element makes this unreadable.
+                "mean_at_pct": {el: round(v, 2)
+                                for el, v in sorted(m.mean_at_pct.items(),
+                                                    key=lambda kv: -kv[1])
+                                if v >= 0.5},
+                "cif_filename": (candidates[m.phase_index].cif_filename
+                                 if m.phase_index >= 0 else None),
+                "formula": (candidates[m.phase_index].formula
+                            if m.phase_index >= 0 else None),
+                "phase_index": m.phase_index,
+                "score": round(m.score, 4),
+                "ambiguous": m.ambiguous,
+                "runners_up": [
+                    {"cif_filename": candidates[i].cif_filename,
+                     "score": round(s, 4)}
+                    for i, s in m.runners_up
+                ],
+            })
+
     if not candidates:
         raise HTTPException(
             status_code=400,
@@ -713,7 +811,12 @@ async def auto_classify(req: AutoClassifyRequest):
         min_score=req.min_score,
         file_path=file_path,
     )
-    return _state_to_response(include_image=True)
+    response = _state_to_response(include_image=True)
+    response["mode"] = mode
+    response["k_used"] = k_used
+    response["clusters"] = clusters_payload
+    response["n_ambiguous"] = int(np.asarray(ambiguous).sum())
+    return response
 
 
 @router.get("/phase-map")
