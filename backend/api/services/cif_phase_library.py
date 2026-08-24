@@ -24,11 +24,26 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from backend.api.services.chemistry_score import (
+    DEFAULT_REL_REQ, score_phase_vectorised,
+)
+
 logger = logging.getLogger(__name__)
 
 # Reuse the project-wide subscript translation so the parsing matches
 # whatever the database builder writes into the xlsx.
 _SUB_TO_ASCII = str.maketrans("₀₁₂₃₄₅₆₇₈₉", "0123456789")
+
+# Two winners closer than this are a tie, not a decision.
+#
+# Deliberately equal to grain_phase_assignment.TIE_TOLERANCE, which is
+# empirical and pinned by tests between a gap of 0.0030 ("must read as a
+# tie") and 0.0187 ("must decide") on this same chemistry_fit score scale.
+# An earlier version of this line said 0.02 and claimed to match it; 0.02 is
+# above 0.0187, i.e. it would have flagged as an unresolvable tie exactly
+# the case that module calibrated as a decision. Read the derivation there
+# before touching this.
+TIE_TOLERANCE = 0.01
 
 
 @dataclass
@@ -223,6 +238,72 @@ def suggest_phases_from_cif_library(
     return enriched[:max_results]
 
 
+def candidates_for(
+    cif_library: Dict[str, CifPhaseEntry], measured_elements,
+) -> List[CifPhaseEntry]:
+    """Library entries whose elements are all present in the measurement.
+
+    A phase whose elements are not all measured cannot plausibly be
+    assigned — we would be matching against zeros for the missing ones.
+
+    THE ORDER OF THIS LIST IS LOAD-BEARING. Its index is the phase id
+    written into :class:`PhaseMapStore`, persisted in the ``.npz`` sidecar,
+    and handed to indexing by ``get_phase_masks``. Every caller must build
+    the candidate list through this one function, or two code paths can
+    silently disagree about what phase id 3 means.
+    """
+    measured = set(measured_elements)
+    return [entry for entry in cif_library.values()
+            if set(entry.elements).issubset(measured)]
+
+
+def group_degenerate_entries(
+    candidates: List[CifPhaseEntry], max_at_pct_sep: float = 3.0,
+) -> List[List[int]]:
+    """Group candidates the available chemistry cannot separate.
+
+    Two entries are degenerate when their nominal compositions differ by at
+    most ``max_at_pct_sep`` at% on every element. Grouping is transitive
+    (single-linkage) and emitted in first-member order so group ids stay
+    stable across runs.
+
+    Why this exists: on the user's 22-candidate Al-alloy library, 11 pairs
+    differ by less than 8 at% and ``Al6Fe_mp-570001`` vs ``beta-AlFeSi`` by
+    1.1 at% — far below the error of standardless Cliff-Lorimer. Picking a
+    winner between those by ``argmax`` is a coin flip decided by spreadsheet
+    row order. Callers use the grouping to tell ties apart from real
+    disagreements.
+    """
+    n = len(candidates)
+    parent = list(range(n))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(i: int, j: int) -> None:
+        ri, rj = find(i), find(j)
+        if ri != rj:
+            parent[max(ri, rj)] = min(ri, rj)
+
+    for i in range(n):
+        ci = candidates[i].composition
+        for j in range(i + 1, n):
+            cj = candidates[j].composition
+            els = set(ci) | set(cj)
+            if not els:
+                continue
+            if max(abs(ci.get(e, 0.0) - cj.get(e, 0.0)) for e in els) <= max_at_pct_sep:
+                union(i, j)
+
+    groups: Dict[int, List[int]] = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    return [groups[k] for k in sorted(groups)]
+
+
 def auto_classify_pixels(
     at_pct_per_element: Dict[str, np.ndarray],
     n_rows: int,
@@ -230,15 +311,23 @@ def auto_classify_pixels(
     cif_library: Dict[str, CifPhaseEntry],
     tolerance: float = 15.0,
     min_score: float = 0.3,
-) -> Tuple[np.ndarray, np.ndarray, List[CifPhaseEntry]]:
+    rel_req: float = DEFAULT_REL_REQ,
+) -> Tuple[np.ndarray, np.ndarray, List[CifPhaseEntry], np.ndarray]:
     """Classify every pixel against the CIF library, vectorised.
 
-    Computes, for each candidate phase, a per-pixel score from the
-    deviation between measured and expected At.% (same scoring rule as
-    :func:`eds_utils.suggest_phases` — average deviation rescaled by
-    tolerance, rejected when any single element exceeds ``2*tolerance``).
-    The phase with the highest score wins; pixels whose best score
-    stays below ``min_score`` are marked unclassified (-1).
+    Scores each candidate with :func:`chemistry_score.score_phase_vectorised`
+    — renormalised L1 over the metallic elements, with an absolute and a
+    relative missing-major veto. The phase with the highest score wins;
+    pixels whose best score stays below ``min_score`` are marked
+    unclassified (-1).
+
+    Changed 2026-08-19: the previous rule averaged the At.% deviation over
+    the *phase's* elements and rescaled it by ``tolerance``. That let a large
+    deviation on one element be diluted by small deviations on the others,
+    with no veto for a missing major element, so a phase requiring 11.6 at%
+    Fe was assigned to pixels measuring 3 at% Fe — 20.95 % of all pixels on
+    SampleB. ``tolerance`` is retained for API compatibility and no longer
+    affects scoring.
 
     Args:
         at_pct_per_element: pre-computed atomic-percent maps as 1D
@@ -253,9 +342,12 @@ def auto_classify_pixels(
         min_score: pixels whose best phase scores below this are
             marked unclassified rather than forced into the closest
             (often nonsense) bucket.
+        rel_req: a defining element (nominal fraction >= 5 %) measured
+            below this fraction of its nominal value vetoes the phase.
+            Calibrated on SampleB — see :data:`DEFAULT_REL_REQ`.
 
     Returns:
-        ``(phase_index_grid, score_grid, candidate_entries)``:
+        ``(phase_index_grid, score_grid, candidate_entries, ambiguous_grid)``:
         - ``phase_index_grid``: int32 (n_rows, n_cols), -1 where
           unclassified, else the index into ``candidate_entries``.
         - ``score_grid``: float32 (n_rows, n_cols), the winning
@@ -263,58 +355,64 @@ def auto_classify_pixels(
         - ``candidate_entries``: list of :class:`CifPhaseEntry` whose
           index in the list matches the ids in ``phase_index_grid``.
           Empty if no phase passed the element-subset pre-filter.
+        - ``ambiguous_grid``: bool (n_rows, n_cols), True where the
+          runner-up from a *different* degeneracy group scored within
+          :data:`TIE_TOLERANCE`. A tie between two members of the same
+          group is not ambiguity — chemistry cannot tell them apart, so
+          they are the same answer.
     """
     n_pixels = n_rows * n_cols
     if not cif_library or not at_pct_per_element:
         empty = np.full((n_rows, n_cols), -1, dtype=np.int32)
-        return empty, np.zeros((n_rows, n_cols), dtype=np.float32), []
+        return (empty, np.zeros((n_rows, n_cols), dtype=np.float32), [],
+                np.zeros((n_rows, n_cols), dtype=bool))
 
-    # Pre-filter: a phase whose elements aren't all measured cannot
-    # plausibly be assigned (we'd be matching against zeros for the
-    # missing elements, dragging bogus phases in front of real ones).
-    measured_set = set(at_pct_per_element.keys())
-    candidates: List[CifPhaseEntry] = [
-        entry for entry in cif_library.values()
-        if set(entry.elements).issubset(measured_set)
-    ]
+    candidates = candidates_for(cif_library, at_pct_per_element.keys())
     if not candidates:
         empty = np.full((n_rows, n_cols), -1, dtype=np.int32)
-        return empty, np.zeros((n_rows, n_cols), dtype=np.float32), []
+        return (empty, np.zeros((n_rows, n_cols), dtype=np.float32), [],
+                np.zeros((n_rows, n_cols), dtype=bool))
 
-    # Score every candidate phase for every pixel in one vectorised
-    # loop. The grid stays (n_candidates, n_pixels) since we argmax
-    # along the candidate axis per pixel at the end.
+    # Score every candidate phase for every pixel. The grid stays
+    # (n_candidates, n_pixels) since we argmax along the candidate axis
+    # per pixel at the end.
     score_per_phase = np.zeros((len(candidates), n_pixels), dtype=np.float32)
     for i, entry in enumerate(candidates):
-        # Stack per-element deviations so we get max & mean in one go.
-        dev_stack: List[np.ndarray] = []
-        for el, expected_pct in entry.composition.items():
-            measured = at_pct_per_element.get(el)
-            if measured is None:
-                dev_stack = []
-                break  # subset check should have caught this
-            dev_stack.append(np.abs(measured.astype(np.float32) - float(expected_pct)))
-        if not dev_stack:
-            continue
-        dev_arr = np.stack(dev_stack, axis=0)
-        avg_dev = dev_arr.mean(axis=0)
-        max_dev = dev_arr.max(axis=0)
+        # no_data_score=0.0: an unmeasured pixel must fall below min_score
+        # and come out unclassified, never win argmax at a perfect 1.0.
+        score_per_phase[i] = score_phase_vectorised(
+            at_pct_per_element, entry.composition, rel_req=rel_req,
+            no_data_score=0.0,
+        )
 
-        # Same scoring rule as eds_utils.suggest_phases — keeps the
-        # batch path consistent with the click-to-suggest path.
-        score = np.maximum(0.0, 1.0 - avg_dev / float(tolerance))
-        # Hard reject if any single element is way off.
-        score = np.where(max_dev > tolerance * 2.0, 0.0, score)
-        score_per_phase[i] = score
-
+    idx = np.arange(n_pixels)
     best_phase = np.argmax(score_per_phase, axis=0)
-    best_score = score_per_phase[best_phase, np.arange(n_pixels)]
+    best_score = score_per_phase[best_phase, idx]
 
     classified = best_score >= float(min_score)
     phase_grid = np.where(classified, best_phase, -1).astype(np.int32)
+
+    # Ambiguity: a runner-up from a DIFFERENT degeneracy group scoring
+    # within TIE_TOLERANCE means chemistry genuinely cannot decide, and
+    # argmax would be breaking the tie on library row order.
+    group_of = np.zeros(len(candidates), dtype=np.int32)
+    for gid, members in enumerate(group_degenerate_entries(candidates)):
+        for m in members:
+            group_of[m] = gid
+
+    ambiguous = np.zeros(n_pixels, dtype=bool)
+    if len(candidates) > 1:
+        masked = score_per_phase.copy()
+        masked[best_phase, idx] = -np.inf          # exclude the winner
+        same_group = group_of[:, None] == group_of[best_phase][None, :]
+        masked[same_group] = -np.inf               # exclude its degenerate twins
+        runner_up = masked.max(axis=0)
+        ambiguous = np.isfinite(runner_up) & ((best_score - runner_up) <= TIE_TOLERANCE)
+    ambiguous &= classified
 
     return (
         phase_grid.reshape(n_rows, n_cols),
         best_score.reshape(n_rows, n_cols).astype(np.float32),
         candidates,
+        ambiguous.reshape(n_rows, n_cols),
     )

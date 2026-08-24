@@ -42,7 +42,11 @@ from backend.api.services.cif_phase_library import CifPhaseEntry
 # Single-source schema version so older sidecars (or sidecars from a
 # fork) get rejected cleanly instead of crashing the load. Bump only
 # on incompatible changes — adding optional fields is fine.
-_SIDECAR_SCHEMA = 1
+# 2 (2026-08-19): the classifier's scoring rule changed from mean At.%
+# deviation to renormalised L1 with a relative missing-major veto. A
+# schema-1 sidecar was written by the old rule and would silently outlive
+# it, so those files are ignored and the map is recomputed.
+_SIDECAR_SCHEMA = 2
 
 
 def _sidecar_path_for(file_path: str) -> Path:
