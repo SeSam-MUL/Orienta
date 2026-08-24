@@ -364,6 +364,7 @@
     "phaseMap": "Phasenkarte",
     "elementsTooltip": "Composite-Overlay, Ebenenstapel und alle Elementkarten nebeneinander.",
     "phaseMapTooltip": "Die Karte nach Chemie in Strukturen gruppieren und dann entscheiden, welche Phase jede ist.",
-    "noMapYet": "Noch keine Phasenkarte. Rechts auf „Re-classify“ eine aus der Chemie erzeugen."
+    "noMapYet": "Noch keine Phasenkarte. Rechts auf „Re-classify“ eine aus der Chemie erzeugen.",
+    "viewStructuresLabel": "Strukturen"
   }
 }

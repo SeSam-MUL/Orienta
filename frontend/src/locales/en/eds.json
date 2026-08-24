@@ -364,6 +364,7 @@
     "phaseMap": "Phase map",
     "elementsTooltip": "The composite overlay, the layer stack and every element map side by side.",
     "phaseMapTooltip": "Group the map by chemistry into structures, then decide which phase each one is.",
-    "noMapYet": "No phase map yet. Use Re-classify on the right to build one from the chemistry."
+    "noMapYet": "No phase map yet. Use Re-classify on the right to build one from the chemistry.",
+    "viewStructuresLabel": "Structures"
   }
 }

@@ -98,5 +98,7 @@
   "captureFailed": "Could not capture this view.",
   "menuExportThisPanel": "Export this panel…",
   "menuExportBothPanels": "Export both panels on one sheet…",
-  "scalebarShared": "This is the map’s own scale bar — changes here show on the map too. Drag it on the preview to move it."
+  "scalebarShared": "This is the map’s own scale bar — changes here show on the map too. Drag it on the preview to move it.",
+  "menuExportStructureMap": "Export the structure map…",
+  "menuExportPhaseMap": "Export the phase map…"
 }

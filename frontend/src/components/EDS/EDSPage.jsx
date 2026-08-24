@@ -704,7 +704,13 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   const openExport = useCallback((build, name, label, scale = null) => {
     try {
       setExportError(null);
-      setExportSrc({ src: canvasToDataUrl(build()), name, label, scale });
+      // `build` may return a canvas it composed, or a URL for something the
+      // backend already rendered — the phase and structure maps arrive as
+      // base64 PNGs and re-drawing them into a canvas would only re-encode
+      // the same pixels.
+      const built = build();
+      const src = typeof built === 'string' ? built : canvasToDataUrl(built);
+      setExportSrc({ src, name, label, scale });
     } catch (err) {
       setExportError(err?.message || String(err));
     }
@@ -726,6 +732,39 @@ export default function EDSPage({ onNavigate, isActive = true }) {
           pixelSizeForLayer(l.id, pixelSizes),
         ),
       });
+    }
+    if (hit?.kind === 'phasemap') {
+      // Both renderings are offered whichever one is on screen, so exporting
+      // the other does not mean switching the view and switching back. Both
+      // sit on the scan raster, so the map's own pixel size applies.
+      const pm = phaseMapHandle.phaseMap;
+      const mapScale = pixelSizeForLayer('phase', pixelSizes);
+      if (pm?.structure_image) {
+        items.push({
+          id: 'structure-map',
+          label: t('imageexport:menuExportStructureMap',
+            { defaultValue: 'Export the structure map…' }),
+          onSelect: () => openExport(
+            () => `data:image/png;base64,${pm.structure_image}`,
+            `${exportStem}_structures`,
+            `${exportStem} \u00b7 ${t('tabs.viewStructuresLabel', { defaultValue: 'Structures' })}`,
+            mapScale,
+          ),
+        });
+      }
+      if (pm?.image) {
+        items.push({
+          id: 'phase-map',
+          label: t('imageexport:menuExportPhaseMap',
+            { defaultValue: 'Export the phase map…' }),
+          onSelect: () => openExport(
+            () => `data:image/png;base64,${pm.image}`,
+            `${exportStem}_phases`,
+            `${exportStem} \u00b7 ${t('phaseMap.mapTitle', { defaultValue: 'Phase map' })}`,
+            mapScale,
+          ),
+        });
+      }
     }
     if (hit?.kind === 'overlay') {
       items.push({
@@ -849,6 +888,17 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                          minHeight: 220 }}
               >
                 {phaseMapHandle.phaseMap?.image ? (
+                  /* Right-click exports the map. On the wrapper rather than on
+                     the canvas: the canvas already owns its own pointer
+                     gestures, and a context menu is not one of them. */
+                  <div
+                    style={{ display: 'flex', flexDirection: 'column',
+                             flex: 1, minHeight: 0 }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setMenu({ x: e.clientX, y: e.clientY, kind: 'phasemap' });
+                    }}
+                  >
                   <PhaseMapCanvas
                     handle={phaseMapHandle}
                     onInspect={onPixelClick}
@@ -860,6 +910,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                           row, col, phaseMapHandle.selectedPhaseIndex))
                       : undefined}
                   />
+                  </div>
                 ) : (
                   <Label secondary small>{t('tabs.noMapYet')}</Label>
                 )}

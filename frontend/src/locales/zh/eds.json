@@ -364,6 +364,7 @@
     "phaseMap": "物相图",
     "elementsTooltip": "合成叠加、图层堆栈以及所有元素图并排显示。",
     "phaseMapTooltip": "按化学成分将图分组为结构，然后决定每个结构是哪个物相。",
-    "noMapYet": "尚无物相图。使用右侧的「Re-classify」从化学成分生成。"
+    "noMapYet": "尚无物相图。使用右侧的「Re-classify」从化学成分生成。",
+    "viewStructuresLabel": "结构"
   }
 }

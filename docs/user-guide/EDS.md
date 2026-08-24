@@ -174,7 +174,13 @@ together, you say what they are.**
 
 #### Step 3 — the phase view
 
-13. Switch the map to **Phases**. Now there is **one colour per phase**: two
+13. **Right-click the map** to export it. The menu offers the **structure map**
+    and the **phase map** whichever one is on screen, so getting the other does
+    not mean switching the view and switching back. Both open the usual export
+    dialog — crop, resolution, border, scale bar, caption — and both carry the
+    scan's pixel size, so a burnt-in scale bar is correct.
+
+14. Switch the map to **Phases**. Now there is **one colour per phase**: two
     neighbouring regions you gave the same phase become one uninterrupted area.
     Many regions, few phases — the phase count is whatever you decided, not
     whatever the classifier guessed.
@@ -216,12 +222,12 @@ map-wide phase replacement. Pixels set by hand are marked as such — they
 survive a re-classify, and a later boundary change will not silently revert
 them.
 
-14. Use the **send-to-indexing** action to hand the phase map's CIF filenames and
+15. Use the **send-to-indexing** action to hand the phase map's CIF filenames and
     pixel masks to the Indexing page for chemistry-guided indexing.
 
 ### Suggest phases
 
-15. In **Phase Suggestion**, set Row/Col (or click a pixel) and **Suggest**. The
+16. In **Phase Suggestion**, set Row/Col (or click a pixel) and **Suggest**. The
     chemistry at that pixel is matched against your CIF library (or a built-in
     fallback library if you have not built one yet); each candidate shows formula,
     space group, crystal system, and a match score.

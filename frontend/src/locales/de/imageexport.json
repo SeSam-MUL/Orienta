@@ -98,5 +98,7 @@
   "captureFailed": "Diese Ansicht konnte nicht aufgenommen werden.",
   "menuExportThisPanel": "Dieses Panel exportieren…",
   "menuExportBothPanels": "Beide Panels auf ein Blatt exportieren…",
-  "scalebarShared": "Das ist der Maßstab der Karte — Änderungen hier gelten auch dort. Zum Verschieben in der Vorschau ziehen."
+  "scalebarShared": "Das ist der Maßstab der Karte — Änderungen hier gelten auch dort. Zum Verschieben in der Vorschau ziehen.",
+  "menuExportStructureMap": "Strukturkarte exportieren…",
+  "menuExportPhaseMap": "Phasenkarte exportieren…"
 }

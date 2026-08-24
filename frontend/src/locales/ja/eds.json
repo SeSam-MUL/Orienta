@@ -364,6 +364,7 @@
     "phaseMap": "相マップ",
     "elementsTooltip": "合成オーバーレイ、レイヤースタック、すべての元素マップを並べて表示します。",
     "phaseMapTooltip": "化学組成でマップを構造にグループ化し、それぞれがどの相かを決めます。",
-    "noMapYet": "相マップはまだありません。右の「Re-classify」で組成から作成してください。"
+    "noMapYet": "相マップはまだありません。右の「Re-classify」で組成から作成してください。",
+    "viewStructuresLabel": "構造"
   }
 }
