@@ -64,6 +64,36 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   // Last clicked pixel (for the readout under the canvas)
   const [hoveredPixel, setHoveredPixel] = useState(null);
 
+  // Grouping mode. 'cluster' groups the composition and matches each
+  // group's mean; 'pixel' matches every pixel on its own. Cluster is the
+  // default because per-pixel composition on real data carries several
+  // at% of systematic error (see the 2026-08-19 design spec).
+  const [mode, setMode] = useState('cluster');
+  const [nClusters, setNClusters] = useState(null);   // null -> chosen by BIC
+
+  // Which library phases take part. Empty set = "not loaded yet"; the
+  // request only narrows when a STRICT subset is ticked, so a stale list
+  // can never silently drop phases from a run.
+  const [cifPhases, setCifPhases] = useState([]);
+  const [selectedPhaseKeys, setSelectedPhaseKeys] = useState(new Set());
+
+  const loadCifPhases = useCallback(async () => {
+    try {
+      const res = await edsApi.cifPhases();
+      const phases = res.data?.phases || [];
+      setCifPhases(phases);
+      setSelectedPhaseKeys(new Set(phases.map(p => p.key)));
+      return phases;
+    } catch {
+      setCifPhases([]);
+      return [];
+    }
+  }, []);
+
+  // Load the phase list once per file so the picker has something to show
+  // before the first classification.
+  useEffect(() => { loadCifPhases(); }, [loadCifPhases, filePath]);
+
   // On mount or file change, sync from backend. The backend clears its
   // store on close_file(), so a 200-with-loaded:false response is the
   // expected "nothing to show" state, not an error.
@@ -77,9 +107,27 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   }, [filePath]);
 
   const handleAutoClassify = useCallback(async () => {
+    // "None selected" must not run the whole library — that inverts the
+    // clearest instruction the user can give. Refuse instead.
+    if (cifPhases.length > 0 && selectedPhaseKeys.size === 0) {
+      setError(t('phaseMap.noneSelected'));
+      return;
+    }
     setLoading(true); setError(null);
     try {
-      const res = await edsApi.autoClassify(tolerance, minScore);
+      // Only send phase_keys for a STRICT subset — an all-selected list
+      // means "everything", and sending it would freeze the run against a
+      // library the user may since have extended.
+      const isSubset = cifPhases.length > 0
+        && selectedPhaseKeys.size > 0
+        && selectedPhaseKeys.size < cifPhases.length;
+      const res = await edsApi.autoClassify({
+        tolerance,
+        minScore,
+        mode,
+        nClusters,
+        ...(isSubset ? { phaseKeys: [...selectedPhaseKeys] } : {}),
+      });
       setPhaseMap(res.data);
       setSelectedPhaseIndex(null);
     } catch (err) {
@@ -87,7 +135,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     } finally {
       setLoading(false);
     }
-  }, [tolerance, minScore, t]);
+  }, [tolerance, minScore, mode, nClusters, cifPhases, selectedPhaseKeys, t]);
 
   const handleClearMap = useCallback(async () => {
     setLoading(true); setError(null);
@@ -146,6 +194,9 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   return {
     phaseMap, loading, error,
     tolerance, setTolerance, minScore, setMinScore,
+    mode, setMode, nClusters, setNClusters,
+    cifPhases, loadCifPhases,
+    selectedPhaseKeys, setSelectedPhaseKeys,
     selectedPhaseIndex, setSelectedPhaseIndex,
     region, setRegion,
     assignBusy,
@@ -208,7 +259,7 @@ function pixelFromClick(e) {
  * No phase map → empty placeholder so the parent can still slot the
  * canvas into the layout without flicker.
  */
-export function PhaseMapCanvas({ handle }) {
+export function PhaseMapCanvas({ handle, onInspect }) {
   const { t } = useTranslation('eds');
   const {
     phaseMap, hoveredPixel, setHoveredPixel,
@@ -243,6 +294,13 @@ export function PhaseMapCanvas({ handle }) {
     if (sameSpot) {
       // Treat as a click — don't create a 1-pixel "region", just inspect.
       setHoveredPixel({ row: endRow, col: endCol });
+      // Drive the SAME per-pixel panels every other map on this page drives.
+      // Without this the phase map was the one clickable surface that did
+      // not move Pixel Quantification or Phase Suggestion, so the
+      // suggestion silently kept describing a pixel picked somewhere else —
+      // a user clicking a Cu-rich region got the candidate list for
+      // wherever they last clicked a tile.
+      onInspect?.(endRow, endCol);
     } else {
       const r0 = Math.min(drag.startRow, endRow);
       const r1 = Math.max(drag.startRow, endRow);
@@ -252,7 +310,7 @@ export function PhaseMapCanvas({ handle }) {
       setHoveredPixel(null);
     }
     setDrag(null);
-  }, [drag, setHoveredPixel, setRegion]);
+  }, [drag, setHoveredPixel, setRegion, onInspect]);
 
   const handleMouseLeave = useCallback(() => {
     // Cancel the drag if the mouse leaves the image — otherwise a
@@ -378,14 +436,34 @@ export function PhaseMapCanvas({ handle }) {
             }}
           >
             {liveRect && !isPolygon && (
-              <rect
-                x={liveRect.x} y={liveRect.y}
-                width={liveRect.w} height={liveRect.h}
-                fill="rgba(139, 233, 253, 0.18)"
-                stroke="rgba(139, 233, 253, 0.95)"
-                strokeWidth={Math.max(1, Math.min(nCols, nRows) / 200)}
-                vectorEffect="non-scaling-stroke"
-              />
+              /* Drawn as a dark casing under a white dashed line ("marching
+                 ants") instead of one tinted stroke. A single cyan outline
+                 was invisible on this very map: the phase colours are a
+                 golden-ratio HSV walk, so a fixed accent colour lands on a
+                 near-match sooner or later — cyan on the teal Al-Fe-Mn-Si
+                 region had almost no contrast. Black-under-white reads on
+                 any fill. The old width also collapsed to ~1 screen px,
+                 because non-scaling-stroke makes strokeWidth a SCREEN
+                 length while the value was computed in viewBox units. */
+              <>
+                <rect
+                  x={liveRect.x} y={liveRect.y}
+                  width={liveRect.w} height={liveRect.h}
+                  fill="rgba(255, 255, 255, 0.16)"
+                  stroke="rgba(0, 0, 0, 0.85)"
+                  strokeWidth={4}
+                  vectorEffect="non-scaling-stroke"
+                />
+                <rect
+                  x={liveRect.x} y={liveRect.y}
+                  width={liveRect.w} height={liveRect.h}
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth={2}
+                  strokeDasharray="6 4"
+                  vectorEffect="non-scaling-stroke"
+                />
+              </>
             )}
             {isPolygon && polygonVertices.length > 0 && (
               <>
@@ -393,34 +471,54 @@ export function PhaseMapCanvas({ handle }) {
                     what the assign will paint. While the polygon is
                     still open we show only the polyline so the user
                     can tell open vs. closed at a glance. */}
+                {/* Same black-under-white treatment as the rectangle, for
+                    the same reason: readable over any phase colour. */}
                 {polygonVertices.length >= 3 && (
-                  <polygon
-                    points={polygonVertices.map(([x, y]) => `${x + 0.5},${y + 0.5}`).join(' ')}
-                    fill="rgba(189, 147, 249, 0.18)"
-                    stroke="rgba(189, 147, 249, 0.95)"
-                    strokeWidth={Math.max(1, Math.min(nCols, nRows) / 200)}
-                    strokeDasharray={polygonVertices.length < 3 ? "2 2" : undefined}
-                    vectorEffect="non-scaling-stroke"
-                  />
+                  <>
+                    <polygon
+                      points={polygonVertices.map(([x, y]) => `${x + 0.5},${y + 0.5}`).join(' ')}
+                      fill="rgba(255, 255, 255, 0.16)"
+                      stroke="rgba(0, 0, 0, 0.85)"
+                      strokeWidth={4}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <polygon
+                      points={polygonVertices.map(([x, y]) => `${x + 0.5},${y + 0.5}`).join(' ')}
+                      fill="none"
+                      stroke="#ffffff"
+                      strokeWidth={2}
+                      strokeDasharray="6 4"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </>
                 )}
                 {polygonVertices.length < 3 && (
-                  <polyline
-                    points={polygonVertices.map(([x, y]) => `${x + 0.5},${y + 0.5}`).join(' ')}
-                    fill="none"
-                    stroke="rgba(189, 147, 249, 0.95)"
-                    strokeWidth={Math.max(1, Math.min(nCols, nRows) / 200)}
-                    strokeDasharray="2 2"
-                    vectorEffect="non-scaling-stroke"
-                  />
+                  <>
+                    <polyline
+                      points={polygonVertices.map(([x, y]) => `${x + 0.5},${y + 0.5}`).join(' ')}
+                      fill="none"
+                      stroke="rgba(0, 0, 0, 0.85)"
+                      strokeWidth={4}
+                      vectorEffect="non-scaling-stroke"
+                    />
+                    <polyline
+                      points={polygonVertices.map(([x, y]) => `${x + 0.5},${y + 0.5}`).join(' ')}
+                      fill="none"
+                      stroke="#ffffff"
+                      strokeWidth={2}
+                      strokeDasharray="6 4"
+                      vectorEffect="non-scaling-stroke"
+                    />
+                  </>
                 )}
                 {polygonVertices.map(([x, y], i) => (
                   <circle
                     key={`v${i}`}
                     cx={x + 0.5} cy={y + 0.5}
-                    r={Math.max(1.0, Math.min(nCols, nRows) / 120)}
-                    fill="rgba(189, 147, 249, 0.95)"
-                    stroke="white"
-                    strokeWidth={Math.max(0.5, Math.min(nCols, nRows) / 400)}
+                    r={Math.max(1.2, Math.min(nCols, nRows) / 90)}
+                    fill="#ffffff"
+                    stroke="rgba(0, 0, 0, 0.85)"
+                    strokeWidth={2}
                     vectorEffect="non-scaling-stroke"
                   />
                 ))}
@@ -441,6 +539,8 @@ export function PhaseMapControls({ handle }) {
   const {
     phaseMap, loading, error,
     tolerance, setTolerance, minScore, setMinScore,
+    mode, setMode, nClusters, setNClusters,
+    cifPhases, selectedPhaseKeys, setSelectedPhaseKeys,
     selectedPhaseIndex, setSelectedPhaseIndex,
     region, setRegion,
     assignBusy,
@@ -455,24 +555,84 @@ export function PhaseMapControls({ handle }) {
   const summary = phaseMap?.summary || [];
   const realPhases = summary.filter(s => !s.is_unclassified);
   const unclassifiedRow = summary.find(s => s.is_unclassified);
+  const clusters = phaseMap?.clusters || [];
+
+  const togglePhase = (key) => {
+    const next = new Set(selectedPhaseKeys);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    setSelectedPhaseKeys(next);
+  };
 
   return (
     <GroupBox title={t('phaseMap.title')}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {/* --- Tolerance + min-score --- */}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-          <div style={{ flex: 1 }}>
-            <Label secondary small style={{ display: 'block', marginBottom: 2 }} title={t('phaseMap.toleranceTooltip')}>
-              {t('phaseMap.tolerance', { value: tolerance.toFixed(1) })}
-            </Label>
-            <input
-              type="range" min={1} max={40} step={0.5}
-              value={tolerance}
-              onChange={(e) => setTolerance(Number(e.target.value))}
-              style={{ width: '100%', accentColor: C.purple }}
-              title={t('hoverTips.toleranceSlider')}
-            />
+        {/* --- Grouping mode. The rail is a fixed 280 px, so this row wraps
+                rather than overflowing it — an earlier version pushed the
+                cluster-count box 22 px past the edge. --- */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <Label secondary small title={t('phaseMap.modeTooltip')}>
+            {t('phaseMap.grouping')}
+          </Label>
+          <div style={{ display: 'flex', gap: 0, flexShrink: 0 }} role="group" aria-label={t('phaseMap.grouping')}>
+            {[['cluster', t('phaseMap.modeCluster')], ['pixel', t('phaseMap.modePixel')]].map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setMode(id)}
+                aria-pressed={mode === id}
+                title={t('phaseMap.modeTooltip')}
+                style={{
+                  padding: '2px 10px', fontSize: '8.5pt', cursor: 'pointer',
+                  border: `1px solid ${alpha(C.purple, mode === id ? 70 : 25)}`,
+                  background: mode === id ? alpha(C.purple, 30) : 'transparent',
+                  color: mode === id ? C.text : C.textSecondary,
+                  borderRadius: id === 'cluster' ? '3px 0 0 3px' : '0 3px 3px 0',
+                }}
+              >
+                {label}
+              </button>
+            ))}
           </div>
+          {mode === 'cluster' && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+              <Label secondary small title={t('phaseMap.nClustersTooltip')}>
+                {t('phaseMap.nClusterCount')}
+              </Label>
+              <input
+                type="number" min={2} max={20}
+                value={nClusters ?? ''}
+                placeholder={t('phaseMap.nClustersAuto')}
+                onChange={(e) => setNClusters(e.target.value === '' ? null : Number(e.target.value))}
+                title={t('phaseMap.nClustersTooltip')}
+                style={{
+                  width: 58, minWidth: 0, flexShrink: 1,
+                  fontSize: '8.5pt', padding: '1px 4px',
+                  background: 'transparent', color: C.text,
+                  border: `1px solid ${alpha(C.purple, 25)}`, borderRadius: 3,
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* --- Tolerance + min-score. Tolerance only affects the legacy
+                per-pixel rule; hide it in cluster mode rather than show a
+                slider that does nothing. --- */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+          {mode === 'pixel' && (
+            <div style={{ flex: 1 }}>
+              <Label secondary small style={{ display: 'block', marginBottom: 2 }} title={t('phaseMap.toleranceTooltip')}>
+                {t('phaseMap.tolerance', { value: tolerance.toFixed(1) })}
+              </Label>
+              <input
+                type="range" min={1} max={40} step={0.5}
+                value={tolerance}
+                onChange={(e) => setTolerance(Number(e.target.value))}
+                style={{ width: '100%', accentColor: C.purple }}
+                title={t('hoverTips.toleranceSlider')}
+              />
+            </div>
+          )}
           <div style={{ flex: 1 }}>
             <Label secondary small style={{ display: 'block', marginBottom: 2 }} title={t('phaseMap.minScoreTooltip')}>
               {t('phaseMap.minScore', { value: minScore.toFixed(2) })}
@@ -486,6 +646,57 @@ export function PhaseMapControls({ handle }) {
             />
           </div>
         </div>
+
+        {/* --- Which phases take part --- */}
+        {cifPhases.length > 0 && (
+          <details style={{ marginTop: 2 }}>
+            <summary style={{
+              cursor: 'pointer', fontSize: '8.5pt', color: C.textSecondary,
+              userSelect: 'none',
+            }} title={t('phaseMap.phaseSelectionTooltip')}>
+              {t('phaseMap.phaseSelection')} ({selectedPhaseKeys.size}/{cifPhases.length})
+            </summary>
+            <div style={{ display: 'flex', gap: 6, margin: '4px 0' }}>
+              <button
+                type="button"
+                onClick={() => setSelectedPhaseKeys(new Set(cifPhases.map(p => p.key)))}
+                style={{ fontSize: '8pt', cursor: 'pointer', background: 'transparent',
+                         border: `1px solid ${alpha(C.purple, 25)}`, borderRadius: 3,
+                         color: C.textSecondary, padding: '1px 8px' }}
+              >{t('phaseMap.selectAll')}</button>
+              <button
+                type="button"
+                onClick={() => setSelectedPhaseKeys(new Set())}
+                style={{ fontSize: '8pt', cursor: 'pointer', background: 'transparent',
+                         border: `1px solid ${alpha(C.purple, 25)}`, borderRadius: 3,
+                         color: C.textSecondary, padding: '1px 8px' }}
+              >{t('phaseMap.selectNone')}</button>
+            </div>
+            <div style={{ maxHeight: 160, overflowY: 'auto', paddingRight: 4 }}>
+              {cifPhases.map((p) => (
+                <label key={p.key} style={{
+                  display: 'flex', alignItems: 'center', gap: 6, fontSize: '8.5pt',
+                  padding: '1px 0', cursor: 'pointer', color: C.text,
+                }} title={p.formula || p.cif_filename}>
+                  <input
+                    type="checkbox"
+                    checked={selectedPhaseKeys.has(p.key)}
+                    onChange={() => togglePhase(p.key)}
+                    style={{ accentColor: C.purple }}
+                  />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {p.cif_filename}
+                  </span>
+                </label>
+              ))}
+            </div>
+            {selectedPhaseKeys.size === 0 && (
+              <div style={{ fontSize: '8pt', color: C.orange, marginTop: 2 }}>
+                {t('phaseMap.noneSelected')}
+              </div>
+            )}
+          </details>
+        )}
 
         {/* --- Action buttons --- */}
         <div style={{ display: 'flex', gap: 6 }}>
@@ -527,7 +738,59 @@ export function PhaseMapControls({ handle }) {
             {realPhases.length === 1
               ? t('phaseMap.statsPhasesOne', { count: realPhases.length })
               : t('phaseMap.statsPhasesOther', { count: realPhases.length })}
+            {phaseMap.k_used > 0 && ` · ${t('phaseMap.kUsed', { k: phaseMap.k_used })}`}
           </div>
+        )}
+
+        {/* --- Cluster report. The point of clustering is that ambiguity can
+                be stated per region, which is impossible per pixel: "this
+                group matches A at 0.98 and B at 0.95, chemistry cannot
+                separate them". --- */}
+        {clusters.length > 0 && (
+          <details style={{ marginTop: 2 }}>
+            <summary style={{
+              cursor: 'pointer', fontSize: '8.5pt', color: C.textSecondary,
+              userSelect: 'none',
+            }}>
+              {t('phaseMap.clusterReport')} ({clusters.length})
+            </summary>
+            <div style={{
+              maxHeight: 240, overflowY: 'auto', marginTop: 4,
+              border: `1px solid ${C.border}`, borderRadius: 4, padding: 4,
+            }}>
+              {clusters.map((c) => (
+                <div key={c.cluster_id} style={{
+                  padding: '4px 2px',
+                  borderBottom: `1px solid ${alpha(C.border, 40)}`,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+                    <span style={{
+                      fontSize: '9pt', fontWeight: 600,
+                      color: c.cif_filename ? C.green : C.orange,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
+                      {c.cif_filename || t('phaseMap.clusterUnmatched')}
+                    </span>
+                    <span style={{ fontSize: '8.5pt', color: C.textSecondary, flexShrink: 0 }}>
+                      {c.percentage}% · {c.score}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '8pt', color: C.textSecondary, marginTop: 1 }}>
+                    {Object.entries(c.mean_at_pct)
+                      .map(([el, v]) => `${el} ${v}`).join(' · ')}
+                  </div>
+                  {c.ambiguous && (
+                    <div style={{ fontSize: '8pt', color: C.orange, marginTop: 1 }}
+                         title={t('phaseMap.ambiguousTooltip')}>
+                      ⚠ {t('phaseMap.ambiguous')}
+                      {c.runners_up?.length > 0 && `: ${c.runners_up
+                        .map(r => `${r.cif_filename} (${r.score})`).join(', ')}`}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </details>
         )}
 
         {/* --- Legend --- */}

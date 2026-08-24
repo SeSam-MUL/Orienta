@@ -121,7 +121,11 @@
     "sourceCifTooltip": "与你的精选 CIF 库（Database/crystal_database.xlsx）进行匹配。",
     "sourceDefaultTooltip": "尚未构建 CIF 数据库 — 回退到常见相的硬编码库。构建数据库以获得更好的匹配。",
     "none": "没有为此成分建议的相。",
-    "unknown": "未知"
+    "unknown": "未知",
+    "atPixel": "像素 ({{row}}, {{col}})",
+    "atPixelTooltip": "计算这些建议所用的像素。点击图上的其他像素即可更新。",
+    "staleHint": "显示的是较早的像素 — 请按“建议相”以获取 ({{row}}, {{col}})。",
+    "elementTooltip": "{{el}}：实测 {{measured}} at%，该相期望 {{expected}} at%。相所需但像素缺失的元素会将其排除。"
   },
   "swipe": {
     "labelA": "A:",
@@ -196,7 +200,26 @@
     "polygonClearTooltip": "关闭并将内部标记为未分类",
     "polygonCancelTooltip": "丢弃当前的多边形顶点",
     "sendToIndexing": "→ 发送到 Indexing",
-    "sendToIndexingTooltip": "将相分类发送到 Indexing 模块，使每个相仅在其分配的像素上进行测试"
+    "sendToIndexingTooltip": "将相分类发送到 Indexing 模块，使每个相仅在其分配的像素上进行测试",
+    "mapTitle": "相图",
+    "grouping": "分组",
+    "modeCluster": "聚类",
+    "modePixel": "逐像素",
+    "modeTooltip": "聚类：将成分相近的像素分组，用每组的平均值进行匹配——更可靠，因为单个像素的成分带有数 at% 的测量误差。逐像素：每个像素单独匹配。",
+    "nClusters": "聚类数",
+    "nClustersAuto": "自动",
+    "nClustersTooltip": "成分分组的数量。保持自动，则按生成图的空间连贯性选择。",
+    "phaseSelection": "参与的相",
+    "selectAll": "全选",
+    "selectNone": "全不选",
+    "phaseSelectionTooltip": "取消勾选可将该相排除在分类之外。当两个库条目在化学上无法区分时很有用。",
+    "clusterReport": "聚类",
+    "clusterUnmatched": "无匹配",
+    "ambiguous": "不明确",
+    "ambiguousTooltip": "另一组中的相得分相差在 0.01 以内——此处化学无法区分。",
+    "kUsed": "{{k}} 个聚类",
+    "noneSelected": "请至少选择一个相。",
+    "nClusterCount": "数量"
   },
   "periodicTable": {
     "title": "周期表 — EDS 元素颜色",

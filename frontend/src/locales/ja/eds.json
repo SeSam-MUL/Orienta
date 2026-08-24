@@ -121,7 +121,11 @@
     "sourceCifTooltip": "キュレーション済みの CIF ライブラリ（Database/crystal_database.xlsx）と照合しています。",
     "sourceDefaultTooltip": "CIF データベースがまだ構築されていません — 一般的な相のハードコードされたライブラリにフォールバックします。より良い一致のためにデータベースを構築してください。",
     "none": "この組成に対して提案できる相はありません。",
-    "unknown": "不明"
+    "unknown": "不明",
+    "atPixel": "ピクセル ({{row}}, {{col}})",
+    "atPixelTooltip": "これらの提案が計算されたピクセルです。マップ上の別のピクセルをクリックすると更新されます。",
+    "staleHint": "古いピクセルを表示中 — ({{row}}, {{col}}) には「相を提案」を押してください。",
+    "elementTooltip": "{{el}}: 実測 {{measured}} at%、この相の期待値 {{expected}} at%。相が必要とする元素がピクセルに欠けている場合、その相は除外されます。"
   },
   "swipe": {
     "labelA": "A:",
@@ -196,7 +200,26 @@
     "polygonClearTooltip": "閉じて内部を未分類としてマーク",
     "polygonCancelTooltip": "現在のポリゴン頂点を破棄",
     "sendToIndexing": "→ Indexing に送る",
-    "sendToIndexingTooltip": "相分類を Indexing モジュールに送り、各相が割り当てられたピクセルのみで指数付けされるようにします"
+    "sendToIndexingTooltip": "相分類を Indexing モジュールに送り、各相が割り当てられたピクセルのみで指数付けされるようにします",
+    "mapTitle": "相マップ",
+    "grouping": "グループ化",
+    "modeCluster": "クラスタ",
+    "modePixel": "ピクセル単位",
+    "modeTooltip": "クラスタ: 組成が近いピクセルをまとめ、各グループの平均で照合します。単一ピクセルの組成には数 at% の測定誤差が含まれるため、より信頼できます。ピクセル単位: 各ピクセルを個別に照合します。",
+    "nClusters": "クラスタ数",
+    "nClustersAuto": "自動",
+    "nClustersTooltip": "組成グループの数。自動のままにすると、生成されるマップの空間的まとまりから選択されます。",
+    "phaseSelection": "対象の相",
+    "selectAll": "すべて",
+    "selectNone": "なし",
+    "phaseSelectionTooltip": "相のチェックを外すと分類から除外されます。2 つのライブラリ項目が化学的に区別できない場合に便利です。",
+    "clusterReport": "クラスタ",
+    "clusterUnmatched": "一致なし",
+    "ambiguous": "曖昧",
+    "ambiguousTooltip": "別グループの相が 0.01 以内でした — ここでは化学的に区別できません。",
+    "kUsed": "{{k}} クラスタ",
+    "noneSelected": "少なくとも 1 つの相を選択してください。",
+    "nClusterCount": "個数"
   },
   "periodicTable": {
     "title": "周期表 — EDS 元素カラー",

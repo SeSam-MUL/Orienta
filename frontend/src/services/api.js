@@ -849,8 +849,17 @@ export const edsApi = {
   suggestPhases: (row, col) =>
     api.post('/api/eds/suggest-phases', { row, col }),
   cifPhases: () => api.get('/api/eds/cif-phases'),
-  autoClassify: (tolerance = 15.0, minScore = 0.3) =>
-    api.post('/api/eds/auto-classify', { tolerance, min_score: minScore }),
+  // Options object rather than positional args: the request grew a mode,
+  // a cluster count and a phase selection, and positional arguments for
+  // that many optional fields are a bug waiting to happen.
+  autoClassify: (opts = {}) =>
+    api.post('/api/eds/auto-classify', {
+      tolerance: opts.tolerance ?? 15.0,
+      min_score: opts.minScore ?? 0.3,
+      ...(opts.mode ? { mode: opts.mode } : {}),
+      ...(opts.nClusters != null ? { n_clusters: opts.nClusters } : {}),
+      ...(opts.phaseKeys ? { phase_keys: opts.phaseKeys } : {}),
+    }),
   getPhaseMap: (includeImage = true) =>
     api.get('/api/eds/phase-map', { params: { include_image: includeImage } }),
   clearPhaseMap: () => api.delete('/api/eds/phase-map'),

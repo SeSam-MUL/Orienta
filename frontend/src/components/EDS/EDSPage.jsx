@@ -36,8 +36,9 @@ import { useEdsLayerStack } from './hooks/useEdsLayerStack';
 import { allMapsLayersFor } from './edsLayerSources';
 import { useHoverProbe } from './hooks/useHoverProbe';
 import { useLinescan } from './hooks/useLinescan';
+import { useSuggestPhases } from './hooks/useSuggestPhases';
 import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from './hooks/useZoomViews';
-import { usePhaseMap, PhaseMapControls } from './PhaseMapPanel';
+import { usePhaseMap, PhaseMapCanvas, PhaseMapControls } from './PhaseMapPanel';
 import { exportComposite } from './compositeExporter';
 import ContextMenu from '../common/ContextMenu';
 import ImageExportDialog from '../common/ImageExportDialog';
@@ -355,12 +356,22 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   const [regionError, setRegionError] = useState(null);
   const [regionCopied, setRegionCopied] = useState(false);
 
-  // Phase Suggestion state (lifted).
-  const [suggestedPhases, setSuggestedPhases] = useState(null);
-  const [suggestLibrarySource, setSuggestLibrarySource] = useState(null);
-  const [suggestLibrarySize, setSuggestLibrarySize] = useState(null);
-  const [suggestLoading, setSuggestLoading] = useState(false);
-  const [suggestError, setSuggestError] = useState(null);
+  // Phase Suggestion state (lifted). The suggestion is per-pixel, so the hook
+  // also tracks WHICH pixel the shown list belongs to and follows the cursor
+  // once the user has asked for suggestions.
+  // Destructured (rather than used as `suggest.x`) because `suggest` is a fresh
+  // object each render — depending on it would churn every consumer's identity.
+  const {
+    suggestions: suggestedPhases,
+    pixel: suggestPixel,
+    atomicPct: suggestAtPct,
+    librarySource: suggestLibrarySource,
+    librarySize: suggestLibrarySize,
+    loading: suggestLoading,
+    error: suggestError,
+    run: suggestRun,
+    followPixel: suggestFollowPixel,
+  } = useSuggestPhases();
 
   // Hover probe — drives the multi-layer tooltip near the cursor.
   const { probe, error: probeError, requestProbe, clear: clearProbe } = useHoverProbe({ displayMode });
@@ -420,11 +431,15 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     } finally { setQuantLoading(false); }
   }, [pixelRow, pixelCol, displayMode, t]);
 
-  // Click-to-quantify (drives both Overlay and tiles).
+  // Click-to-quantify (drives both Overlay and tiles). The phase suggestion is
+  // a per-pixel quantity too, so it follows the click instead of continuing to
+  // describe the previously clicked pixel (no-op until the user has asked for
+  // suggestions once).
   const onPixelClick = useCallback((row, col) => {
     setPixelRow(row); setPixelCol(col);
     handleQuantify(row, col);
-  }, [handleQuantify]);
+    suggestFollowPixel(row, col);
+  }, [handleQuantify, suggestFollowPixel]);
 
   // handleRegionQuantify (lifted).
   const handleRegionQuantify = useCallback(async () => {
@@ -453,19 +468,18 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     setTimeout(() => { handleRegionQuantify(); }, 0);
   }, [handleRegionQuantify]);
 
-  // handleSuggestPhases (lifted).
-  const handleSuggestPhases = useCallback(async () => {
-    setSuggestLoading(true); setSuggestError(null); setSuggestedPhases(null);
-    setSuggestLibrarySource(null); setSuggestLibrarySize(null);
-    try {
-      const res = await edsApi.suggestPhases(Number(pixelRow), Number(pixelCol));
-      setSuggestedPhases(res.data?.suggestions || res.data?.phases || res.data || []);
-      setSuggestLibrarySource(res.data?.library_source || null);
-      setSuggestLibrarySize(res.data?.library_size ?? null);
-    } catch (err) {
-      setSuggestError(err.response?.data?.detail || err.message || t('suggest.error'));
-    } finally { setSuggestLoading(false); }
-  }, [pixelRow, pixelCol, t]);
+  // handleSuggestPhases (lifted) — explicit "Suggest Phases" press.
+  const handleSuggestPhases = useCallback(
+    () => suggestRun(pixelRow, pixelCol),
+    [suggestRun, pixelRow, pixelCol],
+  );
+
+  // The shown list belongs to `suggestPixel`; the row/col boxes can be typed
+  // into without clicking the map, so flag the mismatch rather than let the
+  // panel silently describe a pixel the user is no longer looking at.
+  const suggestStale = !!suggestPixel && !suggestLoading && (
+    suggestPixel.row !== Number(pixelRow) || suggestPixel.col !== Number(pixelCol)
+  );
 
   // LayerStackPanel.onSetSingleLayer adapter — quick-mode button maps to an EDS layer object.
   const onSetSingleLayer = useCallback((id) => {
@@ -897,8 +911,29 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             }} />
           </div>
 
-          {/* CENTER: TileGrid */}
+          {/* CENTER: phase map (when classified) + TileGrid */}
           <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, paddingLeft: 4 }}>
+            {/* The canvas carries the rectangle/polygon paint gestures, so
+                mounting it is also what makes manual correction reachable. */}
+            {phaseMapHandle.phaseMap?.image && (
+              <GroupBox
+                title={t('phaseMap.mapTitle')}
+                /* Capped so the element-map tiles stay on screen beside it:
+                   comparing the phase map against Fe / BC is the whole point,
+                   and an uncapped panel pushed the tile grid below the fold. */
+                style={{
+                  marginBottom: spacing.outerSpacing,
+                  flexShrink: 0, maxHeight: '42vh',
+                  display: 'flex', flexDirection: 'column', minHeight: 0,
+                }}
+              >
+                {/* onInspect wires a click on the phase map to the same
+                    per-pixel panels every other map drives — quantification
+                    and phase suggestion. Without it the suggestion kept
+                    describing a pixel picked on a different map. */}
+                <PhaseMapCanvas handle={phaseMapHandle} onInspect={onPixelClick} />
+              </GroupBox>
+            )}
             <GroupBox
               title={(
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 12 }}>
@@ -1078,9 +1113,23 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                   {suggestLoading ? <span className="btn-loading">{t('suggest.analyzing')}</span> : t('suggest.run')}
                 </Button>
                 {suggestError && <div role="alert" style={{ fontSize: '9pt', color: colors.red, marginTop: 4, animation: 'fadeSlideIn 0.2s ease-out' }}>{suggestError}</div>}
-                {suggestLibrarySource && (
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
-                    <span style={{
+                {(suggestLibrarySource || suggestPixel) && (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginTop: 2, flexWrap: 'wrap' }}>
+                    {suggestPixel && (
+                      <span
+                        style={{
+                          fontSize: '8pt', color: colors.textSecondary,
+                          background: alpha(colors.cyan, 10),
+                          border: `1px solid ${alpha(colors.cyan, 25)}`,
+                          borderRadius: 3, padding: '1px 6px', fontWeight: 600,
+                          fontVariantNumeric: 'tabular-nums',
+                        }}
+                        title={t('suggest.atPixelTooltip')}
+                      >
+                        {t('suggest.atPixel', { row: suggestPixel.row, col: suggestPixel.col })}
+                      </span>
+                    )}
+                    {suggestLibrarySource && <span style={{
                       fontSize: '8pt',
                       color: suggestLibrarySource === 'cif' ? colors.green : colors.orange,
                       background: alpha(suggestLibrarySource === 'cif' ? colors.green : colors.orange, 12),
@@ -1092,7 +1141,15 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                       : t('suggest.sourceDefaultTooltip')}>
                       {suggestLibrarySource === 'cif' ? t('suggest.sourceCif') : t('suggest.sourceDefault')}
                       {suggestLibrarySize != null && ` (${suggestLibrarySize})`}
-                    </span>
+                    </span>}
+                  </div>
+                )}
+                {/* The row/col boxes can be typed into without clicking the map,
+                    which would leave the list describing a different pixel.
+                    Say so instead of quietly showing the wrong pixel. */}
+                {suggestStale && (
+                  <div style={{ fontSize: '8pt', color: colors.orange, marginTop: 2 }}>
+                    {t('suggest.staleHint', { row: Number(pixelRow), col: Number(pixelCol) })}
                   </div>
                 )}
                 {suggestedPhases && (
@@ -1128,6 +1185,38 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                             {secondary && (
                               <div style={{ fontSize: '9pt', color: colors.textSecondary, marginTop: 1 }}>
                                 {secondary}
+                              </div>
+                            )}
+                            {/* Measured vs expected per element. Without this
+                                the list is a bare ranking: a user who knows
+                                the region is a Cu phase cannot see whether
+                                the candidate lost on Cu, on Fe, or not at
+                                all. Off-elements are the ones that decide. */}
+                            {phase.expected && suggestAtPct && (
+                              <div style={{
+                                display: 'flex', gap: 6, marginTop: 3, flexWrap: 'wrap',
+                                fontSize: '7.5pt', fontVariantNumeric: 'tabular-nums',
+                              }}>
+                                {Object.entries(phase.expected)
+                                  .sort((a, b) => b[1] - a[1])
+                                  .map(([el, exp]) => {
+                                    const meas = Number(suggestAtPct[el] ?? 0);
+                                    const ratio = exp > 0 ? meas / exp : 1;
+                                    // Red where the element the phase needs
+                                    // is largely absent — that is what
+                                    // vetoes a candidate.
+                                    const col = ratio < 0.3 ? colors.red
+                                      : ratio < 0.6 ? colors.orange
+                                      : colors.textSecondary;
+                                    return (
+                                      <span key={el} style={{ color: col }}
+                                        title={t('suggest.elementTooltip', {
+                                          el, measured: meas.toFixed(1), expected: exp.toFixed(1),
+                                        })}>
+                                        {el} {meas.toFixed(1)}/{exp.toFixed(0)}
+                                      </span>
+                                    );
+                                  })}
                               </div>
                             )}
                             {isCif && (phase.space_group || phase.crystal_system) && (

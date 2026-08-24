@@ -121,7 +121,11 @@
     "sourceCifTooltip": "Abgleich mit deiner kuratierten CIF-Bibliothek (Database/crystal_database.xlsx).",
     "sourceDefaultTooltip": "Noch keine CIF-Datenbank erstellt — Rückgriff auf eine fest hinterlegte Bibliothek gängiger Phasen. Datenbank erstellen für bessere Treffer.",
     "none": "Keine Phasen für diese Zusammensetzung vorgeschlagen.",
-    "unknown": "Unbekannt"
+    "unknown": "Unbekannt",
+    "atPixel": "Pixel ({{row}}, {{col}})",
+    "atPixelTooltip": "Das Pixel, für das diese Vorschläge berechnet wurden. Ein Klick auf ein anderes Pixel der Karte aktualisiert sie.",
+    "staleHint": "Zeigt ein älteres Pixel — „Phasen vorschlagen“ für ({{row}}, {{col}}) drücken.",
+    "elementTooltip": "{{el}}: gemessen {{measured}} at%, diese Phase erwartet {{expected}} at%. Ein Element, das die Phase braucht und das dem Pixel fehlt, schliesst sie aus."
   },
   "swipe": {
     "labelA": "A:",
@@ -196,7 +200,26 @@
     "polygonClearTooltip": "Schließen & Inneres als unklassifiziert markieren",
     "polygonCancelTooltip": "Aktuelle Polygon-Eckpunkte verwerfen",
     "sendToIndexing": "→ Ans Indexing senden",
-    "sendToIndexingTooltip": "Phasenklassifizierung ans Indexing-Modul senden, damit jede Phase nur auf ihren zugewiesenen Pixeln getestet wird"
+    "sendToIndexingTooltip": "Phasenklassifizierung ans Indexing-Modul senden, damit jede Phase nur auf ihren zugewiesenen Pixeln getestet wird",
+    "mapTitle": "Phasenkarte",
+    "grouping": "Gruppierung",
+    "modeCluster": "Cluster",
+    "modePixel": "Pro Pixel",
+    "modeTooltip": "Cluster: Pixel ähnlicher Zusammensetzung gruppieren und den Mittelwert jeder Gruppe zuordnen — zuverlässiger, weil die Zusammensetzung eines einzelnen Pixels mehrere at% Messfehler trägt. Pro Pixel: jeden Pixel einzeln zuordnen.",
+    "nClusters": "Cluster",
+    "nClustersAuto": "automatisch",
+    "nClustersTooltip": "Anzahl der Zusammensetzungsgruppen. Auf automatisch lassen — dann wird sie über die räumliche Geschlossenheit der entstehenden Karte gewählt.",
+    "phaseSelection": "Beteiligte Phasen",
+    "selectAll": "Alle",
+    "selectNone": "Keine",
+    "phaseSelectionTooltip": "Phase abwählen, um sie aus der Klassifizierung herauszuhalten. Nützlich, wenn zwei Bibliothekseinträge chemisch nicht unterscheidbar sind.",
+    "clusterReport": "Cluster",
+    "clusterUnmatched": "kein Treffer",
+    "ambiguous": "mehrdeutig",
+    "ambiguousTooltip": "Eine andere Phase aus einer anderen Gruppe lag innerhalb von 0,01 — die Chemie kann sie hier nicht trennen.",
+    "kUsed": "{{k}} Cluster",
+    "noneSelected": "Mindestens eine Phase auswählen.",
+    "nClusterCount": "Anzahl"
   },
   "periodicTable": {
     "title": "Periodensystem — EDS-Elementfarben",

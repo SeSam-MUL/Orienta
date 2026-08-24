@@ -121,7 +121,11 @@
     "sourceCifTooltip": "Matching against your curated CIF library (Database/crystal_database.xlsx).",
     "sourceDefaultTooltip": "No CIF database built yet — falling back to a hardcoded library of common phases. Build the database for better matches.",
     "none": "No phases suggested for this composition.",
-    "unknown": "Unknown"
+    "unknown": "Unknown",
+    "atPixel": "Pixel ({{row}}, {{col}})",
+    "atPixelTooltip": "The pixel these suggestions were computed for. Clicking another pixel on the map updates them.",
+    "staleHint": "Showing an older pixel — press “Suggest Phases” for ({{row}}, {{col}}).",
+    "elementTooltip": "{{el}}: measured {{measured}} at%, this phase expects {{expected}} at%. An element the phase needs but the pixel lacks is what rules it out."
   },
   "swipe": {
     "labelA": "A:",
@@ -196,7 +200,26 @@
     "polygonClearTooltip": "Close & mark interior as unclassified",
     "polygonCancelTooltip": "Discard the current polygon vertices",
     "sendToIndexing": "→ Send to Indexing",
-    "sendToIndexingTooltip": "Send phase classification to the Indexing module so each phase is tested only on its assigned pixels"
+    "sendToIndexingTooltip": "Send phase classification to the Indexing module so each phase is tested only on its assigned pixels",
+    "mapTitle": "Phase Map",
+    "grouping": "Grouping",
+    "modeCluster": "Clusters",
+    "modePixel": "Per pixel",
+    "modeTooltip": "Clusters: group pixels of similar composition and match each group's mean — more reliable, because a single pixel's composition carries several at% of measurement error. Per pixel: match every pixel on its own.",
+    "nClusters": "Clusters",
+    "nClustersAuto": "auto",
+    "nClustersTooltip": "Number of composition groups. Leave on auto and it is chosen by the spatial coherence of the resulting map.",
+    "phaseSelection": "Phases taking part",
+    "selectAll": "All",
+    "selectNone": "None",
+    "phaseSelectionTooltip": "Untick a phase to keep it out of the classification. Useful when two library entries are chemically indistinguishable.",
+    "clusterReport": "Clusters",
+    "clusterUnmatched": "no match",
+    "ambiguous": "ambiguous",
+    "ambiguousTooltip": "Another phase from a different group scored within 0.01 — chemistry cannot separate them here.",
+    "kUsed": "{{k}} clusters",
+    "noneSelected": "Select at least one phase.",
+    "nClusterCount": "Count"
   },
   "periodicTable": {
     "title": "Periodic Table — EDS Element Colors",
