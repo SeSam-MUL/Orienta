@@ -735,6 +735,13 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         });
         log(msg);
         toast.info(msg, 15000);
+          // There is nothing for this viewer to show — no patterns, no
+          // detector, no orientations. Go where the data actually is,
+          // instead of leaving the user on empty panes to work out for
+          // themselves that they have to navigate.
+          setLoadProgressOpen(false);
+          onNavigate?.('eds');
+          return;
       } else {
         log(t('logMessages.loadedFile', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
         toast.success(t('logMessages.loadedToast', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
@@ -754,7 +761,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } finally {
       setLoadLoading(false);
     }
-  }, [log, t, setEBSDLoaded, setFileData, setMetadata, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+  }, [log, t, onNavigate, setEBSDLoaded, setFileData, setMetadata, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
 
   // ---------------------------------------------------------------------------
   // Switch active file from the left-panel Loaded Files list. Calls
@@ -796,6 +803,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       fetchAtlas();
       log(t('logMessages.switchedFile', { name: fname }));
       toast.success(t('logMessages.switchedToast', { name: fname }));
+        // Same reasoning as the load path: an EDS-only acquisition
+        // leaves this viewer with nothing to show, so follow the data.
+        if (info?.content_mode === 'eds_only') onNavigate?.('eds');
     } catch (err) {
       const msg = err.response?.data?.detail || err.message || t('logMessages.switchFailedDefault');
       log(t('logMessages.switchError', { error: msg }));
@@ -803,7 +813,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } finally {
       setFileSwitching(false);
     }
-  }, [filePath, fileSwitching, log, t, setEBSDLoaded, setFileData, setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+  }, [filePath, fileSwitching, log, t, onNavigate, setEBSDLoaded, setFileData, setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
 
   // The header <FileSwitcher/> does the backend switch + global-store sync
   // itself. This callback re-syncs the EBSD viewer's OWN local state
