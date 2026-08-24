@@ -365,6 +365,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     suggestions: suggestedPhases,
     pixel: suggestPixel,
     atomicPct: suggestAtPct,
+    mapPhase: suggestMapPhase,
     librarySource: suggestLibrarySource,
     librarySize: suggestLibrarySize,
     loading: suggestLoading,
@@ -931,7 +932,16 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                     per-pixel panels every other map drives — quantification
                     and phase suggestion. Without it the suggestion kept
                     describing a pixel picked on a different map. */}
-                <PhaseMapCanvas handle={phaseMapHandle} onInspect={onPixelClick} />
+                <PhaseMapCanvas
+                  handle={phaseMapHandle}
+                  onInspect={onPixelClick}
+                  /* A click assigns only when a phase is armed in the
+                     legend; otherwise it inspects, as before. */
+                  onAssignPixel={phaseMapHandle.selectedPhaseIndex != null
+                    ? ((row, col) => phaseMapHandle.handleAssignPixel(
+                        row, col, phaseMapHandle.selectedPhaseIndex))
+                    : undefined}
+                />
               </GroupBox>
             )}
             <GroupBox
@@ -1151,6 +1161,36 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                   <div style={{ fontSize: '8pt', color: colors.orange, marginTop: 2 }}>
                     {t('suggest.staleHint', { row: Number(pixelRow), col: Number(pixelCol) })}
                   </div>
+                )}
+                {/* What the MAP decided here, first. The list below ranks THIS ONE
+                    PIXEL; the map, in cluster mode, decides by the mean of the
+                    pixel's whole composition group. Measured on SampleB the two
+                    disagree on 53 % of pixels in cluster mode and 1 % in pixel
+                    mode — not a bug in either, but nothing said so, and the panel
+                    appeared to contradict the map. The map's answer is the more
+                    reliable one: a single pixel carries several at% of error. */}
+                {suggestMapPhase && (
+                  <div style={{
+                    marginTop: 4, padding: '6px 8px', borderRadius: 4,
+                    background: alpha(colors.cyan, 8),
+                    border: `1px solid ${alpha(colors.cyan, 25)}`,
+                  }}>
+                    <div style={{ fontSize: '8pt', color: colors.textSecondary }}>
+                      {t('suggest.onTheMap')}
+                    </div>
+                    <div style={{ fontSize: '10pt', fontWeight: 600, color: colors.cyan,
+                                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {suggestMapPhase.unclassified
+                        ? t('phaseMap.unclassified')
+                        : suggestMapPhase.cif_filename}
+                      {suggestMapPhase.hand_set && ` · ${t('suggest.handSet')}`}
+                    </div>
+                  </div>
+                )}
+                {suggestedPhases && suggestedPhases.length > 0 && suggestMapPhase && (
+                  <Label secondary small style={{ marginTop: 6 }}>
+                    {t('suggest.thisPixelAlone')}
+                  </Label>
                 )}
                 {suggestedPhases && (
                   <div style={{ marginTop: 6, animation: 'fadeSlideIn 0.2s ease-out' }}>

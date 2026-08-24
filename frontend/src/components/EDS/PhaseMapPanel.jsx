@@ -150,6 +150,22 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     }
   }, [t]);
 
+  // Assign the single clicked pixel. Goes through the same endpoint as a
+  // rectangle (r0==r1, c0==c1) so it inherits the grid-mismatch guard and
+  // the locked_mask bookkeeping rather than opening a second write path.
+  const handleAssignPixel = useCallback(async (row, col, phaseIndex) => {
+    setAssignBusy(true); setError(null);
+    try {
+      const res = await edsApi.assignRegion(
+        Number(row), Number(row), Number(col), Number(col), Number(phaseIndex));
+      setPhaseMap(res.data);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || t('phaseMap.errorAssign'));
+    } finally {
+      setAssignBusy(false);
+    }
+  }, [t]);
+
   const handleAssignRegion = useCallback(async (phaseIndex) => {
     if (!phaseMap) return;
     const r = region;
@@ -204,7 +220,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     paintMode, setPaintMode,
     polygonVertices, setPolygonVertices,
     handleAutoClassify, handleClearMap,
-    handleAssignRegion, handleClosePolygon, handleCancelPolygon,
+    handleAssignRegion, handleAssignPixel, handleClosePolygon, handleCancelPolygon,
     handleSendToIndexing,
   };
 }
@@ -259,7 +275,7 @@ function pixelFromClick(e) {
  * No phase map → empty placeholder so the parent can still slot the
  * canvas into the layout without flicker.
  */
-export function PhaseMapCanvas({ handle, onInspect }) {
+export function PhaseMapCanvas({ handle, onInspect, onAssignPixel }) {
   const { t } = useTranslation('eds');
   const {
     phaseMap, hoveredPixel, setHoveredPixel,
@@ -301,6 +317,8 @@ export function PhaseMapCanvas({ handle, onInspect }) {
       // a user clicking a Cu-rich region got the candidate list for
       // wherever they last clicked a tile.
       onInspect?.(endRow, endCol);
+      // Armed phase -> the click also assigns that single pixel.
+      onAssignPixel?.(endRow, endCol);
     } else {
       const r0 = Math.min(drag.startRow, endRow);
       const r1 = Math.max(drag.startRow, endRow);
@@ -310,7 +328,7 @@ export function PhaseMapCanvas({ handle, onInspect }) {
       setHoveredPixel(null);
     }
     setDrag(null);
-  }, [drag, setHoveredPixel, setRegion, onInspect]);
+  }, [drag, setHoveredPixel, setRegion, onInspect, onAssignPixel]);
 
   const handleMouseLeave = useCallback(() => {
     // Cancel the drag if the mouse leaves the image — otherwise a
@@ -547,7 +565,7 @@ export function PhaseMapControls({ handle }) {
     paintMode, setPaintMode,
     polygonVertices,
     handleAutoClassify, handleClearMap,
-    handleAssignRegion, handleClosePolygon, handleCancelPolygon,
+    handleAssignRegion, handleAssignPixel, handleClosePolygon, handleCancelPolygon,
     handleSendToIndexing,
   } = handle;
 
@@ -556,6 +574,12 @@ export function PhaseMapControls({ handle }) {
   const realPhases = summary.filter(s => !s.is_unclassified);
   const unclassifiedRow = summary.find(s => s.is_unclassified);
   const clusters = phaseMap?.clusters || [];
+  // The legend doubles as the phase PICKER, and `summary` deliberately omits
+  // phases with zero pixels. That made the one phase a manual correction is
+  // usually FOR — "this particle is beta-AlFeSi, the classifier missed it" —
+  // impossible to select. `all_phases` carries every candidate.
+  const allPhases = phaseMap?.all_phases || [];
+  const unplacedPhases = allPhases.filter(p => p.n_pixels === 0);
 
   const togglePhase = (key) => {
     const next = new Set(selectedPhaseKeys);
@@ -870,6 +894,41 @@ export function PhaseMapControls({ handle }) {
           }}>
             {/* Mode toggle: rectangle (drag) vs polygon (click vertices) */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* Phases the classifier placed nowhere. The legend cannot show
+            them (zero pixels) but they are exactly what a manual
+            correction usually needs to assign. */}
+        {hasMap && unplacedPhases.length > 0 && (
+          <details style={{ marginTop: 2 }}>
+            <summary style={{ cursor: 'pointer', fontSize: '8.5pt',
+                              color: C.textSecondary, userSelect: 'none' }}>
+              {t('phaseMap.unplaced', { count: unplacedPhases.length })}
+            </summary>
+            <div style={{ maxHeight: 150, overflowY: 'auto', marginTop: 4 }}>
+              {unplacedPhases.map((s) => {
+                const active = selectedPhaseIndex === s.phase_index;
+                return (
+                  <div
+                    key={s.phase_index}
+                    onClick={() => setSelectedPhaseIndex(active ? null : s.phase_index)}
+                    title={s.formula || s.cif_filename}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6,
+                      padding: '3px 5px', borderRadius: 3, cursor: 'pointer',
+                      fontSize: '8.5pt',
+                      background: active ? alpha(C.purple, 25) : 'transparent',
+                      border: `1px solid ${active ? alpha(C.purple, 60) : 'transparent'}`,
+                    }}
+                  >
+                    <span style={{ width: 10, height: 10, borderRadius: 2,
+                                   background: s.color, flexShrink: 0 }} />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis',
+                                   whiteSpace: 'nowrap' }}>{s.cif_filename}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        )}
               <Label secondary small>{t('phaseMap.paintMode')}</Label>
               <div style={{
                 display: 'flex', border: `1px solid ${C.border}`, borderRadius: 4,

@@ -125,7 +125,10 @@
     "atPixel": "Pixel ({{row}}, {{col}})",
     "atPixelTooltip": "The pixel these suggestions were computed for. Clicking another pixel on the map updates them.",
     "staleHint": "Showing an older pixel — press “Suggest Phases” for ({{row}}, {{col}}).",
-    "elementTooltip": "{{el}}: measured {{measured}} at%, this phase expects {{expected}} at%. An element the phase needs but the pixel lacks is what rules it out."
+    "elementTooltip": "{{el}}: measured {{measured}} at%, this phase expects {{expected}} at%. An element the phase needs but the pixel lacks is what rules it out.",
+    "onTheMap": "On the map",
+    "thisPixelAlone": "This pixel alone — the map decides by composition group:",
+    "handSet": "set by hand"
   },
   "swipe": {
     "labelA": "A:",
@@ -219,7 +222,8 @@
     "ambiguousTooltip": "Another phase from a different group scored within 0.01 — chemistry cannot separate them here.",
     "kUsed": "{{k}} clusters",
     "noneSelected": "Select at least one phase.",
-    "nClusterCount": "Count"
+    "nClusterCount": "Count",
+    "unplaced": "Phases not on the map ({{count}})"
   },
   "periodicTable": {
     "title": "Periodic Table — EDS Element Colors",

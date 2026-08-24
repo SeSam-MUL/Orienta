@@ -125,7 +125,10 @@
     "atPixel": "Pixel ({{row}}, {{col}})",
     "atPixelTooltip": "Das Pixel, für das diese Vorschläge berechnet wurden. Ein Klick auf ein anderes Pixel der Karte aktualisiert sie.",
     "staleHint": "Zeigt ein älteres Pixel — „Phasen vorschlagen“ für ({{row}}, {{col}}) drücken.",
-    "elementTooltip": "{{el}}: gemessen {{measured}} at%, diese Phase erwartet {{expected}} at%. Ein Element, das die Phase braucht und das dem Pixel fehlt, schliesst sie aus."
+    "elementTooltip": "{{el}}: gemessen {{measured}} at%, diese Phase erwartet {{expected}} at%. Ein Element, das die Phase braucht und das dem Pixel fehlt, schliesst sie aus.",
+    "onTheMap": "Auf der Karte",
+    "thisPixelAlone": "Nur dieses Pixel — die Karte entscheidet nach Zusammensetzungsgruppe:",
+    "handSet": "von Hand gesetzt"
   },
   "swipe": {
     "labelA": "A:",
@@ -219,7 +222,8 @@
     "ambiguousTooltip": "Eine andere Phase aus einer anderen Gruppe lag innerhalb von 0,01 — die Chemie kann sie hier nicht trennen.",
     "kUsed": "{{k}} Cluster",
     "noneSelected": "Mindestens eine Phase auswählen.",
-    "nClusterCount": "Anzahl"
+    "nClusterCount": "Anzahl",
+    "unplaced": "Phasen ohne Pixel auf der Karte ({{count}})"
   },
   "periodicTable": {
     "title": "Periodensystem — EDS-Elementfarben",

@@ -125,7 +125,10 @@
     "atPixel": "ピクセル ({{row}}, {{col}})",
     "atPixelTooltip": "これらの提案が計算されたピクセルです。マップ上の別のピクセルをクリックすると更新されます。",
     "staleHint": "古いピクセルを表示中 — ({{row}}, {{col}}) には「相を提案」を押してください。",
-    "elementTooltip": "{{el}}: 実測 {{measured}} at%、この相の期待値 {{expected}} at%。相が必要とする元素がピクセルに欠けている場合、その相は除外されます。"
+    "elementTooltip": "{{el}}: 実測 {{measured}} at%、この相の期待値 {{expected}} at%。相が必要とする元素がピクセルに欠けている場合、その相は除外されます。",
+    "onTheMap": "マップ上",
+    "thisPixelAlone": "このピクセル単独 — マップは組成グループで判断します:",
+    "handSet": "手動設定"
   },
   "swipe": {
     "labelA": "A:",
@@ -219,7 +222,8 @@
     "ambiguousTooltip": "別グループの相が 0.01 以内でした — ここでは化学的に区別できません。",
     "kUsed": "{{k}} クラスタ",
     "noneSelected": "少なくとも 1 つの相を選択してください。",
-    "nClusterCount": "個数"
+    "nClusterCount": "個数",
+    "unplaced": "マップにない相 ({{count}})"
   },
   "periodicTable": {
     "title": "周期表 — EDS 元素カラー",

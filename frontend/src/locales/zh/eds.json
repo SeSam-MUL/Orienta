@@ -125,7 +125,10 @@
     "atPixel": "像素 ({{row}}, {{col}})",
     "atPixelTooltip": "计算这些建议所用的像素。点击图上的其他像素即可更新。",
     "staleHint": "显示的是较早的像素 — 请按“建议相”以获取 ({{row}}, {{col}})。",
-    "elementTooltip": "{{el}}：实测 {{measured}} at%，该相期望 {{expected}} at%。相所需但像素缺失的元素会将其排除。"
+    "elementTooltip": "{{el}}：实测 {{measured}} at%，该相期望 {{expected}} at%。相所需但像素缺失的元素会将其排除。",
+    "onTheMap": "图上",
+    "thisPixelAlone": "仅此像素 — 图按成分分组判断：",
+    "handSet": "手动设置"
   },
   "swipe": {
     "labelA": "A:",
@@ -219,7 +222,8 @@
     "ambiguousTooltip": "另一组中的相得分相差在 0.01 以内——此处化学无法区分。",
     "kUsed": "{{k}} 个聚类",
     "noneSelected": "请至少选择一个相。",
-    "nClusterCount": "数量"
+    "nClusterCount": "数量",
+    "unplaced": "图上没有的相 ({{count}})"
   },
   "periodicTable": {
     "title": "周期表 — EDS 元素颜色",

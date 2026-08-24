@@ -19,6 +19,7 @@ export function useSuggestPhases() {
   const [suggestions, setSuggestions] = useState(null);
   const [pixel, setPixel] = useState(null);          // pixel `suggestions` belongs to
   const [atomicPct, setAtomicPct] = useState(null);  // measured At.% at that pixel
+  const [mapPhase, setMapPhase] = useState(null);     // what the MAP says here
   const [librarySource, setLibrarySource] = useState(null);
   const [librarySize, setLibrarySize] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -47,6 +48,7 @@ export function useSuggestPhases() {
       setSuggestions(data.suggestions || data.phases || []);
       setPixel({ row: Number(row), col: Number(col) });
       setAtomicPct(data.atomic_pct || null);
+      setMapPhase(data.map_phase || null);
       setLibrarySource(data.library_source || null);
       setLibrarySize(data.library_size ?? null);
     } catch (e) {
@@ -56,6 +58,7 @@ export function useSuggestPhases() {
       setSuggestions(null);
       setPixel(null);
       setAtomicPct(null);
+      setMapPhase(null);
       setLibrarySource(null);
       setLibrarySize(null);
     } finally {
@@ -74,6 +77,7 @@ export function useSuggestPhases() {
     setSuggestions(null);
     setPixel(null);
     setAtomicPct(null);
+    setMapPhase(null);
     setLibrarySource(null);
     setLibrarySize(null);
     setError(null);
@@ -81,7 +85,7 @@ export function useSuggestPhases() {
   }, []);
 
   return {
-    suggestions, pixel, atomicPct, librarySource, librarySize, loading, error,
+    suggestions, pixel, atomicPct, mapPhase, librarySource, librarySize, loading, error,
     run, followPixel, clear,
   };
 }
