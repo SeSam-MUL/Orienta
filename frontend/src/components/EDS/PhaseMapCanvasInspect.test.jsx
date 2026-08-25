@@ -40,14 +40,24 @@ function makeHandle() {
   };
 }
 
-/** Give the <img> a natural size and a layout box so pixelFromClick works. */
-function prepareImg(img) {
-  Object.defineProperty(img, 'naturalWidth', { value: 10, configurable: true });
-  Object.defineProperty(img, 'naturalHeight', { value: 10, configurable: true });
-  img.getBoundingClientRect = () => ({
+/**
+ * Give the map a layout box.
+ *
+ * Measured on the HOST, not on the <img>: since the zoom landed, the pointer
+ * maths reads the untransformed outer box on purpose — `getBoundingClientRect`
+ * already includes a CSS transform, so measuring the zoomed node would count
+ * the zoom twice. Stubbing the img here would test a path the app no longer
+ * takes.
+ */
+function prepareMap(container) {
+  const img = container.querySelector('img');
+  const host = img.closest('div[style*="overflow"]') || img.parentElement.parentElement;
+  const rect = {
     left: 0, top: 0, width: 100, height: 100,
     right: 100, bottom: 100, x: 0, y: 0, toJSON: () => {},
-  });
+  };
+  host.getBoundingClientRect = () => rect;
+  return img;
 }
 
 describe('clicking the phase map', () => {
@@ -56,8 +66,7 @@ describe('clicking the phase map', () => {
     const { container } = render(
       <PhaseMapCanvas handle={makeHandle()} onInspect={onInspect} />,
     );
-    const img = container.querySelector('img');
-    prepareImg(img);
+    const img = prepareMap(container);
 
     // Press and release on the same spot = inspect, not a region drag.
     fireEvent.mouseDown(img, { clientX: 35, clientY: 45 });
@@ -75,8 +84,7 @@ describe('clicking the phase map', () => {
     const { container } = render(
       <PhaseMapCanvas handle={handle} onInspect={onInspect} />,
     );
-    const img = container.querySelector('img');
-    prepareImg(img);
+    const img = prepareMap(container);
 
     fireEvent.mouseDown(img, { clientX: 10, clientY: 10 });
     fireEvent.mouseMove(img, { clientX: 60, clientY: 70 });
@@ -90,8 +98,7 @@ describe('clicking the phase map', () => {
 
   it('works without an onInspect handler', () => {
     const { container } = render(<PhaseMapCanvas handle={makeHandle()} />);
-    const img = container.querySelector('img');
-    prepareImg(img);
+    const img = prepareMap(container);
     expect(() => {
       fireEvent.mouseDown(img, { clientX: 35, clientY: 45 });
       fireEvent.mouseUp(img, { clientX: 35, clientY: 45 });

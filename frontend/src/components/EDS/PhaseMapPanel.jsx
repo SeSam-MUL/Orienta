@@ -31,6 +31,10 @@ import {
 } from '../../theme/components';
 import useDataStore from '../../stores/useDataStore';
 import usePhaseColorStore from '../../stores/usePhaseColorStore';
+import { pointerToRowCol } from './mapCoords';
+import {
+  IDENTITY_VIEW, isZoomed, viewToTransform, wheelFactor, zoomedRect,
+} from './zoomView';
 import StructurePanel from './StructurePanel';
 
 /** Store key for a phase colour.
@@ -351,35 +355,21 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
 }
 
 
-/** Convert a click event on the phase-map img element to (row, col). */
-function pixelFromClick(e) {
-  const img = e.currentTarget;
-  if (!img || !img.naturalWidth || !img.naturalHeight) return null;
-  const rect = img.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-
-  const natW = img.naturalWidth;
-  const natH = img.naturalHeight;
-  const containerAspect = rect.width / rect.height;
-  const imageAspect = natW / natH;
-
-  let dispW, dispH, offX, offY;
-  if (containerAspect > imageAspect) {
-    dispH = rect.height;
-    dispW = rect.height * imageAspect;
-    offX = (rect.width - dispW) / 2;
-    offY = 0;
-  } else {
-    dispW = rect.width;
-    dispH = rect.width / imageAspect;
-    offX = 0;
-    offY = (rect.height - dispH) / 2;
-  }
-  const px = (x - offX) / dispW * natW;
-  const py = (y - offY) / dispH * natH;
-  if (px < 0 || py < 0 || px >= natW || py >= natH) return null;
-  return { row: Math.floor(py), col: Math.floor(px) };
+/**
+ * Convert a click on the phase map to (row, col), through the zoom.
+ *
+ * `hostRect` must come from an element that is NOT itself transformed:
+ * `getBoundingClientRect()` already includes a CSS transform, so measuring the
+ * zoomed node would count the zoom twice. `zoomedRect` turns that untransformed
+ * box into the virtual box the pixels are actually drawn in, and
+ * `mapCoords.pointerToRowCol` does the letterbox arithmetic — the same routine
+ * the element tiles use, rather than a second copy of it that can drift.
+ */
+export function pixelFromClickAt(e, hostRect, view, nRows, nCols) {
+  if (!hostRect || !hostRect.width || !hostRect.height) return null;
+  if (!nRows || !nCols) return null;
+  return pointerToRowCol(e, zoomedRect(hostRect, view || IDENTITY_VIEW),
+                         [nRows, nCols]);
 }
 
 
@@ -401,7 +391,8 @@ function pixelFromClick(e) {
  * canvas into the layout without flicker.
  */
 export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
-                                onPickStructure }) {
+                                onPickStructure, view, onZoomAt, onPan,
+                                onResetView }) {
   const { t } = useTranslation('eds');
   const {
     phaseMap, hoveredPixel, setHoveredPixel,
@@ -417,26 +408,92 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
     ? phaseMap.structure_image
     : phaseMap?.image;
   const [drag, setDrag] = useState(null);  // { startRow, startCol, endRow, endCol } | null
+  // Measured for the pointer maths; deliberately the UNtransformed box.
+  const hostRef = useRef(null);
+  const [panFrom, setPanFrom] = useState(null);
+  const activeView = view || IDENTITY_VIEW;
+  // The wheel listener is attached natively (it has to be non-passive to
+  // preventDefault), so it reads the view through a ref rather than
+  // closing over a stale one.
+  const viewRef = useRef(activeView);
+  viewRef.current = activeView;
+  const zoomed = isZoomed(activeView);
+
+  // Read the shape from the payload rather than from `nRows`/`nCols`: those
+  // are declared after this component's early return, so referencing them here
+  // would be a use-before-define at render time.
+  // Ctrl+wheel zooms to the cursor, matching the element tiles. Attached
+  // natively because React's synthetic wheel handler is passive and cannot
+  // preventDefault, which the browser needs to not zoom the whole page.
+  // A plain wheel is left alone so the panel can still be scrolled.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !onZoomAt) return undefined;
+    const onWheel = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      const rect = host.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      onZoomAt(
+        wheelFactor(e.deltaY),
+        (e.clientX - rect.left) / rect.width,
+        (e.clientY - rect.top) / rect.height,
+      );
+    };
+    host.addEventListener('wheel', onWheel, { passive: false });
+    return () => host.removeEventListener('wheel', onWheel);
+  }, [onZoomAt]);
+
+  const pixelFromClick = useCallback((e) => pixelFromClickAt(
+    e, hostRef.current?.getBoundingClientRect(), viewRef.current,
+    phaseMap?.n_rows, phaseMap?.n_cols,
+  ), [phaseMap?.n_rows, phaseMap?.n_cols]);
 
   const isPolygon = paintMode === 'polygon';
   const isWand = paintMode === 'wand';
 
+  /** Drag with Ctrl (or in pan mode) moves a zoomed view instead of painting. */
+  const beginPan = useCallback((e) => {
+    setPanFrom({ x: e.clientX, y: e.clientY });
+  }, []);
+
   const handleMouseDown = useCallback((e) => {
+    if (onPan && zoomed && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      beginPan(e);
+      return;
+    }
     if (isPolygon) return;  // polygon mode uses click-to-add-vertex, not drag
     const px = pixelFromClick(e);
     if (!px || !phaseMap) return;
     e.preventDefault();
     setDrag({ startRow: px.row, startCol: px.col, endRow: px.row, endCol: px.col });
-  }, [phaseMap, isPolygon]);
+  }, [phaseMap, isPolygon, onPan, zoomed, beginPan]);
 
   const handleMouseMove = useCallback((e) => {
+    if (panFrom) {
+      const host = hostRef.current;
+      if (host && onPan) {
+        const rect = host.getBoundingClientRect();
+        // Deltas relative to the LAST point, not the drag origin: the
+        // controller accumulates, so sending the whole offset each move
+        // would accelerate the pan quadratically.
+        onPan(
+          -(e.clientX - panFrom.x) / Math.max(1, rect.width),
+          -(e.clientY - panFrom.y) / Math.max(1, rect.height),
+        );
+        setPanFrom({ ...panFrom, x: e.clientX, y: e.clientY });
+      }
+      return;
+    }
     if (!drag) return;
     const px = pixelFromClick(e);
     if (!px) return;
     setDrag(d => d && { ...d, endRow: px.row, endCol: px.col });
-  }, [drag]);
+  }, [drag, panFrom, onPan]);
 
   const handleMouseUp = useCallback((e) => {
+    if (panFrom) { setPanFrom(null); return; }
     if (!drag) return;
     const px = pixelFromClick(e);
     const endRow = px ? px.row : drag.endRow;
@@ -477,7 +534,12 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
   }, [drag, setHoveredPixel, setRegion, onInspect, onAssignPixel, isWand, wand,
       onPickStructure]);
 
+  const handleDoubleClick = useCallback(() => {
+    if (onResetView) onResetView();
+  }, [onResetView]);
+
   const handleMouseLeave = useCallback(() => {
+    if (panFrom) setPanFrom(null);
     // Cancel the drag if the mouse leaves the image — otherwise a
     // mouseup outside the canvas would commit a stale rectangle.
     if (drag) setDrag(null);
@@ -566,8 +628,26 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
           ``preserveAspectRatio: xMidYMid meet`` on the SVG keeps both
           letterbox calculations identical, so the rectangle / polygon
           overlay never drifts off the underlying pixels. */}
+      {/* Two nested boxes on purpose. The OUTER one is what the pointer
+          maths measures and what the wheel listener hangs on - it never
+          moves, so getBoundingClientRect() stays the UNtransformed box and
+          the zoom is not counted twice. The INNER one carries the
+          transform, and the image, the wand overlay and the
+          rectangle/polygon SVG all live inside it so they move together
+          and cannot drift apart. */}
+      <div
+        ref={hostRef}
+        onDoubleClick={handleDoubleClick}
+        style={{
+          position: 'relative', width: '100%', height: '100%',
+          overflow: 'hidden',
+          cursor: panFrom ? 'grabbing' : undefined,
+        }}
+      >
       <div style={{
         position: 'relative', width: '100%', height: '100%',
+        transform: viewToTransform(activeView),
+        transformOrigin: '0 0',
       }}>
         <img
           src={`data:image/png;base64,${shownImage}`}
@@ -694,6 +774,7 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
             )}
           </svg>
         )}
+      </div>
       </div>
       {readout}
     </div>

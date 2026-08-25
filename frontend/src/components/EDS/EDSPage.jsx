@@ -38,6 +38,12 @@ import { useHoverProbe } from './hooks/useHoverProbe';
 import { useLinescan } from './hooks/useLinescan';
 import { useSuggestPhases } from './hooks/useSuggestPhases';
 import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from './hooks/useZoomViews';
+
+// The phase map's id in the page's shared zoom controller. A constant rather
+// than a literal at the call site: in SYNC_SINGLE mode the id is what keeps
+// this view separate from the tiles', and a typo would silently give the map
+// its own second view that nothing resets.
+const PHASE_MAP_ZOOM_ID = 'phase-map';
 import { usePhaseMap, PhaseMapCanvas, PhaseMapControls } from './PhaseMapPanel';
 import StructureInspector from './StructureInspector';
 import useStructureInspector from './hooks/useStructureInspector';
@@ -903,6 +909,16 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                     handle={phaseMapHandle}
                     onInspect={onPixelClick}
                     wand={phaseMapHandle.wand}
+                    /* The page's OWN zoom controller, the one the element
+                       tiles already use - not a second one. In "All" sync
+                       mode the map and the tiles then share a view, which is
+                       the point: you compare the phase map against Fe or BC
+                       at the same magnification. */
+                    view={zoom.viewFor(PHASE_MAP_ZOOM_ID)}
+                    onZoomAt={(f, px, py) =>
+                      zoom.zoomAtPointer(PHASE_MAP_ZOOM_ID, f, px, py)}
+                    onPan={(dx, dy) => zoom.pan(PHASE_MAP_ZOOM_ID, dx, dy)}
+                    onResetView={() => zoom.resetOne(PHASE_MAP_ZOOM_ID)}
                     onPickStructure={inStructureView
                       ? inspector.inspectPixel : undefined}
                     onAssignPixel={phaseMapHandle.selectedPhaseIndex != null
