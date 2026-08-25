@@ -859,6 +859,7 @@ export const edsApi = {
       ...(opts.mode ? { mode: opts.mode } : {}),
       ...(opts.nClusters != null ? { n_clusters: opts.nClusters } : {}),
       ...(opts.scale != null ? { scale: opts.scale } : {}),
+      ...(opts.rules ? { rules: opts.rules } : {}),
       ...(opts.phaseKeys ? { phase_keys: opts.phaseKeys } : {}),
     }),
   getPhaseMap: (includeImage = true) =>

@@ -90,6 +90,11 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   // to hide that - measured at k=8 on SampleB: 3491 pieces, median size 1 px.
   const [scale, setScale] = useState(null);
   const [structureBusy, setStructureBusy] = useState(false);
+  // User-authored rules. They decide which phases may COMPETE for a region,
+  // and they only take effect on the next classification - like the scale and
+  // the structure count, and for the same reason: changing them silently under
+  // an existing map would leave the picture and its explanation disagreeing.
+  const [rules, setRules] = useState(null);
   // Bumped by anything that changes the grouping. Merging renumbers
   // ids, splitting adds them, a boundary move changes the pixels — the
   // inspector has to re-read or it describes a structure that is gone.
@@ -219,6 +224,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
         mode,
         nClusters,
         ...(scale != null ? { scale } : {}),
+        ...(rules && (rules.rules?.length || rules.phase_keys) ? { rules } : {}),
         ...(isSubset ? { phaseKeys: [...selectedPhaseKeys] } : {}),
       });
       setPhaseMap(res.data);
@@ -229,7 +235,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     } finally {
       setLoading(false);
     }
-  }, [tolerance, minScore, mode, nClusters, scale, cifPhases, selectedPhaseKeys, t]);
+  }, [tolerance, minScore, mode, nClusters, scale, rules, cifPhases, selectedPhaseKeys, t]);
 
   const handleClearMap = useCallback(async () => {
     setLoading(true); setError(null);
@@ -336,6 +342,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     mapView, setMapView,
     selectedStructureId, setSelectedStructureId,
     scale, setScale, structureBusy, mapVersion,
+    rules, setRules,
     handleAssignStructure, handleMergeStructures, handleSplitStructure,
     handleGrowStructure, handleSnapEdges,
     selectedPhaseKeys, setSelectedPhaseKeys,

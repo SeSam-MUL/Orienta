@@ -671,6 +671,9 @@ class AutoClassifyRequest(BaseModel):
     # Box width in pixels for smoothing the composition before clustering.
     # None = the module default. 0 reproduces the pre-2026-08-24 behaviour.
     scale: Optional[int] = None
+    # User-authored rules. See backend/api/services/phase_rules.py — they
+    # decide which phases may COMPETE for a region, not how well they score.
+    rules: Optional[dict] = None
     phase_keys: Optional[List[str]] = None  # None -> every library phase
     # Carry hand-assigned pixels across the re-classify. Default True: the
     # old behaviour silently destroyed them, which is the bug, not the
@@ -926,6 +929,16 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
     clusters_payload: List[dict] = []
     k_used = 0
 
+    from backend.api.services.phase_rules import rule_set_from_dict
+    rule_set = rule_set_from_dict(req.rules)
+    # Participation is filtered HERE and only here. The candidate list is built
+    # in two places (this route and `auto_classify_pixels`); narrowing it in
+    # one would make the two modes number phases differently, and that number
+    # is what gets persisted and handed to indexing.
+    if rule_set is not None and rule_set.phase_keys is not None:
+        keep = set(rule_set.phase_keys)
+        cif_library = {k: v for k, v in cif_library.items() if k in keep}             if isinstance(cif_library, dict) else cif_library
+
     if mode == "pixel":
         phase_grid, score_grid, candidates, ambiguous = auto_classify_pixels(
             at_pct_per_element=at_maps,
@@ -934,6 +947,7 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
             cif_library=cif_library,
             tolerance=req.tolerance,
             min_score=req.min_score,
+            rule_set=rule_set,
         )
     else:
         # Same helper auto_classify_pixels uses — the index into this list is
@@ -948,6 +962,7 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
             k=req.n_clusters,
             min_score=req.min_score,
             scale=req.scale,
+            rule_set=rule_set,
         )
         score_grid = np.zeros((n_rows, n_cols), dtype=np.float32)
         ambiguous = np.zeros((n_rows, n_cols), dtype=bool)
@@ -1905,6 +1920,18 @@ def _structure_detail(state, sid: int) -> dict:
         "percentage": round(n_px / max(1, state.n_rows * state.n_cols) * 100, 2),
         "color": structure_color_hex(sid),
         "phase_index": int(state.structure_phase[sid]),
+        # The phase NAME, not only its index. A rule is keyed on the
+        # entry key rather than a position, so anything seeding a rule
+        # from this structure needs the name; without it the "rule from
+        # this structure" path has nothing to key on.
+        "cif_filename": (
+            state.phase_entries[state.structure_phase[sid]].cif_filename
+            if 0 <= state.structure_phase[sid] < len(state.phase_entries)
+            else None),
+        "formula": (
+            state.phase_entries[state.structure_phase[sid]].formula
+            if 0 <= state.structure_phase[sid] < len(state.phase_entries)
+            else None),
         "elements": [],
         "pieces": [],
         "neighbours": [],

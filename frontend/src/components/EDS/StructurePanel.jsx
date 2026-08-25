@@ -55,6 +55,7 @@ export default function StructurePanel({ handle }) {
     handleMergeStructures, handleSplitStructure,
     handleGrowStructure, handleSnapEdges,
     setMapView, background, backgroundChoices,
+    mode, phaseMap: pm,
   } = handle;
 
   const [mergeInto, setMergeInto] = useState(null);
@@ -177,6 +178,18 @@ export default function StructurePanel({ handle }) {
           {(scale ?? 5) <= 1 ? t('structures.scaleOff') : `${scale ?? 5} px`}
         </span>
       </ToolRow>
+
+      {/* Switching to per-pixel throws the structures away, and with them
+          every name the user gave by hand. Verified: the sidecar drops to an
+          empty structure grid and comes back only on the next cluster run.
+          Not a fault - per-pixel HAS no groups - but it must not be silent. */}
+      {handle.mode === 'pixel' && (structures?.length === 0)
+        && (phaseMap?.n_classified > 0) && (
+        <Label secondary small style={{ display: 'block',
+                                        color: C.orange || '#f0b429' }}>
+          {t('structures.pixelModeNoStructures')}
+        </Label>
+      )}
 
       <ToolRow title={t('structures.countTooltip')}>
         <Label secondary small style={{ minWidth: 62 }}>

@@ -104,16 +104,20 @@ def test_no_silicon_particle_gets_an_iron_phase(classified):
 
 
 def test_the_real_particle_survives_the_veto(classified):
-    """The relative veto must not eat the particle it is meant to protect.
+    """No veto may eat the particle it is meant to protect.
 
     Ground truth is the connected Fe-rich region (Fe > 4 at%, 3401 px on
     SampleB). It measures a mean 5.33 at% Fe against the 11.6 at% its phase
-    nominally requires — a 0.46x standardless Cliff-Lorimer under-read — so
-    a veto threshold anywhere near 0.46 silently deletes it. Measured:
-    rel_req 0.30 keeps 99.4 % of it, 0.40 keeps only 71.5 %.
+    nominally requires — a 0.46x standardless Cliff-Lorimer under-read — so any
+    threshold near 0.46 silently deletes it.
 
-    This is the assertion the first calibration lacked; it was chosen on
-    per-pixel correctness alone and picked 0.40.
+    Written when the veto was the relative one (`rel_req`, where 0.30 kept
+    99.4 % of the particle and 0.40 only 71.5 %; the first calibration was
+    chosen on per-pixel correctness alone and picked 0.40). That veto is gone —
+    both modes now score through `score_phase_ratio`, whose gates are absolute
+    and enrichment-based — but the assertion is the point, not the mechanism:
+    whatever vetoes, the particle has to survive it. It would have caught the
+    old calibration and it guards the new gates just the same.
     """
     at, grid, _score, cands, _amb = classified
     fe = np.asarray(at["Fe"], dtype=float)

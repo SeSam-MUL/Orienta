@@ -279,9 +279,9 @@ def _run_for_k(
     group_of: np.ndarray,
     k: int,
     min_score: float,
-    rel_req: float,
     matrix_element: Optional[str] = None,
     background: Optional[Dict[str, float]] = None,
+    rule_set=None,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch]]:
     """One full cluster-and-match pass at a fixed ``k``."""
     from sklearn.cluster import KMeans
@@ -317,6 +317,26 @@ def _run_for_k(
                 no_data_score=0.0, background=background)[0]))
             for idx, entry in enumerate(candidates)
         ]
+
+        # User rules decide ELIGIBILITY, before the ranking. A blocked
+        # phase scores 0 so it loses even to a badly-scoring phase that
+        # is allowed - that is what "may not compete" means. The rule is
+        # evaluated on the cluster MEAN here and on the pixel in the
+        # other mode; same evaluator, different population, and the UI
+        # has to say which.
+        blocked_reasons = {}
+        if rule_set is not None and not rule_set.is_empty:
+            from backend.api.services.phase_rules import gate_scores
+            regated = []
+            for idx, sc in scored:
+                rule = rule_set.rule_for(candidates[idx].key)
+                gated, outcome = gate_scores(
+                    np.array([sc], dtype=np.float64), rule, one,
+                    background=background)
+                if outcome is not None and not bool(outcome.allowed[0]):
+                    blocked_reasons[idx] = outcome.reason
+                regated.append((idx, float(gated[0])))
+            scored = regated
         scored.sort(key=lambda t: -t[1])
 
         if scored and scored[0][1] >= min_score:
@@ -359,8 +379,8 @@ def cluster_and_match(
     k: Optional[int] = None,
     k_range: Tuple[int, int] = (2, 12),
     min_score: float = 0.3,
-    rel_req: float = DEFAULT_REL_REQ,
     scale: Optional[int] = None,
+    rule_set=None,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch], int]:
     """Cluster the composition, match each cluster, paint its pixels.
 
@@ -403,8 +423,8 @@ def cluster_and_match(
 
     def run(kk):
         return _run_for_k(X, at_pct_per_element, n_rows, n_cols, candidates,
-                          group_of, kk, min_score, rel_req, matrix_element,
-                          background)
+                          group_of, kk, min_score, matrix_element,
+                          background, rule_set)
 
     if k:
         k_used = max(1, min(int(k), n_px))

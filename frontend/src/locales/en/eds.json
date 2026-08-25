@@ -323,7 +323,8 @@
     "howTitle": "How this page works",
     "howStep1": "1 — The map is cut into STRUCTURES by element ratio alone. A structure is just \"these pixels have the same chemistry\"; it has no name yet, and its colour means nothing beyond telling it apart from its neighbours.",
     "howStep2": "2 — You give each structure a phase. Several structures may get the SAME phase — that is normal and expected, which is why one phase name appears on several rows in the list.",
-    "howStep3": "3 — Switch to “Phases” to see the result: one colour per phase, so two neighbouring regions you gave the same phase become one uninterrupted area. Many structures, few phases."
+    "howStep3": "3 — Switch to “Phases” to see the result: one colour per phase, so two neighbouring regions you gave the same phase become one uninterrupted area. Many structures, few phases.",
+    "pixelModeNoStructures": "Per-pixel mode has no structures, so any names you gave them are gone. Switch back to Clusters and re-classify to get them back."
   },
   "inspector": {
     "title": "Structure inspector",
@@ -376,5 +377,35 @@
     "tooltip": "Lay one element map or electron image under the phase map, so a region can be placed against the chemistry or the topography it came from.",
     "opacityTooltip": "How solid the phase map is. The MAP fades, not the image beneath it - the map is the thing you are placing.",
     "fovWarning": "The image below covers a {{pct}}% different field of view, so it may not line up."
+  },
+  "rules": {
+    "tab": "Phase rules · {{count}}",
+    "explain": "A rule decides which phases may COMPETE for a region — not how well they score. A phase whose rule fails simply cannot win there; the region goes to the next candidate, or stays unclassified and says which rule blocked it. Rules only take effect on the next classification.",
+    "withRules": "Phases with rules ({{count}})",
+    "withRulesHint": "Everything else is decided automatically, as before.",
+    "noneYet": "No rules yet. Select a structure on the map, then seed one from it.",
+    "matchesN": "{{count}} structures",
+    "matchesNone": "matches nothing",
+    "removeTooltip": "Remove the rule for {{name}}",
+    "removeClause": "Remove this clause",
+    "seed": "Rule from this structure →",
+    "seedTooltip": "Start a rule for {{name}} from what this structure actually measures — mean ± 2× the spread, on the elements that are genuinely concentrated here. Then correct the numbers.",
+    "seedNeedStructure": "Select a structure on the map first",
+    "editing": "Rules for {{name}}",
+    "pickOne": "Pick a phase on the left to edit its rules.",
+    "allMustHold": "Every line must hold. Ranges are at% of the measured elements, with C and O left out — the same composition the inspector shows.",
+    "min": "min",
+    "max": "max",
+    "minFor": "Minimum {{element}} in at%",
+    "maxFor": "Maximum {{element}} in at%",
+    "minRatio": "Minimum ratio",
+    "maxRatio": "Maximum ratio",
+    "minEnrichment": "Minimum enrichment",
+    "timesBackground": "× background",
+    "addElement": "+ element range",
+    "addEnrichment": "+ enrichment",
+    "enrichmentHint": "Enrichment is measured against this map's own background, so it needs no k-factor and travels between datasets. On a real particle “Si ≥ 2× background” kept 96 % of it where “Si ≥ 40 at%” kept 46 %.",
+    "apply": "Classify with these rules",
+    "applyTooltip": "Re-runs the classification. Structures are rebuilt, so hand-given names are lost."
   }
 }

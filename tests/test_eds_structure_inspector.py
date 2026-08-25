@@ -230,3 +230,24 @@ def test_a_composition_from_a_different_sized_map_is_refused(monkeypatch):
     )
     d = _structure_detail(_state(grid), 1)
     assert d["elements"] == []
+
+
+def test_the_detail_names_the_phase_not_only_its_index(sample):
+    """A rule is keyed on the phase NAME, never on a position in the candidate
+    list. Without the name here, "rule from this structure" has nothing to key
+    on — which is exactly how it shipped broken the first time: the button was
+    permanently disabled and said "select a structure first" while one was
+    selected."""
+    st = _state(sample.structure_grid, structure_phase=[-1, 2])
+    d = _structure_detail(st, 1)
+    assert d["phase_index"] == 2
+    assert d["cif_filename"] == "AlSi.cif"
+    # The fixture's `_entry` uses the filename as the formula too.
+    assert d["formula"] == "AlSi.cif"
+
+
+def test_an_unnamed_structure_reports_no_phase_rather_than_a_wrong_one(sample):
+    st = _state(sample.structure_grid, structure_phase=[-1, -1])
+    d = _structure_detail(st, 1)
+    assert d["phase_index"] == -1
+    assert d["cif_filename"] is None

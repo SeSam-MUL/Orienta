@@ -48,6 +48,7 @@ import { usePhaseMap, PhaseMapCanvas, PhaseMapControls } from './PhaseMapPanel';
 import StructureInspector from './StructureInspector';
 import useStructureInspector from './hooks/useStructureInspector';
 import useMapBackground, { fovRatio } from './useMapBackground';
+import PhaseRules from './PhaseRules';
 import { exportComposite } from './compositeExporter';
 import ContextMenu from '../common/ContextMenu';
 import ImageExportDialog from '../common/ImageExportDialog';
@@ -359,6 +360,11 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   // and the tile grid left neither usable. It gets its own tab; everything
   // else on this page stays exactly where it was.
   const [edsTab, setEdsTab] = useState('elements');
+  // The strip under the map holds two things now: what one structure IS, and
+  // the rules that decide which phases may compete for it. A tab rather than a
+  // third panel: they are alternate readings of the same selection, and the
+  // 300 px rail has already been shown to be the wrong home for a table.
+  const [stripTab, setStripTab] = useState('inspector');
   // One image under the phase map, so a region can be placed against the
   // chemistry or the topography it came from.
   const mapBackground = useMapBackground({
@@ -975,10 +981,53 @@ export default function EDSPage({ onNavigate, isActive = true }) {
               </GroupBox>
               {inStructureView && (
                 <GroupBox
-                  title={t('inspector.title')}
+                  title={(
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      {[
+                        { id: 'inspector', label: t('inspector.title') },
+                        { id: 'rules',
+                          label: t('rules.tab', {
+                            count: phaseMapHandle.rules?.rules?.length || 0,
+                          }) },
+                      ].map((tb) => {
+                        const on = stripTab === tb.id;
+                        return (
+                          <button
+                            key={tb.id}
+                            type="button"
+                            onClick={() => setStripTab(tb.id)}
+                            style={{
+                              fontSize: '9pt', padding: '2px 10px',
+                              borderRadius: 3, cursor: 'pointer',
+                              background: on ? alpha(colors.cyan, 20) : 'transparent',
+                              color: on ? colors.cyan : colors.textSecondary,
+                              border: `1px solid ${on ? alpha(colors.cyan, 45) : 'transparent'}`,
+                              fontWeight: on ? 600 : 400,
+                            }}
+                          >
+                            {tb.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                   style={{ flexShrink: 0, maxHeight: '42vh',
                            overflowY: 'auto' }}
                 >
+                  {stripTab === 'rules' ? (
+                    <PhaseRules
+                      rules={phaseMapHandle.rules}
+                      setRules={phaseMapHandle.setRules}
+                      structures={phaseMapHandle.phaseMap?.structures}
+                      allPhases={phaseMapHandle.phaseMap?.all_phases}
+                      inspectorDetail={inspector.detail}
+                      elements={(def.elements || []).map((e) => (
+                        typeof e === 'string' ? e : (e.symbol || e.name)
+                      )).filter(Boolean)}
+                      onReclassify={phaseMapHandle.handleAutoClassify}
+                      busy={phaseMapHandle.loading || phaseMapHandle.structureBusy}
+                    />
+                  ) : (
                   <StructureInspector
                     detail={inspector.detail}
                     loading={inspector.loading}
@@ -989,6 +1038,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                       inspector.detail.structure_id, phaseIndex)}
                     onSelectStructure={phaseMapHandle.setSelectedStructureId}
                   />
+                  )}
                 </GroupBox>
               )}
             </div>

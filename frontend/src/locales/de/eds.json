@@ -323,7 +323,8 @@
     "howTitle": "Wie diese Seite funktioniert",
     "howStep1": "1 — Die Karte wird allein nach Elementverhältnis in STRUKTUREN zerlegt. Eine Struktur heißt nur „diese Pixel haben dieselbe Chemie“; sie hat noch keinen Namen, und ihre Farbe bedeutet nichts außer der Unterscheidung von den Nachbarn.",
     "howStep2": "2 — Du gibst jeder Struktur eine Phase. Mehrere Strukturen dürfen DIESELBE Phase bekommen — das ist der Normalfall, und deshalb steht ein Phasenname mehrfach in der Liste.",
-    "howStep3": "3 — Auf „Phasen“ umschalten zeigt das Ergebnis: eine Farbe je Phase, zwei benachbarte Bereiche mit derselben Phase werden dort zu einer durchgehenden Fläche. Viele Strukturen, wenige Phasen."
+    "howStep3": "3 — Auf „Phasen“ umschalten zeigt das Ergebnis: eine Farbe je Phase, zwei benachbarte Bereiche mit derselben Phase werden dort zu einer durchgehenden Fläche. Viele Strukturen, wenige Phasen.",
+    "pixelModeNoStructures": "Der Pixelmodus kennt keine Strukturen — von Hand vergebene Namen sind damit weg. Zurueck auf Cluster wechseln und neu klassifizieren, um sie wiederzubekommen."
   },
   "inspector": {
     "title": "Struktur-Inspektor",
@@ -376,5 +377,35 @@
     "tooltip": "Eine Elementkarte oder ein Elektronenbild unter die Phasenkarte legen, damit sich ein Gebiet gegen die Chemie oder die Topografie einordnen laesst, aus der es stammt.",
     "opacityTooltip": "Wie deckend die Phasenkarte ist. Die KARTE wird durchsichtig, nicht das Bild darunter — die Karte ist das, was du einordnest.",
     "fovWarning": "Das Bild darunter deckt ein um {{pct}} % anderes Bildfeld ab und passt daher moeglicherweise nicht."
+  },
+  "rules": {
+    "tab": "Phasenregeln · {{count}}",
+    "explain": "Eine Regel entscheidet, welche Phasen um ein Gebiet MITBIETEN dürfen — nicht wie gut sie bewertet werden. Eine Phase, deren Regel reißt, kann dort schlicht nicht gewinnen; das Gebiet geht an den nächsten Kandidaten oder bleibt unzugeordnet und nennt die blockierende Regel. Regeln wirken erst bei der nächsten Klassifikation.",
+    "withRules": "Phasen mit Regeln ({{count}})",
+    "withRulesHint": "Alles Übrige wird weiterhin automatisch entschieden.",
+    "noneYet": "Noch keine Regeln. Eine Struktur in der Karte wählen und daraus eine erzeugen.",
+    "matchesN": "{{count}} Strukturen",
+    "matchesNone": "trifft nichts",
+    "removeTooltip": "Regel für {{name}} entfernen",
+    "removeClause": "Diese Zeile entfernen",
+    "seed": "Regel aus dieser Struktur →",
+    "seedTooltip": "Eine Regel für {{name}} aus dem erzeugen, was diese Struktur tatsächlich misst — Mittel ± 2× Streuung, auf den Elementen, die hier wirklich angereichert sind. Danach die Zahlen korrigieren.",
+    "seedNeedStructure": "Zuerst eine Struktur in der Karte wählen",
+    "editing": "Regeln für {{name}}",
+    "pickOne": "Links eine Phase wählen, um ihre Regeln zu bearbeiten.",
+    "allMustHold": "Jede Zeile muss gelten. Bereiche sind at% der gemessenen Elemente, ohne C und O — dieselbe Zusammensetzung, die der Inspektor zeigt.",
+    "min": "min",
+    "max": "max",
+    "minFor": "Minimum {{element}} in at%",
+    "maxFor": "Maximum {{element}} in at%",
+    "minRatio": "Minimales Verhältnis",
+    "maxRatio": "Maximales Verhältnis",
+    "minEnrichment": "Minimale Anreicherung",
+    "timesBackground": "× Untergrund",
+    "addElement": "+ Elementbereich",
+    "addEnrichment": "+ Anreicherung",
+    "enrichmentHint": "Anreicherung wird gegen den Untergrund dieser Karte gemessen, braucht also keinen k-Faktor und lässt sich auf andere Datensätze übertragen. An einem echten Partikel hielt „Si ≥ 2× Untergrund“ 96 % davon, „Si ≥ 40 at%“ nur 46 %.",
+    "apply": "Mit diesen Regeln klassifizieren",
+    "applyTooltip": "Startet die Klassifikation neu. Strukturen werden neu gebaut, von Hand vergebene Namen gehen dabei verloren."
   }
 }

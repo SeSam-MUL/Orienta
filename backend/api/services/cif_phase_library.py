@@ -25,7 +25,8 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from backend.api.services.chemistry_score import (
-    DEFAULT_REL_REQ, infer_matrix_element, score_phase_ratio,
+    DEFAULT_REL_REQ, background_levels, infer_matrix_element,
+    score_phase_ratio,
     score_phase_vectorised,
 )
 
@@ -323,11 +324,11 @@ def auto_classify_pixels(
     cif_library: Dict[str, CifPhaseEntry],
     tolerance: float = 15.0,
     min_score: float = 0.3,
-    rel_req: float = DEFAULT_REL_REQ,
+    rule_set=None,
 ) -> Tuple[np.ndarray, np.ndarray, List[CifPhaseEntry], np.ndarray]:
     """Classify every pixel against the CIF library, vectorised.
 
-    Scores each candidate with :func:`chemistry_score.score_phase_vectorised`
+    Scores each candidate with :func:`chemistry_score.score_phase_ratio`
     — renormalised L1 over the metallic elements, with an absolute and a
     relative missing-major veto. The phase with the highest score wins;
     pixels whose best score stays below ``min_score`` are marked
@@ -354,9 +355,10 @@ def auto_classify_pixels(
         min_score: pixels whose best phase scores below this are
             marked unclassified rather than forced into the closest
             (often nonsense) bucket.
-        rel_req: a defining element (nominal fraction >= 5 %) measured
-            below this fraction of its nominal value vetoes the phase.
-            Calibrated on SampleB — see :data:`DEFAULT_REL_REQ`.
+        rule_set: optional user-authored rules. Each decides which phases
+            may COMPETE for a pixel - not how well they score - so a
+            blocked phase loses even to a poorly-scoring one that is
+            allowed. See :mod:`backend.api.services.phase_rules`.
 
     Returns:
         ``(phase_index_grid, score_grid, candidate_entries, ambiguous_grid)``:
@@ -389,14 +391,38 @@ def auto_classify_pixels(
     # (n_candidates, n_pixels) since we argmax along the candidate axis
     # per pixel at the end.
     matrix_element = infer_matrix_element(at_pct_per_element)
+    if rule_set is not None and rule_set.matrix_elements:
+        # The user's declaration wins over the inference. `infer_matrix_element`
+        # returns None below 40 at% and its own docstring warns that "this
+        # choice inverts the whole metric if it is wrong" - so when the user
+        # has said which element is the matrix, that is the answer.
+        matrix_element = rule_set.matrix_elements[0]
+    # Resolved ONCE here and handed to the scorer and the rules alike: cluster
+    # mode passes a background explicitly while this path used to let the
+    # scorer recompute one internally, and two definitions of "background" is
+    # how the two modes drift apart.
+    background = background_levels(at_pct_per_element)
     score_per_phase = np.zeros((len(candidates), n_pixels), dtype=np.float32)
+    blocked_reasons = {}
     for i, entry in enumerate(candidates):
         # no_data_score=0.0: an unmeasured pixel must fall below min_score
         # and come out unclassified, never win argmax at a perfect 1.0.
-        score_per_phase[i] = score_phase_ratio(
+        s_i = score_phase_ratio(
             at_pct_per_element, entry.composition,
             matrix_element=matrix_element, no_data_score=0.0,
+            background=background,
         )
+        # User rules decide ELIGIBILITY, before the argmax below. Same
+        # evaluator as cluster mode; there it judges a cluster mean, here a
+        # pixel.
+        if rule_set is not None and not rule_set.is_empty:
+            from backend.api.services.phase_rules import gate_scores
+            s_i, outcome = gate_scores(
+                s_i, rule_set.rule_for(entry.key), at_pct_per_element,
+                background=background)
+            if outcome is not None and not outcome.allowed.any():
+                blocked_reasons[i] = outcome.reason
+        score_per_phase[i] = s_i
 
     idx = np.arange(n_pixels)
     best_phase = np.argmax(score_per_phase, axis=0)

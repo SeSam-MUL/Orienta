@@ -189,6 +189,52 @@ together, you say what they are.**
     on both pages. Click a legend swatch to recolour it, right-click to reset;
     the choice is saved.
 
+#### Rules: deciding which phases may compete
+
+When the automatic pick lands on the wrong candidate, the **Phase rules** tab
+under the map lets you constrain it. A rule decides one thing: **whether a
+phase may compete for a region** — not how well it scores. A phase whose rule
+fails simply cannot win there; the region goes to the next candidate, or stays
+unclassified and says which rule blocked it.
+
+That matters because the ambiguity is real but local. On a real scan, two of
+seven structures decided between their top two candidates on under 1 at% of
+margin while the other five were clear by 1.3 to 3.7 — so rules are per phase
+and opt-in, and they leave the calls that were already right alone.
+
+The fastest way to write one is **Rule from this structure →**: select a
+structure on the map, and the rows arrive filled in from what it actually
+measures (mean ± twice the spread, on the elements that are genuinely
+concentrated there). You then correct the numbers instead of inventing them. A
+seeded rule always brackets its own structure, so it cannot fail on the region
+it came from.
+
+Three kinds of clause, and **every line must hold**:
+
+- **Element range** — `Mg 10–50 at%`. Evaluated on at% renormalised over the
+  measured elements with C and O left out, the same composition the inspector
+  shows. Never on raw at%: the raw total varies with yield alone (measured
+  91.3 to 100.0 on one scan), so a raw band would pass in one region and fail
+  in another for a reason that is not chemistry.
+- **Element ratio** — `Mg:Si 0.5–3.0`. Both elements must clear the detection
+  floor; below it the ratio is meaningless (measured: it spans 0 to 2.5 × 10¹⁰,
+  and a naive band admits 1.7 % of pure noise) and the rule blocks rather than
+  passing.
+- **Enrichment** — `Si ≥ 2× background`. Usually the better instrument, and the
+  one that answers the interaction-volume problem directly. Measured on a real
+  particle: `Si ≥ 2× background` kept **96 %** of it while `Si ≥ 40 at%` kept
+  **46 %**. It carries no k-factor and no stoichiometry assumption because the
+  bar is the map's own median, which also makes it portable between datasets —
+  the factor is stored, the background is re-measured. Element ranges stay
+  necessary for the matrix element itself, which is at 0.5× by construction.
+
+Rules apply in **both** grouping modes, and take effect on the next
+classification. A rule naming an element this dataset did not measure blocks
+rather than silently passing — you cannot assert a composition you do not have.
+If rules exclude every candidate for a region, it stays **unclassified**: there
+is no silent fall-back to the automatic pick, because that would make a
+rule-driven map indistinguishable from one where the rules never fired.
+
 #### Fixing the grouping
 
 No clustering gets this right on EDS taken during an EBSD session: the
