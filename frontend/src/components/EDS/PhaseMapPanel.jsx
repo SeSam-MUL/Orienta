@@ -392,7 +392,7 @@ export function pixelFromClickAt(e, hostRect, view, nRows, nCols) {
  */
 export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
                                 onPickStructure, view, onZoomAt, onPan,
-                                onResetView }) {
+                                onResetView, background }) {
   const { t } = useTranslation('eds');
   const {
     phaseMap, hoveredPixel, setHoveredPixel,
@@ -649,6 +649,26 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
         transform: viewToTransform(activeView),
         transformOrigin: '0 0',
       }}>
+        {/* Background first, the map over it. Both use objectFit:contain in the
+            same box, so they register as long as they cover the same field of
+            view - measured 60.00 um against 60.39 um on a real file. The MAP is
+            what fades, not the background: the map is the thing being placed,
+            and fading the background instead would leave the categorical
+            colours at full strength over a washed-out image. */}
+        {background?.image && (
+          <img
+            src={`data:image/png;base64,${background.image}`}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            style={{
+              position: 'absolute', inset: 0,
+              width: '100%', height: '100%', objectFit: 'contain',
+              borderRadius: 4, display: 'block', pointerEvents: 'none',
+              userSelect: 'none',
+            }}
+          />
+        )}
         <img
           src={`data:image/png;base64,${shownImage}`}
           alt={t('phaseMap.canvasAltText')}
@@ -664,6 +684,7 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
           style={{
             width: '100%', height: '100%', objectFit: 'contain',
             borderRadius: 4, cursor: 'crosshair',
+            opacity: background?.image ? background.opacity : 1,
             // Phase maps are categorical — interpolation across class
             // boundaries would render garbage colours.
             imageRendering: 'pixelated',

@@ -366,5 +366,15 @@
     "phaseMapTooltip": "化学組成でマップを構造にグループ化し、それぞれがどの相かを決めます。",
     "noMapYet": "相マップはまだありません。右の「Re-classify」で組成から作成してください。",
     "viewStructuresLabel": "構造"
+  },
+  "background": {
+    "label": "マップの下",
+    "none": "なし",
+    "opacity": "マップの不透明度",
+    "groupElements": "元素マップ",
+    "groupElectron": "電子像",
+    "tooltip": "元素マップまたは電子像を相マップの下に敷き、領域を由来する化学組成や形態と照合できるようにします。",
+    "opacityTooltip": "相マップの濃さ。薄くなるのは下の画像ではなくマップ側です。",
+    "fovWarning": "下の画像は視野が {{pct}}% 異なるため、位置が合わない可能性があります。"
   }
 }

@@ -47,6 +47,7 @@ const PHASE_MAP_ZOOM_ID = 'phase-map';
 import { usePhaseMap, PhaseMapCanvas, PhaseMapControls } from './PhaseMapPanel';
 import StructureInspector from './StructureInspector';
 import useStructureInspector from './hooks/useStructureInspector';
+import useMapBackground, { fovRatio } from './useMapBackground';
 import { exportComposite } from './compositeExporter';
 import ContextMenu from '../common/ContextMenu';
 import ImageExportDialog from '../common/ImageExportDialog';
@@ -358,6 +359,46 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   // and the tile grid left neither usable. It gets its own tab; everything
   // else on this page stays exactly where it was.
   const [edsTab, setEdsTab] = useState('elements');
+  // One image under the phase map, so a region can be placed against the
+  // chemistry or the topography it came from.
+  const mapBackground = useMapBackground({
+    displayMode, datasetKey,
+  });
+  const backgroundChoices = useMemo(() => {
+    const groups = [];
+    // `def` is the page's own probe of what this file holds - the same source
+    // the tile grid is built from, so the picker cannot offer a map the page
+    // could not draw.
+    const els = (def.elements || []).map((e) => (
+      typeof e === 'string' ? e : (e.symbol || e.name)
+    )).filter(Boolean);
+    if (els.length) {
+      groups.push({
+        label: t('background.groupElements'),
+        items: els.map((e) => ({ id: `element:${e}`, label: e })),
+      });
+    }
+    const imgs = (def.electronImages || []).map((e) => (
+      typeof e === 'string' ? e : (e.name || e.label)
+    )).filter(Boolean);
+    if (imgs.length) {
+      groups.push({
+        label: t('background.groupElectron'),
+        items: imgs.map((n) => ({ id: `electron:${n}`, label: n })),
+      });
+    }
+    return groups;
+  }, [def.elements, def.electronImages, t]);
+  // Warn instead of quietly showing a shifted overlay: the two rasters only
+  // register when they cover the same field of view.
+  const bgFov = fovRatio(pixelSizes, phaseMapHandle.phaseMap?.n_cols,
+                         mapBackground.shape?.[1]);
+  const backgroundHandle = {
+    ...mapBackground,
+    fovWarning: (bgFov != null && Math.abs(bgFov - 1) > 0.05)
+      ? Math.round(Math.abs(bgFov - 1) * 100) : null,
+  };
+
   const inStructureView = phaseMapHandle.mapView === 'structures'
     && (phaseMapHandle.phaseMap?.structures || []).length > 0;
 
@@ -919,6 +960,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                       zoom.zoomAtPointer(PHASE_MAP_ZOOM_ID, f, px, py)}
                     onPan={(dx, dy) => zoom.pan(PHASE_MAP_ZOOM_ID, dx, dy)}
                     onResetView={() => zoom.resetOne(PHASE_MAP_ZOOM_ID)}
+                    background={backgroundHandle}
                     onPickStructure={inStructureView
                       ? inspector.inspectPixel : undefined}
                     onAssignPixel={phaseMapHandle.selectedPhaseIndex != null
@@ -952,7 +994,11 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column',
                           gap: spacing.outerSpacing, overflowY: 'auto' }}>
-              <PhaseMapControls handle={phaseMapHandle} />
+              <PhaseMapControls handle={{
+                ...phaseMapHandle,
+                background: backgroundHandle,
+                backgroundChoices,
+              }} />
             </div>
           </div>
         )}

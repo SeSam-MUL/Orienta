@@ -21,6 +21,8 @@ import { useTranslation } from 'react-i18next';
 
 import { Button, Label, colors as C, alpha } from '../../theme/components';
 import PhaseRollup from './PhaseRollup';
+import OpacitySlider from '../common/OpacitySlider';
+import { BG_NONE } from './useMapBackground';
 
 /** Short, readable composition: the elements that actually carry signal. */
 export function describeComposition(meanAtPct, maxElements = 4) {
@@ -52,7 +54,7 @@ export default function StructurePanel({ handle }) {
     nClusters, setNClusters,
     handleMergeStructures, handleSplitStructure,
     handleGrowStructure, handleSnapEdges,
-    setMapView,
+    setMapView, background, backgroundChoices,
   } = handle;
 
   const [mergeInto, setMergeInto] = useState(null);
@@ -96,6 +98,64 @@ export default function StructurePanel({ handle }) {
           <div style={{ marginTop: 3 }}>{t('structures.howStep3')}</div>
         </div>
       </details>
+
+      {/* --- what to lay the map over ----------------------------------
+          Placing a region is easier against the picture it came from, so the
+          map can sit over one element map or one electron image. The MAP is
+          what fades - it is the thing being placed. --- */}
+      {backgroundChoices?.length > 0 && background && (
+        <div style={{ marginBottom: 4 }}>
+          <ToolRow title={t('background.tooltip')}>
+            <Label secondary small style={{ minWidth: 62 }}>
+              {t('background.label')}
+            </Label>
+            <select
+              value={background.backgroundId}
+              onChange={(e) => background.setBackgroundId(e.target.value)}
+              aria-label={t('background.label')}
+              style={{ flex: 1, minWidth: 0, fontSize: '8.5pt',
+                       padding: '2px 4px', background: 'transparent',
+                       color: C.text, borderRadius: 3,
+                       border: `1px solid ${alpha(C.purple, 25)}` }}
+            >
+              <option value={BG_NONE}>{t('background.none')}</option>
+              {backgroundChoices.map((g) => (
+                <optgroup key={g.label} label={g.label}>
+                  {g.items.map((it) => (
+                    <option key={it.id} value={it.id}>{it.label}</option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </ToolRow>
+          {background.isSet && (
+            <>
+              <ToolRow title={t('background.opacityTooltip')}>
+                <Label secondary small style={{ minWidth: 62 }}>
+                  {t('background.opacity')}
+                </Label>
+                <OpacitySlider
+                  value={background.opacity}
+                  onChange={background.setOpacity}
+                  color={C.cyan}
+                  aria-label={t('background.opacity')}
+                />
+              </ToolRow>
+              {background.error && (
+                <Label secondary small style={{ display: 'block', color: C.red }}>
+                  {background.error}
+                </Label>
+              )}
+              {background.fovWarning && (
+                <Label secondary small style={{ display: 'block',
+                                               color: C.orange || '#f0b429' }}>
+                  {t('background.fovWarning', { pct: background.fovWarning })}
+                </Label>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* --- how the grouping was made ---------------------------------- */}
       <ToolRow title={t('structures.scaleTooltip')}>

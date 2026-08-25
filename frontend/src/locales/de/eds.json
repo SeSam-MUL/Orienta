@@ -366,5 +366,15 @@
     "phaseMapTooltip": "Die Karte nach Chemie in Strukturen gruppieren und dann entscheiden, welche Phase jede ist.",
     "noMapYet": "Noch keine Phasenkarte. Rechts auf „Re-classify“ eine aus der Chemie erzeugen.",
     "viewStructuresLabel": "Strukturen"
+  },
+  "background": {
+    "label": "Unter der Karte",
+    "none": "nichts",
+    "opacity": "Deckkraft der Karte",
+    "groupElements": "Elementkarten",
+    "groupElectron": "Elektronenbilder",
+    "tooltip": "Eine Elementkarte oder ein Elektronenbild unter die Phasenkarte legen, damit sich ein Gebiet gegen die Chemie oder die Topografie einordnen laesst, aus der es stammt.",
+    "opacityTooltip": "Wie deckend die Phasenkarte ist. Die KARTE wird durchsichtig, nicht das Bild darunter — die Karte ist das, was du einordnest.",
+    "fovWarning": "Das Bild darunter deckt ein um {{pct}} % anderes Bildfeld ab und passt daher moeglicherweise nicht."
   }
 }

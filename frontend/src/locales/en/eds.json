@@ -366,5 +366,15 @@
     "phaseMapTooltip": "Group the map by chemistry into structures, then decide which phase each one is.",
     "noMapYet": "No phase map yet. Use Re-classify on the right to build one from the chemistry.",
     "viewStructuresLabel": "Structures"
+  },
+  "background": {
+    "label": "Under the map",
+    "none": "nothing",
+    "opacity": "Map opacity",
+    "groupElements": "Element maps",
+    "groupElectron": "Electron images",
+    "tooltip": "Lay one element map or electron image under the phase map, so a region can be placed against the chemistry or the topography it came from.",
+    "opacityTooltip": "How solid the phase map is. The MAP fades, not the image beneath it - the map is the thing you are placing.",
+    "fovWarning": "The image below covers a {{pct}}% different field of view, so it may not line up."
   }
 }
