@@ -228,6 +228,15 @@ Three kinds of clause, and **every line must hold**:
   the factor is stored, the background is re-measured. Element ranges stay
   necessary for the matrix element itself, which is at 0.5× by construction.
 
+**Matrix element.** Above the rule table you can name the element the sample is
+made of. Left on automatic it is inferred, which is right most of the time; name
+it when the inference would be wrong, because the scoring is built around this
+choice and getting it wrong inverts the whole measure. The matrix element is
+exempt from the penalty for unexplained elements and from the enrichment bar,
+but it stays in the composition — dropping it and renormalising lifted a pure
+aluminium matrix from Si 1.2 to 46.3 at% on a real scan, which would have made
+the matrix itself look like a phase.
+
 Rules apply in **both** grouping modes, and take effect on the next
 classification. A rule naming an element this dataset did not measure blocks
 rather than silently passing — you cannot assert a composition you do not have.

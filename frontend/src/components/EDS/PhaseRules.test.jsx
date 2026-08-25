@@ -197,3 +197,84 @@ describe('the editor', () => {
     expect(screen.getByText('rules.seed').disabled).toBe(true);
   });
 });
+
+describe('the clauses the user explicitly asked for', () => {
+  const base = {
+    rules: { rules: [{ phase_key: 'Si.cif', elements: [], ratios: [], enrichment: [] }] },
+    setRules: vi.fn(),
+    structures: STRUCTURES,
+    allPhases: [],
+    inspectorDetail: DETAIL,
+    elements: ['Al', 'Si', 'Fe', 'Mg'],
+    onReclassify: vi.fn(),
+    busy: false,
+  };
+
+  it('offers a way to ADD a ratio rule', () => {
+    // It shipped without one: the backend supported ratios, the editor
+    // rendered existing ones, and there was no control to create one — so the
+    // clause the user asked for by name ("Mg:Si between 0.5 and 3.0") was
+    // unreachable.
+    render(<PhaseRules {...base} />);
+    fireEvent.click(screen.getByText('Si.cif'));
+    expect(screen.getByLabelText('rules.addRatioNumerator')).toBeTruthy();
+  });
+
+  it('creates a ratio once both elements are picked', () => {
+    const setRules = vi.fn();
+    render(<PhaseRules {...base} setRules={setRules} />);
+    fireEvent.click(screen.getByText('Si.cif'));
+    fireEvent.change(screen.getByLabelText('rules.addRatioNumerator'),
+                     { target: { value: 'Mg' } });
+    fireEvent.change(screen.getByLabelText('rules.addRatioDenominator'),
+                     { target: { value: 'Si' } });
+    const produced = setRules.mock.calls.at(-1)[0](base.rules);
+    expect(produced.rules[0].ratios).toEqual([
+      { numerator: 'Mg', denominator: 'Si', min_ratio: null, max_ratio: null },
+    ]);
+  });
+
+  it('asks for the denominator only after a numerator is chosen', () => {
+    render(<PhaseRules {...base} />);
+    fireEvent.click(screen.getByText('Si.cif'));
+    expect(screen.queryByLabelText('rules.addRatioDenominator')).toBeNull();
+    fireEvent.change(screen.getByLabelText('rules.addRatioNumerator'),
+                     { target: { value: 'Mg' } });
+    expect(screen.getByLabelText('rules.addRatioDenominator')).toBeTruthy();
+  });
+
+  it('never offers an element as the ratio of itself', () => {
+    render(<PhaseRules {...base} />);
+    fireEvent.click(screen.getByText('Si.cif'));
+    fireEvent.change(screen.getByLabelText('rules.addRatioNumerator'),
+                     { target: { value: 'Mg' } });
+    const opts = [...screen.getByLabelText('rules.addRatioDenominator').options]
+      .map((o) => o.value).filter(Boolean);
+    expect(opts).not.toContain('Mg');
+  });
+
+  it('lets the user declare the matrix element', () => {
+    const setRules = vi.fn();
+    render(<PhaseRules {...base} setRules={setRules} />);
+    fireEvent.change(screen.getByLabelText('rules.matrix'), { target: { value: 'Al' } });
+    const produced = setRules.mock.calls.at(-1)[0]({});
+    expect(produced.matrix_elements).toEqual(['Al']);
+  });
+
+  it('clears the declaration back to automatic', () => {
+    const setRules = vi.fn();
+    render(<PhaseRules {...base}
+                       rules={{ ...base.rules, matrix_elements: ['Al'] }}
+                       setRules={setRules} />);
+    fireEvent.change(screen.getByLabelText('rules.matrix'), { target: { value: '' } });
+    const produced = setRules.mock.calls.at(-1)[0]({ matrix_elements: ['Al'] });
+    expect(produced.matrix_elements).toEqual([]);
+  });
+
+  it('leaves C and O out of every picker, as the grouping does', () => {
+    render(<PhaseRules {...base} elements={['Al', 'Si', 'C', 'O']} />);
+    const opts = [...screen.getByLabelText('rules.matrix').options]
+      .map((o) => o.value).filter(Boolean);
+    expect(opts).toEqual(['Al', 'Si']);
+  });
+});

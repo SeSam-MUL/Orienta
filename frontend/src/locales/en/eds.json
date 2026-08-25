@@ -406,6 +406,14 @@
     "addEnrichment": "+ enrichment",
     "enrichmentHint": "Enrichment is measured against this map's own background, so it needs no k-factor and travels between datasets. On a real particle “Si ≥ 2× background” kept 96 % of it where “Si ≥ 40 at%” kept 46 %.",
     "apply": "Classify with these rules",
-    "applyTooltip": "Re-runs the classification. Structures are rebuilt, so hand-given names are lost."
+    "applyTooltip": "Re-runs the classification. Structures are rebuilt, so hand-given names are lost.",
+    "matrix": "Matrix element",
+    "matrixAuto": "detect automatically",
+    "matrixHint": "the element the sample is made of, e.g. Al",
+    "matrixTooltip": "Which element is the solvent. It is inferred when left on automatic; declare it when the inference would be wrong — the scoring is built around this choice, so getting it wrong inverts the whole measure. It is exempt from the penalty for unexplained elements and from the enrichment bar, but it stays in the composition: dropping it and renormalising lifted a pure aluminium matrix from Si 1.2 to 46.3 at% on a real scan, which would make the matrix look like a phase.",
+    "addRatio": "+ ratio of…",
+    "addRatioNumerator": "Ratio numerator",
+    "addRatioDenominator": "Ratio denominator",
+    "ratioPerElement": "{{element}} : …"
   }
 }

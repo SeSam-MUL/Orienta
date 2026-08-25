@@ -406,6 +406,14 @@
     "addEnrichment": "+ 富集",
     "enrichmentHint": "富集是相对本图自身背景测量的，因此不需要 k 因子，也可迁移到其他数据集。在真实颗粒上「Si ≥ 2× 背景」保留了 96%，而「Si ≥ 40 at%」只有 46%。",
     "apply": "按这些规则分类",
-    "applyTooltip": "重新运行分类。结构会被重建，手工命名将丢失。"
+    "applyTooltip": "重新运行分类。结构会被重建，手工命名将丢失。",
+    "matrix": "基体元素",
+    "matrixAuto": "自动识别",
+    "matrixHint": "样品的基体元素，例如 Al",
+    "matrixTooltip": "指定哪个元素是溶剂。保持「自动」时会自行推断；若推断可能出错请明确指定 — 评分正是围绕这个选择构建的，选错会使整个度量反转。基体元素不参与未解释元素的惩罚和富集判定，但仍保留在成分中：将其剔除并重新归一化，会让真实数据中纯铝基体的 Si 从 1.2 升到 46.3 at%，基体看起来就像一个物相。",
+    "addRatio": "+ 比值…",
+    "addRatioNumerator": "比值分子",
+    "addRatioDenominator": "比值分母",
+    "ratioPerElement": "{{element}} : …"
   }
 }

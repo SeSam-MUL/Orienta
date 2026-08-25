@@ -406,6 +406,14 @@
     "addEnrichment": "+ Anreicherung",
     "enrichmentHint": "Anreicherung wird gegen den Untergrund dieser Karte gemessen, braucht also keinen k-Faktor und lässt sich auf andere Datensätze übertragen. An einem echten Partikel hielt „Si ≥ 2× Untergrund“ 96 % davon, „Si ≥ 40 at%“ nur 46 %.",
     "apply": "Mit diesen Regeln klassifizieren",
-    "applyTooltip": "Startet die Klassifikation neu. Strukturen werden neu gebaut, von Hand vergebene Namen gehen dabei verloren."
+    "applyTooltip": "Startet die Klassifikation neu. Strukturen werden neu gebaut, von Hand vergebene Namen gehen dabei verloren.",
+    "matrix": "Matrixelement",
+    "matrixAuto": "automatisch erkennen",
+    "matrixHint": "das Element, aus dem die Probe besteht, z. B. Al",
+    "matrixTooltip": "Welches Element das Lösungsmittel ist. Auf „automatisch“ wird es erschlossen; ausdrücklich angeben, wenn die Erkennung danebenläge — die Bewertung ist um diese Wahl herum gebaut, eine falsche kehrt das ganze Maß um. Das Matrixelement ist von der Strafe für unerklärte Elemente und vom Anreicherungs-Gate ausgenommen, bleibt aber in der Zusammensetzung: es wegzulassen und neu zu normieren hob eine reine Aluminiummatrix auf einem echten Scan von Si 1,2 auf 46,3 at% — die Matrix sähe dann aus wie eine Phase.",
+    "addRatio": "+ Verhältnis von…",
+    "addRatioNumerator": "Zähler des Verhältnisses",
+    "addRatioDenominator": "Nenner des Verhältnisses",
+    "ratioPerElement": "{{element}} : …"
   }
 }

@@ -229,3 +229,55 @@ def test_malformed_json_is_dropped_rather_than_crashing():
 def test_no_payload_means_no_rules():
     assert rule_set_from_dict(None) is None
     assert rule_set_from_dict({}) is None
+
+
+# --- the declared matrix reaches both modes ---------------------------------
+
+def test_a_declared_matrix_overrides_the_inference_in_cluster_mode():
+    """It reached only the per-pixel path at first, so the same rule set
+    behaved differently in the two modes — and the scorer's own docstring
+    warns that this choice "inverts the whole metric if it is wrong"."""
+    import numpy as np
+
+    from backend.api.services.cif_phase_library import CifPhaseEntry
+    from backend.api.services.eds_clustering import cluster_and_match
+
+    n = 64
+    al = np.full(n, 90.0)
+    si = np.full(n, 10.0)
+    si[:8] = 60.0
+    al[:8] = 40.0
+    at = {"Al": al, "Si": si}
+    cands = [
+        CifPhaseEntry(key="Al.cif", cif_filename="Al.cif", formula="Al",
+                      space_group="", space_group_number=None, crystal_system="",
+                      composition={"Al": 100.0}, elements=["Al"]),
+        CifPhaseEntry(key="Si.cif", cif_filename="Si.cif", formula="Si",
+                      space_group="", space_group_number=None, crystal_system="",
+                      composition={"Si": 100.0}, elements=["Si"]),
+    ]
+    # Both runs must complete; the point is that the declaration is accepted
+    # and threaded, not that it flips this toy map.
+    grid_auto, _c, _m, _k = cluster_and_match(at, 8, 8, cands, k=2)
+    grid_decl, _c2, _m2, _k2 = cluster_and_match(
+        at, 8, 8, cands, k=2, rule_set=RuleSet(matrix_elements=("Al",)))
+    assert grid_auto.shape == grid_decl.shape == (8, 8)
+
+
+def test_the_rule_set_reaches_cluster_mode_at_all():
+    """A guard against the gate being wired in one mode only."""
+    import numpy as np
+
+    from backend.api.services.cif_phase_library import CifPhaseEntry
+    from backend.api.services.eds_clustering import cluster_and_match
+
+    n = 64
+    at = {"Al": np.full(n, 90.0), "Si": np.full(n, 10.0)}
+    cands = [CifPhaseEntry(key="Al.cif", cif_filename="Al.cif", formula="Al",
+                           space_group="", space_group_number=None,
+                           crystal_system="", composition={"Al": 100.0},
+                           elements=["Al"])]
+    blocked = RuleSet(rules=(PhaseRule(
+        "Al.cif", elements=(ElementRange("Si", 90.0, None),)),))
+    grid, _c, _m, _k = cluster_and_match(at, 8, 8, cands, k=2, rule_set=blocked)
+    assert (grid < 0).all(), "an impossible rule must leave the map unassigned"

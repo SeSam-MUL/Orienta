@@ -415,6 +415,13 @@ def cluster_and_match(
         return empty, empty.copy(), [], 0
 
     matrix_element = infer_matrix_element(at_pct_per_element)
+    if rule_set is not None and getattr(rule_set, 'matrix_elements', None):
+        # The user's declaration wins over the inference, in BOTH modes.
+        # `infer_matrix_element` returns None below 40 at% and its own
+        # docstring warns that the choice "inverts the whole metric if it
+        # is wrong" - so when the user has said which element is the
+        # matrix, that is the answer.
+        matrix_element = rule_set.matrix_elements[0]
     background = background_levels(at_pct_per_element)
     group_of = np.zeros(len(candidates), dtype=np.int32)
     for gid, members in enumerate(group_degenerate_entries(candidates)):

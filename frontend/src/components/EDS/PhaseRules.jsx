@@ -106,7 +106,13 @@ export default function PhaseRules({
 }) {
   const { t } = useTranslation('eds');
   const [selectedKey, setSelectedKey] = useState(null);
+  // Half-entered ratio: the numerator, waiting for a denominator.
+  const [ratioNum, setRatioNum] = useState('');
 
+  const elementNames = useMemo(
+    () => (elements || []).filter((e) => !IGNORED.has(e)),
+    [elements],
+  );
   const list = rules?.rules || [];
   const active = useMemo(
     () => list.find((r) => r.phase_key === selectedKey) || null,
@@ -140,15 +146,45 @@ export default function PhaseRules({
     upsert(fn({ ...active }));
   }, [active, upsert]);
 
-  const elementNames = useMemo(
-    () => (elements || []).filter((e) => !IGNORED.has(e)),
-    [elements],
-  );
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ fontSize: '8pt', color: C.textSecondary, lineHeight: 1.45 }}>
         {t('rules.explain')}
+      </div>
+
+      {/* The matrix is a property of the SAMPLE, so it is declared once for
+          the map rather than per phase. It is inferred when left blank; the
+          declaration only matters when the inference would be wrong, and it
+          is wrong loudly - the scorer's own docstring warns the choice
+          "inverts the whole metric". */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6,
+                    flexWrap: 'wrap' }}
+           title={t('rules.matrixTooltip')}>
+        <Label secondary small>{t('rules.matrix')}</Label>
+        <select
+          value={(rules?.matrix_elements || [])[0] || ''}
+          aria-label={t('rules.matrix')}
+          onChange={(e) => {
+            // Read the value NOW, not inside the updater. React runs the
+            // updater later, and by then this controlled select has been
+            // reset to its `value` prop - so a deferred read gets the OLD
+            // value and the declaration silently does nothing.
+            const picked = e.target.value;
+            setRules((prev) => ({
+              ...(prev || {}),
+              matrix_elements: picked ? [picked] : [],
+            }));
+          }}
+          style={{ fontSize: '8.5pt', padding: '2px 4px',
+                   background: 'transparent', color: C.text,
+                   border: `1px solid ${alpha(C.purple, 25)}`, borderRadius: 3 }}
+        >
+          <option value="">{t('rules.matrixAuto')}</option>
+          {elementNames.map((e) => <option key={e} value={e}>{e}</option>)}
+        </select>
+        <span style={{ fontSize: '7.5pt', color: C.textSecondary }}>
+          {t('rules.matrixHint')}
+        </span>
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap',
@@ -379,6 +415,46 @@ export default function PhaseRules({
                   <option value="">{t('rules.addElement')}</option>
                   {elementNames.map((e) => <option key={e} value={e}>{e}</option>)}
                 </select>
+                {/* A ratio needs two elements, so it cannot be one dropdown
+                    like the others. Picking the numerator arms it; picking the
+                    denominator creates the row. */}
+                <select
+                  value={ratioNum}
+                  aria-label={t('rules.addRatioNumerator')}
+                  onChange={(e) => setRatioNum(e.target.value)}
+                  style={{ fontSize: '8.5pt', padding: '2px 4px',
+                           background: 'transparent', color: C.text,
+                           border: `1px solid ${alpha(C.purple, 25)}`,
+                           borderRadius: 3 }}
+                >
+                  <option value="">{t('rules.addRatio')}</option>
+                  {elementNames.map((e) => <option key={e} value={e}>{e}</option>)}
+                </select>
+                {ratioNum && (
+                  <select
+                    value=""
+                    aria-label={t('rules.addRatioDenominator')}
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      const den = e.target.value;
+                      patchActive((r) => ({
+                        ...r,
+                        ratios: [...(r.ratios || []),
+                                 { numerator: ratioNum, denominator: den,
+                                   min_ratio: null, max_ratio: null }],
+                      }));
+                      setRatioNum('');
+                    }}
+                    style={{ fontSize: '8.5pt', padding: '2px 4px',
+                             background: 'transparent', color: C.text,
+                             border: `1px solid ${alpha(C.cyan, 45)}`,
+                             borderRadius: 3 }}
+                  >
+                    <option value="">{t('rules.ratioPerElement', { element: ratioNum })}</option>
+                    {elementNames.filter((e) => e !== ratioNum)
+                      .map((e) => <option key={e} value={e}>{e}</option>)}
+                  </select>
+                )}
                 <select
                   value=""
                   aria-label={t('rules.addEnrichment')}
