@@ -15,11 +15,11 @@ result as:
 
 On top of the maps it offers per-pixel and per-region **quantification**,
 chemistry-driven **phase suggestion**, and a **phase-map builder** that works in
-two separable steps: the map is first cut into **structures** — groups of pixels
+two separable steps: the map is first cut into **regions** — groups of pixels
 that share an element ratio, with no name attached — and you then decide which
-phase each structure is. Several structures may carry the same phase, so a map
+phase each region is. Several regions may carry the same phase, so a map
 with a dozen regions can end up with three phases, which is usually what a real
-microstructure looks like.
+microregion looks like.
 
 That separation matters because the two steps fail differently. Grouping is a
 measurement and can be checked; naming is an interpretation and needs your
@@ -28,7 +28,7 @@ candidates. Keeping them apart means a naming mistake never destroys the
 grouping, and a regrouping never silently renames anything.
 
 The element-to-chemistry maths runs in the backend `eds_utils` module; all map,
-probe, quantify, structure, and phase-map operations go through the
+probe, quantify, region, and phase-map operations go through the
 `/api/eds/*` routes.
 
 ## When to use it
@@ -112,7 +112,7 @@ The phase map lives on its own tab. The page has two:
 
 - **Element maps** — the composite overlay, the layer stack and every element
   map side by side. This is where you look at the chemistry.
-- **Phase map** — the map, the structure tools and the inspector. This is where
+- **Phase map** — the map, the region tools and the inspector. This is where
   you turn the chemistry into phases.
 
 They are separate because the phase map brought a tool set of its own and one
@@ -124,10 +124,10 @@ The EDS signal alone can carry a phase map. It works in two steps, and keeping
 them apart is what makes it usable: **the data says which pixels belong
 together, you say what they are.**
 
-#### Step 1 — the map is cut into structures
+#### Step 1 — the map is cut into regions
 
 10. In the **Phase Map** controls, click **Re-classify**. The map is grouped into
-    **structures**: sets of pixels with the same element ratios. A structure has
+    **regions**: sets of pixels with the same element ratios. A region has
     no name yet, and its colour means nothing beyond telling it apart from its
     neighbours.
 
@@ -141,40 +141,40 @@ together, you say what they are.**
       the same eight groups form 174 pieces. The cost is boundary resolution —
       features thinner than the box get absorbed — which is why it is a slider
       and not a fixed value.
-    - **Structures** — how many groups to cut the map into. Leave it on `auto`
+    - **Regions** — how many groups to cut the map into. Leave it on `auto`
       and the count rises while the groups stay chemically distinguishable
       (at least 2 at% apart on some element) and stops when they start
       duplicating each other.
 
-    Expect *more* structures than phases. Over-grouping is the safe error:
-    merging two structures is one click, while recovering a structure that was
+    Expect *more* regions than phases. Over-grouping is the safe error:
+    merging two regions is one click, while recovering a region that was
     never separated is not.
 
 #### Step 2 — you name them
 
-11. Click a region on the map, or a row in the structure list. The **Structure
+11. Click a region on the map, or a row in the region list. The **Region
     inspector** under the map describes it:
 
     | Reading | What it means |
     | --- | --- |
-    | `9 075 px · 16.85% of the map` | how much area this structure covers |
+    | `9 075 px · 16.85% of the map` | how much area this region covers |
     | `33 connected pieces (5967 · 1193 · …)` | how many separate parts it is in, largest first |
-    | **Composition** `at%` | average over every pixel of the structure |
-    | **Composition** `±` | how far the pixels differ from that average — a large `±` means the structure is not one thing, but two, or a gradient |
+    | **Composition** `at%` | average over every pixel of the region |
+    | **Composition** `±` | how far the pixels differ from that average — a large `±` means the region is not one thing, but two, or a gradient |
     | **vs background** `1.0×` | this element is no more common here than anywhere else on the map |
     | **vs background** `> 1.3×` | genuinely concentrated here (below `0.8×` it is depleted) |
-    | **Touches** `4.1 at% apart` | the largest single-element difference to a neighbouring structure. A small number across a long shared border usually means one region got cut in two — merge it |
+    | **Touches** `4.1 at% apart` | the largest single-element difference to a neighbouring region. A small number across a long shared border usually means one region got cut in two — merge it |
     | **Closest phases** `2.7` | mean at% difference between that phase's formula and the measured composition. Smaller is closer |
 
-12. Click a phase under **Closest phases** to put it on the **whole structure**
-    in one action. Several structures may get the **same** phase — that is the
+12. Click a phase under **Closest phases** to put it on the **whole region**
+    in one action. Several regions may get the **same** phase — that is the
     normal case, and it is why one phase name appears on several rows of the
-    structure list. The **`N structures → M phases`** box counts each phase once
+    region list. The **`N regions → M phases`** box counts each phase once
     so the collapse stays visible while you work.
 
 #### Step 3 — the phase view
 
-13. **Right-click the map** to export it. The menu offers the **structure map**
+13. **Right-click the map** to export it. The menu offers the **region map**
     and the **phase map** whichever one is on screen, so getting the other does
     not mean switching the view and switching back. Both open the usual export
     dialog — crop, resolution, border, scale bar, caption — and both carry the
@@ -198,15 +198,15 @@ fails simply cannot win there; the region goes to the next candidate, or stays
 unclassified and says which rule blocked it.
 
 That matters because the ambiguity is real but local. On a real scan, two of
-seven structures decided between their top two candidates on under 1 at% of
+seven regions decided between their top two candidates on under 1 at% of
 margin while the other five were clear by 1.3 to 3.7 — so rules are per phase
 and opt-in, and they leave the calls that were already right alone.
 
-The fastest way to write one is **Rule from this structure →**: select a
-structure on the map, and the rows arrive filled in from what it actually
+The fastest way to write one is **Rule from this region →**: select a
+region on the map, and the rows arrive filled in from what it actually
 measures (mean ± twice the spread, on the elements that are genuinely
 concentrated there). You then correct the numbers instead of inventing them. A
-seeded rule always brackets its own structure, so it cannot fail on the region
+seeded rule always brackets its own region, so it cannot fail on the region
 it came from.
 
 Three kinds of clause, and **every line must hold**:
@@ -249,25 +249,124 @@ rule-driven map indistinguishable from one where the rules never fired.
 No clustering gets this right on EDS taken during an EBSD session: the
 interaction volume is far larger than the features, so a small particle reads as
 a dilution gradient rather than a plateau and gets cut into concentric rings.
-On a real scan one Si particle came out as three structures at Si 24 / 36 /
+On a real scan one Si particle came out as three regions at Si 24 / 36 /
 52 at%. How much rim belongs to the particle is a judgement, so it is offered as
 a control rather than decided for you.
 
-- **Merge with…** — fold another structure into the selected one. The most-used
+- **Merge with…** — fold another region into the selected one. The most-used
   tool, for exactly the case above.
-- **Split into 2 / 3 / 4** — re-group only this structure's own pixels. Local by
-  design: raising the global structure count instead would re-cut every other
-  structure as well.
-- **Boundary −1 px / +1 px** — push this structure's edge out or pull it in.
+- **Split into 2 / 3 / 4** — re-group only this region's own pixels. Local by
+  design: raising the global region count instead would re-cut every other
+  region as well.
+- **Boundary −1 px / +1 px** — push this region's edge out or pull it in.
   Blind to the chemistry; vacated pixels go to the nearest neighbour, never to
   nothing.
 - **Snap edges** — let every boundary relax onto the nearest strong chemistry
-  edge (a watershed on the composition gradient, seeded from the structures'
-  own interiors, so no structure can vanish or swap identity). The slider sets
+  edge (a watershed on the composition gradient, seeded from the regions'
+  own interiors, so no region can vanish or swap identity). The slider sets
   how wide a band around each boundary is put up for re-decision.
 
 Every one of these is undoable, one step, and the **Undo** button names what it
 would take back.
+
+#### Defining the regions yourself
+
+Everything above lets the automatic grouping decide where the regions are and
+then corrects it afterwards. Sometimes that is the wrong end to start from,
+because what separates two regions is **one specific element** rather than the
+overall composition. A user hit exactly that case: pure silicon and AlFeMnSi
+particles sitting in the same aluminium matrix. The grouping measures distance
+over the whole composition, an ~85 at% aluminium background dominates it, and
+the few at% of iron that actually tells the two apart is a rounding error next
+to it. No cluster count fixes that, because a count cannot say *which* element
+carries the distinction.
+
+The **Define regions** tab, next to the region inspector, offers two answers.
+
+**Element weights** keep the grouping automatic and tell it what to care
+about. A weight multiplies one element's contribution to the distance; nothing
+you see reported changes, because the compositions are still the measured ones.
+It does not always help — measured on SampleB, weighting Fe/Mn/Si by 3 moved
+the map from 7 regions to 8 and left coherence at 0.933 — so it is worth trying
+before reaching for the heavier tool, not instead of it.
+
+**Definitions** take the decision away from the fit. You state the composition
+window and the pixels inside it are a region.
+
+**Start with the pixel, not with the region.** Press **From a pixel…**, then
+click the middle of the particle the grouping keeps lumping together. The
+window is written from what that pixel actually contains, and only over the
+elements genuinely concentrated there. This is where the numbers come from: a
+threshold for a silicon particle has to be read off a silicon *pixel*, not off
+a region that already failed to separate silicon from anything else. Seeding
+from the lumped region brackets the mixture and separates nothing — it is the
+single most common way to conclude, wrongly, that the feature does not work.
+
+Then press **Try it**: the pixels that window claims light up on the map. That
+picture is the point. A count cannot tell you whether you caught the right
+pixels — 202 px of matrix and 202 px of particle read identically — so widen
+or narrow the number until the highlight matches what you can see. One click
+on one particle usually finds *every* particle of that chemistry, which is
+what a composition-defined region is for.
+
+The seeded threshold reaches well below the clicked pixel's own value on
+purpose. The interaction volume makes a small particle read as a dilution
+gradient rather than a plateau, so a window drawn tightly around the core
+catches only the core. Measured on a real silicon particle of 202 px:
+
+| accepted down to | 75% | 60% | 50% | 40% | 30% of the clicked value |
+|---|---|---|---|---|---|
+| claimed | 75 px | 126 px | 157 px | **196 px** | 225 px |
+
+The default lands on the feature; below that it starts taking the
+surroundings. How much rim belongs to the particle stays your call, which is
+why the number is an ordinary editable field with a live preview rather than
+a constant you cannot see.
+
+The controls:
+
+| | |
+|---|---|
+| **From a pixel…** | arm the map, then click a pixel that is clearly the thing you want. The best starting point. |
+| **+ Add** | an empty definition, to fill in by hand |
+| **From selected region** | start from a region you picked on the map. Useful when the region is already roughly right; useless when it is the mixture you are trying to split. |
+| clause types | **content** is an absolute window in at%; a **ratio** is one element per another; **enrichment** is relative to this map's own background and is usually the sturdiest — on a real particle a 2× enrichment window kept 96% of it where an absolute threshold set to match kept 46%. |
+| **↑ ↓** | order is priority, and it is the whole conflict rule — the first definition that matches a pixel keeps it |
+| **Phase** | optional. Empty means "group these pixels, then let the matcher name them"; set means you have already decided and the matcher must not overrule you |
+| **Try it** | count what each window would claim on this map, without changing anything |
+
+A definition with no clause in it claims **nothing**, and says so. Reading a
+half-written window as "the whole map" would wipe the map on the way to typing
+the first threshold.
+
+The region inspector has **Define this region by composition →** at the bottom:
+you are already looking at the region the grouping got wrong, and one click
+turns it into a window you can widen or narrow.
+
+Once definitions exist, the **Regions** count in the tool column renames itself
+to **Rest into** — the declared regions are already fixed, so the number applies
+to whatever they did not claim. Definitions and weights are stored with the map,
+so a reload or a backend restart brings them back rather than leaving an editor
+that cannot explain the map next to it.
+
+**Group everything undeclared automatically** is the switch between the two
+ways of working. On, the definitions claim their pixels and the rest of the map
+is clustered as usual — declare the one or two regions the fit keeps getting
+wrong and leave everything else alone. Off, the map is exactly what you
+declared plus one region holding the remainder, which is the fully manual case.
+
+Measured on the real SampleB scan, with the two windows
+`Si ≥ 20 at% and Fe ≤ 1` and `Fe ≥ 2 at%`:
+
+| | automatic | with definitions |
+|---|---|---|
+| the Si particle | three regions, Si 25 / 38 / 56 at% | **one** region, 202 px |
+| the AlFeMnSi | 6 223 px | 6 857 px |
+| named as | Si.cif / Al.cif mix | **Si.cif** and **sd_0302719.cif** |
+| coherence | 0.933 | 0.938 |
+
+So the definitions fixed the separation *and* the concentric-ring problem in
+one step, which the merge tool would otherwise have had to undo by hand.
 
 #### Painting by hand
 
@@ -327,15 +426,15 @@ them.
   contrast, and phase only — electron-image and virtual-BSE values are omitted to
   keep the lookup within the tooltip's response budget.
 - **The phase map survives a restart, the composition does not.** The map and
-  its structures are written to a sidecar next to the scan, so they come back
+  its regions are written to a sidecar next to the scan, so they come back
   when you reopen the file. **Split** and **Snap edges** need the composition
-  the structures were built from, which is not stored — after a restart they
+  the regions were built from, which is not stored — after a restart they
   say so and ask for a re-classify rather than working on different data.
 - **Re-classify keeps your hand edits.** Pixels you painted or assigned by hand
   are carried across, matched by phase name rather than by position in the
   candidate list, so a run over a different phase selection cannot silently
   repoint them at an unrelated phase.
-- **A structure's composition lists only the elements that grouped it.** C and
+- **A region's composition lists only the elements that grouped it.** C and
   O take no part in the clustering, so they are left out of the readout rather
   than implying they helped decide anything.
 - **Enrichment is measured against this map's own background,** not against a

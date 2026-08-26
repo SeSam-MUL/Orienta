@@ -400,3 +400,200 @@ def _num(v) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return f if np.isfinite(f) else None
+
+
+# --- manual region definitions ----------------------------------------------
+#
+# The clause types above answer "may this phase compete for this pixel". The
+# same three clause types answer a different question just as well: "do these
+# pixels belong together". That second question is the one the automatic
+# grouping sometimes gets wrong, and a user reported exactly how:
+#
+#   "pure Silicon and AlFeMnSi phases are not possible to separate from each
+#    other because the automatic definition of regions based on composition
+#    lumps them into the same category. The high amount of Al background
+#    signal is likely the issue here"
+#
+# That is a real property of the feature space, not a bug in the fit. The
+# grouping measures distance over the renormalised composition, so a matrix
+# element sitting at ~85 at% dominates the distance and a few at% of iron —
+# the thing that actually tells the two apart — is a rounding error next to
+# it. No choice of ``k`` fixes that, because ``k`` cannot say WHICH element
+# carries the distinction.
+#
+# Two levers follow, and they are different tools:
+#   * element weights (in ``eds_clustering``) tell the automatic grouping
+#     which elements to care about, and keep it automatic;
+#   * a region definition here removes the question from the fit entirely —
+#     the user states the composition window and the pixels inside it are a
+#     region, whatever the distance metric thinks.
+
+
+def _binds(clause) -> bool:
+    """Does this clause actually constrain anything?
+
+    A clause with both bounds unset is what the editor's "Add" button
+    produces before the user types a number. It is a half-written edit, and
+    reading it as a real clause made a definition look non-empty while
+    constraining nothing - so it claimed EVERY pixel and one definition ate
+    the map. Counting clauses is not enough; they have to bite.
+    """
+    for attr in ("min_at_pct", "max_at_pct", "min_ratio", "max_ratio",
+                 "min_factor", "max_factor"):
+        if getattr(clause, attr, None) is not None:
+            return True
+    return False
+
+
+@dataclass(frozen=True)
+class RegionDefinition:
+    """One hand-declared region: a name plus the composition window for it.
+
+    Deliberately the same three clause types as :class:`PhaseRule`, so
+    :func:`evaluate_rule` evaluates both — one editor, one semantics, one set
+    of surprises. The difference is what the result is used for: a rule gates
+    a phase's eligibility, a definition claims pixels.
+
+    ``phase_key`` is optional. Empty means "group these pixels, then let the
+    library matcher name them as usual"; set means the user has already
+    decided the name and the matcher must not overrule it.
+    """
+
+    name: str
+    elements: Sequence[ElementRange] = field(default_factory=tuple)
+    ratios: Sequence[RatioRange] = field(default_factory=tuple)
+    enrichment: Sequence[EnrichmentRange] = field(default_factory=tuple)
+    phase_key: str = ""
+
+    @property
+    def is_empty(self) -> bool:
+        # Bound-less clauses do not count - see `_binds`.
+        return not any(_binds(c) for c in
+                       (*self.elements, *self.ratios, *self.enrichment))
+
+
+@dataclass
+class RegionAssignment:
+    """Result of applying definitions to a map."""
+
+    #: One label per pixel: index into ``defs``, or -1 for unclaimed.
+    labels: np.ndarray
+    #: Pixels each definition claimed, in order.
+    counts: List[int]
+    #: Pixels a later definition wanted but an earlier one had already taken.
+    overlaps: List[int]
+    #: Per definition: why it claims nothing, when it claims nothing.
+    #: Human-readable English, always present as a fallback.
+    reasons: List[Optional[str]]
+    #: The same answer as a stable code, so the UI can say it in the user's
+    #: language. `None` where the definition claimed something; the code
+    #: ``"rule"`` means the text in ``reasons`` is the clause-level reason
+    #: from :func:`evaluate_rule` and carries element names, so it has no
+    #: fixed translation and the prose is the answer.
+    reason_codes: List[Optional[str]] = field(default_factory=list)
+
+
+def region_labels(
+    defs: Sequence[RegionDefinition],
+    at_pct_per_element: Dict[str, np.ndarray],
+    background: Optional[Dict[str, float]] = None,
+) -> RegionAssignment:
+    """Claim pixels for hand-declared regions, first definition wins.
+
+    Order is priority, and it is the whole conflict-resolution story. An
+    overlap is normal — "Si > 40" and "Fe 2-10" can both hold on a rim pixel
+    — and resolving it by anything cleverer than declared order (smallest
+    region, best fit, nearest mean) would make the outcome depend on the data
+    rather than on what the user wrote. The counts of what each definition
+    lost to an earlier one are reported instead, so the UI can show it.
+
+    An empty definition claims NOTHING rather than everything. A window with
+    no clauses in it is a half-finished edit, and reading it as "the whole
+    map" would wipe the map on the way to writing the first clause.
+    """
+    els, at_pct = renormalised_at_pct(at_pct_per_element)
+    n_px = at_pct.shape[1] if at_pct.size else 0
+    labels = np.full(n_px, -1, dtype=np.int32)
+    counts: List[int] = []
+    overlaps: List[int] = []
+    reasons: List[Optional[str]] = []
+    codes: List[Optional[str]] = []
+    if n_px == 0:
+        return RegionAssignment(labels, [0] * len(defs), [0] * len(defs),
+                                [None] * len(defs), [None] * len(defs))
+
+    for i, d in enumerate(defs):
+        if d.is_empty:
+            counts.append(0)
+            overlaps.append(0)
+            reasons.append("no composition window set yet")
+            codes.append("empty")
+            continue
+        outcome = evaluate_rule(d, at_pct_per_element, background=background)
+        want = np.asarray(outcome.allowed, dtype=bool)
+        free = labels < 0
+        take = want & free
+        labels[take] = i
+        counts.append(int(take.sum()))
+        overlaps.append(int((want & ~free).sum()))
+        if not take.any():
+            if outcome.reason:
+                reasons.append(outcome.reason)
+                codes.append("rule")
+            elif want.any():
+                reasons.append("every matching pixel was already claimed above")
+                codes.append("taken")
+            else:
+                reasons.append("no pixel matches this window")
+                codes.append("nomatch")
+        else:
+            reasons.append(None)
+            codes.append(None)
+    return RegionAssignment(labels, counts, overlaps, reasons, codes)
+
+
+def region_defs_from_list(payload) -> List[RegionDefinition]:
+    """Parse region definitions from the wire. Unusable entries are dropped."""
+    out: List[RegionDefinition] = []
+    for i, item in enumerate(payload or []):
+        if not isinstance(item, dict):
+            continue
+        out.append(RegionDefinition(
+            name=str(item.get("name") or f"Region {i + 1}"),
+            elements=tuple(
+                ElementRange(str(e.get("element")), _num(e.get("min_at_pct")),
+                             _num(e.get("max_at_pct")))
+                for e in item.get("elements") or [] if e.get("element")),
+            ratios=tuple(
+                RatioRange(str(r.get("numerator")), str(r.get("denominator")),
+                           _num(r.get("min_ratio")), _num(r.get("max_ratio")))
+                for r in item.get("ratios") or []
+                if r.get("numerator") and r.get("denominator")),
+            enrichment=tuple(
+                EnrichmentRange(str(x.get("element")), _num(x.get("min_factor")),
+                                _num(x.get("max_factor")))
+                for x in item.get("enrichment") or [] if x.get("element")),
+            phase_key=str(item.get("phase_key") or ""),
+        ))
+    return out
+
+
+def region_defs_to_list(defs: Sequence[RegionDefinition]) -> List[dict]:
+    """Round-trip counterpart of :func:`region_defs_from_list`."""
+    out: List[dict] = []
+    for d in defs or []:
+        out.append({
+            "name": d.name,
+            "phase_key": d.phase_key,
+            "elements": [
+                {"element": e.element, "min_at_pct": e.min_at_pct,
+                 "max_at_pct": e.max_at_pct} for e in d.elements],
+            "ratios": [
+                {"numerator": r.numerator, "denominator": r.denominator,
+                 "min_ratio": r.min_ratio, "max_ratio": r.max_ratio}
+                for r in d.ratios],
+            "enrichment": [
+                {"element": x.element, "min_factor": x.min_factor,
+                 "max_factor": x.max_factor} for x in d.enrichment],
+        })
+    return out

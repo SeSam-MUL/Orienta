@@ -35,7 +35,7 @@ import { pointerToRowCol } from './mapCoords';
 import {
   IDENTITY_VIEW, isZoomed, viewToTransform, wheelFactor, zoomedRect,
 } from './zoomView';
-import StructurePanel from './StructurePanel';
+import RegionPanel from './RegionPanel';
 
 /** Store key for a phase colour.
  *
@@ -81,23 +81,28 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   const [paintMode, setPaintMode] = useState('rectangle');  // 'rectangle' | 'polygon' | 'wand'
   const wand = useEdsWand();
   const [replaceFrom, setReplaceFrom] = useState(null);
-  // Structures first: the classification groups pixels by composition alone,
-  // and naming them is a separate act. 'structures' | 'phases'.
-  const [mapView, setMapView] = useState('structures');
-  const [selectedStructureId, setSelectedStructureId] = useState(null);
+  // Regions first: the classification groups pixels by composition alone,
+  // and naming them is a separate act. 'regions' | 'phases'.
+  const [mapView, setMapView] = useState('regions');
+  const [selectedRegionId, setSelectedRegionId] = useState(null);
   // Smoothing box width for the clustering. null = the backend default (5).
   // Without it KMeans returns confetti and the cluster count has to stay tiny
   // to hide that - measured at k=8 on SampleB: 3491 pieces, median size 1 px.
   const [scale, setScale] = useState(null);
-  const [structureBusy, setStructureBusy] = useState(false);
+  const [regionBusy, setRegionBusy] = useState(false);
   // User-authored rules. They decide which phases may COMPETE for a region,
   // and they only take effect on the next classification - like the scale and
-  // the structure count, and for the same reason: changing them silently under
+  // the region count, and for the same reason: changing them silently under
   // an existing map would leave the picture and its explanation disagreeing.
   const [rules, setRules] = useState(null);
+  // Hand-declared regions and per-element clustering weights. Both are
+  // opt-in: empty means the automatic grouping runs exactly as before.
+  const [regionDefs, setRegionDefs] = useState([]);
+  const [elementWeights, setElementWeights] = useState({});
+  const [clusterRemainder, setClusterRemainder] = useState(true);
   // Bumped by anything that changes the grouping. Merging renumbers
   // ids, splitting adds them, a boundary move changes the pixels — the
-  // inspector has to re-read or it describes a structure that is gone.
+  // inspector has to re-read or it describes a region that is gone.
   const [mapVersion, setMapVersion] = useState(0);
   // The SAME store the EBSD phase map uses, so a phase keeps its colour on
   // both pages and the user's choice survives a reload.
@@ -139,17 +144,47 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   // before the first classification.
   useEffect(() => { loadCifPhases(); }, [loadCifPhases, filePath]);
 
+  /**
+   * Take the region definitions and weights a stored map was built with.
+   *
+   * Only ever ADDS: a map that carries none leaves the editor as it is, so
+   * arriving at a page whose backend map predates this feature cannot wipe
+   * definitions the user is halfway through writing. Called only where the
+   * map came from disk — after an action the user just took, the editor
+   * already holds the truth and the round trip would only fight it.
+   */
+  const adoptMapProvenance = useCallback((data) => {
+    if (!data) return;
+    if (Array.isArray(data.region_defs) && data.region_defs.length) {
+      setRegionDefs(data.region_defs);
+    }
+    if (data.element_weights && Object.keys(data.element_weights).length) {
+      setElementWeights(data.element_weights);
+    }
+  }, []);
+
   // On mount or file change, sync from backend. The backend clears its
   // store on close_file(), so a 200-with-loaded:false response is the
   // expected "nothing to show" state, not an error.
   useEffect(() => {
     let cancelled = false;
     setError(null);
+    // Windows are written in at% against ONE dataset's chemistry. Carrying
+    // them to the next file leaves numbers that mean something else silently
+    // armed, and the next Classify applies them. Whatever the new file's own
+    // stored map carries is adopted below.
+    setRegionDefs([]);
+    setElementWeights({});
+    setClusterRemainder(true);
     edsApi.getPhaseMap(true)
-      .then((res) => { if (!cancelled) setPhaseMap(res.data?.loaded ? res.data : null); })
+      .then((res) => {
+        if (cancelled) return;
+        setPhaseMap(res.data?.loaded ? res.data : null);
+        if (res.data?.loaded) adoptMapProvenance(res.data);
+      })
       .catch(() => { /* 4xx is fine — just means nothing classified yet */ });
     return () => { cancelled = true; };
-  }, [filePath]);
+  }, [filePath, adoptMapProvenance]);
 
   // Push the colour choices to the backend, which renders the PNG. Runs on
   // mount too: the store is persisted, so a returning user's colours must
@@ -158,17 +193,22 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     let cancelled = false;
     edsApi.setPhaseColors(colorOverrides)
       .then((res) => {
+        // Deliberately NOT adopting provenance here. This effect runs on
+        // every colour change, and adopting would replace a definition the
+        // user just deleted or a threshold they just retyped with the last
+        // classified map's copy - an edit silently rolled back by clicking a
+        // swatch. Adoption belongs where the map arrives from disk.
         if (!cancelled && res.data?.loaded) setPhaseMap(res.data);
       })
       .catch(() => { /* colours are a preference; never break the map */ });
     return () => { cancelled = true; };
   }, [colorOverrides]);
 
-  // Every structure tool answers with the whole refreshed map, so they share
+  // Every region tool answers with the whole refreshed map, so they share
   // one caller. Keeping them separate would mean five copies of the same
   // error handling and the same chance for one of them to drift.
-  const runStructureOp = useCallback(async (fn, args) => {
-    setStructureBusy(true);
+  const runRegionOp = useCallback(async (fn, args) => {
+    setRegionBusy(true);
     setError(null);
     try {
       const res = await fn(args);
@@ -179,29 +219,29 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       setError(e.response?.data?.detail || String(e));
       return null;
     } finally {
-      setStructureBusy(false);
+      setRegionBusy(false);
     }
   }, []);
 
-  const handleAssignStructure = useCallback((structureId, phaseIndex) =>
-    runStructureOp(edsApi.assignStructure, { structureId, phaseIndex }),
-  [runStructureOp]);
+  const handleAssignRegionPhase = useCallback((regionId, phaseIndex) =>
+    runRegionOp(edsApi.assignRegionPhase, { regionId, phaseIndex }),
+  [runRegionOp]);
 
-  const handleMergeStructures = useCallback((keepId, dropId) =>
-    runStructureOp(edsApi.mergeStructures, { keepId, dropId }),
-  [runStructureOp]);
+  const handleMergeRegions = useCallback((keepId, dropId) =>
+    runRegionOp(edsApi.mergeRegions, { keepId, dropId }),
+  [runRegionOp]);
 
-  const handleSplitStructure = useCallback((structureId, nParts = 2) =>
-    runStructureOp(edsApi.splitStructure, { structureId, nParts }),
-  [runStructureOp]);
+  const handleSplitRegion = useCallback((regionId, nParts = 2) =>
+    runRegionOp(edsApi.splitRegion, { regionId, nParts }),
+  [runRegionOp]);
 
-  const handleGrowStructure = useCallback((structureId, nPixels) =>
-    runStructureOp(edsApi.growStructure, { structureId, nPixels }),
-  [runStructureOp]);
+  const handleGrowRegion = useCallback((regionId, nPixels) =>
+    runRegionOp(edsApi.growRegion, { regionId, nPixels }),
+  [runRegionOp]);
 
   const handleSnapEdges = useCallback((strength) =>
-    runStructureOp(edsApi.snapStructureEdges, { strength }),
-  [runStructureOp]);
+    runRegionOp(edsApi.snapRegionEdges, { strength }),
+  [runRegionOp]);
 
   const handleAutoClassify = useCallback(async () => {
     // "None selected" must not run the whole library — that inverts the
@@ -226,16 +266,25 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
         ...(scale != null ? { scale } : {}),
         ...(rules && (rules.rules?.length || rules.phase_keys) ? { rules } : {}),
         ...(isSubset ? { phaseKeys: [...selectedPhaseKeys] } : {}),
+        elementWeights,
+        // A definition with no clause in it claims nothing on the backend,
+        // but sending it would still flip the run onto the manual path and
+        // put every pixel in the leftover region. Drop the half-written
+        // ones here so an in-progress edit cannot wipe the map.
+        regionDefs: regionDefs.filter(
+          (d) => d.elements?.length || d.ratios?.length || d.enrichment?.length),
+        clusterRemainder,
       });
       setPhaseMap(res.data);
       setSelectedPhaseIndex(null);
-      setSelectedStructureId(null);
+      setSelectedRegionId(null);
     } catch (err) {
       setError(err.response?.data?.detail || err.message || t('phaseMap.errorClassify'));
     } finally {
       setLoading(false);
     }
-  }, [tolerance, minScore, mode, nClusters, scale, rules, cifPhases, selectedPhaseKeys, t]);
+  }, [tolerance, minScore, mode, nClusters, scale, rules, regionDefs,
+      elementWeights, clusterRemainder, cifPhases, selectedPhaseKeys, t]);
 
   const handleClearMap = useCallback(async () => {
     setLoading(true); setError(null);
@@ -340,11 +389,14 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     cifPhases, loadCifPhases,
     colorOverrides, setPhaseColor, resetPhaseColor,
     mapView, setMapView,
-    selectedStructureId, setSelectedStructureId,
-    scale, setScale, structureBusy, mapVersion,
+    selectedRegionId, setSelectedRegionId,
+    scale, setScale, regionBusy, mapVersion,
     rules, setRules,
-    handleAssignStructure, handleMergeStructures, handleSplitStructure,
-    handleGrowStructure, handleSnapEdges,
+    regionDefs, setRegionDefs,
+    elementWeights, setElementWeights,
+    clusterRemainder, setClusterRemainder,
+    handleAssignRegionPhase, handleMergeRegions, handleSplitRegion,
+    handleGrowRegion, handleSnapEdges,
     selectedPhaseKeys, setSelectedPhaseKeys,
     selectedPhaseIndex, setSelectedPhaseIndex,
     replaceFrom, setReplaceFrom,
@@ -398,7 +450,8 @@ export function pixelFromClickAt(e, hostRect, view, nRows, nCols) {
  * canvas into the layout without flicker.
  */
 export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
-                                onPickStructure, view, onZoomAt, onPan,
+                                onPickRegion, view, onZoomAt, onPan,
+                                claimOverlay,
                                 onResetView, background }) {
   const { t } = useTranslation('eds');
   const {
@@ -408,11 +461,11 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
     mapView,
   } = handle;
 
-  // The structure view draws its own image. Falling back to the phase image
-  // keeps a map made before structures existed (or a per-pixel run, which has
+  // The region view draws its own image. Falling back to the phase image
+  // keeps a map made before regions existed (or a per-pixel run, which has
   // no groups at all) visible instead of blank.
-  const shownImage = (mapView === 'structures' && phaseMap?.structure_image)
-    ? phaseMap.structure_image
+  const shownImage = (mapView === 'regions' && phaseMap?.region_image)
+    ? phaseMap.region_image
     : phaseMap?.image;
   const [drag, setDrag] = useState(null);  // { startRow, startCol, endRow, endCol } | null
   // Measured for the pointer maths; deliberately the UNtransformed box.
@@ -516,12 +569,12 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
       // a user clicking a Cu-rich region got the candidate list for
       // wherever they last clicked a tile.
       onInspect?.(endRow, endCol);
-      if (onPickStructure) {
-        // Structure view: the click selects the region under it. It must NOT
+      if (onPickRegion) {
+        // Region view: the click selects the region under it. It must NOT
         // fall through to the single-pixel paint below — that is the phase
         // view's gesture, and here it would quietly hand-edit one pixel
-        // instead of picking the structure the user aimed at.
-        onPickStructure(endRow, endCol);
+        // instead of picking the region the user aimed at.
+        onPickRegion(endRow, endCol);
       } else if (isWand) {
         // Wand mode: the click seeds a selection instead of assigning.
         wand?.seedAt(endRow, endCol);
@@ -539,7 +592,7 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
     }
     setDrag(null);
   }, [drag, setHoveredPixel, setRegion, onInspect, onAssignPixel, isWand, wand,
-      onPickStructure]);
+      onPickRegion]);
 
   const handleDoubleClick = useCallback(() => {
     if (onResetView) onResetView();
@@ -699,6 +752,26 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
             userSelect: 'none',
           }}
         />
+        {/* What the last "Try it" claimed, laid over the map. A count
+            cannot tell you whether you caught the right pixels - 202 px of
+            matrix and 202 px of particle read identically - and this is the
+            same answer as a picture, before anything is committed. Pinned
+            at 0.75 rather than full: it has to read as an ANSWER ABOUT the
+            map, not as the map. */}
+        {claimOverlay && (
+          <img
+            src={`data:image/png;base64,${claimOverlay}`}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+            style={{
+              position: 'absolute', inset: 0,
+              width: '100%', height: '100%', objectFit: 'contain',
+              imageRendering: 'pixelated', opacity: 0.75,
+              pointerEvents: 'none', userSelect: 'none', display: 'block',
+            }}
+          />
+        )}
         {isWand && wand?.mask && (
           <WandOverlay mask={wand.mask} shape={wand.shape} seed={wand.seed} />
         )}
@@ -838,11 +911,11 @@ export function PhaseMapControls({ handle }) {
   const unclassifiedRow = summary.find(s => s.is_unclassified);
   const clusters = phaseMap?.clusters || [];
   const isWandMode = paintMode === 'wand';
-  // The structure view only exists when there ARE structures. A per-pixel run
+  // The region view only exists when there ARE regions. A per-pixel run
   // has no groups and an old map predates them; without this the toggle is
   // hidden AND the phase legend is hidden, leaving no legend at all.
-  const showStructures = mapView === 'structures'
-    && (phaseMap?.structures || []).length > 0;
+  const showRegions = mapView === 'regions'
+    && (phaseMap?.regions || []).length > 0;
   // The legend doubles as the phase PICKER, and `summary` deliberately omits
   // phases with zero pixels. That made the one phase a manual correction is
   // usually FOR — "this particle is beta-AlFeSi, the classifier missed it" —
@@ -1086,17 +1159,17 @@ export function PhaseMapControls({ handle }) {
           </details>
         )}
 
-        {/* --- Structures vs phases ----------------------------------
-            Structures come first because that is the order of the work: the
+        {/* --- Regions vs phases ----------------------------------
+            Regions come first because that is the order of the work: the
             data says which pixels belong together, the user says what they
             are. The phase view is the same map seen through those names. */}
-        {hasMap && (phaseMap?.structures || []).length > 0 && (
+        {hasMap && (phaseMap?.regions || []).length > 0 && (
           <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
             {[
-              { id: 'structures', label: t('structures.viewStructures'),
-                tip: t('structures.viewStructuresTooltip') },
-              { id: 'phases', label: t('structures.viewPhases'),
-                tip: t('structures.viewPhasesTooltip') },
+              { id: 'regions', label: t('regions.viewRegions'),
+                tip: t('regions.viewRegionsTooltip') },
+              { id: 'phases', label: t('regions.viewPhases'),
+                tip: t('regions.viewPhasesTooltip') },
             ].map((v) => {
               const active = mapView === v.id;
               return (
@@ -1120,10 +1193,10 @@ export function PhaseMapControls({ handle }) {
           </div>
         )}
 
-        {hasMap && showStructures && <StructurePanel handle={handle} />}
+        {hasMap && showRegions && <RegionPanel handle={handle} />}
 
         {/* --- Legend --- */}
-        {hasMap && !showStructures && realPhases.length > 0 && (
+        {hasMap && !showRegions && realPhases.length > 0 && (
           <div style={{
             display: 'flex', flexDirection: 'column', gap: 2,
             maxHeight: 220, overflowY: 'auto',
@@ -1224,16 +1297,16 @@ export function PhaseMapControls({ handle }) {
         {/* --- Hand tools. Collapsed while grouping, because they belong to
             the phase view and stacking both toolsets is what made this rail
             unreadable. --- */}
-        {hasMap && showStructures && (
+        {hasMap && showRegions && (
           <Label secondary small style={{ display: 'block', marginTop: 6 }}>
-            {t('structures.handToolsHint')}
+            {t('regions.handToolsHint')}
           </Label>
         )}
-        <details open={!showStructures} style={{ marginTop: 2 }}>
+        <details open={!showRegions} style={{ marginTop: 2 }}>
           <summary style={{ cursor: 'pointer', fontSize: '8.5pt',
                             color: C.textSecondary, userSelect: 'none' }}
-                   title={t('structures.handToolsTooltip')}>
-            {t('structures.handTools')}
+                   title={t('regions.handToolsTooltip')}>
+            {t('regions.handTools')}
           </summary>
         {/* --- Region painting (M4) --- */}
         {hasMap && (

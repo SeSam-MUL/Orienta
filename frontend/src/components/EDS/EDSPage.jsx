@@ -45,10 +45,12 @@ import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from './hooks/useZoomViews';
 // its own second view that nothing resets.
 const PHASE_MAP_ZOOM_ID = 'phase-map';
 import { usePhaseMap, PhaseMapCanvas, PhaseMapControls } from './PhaseMapPanel';
-import StructureInspector from './StructureInspector';
-import useStructureInspector from './hooks/useStructureInspector';
+import RegionInspector from './RegionInspector';
+import useRegionInspector from './hooks/useRegionInspector';
 import useMapBackground, { fovRatio } from './useMapBackground';
 import PhaseRules from './PhaseRules';
+import RegionDefs, { seedDefFromRegion } from './RegionDefs';
+import { elementSymbols } from './elementSymbol';
 import { exportComposite } from './compositeExporter';
 import ContextMenu from '../common/ContextMenu';
 import ImageExportDialog from '../common/ImageExportDialog';
@@ -347,24 +349,33 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     onNavigate?.('indexing');
   }, [onNavigate, setPendingPhaseMap]);
   const phaseMapHandle = usePhaseMap({ onIndexingHandoff: handlePhaseMapHandoff });
-  // The inspector follows whichever structure is selected, from the map or
+  // The inspector follows whichever region is selected, from the map or
   // from the list, and re-reads after anything that changes the grouping
   // (merge renumbers ids, split adds them).
-  const inspector = useStructureInspector({
-    selectedStructureId: phaseMapHandle.selectedStructureId,
-    setSelectedStructureId: phaseMapHandle.setSelectedStructureId,
+  const inspector = useRegionInspector({
+    selectedRegionId: phaseMapHandle.selectedRegionId,
+    setSelectedRegionId: phaseMapHandle.setSelectedRegionId,
     mapVersion: phaseMapHandle.mapVersion,
   });
-  // The phase map grew a tool set of its own - structures, the inspector,
+  // The phase map grew a tool set of its own - regions, the inspector,
   // four boundary tools - and sharing one screen with the element overlay
   // and the tile grid left neither usable. It gets its own tab; everything
   // else on this page stays exactly where it was.
   const [edsTab, setEdsTab] = useState('elements');
-  // The strip under the map holds two things now: what one structure IS, and
+  // The strip under the map holds two things now: what one region IS, and
   // the rules that decide which phases may compete for it. A tab rather than a
   // third panel: they are alternate readings of the same selection, and the
   // 300 px rail has already been shown to be the wrong home for a table.
   const [stripTab, setStripTab] = useState('inspector');
+  // Pointing at a pixel to seed a composition window from it. Armed
+  // explicitly, because an unarmed click on this map already means
+  // "inspect this region" and silently changing that would break the
+  // gesture people have.
+  const [pixelArmed, setPixelArmed] = useState(false);
+  const [pixelPick, setPixelPick] = useState(null);
+  // What the last preview claimed, drawn over the map. Held here because
+  // the map lives here; the editor produces it.
+  const [claimOverlay, setClaimOverlay] = useState(null);
   // One image under the phase map, so a region can be placed against the
   // chemistry or the topography it came from.
   const mapBackground = useMapBackground({
@@ -405,8 +416,8 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       ? Math.round(Math.abs(bgFov - 1) * 100) : null,
   };
 
-  const inStructureView = phaseMapHandle.mapView === 'structures'
-    && (phaseMapHandle.phaseMap?.structures || []).length > 0;
+  const inRegionView = phaseMapHandle.mapView === 'regions'
+    && (phaseMapHandle.phaseMap?.regions || []).length > 0;
 
   // Pixel Quantification state (lifted).
   const [pixelRow, setPixelRow] = useState(0);
@@ -429,7 +440,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   // Phase Suggestion state (lifted). The suggestion is per-pixel, so the hook
   // also tracks WHICH pixel the shown list belongs to and follows the cursor
   // once the user has asked for suggestions.
-  // Destructured (rather than used as `suggest.x`) because `suggest` is a fresh
+  // Deregiond (rather than used as `suggest.x`) because `suggest` is a fresh
   // object each render — depending on it would churn every consumer's identity.
   const {
     suggestions: suggestedPhases,
@@ -758,7 +769,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     try {
       setExportError(null);
       // `build` may return a canvas it composed, or a URL for something the
-      // backend already rendered — the phase and structure maps arrive as
+      // backend already rendered — the phase and region maps arrive as
       // base64 PNGs and re-drawing them into a canvas would only re-encode
       // the same pixels.
       const built = build();
@@ -792,15 +803,15 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       // sit on the scan raster, so the map's own pixel size applies.
       const pm = phaseMapHandle.phaseMap;
       const mapScale = pixelSizeForLayer('phase', pixelSizes);
-      if (pm?.structure_image) {
+      if (pm?.region_image) {
         items.push({
-          id: 'structure-map',
-          label: t('imageexport:menuExportStructureMap',
-            { defaultValue: 'Export the structure map…' }),
+          id: 'region-map',
+          label: t('imageexport:menuExportRegionMap',
+            { defaultValue: 'Export the region map…' }),
           onSelect: () => openExport(
-            () => `data:image/png;base64,${pm.structure_image}`,
-            `${exportStem}_structures`,
-            `${exportStem} \u00b7 ${t('tabs.viewStructuresLabel', { defaultValue: 'Structures' })}`,
+            () => `data:image/png;base64,${pm.region_image}`,
+            `${exportStem}_regions`,
+            `${exportStem} \u00b7 ${t('tabs.viewRegionsLabel', { defaultValue: 'Regions' })}`,
             mapScale,
           ),
         });
@@ -967,8 +978,20 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                     onPan={(dx, dy) => zoom.pan(PHASE_MAP_ZOOM_ID, dx, dy)}
                     onResetView={() => zoom.resetOne(PHASE_MAP_ZOOM_ID)}
                     background={backgroundHandle}
-                    onPickStructure={inStructureView
-                      ? inspector.inspectPixel : undefined}
+                    onPickRegion={inRegionView
+                      ? ((row, col) => {
+                        if (pixelArmed) {
+                          // A fresh object every time: picking the same
+                          // pixel twice has to seed twice, and identity is
+                          // what the editor's effect keys on.
+                          setPixelPick({ row, col });
+                          setPixelArmed(false);
+                          return;
+                        }
+                        inspector.inspectPixel(row, col);
+                      })
+                      : undefined}
+                    claimOverlay={claimOverlay}
                     onAssignPixel={phaseMapHandle.selectedPhaseIndex != null
                       ? ((row, col) => phaseMapHandle.handleAssignPixel(
                           row, col, phaseMapHandle.selectedPhaseIndex))
@@ -979,12 +1002,16 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                   <Label secondary small>{t('tabs.noMapYet')}</Label>
                 )}
               </GroupBox>
-              {inStructureView && (
+              {inRegionView && (
                 <GroupBox
                   title={(
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                       {[
                         { id: 'inspector', label: t('inspector.title') },
+                        { id: 'defs',
+                          label: t('defs.tab', {
+                            count: phaseMapHandle.regionDefs?.length || 0,
+                          }) },
                         { id: 'rules',
                           label: t('rules.tab', {
                             count: phaseMapHandle.rules?.rules?.length || 0,
@@ -1014,29 +1041,53 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                   style={{ flexShrink: 0, maxHeight: '42vh',
                            overflowY: 'auto' }}
                 >
-                  {stripTab === 'rules' ? (
+                  {stripTab === 'defs' ? (
+                    <RegionDefs
+                      defs={phaseMapHandle.regionDefs}
+                      setDefs={phaseMapHandle.setRegionDefs}
+                      elements={elementSymbols(def.elements)}
+                      allPhases={phaseMapHandle.phaseMap?.all_phases || []}
+                      inspectorDetail={inspector.detail}
+                      scale={phaseMapHandle.scale}
+                      clusterRemainder={phaseMapHandle.clusterRemainder}
+                      setClusterRemainder={phaseMapHandle.setClusterRemainder}
+                      elementWeights={phaseMapHandle.elementWeights}
+                      setElementWeights={phaseMapHandle.setElementWeights}
+                      onReclassify={phaseMapHandle.handleAutoClassify}
+                      busy={phaseMapHandle.loading || phaseMapHandle.regionBusy}
+                      pixelArmed={pixelArmed}
+                      onArmPixelPick={setPixelArmed}
+                      pixelPick={pixelPick}
+                      onOverlay={setClaimOverlay}
+                    />
+                  ) : stripTab === 'rules' ? (
                     <PhaseRules
                       rules={phaseMapHandle.rules}
                       setRules={phaseMapHandle.setRules}
-                      structures={phaseMapHandle.phaseMap?.structures}
+                      regions={phaseMapHandle.phaseMap?.regions}
                       allPhases={phaseMapHandle.phaseMap?.all_phases}
                       inspectorDetail={inspector.detail}
-                      elements={(def.elements || []).map((e) => (
-                        typeof e === 'string' ? e : (e.symbol || e.name)
-                      )).filter(Boolean)}
+                      elements={elementSymbols(def.elements)}
                       onReclassify={phaseMapHandle.handleAutoClassify}
-                      busy={phaseMapHandle.loading || phaseMapHandle.structureBusy}
+                      busy={phaseMapHandle.loading || phaseMapHandle.regionBusy}
                     />
                   ) : (
-                  <StructureInspector
+                  <RegionInspector
                     detail={inspector.detail}
                     loading={inspector.loading}
                     error={inspector.error}
-                    busy={phaseMapHandle.structureBusy}
+                    busy={phaseMapHandle.regionBusy}
                     phaseIndex={inspector.detail?.phase_index}
-                    onAssign={(phaseIndex) => phaseMapHandle.handleAssignStructure(
-                      inspector.detail.structure_id, phaseIndex)}
-                    onSelectStructure={phaseMapHandle.setSelectedStructureId}
+                    onAssign={(phaseIndex) => phaseMapHandle.handleAssignRegionPhase(
+                      inspector.detail.region_id, phaseIndex)}
+                    onSelectRegion={phaseMapHandle.setSelectedRegionId}
+                    onDefineFromRegion={(d) => {
+                      const seed = seedDefFromRegion(d);
+                      if (!seed) return;
+                      phaseMapHandle.setRegionDefs([
+                        ...(phaseMapHandle.regionDefs || []), seed]);
+                      setStripTab('defs');
+                    }}
                   />
                   )}
                 </GroupBox>
@@ -1253,7 +1304,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                   {/* Wrap in arrow fn so React's click event is not
                       forwarded as ``rowOverride`` to handleQuantify —
                       that triggered ``JSON.stringify(<event>)`` and the
-                      circular-structure error visible in the screenshot. */}
+                      circular-region error visible in the screenshot. */}
                   <Button variant="warning" onClick={() => handleQuantify()} disabled={quantLoading} style={{ flexShrink: 0 }} title={t('hoverTips.quantifyRun')}>
                     {quantLoading ? <span className="btn-loading">{t('quantify.run')}</span> : t('quantify.run')}
                   </Button>

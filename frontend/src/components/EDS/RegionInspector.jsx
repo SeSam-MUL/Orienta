@@ -1,5 +1,5 @@
 /**
- * What one structure actually is.
+ * What one region actually is.
  *
  * Sits under the map rather than in the right rail because the three things
  * worth reading — the full composition, who it touches, and which phases come
@@ -10,7 +10,7 @@
  *
  * * enrichment is the factor over the map's OWN background, the same quantity
  *   the classifier gates on, so the readout and the classifier cannot disagree;
- * * spread says whether the structure is homogeneous — one that is not is
+ * * spread says whether the region is homogeneous — one that is not is
  *   either two things or a gradient;
  * * connected pieces is how you see three concentric rings as one particle;
  * * the neighbour gap is the merge decision in a number.
@@ -29,11 +29,23 @@ export function enrichmentBarPct(factor) {
   return ((Math.log2(clamped) + 4) / 8) * 100;
 }
 
+/**
+ * How far from the map's own background counts as "concentrated here".
+ *
+ * The depletion side is the RECIPROCAL, so a factor and its inverse are
+ * judged alike: 1.3x more is as notable as 1.3x less. Exported because the
+ * legend has to state the same numbers the colours use — it said 0.8 while
+ * the code used 0.77, and a legend that disagrees with what it explains is
+ * worse than no legend.
+ */
+export const ENRICHED_AT = 1.3;
+export const DEPLETED_AT = Number((1 / ENRICHED_AT).toFixed(2));   // 0.77
+
 /** Enriched, depleted, or neither — for colouring, not for judging. */
 export function enrichmentKind(factor) {
   if (factor == null || !Number.isFinite(factor)) return 'unknown';
-  if (factor >= 1.3) return 'enriched';
-  if (factor <= 0.77) return 'depleted';
+  if (factor >= ENRICHED_AT) return 'enriched';
+  if (factor <= DEPLETED_AT) return 'depleted';
   return 'flat';
 }
 
@@ -56,8 +68,9 @@ function Column({ title, hint, children, grow = 1 }) {
   );
 }
 
-export default function StructureInspector({
-  detail, loading, error, phaseIndex, onAssign, onSelectStructure, busy,
+export default function RegionInspector({
+  detail, loading, error, phaseIndex, onAssign, onSelectRegion, busy,
+  onDefineFromRegion,
 }) {
   const { t } = useTranslation('eds');
 
@@ -192,11 +205,11 @@ export default function StructureInspector({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
               {neighbours.map((n) => (
                 <button
-                  key={n.structure_id}
+                  key={n.region_id}
                   type="button"
-                  onClick={() => onSelectStructure?.(n.structure_id)}
+                  onClick={() => onSelectRegion?.(n.region_id)}
                   title={t('inspector.neighbourTooltip', {
-                    gap: n.gap_at_pct, edge: n.shared_edge_px,
+                    gap: n.gap_at_pct.toFixed(1), edge: n.shared_edge_px,
                   })}
                   style={{
                     display: 'flex', alignItems: 'center', gap: 6,
@@ -234,7 +247,7 @@ export default function StructureInspector({
                   disabled={busy}
                   onClick={() => onAssign?.(c.phase_index)}
                   title={t('inspector.candidateTooltip', {
-                    name: c.cif_filename, gap: c.gap_at_pct,
+                    name: c.cif_filename, gap: c.gap_at_pct.toFixed(1),
                   })}
                   style={{
                     display: 'flex', alignItems: 'baseline', gap: 6,
@@ -269,6 +282,24 @@ export default function StructureInspector({
           </div>
         </Column>
       </div>
+
+      {/* The user's own suggestion was to make regions definable "in the
+          Region Inspector". The editor is map-wide so it lives in its own
+          tab, but the journey starts here: you are looking at the region
+          the grouping got wrong, and this turns it into a window you can
+          adjust. Without it the path is pick region -> change tab -> find
+          the seed button, and nothing on this panel says so. */}
+      {onDefineFromRegion && (
+        <Button
+          variant="secondary"
+          disabled={busy}
+          onClick={() => onDefineFromRegion(detail)}
+          title={t('inspector.defineTooltip')}
+          style={{ marginTop: 6, width: '100%' }}
+        >
+          {t('inspector.define')}
+        </Button>
+      )}
     </div>
   );
 }

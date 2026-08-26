@@ -54,7 +54,7 @@ class ClusterMatch:
 #: This is the single most important knob in this module, and leaving it at
 #: zero was a real defect. KMeans on raw per-pixel at% produces confetti, and
 #: the only lever against that was keeping ``k`` tiny — so ``k`` was doing
-#: smoothing's job and the map collapsed to three structures no matter what
+#: smoothing's job and the map collapsed to three regions no matter what
 #: the element maps showed. Measured on SampleB (90x120, 8 elements), cluster
 #: coherence (fraction of 4-neighbour pairs in the same cluster):
 #:
@@ -96,8 +96,22 @@ def _smooth_maps(
 
 def _feature_matrix(
     at_pct_per_element: Dict[str, np.ndarray], n_px: int,
+    element_weights: Optional[Dict[str, float]] = None,
 ) -> Tuple[List[str], np.ndarray]:
-    """Per-pixel composition as fractions over the metallic elements."""
+    """Per-pixel composition as fractions over the metallic elements.
+
+    ``element_weights`` scales a column AFTER renormalisation, so it changes
+    what the distance metric cares about without changing what the cluster
+    means report. A user put the need plainly: differentiation sometimes
+    "requires specific elements rather than overall similarity" - pure Si and
+    AlFeMnSi differ by a few at% of iron on top of an ~85 at% aluminium
+    background, and unweighted Euclidean distance is almost entirely that
+    aluminium. Weighting iron up makes the fit see the difference that
+    matters; the reported compositions stay the measured ones.
+
+    A weight of 1.0 everywhere is the identity, so the default path is
+    bit-identical to the unweighted one.
+    """
     els = sorted(el for el in at_pct_per_element if el not in _CHEM_IGNORE)
     if not els:
         return [], np.zeros((n_px, 0))
@@ -107,7 +121,14 @@ def _feature_matrix(
         axis=1,
     )
     tot = X.sum(axis=1, keepdims=True)
-    return els, X / np.where(tot > 1e-9, tot, 1.0)
+    X = X / np.where(tot > 1e-9, tot, 1.0)
+    if element_weights:
+        w = np.array([float(element_weights.get(el, 1.0)) for el in els],
+                     dtype=np.float64)
+        w = np.where(np.isfinite(w) & (w >= 0.0), w, 1.0)
+        if not np.allclose(w, 1.0):
+            X = X * w[None, :]
+    return els, X
 
 
 def choose_k_by_bic(X: np.ndarray, k_range: Tuple[int, int] = (2, 12)) -> int:
@@ -163,7 +184,7 @@ def min_pairwise_gap(X: np.ndarray, labels: np.ndarray, k: int) -> float:
     """Smallest largest-single-element difference between any two clusters.
 
     "Largest single element" rather than a Euclidean distance on purpose: two
-    structures differing by 3 at% Si and nothing else ARE different structures,
+    regions differing by 3 at% Si and nothing else ARE different regions,
     but that difference is diluted to near-nothing in a norm over eight
     elements dominated by Al.
     """
@@ -178,6 +199,7 @@ def min_pairwise_gap(X: np.ndarray, labels: np.ndarray, k: int) -> float:
 def choose_k_by_distinctness(
     X: np.ndarray, k_range: Tuple[int, int] = (2, 12),
     min_gap: float = DISTINCT_AT_PCT,
+    gap_X: Optional[np.ndarray] = None,
 ) -> int:
     """Largest ``k`` whose clusters are all still chemically distinct.
 
@@ -192,17 +214,28 @@ def choose_k_by_distinctness(
 
     * **Map coherence** (the previous default) falls monotonically with k on
       unsmoothed data, so maximising it is FORCED to the smallest k. SampleB
-      collapsed to 3 structures while the element maps plainly showed more.
+      collapsed to 3 regions while the element maps plainly showed more.
       Tidiness is what :data:`DEFAULT_SCALE` is for — one lever per problem.
     * **Silhouette** peaks at k=3-4 here (0.834 / 0.838) because it averages
-      over pixels, and the structures that matter are 70 px out of 10 800.
+      over pixels, and the regions that matter are 70 px out of 10 800.
       Any area-weighted criterion is dominated by the matrix. Measured, not
       assumed.
+
+    ``gap_X`` is the matrix the GAP is measured on, when that differs from
+    the one the clustering runs on. It exists for element weighting: a
+    weighted column inflates the distance in that element, and measuring the
+    gap on the weighted values would silently reinterpret ``min_gap`` in
+    weighted units. Measured on SampleB, weighting Fe/Mn/Si by 3 with a
+    weighted gap pushed k from 7 to 12 and coherence from 0.933 to 0.800 -
+    the weights were not separating anything, they were just raising k
+    through the back door. Weights say WHICH elements decide the grouping;
+    ``min_gap`` says how far apart two chemistries must be to count as two.
+    One lever per problem, as with :data:`DEFAULT_SCALE` and ``k``.
 
     Over-segmentation is the safer error: on SampleB k=7 splits one Si
     particle into three concentric rings (Si 24 / 36 / 52 at%) because the
     interaction volume makes a small particle read as a gradient. Merging
-    those is one click; recovering a structure that was never separated is
+    those is one click; recovering a region that was never separated is
     not. So this deliberately errs high.
     """
     from sklearn.cluster import KMeans
@@ -221,7 +254,8 @@ def choose_k_by_distinctness(
             break
         if len(np.unique(labels)) < k:
             break
-        if min_pairwise_gap(X, labels, k) < min_gap:
+        if min_pairwise_gap(X if gap_X is None else gap_X,
+                            labels, k) < min_gap:
             break
         best = k
     return best
@@ -286,9 +320,39 @@ def _run_for_k(
     """One full cluster-and-match pass at a fixed ``k``."""
     from sklearn.cluster import KMeans
 
-    n_px = n_rows * n_cols
     km = KMeans(n_clusters=k, n_init=10, random_state=0).fit(X)
-    cluster_grid = km.labels_.astype(np.int32)
+    return _match_labels(km.labels_.astype(np.int32), k, at_pct_per_element,
+                         n_rows, n_cols, candidates, group_of, min_score,
+                         matrix_element, background, rule_set)
+
+
+def _match_labels(
+    cluster_grid: np.ndarray,
+    k: int,
+    at_pct_per_element: Dict[str, np.ndarray],
+    n_rows: int,
+    n_cols: int,
+    candidates: List[CifPhaseEntry],
+    group_of: np.ndarray,
+    min_score: float,
+    matrix_element: Optional[str] = None,
+    background: Optional[Dict[str, float]] = None,
+    rule_set=None,
+    fixed_phase: Optional[Dict[int, int]] = None,
+) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch]]:
+    """Name each already-grouped region against the library.
+
+    Split out of :func:`_run_for_k` so the grouping and the naming are
+    separable: hand-declared regions arrive here with their labels already
+    decided and go through exactly the same naming path as automatic ones.
+    Two grouping routes that named their regions differently would be two
+    products.
+
+    ``fixed_phase`` maps a label to a phase index the user has already
+    chosen. Those regions keep that phase whatever the score says - the
+    matcher advises, it does not overrule a decision.
+    """
+    n_px = n_rows * n_cols
 
     phase_grid = np.full(n_px, -1, dtype=np.int32)
     matches: List[ClusterMatch] = []
@@ -339,7 +403,13 @@ def _run_for_k(
             scored = regated
         scored.sort(key=lambda t: -t[1])
 
-        if scored and scored[0][1] >= min_score:
+        forced = None if fixed_phase is None else fixed_phase.get(int(cid))
+        if forced is not None and 0 <= forced < len(candidates):
+            best_idx = int(forced)
+            best_s = float(dict(scored).get(best_idx, 0.0))
+            ambiguous = False
+            phase_grid[mask] = best_idx
+        elif scored and scored[0][1] >= min_score:
             best_idx, best_s = scored[0]
             ambiguous = any(
                 group_of[i] != group_of[best_idx] and (best_s - s) <= TIE_TOLERANCE
@@ -381,6 +451,9 @@ def cluster_and_match(
     min_score: float = 0.3,
     scale: Optional[int] = None,
     rule_set=None,
+    element_weights: Optional[Dict[str, float]] = None,
+    region_defs=None,
+    cluster_remainder: bool = True,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch], int]:
     """Cluster the composition, match each cluster, paint its pixels.
 
@@ -393,7 +466,7 @@ def cluster_and_match(
     :func:`choose_k_by_distinctness`, which raises k while the cluster means
     stay chemically distinguishable. It deliberately does NOT maximise :func:`phase_coherence`: coherence
     falls monotonically with k on unsmoothed data, so maximising it forces the
-    smallest k and the map collapses however much structure the element maps
+    smallest k and the map collapses however much region the element maps
     show. Coherence is still the right measure of a map's tidiness, and
     smoothing is the knob for it — one lever per problem.
 
@@ -410,9 +483,12 @@ def cluster_and_match(
     scale_used = DEFAULT_SCALE if scale is None else int(scale)
     smoothed = _smooth_maps(at_pct_per_element, n_rows, n_cols, scale_used)
 
-    els, X = _feature_matrix(smoothed, n_px)
+    els, X = _feature_matrix(smoothed, n_px, element_weights)
     if not els:
         return empty, empty.copy(), [], 0
+    # The physical composition, for any question that has to be answered in
+    # at%. Identical to `X` unless weights are in play.
+    X_phys = X if not element_weights else _feature_matrix(smoothed, n_px)[1]
 
     matrix_element = infer_matrix_element(at_pct_per_element)
     if rule_set is not None and getattr(rule_set, 'matrix_elements', None):
@@ -433,6 +509,15 @@ def cluster_and_match(
                           group_of, kk, min_score, matrix_element,
                           background, rule_set)
 
+    if region_defs:
+        return _manual_and_match(
+            X, smoothed, at_pct_per_element, n_rows, n_cols, candidates,
+            group_of, region_defs, k, k_range, min_score, matrix_element,
+            # X_phys is what keeps `min_gap` meaning at% when weights are in
+            # play. Omitting it made the manual path reintroduce the very
+            # coupling the automatic path was fixed for.
+            background, rule_set, cluster_remainder, X_phys)
+
     if k:
         k_used = max(1, min(int(k), n_px))
         phase_grid, cluster_grid, matches = run(k_used)
@@ -441,7 +526,7 @@ def cluster_and_match(
     lo, hi = k_range
     lo = max(2, lo)
     hi = max(lo, min(hi, n_px))
-    k_used = choose_k_by_distinctness(X, (lo, hi))
+    k_used = choose_k_by_distinctness(X, (lo, hi), gap_X=X_phys)
     k_used = max(1, min(k_used, n_px))
     try:
         phase_grid, cluster_grid, matches = run(k_used)
@@ -450,4 +535,99 @@ def cluster_and_match(
         # smallest k is always fittable when there are pixels at all.
         k_used = max(1, min(lo, n_px))
         phase_grid, cluster_grid, matches = run(k_used)
+    return phase_grid, cluster_grid, matches, k_used
+
+
+def _manual_and_match(
+    X: np.ndarray,
+    smoothed: Dict[str, np.ndarray],
+    at_pct_per_element: Dict[str, np.ndarray],
+    n_rows: int,
+    n_cols: int,
+    candidates: List[CifPhaseEntry],
+    group_of: np.ndarray,
+    region_defs,
+    k: Optional[int],
+    k_range: Tuple[int, int],
+    min_score: float,
+    matrix_element: Optional[str],
+    background: Optional[Dict[str, float]],
+    rule_set,
+    cluster_remainder: bool,
+    X_phys: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch], int]:
+    """Hand-declared regions first, automatic grouping for whatever is left.
+
+    The two paths coexist on purpose. A user asked for "the automatized
+    selection of regions and their assignment of phases but also ... full
+    manual customization", and the useful answer to that is not a mode
+    switch: it is declaring the one or two regions the fit keeps getting
+    wrong and leaving the rest of the map alone. With ``cluster_remainder``
+    off the map is exactly what was declared, plus one region holding
+    everything else - which is the fully manual case.
+
+    Definitions are matched on the SMOOTHED composition, the same values the
+    automatic grouping sees. Evaluating them on raw pixels instead would let
+    a threshold speckle along a boundary that the smoothing had settled, and
+    the user would be tuning against noise.
+    """
+    from backend.api.services.phase_rules import region_labels
+
+    n_px = n_rows * n_cols
+    assign = region_labels(region_defs, smoothed, background=background)
+    labels = assign.labels.astype(np.int32).copy()
+    n_manual = len(region_defs)
+
+    rest = labels < 0
+    n_rest = int(rest.sum())
+    if n_rest:
+        if cluster_remainder:
+            lo, hi = k_range
+            lo = max(2, lo)
+            hi = max(lo, min(hi, n_rest))
+            if k:
+                k_rest = max(1, min(int(k), n_rest))
+            else:
+                gx = None if X_phys is None else X_phys[rest]
+                k_rest = max(1, min(
+                    choose_k_by_distinctness(X[rest], (lo, hi), gap_X=gx),
+                    n_rest))
+            if k_rest > 1:
+                from sklearn.cluster import KMeans
+                sub = KMeans(n_clusters=k_rest, n_init=10,
+                             random_state=0).fit(X[rest]).labels_
+                labels[rest] = n_manual + sub.astype(np.int32)
+            else:
+                labels[rest] = n_manual
+                k_rest = 1
+        else:
+            # One region for everything undeclared. It is a real region with
+            # a real mean, not a hole: leaving it at -1 would drop those
+            # pixels out of the map instead of showing what is still
+            # unaccounted for.
+            labels[rest] = n_manual
+            k_rest = 1
+    else:
+        k_rest = 0
+
+    # Compact the labels. Ids are positions - a gap would misname every
+    # region after it, the same trap the merge operation guards against.
+    used = [int(v) for v in np.unique(labels) if v >= 0]
+    remap = {old: new for new, old in enumerate(used)}
+    compact = np.full(n_px, -1, dtype=np.int32)
+    for old, new in remap.items():
+        compact[labels == old] = new
+
+    key_to_index = {e.key: i for i, e in enumerate(candidates)}
+    fixed: Dict[int, int] = {}
+    for i, d in enumerate(region_defs):
+        pk = getattr(d, "phase_key", "")
+        if pk and i in remap and pk in key_to_index:
+            fixed[remap[i]] = key_to_index[pk]
+
+    k_used = len(used)
+    phase_grid, cluster_grid, matches = _match_labels(
+        compact, k_used, at_pct_per_element, n_rows, n_cols, candidates,
+        group_of, min_score, matrix_element, background, rule_set,
+        fixed_phase=fixed)
     return phase_grid, cluster_grid, matches, k_used

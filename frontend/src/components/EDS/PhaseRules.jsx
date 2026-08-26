@@ -4,7 +4,7 @@
  * From a user report: EDS ambiguity — features smaller than the interaction
  * volume, so every spot mixes in its surroundings — makes the automatic pick
  * land on the wrong candidate. Measured on a real scan that is true but local:
- * of seven structures, two decide between their top two candidates on under
+ * of seven regions, two decide between their top two candidates on under
  * 1 at% of margin while the other five are clear by 1.3 to 3.7. So rules are
  * per phase and opt-in; they settle the close calls and leave the rest alone.
  *
@@ -13,8 +13,8 @@
  * passed; nearest was Si.cif, blocked by Si >= 40, measured 25.3" — and a soft
  * factor could not produce it.
  *
- * The fastest path to a rule is not typing but **Rule from this structure**:
- * the inspector already shows a structure's measured composition, so the rows
+ * The fastest path to a rule is not typing but **Rule from this region**:
+ * the inspector already shows a region's measured composition, so the rows
  * arrive filled in and the user corrects numbers instead of inventing them.
  */
 import React, { useCallback, useMemo, useState } from 'react';
@@ -35,7 +35,7 @@ export function renormalise(meanAtPct) {
 }
 
 /**
- * Seed a rule from a structure the user already selected.
+ * Seed a rule from a region the user already selected.
  *
  * Only the elements that are actually concentrated here get a row: a band on
  * an element that merely sits at the background level constrains nothing and
@@ -44,10 +44,10 @@ export function renormalise(meanAtPct) {
  *
  * The band is mean +/- 2*spread, rounded — wide enough to survive the dilution
  * gradient that made the user ask for rules in the first place, and clamped to
- * the measured value so a seeded rule can never fail on the very structure it
+ * the measured value so a seeded rule can never fail on the very region it
  * came from.
  */
-export function seedRuleFromStructure(detail, { widen = 2 } = {}) {
+export function seedRuleFromRegion(detail, { widen = 2 } = {}) {
   const els = (detail?.elements || []).filter((e) => !IGNORED.has(e.element));
   const interesting = els.filter((e) => (e.enrichment ?? 0) >= 1.3);
   const chosen = interesting.length ? interesting : els.slice(0, 2);
@@ -67,10 +67,10 @@ export function seedRuleFromStructure(detail, { widen = 2 } = {}) {
   };
 }
 
-/** How many structures a rule set would admit for its phase. Display only. */
-export function countMatching(rule, structures) {
+/** How many regions a rule set would admit for its phase. Display only. */
+export function countMatching(rule, regions) {
   if (!rule) return 0;
-  return (structures || []).filter((s) => {
+  return (regions || []).filter((s) => {
     const comp = renormalise(s.mean_at_pct);
     return (rule.elements || []).every((er) => {
       const v = comp[er.element];
@@ -101,7 +101,7 @@ function NumField({ value, onChange, placeholder, ariaLabel }) {
 }
 
 export default function PhaseRules({
-  rules, setRules, structures, allPhases, inspectorDetail, elements,
+  rules, setRules, regions, allPhases, inspectorDetail, elements,
   onReclassify, busy,
 }) {
   const { t } = useTranslation('eds');
@@ -134,9 +134,9 @@ export default function PhaseRules({
     setSelectedKey((k) => (k === key ? null : k));
   }, [setRules]);
 
-  const seedFromStructure = useCallback(() => {
+  const seedFromRegion = useCallback(() => {
     if (!inspectorDetail?.cif_filename) return;
-    const seeded = seedRuleFromStructure(inspectorDetail);
+    const seeded = seedRuleFromRegion(inspectorDetail);
     upsert(seeded);
     setSelectedKey(seeded.phase_key);
   }, [inspectorDetail, upsert]);
@@ -205,7 +205,7 @@ export default function PhaseRules({
               <Label secondary small>{t('rules.noneYet')}</Label>
             )}
             {list.map((r) => {
-              const n = countMatching(r, structures);
+              const n = countMatching(r, regions);
               return (
                 <div
                   key={r.phase_key}
@@ -256,10 +256,10 @@ export default function PhaseRules({
           <Button
             variant="secondary"
             disabled={!inspectorDetail?.cif_filename || busy}
-            onClick={seedFromStructure}
+            onClick={seedFromRegion}
             title={inspectorDetail?.cif_filename
               ? t('rules.seedTooltip', { name: inspectorDetail.cif_filename })
-              : t('rules.seedNeedStructure')}
+              : t('rules.seedNeedRegion')}
             style={{ width: '100%', marginTop: 4 }}
           >
             {t('rules.seed')}

@@ -2,8 +2,8 @@
 /**
  * The rule editor.
  *
- * The thing worth pinning is the seeding: "Rule from this structure" is the
- * primary path, and a seeded rule that fails on the very structure it came
+ * The thing worth pinning is the seeding: "Rule from this region" is the
+ * primary path, and a seeded rule that fails on the very region it came
  * from would be worse than no seeding at all. The rest is plumbing, but the
  * plumbing must not silently drop a clause.
  */
@@ -16,10 +16,10 @@ vi.mock('react-i18next', () => ({
 }));
 
 import PhaseRules, {
-  countMatching, renormalise, seedRuleFromStructure,
+  countMatching, renormalise, seedRuleFromRegion,
 } from './PhaseRules';
 
-/** What the inspector hands over for one structure. */
+/** What the inspector hands over for one region. */
 const DETAIL = {
   cif_filename: 'Si.cif',
   formula: 'Si',
@@ -31,9 +31,9 @@ const DETAIL = {
 };
 
 const STRUCTURES = [
-  { structure_id: 0, mean_at_pct: { Al: 97.0, Si: 1.2 } },
-  { structure_id: 1, mean_at_pct: { Al: 60.0, Si: 38.0 } },
-  { structure_id: 2, mean_at_pct: { Al: 43.0, Si: 56.0 } },
+  { region_id: 0, mean_at_pct: { Al: 97.0, Si: 1.2 } },
+  { region_id: 1, mean_at_pct: { Al: 60.0, Si: 38.0 } },
+  { region_id: 2, mean_at_pct: { Al: 43.0, Si: 56.0 } },
 ];
 
 beforeEach(() => { cleanup(); vi.clearAllMocks(); });
@@ -57,16 +57,16 @@ describe('renormalise', () => {
   });
 });
 
-describe('seedRuleFromStructure', () => {
+describe('seedRuleFromRegion', () => {
   it('only writes rows for elements that are genuinely concentrated', () => {
     // A band on an element sitting at background constrains nothing and only
     // makes the rule brittle. 1.3x is the bar the classifier itself gates on.
-    const seeded = seedRuleFromStructure(DETAIL);
+    const seeded = seedRuleFromRegion(DETAIL);
     expect(seeded.elements.map((e) => e.element)).toEqual(['Si']);
   });
 
-  it('brackets the measured value, so it cannot fail on its own structure', () => {
-    const seeded = seedRuleFromStructure(DETAIL);
+  it('brackets the measured value, so it cannot fail on its own region', () => {
+    const seeded = seedRuleFromRegion(DETAIL);
     const si = seeded.elements[0];
     expect(si.min_at_pct).toBeLessThanOrEqual(56.0);
     expect(si.max_at_pct).toBeGreaterThanOrEqual(56.0);
@@ -76,7 +76,7 @@ describe('seedRuleFromStructure', () => {
     // Si 56.0 +/- 2 * 6.4 -> 43.2 .. 68.8. The particle's other rings sit at
     // 38 and 25 at%, so the user still has to widen it - which is the point of
     // showing the numbers rather than guessing them.
-    const si = seedRuleFromStructure(DETAIL).elements[0];
+    const si = seedRuleFromRegion(DETAIL).elements[0];
     expect(si.min_at_pct).toBeCloseTo(43.2, 1);
     expect(si.max_at_pct).toBeCloseTo(68.8, 1);
   });
@@ -86,21 +86,21 @@ describe('seedRuleFromStructure', () => {
       { element: 'Al', at_pct: 90, spread: 1, enrichment: 1.0 },
       { element: 'Si', at_pct: 10, spread: 1, enrichment: 1.0 },
     ] };
-    expect(seedRuleFromStructure(flat).elements).toHaveLength(2);
+    expect(seedRuleFromRegion(flat).elements).toHaveLength(2);
   });
 
   it('keys the rule on the phase name, not on a position', () => {
-    expect(seedRuleFromStructure(DETAIL).phase_key).toBe('Si.cif');
+    expect(seedRuleFromRegion(DETAIL).phase_key).toBe('Si.cif');
   });
 
-  it('survives a structure with no chemistry', () => {
-    const seeded = seedRuleFromStructure({ cif_filename: 'X', elements: [] });
+  it('survives a region with no chemistry', () => {
+    const seeded = seedRuleFromRegion({ cif_filename: 'X', elements: [] });
     expect(seeded.elements).toEqual([]);
   });
 });
 
 describe('countMatching', () => {
-  it('counts the structures a rule would admit', () => {
+  it('counts the regions a rule would admit', () => {
     const rule = { elements: [{ element: 'Si', min_at_pct: 30, max_at_pct: null }] };
     expect(countMatching(rule, STRUCTURES)).toBe(2);
   });
@@ -110,7 +110,7 @@ describe('countMatching', () => {
     expect(countMatching(rule, STRUCTURES)).toBe(0);
   });
 
-  it('does not count a structure whose element the rule names but the data lacks', () => {
+  it('does not count a region whose element the rule names but the data lacks', () => {
     const rule = { elements: [{ element: 'W', min_at_pct: 1 }] };
     expect(countMatching(rule, STRUCTURES)).toBe(0);
   });
@@ -120,7 +120,7 @@ describe('the editor', () => {
   const base = {
     rules: { rules: [] },
     setRules: vi.fn(),
-    structures: STRUCTURES,
+    regions: STRUCTURES,
     allPhases: [],
     inspectorDetail: DETAIL,
     elements: ['Al', 'Si', 'Fe'],
@@ -133,7 +133,7 @@ describe('the editor', () => {
     expect(screen.getByText('rules.noneYet')).toBeTruthy();
   });
 
-  it('seeds a rule from the inspected structure', () => {
+  it('seeds a rule from the inspected region', () => {
     const setRules = vi.fn();
     render(<PhaseRules {...base} setRules={setRules} />);
     fireEvent.click(screen.getByText('rules.seed'));
@@ -142,7 +142,7 @@ describe('the editor', () => {
     expect(produced.rules[0].phase_key).toBe('Si.cif');
   });
 
-  it('cannot seed without a structure selected', () => {
+  it('cannot seed without a region selected', () => {
     render(<PhaseRules {...base} inspectorDetail={null} />);
     expect(screen.getByText('rules.seed').disabled).toBe(true);
   });
@@ -154,7 +154,7 @@ describe('the editor', () => {
     expect(screen.getByText('rules.matchesNone')).toBeTruthy();
   });
 
-  it('shows how many structures a rule admits', () => {
+  it('shows how many regions a rule admits', () => {
     const rules = { rules: [{ phase_key: 'Si.cif',
                               elements: [{ element: 'Si', min_at_pct: 30 }] }] };
     render(<PhaseRules {...base} rules={rules} />);
@@ -202,7 +202,7 @@ describe('the clauses the user explicitly asked for', () => {
   const base = {
     rules: { rules: [{ phase_key: 'Si.cif', elements: [], ratios: [], enrichment: [] }] },
     setRules: vi.fn(),
-    structures: STRUCTURES,
+    regions: STRUCTURES,
     allPhases: [],
     inspectorDetail: DETAIL,
     elements: ['Al', 'Si', 'Fe', 'Mg'],

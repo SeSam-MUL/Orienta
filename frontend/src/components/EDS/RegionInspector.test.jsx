@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 /**
- * The structure inspector.
+ * The region inspector.
  *
  * It reports measurements, so the things worth pinning are the ones that would
  * quietly mislead: an enrichment bar that puts depletion on the enriched side,
- * a "loading" state that keeps the previous structure on screen as if it were
+ * a "loading" state that keeps the previous region on screen as if it were
  * the one just clicked, and a candidate list that hides how far off it is.
  */
 import React from 'react';
@@ -15,12 +15,12 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k, o) => (o ? `${k}:${JSON.stringify(o)}` : k) }),
 }));
 
-import StructureInspector, {
+import RegionInspector, {
   enrichmentBarPct, enrichmentKind,
-} from './StructureInspector';
+} from './RegionInspector';
 
 const DETAIL = {
-  structure_id: 5,
+  region_id: 5,
   n_pixels: 68,
   percentage: 0.63,
   color: '#88ddf8',
@@ -33,7 +33,7 @@ const DETAIL = {
     { element: 'Zn', at_pct: 0.2, spread: 0.3, enrichment: null },
   ],
   neighbours: [
-    { structure_id: 2, color: '#ccbbaa', shared_edge_px: 27, gap_at_pct: 18.0 },
+    { region_id: 2, color: '#ccbbaa', shared_edge_px: 27, gap_at_pct: 18.0 },
   ],
   candidates: [
     { phase_index: 3, cif_filename: 'Mn2(AlSi)5.cif', formula: 'Mn2Al5Si5',
@@ -82,14 +82,14 @@ describe('enrichmentKind', () => {
 });
 
 describe('the inspector', () => {
-  it('shows size and how many pieces the structure is in', () => {
-    render(<StructureInspector detail={DETAIL} />);
+  it('shows size and how many pieces the region is in', () => {
+    render(<RegionInspector detail={DETAIL} />);
     expect(screen.getByText(/inspector\.headline/)).toBeTruthy();
     expect(screen.getByText(/inspector\.pieces/)).toBeTruthy();
   });
 
   it('lists every element with its at%, spread and enrichment', () => {
-    render(<StructureInspector detail={DETAIL} />);
+    render(<RegionInspector detail={DETAIL} />);
     expect(screen.getByText('Si')).toBeTruthy();
     expect(screen.getByText('56.0')).toBeTruthy();
     expect(screen.getByText('7.69×')).toBeTruthy();
@@ -97,67 +97,67 @@ describe('the inspector', () => {
   });
 
   it('shows a dash where there is no background to compare against', () => {
-    render(<StructureInspector detail={DETAIL} />);
+    render(<RegionInspector detail={DETAIL} />);
     expect(screen.getByText('—')).toBeTruthy();
   });
 
   it('names each candidate with how far off it is, not just its rank', () => {
-    render(<StructureInspector detail={DETAIL} />);
+    render(<RegionInspector detail={DETAIL} />);
     expect(screen.getByText('5.4')).toBeTruthy();
     expect(screen.getByText('7.8')).toBeTruthy();
   });
 
-  it('names the structure when a candidate is clicked', () => {
+  it('names the region when a candidate is clicked', () => {
     const onAssign = vi.fn();
-    render(<StructureInspector detail={DETAIL} phaseIndex={1} onAssign={onAssign} />);
+    render(<RegionInspector detail={DETAIL} phaseIndex={1} onAssign={onAssign} />);
     fireEvent.click(screen.getByText('Mn2(AlSi)5.cif'));
     expect(onAssign).toHaveBeenCalledWith(3);
   });
 
   it('offers to take the name off only when it has one', () => {
-    render(<StructureInspector detail={DETAIL} phaseIndex={1} />);
+    render(<RegionInspector detail={DETAIL} phaseIndex={1} />);
     expect(screen.getByText('inspector.clearName')).toBeTruthy();
     cleanup();
-    render(<StructureInspector detail={DETAIL} phaseIndex={-1} />);
+    render(<RegionInspector detail={DETAIL} phaseIndex={-1} />);
     expect(screen.queryByText('inspector.clearName')).toBeNull();
   });
 
   it('jumps to a neighbour when it is clicked — the merge decision path', () => {
     const onSelect = vi.fn();
-    render(<StructureInspector detail={DETAIL} onSelectStructure={onSelect} />);
+    render(<RegionInspector detail={DETAIL} onSelectRegion={onSelect} />);
     fireEvent.click(screen.getByText(/inspector\.neighbourGap/));
     expect(onSelect).toHaveBeenCalledWith(2);
   });
 
-  it('says a structure touches nothing rather than showing an empty column', () => {
-    render(<StructureInspector detail={{ ...DETAIL, neighbours: [] }} />);
+  it('says a region touches nothing rather than showing an empty column', () => {
+    render(<RegionInspector detail={{ ...DETAIL, neighbours: [] }} />);
     expect(screen.getByText('inspector.noNeighbours')).toBeTruthy();
   });
 
   it('shows the error instead of stale numbers', () => {
-    render(<StructureInspector detail={DETAIL} error="no structures on this map" />);
-    expect(screen.getByText('no structures on this map')).toBeTruthy();
+    render(<RegionInspector detail={DETAIL} error="no regions on this map" />);
+    expect(screen.getByText('no regions on this map')).toBeTruthy();
     expect(screen.queryByText('Si')).toBeNull();
   });
 
-  it('does not present a previous structure as the one being loaded', () => {
-    render(<StructureInspector detail={null} loading />);
+  it('does not present a previous region as the one being loaded', () => {
+    render(<RegionInspector detail={null} loading />);
     expect(screen.getByText('inspector.loading')).toBeTruthy();
   });
 
-  it('keeps showing the current structure while a refresh is in flight', () => {
+  it('keeps showing the current region while a refresh is in flight', () => {
     // Blanking on every refresh would make the panel flicker on each merge.
-    render(<StructureInspector detail={DETAIL} loading />);
+    render(<RegionInspector detail={DETAIL} loading />);
     expect(screen.getByText('Si')).toBeTruthy();
   });
 
   it('says plainly when nothing is selected', () => {
-    render(<StructureInspector detail={null} />);
+    render(<RegionInspector detail={null} />);
     expect(screen.getByText('inspector.empty')).toBeTruthy();
   });
 
   it('disables naming while an operation is in flight', () => {
-    render(<StructureInspector detail={DETAIL} phaseIndex={1} busy />);
+    render(<RegionInspector detail={DETAIL} phaseIndex={1} busy />);
     // getByText lands on the inner span; the button is its parent.
     expect(screen.getByText('Mn2(AlSi)5.cif').closest('button').disabled)
       .toBe(true);

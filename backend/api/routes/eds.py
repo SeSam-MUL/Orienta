@@ -36,11 +36,12 @@ from backend.api.services.eds_wand import (
     flood_from, global_growth_curve, selection_stats, wand_field,
 )
 from backend.api.services.phase_map_store import (
+    render_claim_overlay_to_base64,
     get_phase_map_store,
     palette_hex_for_state,
     render_phase_map_to_base64,
-    render_structure_map_to_base64,
-    structure_color_hex,
+    render_region_map_to_base64,
+    region_color_hex,
 )
 
 logger = logging.getLogger(__name__)
@@ -679,15 +680,32 @@ class AutoClassifyRequest(BaseModel):
     # old behaviour silently destroyed them, which is the bug, not the
     # feature. Send False for a deliberate "start over".
     keep_manual_edits: bool = True
+    # Per-element multipliers on the clustering distance. 1.0 = untouched.
+    # The answer to "differentiation requires specific elements rather than
+    # overall similarity": on an ~85 at% aluminium matrix the distance is
+    # almost entirely aluminium, so a few at% of iron - the thing that
+    # actually separates pure Si from AlFeMnSi - is lost in it.
+    element_weights: Optional[Dict[str, float]] = None
+    # Hand-declared regions, evaluated before the automatic grouping.
+    # See backend/api/services/phase_rules.RegionDefinition.
+    region_defs: Optional[List[dict]] = None
+    # With region_defs set: cluster whatever the definitions did not claim
+    # (True, the default) or put all of it in one leftover region (False,
+    # the fully manual case).
+    cluster_remainder: bool = True
 
 
-def _structure_feature_matrix(at_maps, n_rows: int, n_cols: int,
-                              scale: Optional[int]):
+def _region_feature_matrix(at_maps, n_rows: int, n_cols: int,
+                           scale: Optional[int],
+                           element_weights: Optional[Dict[str, float]] = None):
     """The exact feature matrix the clustering used, for later re-splitting.
 
     Built through the clustering module rather than re-derived here, because a
-    second implementation that drifts would split a structure on different
-    data than the one that created it.
+    second implementation that drifts would split a region on different data
+    than the one that created it. ``element_weights`` has to be threaded
+    through for the same reason: without it, a map grouped with iron weighted
+    up would be re-split and edge-snapped on unweighted composition, so the
+    boundary tools would disagree with the boundaries they are adjusting.
     """
     from backend.api.services.eds_clustering import (
         DEFAULT_SCALE, _feature_matrix, _smooth_maps,
@@ -695,7 +713,7 @@ def _structure_feature_matrix(at_maps, n_rows: int, n_cols: int,
 
     sc = DEFAULT_SCALE if scale is None else int(scale)
     smoothed = _smooth_maps(at_maps, n_rows, n_cols, sc)
-    _els, X = _feature_matrix(smoothed, n_rows * n_cols)
+    _els, X = _feature_matrix(smoothed, n_rows * n_cols, element_weights)
     return X if X.size else None
 
 
@@ -791,9 +809,9 @@ def _state_to_response(include_image: bool = True) -> dict:
             "crystal_system": e.crystal_system,
             "n_pixels": int(counts[i + 1]),
             "color": palette[i] if i < len(palette) else "#3c3c3c",
-            # The nominal composition, so the structure picker can rank
-            # candidates against a structure's measured mean without a second
-            # round trip per structure.
+            # The nominal composition, so the region picker can rank
+            # candidates against a region's measured mean without a second
+            # round trip per region.
             "composition": {el: round(float(v), 2)
                             for el, v in (e.composition or {}).items()},
         }
@@ -806,30 +824,36 @@ def _state_to_response(include_image: bool = True) -> dict:
     # What an undo would take back, so the button can name it instead of
     # asking the user to remember.
     response["undo_label"] = store.undo_label
-    response["structures"] = _structures_payload(state)
+    response["regions"] = _regions_payload(state)
+    # How this map was made, so a reload gets the editor back rather than an
+    # empty one next to a map it can no longer explain. A segmentation built
+    # by hand is work; losing it to a page refresh would make the manual path
+    # unusable for anything real.
+    response["region_defs"] = list(state.region_defs or [])
+    response["element_weights"] = dict(state.element_weights or {})
     if include_image:
         response["image"] = render_phase_map_to_base64(state, _COLOR_OVERRIDES)
-        if state.structure_grid is not None:
-            response["structure_image"] = render_structure_map_to_base64(state)
+        if state.region_grid is not None:
+            response["region_image"] = render_region_map_to_base64(state)
     return response
 
 
-def _structures_payload(state) -> list:
-    """One entry per structure: how big, what it is made of, what it is called.
+def _regions_payload(state) -> list:
+    """One entry per region: how big, what it is made of, what it is called.
 
-    The composition is the honest content of a structure - it is what grouped
+    The composition is the honest content of a region - it is what grouped
     those pixels in the first place - so the legend can show it without the
     frontend recomputing anything. Ranked CIF candidates come with it, because
-    naming a structure is the one action the legend exists for.
+    naming a region is the one action the legend exists for.
     """
-    if state.structure_grid is None:
+    if state.region_grid is None:
         return []
     import numpy as _np
 
-    n_s = len(state.structure_phase)
+    n_s = len(state.region_phase)
     if n_s == 0:
         return []
-    flat = state.structure_grid.ravel()
+    flat = state.region_grid.ravel()
     counts = _np.bincount(flat[flat >= 0], minlength=n_s)
     total = int(state.n_rows * state.n_cols) or 1
 
@@ -848,7 +872,7 @@ def _structures_payload(state) -> list:
         if at_maps is not None and m.any():
             # Only the elements the grouping actually used. C and O are
             # excluded from the clustering (`_CHEM_IGNORE`), so listing them
-            # in a structure's description would imply they helped decide it.
+            # in a region's description would imply they helped decide it.
             from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
             for el, arr in at_maps.items():
                 if el in _CHEM_IGNORE:
@@ -856,11 +880,11 @@ def _structures_payload(state) -> list:
                 v = float(_np.asarray(arr, dtype=float).ravel()[m].mean())
                 if v >= 0.5:
                     mean[el] = round(v, 2)
-        phase_idx = int(state.structure_phase[sid])
+        phase_idx = int(state.region_phase[sid])
         entry = (state.phase_entries[phase_idx]
                  if 0 <= phase_idx < len(state.phase_entries) else None)
         out.append({
-            "structure_id": sid,
+            "region_id": sid,
             "n_pixels": int(counts[sid]) if sid < len(counts) else 0,
             "percentage": round((int(counts[sid]) if sid < len(counts) else 0)
                                 / total * 100, 2),
@@ -868,7 +892,7 @@ def _structures_payload(state) -> list:
             "phase_index": phase_idx,
             "cif_filename": entry.cif_filename if entry else None,
             "formula": entry.formula if entry else None,
-            "color": structure_color_hex(sid),
+            "color": region_color_hex(sid),
         })
     return out
 
@@ -929,8 +953,15 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
     clusters_payload: List[dict] = []
     k_used = 0
 
-    from backend.api.services.phase_rules import rule_set_from_dict
+    from backend.api.services.phase_rules import (
+        region_defs_from_list, region_defs_to_list, rule_set_from_dict,
+    )
     rule_set = rule_set_from_dict(req.rules)
+    # Definitions with nothing in them are dropped here rather than in the
+    # clustering: a half-written window must not claim the whole map, and an
+    # all-empty list must fall back to the automatic path unchanged.
+    region_defs = [d for d in region_defs_from_list(req.region_defs)
+                   if not d.is_empty] if req.region_defs else None
     # Participation is filtered HERE and only here. The candidate list is built
     # in two places (this route and `auto_classify_pixels`); narrowing it in
     # one would make the two modes number phases differently, and that number
@@ -963,6 +994,9 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
             min_score=req.min_score,
             scale=req.scale,
             rule_set=rule_set,
+            element_weights=req.element_weights,
+            region_defs=region_defs,
+            cluster_remainder=req.cluster_remainder,
         )
         score_grid = np.zeros((n_rows, n_cols), dtype=np.float32)
         ambiguous = np.zeros((n_rows, n_cols), dtype=bool)
@@ -1005,21 +1039,22 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
             ),
         )
 
-    # The structure layer: which pixels belong together by composition alone,
+    # The region layer: which pixels belong together by composition alone,
     # before anything is named. Only cluster mode produces it - per-pixel
     # matching has no notion of a group.
-    structure_grid = None
-    structure_phase = None
-    structure_features = None
+    region_grid = None
+    region_phase = None
+    region_features = None
     if mode != "pixel":
-        structure_grid = np.asarray(cluster_grid).reshape(n_rows, n_cols)
-        n_struct = int(structure_grid.max()) + 1 if structure_grid.size else 0
-        structure_phase = [-1] * n_struct
+        region_grid = np.asarray(cluster_grid).reshape(n_rows, n_cols)
+        n_struct = int(region_grid.max()) + 1 if region_grid.size else 0
+        region_phase = [-1] * n_struct
         for m in matches:
             if 0 <= m.cluster_id < n_struct:
-                structure_phase[m.cluster_id] = int(m.phase_index)
-        structure_features = _structure_feature_matrix(at_maps, n_rows, n_cols,
-                                                       req.scale)
+                region_phase[m.cluster_id] = int(m.phase_index)
+        region_features = _region_feature_matrix(at_maps, n_rows, n_cols,
+                                                 req.scale,
+                                                 req.element_weights)
 
     store = get_phase_map_store()
     store.set_classification(
@@ -1030,9 +1065,14 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
         min_score=req.min_score,
         file_path=file_path,
         preserve_locked=bool(req.keep_manual_edits),
-        structure_grid=structure_grid,
-        structure_phase=structure_phase,
-        structure_features=structure_features,
+        region_grid=region_grid,
+        region_phase=region_phase,
+        region_features=region_features,
+        # Stored with the map, not just used to build it - see the payload.
+        # Round-tripped through the parser rather than echoing the raw
+        # request, so what is stored is what was actually evaluated.
+        region_defs=region_defs_to_list(region_defs or []),
+        element_weights=dict(req.element_weights or {}),
     )
     response = _state_to_response(include_image=True)
     response["mode"] = mode
@@ -1803,30 +1843,33 @@ async def set_phase_colors(req: PhaseColorsRequest):
     return response
 
 
-# --- Structures (2026-08-24) ------------------------------------------------
+# --- Regions (2026-08-24) ------------------------------------------------
 #
-# A structure is a group of pixels that belong together by composition alone,
+# A region is a group of pixels that belong together by composition alone,
 # before anything is named. Naming it is one click; the four tools below are
 # for the cases where the grouping itself is wrong.
 
 
-class AssignStructureRequest(BaseModel):
-    structure_id: int
+# Distinct from `AssignRegionRequest` above, which paints a RECTANGLE. This
+# one names one grouped region. The rename to "region" put the two a
+# collision apart, and pydantic would have silently used whichever came last.
+class AssignRegionPhaseRequest(BaseModel):
+    region_id: int
     phase_index: int          # -1 clears the name
 
 
-class MergeStructuresRequest(BaseModel):
+class MergeRegionsRequest(BaseModel):
     keep_id: int
     drop_id: int
 
 
-class SplitStructureRequest(BaseModel):
-    structure_id: int
+class SplitRegionRequest(BaseModel):
+    region_id: int
     n_parts: int = 2
 
 
-class GrowStructureRequest(BaseModel):
-    structure_id: int
+class GrowRegionRequest(BaseModel):
+    region_id: int
     n_pixels: int             # negative shrinks
 
 
@@ -1834,8 +1877,8 @@ class SnapEdgesRequest(BaseModel):
     strength: float = 1.0     # erosion radius in px: how wide a band is re-decided
 
 
-def _structure_op(fn, *args):
-    """Run one structure operation and return the refreshed map.
+def _region_op(fn, *args):
+    """Run one region operation and return the refreshed map.
 
     Every one of them shares the same failure surface, so they share the same
     translation of it: a missing map or a stale composition is a 400 the
@@ -1852,57 +1895,57 @@ def _structure_op(fn, *args):
     return response
 
 
-@router.post("/phase-map/structure/assign")
-async def assign_structure_endpoint(req: AssignStructureRequest):
-    """Name a structure: every pixel of it becomes that phase."""
+@router.post("/phase-map/region/assign")
+async def assign_region_phase_endpoint(req: AssignRegionPhaseRequest):
+    """Name a region: every pixel of it becomes that phase."""
     store = get_phase_map_store()
-    return _structure_op(store.assign_structure, req.structure_id, req.phase_index)
+    return _region_op(store.assign_region_phase, req.region_id, req.phase_index)
 
 
-@router.post("/phase-map/structure/merge")
-async def merge_structures_endpoint(req: MergeStructuresRequest):
-    """Fold one structure into another.
+@router.post("/phase-map/region/merge")
+async def merge_regions_endpoint(req: MergeRegionsRequest):
+    """Fold one region into another.
 
     The most-used boundary tool: over-segmentation is the expected error,
     because a small particle reads as a dilution gradient rather than a
     plateau and gets cut into concentric rings.
     """
     store = get_phase_map_store()
-    return _structure_op(store.merge_structures, req.keep_id, req.drop_id)
+    return _region_op(store.merge_regions, req.keep_id, req.drop_id)
 
 
-@router.post("/phase-map/structure/split")
-async def split_structure_endpoint(req: SplitStructureRequest):
-    """Re-cluster one structure's own pixels, leaving the rest of the map alone."""
+@router.post("/phase-map/region/split")
+async def split_region_endpoint(req: SplitRegionRequest):
+    """Re-cluster one region's own pixels, leaving the rest of the map alone."""
     store = get_phase_map_store()
-    return _structure_op(store.split_structure, req.structure_id, req.n_parts)
+    return _region_op(store.split_region, req.region_id, req.n_parts)
 
 
-@router.post("/phase-map/structure/grow")
-async def grow_structure_endpoint(req: GrowStructureRequest):
-    """Move one structure's boundary out (positive) or in (negative)."""
+@router.post("/phase-map/region/grow")
+async def grow_region_endpoint(req: GrowRegionRequest):
+    """Move one region's boundary out (positive) or in (negative)."""
     store = get_phase_map_store()
-    return _structure_op(store.grow_structure, req.structure_id, req.n_pixels)
+    return _region_op(store.grow_region, req.region_id, req.n_pixels)
 
 
-@router.post("/phase-map/structure/snap")
+@router.post("/phase-map/region/snap")
 async def snap_edges_endpoint(req: SnapEdgesRequest):
     """Let every boundary relax onto the nearest strong chemistry edge."""
     store = get_phase_map_store()
-    return _structure_op(store.snap_structure_edges, req.strength)
+    return _region_op(store.snap_region_edges, req.strength)
 
 
-class StructureAtRequest(BaseModel):
+class RegionAtRequest(BaseModel):
     row: int
     col: int
 
 
-def _structure_detail(state, sid: int) -> dict:
-    """Everything worth knowing about one structure.
+def _region_detail(state, sid: int) -> dict:
+    """Everything worth knowing about one region.
 
-    Computed on demand rather than for every structure on every response: the
+    Computed on demand rather than for every region on every response: the
     composition spread and the neighbour scan are O(pixels x elements) each,
-    which is nothing for one structure and real work for twenty on a 485k-px
+    which is nothing for one region and real work for twenty on a 485k-px
     map.
     """
     from scipy import ndimage as _ndi
@@ -1911,26 +1954,26 @@ def _structure_detail(state, sid: int) -> dict:
     from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
     from backend.api.services.eds_wand import selection_stats
 
-    grid = state.structure_grid
+    grid = state.region_grid
     mask2d = grid == sid
     n_px = int(mask2d.sum())
     detail = {
-        "structure_id": sid,
+        "region_id": sid,
         "n_pixels": n_px,
         "percentage": round(n_px / max(1, state.n_rows * state.n_cols) * 100, 2),
-        "color": structure_color_hex(sid),
-        "phase_index": int(state.structure_phase[sid]),
+        "color": region_color_hex(sid),
+        "phase_index": int(state.region_phase[sid]),
         # The phase NAME, not only its index. A rule is keyed on the
         # entry key rather than a position, so anything seeding a rule
-        # from this structure needs the name; without it the "rule from
-        # this structure" path has nothing to key on.
+        # from this region needs the name; without it the "rule from
+        # this region" path has nothing to key on.
         "cif_filename": (
-            state.phase_entries[state.structure_phase[sid]].cif_filename
-            if 0 <= state.structure_phase[sid] < len(state.phase_entries)
+            state.phase_entries[state.region_phase[sid]].cif_filename
+            if 0 <= state.region_phase[sid] < len(state.phase_entries)
             else None),
         "formula": (
-            state.phase_entries[state.structure_phase[sid]].formula
-            if 0 <= state.structure_phase[sid] < len(state.phase_entries)
+            state.phase_entries[state.region_phase[sid]].formula
+            if 0 <= state.region_phase[sid] < len(state.phase_entries)
             else None),
         "elements": [],
         "pieces": [],
@@ -1941,7 +1984,7 @@ def _structure_detail(state, sid: int) -> dict:
         return detail
 
     # --- connected pieces: three rings of one particle look like three
-    # structures, and this is where that becomes visible.
+    # regions, and this is where that becomes visible.
     labelled, n_pieces = _ndi.label(mask2d)
     sizes = sorted((int(v) for v in np.bincount(labelled.ravel())[1:]), reverse=True)
     detail["n_pieces"] = int(n_pieces)
@@ -1959,16 +2002,46 @@ def _structure_detail(state, sid: int) -> dict:
     # implementation. Enrichment needs the composition renormalised over the
     # scored elements before dividing by the background - doing that by hand
     # here produced "Al 49.68x" on a map whose background IS aluminium.
-    stats = selection_stats(at_maps, mask2d, background=background_levels(at_maps))
+    background = background_levels(at_maps)
+    stats = selection_stats(at_maps, mask2d, background=background)
     means = {el: v for el, v in stats["mean_at_pct"].items()
              if el not in _CHEM_IGNORE}
+
+    # The same region measured the way a WINDOW will be read: the classifier
+    # evaluates definitions on the smoothed composition, and on a small
+    # feature that differs enough to matter. Measured on the SampleB silicon
+    # particle: 40.97 at% raw against 36.88 smoothed, so a threshold copied
+    # off the raw reading catches nothing. Seeding uses these instead.
+    from backend.api.services.eds_clustering import DEFAULT_SCALE, _smooth_maps
+    try:
+        smoothed = _smooth_maps(at_maps, state.n_rows, state.n_cols,
+                                DEFAULT_SCALE)
+        sstats = selection_stats(smoothed, mask2d, background=background)
+        seed = []
+        for el, mean in sstats["mean_at_pct"].items():
+            if el in _CHEM_IGNORE:
+                continue
+            v = np.asarray(smoothed[el], dtype=float).ravel()[mask2d.ravel()]
+            seed.append({
+                "element": el,
+                "at_pct": round(float(mean), 2),
+                "spread_at_pct": round(float(v.std()), 2) if v.size else 0.0,
+                "enrichment": (round(float(sstats["enrichment"][el]), 2)
+                               if sstats.get("enrichment", {}).get(el) is not None
+                               else None),
+            })
+        detail["seed"] = sorted(seed, key=lambda r: -r["at_pct"])
+    except Exception:
+        # Seeding falls back to the raw composition, which is wider but not
+        # wrong. Never lose the whole panel over the convenience half.
+        detail["seed"] = []
     els = []
     for el, mean in means.items():
         vals = np.asarray(at_maps[el], dtype=float).ravel()[flat]
         els.append({
             "element": el,
             "at_pct": round(float(mean), 2),
-            # Spread inside the structure: one that is not homogeneous is
+            # Spread inside the region: one that is not homogeneous is
             # either two things or a gradient, and both are worth seeing.
             "spread": round(float(vals.std()), 2),
             "enrichment": stats["enrichment"].get(el),
@@ -1976,7 +2049,7 @@ def _structure_detail(state, sid: int) -> dict:
     els.sort(key=lambda d: -d["at_pct"])
     detail["elements"] = els
 
-    # --- neighbours: who this structure touches, and how far away it is
+    # --- neighbours: who this region touches, and how far away it is
     # chemically. The decision basis for merging.
     struct = _ndi.generate_binary_structure(2, 1)
     rim = _ndi.binary_dilation(mask2d, structure=struct) & ~mask2d
@@ -1990,8 +2063,8 @@ def _structure_detail(state, sid: int) -> dict:
             ov = float(np.asarray(at_maps[el], dtype=float).ravel()[om].mean())
             gap = max(gap, abs(mean - ov))
         detail["neighbours"].append({
-            "structure_id": other,
-            "color": structure_color_hex(other),
+            "region_id": other,
+            "color": region_color_hex(other),
             "shared_edge_px": int((grid[rim] == other).sum()),
             # Largest single-element difference, in at% - the same measure the
             # cluster count is chosen by, so "2 at% apart" means the same
@@ -2018,37 +2091,240 @@ def _structure_detail(state, sid: int) -> dict:
     return detail
 
 
-@router.get("/phase-map/structure/{structure_id}")
-async def get_structure_detail(structure_id: int):
-    """Full description of one structure, for the inspector."""
+@router.get("/phase-map/region/{region_id}")
+async def get_region_detail(region_id: int):
+    """Full description of one region, for the inspector."""
     state = get_phase_map_store().get_state()
-    if state is None or state.structure_grid is None:
-        raise HTTPException(status_code=400, detail="No structures on this map")
-    if not (0 <= structure_id < len(state.structure_phase)):
+    if state is None or state.region_grid is None:
+        raise HTTPException(status_code=400, detail="No regions on this map")
+    if not (0 <= region_id < len(state.region_phase)):
         raise HTTPException(
             status_code=400,
-            detail=f"Structure {structure_id} out of range "
-                   f"(0..{len(state.structure_phase) - 1})")
-    return await asyncio.to_thread(_structure_detail, state, int(structure_id))
+            detail=f"Region {region_id} out of range "
+                   f"(0..{len(state.region_phase) - 1})")
+    return await asyncio.to_thread(_region_detail, state, int(region_id))
 
 
-@router.post("/phase-map/structure-at")
-async def structure_at(req: StructureAtRequest):
-    """Which structure is under this pixel, described in full.
+class SeedFromPixelRequest(BaseModel):
+    """Build a composition window from one pixel the user pointed at."""
 
-    One round trip for the whole click: the map has no structure ids on the
+    row: int
+    col: int
+    #: How far below the clicked pixel's own value the window still
+    #: accepts, as a fraction of it. 0.6 means "down to 40% of what this
+    #: pixel reads".
+    #:
+    #: That is deliberately loose, and it is loose because of the physics
+    #: this module keeps running into: EDS taken during an EBSD session has
+    #: an interaction volume far larger than the features, so a small
+    #: particle reads as a DILUTION GRADIENT rather than a plateau. A window
+    #: seeded tightly around the core therefore catches only the core.
+    #: Measured on the SampleB silicon particle, whose full extent is 202 px:
+    #:
+    #:   tolerance | 0.25   0.40   0.50   0.60   0.70
+    #:   claimed   |  75    126    157    196    225
+    #:
+    #: 0.6 recovers the feature; 0.7 starts taking its surroundings. How
+    #: much rim belongs to the particle is the user's call - which is why
+    #: the seeded number is an ordinary editable field with a live preview
+    #: over the map, not a constant they cannot see.
+    tolerance: float = 0.6
+    scale: Optional[int] = None
+
+
+@router.post("/phase-map/region-defs/seed-from-pixel")
+async def seed_region_def_from_pixel(req: SeedFromPixelRequest):
+    """A ready-made definition, read off the pixel the user clicked.
+
+    This is where the numbers were always meant to come from. A threshold
+    for a silicon particle has to be read off a silicon PIXEL; seeding from
+    a region that failed to separate silicon from AlFeMnSi brackets the
+    mixture and separates nothing, which is precisely where first-time users
+    concluded the feature did not work.
+
+    Only elements genuinely concentrated at that pixel become clauses.
+    Writing one per measured element produces six clauses that say "and the
+    matrix is still the matrix" - true, useless, and brittle the moment the
+    neighbouring chemistry shifts.
+    """
+    from backend.api.services.chemistry_score import background_levels
+    from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
+    from backend.api.services.eds_clustering import DEFAULT_SCALE, _smooth_maps
+    from backend.api.services.phase_rules import renormalised_at_pct
+
+    at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
+    if not (0 <= req.row < n_rows and 0 <= req.col < n_cols):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Pixel ({req.row}, {req.col}) is outside this "
+                   f"{n_rows}x{n_cols} map.",
+        )
+    scale = DEFAULT_SCALE if req.scale is None else int(req.scale)
+    # Smoothed, because a window is evaluated on the smoothed composition.
+    # Seeding from the raw pixel would hand back a threshold the classifier
+    # then refuses - measured on a real particle: 40.97 at% raw against
+    # 36.88 smoothed, so "Si >= 40" read off the raw value catches nothing.
+    smoothed = _smooth_maps(at_maps, n_rows, n_cols, scale)
+    els, at_pct = renormalised_at_pct(smoothed)
+    idx = req.row * n_cols + req.col
+    background = background_levels(at_maps)
+
+    tol = max(0.02, min(1.0, float(req.tolerance)))
+    clauses, here = [], {}
+    for j, el in enumerate(els):
+        if el in _CHEM_IGNORE:
+            continue
+        v = float(at_pct[j, idx])
+        here[el] = round(v, 2)
+        bg = background.get(el)
+        # `background` is a renormalised FRACTION; `at_pct` is a percentage.
+        enrich = (v / (bg * 100.0)) if bg else None
+        if enrich is None or enrich < _ENRICHMENT_FOR_SEED or v < 0.5:
+            continue
+        # Lower bound only. An upper bound on the very element that makes
+        # the feature distinctive excludes its PUREST pixels - the core of
+        # the particle - which is the opposite of what the user pointed at.
+        # Both windows that were measured to solve the reported case were
+        # one-sided for the same reason ("Si >= 20", "Fe >= 2"); an upper
+        # bound earns its place on a DIFFERENT element, to exclude the
+        # neighbouring phase, and that is a judgement one pixel cannot make.
+        clauses.append({
+            "element": el,
+            "min_at_pct": round(max(0.0, v * (1.0 - tol)), 2),
+            "max_at_pct": None,
+            "enrichment": round(enrich, 2),
+        })
+
+    return {
+        "success": True,
+        "row": req.row,
+        "col": req.col,
+        "scale": scale,
+        # Everything measured there, so the UI can say what it left out and
+        # why, rather than silently handing back two clauses out of eight.
+        "composition": dict(sorted(here.items(), key=lambda kv: -kv[1])),
+        "elements": clauses,
+        "definition": {
+            "name": _seed_name(clauses),
+            "phase_key": "",
+            "elements": [{k: v for k, v in c.items() if k != "enrichment"}
+                         for c in clauses],
+            "ratios": [],
+            "enrichment": [],
+        },
+    }
+
+
+#: A pixel has to read this many times the map background for an element to
+#: be worth a clause. Same threshold the inspector paints "concentrated
+#: here" at, so the panel and the seed agree about what is interesting.
+_ENRICHMENT_FOR_SEED = 1.3
+
+
+def _seed_name(clauses) -> str:
+    """Name the window after what makes it distinctive."""
+    if not clauses:
+        return "Region"
+    top = sorted(clauses, key=lambda c: -(c.get("enrichment") or 0))[:2]
+    return "-".join(c["element"] for c in top) + " rich"
+
+
+class RegionDefPreviewRequest(BaseModel):
+    """Try hand-written region definitions without committing to them."""
+
+    region_defs: List[dict] = []
+    scale: Optional[int] = None
+
+
+@router.post("/phase-map/region-defs/preview")
+async def preview_region_defs(req: RegionDefPreviewRequest):
+    """How many pixels each definition would claim, and what they contain.
+
+    The editor needs real numbers from the real map, not an estimate: a
+    window that claims 3 pixels and a window that claims half the map look
+    identical while you are typing the thresholds. Overlaps are reported per
+    definition too, because "first definition wins" is only a usable rule if
+    you can see what the later ones lost.
+
+    Evaluated on the SMOOTHED composition, the same values the grouping will
+    use, so the preview and the run cannot disagree.
+    """
+    from backend.api.services.chemistry_score import background_levels
+    from backend.api.services.eds_clustering import DEFAULT_SCALE, _smooth_maps
+    from backend.api.services.phase_rules import (
+        region_defs_from_list, region_labels,
+    )
+
+    at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
+    scale = DEFAULT_SCALE if req.scale is None else int(req.scale)
+    smoothed = _smooth_maps(at_maps, n_rows, n_cols, scale)
+    background = background_levels(at_maps)
+
+    defs = region_defs_from_list(req.region_defs)
+    assign = region_labels(defs, smoothed, background=background)
+    n_px = n_rows * n_cols
+
+    out = []
+    for i, d in enumerate(defs):
+        mask = assign.labels == i
+        mean = {}
+        if mask.any():
+            mean = {el: round(float(np.asarray(a, dtype=float)[mask].mean()), 2)
+                    for el, a in at_maps.items()}
+            mean = {el: v for el, v in
+                    sorted(mean.items(), key=lambda kv: -kv[1]) if v >= 0.5}
+        out.append({
+            "name": d.name,
+            "n_pixels": int(assign.counts[i]),
+            "percentage": round(assign.counts[i] / n_px * 100, 2) if n_px else 0.0,
+            "overlap_pixels": int(assign.overlaps[i]),
+            "mean_at_pct": mean,
+            "reason": assign.reasons[i],
+            # Stable code so the UI can translate it; the prose above stays
+            # as the fallback for anything it does not recognise.
+            "reason_code": (assign.reason_codes[i]
+                            if i < len(assign.reason_codes) else None),
+        })
+
+    unclaimed = int((assign.labels < 0).sum())
+    # Where, not only how many. Rendered here because the labels already
+    # exist; asking the frontend to rebuild them would be a second
+    # implementation of the thing this endpoint exists to be authoritative
+    # about.
+    overlay = None
+    try:
+        if assign.labels.size:
+            overlay = render_claim_overlay_to_base64(
+                assign.labels, n_rows, n_cols)
+    except Exception:
+        logger.warning("Could not render the claim overlay", exc_info=True)
+    return {
+        "success": True,
+        "overlay": overlay,
+        "definitions": out,
+        "unclaimed_pixels": unclaimed,
+        "unclaimed_percentage": round(unclaimed / n_px * 100, 2) if n_px else 0.0,
+        "total_pixels": n_px,
+        "scale": scale,
+    }
+
+@router.post("/phase-map/region-at")
+async def region_at(req: RegionAtRequest):
+    """Which region is under this pixel, described in full.
+
+    One round trip for the whole click: the map has no region ids on the
     client, and fetching the id and then its detail would be two.
     """
     state = get_phase_map_store().get_state()
-    if state is None or state.structure_grid is None:
-        raise HTTPException(status_code=400, detail="No structures on this map")
+    if state is None or state.region_grid is None:
+        raise HTTPException(status_code=400, detail="No regions on this map")
     if not (0 <= req.row < state.n_rows and 0 <= req.col < state.n_cols):
         raise HTTPException(
             status_code=400,
             detail=f"pixel ({req.row},{req.col}) outside scan "
                    f"{state.n_rows}x{state.n_cols}")
-    sid = int(state.structure_grid[req.row, req.col])
+    sid = int(state.region_grid[req.row, req.col])
     if sid < 0:
-        # No data here - say so rather than returning structure 0.
-        return {"structure_id": None}
-    return await asyncio.to_thread(_structure_detail, state, sid)
+        # No data here - say so rather than returning region 0.
+        return {"region_id": None}
+    return await asyncio.to_thread(_region_detail, state, sid)

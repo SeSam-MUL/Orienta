@@ -831,6 +831,24 @@ export const dbApi = {
 };
 
 // --- EDS ---
+/**
+ * The weights that actually say something.
+ *
+ * A slider parked at 1 is not a weight, and sending a full table of ones
+ * would make every request look weighted — which matters, because the
+ * backend treats "weights present" as the signal to build a second,
+ * unweighted feature matrix. Returns null when there is nothing to send.
+ */
+function nonUnitWeights(w) {
+  if (!w) return null;
+  const out = {};
+  Object.entries(w).forEach(([el, v]) => {
+    const n = Number(v);
+    if (Number.isFinite(n) && n >= 0 && n !== 1) out[el] = n;
+  });
+  return Object.keys(out).length ? out : null;
+}
+
 export const edsApi = {
   elements: () => api.get('/api/eds/elements'),
   getMap: (element, mode = 'counts', cmap = 'hot', color = '') =>
@@ -861,6 +879,13 @@ export const edsApi = {
       ...(opts.scale != null ? { scale: opts.scale } : {}),
       ...(opts.rules ? { rules: opts.rules } : {}),
       ...(opts.phaseKeys ? { phase_keys: opts.phaseKeys } : {}),
+      // Only sent when in use, so the automatic path stays byte-for-byte
+      // the request it always was.
+      ...(nonUnitWeights(opts.elementWeights)
+        ? { element_weights: nonUnitWeights(opts.elementWeights) } : {}),
+      ...(opts.regionDefs?.length ? { region_defs: opts.regionDefs } : {}),
+      ...(opts.regionDefs?.length && opts.clusterRemainder === false
+        ? { cluster_remainder: false } : {}),
     }),
   getPhaseMap: (includeImage = true) =>
     api.get('/api/eds/phase-map', { params: { include_image: includeImage } }),
@@ -889,28 +914,44 @@ export const edsApi = {
   phaseMapUndo: () => api.post('/api/eds/phase-map/undo'),
   setPhaseColors: (overrides) =>
     api.post('/api/eds/phase-map/colors', { overrides }),
-  // Structures: group by composition first, name afterwards.
-  assignStructure: ({ structureId, phaseIndex }) =>
-    api.post('/api/eds/phase-map/structure/assign',
-      { structure_id: structureId, phase_index: phaseIndex }),
-  mergeStructures: ({ keepId, dropId }) =>
-    api.post('/api/eds/phase-map/structure/merge',
+  // Regions: group by composition first, name afterwards.
+  assignRegionPhase: ({ regionId, phaseIndex }) =>
+    api.post('/api/eds/phase-map/region/assign',
+      { region_id: regionId, phase_index: phaseIndex }),
+  mergeRegions: ({ keepId, dropId }) =>
+    api.post('/api/eds/phase-map/region/merge',
       { keep_id: keepId, drop_id: dropId }),
-  splitStructure: ({ structureId, nParts }) =>
-    api.post('/api/eds/phase-map/structure/split',
-      { structure_id: structureId, n_parts: nParts }),
-  growStructure: ({ structureId, nPixels }) =>
-    api.post('/api/eds/phase-map/structure/grow',
-      { structure_id: structureId, n_pixels: nPixels }),
-  snapStructureEdges: ({ strength }) =>
-    api.post('/api/eds/phase-map/structure/snap', { strength }),
-  // Full description of one structure, for the inspector.
-  structureDetail: (structureId) =>
-    api.get(`/api/eds/phase-map/structure/${structureId}`),
-  // Which structure is under this pixel, described in full — one round
+  splitRegion: ({ regionId, nParts }) =>
+    api.post('/api/eds/phase-map/region/split',
+      { region_id: regionId, n_parts: nParts }),
+  growRegion: ({ regionId, nPixels }) =>
+    api.post('/api/eds/phase-map/region/grow',
+      { region_id: regionId, n_pixels: nPixels }),
+  snapRegionEdges: ({ strength }) =>
+    api.post('/api/eds/phase-map/region/snap', { strength }),
+  // A ready-made composition window, read off one pixel the user pointed
+  // at. This is where the numbers come from: a threshold for a silicon
+  // particle has to be read off a silicon PIXEL, not off a region that
+  // failed to separate silicon from anything else.
+  seedRegionDefFromPixel: ({ row, col, tolerance, scale }) =>
+    api.post('/api/eds/phase-map/region-defs/seed-from-pixel', {
+      row, col,
+      ...(tolerance != null ? { tolerance } : {}),
+      ...(scale != null ? { scale } : {}),
+    }),
+  // Try region definitions against the real map without committing. The
+  // editor needs real counts: a window that claims 3 px and one that claims
+  // half the map look identical while you are typing the thresholds.
+  previewRegionDefs: ({ regionDefs, scale }) =>
+    api.post('/api/eds/phase-map/region-defs/preview',
+      { region_defs: regionDefs, ...(scale != null ? { scale } : {}) }),
+  // Full description of one region, for the inspector.
+  regionDetail: (regionId) =>
+    api.get(`/api/eds/phase-map/region/${regionId}`),
+  // Which region is under this pixel, described in full — one round
   // trip for the whole click.
-  structureAt: (row, col) =>
-    api.post('/api/eds/phase-map/structure-at', { row, col }),
+  regionAt: (row, col) =>
+    api.post('/api/eds/phase-map/region-at', { row, col }),
   phaseMapIndexingConfig: () => api.get('/api/eds/phase-map/indexing-config'),
   displayModes: () => api.get('/api/eds/display-modes'),
   chemistryMask: (filters, combine = 'and', margin_px = 0) =>
@@ -1184,6 +1225,9 @@ export const crystalHintApi = {
   // Download a CIF from an external DB (COD only for v1) and validate it.
   // Optionally persists it into Database/CIF_Library/. Does NOT trigger
   // SHT generation — the user must run that explicitly from Simulation page.
+  // `structureId` here is a CRYSTAL STRUCTURE id in an external database
+  // (numeric for COD), not a map region. The backend field is `structure_id`
+  // and renaming it silently broke every CIF download.
   downloadCif: ({ source = 'COD', structureId, save = true, overwrite = false } = {}) =>
     api.post('/api/crystal-hint/download-cif', {
       source, structure_id: structureId, save, overwrite,

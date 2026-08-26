@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The structure panel: name a group, or fix the grouping.
+ * The region panel: name a group, or fix the grouping.
  *
  * What matters here is that the panel never decides anything itself. It shows
  * what the backend grouped, ranks the candidate names so the plausible ones
@@ -15,17 +15,17 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (k, o) => (o ? `${k}:${JSON.stringify(o)}` : k) }),
 }));
 
-import StructurePanel, { describeComposition } from './StructurePanel';
+import RegionPanel, { describeComposition } from './RegionPanel';
 
 const STRUCTURES = [
-  { structure_id: 0, n_pixels: 3036, percentage: 28.1, color: '#aabbcc',
+  { region_id: 0, n_pixels: 3036, percentage: 28.1, color: '#aabbcc',
     mean_at_pct: { Al: 97.0, Si: 1.2 }, phase_index: 0,   // C/O are
     // excluded by the backend: they take no part in the grouping.
     cif_filename: 'Al.cif', formula: 'Al' },
-  { structure_id: 1, n_pixels: 70, percentage: 0.7, color: '#ccbbaa',
+  { region_id: 1, n_pixels: 70, percentage: 0.7, color: '#ccbbaa',
     mean_at_pct: { Al: 60.3, Si: 38.0 }, phase_index: 0,
     cif_filename: 'Al.cif', formula: 'Al' },
-  { structure_id: 2, n_pixels: 68, percentage: 0.6, color: '#bbccaa',
+  { region_id: 2, n_pixels: 68, percentage: 0.6, color: '#bbccaa',
     mean_at_pct: { Si: 56.0, Al: 42.6 }, phase_index: 1,
     cif_filename: 'Si.cif', formula: 'Si' },
 ];
@@ -41,15 +41,15 @@ const ALL_PHASES = [
 
 function makeHandle(over = {}) {
   return {
-    phaseMap: { loaded: true, structures: STRUCTURES, all_phases: ALL_PHASES },
-    structureBusy: false,
-    selectedStructureId: null,
-    setSelectedStructureId: vi.fn(),
+    phaseMap: { loaded: true, regions: STRUCTURES, all_phases: ALL_PHASES },
+    regionBusy: false,
+    selectedRegionId: null,
+    setSelectedRegionId: vi.fn(),
     scale: 5, setScale: vi.fn(),
     nClusters: null, setNClusters: vi.fn(),
-    handleMergeStructures: vi.fn(),
-    handleSplitStructure: vi.fn(),
-    handleGrowStructure: vi.fn(),
+    handleMergeRegions: vi.fn(),
+    handleSplitRegion: vi.fn(),
+    handleGrowRegion: vi.fn(),
     handleSnapEdges: vi.fn(),
     ...over,
   };
@@ -67,101 +67,101 @@ describe('describeComposition', () => {
     expect(describeComposition({ Al: 97, Zn: 0.02 })).toBe('Al 97.0');
   });
 
-  it('survives a structure with no measured chemistry', () => {
+  it('survives a region with no measured chemistry', () => {
     expect(describeComposition({})).toBe('');
     expect(describeComposition(undefined)).toBe('');
   });
 });
 
-// Candidate ranking moved to the backend (`_structure_detail`) when the
+// Candidate ranking moved to the backend (`_region_detail`) when the
 // inspector started showing the at% gap: two rankings could disagree about
 // which phase sits under the user's cursor. The inspector's tests cover it.
 
 describe('the panel', () => {
-  it('lists every structure with its composition, not its phase name', () => {
-    render(<StructurePanel handle={makeHandle()} />);
+  it('lists every region with its composition, not its phase name', () => {
+    render(<RegionPanel handle={makeHandle()} />);
     expect(screen.getByText('Al 97.0 · Si 1.2')).toBeTruthy();
     expect(screen.getByText('Al 60.3 · Si 38.0')).toBeTruthy();
     expect(screen.getByText('Si 56.0 · Al 42.6')).toBeTruthy();
   });
 
-  it('selects a structure when its row is clicked', () => {
+  it('selects a region when its row is clicked', () => {
     const h = makeHandle();
-    render(<StructurePanel handle={h} />);
+    render(<RegionPanel handle={h} />);
     fireEvent.click(screen.getByText('Al 60.3 · Si 38.0'));
-    expect(h.setSelectedStructureId).toHaveBeenCalledWith(1);
+    expect(h.setSelectedRegionId).toHaveBeenCalledWith(1);
   });
 
-      it('merges the selected structure with another', () => {
-    const h = makeHandle({ selectedStructureId: 1 });
-    render(<StructurePanel handle={h} />);
-    fireEvent.change(screen.getByLabelText('structures.merge'), {
+      it('merges the selected region with another', () => {
+    const h = makeHandle({ selectedRegionId: 1 });
+    render(<RegionPanel handle={h} />);
+    fireEvent.change(screen.getByLabelText('regions.merge'), {
       target: { value: '2' },
     });
-    fireEvent.click(screen.getByText('structures.mergeGo'));
-    expect(h.handleMergeStructures).toHaveBeenCalledWith(1, 2);
+    fireEvent.click(screen.getByText('regions.mergeGo'));
+    expect(h.handleMergeRegions).toHaveBeenCalledWith(1, 2);
   });
 
-  it('never offers a structure as a merge target with itself', () => {
-    const h = makeHandle({ selectedStructureId: 1 });
-    render(<StructurePanel handle={h} />);
-    const opts = [...screen.getByLabelText('structures.merge').options]
+  it('never offers a region as a merge target with itself', () => {
+    const h = makeHandle({ selectedRegionId: 1 });
+    render(<RegionPanel handle={h} />);
+    const opts = [...screen.getByLabelText('regions.merge').options]
       .map((o) => o.value).filter(Boolean);
     expect(opts).not.toContain('1');
     expect(opts).toEqual(['0', '2']);
   });
 
-  it('splits the selected structure locally', () => {
-    const h = makeHandle({ selectedStructureId: 0 });
-    render(<StructurePanel handle={h} />);
-    fireEvent.click(screen.getByText('structures.splitInto:{"count":3}'));
-    expect(h.handleSplitStructure).toHaveBeenCalledWith(0, 3);
+  it('splits the selected region locally', () => {
+    const h = makeHandle({ selectedRegionId: 0 });
+    render(<RegionPanel handle={h} />);
+    fireEvent.click(screen.getByText('regions.splitInto:{"count":3}'));
+    expect(h.handleSplitRegion).toHaveBeenCalledWith(0, 3);
   });
 
   it('moves one boundary in and out', () => {
-    const h = makeHandle({ selectedStructureId: 2 });
-    render(<StructurePanel handle={h} />);
+    const h = makeHandle({ selectedRegionId: 2 });
+    render(<RegionPanel handle={h} />);
     fireEvent.click(screen.getByText('+1 px'));
-    expect(h.handleGrowStructure).toHaveBeenCalledWith(2, 1);
+    expect(h.handleGrowRegion).toHaveBeenCalledWith(2, 1);
     fireEvent.click(screen.getByText('−1 px'));
-    expect(h.handleGrowStructure).toHaveBeenCalledWith(2, -1);
+    expect(h.handleGrowRegion).toHaveBeenCalledWith(2, -1);
   });
 
   it('snaps every boundary onto the chemistry, map-wide', () => {
     const h = makeHandle();
-    render(<StructurePanel handle={h} />);
-    fireEvent.change(screen.getByLabelText('structures.snap'), {
+    render(<RegionPanel handle={h} />);
+    fireEvent.change(screen.getByLabelText('regions.snap'), {
       target: { value: '4' },
     });
-    fireEvent.click(screen.getByText('structures.snapGo'));
+    fireEvent.click(screen.getByText('regions.snapGo'));
     expect(h.handleSnapEdges).toHaveBeenCalledWith(4);
   });
 
-  it('shows the per-structure tools only once one is selected', () => {
-    render(<StructurePanel handle={makeHandle()} />);
-    expect(screen.queryByText('structures.mergeGo')).toBeNull();
+  it('shows the per-region tools only once one is selected', () => {
+    render(<RegionPanel handle={makeHandle()} />);
+    expect(screen.queryByText('regions.mergeGo')).toBeNull();
     cleanup();
-    render(<StructurePanel handle={makeHandle({ selectedStructureId: 0 })} />);
-    expect(screen.getByText('structures.mergeGo')).toBeTruthy();
+    render(<RegionPanel handle={makeHandle({ selectedRegionId: 0 })} />);
+    expect(screen.getByText('regions.mergeGo')).toBeTruthy();
   });
 
-  it('says so plainly when the map has no structures', () => {
-    render(<StructurePanel handle={makeHandle({
-      phaseMap: { loaded: true, structures: [], all_phases: ALL_PHASES },
+  it('says so plainly when the map has no regions', () => {
+    render(<RegionPanel handle={makeHandle({
+      phaseMap: { loaded: true, regions: [], all_phases: ALL_PHASES },
     })} />);
-    expect(screen.getByText('structures.none')).toBeTruthy();
+    expect(screen.getByText('regions.none')).toBeTruthy();
   });
 
   it('renders nothing at all without a map', () => {
     const { container } = render(
-      <StructurePanel handle={makeHandle({ phaseMap: { loaded: false } })} />);
+      <RegionPanel handle={makeHandle({ phaseMap: { loaded: false } })} />);
     expect(container.firstChild).toBeNull();
   });
 
   it('disables every action while one is in flight', () => {
-    const h = makeHandle({ selectedStructureId: 0, structureBusy: true });
-    render(<StructurePanel handle={h} />);
-    expect(screen.getByText('structures.snapGo').disabled).toBe(true);
+    const h = makeHandle({ selectedRegionId: 0, regionBusy: true });
+    render(<RegionPanel handle={h} />);
+    expect(screen.getByText('regions.snapGo').disabled).toBe(true);
     expect(screen.getByText('+1 px').disabled).toBe(true);
   });
 });

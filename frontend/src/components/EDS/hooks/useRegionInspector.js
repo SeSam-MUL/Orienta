@@ -1,20 +1,20 @@
 /**
- * Keeps the structure inspector pointed at one structure.
+ * Keeps the region inspector pointed at one region.
  *
  * A click on the map and a click in the list must land on the same thing, so
- * both funnel through here. The map has no structure ids on the client — the
+ * both funnel through here. The map has no region ids on the client — the
  * grid is one int per pixel and shipping it would cost ~1.9 MB on a 485k-px
  * scan — so the pixel lookup and the detail come back in ONE request rather
  * than two.
  *
- * Requests carry a token: a slow answer for a structure the user has already
+ * Requests carry a token: a slow answer for a region the user has already
  * clicked past must not overwrite the current one.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { edsApi } from '../../../services/api';
 
-export default function useStructureInspector({ selectedStructureId, setSelectedStructureId, mapVersion }) {
+export default function useRegionInspector({ selectedRegionId, setSelectedRegionId, mapVersion }) {
   const [detail, setDetail] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -25,7 +25,7 @@ export default function useStructureInspector({ selectedStructureId, setSelected
     const mine = ++token.current;
     setLoading(true); setError(null);
     try {
-      const res = await edsApi.structureDetail(sid);
+      const res = await edsApi.regionDetail(sid);
       if (mine !== token.current) return null;
       setDetail(res.data);
       return res.data;
@@ -39,36 +39,36 @@ export default function useStructureInspector({ selectedStructureId, setSelected
     }
   }, []);
 
-  /** A click on the map: find the structure under the pixel and describe it. */
+  /** A click on the map: find the region under the pixel and describe it. */
   const inspectPixel = useCallback(async (row, col) => {
     const mine = ++token.current;
     setLoading(true); setError(null);
     try {
-      const res = await edsApi.structureAt(row, col);
+      const res = await edsApi.regionAt(row, col);
       if (mine !== token.current) return;
-      if (res.data?.structure_id == null) {
+      if (res.data?.region_id == null) {
         // No data under that pixel. Saying so beats silently keeping the
-        // previous structure on screen as if it were the one clicked.
+        // previous region on screen as if it were the one clicked.
         setDetail(null);
-        setSelectedStructureId?.(null);
+        setSelectedRegionId?.(null);
         return;
       }
       setDetail(res.data);
-      setSelectedStructureId?.(res.data.structure_id);
+      setSelectedRegionId?.(res.data.region_id);
     } catch (e) {
       if (mine !== token.current) return;
       setError(e.response?.data?.detail || String(e));
     } finally {
       if (mine === token.current) setLoading(false);
     }
-  }, [setSelectedStructureId]);
+  }, [setSelectedRegionId]);
 
   // Follow the selection, and refresh after anything that changes the map:
   // merging renumbers ids, splitting adds them, a boundary move changes the
-  // pixels — a stale panel would describe a structure that no longer exists.
+  // pixels — a stale panel would describe a region that no longer exists.
   useEffect(() => {
-    fetchFor(selectedStructureId);
-  }, [selectedStructureId, mapVersion, fetchFor]);
+    fetchFor(selectedRegionId);
+  }, [selectedRegionId, mapVersion, fetchFor]);
 
-  return { detail, loading, error, inspectPixel, refresh: () => fetchFor(selectedStructureId) };
+  return { detail, loading, error, inspectPixel, refresh: () => fetchFor(selectedRegionId) };
 }

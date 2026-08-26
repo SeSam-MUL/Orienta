@@ -46,7 +46,7 @@ import { usePhaseMap, PhaseMapControls, phaseNameKey } from './PhaseMapPanel';
 function Harness() {
   const handle = usePhaseMap({});
   // The colour picker lives in the phase legend, and the page now opens on
-  // the structure view. Switching here is what a user does with the toggle.
+  // the region view. Switching here is what a user does with the toggle.
   React.useEffect(() => { handle.setMapView('phases'); }, []);
   return <PhaseMapControls handle={handle} />;
 }
