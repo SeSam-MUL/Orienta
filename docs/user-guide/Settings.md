@@ -3,7 +3,7 @@
 ## What it does
 
 The Settings page is where you configure the system dependencies and preferences
-Orienta needs for its more advanced features. It groups six sections:
+Orienta needs for its more advanced features. It groups seven sections:
 
 - **Dashboard Background** — pick the visual style of the start page.
 - **System Status** — a read-only health check of WSL, EMsoft, EMSphInx, OpenCL,
@@ -16,6 +16,8 @@ Orienta needs for its more advanced features. It groups six sections:
   EMSphInx directory.
 - **Server Mode** — point Orienta at a shared network database root for phase
   files and verify/create its standard subfolders.
+- **About Orienta** — licence notice, the **version** you are running, and the
+  **"Report a problem…"** button.
 
 Settings are stored **per machine** in a user-config file outside the project
 tree (so they travel with the user, not the repository). The page talks to the
@@ -80,6 +82,14 @@ not require any Settings changes.
    file counts. If some subfolders are missing, **Create Missing** creates them.
    Click **Save** to persist.
 
+### About Orienta
+
+9. The section shows the **version** you are running — a date, a short code and
+   the branch, e.g. `2026-08-26 (a1b2c3d) · main`. Quote it in any bug report.
+10. **"Report a problem…"** opens a dialog that packages your description
+    together with the version, environment details and log files into one zip.
+    See [Reporting a problem](ReportingProblems.md).
+
 ## Inputs & outputs
 
 - **Inputs:** text you type (binary/EMSphInx paths, database root, API keys),
@@ -109,4 +119,9 @@ not require any Settings changes.
 - **OpenCL/GPU shows as a warning, not an error, when absent.** Orienta still works
   CPU-only; the GPU rows just indicate whether GPU-accelerated paths are available.
 - **EMsoft install streams its log.** Step 3 can take a while; watch the live log
-  for build errors rather than assuming it hung.
+  for build errors rather than assuming it hung. The same log is also written to
+  `logs/orienta.log`, so a dropped connection no longer loses it.
+- **Something went wrong? Send a report, not a screenshot.** "Report a problem…"
+  in the About section (and on the crash screen) collects the error text, the
+  preceding events and your version into one file —
+  see [Reporting a problem](ReportingProblems.md).

@@ -11,7 +11,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockPost = vi.fn();
 const mockGet = vi.fn();
-const mockAxiosInstance = { post: mockPost, get: mockGet };
+// `interceptors` is part of every real axios instance; api.js registers a
+// breadcrumb/error-reporting interceptor at import time.
+const mockAxiosInstance = {
+  post: mockPost,
+  get: mockGet,
+  interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
+};
 
 vi.mock('axios', () => ({
   default: {

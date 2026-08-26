@@ -60,6 +60,51 @@ def _backend_env(headless: bool, base: dict | None = None) -> dict:
     return env
 
 
+def _open_backend_console_log() -> "object | None":
+    """Append-mode handle for logs/backend-console.log, or None on failure.
+
+    Captures the backend's raw stdout/stderr — the only place that holds
+    import-time crash tracebacks (a missing package kills uvicorn before any
+    Python log handler exists), print() output from scientific libs, and
+    CUDA-level stderr. Console output stays visible via the tee thread.
+    One-generation rotation caps growth.
+    """
+    try:
+        log_dir = PROJECT_ROOT / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "backend-console.log"
+        if log_path.exists() and log_path.stat().st_size > 2 * 1024 * 1024:
+            old = log_path.with_suffix(".log.1")
+            old.unlink(missing_ok=True)
+            log_path.rename(old)
+        fh = open(log_path, "a", encoding="utf-8", errors="replace")
+        fh.write(f"\n===== session start {time.strftime('%Y-%m-%d %H:%M:%S')} =====\n")
+        fh.flush()
+        return fh
+    except OSError as exc:
+        print(f"  (backend-console.log unavailable: {exc})")
+        return None
+
+
+def _tee_backend_output(proc, log_fh) -> None:
+    """Daemon thread: mirror backend output to this console AND the log file."""
+    import threading
+
+    def pump():
+        for raw in proc.stdout:
+            line = raw.decode("utf-8", errors="replace") if isinstance(raw, bytes) else raw
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            if log_fh is not None:
+                try:
+                    log_fh.write(line)
+                    log_fh.flush()
+                except OSError:
+                    pass
+
+    threading.Thread(target=pump, name="backend-log-tee", daemon=True).start()
+
+
 def _kill_tree(pid: int) -> None:
     """End a process and everything it spawned."""
     if sys.platform == "win32":
@@ -94,13 +139,17 @@ def main():
     #                         and wipe an in-flight 12 h job.
     print("[1/3] Starting FastAPI backend...")
     backend_env = _backend_env(headless)
+    backend_log = _open_backend_console_log()
     backend_proc = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.api.main:app",
          "--host", "127.0.0.1", "--port", str(BACKEND_PORT),
          "--log-level", "info"],
         cwd=str(PROJECT_ROOT),
         env=backend_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
+    _tee_backend_output(backend_proc, backend_log)
 
     if not wait_for_server(BACKEND_PORT):
         print("ERROR: Backend failed to start!")

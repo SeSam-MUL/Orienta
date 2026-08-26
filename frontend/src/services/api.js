@@ -6,6 +6,8 @@
  */
 
 import axios from 'axios';
+import { addBreadcrumb, addHttpBreadcrumb, formatBreadcrumbs } from './breadcrumbs';
+import { reportError } from './errorReporter';
 
 // In dev mode with Vite proxy, use relative URLs. In Electron/production, use full URL.
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -14,6 +16,86 @@ const api = axios.create({
   baseURL: API_BASE,
   timeout: 300000, // 5 min for long operations
 });
+
+// Every request leaves a breadcrumb; every failure is reported to the backend
+// log. This is the one place that sees all of them — the ~463 individual catch
+// blocks each handle their own failure and none of them leaves a trace.
+//
+// The error object is re-rejected UNCHANGED: call sites read
+// `err.response?.data?.detail` and must keep working exactly as before.
+api.interceptors.request.use((config) => {
+  config.metadata = { start: Date.now() };
+  return config;
+});
+
+/**
+ * "Which dataset was it?" is the second question of every bug report, and
+ * `POST /api/ebsd/load → 200` does not answer it. Pull the path out of the
+ * request body of the endpoints that change the loaded file — one place
+ * instead of every call site.
+ */
+const FILE_SETTING_PATHS = ['/api/ebsd/load', '/api/ebsd/switch-file', '/api/h5/open'];
+
+function noteLoadedFile(config) {
+  try {
+    const url = config?.url || '';
+    if (!FILE_SETTING_PATHS.some((p) => url.includes(p))) return;
+    const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
+    const path = body?.path;
+    if (!path) return;
+    const name = String(path).split(/[\\/]/).pop();
+    addBreadcrumb('file', `loaded ${name}`, { path: String(path).slice(0, 300) });
+  } catch {
+    // Body not JSON, or no path — nothing to note.
+  }
+}
+
+api.interceptors.response.use(
+  (response) => {
+    addHttpBreadcrumb({
+      method: response.config?.method,
+      url: response.config?.url,
+      status: response.status,
+      durationMs: Date.now() - (response.config?.metadata?.start ?? Date.now()),
+    });
+    noteLoadedFile(response.config);
+    return response;
+  },
+  (error) => {
+    try {
+      if (!axios.isCancel?.(error)) {
+        const cfg = error.config || {};
+        const status = error.response?.status;
+        const detail =
+          error.response?.data?.detail?.error ||
+          error.response?.data?.detail ||
+          error.response?.data?.error ||
+          error.message;
+        const recorded = addHttpBreadcrumb({
+          method: cfg.method,
+          url: cfg.url,
+          status,
+          durationMs: Date.now() - (cfg.metadata?.start ?? Date.now()),
+          detail: typeof detail === 'string' ? detail : undefined,
+        });
+        // Ignored paths (health/progress polling) stay out of the report too:
+        // a backend that is simply down would otherwise report every poll.
+        if (recorded) {
+          const method = (cfg.method || 'get').toUpperCase();
+          const label = `${method} ${cfg.url} → ${status || 'no response'}: ${
+            typeof detail === 'string' ? detail : error.message
+          }`;
+          reportError('http-error', label, {
+            stack: typeof error.stack === 'string' ? error.stack : '',
+          });
+        }
+      }
+    } catch {
+      // Never let observation break the request path.
+    }
+    return Promise.reject(error);
+  },
+);
 
 // --- Health ---
 export const healthCheck = () => api.get('/api/health');
@@ -24,6 +106,37 @@ export async function getGpuStatus() {
   const r = await api.get('/api/system/gpu');
   return r.data;
 }
+
+/** App version identity (git commit based): {app, version, commit, branch, ...}. */
+export async function getAppVersion() {
+  const r = await api.get('/api/system/version');
+  return r.data;
+}
+
+/**
+ * Download the bug-report bundle (zip Blob).
+ *
+ * `context` carries the half no log can reconstruct: what the user was
+ * trying to do, and the breadcrumb trail from this browser session. Both
+ * are optional — without them the zip still holds version, environment
+ * and logs.
+ */
+export async function exportDiagnostics(context = {}) {
+  const r = await api.post(
+    '/api/system/diagnostics/export',
+    {
+      description: context.description || '',
+      page: context.page || (typeof window !== 'undefined' ? window.location.hash : ''),
+      breadcrumbs: formatBreadcrumbs(),
+    },
+    { responseType: 'blob' },
+  );
+  return r.data;
+}
+
+// Frontend errors are posted by services/errorReporter.js via raw fetch —
+// it must not depend on this module (cycle) nor on an axios instance that
+// may itself be the thing failing.
 
 // --- HDF5 Viewer ---
 export const h5Api = {

@@ -39,6 +39,20 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 logger = logging.getLogger(__name__)
+
+# Persistent rotating log file (logs/orienta.log). MUST happen at import time,
+# not in the lifespan: anything logged during module import / route import /
+# prewarm would otherwise be lost, and a lifespan-installed handler never runs
+# at all when the app fails to import.
+from backend.api.file_log import install_file_logging
+_LOG_FILE = install_file_logging()
+if _LOG_FILE is not None:
+    from backend.api.services.app_version import version_line
+    logger.info("=" * 60)
+    logger.info("%s — session start (pid %d)", version_line(), os.getpid())
+    logger.info("Python %s on %s", sys.version.split()[0], sys.platform)
+    logger.info("Log file: %s", _LOG_FILE)
+
 from backend.api.log_broadcast import install_ws_log_handler
 
 
@@ -312,10 +326,12 @@ class HTTPTimingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+from backend.api.services.app_version import get_version_info
+
 app = FastAPI(
     title="Orienta Backend",
     description="REST + WebSocket API for EBSD Pattern Analysis",
-    version="1.0.0",
+    version=get_version_info()["version"],
     lifespan=lifespan,
 )
 
@@ -328,6 +344,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(HTTPTimingMiddleware)
+
+
+from fastapi import HTTPException as _FastAPIHTTPException
+from fastapi.exception_handlers import http_exception_handler as _default_http_handler
+from starlette.exceptions import HTTPException as _StarletteHTTPException
+
+# Paths whose failures are noise: the frontend polls these constantly, and a
+# backend that is simply busy would otherwise fill the log with 404s.
+_QUIET_ERROR_PATHS = ("/api/health", "/api/system/frontend-error")
+
+
+@app.exception_handler(_StarletteHTTPException)
+async def _log_http_exception(request: Request, exc: _StarletteHTTPException):
+    """Log every error response the user is about to see.
+
+    The codebase raises HTTPException in ~543 places; each returns a message
+    to the client and, until now, left no server-side trace at all. Those
+    messages are exactly what users screenshot, so they belong in the log
+    next to the events that led to them.
+
+    The response itself is produced by FastAPI's default handler — behaviour
+    for every existing client is unchanged.
+    """
+    path = request.url.path
+    if not any(path.startswith(p) for p in _QUIET_ERROR_PATHS):
+        log = logger.error if exc.status_code >= 500 else logger.warning
+        log("HTTP %s on %s %s: %s", exc.status_code, request.method, path, exc.detail)
+    return await _default_http_handler(request, exc)
 
 
 @app.get("/api/health")

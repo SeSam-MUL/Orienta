@@ -726,6 +726,10 @@ async def ws_install_emsoft(websocket: WebSocket):
             if "[sudo]" in line or "password for" in line.lower():
                 continue
 
+            # Also into the persistent log — a WebSocket drop used to lose
+            # the whole 10-20 minute build log with it.
+            logger.info("[emsoft-install] %s", line)
+
             try:
                 await websocket.send_json({"type": "log", "line": line})
             except WebSocketDisconnect:
@@ -739,6 +743,7 @@ async def ws_install_emsoft(websocket: WebSocket):
             if success
             else f"Installation failed (exit code {process.returncode})"
         )
+        logger.info("[emsoft-install] %s", message)
         await websocket.send_json({"type": "done", "success": success, "message": message})
 
     except WebSocketDisconnect:

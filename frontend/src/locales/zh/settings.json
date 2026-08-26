@@ -243,9 +243,28 @@
       "dataNote": "所有处理均在本机本地进行，您的数据绝不会传输给作者。Orienta 以只读方式打开测量文件，结果写入单独的文件——但仍请保留原始数据的备份，并在依赖自动结果（标定、物相识别、定量）之前进行独立验证。",
       "viewLicense": "完整许可证文本 (GPL-3.0)",
       "sourceCode": "源代码",
-      "authoritative": "以随源代码分发的英文 LICENSE 文件为准。"
+      "authoritative": "以随源代码分发的英文 LICENSE 文件为准。",
+      "versionLabel": "版本",
+      "versionUnknown": "未知（未找到 Git 信息）",
+      "exportDiagnostics": "导出诊断报告",
+      "exportDiagnosticsBusy": "正在导出…",
+      "exportDiagnosticsDone": "诊断报告已保存",
+      "exportDiagnosticsFailed": "导出失败——后端是否在运行？",
+      "exportDiagnosticsHint": "诊断报告是一个 Zip 文件，包含应用版本、环境信息和日志文件。请将其附在错误报告中——不包含任何测量数据。"
     },
+  "report": {
+    "open": "报告问题…",
+    "title": "报告问题",
+    "prompt": "您当时在做什么？您期望的结果是什么？",
+    "placeholder": "例如：加载 SampleB 后对整幅图启动 Hough 标定，进度停在 40%，物相图始终为空。我期望得到一幅完整的物相图。",
+    "contents": "报告包含：您的描述、应用在最近几分钟内的操作记录、应用版本、环境与依赖包版本以及日志文件。不包含任何测量数据。不会自动发送——您将得到一个可供附加的文件。",
+    "create": "创建报告",
+    "cancel": "取消",
+    "close": "关闭",
+    "done": "报告已保存，请将该文件附在您的错误报告中。"
+  },
   "hoverTips": {
+    "exportDiagnostics": "下载包含版本、环境和日志文件的 Zip，用于错误报告。",
     "confirmPassword": "重新输入新的 WSL 用户密码以确认一致。",
     "newPassword": "为现有的 WSL 用户输入新密码。",
     "confirmNewPassword": "重新输入新密码以确认一致。"

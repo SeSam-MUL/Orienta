@@ -5,8 +5,12 @@ import './i18n'
 import App from './App.jsx'
 import PoleFigureWindow from './components/PoleFigure/PoleFigureWindow.jsx'
 import { ThemeProvider } from './theme/ThemeProvider.jsx'
+import { installGlobalErrorReporter } from './services/errorReporter'
 
-const APP_VERSION = '1.0.0'
+// Before render, so even a crash in App/ThemeProvider (blank window — there
+// is deliberately no boundary above App) still lands in the backend log.
+installGlobalErrorReporter()
+
 const isPoleFigure = new URLSearchParams(window.location.search).get('view') === 'polefigure'
 
 createRoot(document.getElementById('root')).render(
@@ -17,4 +21,4 @@ createRoot(document.getElementById('root')).render(
   </StrictMode>,
 )
 
-console.log(`Orienta v${APP_VERSION}${isPoleFigure ? ' (pole-figure window)' : ''}`)
+console.log(`Orienta${isPoleFigure ? ' (pole-figure window)' : ''}`)

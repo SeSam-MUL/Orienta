@@ -243,9 +243,28 @@
       "dataNote": "Die gesamte Verarbeitung findet lokal auf diesem Rechner statt; Ihre Daten werden nie an die Autoren übertragen. Orienta öffnet Messdateien nur lesend und schreibt Ergebnisse in separate Dateien — halten Sie dennoch Sicherungskopien Ihrer Originaldaten und validieren Sie automatische Ergebnisse (Indizierung, Phasenidentifikation, Quantifizierung) unabhängig, bevor Sie sich darauf verlassen.",
       "viewLicense": "Vollständiger Lizenztext (GPL-3.0)",
       "sourceCode": "Quellcode",
-      "authoritative": "Maßgeblich ist die englische LICENSE-Datei, die mit dem Quellcode verteilt wird."
+      "authoritative": "Maßgeblich ist die englische LICENSE-Datei, die mit dem Quellcode verteilt wird.",
+      "versionLabel": "Version",
+      "versionUnknown": "unbekannt (keine Git-Information gefunden)",
+      "exportDiagnostics": "Diagnosebericht exportieren",
+      "exportDiagnosticsBusy": "Exportiere…",
+      "exportDiagnosticsDone": "Diagnosebericht gespeichert",
+      "exportDiagnosticsFailed": "Export fehlgeschlagen — läuft das Backend?",
+      "exportDiagnosticsHint": "Der Diagnosebericht ist ein Zip mit App-Version, Umgebungsinformationen und Logdateien. Hängen Sie ihn an Fehlermeldungen an — er enthält keine Messdaten."
     },
+  "report": {
+    "open": "Problem melden…",
+    "title": "Problem melden",
+    "prompt": "Was hast du gemacht, und was hättest du stattdessen erwartet?",
+    "placeholder": "z. B. SampleB geladen, Hough-Indizierung über die ganze Karte gestartet — bei 40 % blieb sie stehen und die Phasenkarte blieb leer. Erwartet hätte ich eine fertige Karte.",
+    "contents": "Der Bericht enthält: deine Beschreibung, was die App in den letzten Minuten gemacht hat, die App-Version, Umgebungs- und Paketversionen sowie die Logdateien. Er enthält KEINE Messdaten. Es wird nichts automatisch verschickt — du bekommst eine Datei zum Anhängen.",
+    "create": "Bericht erstellen",
+    "cancel": "Abbrechen",
+    "close": "Schließen",
+    "done": "Bericht gespeichert. Bitte hänge die Datei an deine Fehlermeldung an."
+  },
   "hoverTips": {
+    "exportDiagnostics": "Zip mit Version, Umgebung und Logdateien für Fehlermeldungen herunterladen.",
     "confirmPassword": "Neues WSL-Benutzerpasswort erneut eingeben, um die Übereinstimmung zu bestätigen.",
     "newPassword": "Neues Passwort für den bestehenden WSL-Benutzer eingeben.",
     "confirmNewPassword": "Neues Passwort erneut eingeben, um die Übereinstimmung zu bestätigen."

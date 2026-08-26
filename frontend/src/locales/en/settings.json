@@ -243,9 +243,28 @@
       "dataNote": "All processing happens locally on this machine; your data is never transmitted to the authors. Orienta opens measurement files read-only and writes results to separate files — still, keep backups of your original data and independently validate automated results (indexing, phase identification, quantification) before relying on them.",
       "viewLicense": "Full license text (GPL-3.0)",
       "sourceCode": "Source code",
-      "authoritative": "The English LICENSE file distributed with the source code is authoritative."
+      "authoritative": "The English LICENSE file distributed with the source code is authoritative.",
+      "versionLabel": "Version",
+      "versionUnknown": "unknown (no git information found)",
+      "exportDiagnostics": "Export diagnostics report",
+      "exportDiagnosticsBusy": "Exporting…",
+      "exportDiagnosticsDone": "Diagnostics report saved",
+      "exportDiagnosticsFailed": "Export failed — is the backend running?",
+      "exportDiagnosticsHint": "The diagnostics report is a zip with the app version, environment info and log files. Attach it to bug reports — it contains no measurement data."
     },
+  "report": {
+    "open": "Report a problem…",
+    "title": "Report a problem",
+    "prompt": "What were you doing, and what did you expect to happen instead?",
+    "placeholder": "e.g. Loaded SampleB, started Hough indexing on the whole map — it stopped at 40% and the phase map stayed empty. I expected a finished map.",
+    "contents": "The report contains: your description, what the app did in the last minutes, the app version, environment and package versions, and the log files. It contains NO measurement data. Nothing is sent automatically — you get a file to attach.",
+    "create": "Create report",
+    "cancel": "Cancel",
+    "close": "Close",
+    "done": "Report saved. Please attach the file to your bug report."
+  },
   "hoverTips": {
+    "exportDiagnostics": "Download a zip with version, environment and log files for bug reports.",
     "confirmPassword": "Re-enter the new WSL user password to confirm it matches.",
     "newPassword": "Enter a new password for the existing WSL user.",
     "confirmNewPassword": "Re-enter the new password to confirm it matches."

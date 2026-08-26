@@ -3,7 +3,10 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('axios', () => {
   const inst = { get: vi.fn(() => Promise.resolve({ data: {} })),
                  put: vi.fn(() => Promise.resolve({ data: {} })),
-                 post: vi.fn(() => Promise.resolve({ data: {} })) };
+                 post: vi.fn(() => Promise.resolve({ data: {} })),
+                 // api.js registers a breadcrumb/error-reporting interceptor
+                 // at import time, like every real axios instance allows.
+                 interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } } };
   // `__inst` is exposed both as a sibling named export and on the default
   // object so `import axios from 'axios'` (as api.js does) can reach it.
   return { default: { create: () => inst, __inst: inst }, __inst: inst };

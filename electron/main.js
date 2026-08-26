@@ -125,10 +125,46 @@ function findPython() {
   return isWin ? 'python' : 'python3';
 }
 
+// --- Persistent capture of the backend's raw stdout/stderr ---------------
+// The pipes below are the ONLY place that sees import-time crashes (a missing
+// package kills uvicorn before any Python log handler exists), print() output
+// from scientific libs, and CUDA C++-level stderr. console.log alone is lost
+// the moment the hosting console closes — and a packaged app has none at all.
+let backendLogStream = null;
+
+function openBackendLog(projectRoot) {
+  try {
+    const logDir = path.join(projectRoot, 'logs');
+    fs.mkdirSync(logDir, { recursive: true });
+    const logPath = path.join(logDir, 'backend-console.log');
+    // One-generation rotation: keep the previous session reachable, cap growth.
+    try {
+      const st = fs.statSync(logPath);
+      if (st.size > 2 * 1024 * 1024) {
+        fs.rmSync(logPath + '.1', { force: true });
+        fs.renameSync(logPath, logPath + '.1');
+      }
+    } catch {}
+    backendLogStream = fs.createWriteStream(logPath, { flags: 'a' });
+    backendLogStream.write(`\n===== session start ${new Date().toISOString()} =====\n`);
+  } catch (err) {
+    console.error('Could not open backend-console.log:', err);
+    backendLogStream = null;
+  }
+}
+
+function logBackendLine(line) {
+  console.log(`[Backend] ${line}`);
+  if (backendLogStream) {
+    try { backendLogStream.write(line + '\n'); } catch {}
+  }
+}
+
 function startBackend() {
   const projectRoot = path.resolve(__dirname, '..');
   const pythonCmd = findPython();
-  console.log(`Using Python: ${pythonCmd}`);
+  openBackendLog(projectRoot);
+  logBackendLine(`Using Python: ${pythonCmd}`);
 
   backendProcess = spawn(pythonCmd, [
     '-m', 'uvicorn',
@@ -156,20 +192,21 @@ function startBackend() {
   });
 
   backendProcess.stdout.on('data', (data) => {
-    console.log(`[Backend] ${data.toString().trim()}`);
+    logBackendLine(data.toString().trim());
   });
 
   backendProcess.stderr.on('data', (data) => {
-    console.log(`[Backend] ${data.toString().trim()}`);
+    logBackendLine(data.toString().trim());
   });
 
   backendProcess.on('error', (err) => {
+    logBackendLine(`Failed to start backend: ${err.message}`);
     console.error('Failed to start backend:', err);
     dialog.showErrorBox('Backend Error', `Failed to start Python backend: ${err.message}`);
   });
 
   backendProcess.on('exit', (code) => {
-    console.log(`Backend exited with code ${code}`);
+    logBackendLine(`Backend exited with code ${code}`);
     backendProcess = null;
   });
 }
@@ -248,6 +285,7 @@ function createWindow() {
   // window instead and leave the backend alone.
   mainWindow.webContents.on('render-process-gone', (event, details) => {
     console.error(`[Renderer] gone: reason=${details.reason} exitCode=${details.exitCode}`);
+    logBackendLine(`[Renderer] gone: reason=${details.reason} exitCode=${details.exitCode}`);
     if (userInitiatedQuit) return;
     if (rendererReloadCount >= MAX_RENDERER_RELOADS) {
       console.error(`[Renderer] crashed ${rendererReloadCount} times — giving up.`);
@@ -284,6 +322,7 @@ function createWindow() {
   // user reported.
   mainWindow.on('unresponsive', () => {
     console.warn('[Renderer] unresponsive — forcing reload to keep backend alive');
+    logBackendLine('[Renderer] unresponsive — forcing reload');
     if (userInitiatedQuit) return;
     try { mainWindow.reload(); } catch {}
   });

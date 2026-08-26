@@ -55,6 +55,37 @@ def _get_job_log_path(task_id: str) -> Path:
     return _SIM_LOG_DIR / f"{task_id}.log"
 
 
+# Job logs accumulated without any bound (81 files and counting before this).
+# Keep a generous window — enough to cover any recent batch — and drop the rest.
+_MAX_SIM_LOGS = 50
+
+
+def _prune_job_logs(keep: int | None = None) -> int:
+    """Delete all but the `keep` newest job logs. Returns how many were removed.
+
+    `keep` is resolved at call time, not bound as a default, so the limit
+    stays configurable.
+    """
+    if keep is None:
+        keep = _MAX_SIM_LOGS
+    removed = 0
+    try:
+        logs = sorted(
+            _SIM_LOG_DIR.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        for stale in logs[keep:]:
+            try:
+                stale.unlink()
+                removed += 1
+            except OSError:
+                pass
+        if removed:
+            logger.info("Pruned %d old simulation log(s), keeping %d", removed, keep)
+    except Exception as exc:
+        logger.warning("Could not prune simulation logs: %s", exc)
+    return removed
+
+
 def _write_job_log(task_id: str, lines: list, crystal: str = "", error: str = ""):
     """Write all log lines for a finished job to a persistent file."""
     try:
@@ -69,6 +100,7 @@ def _write_job_log(task_id: str, lines: list, crystal: str = "", error: str = ""
             for line in lines:
                 f.write(line + "\n")
         logger.info("Saved simulation log: %s", path.name)
+        _prune_job_logs()
     except Exception as e:
         logger.warning("Could not write job log for %s: %s", task_id, e)
 router = APIRouter()

@@ -1,6 +1,25 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, waitFor, fireEvent } from '@testing-library/react';
+
+const mockGetAppVersion = vi.fn(() => Promise.resolve({
+  app: 'Orienta',
+  version: '2026-08-26 (a1b2c3d)',
+  commit: 'a1b2c3d',
+  branch: 'main',
+  source: 'git',
+}));
+const mockExportDiagnostics = vi.fn(() => Promise.resolve(new Blob(['zip'])));
+
+vi.mock('../../services/api', () => ({
+  getAppVersion: (...a) => mockGetAppVersion(...a),
+  exportDiagnostics: (...a) => mockExportDiagnostics(...a),
+}));
+
+const mockDownloadBlob = vi.fn();
+vi.mock('../common/imageExport', () => ({
+  downloadBlob: (...a) => mockDownloadBlob(...a),
+}));
 
 vi.mock('../../theme/components', () => ({
   colors: {
@@ -14,7 +33,10 @@ vi.mock('../../theme/components', () => ({
   Label: ({ children, ...p }) => <label {...p}>{children}</label>,
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 import AboutSection from './AboutSection';
 
@@ -38,5 +60,43 @@ describe('AboutSection', () => {
     const { getByText } = render(<AboutSection />);
     expect(getByText(/locally on this machine/)).toBeTruthy();
     expect(getByText(/keep backups of your original data/)).toBeTruthy();
+  });
+
+  it('shows the app version fetched from the backend', async () => {
+    const { getByText } = render(<AboutSection />);
+    await waitFor(() => {
+      expect(getByText(/2026-08-26 \(a1b2c3d\) · main/)).toBeTruthy();
+    });
+  });
+
+  it('falls back to "unknown" when the version fetch fails', async () => {
+    mockGetAppVersion.mockRejectedValueOnce(new Error('backend down'));
+    const { getByText } = render(<AboutSection />);
+    await waitFor(() => {
+      expect(getByText(/unknown \(no git information found\)/)).toBeTruthy();
+    });
+  });
+
+  it('offers the problem report and opens its dialog', async () => {
+    const { getByText, getByRole } = render(<AboutSection />);
+    fireEvent.click(getByText('Report a problem…'));
+    // The dialog asks the one question no log can answer.
+    expect(getByRole('dialog')).toBeTruthy();
+    expect(
+      getByText(/What were you doing, and what did you expect/),
+    ).toBeTruthy();
+  });
+
+  it('creates the report through the dialog', async () => {
+    const { getByText, getByRole } = render(<AboutSection />);
+    fireEvent.click(getByText('Report a problem…'));
+    fireEvent.change(getByRole('textbox'), { target: { value: 'it broke' } });
+    fireEvent.click(getByText('Create report'));
+    await waitFor(() => {
+      expect(mockExportDiagnostics).toHaveBeenCalledWith({ description: 'it broke' });
+      expect(mockDownloadBlob).toHaveBeenCalledTimes(1);
+    });
+    const [, filename] = mockDownloadBlob.mock.calls[0];
+    expect(filename).toMatch(/^orienta-problem-report-\d{4}-\d{2}-\d{2}\.zip$/);
   });
 });

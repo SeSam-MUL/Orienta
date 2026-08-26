@@ -8,7 +8,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('axios', () => {
   const inst = { get: vi.fn(() => Promise.resolve({ data: {} })),
                  put: vi.fn(() => Promise.resolve({ data: {} })),
-                 post: vi.fn(() => Promise.resolve({ data: {} })) };
+                 post: vi.fn(() => Promise.resolve({ data: {} })),
+                 // api.js registers a breadcrumb/error-reporting interceptor
+                 // at import time, like every real axios instance allows.
+                 interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } } };
   return { default: { create: () => inst, __inst: inst }, __inst: inst };
 });
 

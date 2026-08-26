@@ -19,6 +19,9 @@ import { useTranslation } from 'react-i18next';
 import i18n from './i18n';
 import { setLanguage, LANGUAGES } from './i18n';
 import { healthCheck, createWebSocket } from './services/api';
+import { reportError } from './services/errorReporter';
+import { addBreadcrumb } from './services/breadcrumbs';
+import DiagnosticsExportButton from './components/common/DiagnosticsExportButton';
 import useDataStore from './stores/useDataStore';
 import useResultStore from './stores/useResultStore';
 import { colors, layout } from './theme/tokens';
@@ -68,7 +71,12 @@ import useDevLogs from './hooks/useDevLogs';
 class ErrorBoundary extends Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }
-  componentDidCatch(err, info) { console.error('React crash:', err, info); }
+  componentDidCatch(err, info) {
+    console.error('React crash:', err, info);
+    // Persist in the backend log — the "This module crashed" screenshot users
+    // send never contains the stack; this line puts it into logs/orienta.log.
+    reportError('react-boundary', err, { componentStack: info?.componentStack || '' });
+  }
   render() {
     if (this.state.error) {
       return (
@@ -84,7 +92,7 @@ class ErrorBoundary extends Component {
           }}>
             {this.state.error.message || String(this.state.error)}
           </pre>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
             <button
               onClick={() => this.setState({ error: null })}
               title={i18n.t('shell:hoverTips.errorTryAgain')}
@@ -113,6 +121,15 @@ class ErrorBoundary extends Component {
             >
               Reload App
             </button>
+            {/* The crash screen is where a bug report is most likely to
+                happen — offer the zip instead of a screenshot. */}
+            <DiagnosticsExportButton variant="crash" />
+          </div>
+          <div style={{
+            color: colors.textSecondary, fontSize: 10, marginTop: 12,
+            maxWidth: 460, textAlign: 'center', opacity: 0.8,
+          }}>
+            {i18n.t('settings:about.exportDiagnosticsHint')}
           </div>
         </div>
       );
@@ -357,6 +374,8 @@ function App() {
   // Also scroll the newly visible page to top
   const mainRef = useRef(null);
   useEffect(() => {
+    // "Which screen was the user on?" — the first question of every bug report.
+    addBreadcrumb('nav', `page → ${currentPage}`);
     window.dispatchEvent(new CustomEvent('page-changed', { detail: { page: currentPage } }));
     // Scroll the active page container to top
     if (mainRef.current) {
