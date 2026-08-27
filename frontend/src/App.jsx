@@ -23,6 +23,8 @@ import { reportError } from './services/errorReporter';
 import { addBreadcrumb } from './services/breadcrumbs';
 import DiagnosticsExportButton from './components/common/DiagnosticsExportButton';
 import UpdateDialog from './components/common/UpdateDialog';
+import ProblemReportDialog from './components/common/ProblemReportDialog';
+import { captureScreenshot } from './services/screenshot';
 import useUpdateCheck from './hooks/useUpdateCheck';
 import useDataStore from './stores/useDataStore';
 import useResultStore from './stores/useResultStore';
@@ -182,6 +184,17 @@ function App() {
   const [backendStatus, setBackendStatus] = useState('checking');
   const [h5ViewerOpen, setH5ViewerOpen] = useState(false);
   const [edsColorsOpen, setEdsColorsOpen] = useState(false);
+  // Reachable from every page: a problem is reported where it happened, and
+  // the trail it collects is most complete right then.
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportShot, setReportShot] = useState(null);
+
+  // Capture BEFORE the dialog renders, or the picture shows the dialog
+  // instead of the screen the user is complaining about.
+  const openReport = useCallback(async () => {
+    setReportShot(await captureScreenshot());
+    setReportOpen(true);
+  }, []);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 1100);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [devPanelOpen, setDevPanelOpen] = useState(false);
@@ -305,8 +318,9 @@ function App() {
     const tag = e.target.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
-    // Escape closes floating panels
+    // Escape closes floating panels, topmost first
     if (e.key === 'Escape') {
+      if (reportOpen) { setReportOpen(false); return; }
       if (shortcutHelpOpen) { setShortcutHelpOpen(false); return; }
       if (edsColorsOpen) { setEdsColorsOpen(false); return; }
       if (h5ViewerOpen) { setH5ViewerOpen(false); return; }
@@ -454,6 +468,26 @@ function App() {
             onMouseLeave={e => { if (!edsColorsOpen) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = colors.border; } }}
           >
             {t('shell:toolbar.edsColors')}
+          </button>
+          {/* Report a problem — in the toolbar so it is reachable from every
+              page, not only from Settings and the crash screen. */}
+          <button
+            onClick={openReport}
+            style={{
+              background: 'transparent',
+              color: colors.yellow,
+              padding: '4px 12px',
+              border: `1px solid ${colors.border}`,
+              borderRadius: 3,
+              fontSize: '9pt',
+              cursor: 'pointer',
+              transition: 'background 0.12s, color 0.12s, border-color 0.12s',
+            }}
+            title={t('shell:toolbar.reportProblemTooltip')}
+            onMouseEnter={e => { e.currentTarget.style.background = `${colors.yellow}22`; e.currentTarget.style.borderColor = colors.yellow; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = colors.border; }}
+          >
+            {t('shell:toolbar.reportProblem')}
           </button>
           {/* Language switcher — top toolbar, always visible */}
           <select
@@ -690,6 +724,12 @@ function App() {
         </div>
       )}
       <ToastContainer />
+      {reportOpen && (
+        <ProblemReportDialog
+          screenshot={reportShot}
+          onClose={() => { setReportOpen(false); setReportShot(null); }}
+        />
+      )}
       {updateInfo && (
         <UpdateDialog info={updateInfo} onClose={closeUpdate} onSkip={skipUpdate} />
       )}

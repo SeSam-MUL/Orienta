@@ -38,9 +38,34 @@ def gpu_status() -> dict:
     }
 
 
+def _repo_web_url() -> str | None:
+    """Browser URL of the project's git remote, or None.
+
+    Read from the checkout rather than hardcoded, so a fork or a moved
+    repository does not send people to the wrong issue tracker.
+    """
+    from backend.api.services import updater
+
+    url = updater._git_out("remote", "get-url", "origin")
+    if not url:
+        return None
+    url = url.strip()
+    if url.startswith("git@"):                      # git@host:owner/repo.git
+        host, _, path = url[4:].partition(":")
+        url = f"https://{host}/{path}"
+    if url.endswith(".git"):
+        url = url[:-4]
+    return url if url.startswith("http") else None
+
+
 @router.get("/version", summary="App version identity (git commit based)")
 def app_version() -> dict:
-    return get_version_info()
+    info = dict(get_version_info())
+    try:
+        info["repo_url"] = _repo_web_url()
+    except Exception:  # pragma: no cover - defensive
+        info["repo_url"] = None
+    return info
 
 
 @router.get("/update/check", summary="Is a newer released version available?")
@@ -199,9 +224,14 @@ def _report_text(payload: dict) -> str:
     description = _clip(payload.get("description"), 10000)
     page = _clip(payload.get("page"), 300)
     breadcrumbs = _clip(payload.get("breadcrumbs"), 20000)
+    fingerprint = _clip(payload.get("fingerprint"), 40)
 
     lines = ["Orienta problem report", "=" * 40, ""]
     lines.append(f"Created: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append(f"Version: {get_version_info().get('version')}")
+    if fingerprint:
+        # Same fault → same id, so duplicate reports are visible at a glance.
+        lines.append(f"Error id: {fingerprint}")
     if page:
         lines.append(f"Page at time of report: {page}")
     lines.append("")
@@ -236,6 +266,16 @@ def export_diagnostics(payload: dict | None = Body(None)) -> Response:
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         if payload:
             zf.writestr("report.txt", _report_text(payload))
+            shot = payload.get("screenshot")
+            if isinstance(shot, str) and shot:
+                try:
+                    import base64
+
+                    raw = base64.b64decode(shot.split(",")[-1], validate=False)
+                    if 0 < len(raw) <= 8 * 1024 * 1024:
+                        zf.writestr("screenshot.png", raw)
+                except Exception:
+                    logger.warning("Diagnostics export: screenshot could not be decoded")
             # Also into the log, so the description sits next to the events
             # it describes even if the zip is never sent.
             desc = _clip(payload.get("description"), 2000)

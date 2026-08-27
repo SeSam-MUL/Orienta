@@ -93,7 +93,8 @@ describe('AboutSection', () => {
     fireEvent.change(getByRole('textbox'), { target: { value: 'it broke' } });
     fireEvent.click(getByText('Create report'));
     await waitFor(() => {
-      expect(mockExportDiagnostics).toHaveBeenCalledWith({ description: 'it broke' });
+      expect(mockExportDiagnostics.mock.calls[0][0])
+        .toMatchObject({ description: 'it broke' });
       expect(mockDownloadBlob).toHaveBeenCalledTimes(1);
     });
     const [, filename] = mockDownloadBlob.mock.calls[0];

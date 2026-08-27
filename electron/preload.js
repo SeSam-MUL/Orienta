@@ -17,4 +17,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Restart the whole app after a self-update, so the new backend and the
   // newly built interface are both loaded.
   relaunch: () => ipcRenderer.invoke('app:relaunch'),
+  // Base64 PNG of the app window, for problem reports.
+  captureScreen: () => ipcRenderer.invoke('app:captureScreen'),
 });

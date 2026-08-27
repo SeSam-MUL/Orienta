@@ -4,6 +4,8 @@
   "loadingModule": "正在加载模块…",
   "toolbar": {
     "edsColors": "EDS 颜色",
+    "reportProblem": "⚠ 报告问题",
+    "reportProblemTooltip": "描述问题并保存包含日志和版本的报告，可附在错误报告中。",
     "edsColorsTooltip": "配置 EDS 叠加图的元素颜色",
     "shortcutsTooltip": "键盘快捷键 (?)"
   },

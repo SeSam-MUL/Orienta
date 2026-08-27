@@ -4,6 +4,8 @@
   "loadingModule": "モジュールを読み込み中…",
   "toolbar": {
     "edsColors": "EDS カラー",
+    "reportProblem": "⚠ 問題を報告",
+    "reportProblemTooltip": "問題を記入し、ログとバージョンを含むレポートを保存します。バグ報告に添付できます。",
     "edsColorsTooltip": "EDS オーバーレイマップの元素カラーを設定",
     "shortcutsTooltip": "キーボードショートカット (?)"
   },

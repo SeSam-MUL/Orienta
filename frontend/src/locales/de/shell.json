@@ -4,6 +4,8 @@
   "loadingModule": "Modul wird geladen…",
   "toolbar": {
     "edsColors": "EDS-Farben",
+    "reportProblem": "⚠ Problem melden",
+    "reportProblemTooltip": "Ein Problem beschreiben und einen Bericht mit Logdateien und Version speichern, den Sie anhängen können.",
     "edsColorsTooltip": "Elementfarben für EDS-Overlay-Karten konfigurieren",
     "shortcutsTooltip": "Tastenkürzel (?)"
   },

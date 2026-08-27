@@ -4,6 +4,8 @@
   "loadingModule": "Loading module…",
   "toolbar": {
     "edsColors": "EDS Colors",
+    "reportProblem": "⚠ Report a problem",
+    "reportProblemTooltip": "Describe a problem and save a report with logs and version to attach to a bug report.",
     "edsColorsTooltip": "Configure element colors for EDS overlay maps",
     "shortcutsTooltip": "Keyboard shortcuts (?)"
   },

@@ -146,6 +146,8 @@ export async function exportDiagnostics(context = {}) {
       description: context.description || '',
       page: context.page || (typeof window !== 'undefined' ? window.location.hash : ''),
       breadcrumbs: formatBreadcrumbs(),
+      fingerprint: context.fingerprint || '',
+      screenshot: context.screenshot || '',
     },
     { responseType: 'blob' },
   );

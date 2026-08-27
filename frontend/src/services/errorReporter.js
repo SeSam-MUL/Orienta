@@ -17,6 +17,7 @@
  */
 
 import { addBreadcrumb, formatBreadcrumbs } from './breadcrumbs';
+import { errorFingerprint } from './fingerprint';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 const ENDPOINT = `${API_BASE}/api/system/frontend-error`;
@@ -24,6 +25,14 @@ const ENDPOINT = `${API_BASE}/api/system/frontend-error`;
 const MAX_REPORTS_PER_SESSION = 60;
 const seen = new Set();
 let reportCount = 0;
+// The fault the user most likely wants to report is the last one that
+// happened, so a hand-written report can carry its fingerprint too.
+let lastFingerprint = null;
+
+/** Fingerprint of the most recent error in this session, or null. */
+export function getLastFingerprint() {
+  return lastFingerprint;
+}
 
 function currentPage() {
   try {
@@ -58,10 +67,13 @@ export function reportError(kind, error, extra = {}) {
     if (seen.has(key) || reportCount >= MAX_REPORTS_PER_SESSION) return;
     seen.add(key);
     reportCount += 1;
+    const stack = typeof error?.stack === 'string' ? error.stack : '';
+    lastFingerprint = errorFingerprint(kind, message, stack);
     send({
       kind,
       message,
-      stack: typeof error?.stack === 'string' ? error.stack : '',
+      fingerprint: lastFingerprint,
+      stack,
       page: currentPage(),
       userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
       breadcrumbs: formatBreadcrumbs(),
@@ -109,5 +121,6 @@ export function installGlobalErrorReporter() {
 export function _resetForTests() {
   seen.clear();
   reportCount = 0;
+  lastFingerprint = null;
   delete window.__orientaErrorReporterInstalled;
 }

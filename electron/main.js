@@ -400,6 +400,20 @@ ipcMain.handle('dialog:saveImage', async (event, options) => {
   return result.filePath;
 });
 
+// Picture of the window for a problem report. Taken before the report dialog
+// opens, so the report shows the screen the user is complaining about rather
+// than the dialog covering it.
+ipcMain.handle('app:captureScreen', async () => {
+  try {
+    if (!mainWindow) return null;
+    const image = await mainWindow.webContents.capturePage();
+    return image.toPNG().toString('base64');
+  } catch (err) {
+    logBackendLine(`[report] screenshot failed: ${err.message}`);
+    return null;
+  }
+});
+
 // Restart after a self-update. The backend must go down with us — the new
 // source is only loaded by a fresh Python process, and killBackend() is what
 // guarantees port 8000 is free when the relaunched app starts its own.
