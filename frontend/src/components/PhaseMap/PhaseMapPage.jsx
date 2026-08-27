@@ -2278,6 +2278,23 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     t,
   }), [layerStack.layers, dynamicLayers, sourceLink.linked, sourceLink.reason, availability, t]);
 
+  // Layers whose colours mean a number, top of the stack first — the order
+  // the reader sees them in. Recomputed on `bitmapVersion` because the scales
+  // arrive with the bitmaps.
+  const scaleLegends = useMemo(() => {
+    const out = [];
+    for (const layer of [...layerStack.layers].reverse()) {
+      if (!layer.visible) continue;
+      const scale = layerStack.scales?.get?.(layer.id);
+      // The backend names the quantity when it is not what the layer is called:
+      // the "Band Contrast" layer draws EDAX IQ or a computed image quality on
+      // files that have no band contrast, and the legend must say which.
+      if (scale) out.push({ id: layer.id, label: scale.label || layer.label || layer.id, scale });
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layerStack.layers, layerStack.scales, layerStack.bitmapVersion]);
+
   // -------- IPF-key overlay --------------------------------------------
   // Show the IPF colour-key triangles as a canvas overlay whenever any
   // IPF layer is in the stack. The PNG comes from the backend and is

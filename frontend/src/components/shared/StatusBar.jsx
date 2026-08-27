@@ -115,7 +115,9 @@ export default function StatusBar({ backendStatus, onNavigate }) {
           {gridShape?.[0] > 0 && (
             <>
               <Separator />
-              <span>{gridShape[0]}\u00d7{gridShape[1]}</span>
+              {/* The escape must sit inside an expression: text between JSX
+                  tags is literal, so a bare \u00d7 renders as those 6 chars. */}
+              <span>{gridShape[0]}{'\u00d7'}{gridShape[1]}</span>
             </>
           )}
           {detector?.has_detector && detector.pc?.length === 3 && (
