@@ -287,6 +287,8 @@
     "checkNow": "检查更新",
     "checking": "正在检查…",
     "upToDate": "您使用的已是最新版本。",
+    "authRequired": "无法登录更新服务器。请在 Orienta 文件夹中打开终端，运行一次 'git fetch' 以保存凭据，然后重试。",
+    "unreachable": "无法连接更新服务器。请检查网络连接后重试。",
     "checkOnStart": "启动 Orienta 时检查更新"
   },
   "hoverTips": {

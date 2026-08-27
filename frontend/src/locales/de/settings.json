@@ -287,6 +287,8 @@
     "checkNow": "Nach Updates suchen",
     "checking": "Suche…",
     "upToDate": "Sie haben die neueste Version.",
+    "authRequired": "Anmeldung am Update-Server nicht möglich. Öffnen Sie ein Terminal im Orienta-Ordner, führen Sie einmal 'git fetch' aus, um Ihre Zugangsdaten zu hinterlegen, und versuchen Sie es erneut.",
+    "unreachable": "Update-Server nicht erreichbar. Bitte Internetverbindung prüfen und erneut versuchen.",
     "checkOnStart": "Beim Start von Orienta nach Updates suchen"
   },
   "hoverTips": {

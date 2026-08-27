@@ -287,6 +287,8 @@
     "checkNow": "Check for updates",
     "checking": "Checking…",
     "upToDate": "You have the latest version.",
+    "authRequired": "Could not sign in to the update server. Open a terminal in the Orienta folder and run 'git fetch' once to store your credentials, then try again.",
+    "unreachable": "Could not reach the update server. Check your internet connection and try again.",
     "checkOnStart": "Check for updates when Orienta starts"
   },
   "hoverTips": {

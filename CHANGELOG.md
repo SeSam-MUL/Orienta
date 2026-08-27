@@ -9,6 +9,24 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## v0.2.1 — 2026-08-27
+
+Fixes to the update check itself, found by running it against a real
+installation.
+
+- **Says when it cannot sign in.** A private repository answers "not found"
+  rather than "access denied" when credentials are missing, so the check used
+  to report "server unreachable" and send you looking for a network problem.
+  It now tells you to sign in once instead.
+- **The check never opens a credential window on its own.** It runs in the
+  background at start-up, where a prompt nobody asked for would either hang or
+  appear out of nowhere.
+- **"Check for updates" now says what it found** — up to date, not signed in,
+  or unreachable — instead of only ever reporting "up to date".
+- Release notes with dashes and umlauts are no longer garbled on Windows.
+
+---
+
 ## v0.2.0 — 2026-08-27
 
 The first release since v0.1.0, and a large one: 164 changes. The headline

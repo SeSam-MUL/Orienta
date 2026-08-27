@@ -45,10 +45,31 @@ _check_cache: dict = {}
 # git helpers
 # --------------------------------------------------------------------------
 
+def _git_env() -> dict:
+    """Environment for every git call we make.
+
+    The backend is a non-interactive process: if git decides it needs a
+    username it cannot ask, and depending on the credential helper it either
+    hangs until the timeout or pops a window out of nowhere while the user is
+    doing something else. Both are worse than failing fast with a message we
+    can explain, so prompting is switched off and a missing credential is
+    reported as such.
+    """
+    import os
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"
+    return env
+
+
 def _git(*args: str, timeout: int = 30, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    # encoding must be spelled out: with text=True alone Python decodes using
+    # the console code page, which turns the em-dashes in the changelog into
+    # mojibake on Windows.
     return subprocess.run(
         ["git", "-C", str(cwd or PROJECT_ROOT), *args],
-        capture_output=True, text=True, timeout=timeout,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout, env=_git_env(),
     )
 
 
@@ -83,17 +104,51 @@ def parse_version(tag: str) -> tuple | None:
     return (int(major), int(minor), int(patch), 0 if suffix else 1, suffix or "")
 
 
-def _remote_release_tags() -> list[str]:
-    """Release tags on the remote, newest first. Empty on any failure."""
-    out = _git_out("ls-remote", "--tags", "--refs", "origin", timeout=FETCH_TIMEOUT_S)
-    if not out:
-        return []
+# A private repository answers "not found" rather than "forbidden" when the
+# credentials are missing, so that phrase belongs here too.
+_AUTH_MARKERS = (
+    "could not read Username",
+    "terminal prompts disabled",
+    "Authentication failed",
+    "Permission denied",
+    "Repository not found",
+    "repository not found",
+)
+
+
+def _parse_ls_remote(out: str) -> list[str]:
     tags = []
-    for line in out.splitlines():
+    for line in (out or "").splitlines():
         parts = line.split("refs/tags/")
-        if len(parts) == 2 and parse_version(parts[1]):
+        if len(parts) == 2 and parse_version(parts[1].strip()):
             tags.append(parts[1].strip())
     return sorted(tags, key=parse_version, reverse=True)
+
+
+def probe_remote() -> tuple[list[str], str]:
+    """(release tags newest first, reason). reason is '' on success.
+
+    Distinguishes "cannot sign in" from "cannot reach the server": the first
+    is fixed by authenticating once, the second by waiting — and telling the
+    user the wrong one wastes their time.
+    """
+    try:
+        r = _git("ls-remote", "--tags", "--refs", "origin", timeout=FETCH_TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired):
+        return [], "remote_unreachable"
+    if r.returncode != 0:
+        err = r.stderr or ""
+        if any(m in err for m in _AUTH_MARKERS):
+            logger.info("Update check needs credentials: %s", err.strip()[:200])
+            return [], "auth_required"
+        logger.info("Update check could not reach the remote: %s", err.strip()[:200])
+        return [], "remote_unreachable"
+    return _parse_ls_remote(r.stdout), ""
+
+
+def _remote_release_tags() -> list[str]:
+    """Release tags on the remote, newest first. Empty on any failure."""
+    return probe_remote()[0]
 
 
 def _changelog_for(tag: str) -> str:
@@ -156,9 +211,9 @@ def check_for_update(force: bool = False) -> dict:
     except (OSError, subprocess.TimeoutExpired):
         pass  # offline / no credentials — ls-remote below decides
 
-    tags = _remote_release_tags()
+    tags, reason = probe_remote()
     if not tags:
-        result["reason"] = "remote_unreachable"
+        result["reason"] = reason or "remote_unreachable"
         _check_cache.update(at=now, result=result)
         return result
 
@@ -210,7 +265,8 @@ def _run_step(name: str, cmd: list[str], cwd: Path) -> bool:
     _log_line(f"$ {' '.join(cmd)}")
     try:
         proc = subprocess.run(
-            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=STEP_TIMEOUT_S
+            cmd, cwd=str(cwd), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=STEP_TIMEOUT_S,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         _log_line(f"!! {name} failed to run: {exc}")

@@ -27,13 +27,26 @@ export default function AboutSection() {
   const { t } = useTranslation('settings');
   const [versionInfo, setVersionInfo] = useState(null);
   const [autoCheck, setAutoCheck] = useState(isCheckEnabled);
-  const [checkState, setCheckState] = useState('idle'); // idle | busy | uptodate
+  // idle | busy | uptodate | <reason>. A manual check must SAY why it found
+  // nothing — on start-up we stay silent, but here the user asked.
+  const [checkState, setCheckState] = useState('idle');
   const { updateInfo, checkNow, close: closeUpdate, skip: skipUpdate } = useUpdateCheck();
 
   const handleCheckNow = async () => {
     setCheckState('busy');
     const result = await checkNow();
-    setCheckState(result?.available ? 'idle' : 'uptodate');
+    if (result?.available) setCheckState('idle');
+    else if (!result) setCheckState('check_failed');
+    else setCheckState(result.reason || 'up_to_date');
+  };
+
+  const CHECK_MESSAGES = {
+    up_to_date: t('settings:update.upToDate'),
+    auth_required: t('settings:update.authRequired'),
+    remote_unreachable: t('settings:update.unreachable'),
+    not_a_git_install: t('settings:update.manualOnly'),
+    no_local_release: t('settings:update.upToDate'),
+    check_failed: t('settings:update.unreachable'),
   };
 
   useEffect(() => {
@@ -96,9 +109,13 @@ export default function AboutSection() {
               ? t('settings:update.checking')
               : t('settings:update.checkNow')}
           </button>
-          {checkState === 'uptodate' && (
-            <span style={{ color: colors.textSecondary, fontSize: '11px' }}>
-              {t('settings:update.upToDate')}
+          {CHECK_MESSAGES[checkState] && (
+            <span style={{
+              color: checkState === 'up_to_date' || checkState === 'no_local_release'
+                ? colors.textSecondary : colors.yellow,
+              fontSize: '11px',
+            }}>
+              {CHECK_MESSAGES[checkState]}
             </span>
           )}
           <DiagnosticsExportButton />

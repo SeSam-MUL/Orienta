@@ -78,7 +78,10 @@ def test_install_kind_git(monkeypatch, tmp_path):
 def _fake_check(monkeypatch, *, kind="git", tags=(), current="v0.1.0"):
     monkeypatch.setattr(updater, "install_kind", lambda: kind)
     monkeypatch.setattr(updater, "_git", lambda *a, **k: None)
-    monkeypatch.setattr(updater, "_remote_release_tags", lambda: list(tags))
+    monkeypatch.setattr(
+        updater, "probe_remote",
+        lambda: (list(tags), "" if tags else "remote_unreachable"),
+    )
     monkeypatch.setattr(updater, "_changelog_for", lambda t: f"## {t}\nnotes")
     monkeypatch.setattr(
         updater, "get_version_info",
@@ -107,22 +110,71 @@ def test_check_never_offers_a_downgrade(monkeypatch):
     assert r["available"] is False
 
 
-def test_remote_tags_keep_only_releases_newest_first(monkeypatch):
-    monkeypatch.setattr(
-        updater, "_git_out",
-        lambda *a, **k: (
-            "aaa\trefs/tags/nightly\n"
-            "bbb\trefs/tags/v0.4.0\n"
-            "ccc\trefs/tags/v0.10.0\n"
-            "ddd\trefs/tags/some-branch-tag\n"
-        ),
-    )
-    assert updater._remote_release_tags() == ["v0.10.0", "v0.4.0"]
+def test_remote_tags_keep_only_releases_newest_first():
+    assert updater._parse_ls_remote(
+        "aaa\trefs/tags/nightly\n"
+        "bbb\trefs/tags/v0.4.0\n"
+        "ccc\trefs/tags/v0.10.0\n"
+        "ddd\trefs/tags/some-branch-tag\n"
+    ) == ["v0.10.0", "v0.4.0"]
 
 
 def test_remote_tags_empty_when_git_fails(monkeypatch):
-    monkeypatch.setattr(updater, "_git_out", lambda *a, **k: None)
+    monkeypatch.setattr(
+        updater, "_git",
+        lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "boom"),
+    )
     assert updater._remote_release_tags() == []
+
+
+def _completed(code, stdout="", stderr=""):
+    return subprocess.CompletedProcess([], code, stdout, stderr)
+
+
+def test_probe_reports_missing_credentials_separately(monkeypatch):
+    """A private repo answers 'not found' without credentials — telling the
+    user 'server unreachable' would send them chasing the wrong problem."""
+    for err in (
+        "fatal: could not read Username for 'https://github.com'",
+        "remote: Repository not found.",
+        "fatal: Authentication failed for 'https://github.com/x.git'",
+    ):
+        monkeypatch.setattr(updater, "_git", lambda *a, **k: _completed(128, "", err))
+        assert updater.probe_remote() == ([], "auth_required"), err
+
+
+def test_probe_reports_a_real_network_failure_as_unreachable(monkeypatch):
+    monkeypatch.setattr(
+        updater, "_git",
+        lambda *a, **k: _completed(128, "", "fatal: unable to access ...: Could not resolve host"),
+    )
+    assert updater.probe_remote() == ([], "remote_unreachable")
+
+
+def test_probe_reports_a_timeout_as_unreachable(monkeypatch):
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired("git", 30)
+
+    monkeypatch.setattr(updater, "_git", timeout)
+    assert updater.probe_remote() == ([], "remote_unreachable")
+
+
+def test_check_surfaces_auth_required(monkeypatch):
+    monkeypatch.setattr(updater, "install_kind", lambda: "git")
+    monkeypatch.setattr(updater, "_git", lambda *a, **k: _completed(128, "", "Repository not found"))
+    monkeypatch.setattr(
+        updater, "get_version_info", lambda: {"version": "v0.1.0", "release": "v0.1.0"}
+    )
+    r = updater.check_for_update(force=True)
+    assert r["available"] is False
+    assert r["reason"] == "auth_required"
+
+
+def test_git_calls_never_prompt():
+    """A background check must not pop a credential window at the user."""
+    env = updater._git_env()
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GCM_INTERACTIVE"] == "never"
 
 
 def test_check_reports_a_zip_install_instead_of_failing(monkeypatch):
@@ -143,9 +195,8 @@ def test_check_survives_an_unreachable_remote(monkeypatch):
 def test_check_result_is_cached(monkeypatch):
     calls = []
     _fake_check(monkeypatch, tags=["v0.9.0"], current="v0.1.0")
-    real = updater._remote_release_tags
     monkeypatch.setattr(
-        updater, "_remote_release_tags", lambda: (calls.append(1), ["v0.9.0"])[1]
+        updater, "probe_remote", lambda: (calls.append(1), (["v0.9.0"], ""))[1]
     )
     updater.check_for_update(force=True)
     updater.check_for_update()          # cached
