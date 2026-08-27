@@ -84,8 +84,16 @@ not require any Settings changes.
 
 ### About Orienta
 
-9. The section shows the **version** you are running — a date, a short code and
-   the branch, e.g. `2026-08-26 (a1b2c3d) · main`. Quote it in any bug report.
+9. The section shows the **version** you are running, e.g. `v0.2.1`, or
+   `v0.2.1+7 (a1b2c3d)` if your copy is a few changes past that release.
+   Quote it in any bug report.
+9a. **Updates.** Orienta looks for a newer release a few seconds after it
+   starts and offers to install it; **"Check for updates"** asks right away.
+   Installing fetches the new version, installs any changed packages, rebuilds
+   the interface and restarts — a few minutes, and if anything fails your
+   working version stays exactly as it was. Untick **"Check for updates when
+   Orienta starts"** to stop the automatic check. See
+   [Updating Orienta](Updating.md).
 10. **"Report a problem…"** opens a dialog that packages your description
     together with the version, environment details and log files into one zip.
     See [Reporting a problem](ReportingProblems.md).

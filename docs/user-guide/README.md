@@ -60,6 +60,7 @@ workflow at the bottom of this page.
 | Page | What it does |
 |---|---|
 | [Settings](Settings.md) | Configure system dependencies and preferences — system-status health check, install wizard, compute mode, and appearance. |
+| [Updating Orienta](Updating.md) | Install a new release from inside the app, and what happens if it fails. |
 | [Reporting a problem](ReportingProblems.md) | Package version, logs and your description into one zip to attach to a bug report. |
 
 ---
