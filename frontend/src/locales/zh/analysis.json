@@ -68,6 +68,7 @@
     "loadDatasetFirst": "请先加载数据集",
     "imageAlt": "EBSD 分析图",
     "layerTooltip": "选择要渲染的分析图图层。",
+    "colormapIpfTooltip": "IPF 颜色是表示晶体取向的固定编码，而非数值范围——此处不适用色标。",
     "colormapTooltip": "选择渲染图所用的 matplotlib 色图。",
     "refreshTooltip": "渲染所选图层和色图。",
     "layers": {

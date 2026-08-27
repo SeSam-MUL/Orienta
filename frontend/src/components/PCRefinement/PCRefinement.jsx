@@ -27,6 +27,9 @@ import { useImageExport, exportStem } from '../common/useImageExport';
 import { buildPanelSheet } from '../common/imageExport';
 import FloatingPhasePanel from '../Indexing/FloatingPhasePanel';
 import {
+  checkPixelSize, plausibleWidthMm, TYPICAL_MIN_UM, TYPICAL_MAX_UM,
+} from './pixelSizeCheck';
+import {
   colors,
   alpha,
   spacing,
@@ -1025,12 +1028,16 @@ function IndexingSettingsGroup({ onParamsChange }) {
 // ---------------------------------------------------------------------------
 // Pixel Size & Binning sub-group — matches _create_pixel_binning_group()
 // ---------------------------------------------------------------------------
-function PixelBinningGroup({ binning, setBinning, detWidthMm, setDetWidthMm, shapeW }) {
+function PixelBinningGroup({ binning, setBinning, detWidthMm, setDetWidthMm, shapeW,
+                             detWidthFromFile = false }) {
   const { t } = useTranslation('pcrefinement');
   const binVal = parseInt(binning, 10) || 1;
   const unbinnedW = (parseInt(shapeW, 10) || 0) * binVal;
   const detWidthMmVal = parseFloat(detWidthMm) || 0;
-  const binnedPx = unbinnedW > 0 ? (detWidthMmVal * 1000 / unbinnedW).toFixed(2) : '—';
+  const umPerPx = unbinnedW > 0 ? (detWidthMmVal * 1000 / unbinnedW) : null;
+  const binnedPx = umPerPx != null ? umPerPx.toFixed(2) : '—';
+  const pixelCheck = checkPixelSize(umPerPx);
+  const suggestedWidth = pixelCheck.level === 'warn' ? plausibleWidthMm(unbinnedW) : null;
 
   const handleApplyPixelSize = async () => {
     try {
@@ -1075,10 +1082,50 @@ function PixelBinningGroup({ binning, setBinning, detWidthMm, setDetWidthMm, sha
       </FormRow>
 
       <FormRow label={t('pcrefinement:pixelBinning.binnedPxLabel')}>
-        <Label secondary style={{ fontSize: '9pt', fontFamily: 'monospace' }}>
+        <Label secondary style={{
+          fontSize: '9pt', fontFamily: 'monospace',
+          color: pixelCheck.level === 'warn' ? colors.red : undefined,
+        }}>
           {binnedPx}
         </Label>
       </FormRow>
+
+      {/* Say where the number came from. An estimate that looks like a
+          measurement is the problem this whole check exists for. */}
+      {detWidthMmVal > 0 && pixelCheck.level !== 'warn' && (
+        <Label secondary style={{ fontSize: '8pt', opacity: 0.8, display: 'block', marginBottom: 4 }}>
+          {detWidthFromFile
+            ? t('pcrefinement:pixelBinning.fromFile')
+            : t('pcrefinement:pixelBinning.estimated')}
+        </Label>
+      )}
+
+      {/* A wrong detector width produces maps that still look right, so this
+          has to be loud. See pixelSizeCheck.js. */}
+      {pixelCheck.level === 'warn' && (
+        <div style={{
+          margin: '2px 0 6px', padding: '6px 8px',
+          border: `1px solid ${colors.red}`, borderRadius: 4,
+          background: `${colors.red}18`, color: colors.text,
+          fontSize: '8.5pt', lineHeight: 1.5,
+        }}>
+          <div style={{ fontWeight: 600, color: colors.red }}>
+            {t('pcrefinement:pixelBinning.implausibleTitle')}
+          </div>
+          <div>
+            {t('pcrefinement:pixelBinning.implausibleBody', {
+              value: binnedPx, min: TYPICAL_MIN_UM, max: TYPICAL_MAX_UM,
+            })}
+          </div>
+          {suggestedWidth && (
+            <div style={{ marginTop: 4 }}>
+              {t('pcrefinement:pixelBinning.implausibleHint', {
+                width: suggestedWidth.toFixed(1),
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       <Button
         style={{ width: '100%' }}
@@ -1105,7 +1152,10 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
   const [detTilt, setDetTilt] = useState('0.0');
   const [azimuthal, setAzimuthal] = useState('0.0');
   const [binning, setBinning] = useState('1');
-  const [detWidthMm, setDetWidthMm] = useState('0.1');
+  // '' until the file (or the estimate below) fills it — the old default of
+  // 0.1 mm was not a possible detector at any pattern size.
+  const [detWidthMm, setDetWidthMm] = useState('');
+  const [detWidthFromFile, setDetWidthFromFile] = useState(false);
   const [detectorText, setDetectorText] = useState('');
   const [axesText, setAxesText] = useState('');
   const [msg, setMsg] = useState(null);
@@ -1173,6 +1223,17 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
         const unbinnedW = d.shape[1] * bin;
         const widthMm = (d.pixel_size * unbinnedW) / 1000;
         setDetWidthMm(String(widthMm.toFixed(3)));
+        setDetWidthFromFile(true);
+      } else if (d.shape && d.shape.length >= 2) {
+        // The file does not carry the detector geometry. The old fallback was
+        // a fixed 0.1 mm, which is not a detector at any pattern size — a user
+        // reported exactly this value and asked whether they were supposed to
+        // know it. Start from something physically possible instead, and say
+        // that it is an assumption.
+        const bin = d.binning || 1;
+        const est = plausibleWidthMm(d.shape[1] * bin);
+        if (est) setDetWidthMm(est.toFixed(3));
+        setDetWidthFromFile(false);
       }
       if (d.repr) setDetectorText(d.repr);
       if (d.axes_repr) setAxesText(d.axes_repr);
@@ -1259,6 +1320,7 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
         binning={binning}
         setBinning={setBinning}
         detWidthMm={detWidthMm}
+        detWidthFromFile={detWidthFromFile}
         setDetWidthMm={setDetWidthMm}
         shapeW={shapeW}
       />
@@ -1361,6 +1423,9 @@ function ControlsPanel({
   setPropagated,
 }) {
   const { t } = useTranslation(['pcrefinement', 'common']);
+  // This panel calls askPrompt() for the browser fallback of "Load CIF";
+  // the hook lived only in the parent, so that path threw ReferenceError.
+  const [askPrompt, promptProps] = usePrompt();
   // Progress / cancel
   const [progress, setProgress] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
@@ -2145,6 +2210,7 @@ function ControlsPanel({
         onTiltChanged={onTiltChanged}
         externalPc={externalPc}
       />
+      <PromptDialog {...promptProps} />
     </div>
   );
 }

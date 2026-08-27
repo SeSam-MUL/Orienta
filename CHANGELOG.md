@@ -9,6 +9,34 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## v0.2.3 — 2026-08-27
+
+Fixes for four things users reported, three of which read as "it just does
+nothing".
+
+- **The Phase Maps page crashed every time it was opened.** It has been
+  unusable since v0.2.0 — three separate reports were this one fault.
+- **Detector width no longer starts at an impossible value.** It was preset to
+  0.1 mm, which is not a detector at any pattern size; that value quietly
+  skewed the pattern centre and everything computed from it. It is now read
+  from the measurement file, and where the file does not carry it, estimated
+  and clearly labelled as an estimate. A value no real detector could have is
+  now called out — this matters because a wrong detector geometry leaves the
+  maps looking perfectly correct.
+- **Choosing a map layer now shows that layer.** Until now the map only
+  reloaded when you pressed "Refresh", so picking "Grain boundaries" appeared
+  to do nothing at all. When a layer cannot be drawn yet, the reason is shown
+  as a warning instead of a quiet status line.
+- **IPF maps no longer offer a colormap.** IPF colours are a fixed code for
+  crystal directions, not a value range; the setting never had any effect on
+  them and only suggested otherwise. Colormaps remain where they belong, on
+  Band Contrast, KAM, GOS and the other scalar maps.
+- The status bar shows the grid size as "150×201" again, instead of the
+  raw escape sequence it had been printing.
+- "Load CIF" no longer fails in browser mode.
+
+---
+
 ## v0.2.2 — 2026-08-27
 
 Problem reports become easier to file and easier for us to act on.

@@ -68,6 +68,7 @@
     "loadDatasetFirst": "Load a dataset first",
     "imageAlt": "EBSD analysis map",
     "layerTooltip": "Choose the analysis map layer to render.",
+    "colormapIpfTooltip": "IPF colours are a fixed code for crystal directions, not a value range — a colormap does not apply here.",
     "colormapTooltip": "Choose the matplotlib colormap for the rendered map.",
     "refreshTooltip": "Render the selected layer and colormap.",
     "layers": {

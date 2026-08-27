@@ -68,6 +68,7 @@
     "loadDatasetFirst": "先にデータセットを読み込んでください",
     "imageAlt": "EBSD 解析マップ",
     "layerTooltip": "レンダリングする解析マップのレイヤーを選択します。",
+    "colormapIpfTooltip": "IPF の色は結晶方位を表す固定のコードであり、値の範囲ではありません。カラーマップは適用されません。",
     "colormapTooltip": "レンダリングするマップの matplotlib カラーマップを選択します。",
     "refreshTooltip": "選択したレイヤーとカラーマップをレンダリングします。",
     "layers": {

@@ -68,6 +68,7 @@
     "loadDatasetFirst": "Zuerst einen Datensatz laden",
     "imageAlt": "EBSD-Analysekarte",
     "layerTooltip": "Wähle die zu rendernde Analysekarten-Ebene.",
+    "colormapIpfTooltip": "IPF-Farben sind ein fester Code für Kristallrichtungen, kein Wertebereich — ein Farbverlauf ist hier nicht anwendbar.",
     "colormapTooltip": "Wähle die matplotlib-Farbskala für die gerenderte Karte.",
     "refreshTooltip": "Gewählte Ebene und Farbskala rendern.",
     "layers": {

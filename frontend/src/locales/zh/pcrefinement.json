@@ -110,6 +110,11 @@
     "detectorWLabel": "探测器 宽:",
     "detectorWTooltip": "EBSD 探测器闪烁体的物理宽度 (mm)。",
     "mm": "mm",
+    "fromFile": "探测器几何参数取自测量文件。",
+    "estimated": "为估算值——文件中不含探测器几何参数。如果知道实际宽度请填写。",
+    "implausibleTitle": "该探测器像素尺寸不可能成立",
+    "implausibleBody": "{{value}} µm/px 远超真实 EBSD 探测器的范围（{{min}}–{{max}} µm/px）。探测器几何决定花样中心和所有模拟——数值错误时物相图看起来依然正常，但取向是错的。",
+    "implausibleHint": "对于当前花样宽度，约 {{width}} mm 宽的探测器可得到典型像素尺寸。",
     "binnedPxLabel": "合并后 px (um):",
     "applyPixelSize": "应用像素尺寸",
     "applyPixelSizeTooltip": "将计算出的像素尺寸应用于探测器配置"

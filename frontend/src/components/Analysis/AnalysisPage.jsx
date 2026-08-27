@@ -216,6 +216,13 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
   const [loading, setLoading] = useState(false);
   const [info, setInfo]     = useState(t('analysis:map.noMapLoaded'));
 
+  // IPF colours are a code for crystal directions, not a value range: the
+  // backend ignores `cmap` for these layers entirely. Offering the selector
+  // anyway suggests an effect that does not exist — every reviewer of the
+  // user report called that out first.
+  const isOrientationLayer = layer.startsWith('ipf');
+  const [error, setError] = useState(false);
+
   const handleRefresh = useCallback(async () => {
     if (!analysisLoaded) return;
     setLoading(true);
@@ -223,13 +230,28 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
       const res = await analysisApi.getMap(layer, cmap);
       const img = res.data?.image || null;
       setImage(img);
-      setInfo(img ? `${layerLabel(layer)} | ${cmap}` : t('analysis:map.noDataReturned'));
+      setError(!img);
+      setInfo(img
+        ? (layer.startsWith('ipf') ? layerLabel(layer) : `${layerLabel(layer)} | ${cmap}`)
+        : t('analysis:map.noDataReturned'));
     } catch (err) {
+      // The backend says exactly what is missing ("Reconstruct grains first
+      // for grain boundary map"). Show it, and show it as a failure.
+      setImage(null);
+      setError(true);
       setInfo(err.response?.data?.detail || t('analysis:map.failedToLoad'));
     } finally {
       setLoading(false);
     }
   }, [analysisLoaded, layer, cmap]);
+
+  // Changing the layer used to do nothing until "Refresh" was pressed — the
+  // reported "grain boundaries draws nothing, it just does nothing at all".
+  // Picking a layer IS the request to see it.
+  useEffect(() => {
+    if (!analysisLoaded) return;
+    handleRefresh();
+  }, [layer, cmap, analysisLoaded, handleRefresh]);
 
   return (
     <div style={{
@@ -269,14 +291,23 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
           </select>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-          <span style={{ fontSize: 10, color: colors.textSecondary }}>{t('analysis:map.colormapLabel')}</span>
+          <span style={{
+            fontSize: 10,
+            color: isOrientationLayer ? colors.textSecondary : colors.textSecondary,
+            opacity: isOrientationLayer ? 0.5 : 1,
+          }}>{t('analysis:map.colormapLabel')}</span>
           <select
             value={cmap}
+            disabled={isOrientationLayer}
             onChange={(e) => setCmap(e.target.value)}
-            title={t('analysis:map.colormapTooltip')}
+            title={isOrientationLayer
+              ? t('analysis:map.colormapIpfTooltip')
+              : t('analysis:map.colormapTooltip')}
             style={{
               background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 3,
-              color: colors.text, fontSize: 11, padding: '2px 4px', cursor: 'pointer',
+              color: colors.text, fontSize: 11, padding: '2px 4px',
+              cursor: isOrientationLayer ? 'not-allowed' : 'pointer',
+              opacity: isOrientationLayer ? 0.5 : 1,
             }}
           >
             {CMAP_OPTIONS.map(o => (
@@ -293,7 +324,16 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
         >
           {loading ? <span className="btn-loading">{t('analysis:map.loading')}</span> : t('analysis:map.refresh')}
         </Button>
-        <span style={{ fontSize: 10, color: colors.textSecondary, marginLeft: 'auto' }}>{info}</span>
+        {/* A failure must not read like a status line: the backend names the
+            missing step, and that sentence is the whole answer to "it does
+            nothing". */}
+        <span style={{
+          fontSize: 10, marginLeft: 'auto', maxWidth: '46%', textAlign: 'right',
+          color: error ? colors.red : colors.textSecondary,
+          fontWeight: error ? 600 : 400,
+        }}>
+          {error ? `⚠ ${info}` : info}
+        </span>
       </div>
 
       {/* Canvas area */}

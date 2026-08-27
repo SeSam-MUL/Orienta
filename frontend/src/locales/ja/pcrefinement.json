@@ -110,6 +110,11 @@
     "detectorWLabel": "検出器 幅:",
     "detectorWTooltip": "EBSD 検出器シンチレータの物理幅 (mm)。",
     "mm": "mm",
+    "fromFile": "検出器ジオメトリは測定ファイルから読み込みました。",
+    "estimated": "推定値です。ファイルに検出器ジオメトリが含まれていません。実際の幅が分かる場合は入力してください。",
+    "implausibleTitle": "この検出器ピクセルサイズはあり得ません",
+    "implausibleBody": "{{value}} µm/px は実際の EBSD 検出器の範囲（{{min}}〜{{max}} µm/px）から大きく外れています。検出器ジオメトリはパターンセンターとすべてのシミュレーションに影響します。誤った値でもマップは正しく見えますが、方位は正しくありません。",
+    "implausibleHint": "このパターン幅では、幅およそ {{width}} mm の検出器が一般的なピクセルサイズになります。",
     "binnedPxLabel": "ビニング後 px (um):",
     "applyPixelSize": "ピクセルサイズを適用",
     "applyPixelSizeTooltip": "計算したピクセルサイズを検出器構成に適用します"

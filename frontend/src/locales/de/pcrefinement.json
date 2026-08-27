@@ -110,6 +110,11 @@
     "detectorWLabel": "Detektor-B:",
     "detectorWTooltip": "Physikalische Breite des EBSD-Detektor-Szintillators (mm).",
     "mm": "mm",
+    "fromFile": "Detektorgeometrie aus der Messdatei übernommen.",
+    "estimated": "Geschätzt — die Datei enthält keine Detektorgeometrie. Tragen Sie die echte Breite ein, wenn Sie sie kennen.",
+    "implausibleTitle": "Diese Detektor-Pixelgröße ist nicht möglich",
+    "implausibleBody": "{{value}} µm/px liegt weit außerhalb realer EBSD-Detektoren ({{min}}–{{max}} µm/px). Die Detektorgeometrie bestimmt das Pattern Center und jede Simulation — mit einem falschen Wert sehen die Karten weiterhin richtig aus, die Orientierungen sind es aber nicht.",
+    "implausibleHint": "Für diese Musterbreite ergäbe ein Detektor von etwa {{width}} mm eine typische Pixelgröße.",
     "binnedPxLabel": "Binned px (um):",
     "applyPixelSize": "Pixelgröße anwenden",
     "applyPixelSizeTooltip": "Wendet die berechnete Pixelgröße auf die Detektor-Konfiguration an"

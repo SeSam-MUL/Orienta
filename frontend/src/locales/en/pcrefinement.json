@@ -110,6 +110,11 @@
     "detectorWLabel": "Detector W:",
     "detectorWTooltip": "Physical width of the EBSD detector scintillator (mm).",
     "mm": "mm",
+    "fromFile": "Detector geometry read from the measurement file.",
+    "estimated": "Estimated — the file does not contain the detector geometry. Enter the real width if you know it.",
+    "implausibleTitle": "This is not a possible detector pixel size",
+    "implausibleBody": "{{value}} um/px is far outside the range of real EBSD detectors ({{min}}-{{max}} um/px). Detector geometry feeds the pattern centre and every simulation — with a wrong value the maps still look correct but the orientations are not.",
+    "implausibleHint": "For this pattern width, a detector about {{width}} mm wide would give a typical pixel size.",
     "binnedPxLabel": "Binned px (um):",
     "applyPixelSize": "Apply Pixel Size",
     "applyPixelSizeTooltip": "Apply the calculated pixel size to the detector configuration"
