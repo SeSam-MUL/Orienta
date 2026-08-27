@@ -1,11 +1,33 @@
 # Changelog
 
-All notable changes to Orienta, newest first. Versions follow
-[semantic versioning](https://semver.org/): while Orienta is pre-1.0, the
-minor number (0.**x**.0) marks a release with new features, and the patch
-number (0.x.**y**) a fix-only release.
+All notable changes to Orienta, newest first. While Orienta is pre-1.0, the
+minor number (0.**x**.0) marks a release that changes how you work — a new
+module, a reworked page — and the patch number (0.x.**y**) everything else:
+fixes, and refinements to features that are already there.
 
 You can see which version you are running under **Settings → About Orienta**.
+
+---
+
+## v0.2.2 — 2026-08-27
+
+Problem reports become easier to file and easier for us to act on.
+
+- **"⚠ Report a problem" is now in the toolbar at the top of every page.** You
+  no longer have to leave the page where something went wrong in order to
+  report it — which also means the record of what happened is more complete.
+- **A picture of the window is included automatically** (desktop app only),
+  taken the moment you open the dialog, so you no longer need to make a
+  screenshot yourself. You can leave it out if the screen shows something you
+  would rather not share.
+- **Every report carries a short error id.** The same fault produces the same
+  id on every machine, so if two people run into one problem it is visible as
+  one problem instead of two unrelated reports. It is shown in the dialog and
+  written into the report.
+- **"Open a GitHub issue"** opens a new issue with your description, the
+  version, the error id and the preceding events already filled in — you only
+  drag the report file into it. (GitHub does not allow programs to attach
+  files to an issue, so that last step stays manual.)
 
 ---
 
