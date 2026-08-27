@@ -1,5 +1,6 @@
 """Tests for backend/api/services/app_version.py."""
 
+import re
 import subprocess
 
 import pytest
@@ -49,11 +50,66 @@ def test_no_git_at_all_reports_unknown(monkeypatch, tmp_path):
     assert info == {
         "app": "Orienta",
         "version": "unknown",
+        "release": None,
+        "commits_since_release": None,
         "commit": None,
         "commit_date": None,
         "branch": None,
         "source": "unknown",
     }
+
+
+@pytest.mark.parametrize(
+    "described,expected",
+    [
+        ("v0.2.0", ("v0.2.0", 0)),
+        ("v0.1.0-164-g5faee319", ("v0.1.0", 164)),
+        ("v1.0.0-rc1-3-gabcdef12", ("v1.0.0-rc1", 3)),  # hyphen inside the tag
+        ("", (None, None)),
+    ],
+)
+def test_parse_describe(described, expected):
+    assert app_version._parse_describe(described) == expected
+
+
+def test_version_prefers_the_release_lineage(monkeypatch):
+    """A tagged checkout must say which release it is, not just a date."""
+    real = app_version._run_git
+
+    def fake(args, cwd):
+        if args[0] == "describe":
+            return "v0.1.0-164-g5faee319"
+        return real(args, cwd)
+
+    monkeypatch.setattr(app_version, "_run_git", fake)
+    info = app_version.get_version_info()
+    assert info["release"] == "v0.1.0"
+    assert info["commits_since_release"] == 164
+    assert info["version"].startswith("v0.1.0+164 (")
+
+
+def test_version_on_an_exact_tag_is_just_the_tag(monkeypatch):
+    real = app_version._run_git
+    monkeypatch.setattr(
+        app_version,
+        "_run_git",
+        lambda args, cwd: "v0.2.0" if args[0] == "describe" else real(args, cwd),
+    )
+    info = app_version.get_version_info()
+    assert info["version"] == "v0.2.0"
+    assert info["commits_since_release"] == 0
+
+
+def test_repo_without_tags_falls_back_to_date_and_hash(monkeypatch):
+    real = app_version._run_git
+    monkeypatch.setattr(
+        app_version,
+        "_run_git",
+        lambda args, cwd: None if args[0] == "describe" else real(args, cwd),
+    )
+    info = app_version.get_version_info()
+    assert info["release"] is None
+    assert re.match(r"^\d{4}-\d{2}-\d{2} \([0-9a-f]+\)$", info["version"])
 
 
 def test_version_line_contains_app_and_version():

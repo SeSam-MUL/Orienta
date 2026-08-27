@@ -400,6 +400,17 @@ ipcMain.handle('dialog:saveImage', async (event, options) => {
   return result.filePath;
 });
 
+// Restart after a self-update. The backend must go down with us — the new
+// source is only loaded by a fresh Python process, and killBackend() is what
+// guarantees port 8000 is free when the relaunched app starts its own.
+ipcMain.handle('app:relaunch', () => {
+  logBackendLine('[update] relaunching after update');
+  userInitiatedQuit = true;
+  app.relaunch();
+  app.quit();
+  return true;
+});
+
 const poleFigureWindows = new Set();
 
 ipcMain.handle('window:openPoleFigure', () => {

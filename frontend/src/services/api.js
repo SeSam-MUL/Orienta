@@ -107,9 +107,27 @@ export async function getGpuStatus() {
   return r.data;
 }
 
-/** App version identity (git commit based): {app, version, commit, branch, ...}. */
+/** App version identity (git commit based): {app, version, release, branch, ...}. */
 export async function getAppVersion() {
   const r = await api.get('/api/system/version');
+  return r.data;
+}
+
+/** Is a newer released version available? Never throws for the caller's sake. */
+export async function checkForUpdate({ force = false } = {}) {
+  const r = await api.get('/api/system/update/check', { params: { force } });
+  return r.data;
+}
+
+/** Start installing a release. Rejects when already running or not a git install. */
+export async function startUpdate(tag) {
+  const r = await api.post('/api/system/update/start', { tag });
+  return r.data;
+}
+
+/** Progress of a running update: {state, step, log, error, installed}. */
+export async function getUpdateProgress() {
+  const r = await api.get('/api/system/update/progress');
   return r.data;
 }
 

@@ -10,6 +10,8 @@ import { useTranslation } from 'react-i18next';
 import { colors, spacing, GroupBox, Label } from '../../theme/components';
 import { getAppVersion } from '../../services/api';
 import DiagnosticsExportButton from '../common/DiagnosticsExportButton';
+import UpdateDialog from '../common/UpdateDialog';
+import useUpdateCheck, { isCheckEnabled, setCheckEnabled } from '../../hooks/useUpdateCheck';
 
 const LICENSE_URL = 'https://www.gnu.org/licenses/gpl-3.0.html';
 const REPO_URL = 'https://github.com/SeSam-MUL/Orienta';
@@ -24,6 +26,15 @@ function versionText(info, t) {
 export default function AboutSection() {
   const { t } = useTranslation('settings');
   const [versionInfo, setVersionInfo] = useState(null);
+  const [autoCheck, setAutoCheck] = useState(isCheckEnabled);
+  const [checkState, setCheckState] = useState('idle'); // idle | busy | uptodate
+  const { updateInfo, checkNow, close: closeUpdate, skip: skipUpdate } = useUpdateCheck();
+
+  const handleCheckNow = async () => {
+    setCheckState('busy');
+    const result = await checkNow();
+    setCheckState(result?.available ? 'idle' : 'uptodate');
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -71,8 +82,42 @@ export default function AboutSection() {
           </a>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button
+            onClick={handleCheckNow}
+            disabled={checkState === 'busy'}
+            title={t('settings:hoverTips.checkForUpdates')}
+            style={{
+              padding: '6px 14px', background: colors.border, border: 'none',
+              borderRadius: 4, color: colors.text, fontSize: '12px',
+              cursor: checkState === 'busy' ? 'wait' : 'pointer',
+            }}
+          >
+            {checkState === 'busy'
+              ? t('settings:update.checking')
+              : t('settings:update.checkNow')}
+          </button>
+          {checkState === 'uptodate' && (
+            <span style={{ color: colors.textSecondary, fontSize: '11px' }}>
+              {t('settings:update.upToDate')}
+            </span>
+          )}
           <DiagnosticsExportButton />
         </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '11px' }}>
+          <input
+            type="checkbox"
+            checked={autoCheck}
+            onChange={(e) => {
+              const next = e.target.checked;
+              setAutoCheck(next);
+              setCheckEnabled(next);
+            }}
+          />
+          {t('settings:update.checkOnStart')}
+        </label>
+        {updateInfo && (
+          <UpdateDialog info={updateInfo} onClose={closeUpdate} onSkip={skipUpdate} />
+        )}
         <Label secondary style={{ fontSize: '10px', opacity: 0.7 }}>
           {t('settings:about.exportDiagnosticsHint')}
         </Label>

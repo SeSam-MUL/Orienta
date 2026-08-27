@@ -28,6 +28,64 @@ def test_version_endpoint(client):
     assert "commit" in body and "branch" in body
 
 
+def test_update_check_reports_availability(client, monkeypatch):
+    from backend.api.services import updater
+
+    monkeypatch.setattr(
+        updater, "check_for_update",
+        lambda force=False: {"available": True, "latest": "v0.3.0",
+                             "current": "v0.2.0", "install_kind": "git",
+                             "notes": "## v0.3.0", "reason": ""},
+    )
+    body = client.get("/api/system/update/check").json()
+    assert body["available"] is True
+    assert body["latest"] == "v0.3.0"
+
+
+def test_update_check_never_propagates_an_error(client, monkeypatch):
+    """An offline machine must not make the app show an error on startup."""
+    from backend.api.services import updater
+
+    def boom(force=False):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(updater, "check_for_update", boom)
+    r = client.get("/api/system/update/check")
+    assert r.status_code == 200
+    assert r.json()["available"] is False
+    assert r.json()["reason"] == "check_failed"
+
+
+def test_update_start_rejects_a_non_release_tag(client):
+    r = client.post("/api/system/update/start", json={"tag": "main"})
+    assert r.status_code == 400
+    assert "release tag" in r.json()["detail"]
+
+
+def test_update_start_rejects_a_zip_install(client, monkeypatch):
+    from backend.api.services import updater
+
+    monkeypatch.setattr(updater, "install_kind", lambda: "zip")
+    r = client.post("/api/system/update/start", json={"tag": "v0.3.0"})
+    assert r.status_code == 400
+    assert "cannot update itself" in r.json()["detail"]
+
+
+def test_update_start_rejects_a_concurrent_run(client, monkeypatch):
+    from backend.api.services import updater
+
+    monkeypatch.setattr(updater, "install_kind", lambda: "git")
+    monkeypatch.setattr(updater, "start_update", lambda tag: False)
+    r = client.post("/api/system/update/start", json={"tag": "v0.3.0"})
+    assert r.status_code == 409
+
+
+def test_update_progress_is_readable(client):
+    r = client.get("/api/system/update/progress")
+    assert r.status_code == 200
+    assert "state" in r.json()
+
+
 def test_frontend_error_is_logged(client, caplog):
     with caplog.at_level(logging.ERROR, logger="frontend"):
         r = client.post(

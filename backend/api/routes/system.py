@@ -10,7 +10,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import Response
 
 from backend.dict_gpu.runtime import detect_gpu
@@ -41,6 +41,52 @@ def gpu_status() -> dict:
 @router.get("/version", summary="App version identity (git commit based)")
 def app_version() -> dict:
     return get_version_info()
+
+
+@router.get("/update/check", summary="Is a newer released version available?")
+def update_check(force: bool = False) -> dict:
+    """Never raises and never blocks the UI: an offline machine, a missing
+    credential or a zip install all come back as 'not available' with a
+    reason the dialog can explain."""
+    from backend.api.services import updater
+
+    try:
+        return updater.check_for_update(force=force)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Update check failed: %s", exc)
+        return {
+            "available": False,
+            "install_kind": "unknown",
+            "reason": "check_failed",
+            "current": get_version_info().get("version"),
+            "latest": None,
+            "notes": "",
+        }
+
+
+@router.post("/update/start", summary="Install a released version and rebuild")
+def update_start(payload: dict = Body(...)) -> dict:
+    from backend.api.services import updater
+
+    tag = str(payload.get("tag") or "").strip()
+    if not updater.parse_version(tag):
+        raise HTTPException(status_code=400, detail=f"Not a release tag: {tag!r}")
+    if updater.install_kind() != "git":
+        raise HTTPException(
+            status_code=400,
+            detail="This installation cannot update itself (no git checkout).",
+        )
+    if not updater.start_update(tag):
+        raise HTTPException(status_code=409, detail="An update is already running.")
+    logger.info("Update to %s started", tag)
+    return {"started": True, "tag": tag}
+
+
+@router.get("/update/progress", summary="Progress of a running update")
+def update_progress() -> dict:
+    from backend.api.services import updater
+
+    return updater.get_progress()
 
 
 _MAX_FIELD = 8000  # keep a hostile/huge payload from bloating the log

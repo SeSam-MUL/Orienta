@@ -22,6 +22,8 @@ import { healthCheck, createWebSocket } from './services/api';
 import { reportError } from './services/errorReporter';
 import { addBreadcrumb } from './services/breadcrumbs';
 import DiagnosticsExportButton from './components/common/DiagnosticsExportButton';
+import UpdateDialog from './components/common/UpdateDialog';
+import useUpdateCheck from './hooks/useUpdateCheck';
 import useDataStore from './stores/useDataStore';
 import useResultStore from './stores/useResultStore';
 import { colors, layout } from './theme/tokens';
@@ -183,6 +185,8 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => window.innerWidth < 1100);
   const [shortcutHelpOpen, setShortcutHelpOpen] = useState(false);
   const [devPanelOpen, setDevPanelOpen] = useState(false);
+  // Looks for a newer release a few seconds after start; silent on failure.
+  const { updateInfo, close: closeUpdate, skip: skipUpdate } = useUpdateCheck();
   // Only buffer dev logs when the panel is actually visible. Long-running
   // batches/simulations hammer the WebSocket with status events; without
   // gating, App.jsx (root component) re-renders ~10×/s for hours which has
@@ -686,6 +690,9 @@ function App() {
         </div>
       )}
       <ToastContainer />
+      {updateInfo && (
+        <UpdateDialog info={updateInfo} onClose={closeUpdate} onSkip={skipUpdate} />
+      )}
     </div>
   );
 }

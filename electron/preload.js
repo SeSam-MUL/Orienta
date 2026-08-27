@@ -14,4 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // never touch the backend.
   saveImage: (options) => ipcRenderer.invoke('dialog:saveImage', options),
   openPoleFigure: () => ipcRenderer.invoke('window:openPoleFigure'),
+  // Restart the whole app after a self-update, so the new backend and the
+  // newly built interface are both loaded.
+  relaunch: () => ipcRenderer.invoke('app:relaunch'),
 });

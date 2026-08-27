@@ -17,6 +17,7 @@ the diagnostics export.
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from functools import lru_cache
 from pathlib import Path
@@ -84,17 +85,37 @@ def _lookup_packed_ref(root: Path, ref: str) -> str | None:
     return None
 
 
+def _parse_describe(described: str) -> tuple[str | None, int | None]:
+    """Split `git describe` output into (release tag, commits since it).
+
+    'v0.2.0'              -> ('v0.2.0', 0)      exactly on the release
+    'v0.1.0-164-g5faee31' -> ('v0.1.0', 164)    164 commits past it
+    """
+    if not described:
+        return None, None
+    m = re.match(r"^(?P<tag>.+?)-(?P<n>\d+)-g[0-9a-f]+$", described)
+    if m:
+        return m.group("tag"), int(m.group("n"))
+    return described, 0
+
+
 @lru_cache(maxsize=1)
 def get_version_info() -> dict:
     """Resolve the app's version identity. Cached for the process lifetime.
 
-    Returns a dict with keys: app, version (display string), commit,
-    commit_date, branch, source ("git" | "git-files" | "unknown").
+    Prefers the release lineage from `git describe --tags`, which answers both
+    "which release is this" and "how far past it" in one string. Falls back to
+    date + hash when the checkout has no tags at all.
+
+    Returns: app, version (display string), release (tag), commits_since_release,
+    commit, commit_date, branch, source ("git" | "git-files" | "unknown").
     Never raises.
     """
     commit = None
     commit_date = None
     branch = None
+    release = None
+    commits_since = None
     source = "unknown"
 
     out = _run_git(["log", "-1", "--format=%h|%cs"], PROJECT_ROOT)
@@ -102,13 +123,22 @@ def get_version_info() -> dict:
         commit, commit_date = out.split("|", 1)
         branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], PROJECT_ROOT)
         source = "git"
+        # --tags so lightweight tags count too; --always never fails on a
+        # repo without tags (it just returns the hash, which we ignore here).
+        release, commits_since = _parse_describe(
+            _run_git(["describe", "--tags", "--abbrev=8"], PROJECT_ROOT) or ""
+        )
     else:
         commit, branch = _read_git_files(PROJECT_ROOT)
         if commit:
             source = "git-files"
 
-    if commit and commit_date:
-        version = f"{commit_date} ({commit})"
+    if release and commits_since == 0:
+        version = release                                  # v0.2.0
+    elif release:
+        version = f"{release}+{commits_since} ({commit})"  # v0.1.0+164 (5faee319)
+    elif commit and commit_date:
+        version = f"{commit_date} ({commit})"              # no tags in this repo
     elif commit:
         version = f"({commit})"
     else:
@@ -117,6 +147,8 @@ def get_version_info() -> dict:
     return {
         "app": APP_NAME,
         "version": version,
+        "release": release,
+        "commits_since_release": commits_since,
         "commit": commit,
         "commit_date": commit_date,
         "branch": branch,
