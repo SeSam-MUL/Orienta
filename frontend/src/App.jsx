@@ -264,6 +264,15 @@ function App() {
         .catch(() => {
           setBackendStatus(prev => prev === 'disconnected' ? prev : 'disconnected');
           retryCount++;
+          // Go back to fast polling: the slow 30 s cadence was meant for a
+          // healthy backend, and leaving it there meant a backend that died
+          // mid-run went unnoticed for half a minute, and every recovery
+          // took another half minute.
+          if (intervalId) {
+            clearInterval(intervalId);
+            intervalId = setInterval(check, 2000);
+          }
+          retryCount = 0;
         });
     };
     check();

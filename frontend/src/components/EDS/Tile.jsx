@@ -197,6 +197,14 @@ export default function Tile({
         onContextMenu={(e) => {
           if (!onContextMenu) return;
           e.preventDefault();
+          // The tile claims the event. The phase map's grid sits inside a host
+          // that also handles `contextmenu` and reports "no layer, the
+          // composite was hit" — right for the stacked view, wrong here — and
+          // React bubbling let that answer land SECOND and win. Measured in
+          // the running app: right-clicking an SE tile in the phase-map grid
+          // offered the composed-map export and the per-layer one could not be
+          // reached at all.
+          e.stopPropagation();
           onContextMenu(e.clientX, e.clientY);
         }}
         style={{

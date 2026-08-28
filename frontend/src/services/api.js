@@ -98,7 +98,12 @@ api.interceptors.response.use(
 );
 
 // --- Health ---
-export const healthCheck = () => api.get('/api/health');
+// Its own short timeout, NOT the instance's 5 minutes. A backend that is
+// thrashing on its way out of memory leaves the socket open and answers
+// nothing — with the long timeout the check hung instead of failing, so the
+// app kept reporting "connected" while everything was frozen. That silence
+// was the whole of the reported "eingefroren, keine Meldung".
+export const healthCheck = () => api.get('/api/health', { timeout: 4000 });
 
 // --- System ---
 /** Fetch GPU detection / VRAM info from /api/system/gpu. */

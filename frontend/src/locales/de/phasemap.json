@@ -541,7 +541,8 @@
     "scalebarUnit": "{{length}} µm",
     "defaultTitle": "Titel",
     "bgColor": "Hintergrund",
-    "bgOpacity": "Deckkraft"
+    "bgOpacity": "Deckkraft",
+    "scalebarNoScale": "Kein Maßstab — Schrittweite eintragen"
   },
   "canvasOverlay": {
     "ipfKeyAlt": "IPF-Farbschlüssel",

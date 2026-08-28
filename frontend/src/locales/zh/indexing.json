@@ -487,6 +487,7 @@
   },
   "batchDialog": {
     "title": "批量标定",
+    "connectionLost": "与后端失去联系——它已停止响应。运行可能已被终止，例如内存耗尽。请检查后端窗口并重新启动。",
     "globalSettings": "全局设置（应用于全部）",
     "method": "方法:",
     "cif": "CIF:",

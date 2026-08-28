@@ -19,7 +19,7 @@ import {
 import useDataStore from '../../stores/useDataStore';
 import useResultStore from '../../stores/useResultStore';
 import { CursorSyncProvider, useCursorSync } from './CursorSyncContext';
-import { pixelSizeForLayer } from './layerPixelSize';
+import { umPerPxForLayer, scanUmPerPx } from './layerPixelSize';
 import OverlayCard from './OverlayCard';
 import SwipeCompareController from './SwipeCompareController';
 import TileGrid from './TileGrid';
@@ -247,6 +247,14 @@ function quickModeToLayer(id) {
   const base = { id, visible: true, opacity: 1, blend: 'normal', key: `${id}-${Date.now()}` };
   if (id === 'phase') return { ...base, kind: 'phase', label: 'Phase Map' };
   if (id === 'ipf-z') return { ...base, kind: 'ipf-z', label: 'IPF-Z' };
+  // IPF-X and IPF-Y were missing here while `LayerStackPanel` drew buttons for
+  // them, so two enabled controls did nothing at all — the click handler drops
+  // a null without a word, and a button that no-ops silently reads as broken
+  // DATA rather than as an unwired control. Nothing else was needed: the stack
+  // already routes any `ipf*` kind to the phase-map layer endpoint, which
+  // serves all three directions. `quickModes.test.js` compares the two lists.
+  if (id === 'ipf-x') return { ...base, kind: 'ipf-x', label: 'IPF-X' };
+  if (id === 'ipf-y') return { ...base, kind: 'ipf-y', label: 'IPF-Y' };
   if (id === 'bc')    return { ...base, kind: 'bc',    label: 'BC' };
   if (id === 'ci')    return { ...base, kind: 'ci',    label: 'CI' };
   return null;
@@ -572,6 +580,8 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     const quickLabels = {
       phase: t('addLayer.phaseMap'),
       'ipf-z': 'IPF-Z',
+      'ipf-x': 'IPF-X',
+      'ipf-y': 'IPF-Y',
       bc: 'BC',
       ci: 'CI',
     };
@@ -765,7 +775,14 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   // travel with it: electron images sit on the SEM raster and the maps on the
   // scan raster, measured 10.6x apart on a real file, so one global step size
   // mis-scales half the exports.
-  const openExport = useCallback((build, name, label, scale = null) => {
+  /**
+   * `umPerPx` is the micrometres per pixel OF THE PICTURE, not of the layer
+   * the menu was opened on. A builder knows it (it chose the raster it drew
+   * into) and reports it; only the base64 path — where the backend already
+   * rendered the pixels — needs the caller to say, and there the answer is
+   * always the scan raster.
+   */
+  const openExport = useCallback((build, name, label, umPerPx = null) => {
     try {
       setExportError(null);
       // `build` may return a canvas it composed, or a URL for something the
@@ -773,8 +790,12 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       // base64 PNGs and re-drawing them into a canvas would only re-encode
       // the same pixels.
       const built = build();
-      const src = typeof built === 'string' ? built : canvasToDataUrl(built);
-      setExportSrc({ src, name, label, scale });
+      const isUrl = typeof built === 'string';
+      const src = isUrl ? built : canvasToDataUrl(built.canvas);
+      setExportSrc({
+        src, name, label,
+        umPerPx: isUrl ? umPerPx : built.umPerPx,
+      });
     } catch (err) {
       setExportError(err?.message || String(err));
     }
@@ -790,10 +811,13 @@ export default function EDSPage({ onNavigate, isActive = true }) {
         id: 'this',
         label: t('imageexport:menuExportThis'),
         onSelect: () => openExport(
-          () => buildSingleCanvas(l, sourceBitmapFor(l, allMaps.bitmaps)),
+          // A tile is drawn at its source bitmap's own resolution, so the area
+          // that bitmap came from is the right scale. `l`, not `l.id`, so a
+          // mask resolves through the layer it masks.
+          () => buildSingleCanvas(l, sourceBitmapFor(l, allMaps.bitmaps),
+            umPerPxForLayer(l, pixelSizes)),
           `${exportStem}_${layerName(l)}`,
           `${exportStem} \u00b7 ${layerName(l)}`,
-          pixelSizeForLayer(l.id, pixelSizes),
         ),
       });
     }
@@ -802,7 +826,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       // the other does not mean switching the view and switching back. Both
       // sit on the scan raster, so the map's own pixel size applies.
       const pm = phaseMapHandle.phaseMap;
-      const mapScale = pixelSizeForLayer('phase', pixelSizes);
+      const mapScale = scanUmPerPx(pixelSizes);
       if (pm?.region_image) {
         items.push({
           id: 'region-map',
@@ -835,11 +859,17 @@ export default function EDSPage({ onNavigate, isActive = true }) {
         id: 'overlay',
         label: t('imageexport:menuExportOverlay'),
         onSelect: () => openExport(
-          () => buildCompositeCanvas({ layers: stack.layers, bitmaps: stack.bitmaps, shape: stack.shape }),
+          // The composite is drawn into `stack.shape` \u2014 the SCAN grid \u2014
+          // whatever rasters the layers themselves are on, so the scan step is
+          // the scale of every pixel in it. Emphatically NOT the bottom
+          // layer's step: that is the SE image in the default stack, 8.48x
+          // finer on SampleB, and reading it here was the bug.
+          () => buildCompositeCanvas({
+            layers: stack.layers, bitmaps: stack.bitmaps, shape: stack.shape,
+            umPerPx: scanUmPerPx(pixelSizes),
+          }),
           `${exportStem}_overlay`,
           `${exportStem} \u00b7 ${t('overlay.title', { defaultValue: 'Overlay' })}`,
-          // The composite is drawn on the bottom layer's raster.
-          pixelSizeForLayer(stack.layers?.[0]?.id, pixelSizes),
         ),
       });
     }
@@ -855,9 +885,9 @@ export default function EDSPage({ onNavigate, isActive = true }) {
         }),
         `${exportStem}_all-maps`,
         `${exportStem} \u00b7 ${t('allMaps.title', { defaultValue: 'All maps' })}`,
-        // A montage mixes rasters with different pixel sizes \u2014 no single scale
-        // bar can be correct for it, so offer none.
-        null,
+        // No scale argument: a montage mixes rasters and separates them with
+        // gaps, so `buildMontageCanvas` reports `umPerPx: null` itself and no
+        // bar is offered. Saying it here as well would be a second opinion.
       ),
     });
     return items;
@@ -1632,8 +1662,8 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             src={exportSrc.src}
             title={exportSrc.label}
             defaultBaseName={exportSrc.name}
-            unitsPerPixel={exportSrc.scale?.x ?? null}
-            unitLabel={exportSrc.scale?.units || stepSize?.units || 'µm'}
+            unitsPerPixel={exportSrc.umPerPx ?? null}
+            unitLabel={stepSize?.units || 'µm'}
             annotations={{ label: exportSrc.label }}
           />
         )}

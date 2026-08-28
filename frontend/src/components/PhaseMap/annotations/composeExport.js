@@ -42,7 +42,7 @@ const TYPE_DRAWERS = {
  * dragging one does not mean re-composing the whole map.
  */
 export async function composeMapCanvas({
-  layers, bitmaps, shape, scale = 2, contentBbox = null,
+  layers, bitmaps, shape, scale = 2, contentBbox = null, stepX = null,
 }) {
   if (!shape?.rows || !shape?.cols) throw new Error('composeMapCanvas: invalid shape');
   // Frame what the screen frames. The view auto-zooms to the indexed region,
@@ -76,10 +76,16 @@ export async function composeMapCanvas({
 
   // `mapCols/mapRows` say how many SCAN columns the picture spans — the scale
   // bar needs that, not the full grid, once the frame is cropped.
+  //
+  // `umPerPx` is the scale of the OUTPUT pixels, which is `scale` times finer
+  // than a scan pixel because the map is drawn magnified. Anything sizing a bar
+  // from this canvas has to use that, not the raw step.
+  const step = Number(stepX);
   return {
     canvas, mapWidth: mapW, mapHeight: mapH,
     mapLeft: 0, mapTop: 0,
     mapCols: src.w, mapRows: src.h,
+    umPerPx: (Number.isFinite(step) && step > 0 && scale > 0) ? step / scale : null,
   };
 }
 

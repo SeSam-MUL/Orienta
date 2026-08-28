@@ -1984,6 +1984,36 @@ async def start_indexing(req: IndexingStartRequest):
                 task_result["per_phase_stats"] = result.metadata.get('per_phase_stats', [])
             _indexing_tasks[task_id]["result"] = task_result
 
+        except MemoryError as e:
+            # str(MemoryError()) is usually EMPTY, so the generic handler below
+            # produced "Indexing failed: " with no reason at all — the user saw
+            # a failure and could not tell it was the machine running out of
+            # RAM. Say it plainly, and say what to do about it.
+            import traceback
+            from indexing_controller import _release_cuda_cache
+            logger.error("Indexing ran out of memory", exc_info=True)
+            try:
+                _release_cuda_cache()
+            except Exception:
+                pass
+            free_note = ""
+            try:
+                import psutil
+                vm = psutil.virtual_memory()
+                free_note = (f" At the time of failure {vm.percent:.0f}% of "
+                             f"{vm.total / 1024**3:.0f} GB was in use.")
+            except Exception:
+                pass
+            _indexing_tasks[task_id]["status"] = "failed"
+            _indexing_tasks[task_id]["error"] = (
+                "Out of memory — the computer ran out of RAM during indexing."
+                + free_note
+                + " Try a smaller region, a coarser dictionary, or close other"
+                  " programs, then run it again."
+            )
+            _indexing_tasks[task_id]["message"] = "Out of memory"
+            _indexing_tasks[task_id]["traceback"] = traceback.format_exc()
+
         except Exception as e:
             import traceback
             # Check if this was a user cancellation (not a real error)

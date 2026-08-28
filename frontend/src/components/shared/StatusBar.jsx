@@ -126,10 +126,16 @@ export default function StatusBar({ backendStatus, onNavigate }) {
               <span>PC ({detector.pc[0]?.toFixed(3)}, {detector.pc[1]?.toFixed(3)}, {detector.pc[2]?.toFixed(3)})</span>
             </>
           )}
-          {stepSize && stepSize.x !== 1.0 && (
+          {/* A step of exactly 1.0 used to be hidden here, on the assumption
+              that it meant "no step size in the file". It does not: the
+              backend answers `null` for that (see `_extract_step_size`), and
+              1.0 \u00b5m is an ordinary scan step \u2014 both EDAX .osc files in
+              Test_data report exactly 1.0. Hiding it took the one number that
+              scales every figure off the screen for those scans. */}
+          {stepSize?.x > 0 && (
             <>
               <Separator />
-              <span>{stepSize.x?.toFixed(2)} {stepSize.units || '\u00b5m'}</span>
+              <span>{stepSize.x.toFixed(2)} {stepSize.units || '\u00b5m'}</span>
             </>
           )}
           {edsElements?.length > 0 && (

@@ -541,7 +541,8 @@
     "scalebarUnit": "{{length}} µm",
     "defaultTitle": "标题",
     "bgColor": "背景",
-    "bgOpacity": "不透明度"
+    "bgOpacity": "不透明度",
+    "scalebarNoScale": "无比例尺 — 请设置步长"
   },
   "canvasOverlay": {
     "ipfKeyAlt": "IPF 色键",

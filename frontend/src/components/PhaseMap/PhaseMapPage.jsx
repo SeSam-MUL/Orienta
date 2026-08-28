@@ -70,6 +70,11 @@ import {
   buildSingleCanvas, buildCompositeCanvas, buildMontageCanvas,
   sourceBitmapFor, canvasToDataUrl, contentBounds,
 } from '../EDS/edsExportSources';
+// ONE resolver for "which acquisition area is this layer on", shared with the
+// EDS page. This page used to hand its single scan step to every export,
+// including exports of an `se:` layer drawn at the SEM raster — 8.48x finer on
+// SampleB.
+import { areaForLayer, umPerPxForLayer } from '../EDS/layerPixelSize';
 import ThresholdHistogram from '../EDS/ThresholdHistogram';
 import LinescanProfilePlot from '../EDS/LinescanProfilePlot';
 import MagnifierLens from '../EDS/MagnifierLens';
@@ -140,7 +145,14 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
     }
   }, []);
   const { t } = useTranslation('phasemap');
+  // Micrometres per scan pixel, so the figure's scale bar can state a length.
+  // Null until a file with usable geometry is loaded — and then the bar is
+  // offered in map pixels instead of inventing a micrometre value.
+  const matchStepUm = useDataStore((s) => (s.stepSize?.x > 0 ? s.stepSize.x : null));
   const [heatmapClean, setHeatmapClean] = useState(null);
+  // `n_rows`/`n_cols` from /ncc-heatmap describe the CROPPED map — the endpoint
+  // trims to the indexed bounding box and reports the offset separately — so
+  // these are exactly the columns the heatmap picture spans.
   const [gridDims, setGridDims] = useState({ rows: 0, cols: 0 });
   // Shared crosshair + numbered red markers across the 3 comparison panels + the
   // publication-figure export composer — the SAME shared components as the
@@ -1074,7 +1086,7 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
           heatmap: heatmapClean || null,
         }}
         rNcc={{ r: displayed?.r_score, ncc: matchData?.ncc_score }}
-        stepUm={null}
+        stepUm={matchStepUm}
         mapCols={gridDims.cols || null}
         markers={markerCtl.markers}
       />
@@ -1635,6 +1647,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       // A plain canvas (single layer / montage) or the composed map, which also
       // reports where the MAP ends and the colour-key column begins.
       const canvas = built?.canvas ?? built;
+      // How many micrometres one pixel of THIS picture covers, as reported by
+      // whoever drew it. The page must not answer this from its scan step: a
+      // single-layer export of an `se:` layer is at the SEM raster and the
+      // composed map is at 2x, so the step is right for neither.
+      const umPerPx = Number.isFinite(built?.umPerPx) && built.umPerPx > 0
+        ? built.umPerPx : null;
       // A phase map only covers its indexed region; opening on the whole grid
       // shows it small inside a wide empty surround, which is not what the page
       // shows. Measured from the rendered pixels — dependable regardless of
@@ -1642,7 +1660,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       // not, while the content filled only 48.6% of the composed image).
       const crop = autoCrop ? contentBounds(canvas) : null;
       setMapExport({
-        src: canvasToDataUrl(canvas), name, label, crop,
+        src: canvasToDataUrl(canvas), name, label, crop, umPerPx,
         // A COPY of the map's annotations — the dialog edits these, the map
         // keeps its own. (User's choice: arranging a figure must not disturb
         // the working view.)
@@ -1684,7 +1702,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const indexingResult = useResultStore((s) => s.indexingResult);
   const indexingMethod = useResultStore((s) => s.indexingMethod);
   const resultsList = useResultStore((s) => s.resultsList);
-  const { stepSize: storeStepSize } = useDataStore();
+  const { stepSize: storeStepSize, pixelSizes: storePixelSizes } = useDataStore();
   const syncFromBackend = useDataStore((s) => s.syncFromBackend);
   // The result the backend would draw right now, whether or not this browser
   // session produced it. The result store only holds runs made here, so it is
@@ -2383,6 +2401,42 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const effectiveTitle = mapTitle.trim() || autoTitle;
 
 
+  // --- Calibration -----------------------------------------------------
+  // Micrometres per scan pixel. Editable, because a file can arrive without
+  // usable header geometry and a figure still needs a scale.
+  //
+  // `stepConfirmed` says whether these numbers came from somewhere real — the
+  // file's own step size, or the user typing one in. Until then they are a
+  // 1.0 placeholder that must NOT be quoted as a length: a bar labelled "5 µm"
+  // drawn from a made-up 1 µm/px is exactly the failure this whole change is
+  // about, and it is worse than the ones already found because nothing on
+  // screen hints that the number was invented.
+  const [stepX, setStepX] = useState(1.0);
+  const [stepY, setStepY] = useState(1.0);
+  const [stepConfirmed, setStepConfirmed] = useState(false);
+  /** The step to quote in micrometres, or null when there is nothing to quote. */
+  const knownStepX = stepConfirmed && stepX > 0 ? stepX : null;
+
+  /**
+   * Micrometres per pixel of ONE layer's own bitmap, or null.
+   *
+   * The stack mixes rasters: `phase`, `ipf-*`, `bc`, `ci`, the diagnostics and
+   * `eds:` maps are all on the scan grid, while `se:` is the SEM survey image
+   * — 0.059 um/px against 0.5 on SampleB. Exporting a single layer exports its
+   * bitmap unresampled, so the scale has to follow the layer.
+   *
+   * The hand-entered calibration wins for scan-raster layers, because that is
+   * what the user typed it FOR; it says nothing about the electron image, so
+   * there only the file can answer and a missing answer stays missing.
+   */
+  const layerUmPerPx = useCallback((layer) => {
+    const area = areaForLayer(layer);
+    if (area === 'ebsd' || area === 'eds') {
+      return knownStepX ?? umPerPxForLayer(layer, storePixelSizes);
+    }
+    return umPerPxForLayer(layer, storePixelSizes);
+  }, [knownStepX, storePixelSizes]);
+
   // The map export's picture: the data, and nothing else. The colour key and
   // the value scales are bodies laid ON this picture in the dialog, so they no
   // longer change what has to be composed.
@@ -2393,11 +2447,15 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       bitmaps: layerStack.bitmaps,
       shape: stackShape ? { rows: stackShape[0], cols: stackShape[1] } : null,
       scale: 2,
+      // So the result can state its own um/px: the picture is drawn at 2x, so
+      // one output pixel is half a scan step, not a whole one.
+      stepX: knownStepX,
       // The same frame the screen shows, so the annotations land where they
       // were put.
       contentBbox: mapContentBbox,
     });
-  }, [layerStack.layers, layerStack.bitmaps, stackShape, mapContentBbox]);
+  }, [layerStack.layers, layerStack.bitmaps, stackShape, mapContentBbox,
+      knownStepX]);
 
   // The IPF key as a ready <img>. The annotation drawers run synchronously at
   // save time and cannot await a decode, so it is loaded as soon as the key
@@ -2459,7 +2517,13 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         id: 'this',
         label: t('imageexport:menuExportThis'),
         onSelect: () => openMapExport(
-          () => buildSingleCanvas(layer, sourceBitmapFor(layer, layerStack.bitmaps)),
+          // The bitmap is at its own area's raster — an `se:` layer is the
+          // SEM survey image, 8.48x finer than the scan on SampleB — so the
+          // scale comes from the layer, not from this page's scan step.
+          () => buildSingleCanvas(
+            layer, sourceBitmapFor(layer, layerStack.bitmaps),
+            layerUmPerPx(layer),
+          ),
           `${stem}_${layer.label ?? layer.id}`,
           String(layer.label ?? layer.id),
         ),
@@ -2499,6 +2563,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         id: 'all',
         label: t('imageexport:menuExportAll'),
         onSelect: () => openMapExport(
+          // No scale: the sheet is fixed-width cells with gaps between them,
+          // and the panels need not share a raster. `buildMontageCanvas`
+          // reports `umPerPx: null` and the dialog offers no bar.
           () => buildMontageCanvas({
             layers: layerStack.layers,
             bitmaps: layerStack.bitmaps,
@@ -2512,11 +2579,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     }
     return items;
   }, [t, openMapExport, layerStack, stackShape, effectiveTitle,
-      composeMapExport, initialScaleBodies]);
-
-  // Calibration
-  const [stepX, setStepX] = useState(1.0);
-  const [stepY, setStepY] = useState(1.0);
+      composeMapExport, initialScaleBodies, layerUmPerPx]);
 
   // Export
   const [exportPath, setExportPath] = useState('');
@@ -2699,16 +2762,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       sessionStorage.removeItem('batch_handoff_source');
     } catch { /* ignore */ }
 
-    // Always show the attempted path in the Load field — so when the handoff
-    // fails, the user can see what was tried and either correct it (e.g.
-    // a missing export_dir segment) or click Load to retry.
-    setCrystalMapPath(handoff);
+    // The Data Source box that showed the attempted path was removed as
+    // redundant; its state went with it, but three setters were left behind.
+    // setCrystalMapPath threw synchronously here, which took the whole page
+    // down every time someone pressed "Phase Map" on the Batch page.
     import('../../services/api').then(({ analysisApi }) => {
       analysisApi.load(handoff)
         .then((res) => {
           setInfoText(t('phasemap:info.loadedFromBatch'));
-          setDataMsg(t('phasemap:data.loadedFromBatchShort'));
-          setDataMsgErr(false);
           setSendToAnalysisEnabled(true);
           // Add a gallery entry for the loaded file so the user can rename,
           // keep it while comparing with other results, and so the right-
@@ -2883,6 +2944,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     if (storeStepSize?.x > 0) {
       setStepX(storeStepSize.x);
       setStepY(storeStepSize.y ?? storeStepSize.x);
+      // These numbers came from the file, so they may be quoted as lengths.
+      setStepConfirmed(true);
     } else if (isActive) {
       // Fallback: fetch from API if store not yet populated (only when page is active)
       ebsdApi.getMetadata()
@@ -2891,6 +2954,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           if (ss?.x > 0) {
             setStepX(ss.x);
             setStepY(ss.y ?? ss.x);
+            setStepConfirmed(true);
           }
         })
         .catch(() => { /* no EBSD data loaded yet — keep default */ });
@@ -3631,7 +3695,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
               boxAlpha: sbBoxAlpha,
             }}
             title={cleanView ? null : effectiveTitle}
-            stepX={stepX}
+            stepX={knownStepX}
             hoverPixel={hoverPixel}
             onPixelClick={(r, c) => {
               // Drive the existing Pattern Matches dialog flow when a user
@@ -3752,7 +3816,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             containerRef={mapContainerRef}
             ctx={{
               phaseStats: phaseStatsForAnnot,
-              stepX,
+              stepX: knownStepX,
               scanCols: stackShape ? stackShape[1] : null,
               // Everything the scalebar needs to state a real length: the grid
               // it belongs to, the auto-zoom box, the user's zoom, and how wide
@@ -3761,8 +3825,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
               mapNativeSize: stackShape ? { w: stackShape[1], h: stackShape[0] } : null,
               mapContentBbox,
               mapZoomScale: zoom.viewFor('__stack__').scale,
-              mapBoxWidthPx: mapContainerRef.current
-                ?.querySelector('[data-phasemap-map-box]')?.getBoundingClientRect().width || null,
+              // `mapBoxWidthPx` is NOT passed: AnnotationLayer measures the
+              // map box itself, under its own ResizeObserver. Reading it here
+              // — in the render body — froze the width of the moment the page
+              // last rendered, and LayeredCanvas refits on resize without the
+              // page re-rendering, so after a window resize the bar measured a
+              // width the map no longer had.
             }}
           />
         )}
@@ -4443,7 +4511,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <NumberInput
               value={stepX}
-              onChange={(e) => setStepX(Number(e.target.value))}
+              // Typing a step is the user vouching for it — from here on it is
+              // a real calibration and the scale bar may quote it.
+              onChange={(e) => { setStepX(Number(e.target.value)); setStepConfirmed(true); }}
               min={0.001}
               max={1000}
               step={0.1}
@@ -4457,7 +4527,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <NumberInput
               value={stepY}
-              onChange={(e) => setStepY(Number(e.target.value))}
+              onChange={(e) => { setStepY(Number(e.target.value)); setStepConfirmed(true); }}
               min={0.001}
               max={1000}
               step={0.1}
@@ -4541,7 +4611,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 annotations: annotState.annotations,
                 scale: 2,
                 phaseStats: phaseStatsForAnnot,
-                stepX,  // for physical-length scalebar in the export
+                stepX: knownStepX,  // physical-length scalebar; null = no bar
               }, `phase_map_composed_${Date.now()}.png`);
             } catch (e) {
               // surface to console only; existing exportMsg is for the
@@ -4673,8 +4743,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             onClick={() => setMapExportError(null)}
             style={{
               position: 'fixed', bottom: 16, left: '50%', transform: 'translateX(-50%)',
-              zIndex: 3600, background: C.bgSecondary, border: `1px solid ${C.red || '#ff5555'}`,
-              color: C.red || '#ff5555', borderRadius: 6, padding: '8px 14px',
+              zIndex: 3600, background: colors.bgSecondary,
+              border: `1px solid ${colors.red || '#ff5555'}`,
+              color: colors.red || '#ff5555', borderRadius: 6, padding: '8px 14px',
               fontSize: '9pt', cursor: 'pointer',
             }}
           >
@@ -4711,7 +4782,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 onSelect={setMapExportSel}
                 ctx={{
                   phaseStats: phaseStatsForAnnot,
-                  stepX,
+                  stepX: knownStepX,
                   scanCols: mapExport.source.mapCols ?? (stackShape ? stackShape[1] : null),
                   mapNativeSize: mapExport.source.mapCols
                     ? { w: mapExport.source.mapCols, h: mapExport.source.mapRows }
@@ -4736,7 +4807,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 offsetX: geom.origin.x + (src.mapLeft ?? 0) * geom.sx - geom.crop.x * geom.sx,
                 offsetY: geom.origin.y + (src.mapTop ?? 0) * geom.sy - geom.crop.y * geom.sy,
                 phaseStats: phaseStatsForAnnot,
-                stepX,
+                stepX: knownStepX,
                 scanCols: src.mapCols ?? (stackShape ? stackShape[1] : null),
                 // Text grows with the picture, otherwise a 4x figure gets
                 // hairline captions.
@@ -4807,7 +4878,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 },
               };
             })() : null}
-            unitsPerPixel={storeStepSize?.x ?? null}
+            unitsPerPixel={mapExport.umPerPx ?? null}
             unitLabel={storeStepSize?.units || 'µm'}
             annotations={{ label: mapExport.label }}
           />

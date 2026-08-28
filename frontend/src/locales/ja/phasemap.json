@@ -541,7 +541,8 @@
     "scalebarUnit": "{{length}} µm",
     "defaultTitle": "タイトル",
     "bgColor": "背景",
-    "bgOpacity": "不透明度"
+    "bgOpacity": "不透明度",
+    "scalebarNoScale": "スケールなし — ステップサイズを設定してください"
   },
   "canvasOverlay": {
     "ipfKeyAlt": "IPF カラーキー",

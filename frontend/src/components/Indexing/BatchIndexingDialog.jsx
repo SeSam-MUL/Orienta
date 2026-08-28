@@ -31,6 +31,7 @@ export default function BatchIndexingDialog({ open, onClose }) {
   // Batch state
   const [running, setRunning] = useState(false);
   const [status, setStatus] = useState(null);
+  const [connectionLost, setConnectionLost] = useState(false);
   const pollRef = useRef(null);
 
   // Discovered CIF/H5 files from database
@@ -115,14 +116,26 @@ export default function BatchIndexingDialog({ open, onClose }) {
       if (pollRef.current) clearInterval(pollRef.current);
       return;
     }
+    // `running` was only ever cleared by a SUCCESSFUL poll, so a backend that
+    // died left the dialog spinning forever with no message. Three misses in a
+    // row is a dead backend, not a hiccup.
+    let misses = 0;
     const poll = async () => {
       try {
         const res = await indexApi.batchStatus();
+        misses = 0;
         setStatus(res.data);
         if (!res.data.running) {
           setRunning(false);
         }
-      } catch { /* ignore */ }
+      } catch {
+        misses += 1;
+        if (misses >= 3) {
+          clearInterval(pollRef.current);
+          setRunning(false);
+          setConnectionLost(true);
+        }
+      }
     };
     poll();
     pollRef.current = setInterval(poll, 2000);
@@ -162,6 +175,16 @@ export default function BatchIndexingDialog({ open, onClose }) {
 
         {/* Content */}
         <div style={{ flex: 1, overflow: 'auto', padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+
+          {connectionLost && (
+            <div role="alert" style={{
+              padding: '8px 12px', borderRadius: 4,
+              border: `1px solid ${C.red}`, background: `${C.red}18`,
+              color: C.text, fontSize: '9pt', lineHeight: 1.5,
+            }}>
+              {t('batchDialog.connectionLost')}
+            </div>
+          )}
 
           {/* Global settings */}
           <GroupBox title={t('batchDialog.globalSettings')}>

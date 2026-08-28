@@ -387,7 +387,14 @@ function PatternMatchesDialog({ open, onClose }) {
     (f, px, py) => patZoom.zoomAtPointer(NCCMAP_VIEW_ID, f, px, py),
   );
   const nccBoxRef = useRef(null);
+  // Micrometres per scan pixel, so the figure's scale bar can state a length.
+  // Null until a file with usable geometry is loaded — and then the bar is
+  // offered in map pixels instead of inventing a micrometre value.
+  const stepUm = useDataStore((s) => (s.stepSize?.x > 0 ? s.stepSize.x : null));
   const [heatmapClean, setHeatmapClean] = useState(null);
+  // `n_rows`/`n_cols` from /ncc-heatmap describe the CROPPED map — the endpoint
+  // trims to the indexed bounding box and reports the offset separately — so
+  // these are exactly the columns the heatmap picture spans.
   const [gridDims, setGridDims] = useState({ rows: 0, cols: 0 });
   const [cropOffset, setCropOffset] = useState({ row: 0, col: 0 });
   const [matchData, setMatchData] = useState(null);
@@ -758,7 +765,7 @@ function PatternMatchesDialog({ open, onClose }) {
           heatmap: heatmapClean || null,
         }}
         rNcc={{ r: matchData?.r_score, ncc: matchData?.ncc_score }}
-        stepUm={null}
+        stepUm={stepUm}
         mapCols={gridDims.cols || null}
         markers={markerCtl.markers}
       />

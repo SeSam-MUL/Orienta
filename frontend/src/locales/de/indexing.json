@@ -487,6 +487,7 @@
   },
   "batchDialog": {
     "title": "Stapel-Indizierung",
+    "connectionLost": "Kein Kontakt mehr zum Backend — es antwortet nicht mehr. Der Lauf wurde möglicherweise beendet, etwa weil der Arbeitsspeicher ausging. Bitte das Backend-Fenster prüfen und neu starten.",
     "globalSettings": "Globale Einstellungen (für alle)",
     "method": "Methode:",
     "cif": "CIF:",

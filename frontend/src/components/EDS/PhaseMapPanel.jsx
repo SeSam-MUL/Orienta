@@ -405,6 +405,8 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
     hoveredPixel, setHoveredPixel,
     paintMode, setPaintMode,
     wand,
+    // The wand's "Assign" handler writes the returned map straight back.
+    setPhaseMap,
     polygonVertices, setPolygonVertices,
     handleAutoClassify, handleClearMap,
     handleAssignRegion, handleAssignPixel, handleUndo, handleReplacePhase,
@@ -887,7 +889,7 @@ export function PhaseMapCanvas({ handle, onInspect, onAssignPixel, wand,
 export function PhaseMapControls({ handle }) {
   const { t } = useTranslation('eds');
   const {
-    phaseMap, loading, error,
+    phaseMap, setPhaseMap, loading, error,
     tolerance, setTolerance, minScore, setMinScore,
     mode, setMode, nClusters, setNClusters,
     cifPhases, selectedPhaseKeys, setSelectedPhaseKeys,
@@ -896,6 +898,9 @@ export function PhaseMapControls({ handle }) {
     region, setRegion,
     assignBusy,
     paintMode, setPaintMode,
+    // Without this the first render in wand mode threw ReferenceError and the
+    // ErrorBoundary replaced the entire EDS page — one click was enough.
+    wand,
     polygonVertices,
     handleAutoClassify, handleClearMap,
     handleAssignRegion, handleAssignPixel, handleUndo, handleReplacePhase,

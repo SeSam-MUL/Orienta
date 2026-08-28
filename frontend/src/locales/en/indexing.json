@@ -487,6 +487,7 @@
   },
   "batchDialog": {
     "title": "Batch Indexing",
+    "connectionLost": "Lost contact with the backend — it stopped answering. The run may have been killed, e.g. because memory ran out. Check the backend window, then start it again.",
     "globalSettings": "Global Settings (apply to all)",
     "method": "Method:",
     "cif": "CIF:",

@@ -21,6 +21,8 @@ from typing import Dict, List, Optional, Tuple
 import h5py
 import numpy as np
 
+from backend.api.services.atomic_result import begin_atomic, finish_atomic
+
 logger = logging.getLogger(__name__)
 
 # Version of the result file format.
@@ -343,19 +345,23 @@ def export_result_h5(
 
     result_name = f"result_{source_path.stem}.h5"
     result_path = out_dir / result_name
+    # Built under a .part name and moved into place at the end: a process
+    # killed mid-write would otherwise leave a file that opens cleanly and
+    # looks complete. See atomic_result.py.
+    work_path = begin_atomic(result_path)
 
     logger.info("Creating result file: %s", result_path)
 
     # Step 1: Copy original h5oina as the base
     logger.info("Copying original data from: %s", source_path)
-    shutil.copy2(str(source_path), str(result_path))
+    shutil.copy2(str(source_path), str(work_path))
 
     # Step 2: Open checkpoint and read indexing results
     with h5py.File(checkpoint_path, "r") as cp:
         phases_grp = cp.get("phases")
         if phases_grp is None:
             logger.warning("No phases in checkpoint, skipping indexing results")
-            return str(result_path)
+            return finish_atomic(work_path, result_path)
 
         # Collect phase data
         phase_names = []
@@ -408,7 +414,7 @@ def export_result_h5(
         method = cp["metadata"].attrs.get("method", "unknown")
 
     # Step 3: Write indexing results into the result file
-    with h5py.File(str(result_path), "a") as f:
+    with h5py.File(str(work_path), "a") as f:
         now = datetime.now(timezone.utc).isoformat()
 
         # Remove existing /Indexing if re-exporting
@@ -577,9 +583,9 @@ def export_result_h5(
             )
         doc.create_dataset("phase_table", data="\n".join(table_lines))
 
-    file_size_mb = result_path.stat().st_size / (1024 * 1024)
+    file_size_mb = work_path.stat().st_size / (1024 * 1024)
     logger.info("Result file created: %s (%.1f MB)", result_path, file_size_mb)
-    return str(result_path)
+    return finish_atomic(work_path, result_path)
 
 
 def _read_h5oina_acquisition(source_h5_path: Optional[str]) -> Dict[str, float]:
@@ -1375,6 +1381,7 @@ def export_result_h5_light(
     result_name = f"result_{source_path.stem}_light.h5"
     result_path = out_dir / result_name
 
+    work_path = begin_atomic(result_path)
     logger.info("Creating light result file: %s", result_path)
 
     # Read checkpoint data (same as the rich exporter)
@@ -1434,7 +1441,7 @@ def export_result_h5_light(
         method = cp["metadata"].attrs.get("method", "unknown")
 
     # Write a NEW (empty) file — no source copy
-    with h5py.File(str(result_path), "w") as f:
+    with h5py.File(str(work_path), "w") as f:
         now = datetime.now(timezone.utc).isoformat()
 
         # Reference to the source (NOT the data itself)
@@ -1625,9 +1632,9 @@ def export_result_h5_light(
         else:
             doc.attrs["eds_included"] = False
 
-    file_size_mb = result_path.stat().st_size / (1024 * 1024)
+    file_size_mb = work_path.stat().st_size / (1024 * 1024)
     logger.info("Light result file: %s (%.1f MB)", result_path, file_size_mb)
-    return str(result_path)
+    return finish_atomic(work_path, result_path)
 
 
 def export_all(

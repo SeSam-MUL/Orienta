@@ -6,6 +6,23 @@
  * The per-layer drawing mirrors Tile.jsx / LayeredCanvas (same blend, opacity,
  * threshold-mask and mask-preview rules), so an exported map looks like the one
  * on screen rather than like a second interpretation of the same layer.
+ *
+ * Every builder returns `{ canvas, umPerPx }` — the picture AND how many
+ * micrometres one of its pixels covers. That second half is the whole point of
+ * the shape: a scale bar has to be sized from the raster the bitmap actually
+ * IS, and only the builder knows that. Asking the page instead ("what area did
+ * the bottom layer come from?") was right for the single-map path and wrong for
+ * the other two, because they resample:
+ *
+ *   composite  every layer is stretched into the SCAN grid, so the scan step
+ *              applies even when the bottom layer is a 1024-px SE image
+ *              (measured 8.4785x apart on SampleB);
+ *   montage    each panel is stretched into a fixed 320 px cell and gaps sit
+ *              between them, so NO single number is true for the sheet.
+ *
+ * `umPerPx: null` means "this picture has no single scale" and every consumer
+ * must then offer no scale bar. It is never a placeholder for "unknown, use
+ * something plausible".
  */
 
 import { buildMaskCanvas } from '../PhaseMap/maskCanvas';
@@ -34,26 +51,37 @@ function newCanvas(w, h) {
   return c;
 }
 
+/** `x` when it is a usable physical size, else null. Never undefined/NaN. */
+function asUmPerPx(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /**
  * One layer at its own native resolution — what a single tile shows.
  *
  * Opacity is deliberately NOT applied here: on its own the map should be fully
  * opaque. Opacity only means something against the layers underneath it, which
  * is the composite's job.
+ *
+ * `umPerPx` is the pixel size of the raster the BITMAP is on — for a mask, the
+ * raster of the layer it masks, since those are the pixels drawn. The canvas is
+ * the bitmap's own size, so the value passes straight through.
  */
-export function buildSingleCanvas(layer, bitmap) {
+export function buildSingleCanvas(layer, bitmap, umPerPx = null) {
   if (!bitmap) throw new Error('This map has no image data yet');
+  const scale = asUmPerPx(umPerPx);
   if (layer.kind === 'mask' && layer.threshold) {
     const m = buildMaskCanvas(bitmap, layer.threshold);
     const c = newCanvas(m.width, m.height);
     c.getContext('2d').drawImage(m, 0, 0);
-    return c;
+    return { canvas: c, umPerPx: scale };
   }
   const c = newCanvas(bitmap.width, bitmap.height);
   const ctx = c.getContext('2d');
   ctx.drawImage(bitmap, 0, 0);
   applyThreshold(ctx, c.width, c.height, layer.threshold);
-  return c;
+  return { canvas: c, umPerPx: scale };
 }
 
 /**
@@ -62,8 +90,14 @@ export function buildSingleCanvas(layer, bitmap) {
  * Layers are drawn bottom-up with their blend and opacity; differing native
  * resolutions (EDS scan grid vs the higher-res SEM survey) are co-registered by
  * the explicit width/height in drawImage.
+ *
+ * `umPerPx` is therefore the SCAN raster's pixel size — `shape` is the scan
+ * grid, so that is the raster of every pixel in the result, no matter which
+ * layer sits at the bottom. Passing the bottom layer's own size (what the EDS
+ * page did until 2026-08-27) was wrong by the area ratio whenever that layer
+ * was the SE image, which is the default stack.
  */
-export function buildCompositeCanvas({ layers, bitmaps, shape }) {
+export function buildCompositeCanvas({ layers, bitmaps, shape, umPerPx = null }) {
   if (!shape || !layers?.length) throw new Error('Nothing to export: no layers');
   const [H, W] = shape;
   const c = newCanvas(W, H);
@@ -91,7 +125,7 @@ export function buildCompositeCanvas({ layers, bitmaps, shape }) {
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
   if (!drew) throw new Error('Nothing to export: no visible layer has data yet');
-  return c;
+  return { canvas: c, umPerPx: asUmPerPx(umPerPx) };
 }
 
 /** Columns for `n` panels: roughly square, never more than 4 wide. */
@@ -106,6 +140,12 @@ export function montageColumns(n) {
  * Cells all use the scan-grid aspect so the panels line up in a rectangular
  * grid; each bitmap is scaled into its cell exactly the way the composite
  * co-registers differing resolutions.
+ *
+ * `umPerPx` is ALWAYS null, and that is a fact about the picture rather than a
+ * gap in what we know: the sheet is `cellWidth`-wide panels separated by gaps
+ * and captioned, so a bar laid across it spans cell, gap and label in unknown
+ * proportion — and the panels need not share a raster anyway. One bar cannot be
+ * true here, so none is offered.
  */
 export function buildMontageCanvas({ layers, bitmaps, shape, labelFor, cellWidth = 320, gap = 8, background = '#000000', labelColor = '#ffffff' }) {
   const usable = (layers || []).filter((l) => l.visible && sourceBitmapFor(l, bitmaps));
@@ -145,11 +185,11 @@ export function buildMontageCanvas({ layers, bitmaps, shape, labelFor, cellWidth
 
     // Each panel is rendered through the single-map path, so a tile and its
     // panel in the sheet cannot drift apart.
-    const panel = buildSingleCanvas(l, sourceBitmapFor(l, bitmaps));
+    const panel = buildSingleCanvas(l, sourceBitmapFor(l, bitmaps)).canvas;
     ctx.drawImage(panel, x, y + labelH, cellW, cellH);
   });
 
-  return c;
+  return { canvas: c, umPerPx: null };
 }
 
 /** Canvas -> data URL the export dialog can load. */

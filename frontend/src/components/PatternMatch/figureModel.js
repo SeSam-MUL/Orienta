@@ -147,6 +147,11 @@ export function sameSize(els, dim) {
 // `nativePx` is the panel's full native width in scan pixels (= map columns),
 // `panelWidthFracOfNative` is the fraction of that native extent the panel shows
 // (1.0 for a full map). Returns the nice length + its fraction of the panel.
+//
+// `fracOfPanel` is a HINT for the toolbar only. The painter must not size a bar
+// from it: it is a fraction of the heatmap panel, while the bar is drawn inside
+// the scale-bar element's own box, and the two stopped agreeing the moment the
+// user dragged a resize handle — the bar changed length and the label did not.
 export function niceScaleLength(stepUm, panelWidthFracOfNative, nativePx) {
   const span = nativePx * (panelWidthFracOfNative || 1);
   const totalUm = stepUm * span;
@@ -157,6 +162,90 @@ export function niceScaleLength(stepUm, panelWidthFracOfNative, nativePx) {
   let valueUm = cands[0];
   for (const c of cands) if (c <= target) valueUm = c;
   return { valueUm, fracOfPanel: (valueUm / stepUm) / span };
+}
+
+/**
+ * Round a count down to a 1/2/5 x 10^n value, for a bar measured in map pixels.
+ * Same ladder as the micrometre picker, so the two read alike.
+ */
+export function niceCount(raw) {
+  const v = Number(raw);
+  if (!(v > 0)) return 0;
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  let out = pow;
+  for (const c of [1, 2, 5, 10].map((m) => m * pow)) if (c <= v) out = c;
+  return Math.max(1, Math.round(out));
+}
+
+/**
+ * The rectangle a panel's image is actually DRAWN in, in output pixels.
+ *
+ * The painter fits the image inside the panel box (object-fit: contain) so a
+ * square pattern stays square, which means the drawn width is generally NOT the
+ * box width. A scale bar sized against the box is stretched by exactly that
+ * mismatch — on the default layout, a 4:3 heatmap in a wider box.
+ *
+ * Mirrors the fitting in `paintFigure`; kept here because it is geometry, and
+ * because the toolbar needs it without a canvas.
+ */
+export function panelDrawnRect(el, img, { W, H }) {
+  const px = el.x * W, py = el.y * H, pw = el.w * W, ph = el.h * H;
+  if (!img || el.aspectLock === false
+      || !(img.naturalWidth > 0) || !(img.naturalHeight > 0)) {
+    return { x: px, y: py, w: pw, h: ph };
+  }
+  const ar = img.naturalWidth / img.naturalHeight;
+  let dw, dh;
+  if (ar > pw / ph) { dw = pw; dh = pw / ar; }
+  else { dh = ph; dw = ph * ar; }
+  return { x: px + (pw - dw) / 2, y: py + (ph - dh) / 2, w: dw, h: dh };
+}
+
+/**
+ * Micrometres covered by ONE OUTPUT PIXEL of the heatmap panel, or null.
+ *
+ * This is the only quantity a scale bar on this figure may be sized from, and
+ * everything it needs travels with `sources`: the decoded heatmap image, the
+ * scan step (`stepUm`) and how many scan columns the heatmap spans (`mapCols`).
+ *
+ * `mapCols` is the heatmap's OWN column count, not the scan's: /ncc-heatmap
+ * crops to the indexed bounding box and reports `n_cols` for the crop, with the
+ * offset alongside. It also upscales the picture for click precision, which is
+ * why the drawn width has to be measured rather than assumed.
+ *
+ * null means "this figure cannot state a length" and no bar is drawn. Until
+ * 2026-08-27 every caller passed `stepUm: null`, so this was ALWAYS the case
+ * and the button silently produced a bar labelled "100 px" whose width was
+ * 30 % of its own box.
+ */
+export function heatmapUmPerOutputPx(model, sources, size) {
+  return heatmapScale(model, sources, size).umPerPx;
+}
+
+/**
+ * What the heatmap panel can measure: `{ umPerPx, outPxPerScanPx }`.
+ *
+ * `outPxPerScanPx` needs no step size — how wide one SCAN pixel is drawn is
+ * pure geometry — so a figure from a file with no header geometry can still
+ * carry an honest bar, in map pixels. `umPerPx` additionally needs the step.
+ * Either can be null on its own.
+ */
+export function heatmapScale(model, sources, { W, H }) {
+  const none = { umPerPx: null, outPxPerScanPx: null };
+  const cols = Number(sources?.mapCols);
+  if (!(cols > 0)) return none;
+  const el = (model?.elements || []).find(
+    (e) => e.type === 'panel' && e.source === 'heatmap',
+  );
+  if (!el) return none;
+  const rect = panelDrawnRect(el, sources?.heatmap, { W, H });
+  if (!(rect.w > 0)) return none;
+  const outPxPerScanPx = rect.w / cols;
+  const step = Number(sources?.stepUm);
+  return {
+    umPerPx: step > 0 ? (step * cols) / rect.w : null,
+    outPxPerScanPx,
+  };
 }
 
 // Bump the module id counter past any numeric suffix in a (loaded) model so

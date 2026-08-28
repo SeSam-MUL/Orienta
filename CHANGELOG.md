@@ -37,6 +37,106 @@ nothing".
 
 ---
 
+## v0.2.4 — 2026-08-28
+
+Scale bars, and a set of crashes that took a whole page down. If you exported
+a figure from Orienta before today, please check its scale bar against this
+release before the figure goes anywhere.
+
+### Crashes that a single click could trigger
+
+- **Switching to the Wand paint mode killed the entire EDS page.** One click
+  was enough; no data needed to be loaded.
+- **Opening the Phase Map from the Batch page killed the Phase Maps page**,
+  every time — and retrying crashed again.
+- **When a map export failed, the message about it crashed the page.** The
+  notice meant to tell you what went wrong was the thing that went wrong.
+
+### When the backend dies
+
+- **The app now says so within seconds instead of appearing frozen.** Its
+  health check shared the five-minute timeout used for long operations, so a
+  backend struggling with memory — which keeps its connection open but answers
+  nothing — left the app reporting "connected" while nothing worked. Measured
+  against a backend that answers nothing: reported after 17 seconds, where
+  before the first sign could not arrive for five minutes.
+- **A batch run no longer spins forever** when the backend is gone; after three
+  missed replies it says the connection was lost.
+- **Running out of memory says so.** It used to end in "Indexing failed:" with
+  no reason at all, because that particular error carries no message of its own.
+
+### Saved results
+
+- **A crash can no longer leave half a result file behind.** Results are now
+  built alongside their final name and moved into place only once finished —
+  before, a run killed midway left a file that opened cleanly, looked
+  complete, and held only part of the data. A failed re-export also leaves the
+  previous result intact instead of destroying it.
+
+- **The scale bar on an exported image was wrong** wherever the picture was not
+  the raster its measurement came from. On the test scans the error was between
+  1.3x and 8.5x, and which one depended on the file. It affected the EDS
+  overlay export, single-layer exports from the Phase Maps page, and the
+  "all maps on one sheet" export. A bar labelled "2 um" could be 17 um long.
+  Every export now takes its scale from the picture actually being written, so
+  a map and an electron image exported from the same file carry their own
+  correct bars.
+- **A montage no longer offers a scale bar at all.** Its panels are scaled to a
+  fixed cell width and separated by gaps, so no single bar can be true for the
+  sheet.
+- **The scale bar in the pattern-match figure works.** It could never show
+  micrometres, and the pixel bar it fell back to drew one length while its
+  label claimed another; dragging the bar's handles changed its length and left
+  the label alone. Its length now follows the map it measures, and where a scan
+  carries no step size it measures in map pixels instead of inventing a
+  micrometre value.
+- **The scale bar on screen follows the map after you resize the window.** It
+  used to keep measuring against the width the map had before.
+- **A map with no step size says so** instead of drawing a bar from a
+  placeholder value of 1 um per pixel.
+- **A step size of exactly 1 um is shown in the status bar again.** It was
+  being hidden, on the assumption that it meant "unknown".
+- **Right-clicking a single layer in the Phase Maps tile view offers that
+  layer's export again.** It was offering the composed map instead.
+- **The IPF-X and IPF-Y buttons on the EDS page work.** They were drawn,
+  enabled and did nothing when pressed - which reads as a problem with your
+  data rather than as an unconnected button.
+- **"Download All" in the Database Browser now downloads what it says.** It
+  opened a window headed "Sync Upload" that listed your *local* files and
+  greyed out anything you did not already have - and then downloaded.
+  Categories that exist only on the server could not be selected at all. The
+  count shown after any completed sync, in either direction, was also missing.
+
+---
+
+## v0.2.3 — 2026-08-27
+
+Fixes for four things users reported, three of which read as "it just does
+nothing".
+
+- **The Phase Maps page crashed every time it was opened.** It has been
+  unusable since v0.2.0 — three separate reports were this one fault.
+- **Detector width no longer starts at an impossible value.** It was preset to
+  0.1 mm, which is not a detector at any pattern size; that value quietly
+  skewed the pattern centre and everything computed from it. It is now read
+  from the measurement file, and where the file does not carry it, estimated
+  and clearly labelled as an estimate. A value no real detector could have is
+  now called out — this matters because a wrong detector geometry leaves the
+  maps looking perfectly correct.
+- **Choosing a map layer now shows that layer.** Until now the map only
+  reloaded when you pressed "Refresh", so picking "Grain boundaries" appeared
+  to do nothing at all. When a layer cannot be drawn yet, the reason is shown
+  as a warning instead of a quiet status line.
+- **IPF maps no longer offer a colormap.** IPF colours are a fixed code for
+  crystal directions, not a value range; the setting never had any effect on
+  them and only suggested otherwise. Colormaps remain where they belong, on
+  Band Contrast, KAM, GOS and the other scalar maps.
+- The status bar shows the grid size as "150×201" again, instead of the
+  raw escape sequence it had been printing.
+- "Load CIF" no longer fails in browser mode.
+
+---
+
 ## v0.2.2 — 2026-08-27
 
 Problem reports become easier to file and easier for us to act on.

@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors } from '../../theme/components';
 import {
   defaultModel, addPanel, addElement, removeElement, updateElement,
   moveElement, resizeElement, alignElements, distributeElements, sameSize,
-  niceScaleLength, reseedIdsFrom, SOURCE_META,
+  niceScaleLength, niceCount, reseedIdsFrom, SOURCE_META,
 } from './figureModel';
 import { paintFigure } from './paintFigure';
 import {
@@ -35,7 +35,7 @@ export default function PatternExportDialog({ open, onClose, sources, rNcc, step
   // Localized panel-source label, falling back to the model's English label/key.
   const srcLabel = (s) => (SOURCE_META[s] ? t(`patternmatch:source.${s}`) : s);
   const [model, setModel] = useState(null);
-  const [imgs, setImgs] = useState({ markers, stepUm });
+  const [imgs, setImgs] = useState({ markers, stepUm, mapCols });
   const [selectedIds, setSelectedIds] = useState([]);
   const [resolution, setResolution] = useState({ mode: 'scale', scale: 2, widthPx: 2400 });
   const [format, setFormat] = useState('png');
@@ -67,14 +67,18 @@ export default function PatternExportDialog({ open, onClose, sources, rNcc, step
       experimental: sources?.experimental, simulated: sources?.simulated,
       ncc: sources?.ncc, heatmap: sources?.heatmap,
     }).then((decoded) => {
-      if (!cancelled) setImgs({ ...decoded, markers, stepUm });
+      if (!cancelled) setImgs({ ...decoded, markers, stepUm, mapCols });
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sourcesKey]);
 
-  // Keep markers/stepUm fresh without re-decoding images.
-  useEffect(() => { setImgs((p) => ({ ...p, markers, stepUm })); }, [markers, stepUm]);
+  // Keep markers and the map scale fresh without re-decoding images. The scale
+  // rides WITH the sources because that is where the heatmap image lives, and
+  // the painter must never have to guess it from somewhere else.
+  useEffect(() => {
+    setImgs((p) => ({ ...p, markers, stepUm, mapCols }));
+  }, [markers, stepUm, mapCols]);
 
   // Fit the figure's true aspect into the preview budget (contain). Whichever of
   // width/height hits its cap first sets the scale; the other stays under.
@@ -158,23 +162,47 @@ export default function PatternExportDialog({ open, onClose, sources, rNcc, step
     type: 'colorbar', kind: 'ncc', x: 0.92, y: 0.3, w: 0.03, h: 0.4,
     vmin: -1, vmax: 1, color: '#000000', fontSize: 11, visible: true,
   }));
+  /**
+   * Can this figure state a length at all?
+   *
+   * Only the heatmap carries a scale — a detector pattern's pixels are not a
+   * length on the specimen — so a bar needs that panel plus, at minimum, how
+   * many scan columns it spans. With a step size on top, the bar can be in
+   * micrometres; without one it can still be in honest map pixels.
+   *
+   * Until 2026-08-27 the button was always enabled and always produced a
+   * "100 px" label over a bar 30 % of its own box wide. Refusing is the honest
+   * answer, and the tooltip says which half is missing.
+   */
+  const scalebarAvailability = useMemo(() => {
+    const hasHeatmap = !!model?.elements?.some(
+      (e) => e.type === 'panel' && e.source === 'heatmap',
+    );
+    if (!hasHeatmap || !(mapCols > 0)) return { can: false, um: false };
+    return { can: true, um: stepUm > 0 };
+  }, [model, mapCols, stepUm]);
+
   const onAddScalebar = () => setModel((m) => {
-    // µm auto-fit if a heatmap panel + step size + map column count are known;
-    // else a px bar. fracOfPanel is the bar length as a fraction of the heatmap
-    // panel width, calibrated to the real physical map width (stepUm × mapCols).
-    const heatmapPanel = m.elements.find((e) => e.type === 'panel' && e.source === 'heatmap');
-    let props = { type: 'scalebar', mode: 'px', x: 0.1, y: 0.85, w: 0.3, h: 0.06,
-      color: '#000000', fontSize: 12, fracOfPanel: 0.3, unit: 'px', lengthValue: 100,
-      labelText: '100 px' };
-    if (heatmapPanel && stepUm && mapCols) {
-      const { valueUm, fracOfPanel } = niceScaleLength(stepUm, 1.0, mapCols);
+    const heatmapPanel = m.elements.find(
+      (e) => e.type === 'panel' && e.source === 'heatmap');
+    if (!heatmapPanel || !(mapCols > 0)) return m;
+    // Sits under the heatmap by default and spans the panel's box, so there is
+    // room for the bar the painter will size from the physics. Its own width is
+    // a frame only — dragging the handles moves and pads it, never rescales it.
+    const base = {
+      type: 'scalebar', x: heatmapPanel.x,
+      y: heatmapPanel.y + heatmapPanel.h + 0.02,
+      w: heatmapPanel.w, h: 0.06, color: '#000000', fontSize: 12,
+    };
+    if (stepUm > 0) {
+      const { valueUm } = niceScaleLength(stepUm, 1.0, mapCols);
       if (valueUm > 0) {
-        props = { type: 'scalebar', mode: 'um', x: heatmapPanel.x, y: heatmapPanel.y + heatmapPanel.h + 0.02,
-          w: heatmapPanel.w, h: 0.06, color: '#000000', fontSize: 12,
-          fracOfPanel, unit: 'µm', lengthValue: valueUm, labelText: `${valueUm} µm` };
+        return addElement(m, { ...base, mode: 'um', unit: 'µm', lengthValue: valueUm });
       }
     }
-    return addElement(m, props);
+    // No step size: measure in scan pixels, which is still true about the map.
+    const nice = niceCount(mapCols / 3);
+    return addElement(m, { ...base, mode: 'px', unit: 'px', lengthValue: nice });
   });
 
   const setBg = (bg) => setModel((m) => ({ ...m, canvas: { ...m.canvas, bg } }));
@@ -272,7 +300,15 @@ export default function PatternExportDialog({ open, onClose, sources, rNcc, step
             </select>
             <button onClick={onAddText} style={tbBtn} title={t('patternmatch:toolbar.addTextTooltip')}>{t('patternmatch:toolbar.addText')}</button>
             <button onClick={onAddRNcc} style={tbBtn} title={t('patternmatch:toolbar.addRNccTooltip')}>{t('patternmatch:toolbar.addRNcc')}</button>
-            <button onClick={onAddScalebar} style={tbBtn} title={t('patternmatch:toolbar.addScaleBarTooltip')}>{t('patternmatch:toolbar.addScaleBar')}</button>
+            <button
+              onClick={onAddScalebar}
+              disabled={!scalebarAvailability.can}
+              style={{ ...tbBtn, opacity: scalebarAvailability.can ? 1 : 0.45,
+                cursor: scalebarAvailability.can ? 'pointer' : 'not-allowed' }}
+              title={scalebarAvailability.can
+                ? t('patternmatch:toolbar.addScaleBarTooltip')
+                : t('patternmatch:toolbar.addScaleBarUnavailable')}
+            >{t('patternmatch:toolbar.addScaleBar')}</button>
             <button onClick={onAddColorbar} style={tbBtn} title={t('patternmatch:toolbar.addColorbarTooltip')}>{t('patternmatch:toolbar.addColorbar')}</button>
             <button onClick={onLetterAll} style={tbBtn} title={t('patternmatch:toolbar.addLettersTooltip')}>{t('patternmatch:toolbar.addLetters')}</button>
           </div>

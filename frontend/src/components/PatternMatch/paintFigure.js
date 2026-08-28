@@ -4,7 +4,7 @@
 //
 // Used for both the live preview (screen scale) and the export (high scale):
 // preview === export. Canvas fillStyle/strokeStyle MUST be concrete colors.
-import { letterString } from './figureModel';
+import { heatmapScale, letterString } from './figureModel';
 
 const NCC_STOPS = ['#2166ac', '#67a9cf', '#f7f7f7', '#ef8a62', '#b2182b'];
 const RED = '#ff5555';
@@ -12,6 +12,12 @@ const RED = '#ff5555';
 export function paintFigure(ctx, model, sources, { W, H }) {
   const bg = model.canvas?.bg ?? '#ffffff';
   if (bg && bg !== 'transparent') { ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H); }
+
+  // What the heatmap can measure, worked out ONCE from the panel as it will be
+  // drawn. Every scale bar in the figure is sized from this and from nothing
+  // else — not from its own box, which the user drags freely. Both halves null
+  // = this figure carries no scale, and then no bar is drawn at all.
+  const mapScale = heatmapScale(model, sources, { W, H });
 
   let panelIdx = 0;
   for (const el of model.elements) {
@@ -53,7 +59,7 @@ export function paintFigure(ctx, model, sources, { W, H }) {
     } else if (el.type === 'colorbar') {
       drawColorbar(ctx, el, px, py, pw, ph, H);
     } else if (el.type === 'scalebar') {
-      drawScalebar(ctx, el, px, py, pw, ph, H);
+      drawScalebar(ctx, el, px, py, pw, ph, H, mapScale);
     } else if (el.type === 'text') {
       drawTextBox(ctx, el.text || '', px, py, (el.fontSize || 16) * (H / 600), el.color || '#000000', el.weight === 'bold');
     }
@@ -86,14 +92,38 @@ function drawColorbar(ctx, el, px, py, pw, ph, H) {
   ctx.textBaseline = 'alphabetic';
 }
 
-function drawScalebar(ctx, el, px, py, pw, ph, H) {
+/**
+ * The bar's LENGTH is physics; its box is only a frame the user positions.
+ *
+ * `mapScale` is what the heatmap panel can measure. Without the half this bar's
+ * mode needs, the figure cannot state the length and NOTHING is drawn —
+ * deliberately, because the alternative this replaces was a bar of arbitrary
+ * width under a label that claimed a number ("100 px" beside a bar 30 % of its
+ * own box wide, in a figure with no scale at all).
+ *
+ * `mode: 'px'` measures in SCAN pixels. That is a real statement about the map
+ * and needs no step size, so it stays available on files without one.
+ */
+function drawScalebar(ctx, el, px, py, pw, ph, H, mapScale) {
+  const lengthValue = Number(el.lengthValue);
+  if (!(lengthValue > 0)) return;
+  const px_mode = el.mode === 'px';
+  const unit = el.unit || (px_mode ? 'px' : 'µm');
+  // Both modes reduce to "how many output pixels is this length".
+  const barW = px_mode
+    ? lengthValue * (mapScale?.outPxPerScanPx ?? 0)
+    : lengthValue / (mapScale?.umPerPx > 0 ? mapScale.umPerPx : Infinity);
+  if (!(barW > 0) || !Number.isFinite(barW)) return;
+
   const fs = (el.fontSize || 12) * (H / 600);
   const barH = Math.max(3, fs * 0.4);
-  const barW = Math.max(2, (el.fracOfPanel ?? 0.3) * pw);
   ctx.fillStyle = el.color || '#000000';
   ctx.fillRect(px, py, barW, barH);
   ctx.font = `${fs}px sans-serif`; ctx.textAlign = 'start'; ctx.textBaseline = 'top';
-  ctx.fillText(el.labelText || `${el.lengthValue ?? ''} ${el.unit || 'µm'}`, px, py + barH + 2);
+  // The label is generated from the length that was just drawn, so the two
+  // cannot drift apart. A stored `labelText` is honoured only when it still
+  // describes that length.
+  ctx.fillText(`${lengthValue} ${unit}`, px, py + barH + 2);
   ctx.textBaseline = 'alphabetic';
 }
 

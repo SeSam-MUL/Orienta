@@ -541,7 +541,8 @@
     "scalebarUnit": "{{length}} µm",
     "defaultTitle": "Title",
     "bgColor": "Background",
-    "bgOpacity": "Opacity"
+    "bgOpacity": "Opacity",
+    "scalebarNoScale": "No scale — set the step size"
   },
   "canvasOverlay": {
     "ipfKeyAlt": "IPF colour key",

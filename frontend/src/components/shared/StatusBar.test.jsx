@@ -46,3 +46,35 @@ describe('StatusBar grid shape', () => {
     expect(text).not.toContain('\\u');
   });
 });
+
+describe('StatusBar step size', () => {
+  it('shows a step of exactly 1.0 µm instead of hiding it', () => {
+    // The old guard was `stepSize.x !== 1.0`, on the assumption that 1.0 meant
+    // "unknown". Unknown is `null` — the backend's `_extract_step_size` returns
+    // None rather than a placeholder — and 1.0 µm is a perfectly ordinary
+    // scan step: both EDAX .osc files in Test_data report exactly that.
+    dataState.stepSize = { x: 1.0, y: 1.0, units: 'um' };
+    try {
+      const { container } = render(<StatusBar />);
+      expect(container.textContent).toContain('1.00 um');
+    } finally {
+      dataState.stepSize = null;
+    }
+  });
+
+  it('says nothing when the file carries no step size', () => {
+    dataState.stepSize = null;
+    const { container } = render(<StatusBar />);
+    expect(container.textContent).not.toMatch(/µm|\bum\b/);
+  });
+
+  it('ignores a nonsensical step rather than printing it', () => {
+    dataState.stepSize = { x: 0, y: 0, units: 'um' };
+    try {
+      const { container } = render(<StatusBar />);
+      expect(container.textContent).not.toContain('0.00');
+    } finally {
+      dataState.stepSize = null;
+    }
+  });
+});

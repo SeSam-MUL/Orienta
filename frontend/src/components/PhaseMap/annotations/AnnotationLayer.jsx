@@ -157,6 +157,8 @@ function LegendBody({ annot, phaseStats }) {
 }
 
 function ScalebarBody({ annot, ctx, containerSize }) {
+  const { t } = useTranslation('phasemap');
+  const noScaleLabel = t('phasemap:annotations.scalebarNoScale');
   const lengthUm = annot.props?.lengthUm ?? 5;
   const fontSize = annot.props?.fontSize ?? 12;
   const barColor = annot.props?.barColor ?? '#ffffff';
@@ -193,8 +195,12 @@ function ScalebarBody({ annot, ctx, containerSize }) {
   // zoom. If the bar outgrows its frame it now visibly sticks out, which tells
   // the user to widen the frame or pick a shorter length.
   // Without a usable geometry it falls back to filling the box rather than
-  // stating a length it cannot back up.
-  const barStyle = barPx ? { width: `${barPx}px` } : { width: '100%' };
+  // stating a length it cannot back up: with no usable geometry it says so
+  // rather than drawing a full-width bar under a micrometre label. That
+  // combination — a bar of arbitrary length beneath a confident "5 µm" — is
+  // the exact failure this annotation exists to avoid, and the map has no
+  // step size to back it whenever `ctx.stepX` is null (see `knownStepX` in
+  // PhaseMapPage: a 1.0 placeholder is not a measurement).
   return (
     <div style={{
       width: '100%', height: '100%',
@@ -203,18 +209,34 @@ function ScalebarBody({ annot, ctx, containerSize }) {
       background: backgroundCss(annot.props), borderRadius: PLATE_RADIUS,
       boxSizing: 'border-box',
     }}>
-      <div style={{
-        ...barStyle,
-        flexShrink: 0,
-        height: Math.max(3, fontSize * 0.4),
-        background: barColor, borderRadius: 1,
-      }} />
-      <div style={{
-        color: textColor, fontSize, fontFamily: 'sans-serif',
-        textShadow: '0 0 4px rgba(0,0,0,0.8)',
-      }}>
-        {lengthUm} µm
-      </div>
+      {barPx ? (
+        <>
+          <div style={{
+            width: `${barPx}px`,
+            flexShrink: 0,
+            height: Math.max(3, fontSize * 0.4),
+            background: barColor, borderRadius: 1,
+          }} />
+          <div style={{
+            color: textColor, fontSize, fontFamily: 'sans-serif',
+            textShadow: '0 0 4px rgba(0,0,0,0.8)',
+          }}>
+            {lengthUm} µm
+          </div>
+        </>
+      ) : (
+        <div
+          data-scalebar-noscale
+          style={{
+            color: textColor, fontSize: Math.max(9, fontSize * 0.85),
+            fontFamily: 'sans-serif', fontStyle: 'italic', opacity: 0.85,
+            textAlign: 'center', padding: '0 4px',
+            textShadow: '0 0 4px rgba(0,0,0,0.8)',
+          }}
+        >
+          {noScaleLabel}
+        </div>
+      )}
     </div>
   );
 }
@@ -598,6 +620,15 @@ export default function AnnotationLayer({
   // null on the first paint) and never measure again — invisible /
   // un-clickable widgets.
   const [size, setSize] = useState({ width: 0, height: 0 });
+  // How wide the MAP is drawn right now, as opposed to the container it sits
+  // letterboxed inside. Measured here rather than taken from `ctx`, because the
+  // page builds `ctx` in its render body and `LayeredCanvas` refits itself from
+  // its own ResizeObserver: after a window resize the map's drawn width changes
+  // without the page re-rendering, and a bar sized from the frozen value states
+  // a length it no longer has. 0 = there is no map box in this tree (the export
+  // dialog reuses these widgets over its preview), and then `ctx` is the live
+  // answer after all.
+  const [mapBoxWidth, setMapBoxWidth] = useState(0);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -608,6 +639,9 @@ export default function AnnotationLayer({
           ? prev
           : { width: rect.width, height: rect.height }
       ));
+      const box = el.querySelector?.('[data-phasemap-map-box]');
+      const w = box ? box.getBoundingClientRect().width : 0;
+      setMapBoxWidth((prev) => (prev === w ? prev : w));
     };
     measure();  // initial
     let ro = null;
@@ -636,8 +670,14 @@ export default function AnnotationLayer({
     return () => el.removeEventListener('mousedown', onDown);
   }, [containerRef, onSelect]);
 
-  // Merge canvas size into ctx so per-annotation drawers can use it.
-  const enrichedCtx = { ...ctx, canvasWidthPx: size.width, canvasHeightPx: size.height };
+  // Merge canvas size into ctx so per-annotation drawers can use it — and let
+  // the live map-box measurement win over whatever the page froze in.
+  const enrichedCtx = {
+    ...ctx,
+    canvasWidthPx: size.width,
+    canvasHeightPx: size.height,
+    ...(mapBoxWidth > 0 ? { mapBoxWidthPx: mapBoxWidth } : null),
+  };
 
   return (
     <div
