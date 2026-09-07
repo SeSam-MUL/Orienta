@@ -547,8 +547,21 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
 # Wiring — render-NCC scorer + pipeline entry point (lazy heavy imports)
 # ---------------------------------------------------------------------------
 
+#: Gaussian sigma (detector pixels) applied to BOTH the experimental and the
+#: simulated pattern before correlating. See `build_render_score_fn` — this is
+#: the single number that took the median render-NCC on real data from 0.196 to
+#: 0.421.
+RENDER_LOWPASS_SIGMA = 2.0
+
+#: Fraction of the inscribed disc used for the correlation. The rim carries more
+#: noise than signal: measured 0.421 at 0.80 against 0.401 at the previous 0.96.
+RENDER_APERTURE_FRAC = 0.80
+
+
 def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
-                          max_bandwidth: int = 128):
+                          max_bandwidth: int = 128,
+                          lowpass_sigma: float = RENDER_LOWPASS_SIGMA,
+                          aperture_frac: float = RENDER_APERTURE_FRAC):
     """Render-NCC scorer for :func:`unify_map`.
 
     ``get_pattern(flat_idx) -> (H, W) float array | None`` supplies the
@@ -556,10 +569,52 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
     fetch for the endpoint — only the few scored pixels per grain are read).
 
     Renders through the cached SHT renderer service (bw=`max_bandwidth`),
-    removes the dynamic background from BOTH sides and compares inside the
-    inscribed detector disc — the same recipe as the validated SampleB
-    render-NCC ground-truth harness. Pixels without a pattern score -inf so
-    they never decide a class.
+    removes the dynamic background from BOTH sides, BAND-LIMITS both to the
+    same resolution, and compares inside the inscribed detector disc. Pixels
+    without a pattern score -inf so they never decide a class.
+
+    The band limit is the load-bearing part, added 2026-09-06
+    ------------------------------------------------------------------
+    An experimental pattern carries detector noise at the pixel scale; an SHT
+    render does not. Correlating them across the full frequency range spends
+    most of the norm on noise that has no counterpart in the model, and the
+    score collapses. Measured on a real 7050 map, 40 pixels, with the geometry,
+    the pattern centre and the orientation each verified to be AT their optimum
+    beforehand (so none of this is compensating for a mis-set parameter):
+
+        recipe                        median render-NCC   >= 0.30
+        as shipped                          0.196            25%
+        blur the simulation only            0.226            28%
+        blur the experiment only            0.343            57%
+        band-limit BOTH (this)              0.421            90%
+
+    It improves the DECISION, not just the number — which is the only reason to
+    do it. Over 12 pixels, correct orientation vs the best of 40 random ones:
+
+        contrast (correct - noise floor)   0.096  ->  0.221
+        phase gap (stored - best other)    0.119  ->  0.244
+        score 2 deg off the answer         0.088  ->  0.250
+        score 5 deg off                   -0.025  -> -0.039
+
+    The noise floor roughly doubles too, so what matters is that the contrast
+    grows FASTER than it (2.3x vs 2.0x) and that the peak does not broaden: 5
+    degrees away the score is already gone in both recipes, so orientation
+    resolution is unchanged.
+
+    Consequence for callers: the scale of this scorer has roughly doubled.
+    `SCORE_FLOOR = 0.25` was written for "correct assignments render >= ~0.3"
+    and finally matches that intent — before this it sat ABOVE the typical
+    correct score (0.196), which made nearly every grain a suspect and is why
+    the phase check did hundreds of Hough calls. `MARGIN_CLEAR` is a fixed
+    absolute margin on a scale that has doubled, so it is now effectively
+    looser; it wants re-examining against data rather than rescaling by
+    arithmetic.
+
+    Frame averaging (averaging neighbouring scan pixels' patterns) scored 0.333
+    and was deliberately NOT used: it mixes neighbours, so exactly where a phase
+    call is in doubt — a one-pixel island, a small particle — it blends in the
+    surrounding phase and biases the answer toward it. A per-pixel band limit
+    has no such coupling.
 
     GPU-OOM resilience: all torch work runs under ``torch.no_grad()`` (scoring
     never needs autograd graphs), and a per-pixel render that raises a CUDA
@@ -605,12 +660,32 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
 
     yy, xx = np.mgrid[0:H, 0:W]
     cy, cx = (H - 1) / 2.0, (W - 1) / 2.0
-    disc = ((yy - cy) ** 2 + (xx - cx) ** 2) <= (min(cy, cx) * 0.96) ** 2
+    disc = ((yy - cy) ** 2 + (xx - cx) ** 2) <= (min(cy, cx) * float(aperture_frac)) ** 2
+
+    sigma = float(lowpass_sigma)
 
     def _dynbg(im):
-        s = kp.signals.EBSD(np.asarray(im, dtype=np.float32)[None, None])
+        # COPY, never a view. `np.asarray` does not copy a float32 array, the
+        # EBSD signal then wraps the caller's buffer, and
+        # remove_dynamic_background subtracts IN PLACE — so scoring a pixel
+        # silently background-corrected the caller's pattern. The phase check
+        # scores the stored phase and then every candidate on the SAME pixels,
+        # so the candidates were being compared against a pattern that had
+        # already been corrected once per earlier phase (found 2026-09-06: two
+        # identical calls returned 0.715 and 0.623).
+        s = kp.signals.EBSD(np.array(im, dtype=np.float32, copy=True)[None, None])
         s.remove_dynamic_background(operation="subtract", filter_domain="frequency")
         return s.data[0, 0].astype(np.float32)
+
+    def _prep(im):
+        """Background-corrected AND band-limited — applied to both sides, with
+        the same sigma, so the correlation only ever sees content the model can
+        actually carry. sigma <= 0 disables it (the pre-2026-09-06 behaviour)."""
+        out = _dynbg(im)
+        if sigma > 0:
+            from scipy.ndimage import gaussian_filter
+            out = gaussian_filter(out, sigma).astype(np.float32)
+        return out
 
     def _ncc(a, b):
         av = a[disc].astype(np.float64)
@@ -644,7 +719,7 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
     def _render(qt):
         sim = state["rnd"].render(state["pgrid"], qt, pc, (H, W), pixel_size,
                                   tilt_deg=sample_tilt, det_tilt_deg=det_tilt)
-        return _dynbg(np.asarray(sim.numpy(), dtype=np.float32))
+        return _prep(np.asarray(sim.numpy(), dtype=np.float32))
 
     exp_cache: dict[int, np.ndarray | None] = {}
 
@@ -655,7 +730,7 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
                 f = int(f)
                 if f not in exp_cache:
                     p = get_pattern(f)
-                    exp_cache[f] = None if p is None else _dynbg(p)
+                    exp_cache[f] = None if p is None else _prep(p)
                 exp = exp_cache[f]
                 if exp is None:
                     out.append(float("-inf"))

@@ -107,8 +107,92 @@ All of these live in the collapsed **Advanced tools** group in the sidebar:
     (green = stored phase wins, red = another phase renders clearly better);
     **Reassign N grains** then flips only clearly-losing grains (whole grain,
     per-pixel Hough orientation, margin ≥ 0.05, one-level **Undo**).
-    *Current limitation:* the check runs synchronously and can take minutes
-    on large multi-phase maps — a progress/cancel version is planned.
+
+    **The check has two stages, and the button applies both.** Stage 1 works
+    on whole grains — **9 pixels or more**. Stage 2 catches what that leaves
+    behind: the smaller **islands sitting inside a grain**, completely
+    surrounded by another phase. Those are a different
+    defect — in heavily deformed material the patterns go diffuse, the fine
+    detail that identifies a low-symmetry intermetallic is the first thing to
+    go, and the few broad bands that survive fit any cubic phase. The result
+    is matrix pixels scattered through an intermetallic particle.
+
+    Stage 2 needs no Hough: an island inside a grain is surrounded by pixels
+    whose orientation is already known, so the candidate orientation is the
+    neighbour's (taken **per pixel**, not averaged over the island — grains
+    drift, and an average would be wrong exactly where it matters). It is
+    therefore renders only, and cheap: measured on a deformed 7050 map
+    (39×136), stage 1 found **3 grains / 23 px** while stage 2 found **19
+    islands / 22 px** in **4.0 s** — 17 of them Al pixels inside an Al7FeCu2
+    particle, which was the defect actually being reported. Of 30 islands
+    examined it left **11 alone**; the wrong pixels rendered a median 0.229
+    against 0.489 for the proposal.
+
+    **Neither stage believes a loss at face value.** Stage 1 samples 16
+    pixels of a suspect grain and, before offering a reassignment, also asks
+    Hough for an orientation of the *stored* phase on those pixels — one
+    batched call per phase — and judges the grain at the better of the two.
+    This is what stops a low-symmetry phase from being deleted for its
+    indexer's orientation: on the 7050 map the whole MgCuAl2 particle (one
+    grain, ~250 px) was flipped to Al before this step existed, although at a
+    fair orientation MgCuAl2 rendered 0.420 against Al's 0.411 — a tie, not a
+    loss. Grains the step could not settle are reported as **undecided** and
+    left alone; grains it saved are counted as **rescued**.
+
+    **Stage 2 does not believe a loss at face value either.** An island's stored
+    orientation is unreliable almost by definition — these are the pixels
+    where indexing already went wrong — and a wrong orientation renders badly
+    whatever the phase is. Measured on the 7050 map, a third of the raw
+    stage-2 findings were exactly that: the stored phase, given a fair
+    orientation, was the *better* one (MgCuAl2 rendered 0.207 at its stored
+    orientation and 0.420 at a fair one). So before a finding is offered, the
+    stored phase is re-oriented by Hough and judged at the better of the two.
+    Findings that survive are offered; those that turn out to be a bad
+    orientation are dropped (counted as *rescued*); and where Hough can find
+    no orientation at all, the island is reported as **undecided** and left
+    alone — the check cannot tell a wrong phase from a wrong orientation
+    there, and says so rather than guessing.
+
+    Expect *undecided* to be the common outcome, not the exception. Measured
+    on the 7050 map: of 59 islands that lost at their stored orientation,
+    Hough could orient the stored phase on only 4 (1 rescued, 3 confirmed);
+    the other **55 came out undecided**, because Hough cannot fit bands to a
+    single noisy pixel any better than the original indexing could. All 8
+    findings that the orientation search had proven to be artefacts were
+    stopped — by "cannot judge", not by "judged and found fine". That is the
+    trade: far fewer automatic repairs, none of them of the kind that removes
+    a correct phase. The undecided islands are the ones to look at by hand in
+    the Pattern-Match dialog, where *Compare phases* re-indexes the pixel per
+    phase with the full search the check cannot afford.
+
+    The two counts are always reported apart ("3 grains + 19 pixels"), never
+    summed: they are different repairs, and one number you cannot take apart
+    hides which one happened. Both share the single **Undo**.
+
+    *Current limitation:* stage 1 runs synchronously and can take minutes on
+    large multi-phase maps — a progress/cancel version is planned. Stage 2 is
+    not the slow part. Stage 2 also only sees islands **completely enclosed by
+    a single other phase**: a wrong patch on a particle's edge, or one bordering
+    two different phases, is still missed, because there is then no reliable
+    candidate orientation to be had without Hough.
+
+    **If "Assign … to this grain" reports that Hough failed.** The manual
+    assignment in the Pattern-Match dialog normally gives each pixel its own
+    Hough orientation for the target phase. When Hough cannot run at all it now
+    falls back to the orientation the dialog already computed and showed you
+    (the one whose R you just read), carried across the grain as a rigid
+    correction — so the grain keeps its internal misorientation and only its
+    anchor changes. That is the weaker of the two sources, so the confirmation
+    message says when it was used.
+
+    A failure here is often reported by the driver as
+    `Context failed: OUT_OF_HOST_MEMORY`, which sounds like a memory shortage
+    and usually is not: PyEBSDIndex runs its Radon transform through OpenCL,
+    and this is that context failing to open. It hits every phase equally —
+    observed on a plain `Al` CIF (m-3m, 50 reflector families, a *negligible*
+    library) with 6.7 GiB free. The app therefore checks what the library would
+    actually cost against what is free before it blames memory, and prints both
+    numbers so you can see which case you are in.
 
 ### 6. Coordinate system, pole figures, export
 

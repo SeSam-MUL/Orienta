@@ -51,7 +51,11 @@ SCORE_FLOOR = 0.25
 # variant unification: changing the phase is a bigger claim than changing the
 # variant.
 MARGIN_CLEAR = 0.05
-MIN_GRAIN_PX = 5
+# What counts as a grain. This is a materials-science judgement, not a
+# tuning knob: the user set it at 9 px (2026-09-07). Everything smaller is
+# an island and belongs to island_check, whose MAX_ISLAND_PX is derived
+# from this so the two can never leave a gap.
+MIN_GRAIN_PX = 9
 SAMPLE_PX_MAX = 16
 
 
@@ -134,7 +138,11 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
     margin_full = np.full(n, np.nan, dtype=np.float64)
 
     entries: list[dict] = []
+    # Suspect grains, parked until every candidate's Hough orientations have
+    # been fetched in one batch per candidate phase (see below).
+    suspects: list[dict] = []
     n_grains = n_checked = n_suspect = n_reassign = 0
+    n_undecided = n_rescued = 0
 
     pids = sorted(int(p) for p in np.unique(pf) if int(p) >= 0)
     for pid in pids:
@@ -183,55 +191,175 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
                 entries.append(entry)
                 continue
 
-            # Suspect: score every candidate phase at its Hough orientation.
+            # Suspect. The candidate scoring does NOT happen here: every
+            # candidate's Hough orientations for EVERY suspect grain are
+            # fetched together further down, in one call per candidate phase.
+            #
+            # Why: each `hough_indexing` call leaks ~0.24 GiB of Windows commit
+            # that is never returned (measured 2026-09-04: linear over 24 calls,
+            # RSS rising with it, no plateau — it is a real leak in
+            # kikuchipy/PyEBSDIndex, not our indexer, since one reused indexer
+            # leaks just the same). Per grain per candidate that came to 172
+            # calls and ~40 GiB on one map, which is what kept taking the
+            # machine to its commit limit. Batching makes it one call per
+            # candidate phase.
             n_suspect += 1
-            alt_scores: dict[int, float] = {}
-            for cand in pids:
-                if cand == pid or cand not in score_fns:
-                    continue
-                try:
-                    cq = np.asarray(hough_quats_fn(cand, sample),
-                                    dtype=np.float64).reshape(-1, 4)
-                except Exception:
-                    logger.warning("[phase-check] hough for candidate %s failed",
-                                   cand, exc_info=True)
-                    continue
-                ok = np.isfinite(cq[:, 0])
-                # A candidate scored on a tiny Hough-lucky subset would be
-                # compared against the stored phase's FULL-sample median —
-                # asymmetric and biased. Require a minimum successful count.
-                if int(ok.sum()) < min(3, sample.size):
-                    continue
-                s = _agg(score_fns[cand](sample[ok], cq[ok]))
-                if np.isfinite(s):
-                    alt_scores[cand] = round(float(s), 4)
-
-            if alt_scores:
-                best_alt = max(alt_scores, key=lambda k_: alt_scores[k_])
-                best_alt_score = alt_scores[best_alt]
-                margin = (stored if np.isfinite(stored) else -1.0) - best_alt_score
-                entry.update({
-                    "alt_scores": alt_scores,
-                    "best_alt_phase": int(best_alt),
-                    "best_alt_score": best_alt_score,
-                    "margin": round(float(margin), 4),
-                })
-                margin_full[pix] = margin
-                if margin <= -margin_clear:
-                    entry["decision"] = "reassign"
-                    n_reassign += 1
-                else:
-                    entry["decision"] = "keep"
-            else:
-                entry["decision"] = "keep"  # nothing comparable → conservative
+            suspects.append({"entry": entry, "pid": pid, "pix": pix,
+                             "sample": sample, "stored": stored})
             entries.append(entry)
+
+    # --- Candidate scoring, batched per candidate phase --------------------
+    #
+    # Each suspect grain keeps its OWN slice of the batch, so the scores are
+    # per grain exactly as before: `hough_indexing` treats every pattern
+    # independently, so concatenating the samples cannot change a result.
+    for cand in pids:
+        if cand not in score_fns:
+            continue
+        todo = [sp for sp in suspects if sp["pid"] != cand]
+        if not todo:
+            continue
+        flats = np.concatenate([sp["sample"] for sp in todo])
+        try:
+            cq_all = np.asarray(hough_quats_fn(cand, flats),
+                                dtype=np.float64).reshape(-1, 4)
+        except Exception as exc:  # noqa: BLE001 — one candidate, not the run
+            logger.warning("[phase-check] hough for candidate %s failed",
+                           cand, exc_info=True)
+            reason = str(exc) or "hough failed"
+            for sp in todo:
+                sp["entry"].setdefault("unevaluated", {})[int(cand)] = reason
+            continue
+
+        at = 0
+        for sp in todo:
+            sample = sp["sample"]
+            cq = cq_all[at:at + sample.size]
+            at += sample.size
+            ok = np.isfinite(cq[:, 0])
+            # A candidate scored on a tiny Hough-lucky subset would be
+            # compared against the stored phase's FULL-sample median —
+            # asymmetric and biased. Require a minimum successful count.
+            if int(ok.sum()) < min(3, sample.size):
+                continue
+            sc = _agg(score_fns[cand](sample[ok], cq[ok]))
+            if np.isfinite(sc):
+                sp.setdefault("alt_scores", {})[int(cand)] = round(float(sc), 4)
+
+    # --- Fairness: the STORED phase gets a Hough orientation too -----------
+    #
+    # A suspect grain is "suspect" because its stored phase rendered badly AT
+    # ITS STORED ORIENTATION. For a phase whose spherical orientation is
+    # unreliable (z_rot == 2: mmm, -43m, m-3 ...) that is not evidence against
+    # the phase at all -- it is the indexer's orientation being wrong. On the
+    # real 7050 the whole MgCuAl2 particle (one grain, ~250 px) was flipped to
+    # Al this way: MgCuAl2 rendered 0.207 at its stored orientation, but 0.420
+    # at a fair one, the best of the three phases; Al's Hough-oriented 0.35
+    # only won because the comparison was rigged (2026-09-07). Same mechanism
+    # the island check already guards against; this is the grain-sized twin.
+    #
+    # So every stored phase is Hough-oriented on its suspect grains' samples,
+    # ONE batched call per stored phase (same leak arithmetic as above), and
+    # the grain is judged at the better of stored@stored and stored@hough.
+    by_stored: dict = {}
+    for sp in suspects:
+        by_stored.setdefault(int(sp["pid"]), []).append(sp)
+    for spid, group in by_stored.items():
+        flats = np.concatenate([sp["sample"] for sp in group])
+        reason = None
+        try:
+            fq_all = np.asarray(hough_quats_fn(spid, flats),
+                                dtype=np.float64).reshape(-1, 4)
+            if fq_all.shape[0] != flats.size:
+                raise ValueError("hough returned %d rows for %d pixels"
+                                 % (fq_all.shape[0], flats.size))
+        except Exception as exc:  # noqa: BLE001 -- fall through to "no fair"
+            logger.warning("[phase-check] hough for STORED phase %s failed",
+                           spid, exc_info=True)
+            fq_all = np.full((flats.size, 4), np.nan)
+            reason = str(exc) or "hough failed"
+        at = 0
+        for sp in group:
+            sample = sp["sample"]
+            fq = fq_all[at:at + sample.size]
+            at += sample.size
+            ok = np.isfinite(fq[:, 0])
+            if int(ok.sum()) >= min(3, sample.size):
+                fair = _agg(score_fns[spid](sample[ok], fq[ok]))
+            else:
+                fair = float("nan")
+            sp["stored_fair"] = fair
+            sp["stored_fair_reason"] = reason
+            if np.isfinite(fair):
+                sp["entry"]["stored_score_fair"] = round(float(fair), 4)
+
+    # --- Decision per suspect grain ---------------------------------------
+    for sp in suspects:
+        entry = sp["entry"]
+        alt_scores = sp.get("alt_scores") or {}
+        stored = sp["stored"]
+        fair = sp.get("stored_fair", float("nan"))
+        fair_ok = np.isfinite(fair)
+        stored_best = np.nanmax([stored if np.isfinite(stored) else -1.0,
+                                 fair if fair_ok else -np.inf])
+        entry["fair_checked"] = bool(fair_ok)
+        if alt_scores:
+            best_alt = max(alt_scores, key=lambda k_: alt_scores[k_])
+            best_alt_score = alt_scores[best_alt]
+            margin_raw = (stored if np.isfinite(stored) else -1.0) - best_alt_score
+            margin = float(stored_best) - best_alt_score
+            entry.update({
+                "alt_scores": alt_scores,
+                "best_alt_phase": int(best_alt),
+                "best_alt_score": best_alt_score,
+                "margin": round(float(margin), 4),
+            })
+            if margin <= -margin_clear and not fair_ok:
+                # Would reassign, but the stored phase never got a fair
+                # orientation: wrong phase and wrong orientation are
+                # indistinguishable here. Say so; never guess. (Same rule as
+                # the island check.)
+                entry["decision"] = "undecided"
+                entry["undecided_reason"] = sp.get("stored_fair_reason") or (
+                    "no Hough orientation for the stored phase on this grain")
+                n_undecided += 1
+            elif margin <= -margin_clear:
+                margin_full[sp["pix"]] = margin
+                entry["decision"] = "reassign"
+                n_reassign += 1
+            else:
+                margin_full[sp["pix"]] = margin
+                entry["decision"] = "keep"
+                if margin_raw <= -margin_clear:
+                    # Lost at the stored orientation, wins fairly oriented:
+                    # the artefact this step exists to stop.
+                    entry["rescued_by_fair_orientation"] = True
+                    n_rescued += 1
+        else:
+            entry["decision"] = "keep"  # nothing comparable -> conservative
+
+    # Grains where at least one candidate could not be evaluated at all. Kept
+    # apart from n_reassign on purpose: "nothing to reassign" and "nothing could
+    # be compared" look identical in a count and mean opposite things.
+    n_unevaluated = sum(1 for e in entries if e.get("unevaluated"))
+    unevaluated_reasons = sorted({
+        str(r) for e in entries for r in (e.get("unevaluated") or {}).values()
+    })
 
     report = {
         "grains": entries,
         "n_grains": n_grains,
         "n_checked": n_checked,
         "n_suspect": n_suspect,
+        "n_unevaluated": n_unevaluated,
+        "unevaluated_reasons": unevaluated_reasons[:5],
         "n_reassign": n_reassign,
+        # Suspect grains that lost at their stored orientation but got no fair
+        # (Hough) orientation for the stored phase -- reported, never applied.
+        "n_undecided": n_undecided,
+        # Suspect grains that lost at their stored orientation and WON once
+        # fairly oriented: a bad orientation, not a bad phase.
+        "n_rescued": n_rescued,
         "params": {
             "score_floor": score_floor,
             "margin_clear": margin_clear,
@@ -315,14 +443,27 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
         try:
             cq = np.asarray(hough_quats_fn(target, pix),
                             dtype=np.float64).reshape(-1, 4)
-        except Exception:
+        except Exception as exc:  # noqa: BLE001 — one grain must not stop the rest
             logger.warning("[phase-reassign] hough failed for grain %s → phase %s",
                            e.get("grain_id"), target, exc_info=True)
-            skipped.append({**e, "skip_reason": "hough failed"})
+            # Carry the reason. "hough failed" on its own sent the user looking
+            # at their data for a fault that was in the machine's memory.
+            skipped.append({**e, "skip_reason": str(exc) or "hough failed"})
             continue
         ok = np.isfinite(cq[:, 0])
         if not ok.any():
-            skipped.append({**e, "skip_reason": "hough failed on every pixel"})
+            # Hough RAN and rejected every pixel at its own quality gate
+            # (fit > 3 deg or nmatch < 4) -- a statement about how well this
+            # phase's bands fit these patterns, NOT a crash and NOT a memory
+            # problem. Those arrive as an exception above and carry their own
+            # text. Saying "hough failed" for both sent a user hunting an
+            # OpenCL error that was not happening in that session
+            # (2026-09-07), so the two now read differently.
+            skipped.append({**e, "skip_reason": (
+                "Hough ran but could not fit this phase's bands to any pixel "
+                "of the grain (every pixel missed its fit/nmatch gate). This "
+                "is about how the phase matches these patterns, not a crash "
+                "or a memory problem.")})
             continue
         # Nearest-successful fill (flat order) for failed pixels.
         n_filled = 0
@@ -342,3 +483,46 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
                 pass
 
     return pf, q, applied, skipped
+
+
+def rigid_grain_quats(q_stored_grain, q_click, q_seed):
+    """Carry one known orientation across a grain as a RIGID correction.
+
+    ``q_new(i) = (q_seed · q_click⁻¹) · q_stored(i)``
+
+    The fallback for a manual phase assignment when Hough cannot supply
+    per-pixel orientations for the target phase. The user has already been
+    shown one good orientation for that phase AT the clicked pixel (the
+    Compare-phases panel re-indexes the pixel per phase and prints its
+    render-NCC), so the information the assignment needs is on screen; asking
+    Hough for it again is what fails.
+
+    Why a rigid correction and not one orientation copied onto every pixel:
+    inside one grain the stored orientations carry a real lattice rotation
+    field — sub-grain rotation, the deformation the sample actually has. A
+    constant orientation would flatten it and hand back a suspiciously perfect
+    grain. The relative rotation between two pixels is a rotation in SAMPLE
+    space, so it stays meaningful when the phase label changes; only the
+    absolute anchor comes from the new phase.
+
+    This is the same correction `pseudosym.grain_snap_floodfill` applies for a
+    same-phase grain flip (``C = q_target·q_click⁻¹``), and it is deliberately
+    NOT a substitute for Hough: per-pixel Hough orientations are independent
+    measurements, this one propagates a single measurement. It is used only
+    when Hough produced nothing at all, and the caller reports which of the two
+    it used so the result is never silently the weaker one.
+    """
+    from backend.spherical_gpu.pseudosym import _qconj, _qmul
+
+    q = np.asarray(q_stored_grain, dtype=np.float64).reshape(-1, 4)
+    click = np.asarray(q_click, dtype=np.float64).reshape(4)
+    seed = np.asarray(q_seed, dtype=np.float64).reshape(4)
+    if not np.all(np.isfinite(click)) or not np.all(np.isfinite(seed)):
+        raise ValueError("click and seed orientations must both be finite")
+    n_click = np.linalg.norm(click)
+    n_seed = np.linalg.norm(seed)
+    if n_click < 1e-12 or n_seed < 1e-12:
+        raise ValueError("click and seed orientations must be non-zero")
+    corr = _qmul(seed / n_seed, _qconj(click / n_click))
+    out = _qmul(np.broadcast_to(corr, q.shape), q)
+    return out / (np.linalg.norm(out, axis=-1, keepdims=True) + 1e-12)
