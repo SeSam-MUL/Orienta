@@ -51,6 +51,8 @@
   "exporting": "Exporting…",
   "exportTooltip": "Render and save the image.",
   "menuExport": "Export image…",
+  "menuExportIpfKey": "Export the colour key…",
+  "menuExportIpfKeyAlpha": "Export the colour key (transparent)…",
   "style": {
     "text": "Text",
     "textTooltip": "Free text for the caption. Clear the field to leave the caption out.",

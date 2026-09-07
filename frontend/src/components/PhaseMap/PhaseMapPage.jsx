@@ -17,6 +17,7 @@ import api, {
   forwardDiagApi, refinementApi,
 } from '../../services/api';
 import { wouldSwitchFile } from './autoAdoptGuard';
+import { reassignWork, reassignLabelKey } from './reassignLabel';
 import {
   colors, spacing,
   Button, Input, NumberInput, Select, GroupBox, CollapsibleGroup,
@@ -44,7 +45,8 @@ import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
 import { openPoleFigureWindow } from '../PoleFigure/openPoleFigureWindow';
 import useFrameStore from '../../stores/useFrameStore';
-import { useLayerStack } from './hooks/useLayerStack';
+import { useLayerStack, cleanupAffectsLayer } from './hooks/useLayerStack';
+import PhaseReflectorPanel from './PhaseReflectorPanel';
 import { useSourceLink } from './hooks/useSourceLink';
 import { buildAddLayerOptions, findLayerDef } from './layerSources';
 
@@ -59,6 +61,7 @@ import GrainBoundaryPanel from './GrainBoundaryPanel';
 import ScaleLegend from './ScaleLegend';
 import { defaultBands as defaultGbBands } from './grainBoundaryBands';
 import { drawAnnotationsOnto } from './annotations/composeExport';
+import { keyImageToCanvas, ipfKeyExportItems } from './ipfKeyExport';
 import {
   applyPatch, withAdded, withRemoved, withScaleBody, scaleMargins,
 } from './annotations/exportAnnotEdits';
@@ -916,15 +919,23 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                           const r = await indexApi.assignPhaseToGrain({
                             row: selectedPixel.row, col: selectedPixel.col,
                             targetPhaseId: selectedPhase.phase_id,
+                            // The orientation whose R is on screen right now.
+                            seedQuat: selectedPhase.quat_wxyz ?? null,
                           });
                           const d = r.data;
                           setAssignMsg({ err: false,
                             undo: d.undo_available ? 'assign' : false,
                             text: t('phasemap:matches.assignDone', {
-                              n: d.n_pixels_changed, from: d.phase_from, to: d.phase_to }) });
+                              n: d.n_pixels_changed, from: d.phase_from, to: d.phase_to })
+                              // Say when the weaker of the two orientation
+                              // sources was used, so a grain carrying one
+                              // propagated measurement is never mistaken for
+                              // one carrying per-pixel measurements.
+                              + (d.orientation_source === 'seed'
+                                ? ' ' + t('phasemap:matches.assignSeedNote') : '') });
                           if (d.unify_recommended?.length) {
-                            toast(t('phasemap:phaseCheck.unifyHint', {
-                              phases: d.unify_recommended.join(', ') }), { icon: '⬡' });
+                            toast.info(t('phasemap:phaseCheck.unifyHint', {
+                              phases: d.unify_recommended.join(', ') }));
                           }
                           setAssignBump(x => x + 1);
                           setMatchRefresh(x => x + 1);
@@ -1811,6 +1822,11 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [phaseCheckBusy, setPhaseCheckBusy] = useState(false);
   const [reassignBusy, setReassignBusy] = useState(false);
   const [phaseCheckInfo, setPhaseCheckInfo] = useState(null);
+  // The Reassign button applies BOTH check stages, so its label and its
+  // enabled-ness come from one place (see reassignLabel.js).
+  const { has: hasReassignWork } = reassignWork(phaseCheckInfo);
+  const _reassignLbl = reassignLabelKey(phaseCheckInfo);
+  const reassignLabel = t(_reassignLbl.key, _reassignLbl.params);
   // UX restore (2026-07-12): the map is the product. Clean view hides all
   // canvas overlays (title/scalebar); the IPF colour key lives in a
   // collapsible panel BELOW the canvas (never on top of the map); the four
@@ -2506,6 +2522,37 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     }
     return list;
   }, [exportScaleEntries, ipfKeyOpen, scaleLegendOpen]);
+
+  /**
+   * The IPF colour key on its own, at the size the backend drew it.
+   *
+   * No `umPerPx`: a legend measures nothing, so the dialog offers no scale bar.
+   */
+  const buildIpfKeyCanvas = useCallback(async (opaque) => {
+    let img = ipfKeyImgRef.current;
+    if (!img) {
+      const { loadKeyImage } = await import('./annotations/composeExport');
+      img = await loadKeyImage(ipfKeyImage);
+    }
+    if (!img?.width || !img?.height) {
+      throw new Error(t('phasemap:ipfKeyPanel.exportFailed'));
+    }
+    return { canvas: keyImageToCanvas(img, { opaque }) };
+  }, [ipfKeyImage, t]);
+
+  // Right-click on the key panel. It was the only picture on this page without
+  // a menu, and it is the one a figure most often wants on its own: a key that
+  // is 2.75x as tall as it is wide, set beside a wide, short map, makes a sheet
+  // that is mostly empty paper.
+  const ipfKeyMenuItems = useCallback(() => ipfKeyExportItems({
+    t,
+    stem: effectiveTitle || 'phase-map',
+    open: (opaque, filename) => openMapExport(
+      () => buildIpfKeyCanvas(opaque),
+      filename,
+      t('phasemap:ipfKeyPanel.title'),
+    ),
+  }), [t, openMapExport, buildIpfKeyCanvas, effectiveTitle]);
 
   // Menu for a right-click on the map. In grid view `layer` is the tile that
   // was hit; in stacked view it is null and only the composite makes sense.
@@ -3857,11 +3904,22 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       {/* IPF-key side column (inside the canvas row): vertical triangle
           stack, scrolls if many Laue classes. Never overlays the data. */}
       {hasIpfLayer && ipfKeyImage && ipfKeyOpen && (
-        <div className="thin-scrollbar" style={{
-          flexShrink: 0, width: 200, overflowY: 'auto', alignSelf: 'stretch',
-          background: 'rgba(255,255,255,0.95)', borderRadius: 4, padding: 4,
-          border: `1px solid ${colors.border}`,
-        }}>
+        <div
+          className="thin-scrollbar"
+          title={t('phasemap:ipfKeyPanel.exportTip')}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            // The page has its own contextmenu handler for the map; letting
+            // this one bubble would answer with the map's menu instead.
+            e.stopPropagation();
+            setMapMenu({ x: e.clientX, y: e.clientY, kind: 'ipfkey' });
+          }}
+          style={{
+            flexShrink: 0, width: 200, overflowY: 'auto', alignSelf: 'stretch',
+            background: 'rgba(255,255,255,0.95)', borderRadius: 4, padding: 4,
+            border: `1px solid ${colors.border}`,
+          }}
+        >
           <img
             src={`data:image/png;base64,${ipfKeyImage}`}
             alt={t('phasemap:ipfKeyPanel.title')}
@@ -4017,13 +4075,43 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 const r = await indexApi.phaseCheck();
                 const d = r.data;
                 setPhaseCheckInfo(d);
-                toast.success(t('phasemap:phaseCheck.checkDone', {
-                  grains: d.n_checked, suspect: d.n_suspect, reassign: d.n_reassign,
-                }));
+                // Substantive effects first, messages after: if a message
+                // throws, the check must still have shown its layer.
                 if (!layerStack.layers.some((l) => l.id === 'phase-margin')) {
                   layerStack.addLayer('phase-margin');
                 }
                 layerStack.cacheFlush((id) => id === 'phase-margin');
+                toast.success(t('phasemap:phaseCheck.checkDone', {
+                  grains: d.n_checked, suspect: d.n_suspect, reassign: d.n_reassign,
+                }));
+                // Stage 2 gets its own line, never a sum with stage 1: whole
+                // grains stolen by a degenerate phase and single wrong pixels
+                // inside a grain are different repairs, and one number the
+                // user cannot take apart would hide which one happened.
+                if (d.island_error) {
+                  toast.error(t('phasemap:phaseCheck.islandsFailed', { err: d.island_error }));
+                } else if (d.n_islands_reassign > 0) {
+                  toast.success(t('phasemap:phaseCheck.checkDoneIslands', {
+                    islands: d.n_islands_reassign,
+                    px: (d.island_findings || []).reduce((a, e) => a + (e.n_px || 0), 0),
+                  }));
+                }
+                // The fairness step's own two counts. "Undecided" is not a
+                // repair and not a pass — it is the check declining to guess
+                // between a wrong phase and a wrong orientation — so it must
+                // never be folded into the numbers above.
+                if (d.n_grains_undecided > 0 || d.n_grains_rescued > 0) {
+                  toast.info(t('phasemap:phaseCheck.checkDoneGrainsFairness', {
+                    undecided: d.n_grains_undecided ?? 0,
+                    rescued: d.n_grains_rescued ?? 0,
+                  }));
+                }
+                if (d.n_islands_undecided > 0 || d.n_islands_rescued > 0) {
+                  toast.info(t('phasemap:phaseCheck.checkDoneIslandsFairness', {
+                    undecided: d.n_islands_undecided ?? 0,
+                    rescued: d.n_islands_rescued ?? 0,
+                  }));
+                }
               } catch (e) {
                 toast.error(e?.response?.data?.detail || String(e));
               } finally {
@@ -4051,11 +4139,18 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                   grains: d.n_grains_applied, pixels: d.n_pixels_changed,
                 }));
                 if (d.unify_recommended?.length) {
-                  toast(t('phasemap:phaseCheck.unifyHint', {
+                  toast.info(t('phasemap:phaseCheck.unifyHint', {
                     phases: d.unify_recommended.join(', '),
-                  }), { icon: '⬡' });
+                  }));
                 }
-                setPhaseCheckInfo((p) => p ? { ...p, n_reassign: 0, undo: d.undo_available } : p);
+                if (d.n_islands_applied > 0) {
+                  toast.success(t('phasemap:phaseCheck.reassignDoneIslands', {
+                    islands: d.n_islands_applied, px: d.n_island_pixels,
+                  }));
+                }
+                setPhaseCheckInfo((p) => p
+                  ? { ...p, n_reassign: 0, n_islands_reassign: 0, undo: d.undo_available }
+                  : p);
                 layerStack.cacheFlush((id) => (
                   ['phase', 'ipf-x', 'ipf-y', 'ipf-z', 'phase-margin', 'kam', 'gos'].includes(id)
                   || id.startsWith('ci')
@@ -4067,20 +4162,18 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
               }
             }}
             disabled={reassignBusy || phaseCheckBusy || !indexingResult
-              || !(phaseCheckInfo?.n_reassign > 0)}
+              || !(phaseCheckInfo?.n_reassign > 0 || phaseCheckInfo?.n_islands_reassign > 0)}
             title={t('phasemap:phaseCheck.reassignTip')}
             style={{
               fontSize: '9pt', fontWeight: 600, padding: '6px 14px',
               background: reassignBusy ? colors.bgTertiary : '#ffb86c22',
               border: '1px solid #ffb86c', borderRadius: 4,
               color: '#ffb86c',
-              cursor: reassignBusy ? 'wait'
-                : (phaseCheckInfo?.n_reassign > 0 ? 'pointer' : 'not-allowed'),
-              opacity: phaseCheckInfo?.n_reassign > 0 || reassignBusy ? 1 : 0.5,
+              cursor: reassignBusy ? 'wait' : (hasReassignWork ? 'pointer' : 'not-allowed'),
+              opacity: hasReassignWork || reassignBusy ? 1 : 0.5,
             }}
           >
-            {reassignBusy ? t('phasemap:phaseCheck.running')
-              : t('phasemap:phaseCheck.reassignButton', { n: phaseCheckInfo?.n_reassign ?? 0 })}
+            {reassignBusy ? t('phasemap:phaseCheck.running') : reassignLabel}
           </button>
           {phaseCheckInfo?.undo && (
             <button
@@ -4116,6 +4209,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             {t('phasemap:phaseCheck.hint')}
           </span>
         </div>
+        {/* Where a memory refusal can actually be answered. Phase Verification
+            builds its own Hough indexers, so a phase it cannot afford is
+            unusable here even when the Indexing page was never opened. */}
+        <PhaseReflectorPanel resultId={shownResultId ?? null} />
       </GroupBox>
 
       </CollapsibleGroup>
@@ -4333,7 +4430,15 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                   kind: 'ok',
                   text: t('phasemap:cleanup.appliedTo', { where, moved: d.moved ?? 0, unindexed: d.after_unindexed ?? 0 }),
                 });
-                // Re-render so the saved state is visible in the preview
+                // Apply changed the stored result, so every cached layer
+                // bitmap now shows the map as it was BEFORE the commit. The
+                // cleanup params did not change, so the params effect will not
+                // fire — this is the one place that knows the data moved.
+                // Without it "Apply cleanup" reported "moved N pixels" over a
+                // picture that never changed (2026-09-03).
+                layerStack.cacheFlush(cleanupAffectsLayer);
+                // Legacy single-image path (used only when no layer stack is
+                // mounted) — kept so both renderings stay in step.
                 handleRefreshPreview();
               } catch (err) {
                 const msg = err.response?.data?.detail || err.message || t('phasemap:cleanup.applyFailed');
@@ -4734,7 +4839,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             x={mapMenu.x}
             y={mapMenu.y}
             onClose={() => setMapMenu(null)}
-            items={mapMenuItems(mapMenu.layer)}
+            items={mapMenu.kind === 'ipfkey'
+              ? ipfKeyMenuItems()
+              : mapMenuItems(mapMenu.layer)}
           />
         )}
         {mapExportError && (
@@ -4809,9 +4916,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 phaseStats: phaseStatsForAnnot,
                 stepX: knownStepX,
                 scanCols: src.mapCols ?? (stackShape ? stackShape[1] : null),
-                // Text grows with the picture, otherwise a 4x figure gets
-                // hairline captions.
-                textScale: geom.sx,
+                // Text grows with the picture — but measured against the
+                // PREVIEW, which is what the user sized it on. `geom.sx` is
+                // output-per-DATA-pixel and was the wrong yardstick: it made
+                // captions grow with the magnification instead of with the
+                // figure, so an 8x export cut its own scale-bar label off.
+                // The dialog computes `textScale`; `sx` stays the fallback for
+                // hosts that do not supply one.
+                textScale: geom.textScale ?? geom.sx,
                 // The same two sources the preview draws from.
                 scaleLegends,
                 ipfKeyImg: ipfKeyImgRef.current,

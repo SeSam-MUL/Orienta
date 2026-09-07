@@ -16,9 +16,9 @@
       "fast": "Schnell (bw=128)",
       "fastDesc": "~225 MB, leicht unscharf",
       "standard": "Standard (bw=256)",
-      "standardDesc": "~1,7 GB, scharfe Bänder",
+      "standardDesc": "Schärferes simuliertes Muster (~1,7 GB VRAM). Nur der Render — die Neuindexierung für „Compare phases“ läuft immer bei 128, der einzigen Bandbreite, bei der ihre Legendre-Tabellen numerisch gültig sind.",
       "high": "Hoch (bw=384)",
-      "highDesc": "~5,7 GB, schärfstmöglich"
+      "highDesc": "Schärfstes simuliertes Muster (~5,7 GB VRAM; wird abgelehnt, wenn die GPU es nicht frei hat). Nur der Render — die Neuindexierung für „Compare phases“ läuft immer bei 128."
     },
     "aperture": "Blende:",
     "apertureTooltip": "Kreisförmige Detektorblende für den R/NCC-Score. „Circular“ erzwingt die Eckenmaske — bei EDAX-Phosphor-Mustern verwenden, deren graue Ecken die Auto-Erkennung übersieht.",
@@ -94,7 +94,8 @@
     "rStoredBetter": "die gespeicherte passt besser",
     "adoptWorse": "Re-indexierte Orientierung liegt {{delta}}° daneben, passt aber SCHLECHTER (R {{rCand}} gegen {{rStored}}) — wird nicht angeboten",
     "pickHint": "Pixel anklicken oder das Fadenkreuz ziehen. Gezoomt verschiebt Ziehen das Bild — mit Umschalt gedrückt zieht es das Fadenkreuz.",
-    "nccLegend": "NCC"
+    "nccLegend": "NCC",
+    "assignSeedNote": "Hough lief nicht, daher wurde die angezeigte Orientierung über das Korn übertragen statt pro Pixel gemessen."
   },
   "displayModes": {
     "phase": "Phasenkarte",
@@ -656,10 +657,19 @@
     "undoButton": "Rückgängig",
     "undoTip": "Stellt die Phasen-IDs und Orientierungen der letzten Umwidmung wieder her.",
     "undoDone": "{{n}} Pixel wiederhergestellt.",
-    "hint": "Findet Körner mit falsch gespeicherter Phase (chemisch degenerierte Phasen). Render-verifiziert, nur ganze Körner, Undo verfügbar."
+    "hint": "Findet Körner mit falsch gespeicherter Phase (chemisch degenerierte Phasen). Render-verifiziert, nur ganze Körner, Undo verfügbar.",
+    "checkDoneIslands": "Dazu {{islands}} falsche Pixel innerhalb von Körnern ({{px}} px) — zu klein für die Kornprüfung.",
+    "islandsFailed": "Die Prüfung der Pixel innerhalb der Körner lief nicht: {{err}}",
+    "reassignButtonBoth": "{{n}} Körner + {{islands}} Pixel umwidmen",
+    "reassignButtonIslands": "{{islands}} Pixel korrigieren",
+    "reassignDoneIslands": "{{islands}} falsche Pixel in Körnern korrigiert ({{px}} px).",
+    "checkDoneIslandsFairness": "{{undecided}} Inseln nicht entscheidbar (keine verlässliche Orientierung der gespeicherten Phase) und unverändert gelassen; {{rescued}} waren eine falsche Orientierung, keine falsche Phase.",
+    "checkDoneGrainsFairness": "{{undecided}} verdächtige Körner nicht entscheidbar (keine verlässliche Orientierung der gespeicherten Phase) und unverändert gelassen; {{rescued}} waren eine falsche Orientierung, keine falsche Phase."
   },
   "ipfKeyPanel": {
     "title": "IPF-Farbschlüssel",
+    "exportTip": "Rechtsklick exportiert den Farbschlüssel für sich allein — auf weißem Grund oder transparent, zum Legen auf eine eigene Abbildung.",
+    "exportFailed": "Der Farbschlüssel ist noch nicht fertig geladen — gleich noch einmal versuchen.",
     "tip": "IPF-Farbschlüssel ein-/ausblenden (ein stereographisches Dreieck pro Laue-Klasse, bzw. der Schlüssel der gewählten Phase bei gefiltertem IPF-Layer). Sitzt unter der Karte und verdeckt nie die Daten."
   },
   "advanced": {
@@ -686,5 +696,9 @@
   "scaleLegend": {
     "title": "Wertskala",
     "tip": "Farbbalken der Ebenen ein-/ausblenden, deren Farben einen Wert bedeuten"
+  },
+  "reflectors": {
+    "disclosure": "Reflektoren pro Phase (Hough-Speicher)",
+    "noCifs": "Keine Phase dieses Ergebnisses hat eine CIF, hier baut also nichts einen Hough-Index."
   }
 }

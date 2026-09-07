@@ -51,6 +51,8 @@
   "exporting": "正在导出…",
   "exportTooltip": "生成并保存图像。",
   "menuExport": "导出图像…",
+  "menuExportIpfKey": "导出颜色键…",
+  "menuExportIpfKeyAlpha": "导出颜色键（透明背景）…",
   "style": {
     "text": "文字",
     "textTooltip": "标注的自由文字。清空则不绘制标注。",

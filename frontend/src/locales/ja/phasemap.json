@@ -16,9 +16,9 @@
       "fast": "高速 (bw=128)",
       "fastDesc": "約225 MB、やや不鮮明",
       "standard": "標準 (bw=256)",
-      "standardDesc": "約1.7 GB、鮮明なバンド",
+      "standardDesc": "より鮮明なシミュレーション像（VRAM 約1.7 GB）。レンダリングのみ — Compare phases の再指数付けは常に 128 で行われます（Legendre 表が数値的に有効な唯一の帯域幅）。",
       "high": "高 (bw=384)",
-      "highDesc": "約5.7 GB、最も鮮明"
+      "highDesc": "最も鮮明なシミュレーション像（VRAM 約5.7 GB。GPU に空きがなければ拒否）。レンダリングのみ — Compare phases の再指数付けは常に 128 です。"
     },
     "aperture": "アパーチャ:",
     "apertureTooltip": "R/NCC スコア用の円形検出器アパーチャ。「Circular」はコーナーマスクを強制します — 自動検出が見落とす灰色のコーナーを持つ EDAX 蛍光体パターンに使用します。",
@@ -94,7 +94,8 @@
     "rStoredBetter": "保存方位のほうが一致が良好",
     "adoptWorse": "再指数付け方位は {{delta}}° ずれていますが一致は悪化します (R {{rCand}} 対 {{rStored}}) — 適用は提示しません",
     "pickHint": "ピクセルをクリック、または十字線をドラッグ。ズーム中のドラッグは画像を移動します — Shift を押しながらで十字線を移動。",
-    "nccLegend": "NCC"
+    "nccLegend": "NCC",
+    "assignSeedNote": "Hough が実行できなかったため、表示された方位を粒全体に適用しました（画素ごとの測定ではありません）。"
   },
   "displayModes": {
     "phase": "相分布図",
@@ -656,10 +657,19 @@
     "undoButton": "元に戻す",
     "undoTip": "直前の再割り当てで変更された相 ID と方位を復元します。",
     "undoDone": "{{n}} ピクセルを復元しました。",
-    "hint": "誤った相として保存された粒（化学的に縮退した相）を検出します。レンダリング検証済み、粒単位のみ、取り消し可能。"
+    "hint": "誤った相として保存された粒（化学的に縮退した相）を検出します。レンダリング検証済み、粒単位のみ、取り消し可能。",
+    "checkDoneIslands": "さらに粒内の誤った画素 {{islands}} 箇所（{{px}} px）— 粒単位の検査には小さすぎます。",
+    "islandsFailed": "粒内画素の検査を実行できませんでした：{{err}}",
+    "reassignButtonBoth": "{{n}} 粒 + {{islands}} 画素を再割り当て",
+    "reassignButtonIslands": "{{islands}} 画素を修正",
+    "reassignDoneIslands": "粒内の誤った画素 {{islands}} 箇所を修正しました（{{px}} px）。",
+    "checkDoneIslandsFairness": "{{undecided}} 箇所の島は判定不能（保存相の信頼できる方位なし）のため未変更；{{rescued}} 箇所は相ではなく方位の誤りでした。",
+    "checkDoneGrainsFairness": "{{undecided}} 個の疑わしい粒は判定不能（保存相の信頼できる方位なし）のため未変更；{{rescued}} 個は相ではなく方位の誤りでした。"
   },
   "ipfKeyPanel": {
     "title": "IPF カラーキー",
+    "exportTip": "右クリックでカラーキーだけを書き出します — 白地、または自分の図に重ねるための背景透過。",
+    "exportFailed": "カラーキーの読み込みが完了していません — 少し待ってからもう一度お試しください。",
     "tip": "IPF カラーキーの表示/非表示（Laue クラスごとに 1 つの三角形、IPF レイヤーが相フィルタ中はその相のキー）。マップの下に配置され、データを覆いません。"
   },
   "advanced": {
@@ -686,5 +696,9 @@
   "scaleLegend": {
     "title": "値スケール",
     "tip": "色が数値を表すレイヤーのカラーバーを表示/非表示"
+  },
+  "reflectors": {
+    "disclosure": "相ごとの反射面 (Hough のメモリ)",
+    "noCifs": "この結果のどの相にも CIF がないため、ここで Hough インデックスは作られません。"
   }
 }

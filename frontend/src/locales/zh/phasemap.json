@@ -16,9 +16,9 @@
       "fast": "快速 (bw=128)",
       "fastDesc": "约 225 MB，略模糊",
       "standard": "标准 (bw=256)",
-      "standardDesc": "约 1.7 GB，锐利衍射带",
+      "standardDesc": "更清晰的模拟花样（约 1.7 GB 显存）。仅影响渲染——“Compare phases”的重新标定始终使用 128，这是其 Legendre 表在数值上唯一有效的带宽。",
       "high": "高 (bw=384)",
-      "highDesc": "约 5.7 GB，尽可能最锐利"
+      "highDesc": "最清晰的模拟花样（约 5.7 GB 显存；GPU 空闲不足时将拒绝）。仅影响渲染——“Compare phases”的重新标定始终使用 128。"
     },
     "aperture": "光阑：",
     "apertureTooltip": "用于 R/NCC 评分的圆形探测器光阑。“Circular”强制启用边角掩膜——用于自动检测漏掉灰色边角的 EDAX 荧光屏花样。",
@@ -94,7 +94,8 @@
     "rStoredBetter": "已存取向匹配更好",
     "adoptWorse": "重新标定的取向偏差 {{delta}}°，但匹配更差 (R {{rCand}} 对 {{rStored}}) — 不提供应用",
     "pickHint": "点击像素，或拖动十字准线。放大后拖动会移动图像 — 按住 Shift 可拖动十字准线。",
-    "nccLegend": "NCC"
+    "nccLegend": "NCC",
+    "assignSeedNote": "Hough 未能运行，因此将所显示的取向沿晶粒传递，而非逐像素测量。"
   },
   "displayModes": {
     "phase": "相分布图",
@@ -656,10 +657,19 @@
     "undoButton": "撤销",
     "undoTip": "恢复上次重新指派更改的相 ID 和方位。",
     "undoDone": "已恢复 {{n}} 个像素。",
-    "hint": "查找被存为错误相的晶粒（化学简并相）。经渲染验证，仅整晶粒操作，可撤销。"
+    "hint": "查找被存为错误相的晶粒（化学简并相）。经渲染验证，仅整晶粒操作，可撤销。",
+    "checkDoneIslands": "另有晶粒内部的错误像素 {{islands}} 处（{{px}} px）——对晶粒级检查而言太小。",
+    "islandsFailed": "晶粒内部像素检查未能运行：{{err}}",
+    "reassignButtonBoth": "重新指派 {{n}} 个晶粒 + {{islands}} 个像素",
+    "reassignButtonIslands": "修正 {{islands}} 个像素",
+    "reassignDoneIslands": "已修正晶粒内部的 {{islands}} 处错误像素（{{px}} px）。",
+    "checkDoneIslandsFairness": "{{undecided}} 处岛状区无法判定（所存相缺少可靠取向），保持不变；{{rescued}} 处实为取向错误而非相错误。",
+    "checkDoneGrainsFairness": "{{undecided}} 个可疑晶粒无法判定（所存相缺少可靠取向），保持不变；{{rescued}} 个实为取向错误而非相错误。"
   },
   "ipfKeyPanel": {
     "title": "IPF 颜色键",
+    "exportTip": "右键单独导出颜色键 — 白底，或透明背景以叠加到自己的图上。",
+    "exportFailed": "颜色键尚未加载完成 — 请稍后重试。",
     "tip": "显示/隐藏 IPF 颜色键（每个 Laue 类一个立体三角形；IPF 图层按相过滤时显示所选相的键）。位于地图下方，绝不遮挡数据。"
   },
   "advanced": {
@@ -686,5 +696,9 @@
   "scaleLegend": {
     "title": "数值标尺",
     "tip": "显示或隐藏颜色代表数值的图层色标"
+  },
+  "reflectors": {
+    "disclosure": "每个物相的衍射面 (Hough 内存)",
+    "noCifs": "该结果中没有物相带 CIF，因此这里不会构建 Hough 索引。"
   }
 }

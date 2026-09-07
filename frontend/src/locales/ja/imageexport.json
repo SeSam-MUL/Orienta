@@ -51,6 +51,8 @@
   "exporting": "エクスポート中…",
   "exportTooltip": "画像を生成して保存します。",
   "menuExport": "画像をエクスポート…",
+  "menuExportIpfKey": "カラーキーをエクスポート…",
+  "menuExportIpfKeyAlpha": "カラーキーをエクスポート（背景透過）…",
   "style": {
     "text": "テキスト",
     "textTooltip": "キャプションの自由テキスト。空にするとキャプションは描画されません。",

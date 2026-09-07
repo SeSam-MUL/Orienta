@@ -51,6 +51,8 @@
   "exporting": "Exportiere…",
   "exportTooltip": "Bild erzeugen und speichern.",
   "menuExport": "Bild exportieren…",
+  "menuExportIpfKey": "Farbschlüssel exportieren…",
+  "menuExportIpfKeyAlpha": "Farbschlüssel exportieren (transparent)…",
   "style": {
     "text": "Text",
     "textTooltip": "Freier Text für die Beschriftung. Feld leeren lässt die Beschriftung weg.",
