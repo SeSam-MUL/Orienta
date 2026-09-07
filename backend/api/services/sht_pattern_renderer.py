@@ -64,6 +64,54 @@ def get_renderer() -> PatternRenderer:
     return _RENDERER
 
 
+#: VRAM a render grid needs per bandwidth -- the same figures the UI has
+#: advertised next to the Quality presets ("~1.7 GB", "~5.7 GB"); 128 is
+#: small enough never to be the problem.
+_VRAM_NEEDED_GB = {256: 1.7, 384: 5.7}
+_VRAM_HEADROOM = 1.15
+
+
+def _vram_needed_gb(max_bandwidth) -> float:
+    if max_bandwidth is None:
+        return 0.0
+    bw = int(max_bandwidth)
+    best = 0.0
+    for k, v in _VRAM_NEEDED_GB.items():
+        if bw >= k:
+            best = max(best, v)
+    return best
+
+
+def _check_vram_for_bandwidth(max_bandwidth) -> None:
+    """Refuse a render grid the GPU cannot hold, instead of letting it crawl.
+
+    At bw=384 on a 12 GB card that already had 11.5 GB in use, the load did
+    not fail -- it thrashed for five minutes at 100 % GPU with the server
+    blocked, and the process then died (2026-09-07). Refusing up front with
+    both numbers in the message is the honest outcome: the user picks 256 or
+    128 and keeps working. No-op on CPU and when torch cannot report memory.
+    """
+    need = _vram_needed_gb(max_bandwidth)
+    if need <= 0:
+        return
+    try:
+        import torch
+        dev = get_renderer().device
+        if getattr(dev, "type", str(dev)) != "cuda" and "cuda" not in str(dev):
+            return
+        free_b, total_b = torch.cuda.mem_get_info(dev if dev.index is not None else 0)
+    except Exception:  # noqa: BLE001 -- cannot measure, do not refuse
+        return
+    free_gb = free_b / 2**30
+    if free_gb < need * _VRAM_HEADROOM:
+        raise SHTRenderError(
+            f"Quality bw={int(max_bandwidth)} needs about {need:.1f} GB of GPU memory "
+            f"and only {free_gb:.1f} GB is free (of {total_b / 2**30:.1f} GB). "
+            f"Choose 256 or 128, or free the GPU (other programs, or Release "
+            f"GPU memory in Settings) and try again."
+        )
+
+
 def load_or_get_phase(
     sht_path: str,
     max_bandwidth: Optional[int] = None,
@@ -87,6 +135,7 @@ def load_or_get_phase(
         return _PHASE_CACHE[key]
     if not Path(path_key).is_file():
         raise SHTRenderError(f"SHT file not found: {path_key}")
+    _check_vram_for_bandwidth(max_bandwidth)
     try:
         grid = get_renderer().load_phase(path_key, max_bandwidth=max_bandwidth)
     except SHTReadError as e:
