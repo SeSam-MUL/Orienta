@@ -118,6 +118,39 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
   }
 }
 
+/**
+ * Does a change of the post-processing cleanup params change what this layer
+ * LOOKS LIKE — i.e. must its cached bitmap be dropped so it re-fetches?
+ *
+ * This list has to match the kinds that `/api/phasemap/layer` renders through
+ * `effective_pid_2d` / `ipf_valid_2d` (backend/api/routes/phase_map.py):
+ *
+ *   phase                     painted straight from effective_pid_2d
+ *   ipf-x / ipf-y / ipf-z     the COLOUR is cleanup-independent, the ALPHA is
+ *                             not: `alpha[:] = (effective_pid_2d >= 0)` then
+ *                             `alpha &= ipf_valid_2d`
+ *   bc                        same alpha rule when BC comes from the xmap
+ *   ci / ci_<phase> / uncertainty
+ *
+ * Deliberately NOT here: `grain-boundaries` (misorientation is computed before
+ * cleanup is applied and the endpoint returns before touching it),
+ * `ci-threshold` (paints its own band, ignores effective ids), and every
+ * non-result source — EDS elements, SE images, analysis maps, virtual BSE.
+ *
+ * Leaving an affected kind out of this list is SILENT and reads to the user as
+ * "the sliders do nothing": the layer simply keeps its cached bitmap forever.
+ * That was the 2026-09-03 bug — ipf-* and bc were missing, on the reasoning
+ * that IPF *colour* does not depend on cleanup. Measured symptom: 30+ requests
+ * carried a non-zero ci_threshold and not one of them was a /layer request.
+ */
+export function cleanupAffectsLayer(id) {
+  const s = String(id ?? '');
+  return (
+    s === 'phase' || s === 'bc' || s === 'ci' || s === 'uncertainty'
+    || s.startsWith('ipf-') || s.startsWith('ci_')
+  );
+}
+
 export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverrides = null }) {
   const [state, dispatch] = useReducer(layerStackReducer, initialState);
   const cacheRef = useRef(new Map());           // layerId → ImageBitmap
@@ -293,12 +326,11 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     // flushes reliably reload their invalidated layers.
   }, [state.layers, fetchLayer, colorSignature, cacheFlush, bitmapVersion]);
 
-  // Cleanup-param change → invalidate result-source layers only.
-  // (BC/IPF colour doesn't depend on cleanup, but phase/ci/uncertainty do.)
+  // Cleanup-param change → drop the cached bitmap of every layer the backend
+  // renders differently under those params (see cleanupAffectsLayer).
   const cleanupSignature = JSON.stringify(cleanupParams ?? {});
   useEffect(() => {
-    const affected = new Set(['phase', 'ci', 'uncertainty']);
-    cacheFlush((id) => affected.has(id) || id.startsWith('ci_'));
+    cacheFlush(cleanupAffectsLayer);
   }, [cleanupSignature, cacheFlush]);
 
   // Frame (coordinate-system) change → invalidate ONLY the orientation-colored
