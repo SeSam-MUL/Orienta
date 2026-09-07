@@ -664,7 +664,8 @@
     "reassignButtonIslands": "修正 {{islands}} 个像素",
     "reassignDoneIslands": "已修正晶粒内部的 {{islands}} 处错误像素（{{px}} px）。",
     "checkDoneIslandsFairness": "{{undecided}} 处岛状区无法判定（所存相缺少可靠取向），保持不变；{{rescued}} 处实为取向错误而非相错误。",
-    "checkDoneGrainsFairness": "{{undecided}} 个可疑晶粒无法判定（所存相缺少可靠取向），保持不变；{{rescued}} 个实为取向错误而非相错误。"
+    "checkDoneGrainsFairness": "{{undecided}} 个可疑晶粒无法判定（所存相缺少可靠取向），保持不变；{{rescued}} 个实为取向错误而非相错误。",
+    "reassignRefused": "其中 {{n}} 个像素保持不变——像素自身的证据不足。"
   },
   "ipfKeyPanel": {
     "title": "IPF 颜色键",

@@ -165,9 +165,25 @@ All of these live in the collapsed **Advanced tools** group in the sidebar:
     the Pattern-Match dialog, where *Compare phases* re-indexes the pixel per
     phase with the full search the check cannot afford.
 
+    **The grain decides the candidate; the pixel decides whether it is
+    written.** When you press Reassign, every pixel of a chosen grain or
+    island is verified on its own before it changes: the new phase, at that
+    pixel's own Hough orientation, must render at least as well as a correct
+    assignment does (0.25) *and* clearly better than the phase it replaces.
+    Pixels that fail stay as they are and are reported as "left unchanged —
+    too little evidence". Measured on the 7050 map: a single Reassign had
+    moved 531 pixels; per pixel, the ones that pass this test have the band
+    contrast of the particle (110), the ones that fail have that of the
+    matrix (83), and 44 pixels handed to MgCuAl2 rendered at 0.09 — worse
+    than the phase they replaced. A grain median of 16 samples cannot tell
+    those apart; the pixel can. Pixels for which Hough finds no orientation
+    of their own are never filled from a neighbour any more.
+
     The two counts are always reported apart ("3 grains + 19 pixels"), never
     summed: they are different repairs, and one number you cannot take apart
-    hides which one happened. Both share the single **Undo**.
+    hides which one happened. Both share the single **Undo** — note that the
+    undo slot is one for all phase edits, so a manual assignment made after a
+    Reassign replaces the Reassign's undo.
 
     *Current limitation:* stage 1 runs synchronously and can take minutes on
     large multi-phase maps — a progress/cancel version is planned. Stage 2 is

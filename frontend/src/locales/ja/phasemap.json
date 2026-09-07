@@ -664,7 +664,8 @@
     "reassignButtonIslands": "{{islands}} 画素を修正",
     "reassignDoneIslands": "粒内の誤った画素 {{islands}} 箇所を修正しました（{{px}} px）。",
     "checkDoneIslandsFairness": "{{undecided}} 箇所の島は判定不能（保存相の信頼できる方位なし）のため未変更；{{rescued}} 箇所は相ではなく方位の誤りでした。",
-    "checkDoneGrainsFairness": "{{undecided}} 個の疑わしい粒は判定不能（保存相の信頼できる方位なし）のため未変更；{{rescued}} 個は相ではなく方位の誤りでした。"
+    "checkDoneGrainsFairness": "{{undecided}} 個の疑わしい粒は判定不能（保存相の信頼できる方位なし）のため未変更；{{rescued}} 個は相ではなく方位の誤りでした。",
+    "reassignRefused": "うち {{n}} px は未変更のままです — 画素自体の証拠が不十分でした。"
   },
   "ipfKeyPanel": {
     "title": "IPF カラーキー",

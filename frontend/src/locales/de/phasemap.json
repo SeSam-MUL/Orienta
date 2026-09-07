@@ -664,7 +664,8 @@
     "reassignButtonIslands": "{{islands}} Pixel korrigieren",
     "reassignDoneIslands": "{{islands}} falsche Pixel in Körnern korrigiert ({{px}} px).",
     "checkDoneIslandsFairness": "{{undecided}} Inseln nicht entscheidbar (keine verlässliche Orientierung der gespeicherten Phase) und unverändert gelassen; {{rescued}} waren eine falsche Orientierung, keine falsche Phase.",
-    "checkDoneGrainsFairness": "{{undecided}} verdächtige Körner nicht entscheidbar (keine verlässliche Orientierung der gespeicherten Phase) und unverändert gelassen; {{rescued}} waren eine falsche Orientierung, keine falsche Phase."
+    "checkDoneGrainsFairness": "{{undecided}} verdächtige Körner nicht entscheidbar (keine verlässliche Orientierung der gespeicherten Phase) und unverändert gelassen; {{rescued}} waren eine falsche Orientierung, keine falsche Phase.",
+    "reassignRefused": "{{n}} px darin blieben unverändert — zu wenig Evidenz auf dem Pixel selbst."
   },
   "ipfKeyPanel": {
     "title": "IPF-Farbschlüssel",

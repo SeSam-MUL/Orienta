@@ -664,7 +664,8 @@
     "reassignButtonIslands": "Fix {{islands}} pixels",
     "reassignDoneIslands": "Fixed {{islands}} wrong pixels inside grains ({{px}} px).",
     "checkDoneIslandsFairness": "{{undecided}} islands could not be judged (no reliable orientation for the stored phase) and were left alone; {{rescued}} turned out to be a bad orientation, not a wrong phase.",
-    "checkDoneGrainsFairness": "{{undecided}} suspect grains could not be judged (no reliable orientation for the stored phase) and were left alone; {{rescued}} turned out to be a bad orientation, not a wrong phase."
+    "checkDoneGrainsFairness": "{{undecided}} suspect grains could not be judged (no reliable orientation for the stored phase) and were left alone; {{rescued}} turned out to be a bad orientation, not a wrong phase.",
+    "reassignRefused": "{{n}} px inside them were left unchanged — too little evidence on the pixel itself."
   },
   "ipfKeyPanel": {
     "title": "IPF colour key",

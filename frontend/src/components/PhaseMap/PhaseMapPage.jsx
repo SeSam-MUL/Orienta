@@ -4143,6 +4143,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                     phases: d.unify_recommended.join(', '),
                   }));
                 }
+                if (d.n_pixels_refused > 0) {
+                  toast.info(t('phasemap:phaseCheck.reassignRefused', { n: d.n_pixels_refused }));
+                }
                 if (d.n_islands_applied > 0) {
                   toast.success(t('phasemap:phaseCheck.reassignDoneIslands', {
                     islands: d.n_islands_applied, px: d.n_island_pixels,

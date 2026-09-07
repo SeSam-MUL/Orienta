@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 #: chosen: an island is whatever is too small to be a grain, so the two
 #: numbers must meet with nothing in between. The grain size itself is the
 #: user's call (>= 9 px, 2026-09-07) and lives in phase_reassignment.
-from .phase_reassignment import MIN_GRAIN_PX  # noqa: E402
+from .phase_reassignment import MIN_GRAIN_PX, SCORE_FLOOR  # noqa: E402
 MAX_ISLAND_PX = MIN_GRAIN_PX - 1
 
 #: A candidate must beat the stored phase's render by this much before the
@@ -182,6 +182,7 @@ def check_islands(full_q, phase_full, n_rows: int, n_cols: int,
                   phases: dict, score_fns: dict, *,
                   variants_fn=None,
                   fair_orientation_fn=None,
+                  score_floor: float = SCORE_FLOOR,
                   max_island_px: int = MAX_ISLAND_PX,
                   margin_clear: float = MARGIN_CLEAR,
                   max_variants: int = MAX_VARIANTS,
@@ -263,17 +264,30 @@ def check_islands(full_q, phase_full, n_rows: int, n_cols: int,
             out.append(entry)
             continue
 
-        stored = _agg(score_fns[stored_pid](pix, q[pix]))
+        stored_px = np.asarray(score_fns[stored_pid](pix, q[pix]), dtype=np.float64).reshape(-1)
+        stored = _agg(stored_px)
         entry["stored_score"] = None if not np.isfinite(stored) else round(stored, 4)
 
         # Stage 1 — the enclosing phase, at each island pixel's OWN neighbour's
         # orientation. Deformed grains drift; one average would be wrong exactly
         # where it matters.
         nb_q = np.stack([q[isl["neighbour_of"][int(p)]] for p in pix])
-        enc = _agg(score_fns[enc_pid](pix, nb_q))
+        enc_px = np.asarray(score_fns[enc_pid](pix, nb_q), dtype=np.float64).reshape(-1)
+        enc = _agg(enc_px)
         entry["enclosing_score"] = None if not np.isfinite(enc) else round(enc, 4)
 
-        if np.isfinite(enc) and enc - stored >= margin_clear:
+        # Per-pixel evidence: a pixel is written only if the enclosing phase
+        # renders as a correct assignment would (>= score_floor) AND beats the
+        # stored phase on THAT pixel. Measured 2026-09-07 on a reassign that
+        # moved 531 px: the pixels passing both had band contrast 110
+        # (particle), the ones failing 83 (matrix), and 44 pixels handed to
+        # MgCuAl2 rendered at 0.09 -- worse than the phase they replaced.
+        # "Less bad than the stored phase" is not evidence in the noise.
+        pass_px = (np.isfinite(enc_px) & (enc_px >= float(score_floor))
+                   & np.isfinite(stored_px) & ((enc_px - stored_px) >= margin_clear))
+
+        if (np.isfinite(enc) and enc >= float(score_floor)
+                and enc - stored >= margin_clear and pass_px.any()):
             entry.update({"decision": "phase", "winner_phase": int(enc_pid),
                           "margin": round(float(enc - stored), 4),
                           # The orientations that WON, one per pixel, aligned
@@ -281,6 +295,10 @@ def check_islands(full_q, phase_full, n_rows: int, n_cols: int,
                           # finding needs no re-derivation (and cannot silently
                           # drift from what was scored).
                           "new_quats": [[float(v) for v in row] for row in nb_q],
+                          # Only these pixels are written; the others carried
+                          # too little evidence and stay as they are.
+                          "apply_pixels": [int(p) for p in pix[pass_px]],
+                          "n_px_refused": int((~pass_px).sum()),
                           "_stored_pix": pix})
             # PROVISIONAL: a loss at the stored orientation is not yet
             # evidence against the phase -- the fairness step below decides.
@@ -424,6 +442,14 @@ def apply_island_findings(full_q, phase_full, n_rows: int, n_cols: int, report):
             if quats.shape[0] != pix.size:
                 raise ValueError(
                     f"island has {pix.size} pixels but {quats.shape[0]} quats")
+            # Per-pixel evidence gate from the check: write only the pixels
+            # it stood behind. An entry without the key predates the gate and
+            # is applied whole (old reports; the unit tests' hand-built ones).
+            if "apply_pixels" in e:
+                keep = np.isin(pix, np.asarray(e["apply_pixels"], dtype=np.int64))
+                if not keep.any():
+                    continue
+                pix, quats = pix[keep], quats[keep]
         else:
             # One variant of the island's own orientation, for every pixel.
             quats = np.repeat(

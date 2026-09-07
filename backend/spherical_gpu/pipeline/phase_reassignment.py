@@ -373,15 +373,36 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
 
 def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
                        report: dict, phases: dict, hough_quats_fn, *,
+                       score_fns=None, score_floor: float = SCORE_FLOOR,
+                       margin_clear: float = MARGIN_CLEAR,
                        progress=None):
     """Stage B — apply the ``reassign`` decisions from :func:`check_map`.
 
     For every grain with ``decision == "reassign"``: set its pixels to the
     winning phase and give each pixel its own Hough orientation from that
     phase (per-pixel, so intra-grain texture is real, not a rigid copy).
-    Pixels where Hough fails inherit the quat of the nearest (flat-order)
-    successful pixel; if Hough fails for the WHOLE grain the grain is left
-    untouched (fail-safe = stored phase survives).
+
+    The grain decides the candidate; the PIXEL decides whether it is written
+    (2026-09-07). With ``score_fns`` given, every pixel of a reassigned grain
+    is verified on its own: the winner at its Hough orientation must render
+    at least ``score_floor`` -- what a correct assignment renders -- AND beat
+    the stored phase on that pixel by ``margin_clear``. Pixels that fail stay
+    as they are and are counted in ``n_px_refused``; pixels without a Hough
+    orientation of their own are refused too (no nearest-fill in this mode),
+    because an orientation copied from a neighbour was never verified.
+
+    Why: a reassign on a deformed 7050 map moved 531 px in one press. Per
+    pixel, the winner beat the stored phase on 76 %% of the Al->Al7FeCu2
+    pixels -- the 301 that passed had band contrast 110 (particle), the 176
+    that failed had 83 (matrix) -- and on only 16 %% of the 44 Al->MgCuAl2
+    pixels, where the written orientation rendered at 0.09, worse than the
+    phase it replaced. A 16-sample grain median cannot tell those apart; the
+    per-pixel evidence can.
+
+    Without ``score_fns`` (older callers, unit tests) the grain is written
+    whole and pixels where Hough fails inherit the quat of the nearest
+    (flat-order) successful pixel; if Hough fails for the WHOLE grain the
+    grain is left untouched (fail-safe = stored phase survives).
 
     Grain identity is re-derived by re-segmenting the CURRENT orientations,
     and grain ids are only stable while the map is unchanged. Two layers of
@@ -465,17 +486,42 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
                 "is about how the phase matches these patterns, not a crash "
                 "or a memory problem.")})
             continue
-        # Nearest-successful fill (flat order) for failed pixels.
-        n_filled = 0
-        if not ok.all():
-            good_pos = np.flatnonzero(ok)
-            for bad in np.flatnonzero(~ok):
-                nearest = good_pos[np.argmin(np.abs(good_pos - bad))]
-                cq[bad] = cq[nearest]
-                n_filled += 1
-        pf[pix] = target
-        q[pix] = cq
-        applied.append({**e, "n_hough_filled": int(n_filled)})
+        gated = (score_fns is not None and target in score_fns and pid in score_fns)
+        if gated:
+            # Per-pixel evidence gate -- see the docstring. Only pixels with
+            # their OWN Hough orientation are even considered.
+            idx_ok = pix[ok]
+            win_r = np.asarray(score_fns[target](idx_ok, cq[ok]), dtype=np.float64).reshape(-1)
+            st_r = np.asarray(score_fns[pid](idx_ok, q[idx_ok]), dtype=np.float64).reshape(-1)
+            passed = (np.isfinite(win_r) & (win_r >= float(score_floor))
+                      & np.isfinite(st_r) & ((win_r - st_r) >= float(margin_clear)))
+            write = idx_ok[passed]
+            n_refused = int(pix.size - write.size)
+            if write.size == 0:
+                skipped.append({**e, "skip_reason": (
+                    "no pixel of the grain carried enough evidence for the new "
+                    "phase on its own (winner render below %.2f, or not clearly "
+                    "better than the stored phase)" % float(score_floor))})
+                continue
+            pf[write] = target
+            q[write] = cq[ok][passed]
+            applied.append({**e, "n_hough_filled": 0,
+                            "n_px_applied": int(write.size),
+                            "n_px_refused": n_refused,
+                            "n_px_no_hough": int((~ok).sum())})
+        else:
+            # Nearest-successful fill (flat order) for failed pixels.
+            n_filled = 0
+            if not ok.all():
+                good_pos = np.flatnonzero(ok)
+                for bad in np.flatnonzero(~ok):
+                    nearest = good_pos[np.argmin(np.abs(good_pos - bad))]
+                    cq[bad] = cq[nearest]
+                    n_filled += 1
+            pf[pix] = target
+            q[pix] = cq
+            applied.append({**e, "n_hough_filled": int(n_filled),
+                            "n_px_applied": int(pix.size), "n_px_refused": 0})
         if progress is not None:
             try:
                 progress(len(applied), len(todo))

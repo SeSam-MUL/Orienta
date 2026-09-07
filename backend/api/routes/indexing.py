@@ -4503,7 +4503,9 @@ async def phase_reassign(req: PhaseReassignRequest):
     if not pc or not isinstance(pc.get("report"), dict):
         raise HTTPException(status_code=400,
                             detail="Run the phase check first")
-    ctx = _phase_check_ctx(result, build_scorers=False)
+    # Scorers are needed at APPLY time now: every pixel of a reassigned grain
+    # is verified on its own before it is written (see apply_reassignment).
+    ctx = _phase_check_ctx(result, build_scorers=True)
     from backend.spherical_gpu.pipeline.phase_reassignment import apply_reassignment
     report = pc["report"]
 
@@ -4514,6 +4516,7 @@ async def phase_reassign(req: PhaseReassignRequest):
             pf, q, applied, skipped = apply_reassignment(
                 ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
                 report, ctx["phases"], ctx["hough_quats_fn"],
+                score_fns=ctx["score_fns"],
             )
             # Stage 2 on top of stage 1, in the same pass and the same undo.
             # The island findings carry their own winning orientations, so this
@@ -4607,6 +4610,13 @@ async def phase_reassign(req: PhaseReassignRequest):
         "n_islands_applied": len(isl_applied),
         "n_island_pixels": sum(len(a["pixels"]) for a in isl_applied),
         "n_pixels_changed": n_changed,
+        # Pixels inside reassigned grains / islands that were NOT written
+        # because their own evidence was too weak (winner render below the
+        # floor, or not clearly better than the stored phase, or no Hough
+        # orientation of their own). Reported so a "3 grains" that moved 40
+        # of 300 pixels is visible as such.
+        "n_pixels_refused": int(sum(int(a.get("n_px_refused", 0)) for a in applied)
+                                + sum(int(a.get("n_px_refused", 0)) for a in isl_applied)),
         "applied": [
             {"phase_from": _phase_name_of(xmap, a["phase_id"]),
              "phase_to": _phase_name_of(xmap, a["best_alt_phase"]),
