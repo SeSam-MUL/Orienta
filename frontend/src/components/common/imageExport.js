@@ -311,10 +311,41 @@ export function renderExportCanvas({
 export const NO_MARGINS = Object.freeze({ top: 0, right: 0, bottom: 0, left: 0 });
 
 /**
- * Per-side ceiling, as a fraction of the image. Half the image is already a
- * very wide band; beyond that the data is the smaller part of its own figure.
+ * What the border FIELD offers per side, as a fraction of the image. Half the
+ * image is already a very wide band to add by hand.
+ *
+ * This is a suggestion for the person typing, NOT a limit on the file. A
+ * border fitted to a scale body the user placed beside the map may legitimately
+ * be several times the map: a three-phase IPF key is 2.75x as tall as it is
+ * wide, and beside a wide, short map it needs about 1.4 map heights above and
+ * below (reported 2026-09-07). Clamping that away is what sliced it.
+ *
+ * The only HARD ceilings are the browser's, enforced in `canvasSizeWithMargins`
+ * (`MAX_OUTPUT_PX`, `MAX_OUTPUT_AREA`), which also reports when it had to trim.
  */
-export const MAX_MARGIN_FRACTION = 0.5;
+export const BORDER_INPUT_MAX_FRACTION = 0.5;
+
+/**
+ * The wider of two margin sets, side by side.
+ *
+ * Used at save time to guarantee that whatever the caller says the figure
+ * NEEDS (its colour key, its colour bars) still has room in the file, even
+ * when the border was fitted earlier and the body has grown since. The border
+ * is re-fitted only when the SET of scale bodies changes — deliberately, so
+ * dragging one does not resize the picture under the hand — which leaves the
+ * gap this closes: a body made taller after that point was simply cut off by
+ * the canvas edge (2026-09-03: a three-phase IPF key exported as its middle
+ * key, sliced top and bottom).
+ */
+export function widerMargins(a, b) {
+  const A = a || NO_MARGINS;
+  const B = b || NO_MARGINS;
+  const pick = (k) => Math.max(
+    Number.isFinite(A[k]) ? A[k] : 0,
+    Number.isFinite(B[k]) ? B[k] : 0,
+  );
+  return { top: pick('top'), right: pick('right'), bottom: pick('bottom'), left: pick('left') };
+}
 
 /**
  * Margins are a FRACTION of the image on that axis (top/bottom of the height,
@@ -323,7 +354,11 @@ export const MAX_MARGIN_FRACTION = 0.5;
  * output pixels.
  */
 export function marginPixels(margins, output) {
-  const f = (v) => Math.max(0, Math.min(MAX_MARGIN_FRACTION, Number.isFinite(v) ? v : 0));
+  // No upper clamp: the border is as wide as it was asked to be, and
+  // `canvasSizeWithMargins` trims only against the real encode limits — and
+  // says so via `limited`. A fraction cap here quietly cut off whatever had
+  // been placed out there.
+  const f = (v) => Math.max(0, Number.isFinite(v) ? v : 0);
   const mg = margins || NO_MARGINS;
   const w = Math.max(1, output?.width || 1);
   const h = Math.max(1, output?.height || 1);

@@ -10,7 +10,7 @@ import {
   captionLayout, scalebarLayout,
   moveAnnotation, resizeCaptionStyle, resizeScalebarStyle,
   renderExportCanvas, drawAnnotations, canvasToBlob, loadImage, saveImageBlob, rgba,
-  NO_MARGINS, MAX_MARGIN_FRACTION, canvasSizeWithMargins,
+  NO_MARGINS, BORDER_INPUT_MAX_FRACTION, canvasSizeWithMargins, widerMargins,
 } from './imageExport';
 
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
@@ -700,6 +700,13 @@ export default function ImageExportDialog({
     setBusy(true);
     setError(null);
     try {
+      // The border the figure NEEDS, whatever the border currently IS. The
+      // fit effect runs only when `fitMarginsKey` changes — by design, so
+      // dragging a body does not resize the picture mid-gesture — so a body
+      // that grew or moved after that point had no room reserved and the
+      // canvas simply cut it off. Taking the wider of the two at save time
+      // keeps the gesture calm AND the file complete.
+      const exportMargins = widerMargins(margins, fitMargins);
       const canvas = renderExportCanvas({
         image: img,
         crop,
@@ -709,10 +716,10 @@ export default function ImageExportDialog({
         // Lossy formats cannot carry alpha; compositing onto black matches the
         // viewer's own backdrop instead of the browser's default.
         background: fmt.lossy ? '#000000' : null,
-        margins,
+        margins: exportMargins,
         marginColor,
       });
-      const total = canvasSizeWithMargins(output, margins);
+      const total = canvasSizeWithMargins(output, exportMargins);
       const ctx = canvas.getContext('2d');
       // The caller's extras go down first, so the dialog's own caption and
       // scale bar sit on top of them — the same stacking as on the preview.
@@ -722,6 +729,21 @@ export default function ImageExportDialog({
         origin: total.origin,
         sx: output.width / crop.width,
         sy: output.height / crop.height,
+        // How much bigger the FILE is than the PREVIEW the user arranged on.
+        //
+        // Overlay extras are laid out in preview CSS pixels, so this — not
+        // `sx` — is the factor their lettering has to grow by. `sx` counts
+        // output pixels per SOURCE DATA pixel, which is a different number
+        // entirely whenever the preview does not happen to show the data at
+        // 1:1. On a 136x39 scan exported at 8x it was ~4x too large: the
+        // scale bar's plate filled 79% of the picture height and its label
+        // fell off the bottom edge (reported 2026-09-03).
+        //
+        // The dialog computes it because only the dialog knows both halves.
+        previewScale: previewRect?.scale ?? null,
+        textScale: previewRect?.scale > 0
+          ? (output.width / crop.width) / previewRect.scale
+          : 1,
       });
       drawAnnotations(ctx, buildSpec(crop), {
         crop,
@@ -1091,8 +1113,11 @@ export default function ImageExportDialog({
 
             <Field
               label={t('imageexport:border')}
+              // The same margins `doExport` uses — a body that grew after the
+              // last fit is held by `widerMargins` at save time, and a readout
+              // that ignored that announced a smaller file than it wrote.
               hint={output ? (() => {
-                const tt = canvasSizeWithMargins(output, margins);
+                const tt = canvasSizeWithMargins(output, widerMargins(margins, fitMargins));
                 if (tt.width === output.width && tt.height === output.height) {
                   return t('imageexport:borderHint');
                 }
@@ -1109,14 +1134,17 @@ export default function ImageExportDialog({
                     <NumberInput
                       value={Math.round((margins[side] ?? 0) * 100)}
                       min={0}
-                      max={Math.round(MAX_MARGIN_FRACTION * 100)}
+                      // The field offers half the image; a border FITTED to a
+                      // colour key placed beside the map is often wider than
+                      // that, and the field must be able to show and hold the
+                      // value it was given instead of snapping it back down.
+                      max={Math.round(Math.max(
+                        BORDER_INPUT_MAX_FRACTION, margins[side] ?? 0,
+                      ) * 100)}
                       step={5}
                       onChange={(e) => setMargins((m) => ({
                         ...m,
-                        [side]: Math.max(0, Math.min(
-                          MAX_MARGIN_FRACTION,
-                          (Number(e.target.value) || 0) / 100,
-                        )),
+                        [side]: Math.max(0, (Number(e.target.value) || 0) / 100),
                       }))}
                       style={{ flex: 1, minWidth: 0 }}
                       title={t('imageexport:borderTooltip')}

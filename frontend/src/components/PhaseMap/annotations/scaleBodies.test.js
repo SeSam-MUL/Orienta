@@ -82,9 +82,12 @@ describe('scale bodies', () => {
     expect(scaleMargins([])).toEqual({ top: 0, right: 0, bottom: 0, left: 0 });
   });
 
-  it('never asks for more border than the exporter allows', () => {
+  it('asks for the whole border the body needs, however far out it sits', () => {
+    // It used to stop at half the map per side. A three-phase IPF key beside a
+    // wide, short map needs more than that and was sliced (2026-09-07); what
+    // the file can hold is the exporter's business, not this function's.
     const far = [{ type: 'colorkey', x: 4, y: 0, w: 1, h: 1, props: {} }];
-    expect(scaleMargins(far).right).toBe(0.5);
+    expect(scaleMargins(far).right).toBeCloseTo(4 + 1 - 1 + 0.02, 6);
   });
 
   it('respacing an empty or column-less list changes nothing', () => {

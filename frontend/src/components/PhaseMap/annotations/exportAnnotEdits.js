@@ -120,9 +120,14 @@ export function scaleMargins(annotations, pad = 0.02) {
     out.top = Math.max(out.top, -a.y);
     out.bottom = Math.max(out.bottom, a.y + a.h - 1);
   }
-  // MAX_MARGIN_FRACTION in the export dialog: half the image per side. A body
-  // pushed further out than that is the user's business — they can widen the
-  // border by hand.
-  const fit = (v) => (v > 0 ? Math.min(0.5, v + pad) : 0);
+  // No ceiling here. This function REPORTS what the placed bodies need; what
+  // the file can hold is the exporter's business, and only the browser's
+  // encode limits actually bind (`canvasSizeWithMargins`).
+  //
+  // It used to stop at half the map per side, with a note saying the user
+  // could widen the border by hand — they could not, the border field stops at
+  // the same half. A three-phase IPF key beside a wide, short map needs about
+  // 1.4 map heights above and below and was sliced instead (2026-09-07).
+  const fit = (v) => (v > 0 ? v + pad : 0);
   return { top: fit(out.top), right: fit(out.right), bottom: fit(out.bottom), left: fit(out.left) };
 }
