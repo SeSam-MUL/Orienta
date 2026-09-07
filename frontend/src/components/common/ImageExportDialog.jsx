@@ -12,6 +12,7 @@ import {
   renderExportCanvas, drawAnnotations, canvasToBlob, loadImage, saveImageBlob, rgba,
   NO_MARGINS, BORDER_INPUT_MAX_FRACTION, canvasSizeWithMargins, widerMargins,
 } from './imageExport';
+import { makeFolderWriter, planBatchFiles, runImageBatch } from './batchImageExport';
 
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 const HANDLE_CURSOR = {
@@ -299,6 +300,13 @@ export default function ImageExportDialog({
   //   { present, lengthUm, color, fontSize, lengthChoices,
   //     onToggle(bool), onChange({lengthUm?, color?, fontSize?}) }
   scalebarBinding = null,
+  // Turns this dialog into the settings for a SERIES. `items` are the other
+  // pictures the same settings should be applied to:
+  //   { items: [{ id, label, build }], stem }
+  // where `build()` returns what the host's own export builders return —
+  // `{ canvas, umPerPx }` — so a batch picture is built by the same code as a
+  // single one. Absent (the default) the dialog behaves exactly as before.
+  batch = null,
   onExported,
 }) {
   const { t } = useTranslation(['imageexport', 'common']);
@@ -457,18 +465,29 @@ export default function ImageExportDialog({
   // The annotation spec, resolved for a given output geometry. Scalebar length
   // is chosen from the CROP width, so zooming into a corner still gets a bar
   // that fits and reads correctly.
-  const buildSpec = useCallback((c) => {
+  /**
+   * What gets drawn ON the exported picture.
+   *
+   * `opts` lets a SERIES pass the picture's own numbers: every map has its own
+   * micrometres per pixel (on a real file the electron images sit on the SEM
+   * raster and the maps on the scan raster, 10.6x apart), and its own name —
+   * a series where every file is captioned "Al" would be mislabelled figures.
+   */
+  const buildSpec = useCallback((c, opts = null) => {
+    const upp = opts && 'unitsPerPx' in opts ? opts.unitsPerPx : unitsPerPixel;
+    const scalable = Number.isFinite(upp) && upp > 0;
+    const caption = opts?.label ?? captionText;
     let bar = null;
     // With a binding, the bar is drawn by whoever owns it; this dialog only
     // edits it. Gating just the checkbox would leave a second bar on screen
     // when the owner's bar appears after the box was ticked.
-    if (showScalebar && hasScale && !scalebarBinding) {
+    if (showScalebar && scalable && !scalebarBinding) {
       const forced = scalebarStyle.lengthUnits;
       // A forced length that no longer fits the crop would draw a bar wider
       // than the image, so fall back to the automatic pick in that case.
-      bar = (forced && forced / unitsPerPixel <= c.width)
-        ? { lengthUnits: forced, lengthPx: forced / unitsPerPixel, text: formatUnits(forced) }
-        : niceScalebar(unitsPerPixel, c.width, 0.25);
+      bar = (forced && forced / upp <= c.width)
+        ? { lengthUnits: forced, lengthPx: forced / upp, text: formatUnits(forced) }
+        : niceScalebar(upp, c.width, 0.25);
     }
     return {
       scalebar: bar ? { ...bar, unitLabel } : null,
@@ -477,10 +496,10 @@ export default function ImageExportDialog({
       roi: showRoi && hasRoi ? annotations.roi : null,
       // Empty text means the user cleared the field — treat that as "no caption"
       // rather than drawing an empty plate.
-      label: showLabel && captionText.trim() ? captionText : null,
+      label: showLabel && String(caption).trim() ? caption : null,
       labelStyle: captionStyle,
     };
-  }, [showScalebar, hasScale, scalebarBinding, unitsPerPixel, unitLabel, scalebarStyle, showCrosshair,
+  }, [showScalebar, scalebarBinding, unitsPerPixel, unitLabel, scalebarStyle, showCrosshair,
       hasCrosshair, showRoi, hasRoi, showLabel, captionText, captionStyle, annotations]);
 
   // --- draw the preview -----------------------------------------------------
@@ -695,64 +714,76 @@ export default function ImageExportDialog({
   }, [open, busy, onClose]);
 
   // --- export ---------------------------------------------------------------
+
+  /**
+   * One export, rendered to a blob.
+   *
+   * The button below runs it once for the picture on screen; a batch runs it
+   * per picture with the SAME settings. One path on purpose — a series that
+   * went through a second renderer could come out looking unlike the single
+   * export the user checked it against.
+   */
+  const renderToBlob = useCallback(async ({ image, crop: c, unitsPerPx, label, overlayFor }) => {
+    // The border the figure NEEDS, whatever the border currently IS. The
+    // fit effect runs only when `fitMarginsKey` changes — by design, so
+    // dragging a body does not resize the picture mid-gesture — so a body
+    // that grew or moved after that point had no room reserved and the
+    // canvas simply cut it off. Taking the wider of the two at save time
+    // keeps the gesture calm AND the file complete.
+    const exportMargins = widerMargins(margins, fitMargins);
+    const out = outputSize(c, scaleMode);
+    const canvas = renderExportCanvas({
+      image,
+      crop: c,
+      output: out,
+      smoothing,
+      filter: rawValues ? null : displayFilter,
+      // Lossy formats cannot carry alpha; compositing onto black matches the
+      // viewer's own backdrop instead of the browser's default.
+      background: fmt.lossy ? '#000000' : null,
+      margins: exportMargins,
+      marginColor,
+    });
+    const total = canvasSizeWithMargins(out, exportMargins);
+    const ctx = canvas.getContext('2d');
+    const geom = {
+      crop: c,
+      output: { width: total.width, height: total.height },
+      origin: total.origin,
+      sx: out.width / c.width,
+      sy: out.height / c.height,
+      // How much bigger the FILE is than the PREVIEW the user arranged on.
+      //
+      // Overlay extras are laid out in preview CSS pixels, so this — not
+      // `sx` — is the factor their lettering has to grow by. `sx` counts
+      // output pixels per SOURCE DATA pixel, which is a different number
+      // entirely whenever the preview does not happen to show the data at
+      // 1:1. On a 136x39 scan exported at 8x it was ~4x too large: the
+      // scale bar's plate filled 79% of the picture height and its label
+      // fell off the bottom edge (reported 2026-09-03).
+      //
+      // The dialog computes it because only the dialog knows both halves.
+      previewScale: previewRect?.scale ?? null,
+      textScale: previewRect?.scale > 0
+        ? (out.width / c.width) / previewRect.scale
+        : 1,
+    };
+    // The caller's extras go down first, so the dialog's own caption and
+    // scale bar sit on top of them — the same stacking as on the preview.
+    overlayFor?.(ctx, geom);
+    drawAnnotations(ctx, buildSpec(c, { unitsPerPx, label }), geom);
+    return canvasToBlob(canvas, fmt.mime, fmt.lossy ? quality / 100 : undefined);
+  }, [margins, fitMargins, scaleMode, smoothing, rawValues, displayFilter, fmt,
+      marginColor, previewRect, buildSpec, quality]);
+
   const doExport = async () => {
     if (!img || !crop || !output) return;
     setBusy(true);
     setError(null);
     try {
-      // The border the figure NEEDS, whatever the border currently IS. The
-      // fit effect runs only when `fitMarginsKey` changes — by design, so
-      // dragging a body does not resize the picture mid-gesture — so a body
-      // that grew or moved after that point had no room reserved and the
-      // canvas simply cut it off. Taking the wider of the two at save time
-      // keeps the gesture calm AND the file complete.
-      const exportMargins = widerMargins(margins, fitMargins);
-      const canvas = renderExportCanvas({
-        image: img,
-        crop,
-        output,
-        smoothing,
-        filter: rawValues ? null : displayFilter,
-        // Lossy formats cannot carry alpha; compositing onto black matches the
-        // viewer's own backdrop instead of the browser's default.
-        background: fmt.lossy ? '#000000' : null,
-        margins: exportMargins,
-        marginColor,
+      const blob = await renderToBlob({
+        image: img, crop, unitsPerPx: unitsPerPixel, overlayFor: drawOverlay,
       });
-      const total = canvasSizeWithMargins(output, exportMargins);
-      const ctx = canvas.getContext('2d');
-      // The caller's extras go down first, so the dialog's own caption and
-      // scale bar sit on top of them — the same stacking as on the preview.
-      drawOverlay?.(ctx, {
-        crop,
-        output: { width: total.width, height: total.height },
-        origin: total.origin,
-        sx: output.width / crop.width,
-        sy: output.height / crop.height,
-        // How much bigger the FILE is than the PREVIEW the user arranged on.
-        //
-        // Overlay extras are laid out in preview CSS pixels, so this — not
-        // `sx` — is the factor their lettering has to grow by. `sx` counts
-        // output pixels per SOURCE DATA pixel, which is a different number
-        // entirely whenever the preview does not happen to show the data at
-        // 1:1. On a 136x39 scan exported at 8x it was ~4x too large: the
-        // scale bar's plate filled 79% of the picture height and its label
-        // fell off the bottom edge (reported 2026-09-03).
-        //
-        // The dialog computes it because only the dialog knows both halves.
-        previewScale: previewRect?.scale ?? null,
-        textScale: previewRect?.scale > 0
-          ? (output.width / crop.width) / previewRect.scale
-          : 1,
-      });
-      drawAnnotations(ctx, buildSpec(crop), {
-        crop,
-        output: { width: total.width, height: total.height },
-        origin: total.origin,
-        sx: output.width / crop.width,
-        sy: output.height / crop.height,
-      });
-      const blob = await canvasToBlob(canvas, fmt.mime, fmt.lossy ? quality / 100 : undefined);
       const filename = buildFilename(baseName, format);
       const res = await saveImageBlob(blob, filename, format);
       if (!res) { setBusy(false); return; }   // user cancelled the save dialog
@@ -763,6 +794,84 @@ export default function ImageExportDialog({
     } finally {
       setBusy(false);
     }
+  };
+
+  // --- the same settings, applied to a series --------------------------------
+  const [batchRun, setBatchRun] = useState(null);
+  const [batchReport, setBatchReport] = useState(null);
+  const batchCancelRef = useRef(false);
+  const batchCount = batch?.items?.length ?? 0;
+
+  const doBatchExport = async () => {
+    if (!batchCount || !crop || !natural) return;
+    setError(null);
+    setBatchReport(null);
+    batchCancelRef.current = false;
+
+    // The folder is chosen once; a save dialog per picture is exactly what a
+    // series has to avoid.
+    const writer = makeFolderWriter();
+    let target = null;
+    try {
+      target = await writer.pick();
+    } catch (e) {
+      setError(e?.message || String(e));
+      return;
+    }
+    if (!target) return;   // cancelled the folder dialog
+
+    setBusy(true);
+    const plan = planBatchFiles(batch.items, {
+      stem: batch.stem ?? baseName,
+      ext: fmt.ext,
+      labelOf: (i) => i.label,
+    });
+    // The crop as FRACTIONS of the picture it was drawn on. The maps of a
+    // series need not share a raster, and "the same crop" across pictures of
+    // different sizes can only mean the same relative region.
+    const frac = {
+      x: crop.x / natural.width, y: crop.y / natural.height,
+      w: crop.width / natural.width, h: crop.height / natural.height,
+    };
+    let res;
+    try {
+      res = await runImageBatch({
+        plan,
+        isCancelled: () => batchCancelRef.current,
+        onProgress: (p) => setBatchRun(p.done ? null : p),
+        render: async (item) => {
+          const built = await item.build();
+          const image = built?.canvas ?? built;
+          if (!image?.width || !image?.height) {
+            throw new Error(t('imageexport:batchNoPicture'));
+          }
+          const c = {
+            x: Math.round(frac.x * image.width),
+            y: Math.round(frac.y * image.height),
+            width: Math.max(1, Math.round(frac.w * image.width)),
+            height: Math.max(1, Math.round(frac.h * image.height)),
+          };
+          // `drawOverlay` is deliberately NOT passed: the host's extras are
+          // placed against the picture on screen, and drawing them onto a
+          // different map would put them somewhere they do not belong.
+          return renderToBlob({
+            image,
+            crop: c,
+            unitsPerPx: built?.umPerPx ?? item.umPerPx ?? null,
+            label: item.label,
+          });
+        },
+        write: (blob, filename) => writer.write(blob, filename),
+      });
+    } catch (e) {
+      setError(e?.message || String(e));
+      setBusy(false);
+      setBatchRun(null);
+      return;
+    }
+    setBusy(false);
+    setBatchRun(null);
+    setBatchReport({ ...res, kind: writer.kind, target: writer.target });
   };
 
   if (!open) return null;
@@ -1316,7 +1425,51 @@ export default function ImageExportDialog({
           {error && (
             <span data-image-export-error style={{ color: colors.red, fontSize: '8.5pt' }}>{error}</span>
           )}
+          {batchRun && (
+            <span data-image-export-batch-progress
+              style={{ color: colors.textSecondary, fontSize: '8.5pt' }}>
+              {t('imageexport:batchProgress', {
+                n: batchRun.index + 1, total: batchRun.total, name: batchRun.filename,
+              })}
+            </span>
+          )}
+          {batchReport && (
+            <span data-image-export-batch-report
+              style={{
+                color: batchReport.failed.length ? colors.red : colors.textSecondary,
+                fontSize: '8.5pt',
+              }}
+              title={batchReport.failed.map((f) => `${f.filename}: ${f.message}`).join('\n') || undefined}
+            >
+              {t('imageexport:batchDone', {
+                written: batchReport.written.length,
+                total: batchReport.total,
+              })}
+              {batchReport.failed.length > 0
+                && ` — ${t('imageexport:batchFailed', { n: batchReport.failed.length })}`}
+              {batchReport.cancelled && ` — ${t('imageexport:batchCancelled')}`}
+            </span>
+          )}
           <div style={{ flex: 1 }} />
+          {batchCount > 1 && (
+            batchRun ? (
+              <Button
+                onClick={() => { batchCancelRef.current = true; }}
+                title={t('imageexport:batchStopTooltip')}
+              >
+                {t('imageexport:batchStop')}
+              </Button>
+            ) : (
+              <Button
+                data-image-export-batch
+                onClick={doBatchExport}
+                disabled={!canExport}
+                title={t('imageexport:batchTooltip', { n: batchCount })}
+              >
+                {t('imageexport:batchExport', { n: batchCount })}
+              </Button>
+            )
+          )}
           <Button onClick={() => !busy && onClose?.()} disabled={busy} title={t('imageexport:cancelTooltip')}>
             {t('imageexport:cancel')}
           </Button>

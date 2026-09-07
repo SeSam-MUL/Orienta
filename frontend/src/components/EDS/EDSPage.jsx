@@ -571,10 +571,32 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     suggestPixel.row !== Number(pixelRow) || suggestPixel.col !== Number(pixelCol)
   );
 
-  // LayerStackPanel.onSetSingleLayer adapter — quick-mode button maps to an EDS layer object.
+  // LayerStackPanel.onSetSingleLayer adapter — quick-mode button maps to an
+  // EDS layer object.
+  //
+  // The button is a TOGGLE that adds the layer on top of what is there, or
+  // removes it again. It used to `clear()` the stack first: one click on
+  // "BC" and the SE image plus every element layer were gone, with the only
+  // way back — "+ Add Layer" — sitting below the fold of a list that did not
+  // scroll (user report 2026-08-31). On this page the whole point of the
+  // overlay is to lay an EBSD result OVER the SE image or an element map;
+  // replacing the stack defeated that. The layer arrives at 0.8 so what is
+  // underneath stays visible, same as the "+ Add Layer" path.
   const onSetSingleLayer = useCallback((id) => {
+    if (stack.layers.some((l) => l.id === id)) {
+      stack.removeLayer(id);
+      return;
+    }
     const layer = quickModeToLayer(id);
     if (!layer) return;
+    if (id === 'bc') {
+      // Same as the page's default stack (edsLayerSources): multiplied in,
+      // so the SE image below stays readable and BC darkens it.
+      layer.opacity = 0.5;
+      layer.blend = 'multiply';
+    } else {
+      layer.opacity = 0.8;
+    }
     // Localize the quick-mode layer label (the helper is module-level and has
     // no access to t()). Acronyms BC / CI stay verbatim.
     const quickLabels = {
@@ -586,7 +608,6 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       ci: 'CI',
     };
     if (quickLabels[id]) layer.label = quickLabels[id];
-    stack.clear();
     stack.addLayer(layer);
   }, [stack, t]);
 
@@ -782,7 +803,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
    * rendered the pixels — needs the caller to say, and there the answer is
    * always the scan raster.
    */
-  const openExport = useCallback((build, name, label, umPerPx = null) => {
+  const openExport = useCallback((build, name, label, umPerPx = null, batch = null) => {
     try {
       setExportError(null);
       // `build` may return a canvas it composed, or a URL for something the
@@ -795,6 +816,10 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       setExportSrc({
         src, name, label,
         umPerPx: isUrl ? umPerPx : built.umPerPx,
+        // The other pictures the dialog's settings should also be applied to.
+        // The picture above is the one the user sets them ON; it is in the
+        // series too, so what they checked is what gets written.
+        batch,
       });
     } catch (err) {
       setExportError(err?.message || String(err));
@@ -870,6 +895,37 @@ export default function EDSPage({ onNavigate, isActive = true }) {
           }),
           `${exportStem}_overlay`,
           `${exportStem} \u00b7 ${t('overlay.title', { defaultValue: 'Overlay' })}`,
+        ),
+      });
+    }
+    // Every map as its OWN file, all with one set of settings. The montage
+    // below answers "show me the series at a glance"; this answers "give me
+    // the series", which is what a figure panel is assembled from.
+    if (allMaps.layers.length > 1) {
+      const first = allMaps.layers[0];
+      const buildFor = (l) => () => buildSingleCanvas(
+        l, sourceBitmapFor(l, allMaps.bitmaps), umPerPxForLayer(l, pixelSizes),
+      );
+      items.push({
+        id: 'each',
+        label: t('imageexport:menuExportEachMap'),
+        onSelect: () => openExport(
+          buildFor(first),
+          `${exportStem}_${layerName(first)}`,
+          `${exportStem} · ${layerName(first)}`,
+          null,
+          {
+            stem: exportStem,
+            items: allMaps.layers.map((l) => ({
+              id: l.id,
+              label: layerName(l),
+              // The same builder a single tile export uses, so a picture in
+              // the series is built by the code that built the one on screen
+              // — and reports its OWN micrometres per pixel, which the tiles
+              // do not share.
+              build: buildFor(l),
+            })),
+          },
         ),
       });
     }
@@ -1240,6 +1296,11 @@ export default function EDSPage({ onNavigate, isActive = true }) {
               </GroupBox>
             )}
             <GroupBox title={t('layers.title')} style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              {/* The column above is `overflow: hidden` so the overlay stays
+                  pinned; without a scroll container of its own, the layer
+                  list was simply clipped — with 11 elements the rows below
+                  the third one were unreachable. */}
+              <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingRight: 2 }}>
               <LayerStackPanel
                 layers={stack.layers}
                 bitmaps={stack.bitmaps}
@@ -1255,6 +1316,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                 availableToAdd={availableToAdd}
                 renderLayerExtras={renderLayerExtras}
               />
+              </div>
             </GroupBox>
           </div>
 
@@ -1663,6 +1725,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             title={exportSrc.label}
             defaultBaseName={exportSrc.name}
             unitsPerPixel={exportSrc.umPerPx ?? null}
+            batch={exportSrc.batch ?? null}
             unitLabel={stepSize?.units || 'µm'}
             annotations={{ label: exportSrc.label }}
           />

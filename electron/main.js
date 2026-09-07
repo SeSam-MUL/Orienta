@@ -349,11 +349,48 @@ ipcMain.handle('dialog:openFile', async (event, options) => {
   return result.canceled ? null : result.filePaths[0];
 });
 
+/**
+ * Directories the user picked in this session.
+ *
+ * A batch export writes many files without a dialog per file, so the renderer
+ * asks for a folder ONCE and then writes into it. This set is what makes that
+ * safe: `fs:writeImageInFolder` below writes only where the user has already
+ * pointed, so the renderer can never name a path of its own.
+ */
+const grantedFolders = new Set();
+
 ipcMain.handle('dialog:openFolder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
-    properties: ['openDirectory'],
+    properties: ['openDirectory', 'createDirectory'],
   });
-  return result.canceled ? null : result.filePaths[0];
+  if (result.canceled || !result.filePaths?.[0]) return null;
+  grantedFolders.add(path.resolve(result.filePaths[0]));
+  return result.filePaths[0];
+});
+
+/**
+ * Write one image of a batch into a folder the user picked.
+ *
+ * `dialog:saveImage` shows a save dialog per file, which is exactly what a
+ * series of a dozen element maps must avoid. One call per file rather than one
+ * call for the whole series: a 16x series of a large map must not have to sit
+ * in memory all at once.
+ *
+ * Refuses a folder that was not granted, and a name that is anything but a
+ * name — a separator or a '..' in it would put the file somewhere else.
+ */
+ipcMain.handle('fs:writeImageInFolder', async (event, options) => {
+  const dir = path.resolve(String(options?.dir || ''));
+  if (!grantedFolders.has(dir)) {
+    throw new Error('Refusing to write into a folder that was not chosen in this session');
+  }
+  const name = String(options?.name || '');
+  if (!name || name !== path.basename(name) || name === '.' || name === '..') {
+    throw new Error(`Refusing to write under the name ${JSON.stringify(name)}`);
+  }
+  const target = path.join(dir, name);
+  await fs.promises.writeFile(target, Buffer.from(options.base64, 'base64'));
+  return target;
 });
 
 ipcMain.handle('dialog:saveFile', async (event, options) => {

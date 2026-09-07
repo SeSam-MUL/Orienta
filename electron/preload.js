@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // this one also writes the bytes — images are produced in the renderer and
   // never touch the backend.
   saveImage: (options) => ipcRenderer.invoke('dialog:saveImage', options),
+  // Batch export: the folder is chosen once through openFolder, then one call
+  // per file writes into it. Main refuses any folder the user did not pick.
+  writeImageInFolder: (options) => ipcRenderer.invoke('fs:writeImageInFolder', options),
   openPoleFigure: () => ipcRenderer.invoke('window:openPoleFigure'),
   // Restart the whole app after a self-update, so the new backend and the
   // newly built interface are both loaded.
