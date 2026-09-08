@@ -1,3 +1,5 @@
+import { findLayerDef } from './layerSources';
+
 /**
  * Which layers decide the frame the map is drawn in.
  *
@@ -19,8 +21,33 @@
 // covers the full scan whatever the result did.
 const ROI_SOURCES = new Set(['result', 'analysis', 'diagnostics', 'refinement']);
 
+/**
+ * ...but a layer that is deliberately BLANK where nothing is wrong is not a
+ * statement about the region, and must not shrink the frame to its findings.
+ *
+ * Phase Check paints only the grains it flagged; Assignment Source only the
+ * pixels the automation touched. Both are marked `sparse` in the catalogue.
+ * Pressing "Check phases" added Phase Check to the stack and the map collapsed
+ * onto ~20 pixels of a 39x136 scan — drawn as a small block with a 100 nm
+ * scalebar (reported 2026-09-07). The dense diagnostics (Forward NCC, NCC
+ * Anomaly, PC Sensitivity, Pattern Residual, the refinement layers) are
+ * computed for every pixel of the result and keep their vote.
+ *
+ * Why the phase map underneath did not save it: `computeAlphaBbox` answers
+ * null for a layer that covers the whole frame, meaning "this one does not
+ * constrain anything" — so the full-coverage phase map abstained and the
+ * sparse layer was the only voter left.
+ */
+function isSparse(layer) {
+  if (!layer) return false;
+  if (typeof layer.sparse === 'boolean') return layer.sparse;
+  const def = findLayerDef(layer.id);
+  return !!(def && def.sparse);
+}
+
 export function definesRoi(layer) {
-  return !!layer && layer.visible !== false && ROI_SOURCES.has(layer.source);
+  return !!layer && layer.visible !== false && ROI_SOURCES.has(layer.source)
+    && !isSparse(layer);
 }
 
 /**

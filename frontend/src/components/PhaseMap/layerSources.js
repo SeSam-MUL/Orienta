@@ -67,8 +67,14 @@ export const LAYER_SOURCES = {
       // stored phase vs the best alternative phase. Computed by the
       // "Check phases" button (POST /api/indexing/phase-check); 404s until
       // then (per-layer failure isolation shows the error chip).
+      //
+      // `sparse`: this layer is deliberately BLANK wherever nothing is wrong
+      // (NaN on healthy and unchecked pixels), so it must never get a vote on
+      // the frame the map is drawn in -- see roiFrame.js. Adding it collapsed
+      // the whole map onto the handful of flagged pixels: a 39x136 scan drawn
+      // as a ~20-pixel block with a 100 nm scalebar, reported 2026-09-07.
       { id: 'phase-margin',     label: 'Phase Check',      kind: 'phase_margin',
-        defaultBlend: 'normal', defaultOpacity: 0.85 },
+        defaultBlend: 'normal', defaultOpacity: 0.85, sparse: true },
     ],
   },
   refinement: {
