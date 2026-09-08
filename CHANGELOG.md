@@ -9,6 +9,72 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## v0.2.6 — 2026-09-08
+
+Nothing in the app behaves differently. This release is about what the project
+says about itself — because from this version on, Orienta is public, and an
+archived copy of it carries a DOI that people will cite.
+
+### The README now matches the code
+
+An audit compared every claim in the README against what is actually wired up,
+and four of them were wrong.
+
+- **"texture/ODF" was overstated.** The texture index and entropy come from
+  texture-component volume-fraction bins, not from an orientation distribution
+  function. Useful for comparing your own datasets against each other; not
+  comparable with MTEX numbers. Said plainly now.
+- **"Spherical (EMSphInx via WSL)" was out of date.** The default is the
+  built-in GPU indexer; EMSphInx is the alternative, not the main path.
+- **"EDAX H5" needed a limit.** Hexagonal-grid scans are not detected on the
+  load path, so they open sheared instead of being refused. Until that is
+  fixed, do not load HexGrid data — this is the one place where you can get a
+  plausible-looking result that is wrong.
+- **The status line was too pessimistic**, claiming parts of ML and refinement
+  were hidden. Both are ordinary sidebar pages and have been for a long time.
+
+There is now a **Known limitations** section carrying those, plus the ones
+already known: the simulation engine cannot start because its automation module
+is not part of this repository, the "Texture Components" map layer returns an
+empty map, two recrystallisation statistics are placeholders, the frontend build
+needs Node 20.19+, `requirements.txt` installs the CUDA runtime even without an
+NVIDIA card, Python 3.12 is blocked by one leftover dependency, and a ZIP
+download reports its version as "unknown".
+
+### Attribution that was missing
+
+- **EMsoft and SHTfile are now credited, with their licence texts.** Three files
+  say of themselves that they carry transcribed EMsoft content — the WEKO
+  elastic coefficients for Z = 1..98, the LFSR113 random-number stream, and two
+  230-entry tables from the SHTfile reference implementation. Both upstreams are
+  BSD-3-Clause and require their notice to travel with the source; neither
+  licence text was in the repository. Both are now under `licenses/`.
+- **The description of what ships was wrong in NOTICE.md.** It said runtime
+  dependencies are "not redistributed", while three.js sits in
+  `frontend/public/vendor/` and is loaded directly. It is now listed as
+  redistributed, and vanta.js — whose minified bundle carries no copyright text
+  at all — has the notice MIT requires beside it.
+- Three more locations with derived code were undeclared, and one comment called
+  kikuchipy MIT-licensed when it is GPL-3.0.
+
+### The Materials Project key no longer lives in the source
+
+It was a literal in `cif_database_builder.py`. It now comes from your own
+settings, the same place the rest of the app already read it from, with the
+`MP_API_KEY` environment variable as a fallback. Unconfigured means the online
+lookups are skipped and the database builder works offline from your local CIF
+files. **If you used that builder's online lookup, enter your own key under
+Settings → API keys.**
+
+### Citation metadata
+
+`CITATION.cff` said version 0.1.0 and pointed at the DOI of that first archive.
+It now tracks the current release and cites the **concept DOI**, which always
+resolves to the newest archived version, and a `.zenodo.json` gives the archive
+its full description and the funding acknowledgement.
+
+---
+
 ## v0.2.5 — 2026-09-08
 
 Figures in series, and a phase check that judges fairly. **If you have run
