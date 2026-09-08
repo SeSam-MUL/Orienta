@@ -259,7 +259,7 @@ subject to the warranty disclaimer and liability limitation above.
 If you use this software in your research, please cite it via its **concept DOI**,
 which always resolves to the most recent archived version:
 
-> Samberger, S., Pogatscher, S., Kobayashi, E., & Weißensteiner, I. (2026). Orienta. Zenodo. https://doi.org/10.5281/zenodo.21021937
+> Samberger, S., Pogatscher, S., Kobayashi, E., & Weißensteiner, I. (2026). Orienta. Zenodo. https://doi.org/10.5281/zenodo.22664080
 
 If you need to record the exact version you worked with, cite that release's own
 DOI instead — every Zenodo version has one, listed on the record page.

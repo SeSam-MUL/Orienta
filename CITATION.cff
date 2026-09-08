@@ -26,15 +26,15 @@ authors:
     family-names: "Weißensteiner"
     orcid: "https://orcid.org/0000-0002-8917-5231"
     affiliation: "Montanuniversität Leoben"
-version: "0.2.5"
+version: "0.2.6"
 date-released: "2026-09-08"
 license: "GPL-3.0-or-later"
 repository-code: "https://github.com/SeSam-MUL/Orienta"
 # The concept DOI always resolves to the newest archived version — that is what
 # a general "we used Orienta" citation should point at. The DOI of this exact
 # release is listed below under identifiers.
-url: "https://doi.org/10.5281/zenodo.21021937"
-doi: "10.5281/zenodo.21021937"
+url: "https://doi.org/10.5281/zenodo.22664080"
+doi: "10.5281/zenodo.22664080"
 keywords:
   - EBSD
   - electron backscatter diffraction
@@ -51,8 +51,11 @@ keywords:
   - python
 identifiers:
   - type: doi
-    value: "10.5281/zenodo.21021937"
+    value: "10.5281/zenodo.22664080"
     description: "Concept DOI — always resolves to the latest archived version"
   - type: doi
-    value: "10.5281/zenodo.21021938"
-    description: "Zenodo archive of version 0.1.0"
+    value: "10.5281/zenodo.22664081"
+    description: "Zenodo archive of version 0.2.6"
+  - type: doi
+    value: "10.5281/zenodo.21021937"
+    description: "Earlier archive lineage, kept for the example EBSD datasets"

@@ -7,7 +7,7 @@ the files in this folder** (`sample_data/patterns/`).
 Where to get them:
 
 - **GitHub:** the latest **Release** of this repository → *Assets*.
-- **Zenodo:** archived release, concept DOI **10.5281/zenodo.21021937** →
+- **Zenodo:** archived release, data record, DOI **10.5281/zenodo.21021937** →
   `sample_data/patterns/` inside the archive.
 
 | File | Sample | Notes |
