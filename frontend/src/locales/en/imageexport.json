@@ -53,6 +53,8 @@
   "menuExport": "Export image…",
   "menuExportEachMap": "Export each map as its own file…",
   "batchExport": "Export all {{n}}…",
+  "batchCaptionPerMap": "Caption each file with its own map",
+  "batchCaptionPerMapTooltip": "On: every file in the series gets its own map’s name in the corner (Fe Kα1, Cu Lα1,2 …), so a panel of maps is not a set of pictures that all say the same thing. Off: the text above goes on every file — for a caption that names the sample rather than the map.",
   "batchTooltip": "Write all {{n}} maps as separate files with these settings — resolution, border, format and scale bar. You choose the folder once. Each file is named after its map, and each keeps its own micrometres per pixel, so a map on a different raster is still measured correctly.",
   "batchProgress": "{{n}} of {{total}} — {{name}}",
   "batchDone": "{{written}} of {{total}} written",

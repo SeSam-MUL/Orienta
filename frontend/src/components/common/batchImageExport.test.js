@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { batchFileName, planBatchFiles, runImageBatch, makeFolderWriter } from './batchImageExport';
+import {
+  batchFileName, planBatchFiles, runImageBatch, makeFolderWriter, batchCaption,
+} from './batchImageExport';
 
 describe('batchFileName', () => {
   it('keeps the map label but not its path separators', () => {
@@ -149,5 +151,22 @@ describe('makeFolderWriter', () => {
     expect(makeFolderWriter(null).kind).toBe('download');
     // A half-present API is not an API: writing would throw per file.
     expect(makeFolderWriter({ openFolder: () => {} }).kind).toBe('download');
+  });
+});
+
+describe('batchCaption', () => {
+  it('captions each file with its own map by default', () => {
+    expect(batchCaption({ label: 'Fe Ka1' }, { perMap: true })).toBe('Fe Ka1');
+    expect(batchCaption({ label: 'Cu La1,2' }, { perMap: true })).toBe('Cu La1,2');
+  });
+
+  it("leaves the dialog’s own text alone when the box is off", () => {
+    // undefined, not null or '': buildSpec falls back to the typed text, and
+    // an empty string would draw a plate with nothing on it.
+    expect(batchCaption({ label: 'Fe Ka1' }, { perMap: false })).toBeUndefined();
+  });
+
+  it('does not invent a caption for a map that has no name', () => {
+    expect(batchCaption({}, { perMap: true })).toBeUndefined();
   });
 });

@@ -803,7 +803,8 @@ export default function EDSPage({ onNavigate, isActive = true }) {
    * rendered the pixels — needs the caller to say, and there the answer is
    * always the scan raster.
    */
-  const openExport = useCallback((build, name, label, umPerPx = null, batch = null) => {
+  const openExport = useCallback((build, name, label, umPerPx = null,
+    { batch = null, caption = null } = {}) => {
     try {
       setExportError(null);
       // `build` may return a canvas it composed, or a URL for something the
@@ -820,6 +821,12 @@ export default function EDSPage({ onNavigate, isActive = true }) {
         // The picture above is the one the user sets them ON; it is in the
         // series too, so what they checked is what gets written.
         batch,
+        // What the corner caption is PRE-FILLED with. A map's caption is the
+        // map's own name — "Fe Ka1" — not the file stem as well: the stem is
+        // already in the file name, and in a figure panel the corner has room
+        // for what the picture IS. Falls back to the dialog's heading for the
+        // pictures that have no shorter name of their own.
+        caption,
       });
     } catch (err) {
       setExportError(err?.message || String(err));
@@ -843,6 +850,8 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             umPerPxForLayer(l, pixelSizes)),
           `${exportStem}_${layerName(l)}`,
           `${exportStem} \u00b7 ${layerName(l)}`,
+          null,
+          { caption: layerName(l) },
         ),
       });
     }
@@ -912,19 +921,25 @@ export default function EDSPage({ onNavigate, isActive = true }) {
         onSelect: () => openExport(
           buildFor(first),
           `${exportStem}_${layerName(first)}`,
-          `${exportStem} · ${layerName(first)}`,
+          `${exportStem} \u00b7 ${layerName(first)}`,
           null,
           {
-            stem: exportStem,
-            items: allMaps.layers.map((l) => ({
-              id: l.id,
-              label: layerName(l),
-              // The same builder a single tile export uses, so a picture in
-              // the series is built by the code that built the one on screen
-              // — and reports its OWN micrometres per pixel, which the tiles
-              // do not share.
-              build: buildFor(l),
-            })),
+            // The same expression the series itself writes per file, so
+            // the picture the settings are checked on says what the
+            // files will say.
+            caption: layerName(first),
+            batch: {
+              stem: exportStem,
+              items: allMaps.layers.map((l) => ({
+                id: l.id,
+                label: layerName(l),
+                // The same builder a single tile export uses, so a picture in
+                // the series is built by the code that built the one on
+                // screen — and reports its OWN micrometres per pixel, which
+                // the tiles do not share.
+                build: buildFor(l),
+              })),
+            },
           },
         ),
       });
@@ -1727,7 +1742,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             unitsPerPixel={exportSrc.umPerPx ?? null}
             batch={exportSrc.batch ?? null}
             unitLabel={stepSize?.units || 'µm'}
-            annotations={{ label: exportSrc.label }}
+            annotations={{ label: exportSrc.caption ?? exportSrc.label }}
           />
         )}
       </div>

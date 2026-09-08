@@ -126,3 +126,21 @@ export function makeFolderWriter(api = (typeof window !== 'undefined' ? window.e
     get target() { return null; },
   };
 }
+
+/**
+ * The caption one picture of a series carries.
+ *
+ * Two honest answers, and the user picks which — no rule that guesses:
+ *
+ *   perMap  each file is captioned with its OWN map's name. A series of
+ *           element maps where every file says "Fe Ka1" would be mislabelled
+ *           figures, so this is the default.
+ *   typed   the text in the caption field, on every file. For a caption that
+ *           describes the SAMPLE rather than the map.
+ *
+ * `undefined` means "the dialog's own caption text", which is what
+ * `buildSpec` falls back to — so the typed case needs no special path.
+ */
+export function batchCaption(item, { perMap }) {
+  return perMap ? (item?.label ?? undefined) : undefined;
+}

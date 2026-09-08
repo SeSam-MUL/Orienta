@@ -53,6 +53,8 @@
   "menuExport": "Bild exportieren…",
   "menuExportEachMap": "Jede Karte als eigene Datei exportieren…",
   "batchExport": "Alle {{n}} exportieren…",
+  "batchCaptionPerMap": "Jede Datei mit dem Namen ihrer Karte beschriften",
+  "batchCaptionPerMapTooltip": "An: jede Datei der Serie bekommt oben in der Ecke den Namen ihrer Karte (Fe Kα1, Cu Lα1,2 …), damit eine Bildtafel nicht aus lauter gleich beschrifteten Bildern besteht. Aus: der Text oben steht auf jeder Datei — für eine Beschriftung, die die Probe benennt statt der Karte.",
   "batchTooltip": "Schreibt alle {{n}} Karten als einzelne Dateien mit diesen Einstellungen — Auflösung, Rand, Format und Maßstab. Den Ordner wählst du einmal. Jede Datei wird nach ihrer Karte benannt und behält ihre eigene Pixelgröße, damit eine Karte auf anderem Raster trotzdem richtig bemaßt ist.",
   "batchProgress": "{{n}} von {{total}} — {{name}}",
   "batchDone": "{{written}} von {{total}} geschrieben",

@@ -12,7 +12,9 @@ import {
   renderExportCanvas, drawAnnotations, canvasToBlob, loadImage, saveImageBlob, rgba,
   NO_MARGINS, BORDER_INPUT_MAX_FRACTION, canvasSizeWithMargins, widerMargins,
 } from './imageExport';
-import { makeFolderWriter, planBatchFiles, runImageBatch } from './batchImageExport';
+import {
+  makeFolderWriter, planBatchFiles, runImageBatch, batchCaption,
+} from './batchImageExport';
 
 const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 const HANDLE_CURSOR = {
@@ -390,8 +392,13 @@ export default function ImageExportDialog({
       setCaptionText(annotations?.label || '');
       setEditingCaption(null);
       setMargins(NO_MARGINS);
+      // A SERIES opens with the caption on. A panel of element maps whose
+      // pictures carry no names is the thing a series is usually assembled to
+      // avoid, and here the caption is each map's own name. A single export
+      // is untouched: it still opens with the caption off.
+      if (batch?.items?.length > 1 && annotations?.label) setShowLabel(true);
     }
-  }, [open, annotations?.label]);
+  }, [open, annotations?.label, batch]);
 
   // Fit the border to whatever sits beside the picture. Deliberately keyed on
   // WHICH things are out there rather than on where they are, so the sheet
@@ -798,6 +805,11 @@ export default function ImageExportDialog({
 
   // --- the same settings, applied to a series --------------------------------
   const [batchRun, setBatchRun] = useState(null);
+  // Whether each file of a series is captioned with its OWN map's name.
+  // Default on: a series of element maps that all say "Fe Ka1" would be
+  // mislabelled figures. Off uses the typed caption on every file, for a
+  // caption that describes the sample rather than the map.
+  const [batchCaptionPerMap, setBatchCaptionPerMap] = useState(true);
   const [batchReport, setBatchReport] = useState(null);
   const batchCancelRef = useRef(false);
   const batchCount = batch?.items?.length ?? 0;
@@ -858,7 +870,7 @@ export default function ImageExportDialog({
             image,
             crop: c,
             unitsPerPx: built?.umPerPx ?? item.umPerPx ?? null,
-            label: item.label,
+            label: batchCaption(item, { perMap: batchCaptionPerMap }),
           });
         },
         write: (blob, filename) => writer.write(blob, filename),
@@ -1370,6 +1382,16 @@ export default function ImageExportDialog({
                       title={t('imageexport:style.textTooltip')}
                     />
                   </Row>
+                  {batchCount > 1 && (
+                    <div style={{ marginBottom: 5 }}>
+                      <Check
+                        checked={batchCaptionPerMap}
+                        onChange={setBatchCaptionPerMap}
+                        label={t('imageexport:batchCaptionPerMap')}
+                        title={t('imageexport:batchCaptionPerMapTooltip')}
+                      />
+                    </div>
+                  )}
                   <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 5 }}>
                     <Button
                       small

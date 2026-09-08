@@ -53,6 +53,8 @@
   "menuExport": "导出图像…",
   "menuExportEachMap": "将每张图导出为单独文件…",
   "batchExport": "导出全部 {{n}} 张…",
+  "batchCaptionPerMap": "每个文件标注其自身的图名",
+  "batchCaptionPerMapTooltip": "开启：系列中每个文件的角上标注该图的名称（Fe Kα1、Cu Lα1,2 等），以免整组图版的说明文字完全相同。关闭：上方文字用于所有文件 — 适合标注样品而非图本身。",
   "batchTooltip": "以当前设置（分辨率、边距、格式、比例尺）将全部 {{n}} 张图分别保存为单独文件。文件夹只需选择一次。文件按各自的图命名，并各自保留其像素物理尺寸，因此位于不同栅格的图也能正确标注。",
   "batchProgress": "第 {{n}} 张，共 {{total}} 张 — {{name}}",
   "batchDone": "已写入 {{written}} / {{total}}",
