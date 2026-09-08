@@ -1483,7 +1483,6 @@ export default function ImageExportDialog({
               </Button>
             ) : (
               <Button
-                data-image-export-batch
                 onClick={doBatchExport}
                 disabled={!canExport}
                 title={t('imageexport:batchTooltip', { n: batchCount })}
