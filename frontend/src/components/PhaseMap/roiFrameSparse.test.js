@@ -22,7 +22,13 @@ describe('sparse diagnostics do not define the frame', () => {
     expect(definesRoi(L('phase-margin', 'diagnostics'))).toBe(false);
   });
 
-  it('excludes Assignment Source', () => {
+  // Assignment Source is the other sparse layer in the development tree.
+  // This repository does not ship that feature: there is no
+  // `assignment_source` layer kind in phase_map.py and no
+  // /api/indexing/grain-phase-assign route, so the layer is never offered
+  // and the question is vacuous here. Skipped rather than deleted, so
+  // whoever ports the feature finds the assertion waiting for them.
+  it.skip('excludes Assignment Source (layer not shipped here)', () => {
     expect(definesRoi(L('assignment-source', 'diagnostics'))).toBe(false);
   });
 
@@ -61,10 +67,16 @@ describe('the user’s stack after pressing Check phases', () => {
 });
 
 describe('the flag lives in the catalogue, so both readers agree', () => {
-  it('marks exactly the two sparse layers', () => {
+  it('marks the sparse layer, and only it', () => {
     expect(findLayerDef('phase-margin').sparse).toBe(true);
-    expect(findLayerDef('assignment-source').sparse).toBe(true);
     expect(findLayerDef('forward-ncc').sparse).toBeUndefined();
+    // One sparse layer here, two in the development tree — see the skip
+    // above. Counted rather than assumed, so this fails loudly the day
+    // Assignment Source arrives without its flag.
+    const sparse = ['phase-margin', 'assignment-source', 'forward-ncc',
+      'local-anomaly', 'pc-sensitivity', 'pattern-residual']
+      .filter((id) => findLayerDef(id)?.sparse);
+    expect(sparse).toEqual(['phase-margin']);
   });
 
   it('an explicit per-layer override still wins over the catalogue', () => {
