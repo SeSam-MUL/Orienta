@@ -9,6 +9,85 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## v0.2.5 — 2026-09-08
+
+Figures in series, and a phase check that judges fairly. **If you have run
+"Check phases" before, read the second section: its verdicts can differ now,
+and the old ones were sometimes wrong.**
+
+### Every element map as its own file
+
+- **The EDS page can write one file per map.** Right-click a tile and choose
+  *Export each map as its own file…*: the ordinary export dialog opens on the
+  first map, you set resolution, border, format and scale bar once and see
+  them on a real map, then one click writes the whole series. The folder is
+  chosen once, not once per file.
+- **Each file carries its own map's name** in the corner and in the file name,
+  so a panel of element maps is not a set of pictures that all say the same
+  thing. A switch in the dialog turns that off if you would rather caption the
+  sample than the map.
+- **Each file keeps its own micrometres per pixel.** The tiles do not share a
+  raster — the electron images sit on the SEM raster and the element maps on
+  the scan raster, on a real file 10.6x apart — so one shared number would
+  mis-scale half the series.
+- **The IPF colour key can be exported on its own**, on a white plate or
+  transparent to lay onto a figure of your own. Right-click the key panel; it
+  was the only picture on the phase map page without an export.
+
+### Colour keys beside a map are no longer cut off
+
+- **The border could never be wider than half the map.** A three-phase IPF key
+  is 2.75x as tall as it is wide, and beside a wide, short map it needs about
+  1.4 map heights above and below — so it was sliced across the top and the
+  bottom, and the file came out at exactly twice the map height whatever you
+  asked for. The border now takes the room the figure needs; the only limits
+  left are what the browser can encode, and the dialog says when it had to
+  trim.
+- **The size the dialog announces is the size it writes.** It ignored a key
+  that had grown since the border was last fitted.
+
+### Checking phases got fairer — and it can change what you see
+
+- **A phase is now judged at a fair orientation.** It used to be scored at its
+  stored orientation while its rivals were scored at their best, which is not
+  a comparison. Measured on a real map: **8 of 24 island findings were
+  artefacts**, and the per-grain stage flipped a whole MgCuAl2 particle to Al
+  (0.207 stored against 0.420 at a fair orientation).
+- **The score no longer chases noise.** It compared a noisy measured pattern
+  against a noise-free simulation across the full frequency range; limiting
+  both sides to the band that carries the signal takes the median on a real
+  7050 map from **0.196 to 0.417**. That is what had made every grain a
+  suspect.
+- **A second stage finds wrong pixels enclosed inside a grain** — islands
+  below grain size (a grain being 9 pixels or more), taking the orientation
+  from the grain around them. Outcomes are named: reassigned, rescued, or
+  undecided — and undecided is never applied.
+
+### Hough: the reflector budget is yours to set
+
+- **A CIF written as P 1 asked for 44.7 GiB** for its band-triplet library and
+  took the machine to its commit limit. Orienta now works out the cost before
+  allocating anything, refuses what does not fit, and lets you set the number
+  of reflector families per phase — on the Indexing page and in the phase
+  verification panel. Your choice is remembered between sessions.
+- **Trimming reflectors automatically was measured and rejected**: on Ni, 24
+  families put 192 of 800 patterns 120 degrees off and 16 families gave a
+  median fit of 180 degrees, silently. A refusal you can see beats a wrong
+  answer you cannot.
+
+### Fixes
+
+- **The cleanup sliders and "Apply cleanup" now refresh the IPF and BC
+  layers.** They had been showing the state before the cleanup.
+- **A diagnostic layer that paints only its findings no longer decides how
+  large the map is drawn.** A 39x136 scan collapsed onto the ~20 flagged
+  pixels, drawn with a 100 nm scale bar instead of 2 um.
+- **Pattern match refuses a render grid the graphics card cannot hold**
+  instead of failing inside the driver.
+- **The changelog listed v0.2.3 twice**, above v0.2.4.
+
+---
+
 ## v0.2.4 — 2026-08-28
 
 Scale bars, and a set of crashes that took a whole page down. If you exported
