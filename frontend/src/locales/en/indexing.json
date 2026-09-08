@@ -701,6 +701,19 @@
     "phaseTestClearMarkers": "Remove all numbered markers from the comparison panels",
     "phaseTestExcludedToggle": "Show or hide phases excluded by the EDS chemistry filter",
     "matchesClearMarkers": "Remove all numbered markers from the comparison panels",
-    "edsPriorToggle": "Weight the phase choice by the measured EDS chemistry at every pixel. Applies to ALL selected phases equally — off means the pattern decides alone."
+    "edsPriorToggle": "Weight the phase choice by the measured EDS chemistry at every pixel. Applies to ALL selected phases equally — off means the pattern decides alone.",
+    "reflectorCount": "How many reflector families this phase contributes to the Hough band-triplet library.\n\nHough builds that library once per run and sizes it from the family count; it grows roughly with the CUBE of the number of distinct inter-pole angles. The same 70 families therefore cost a few MiB for a cubic phase and tens of GiB for a phase whose CIF carries no symmetry - and on Windows the memory is claimed the moment it is asked for, so an impossible request can take the machine down. Orienta refuses what does not fit rather than attempting it.\n\nFewer families is NOT free. Measured on Ni (58 families, 800 real patterns): 40 and 32 give exactly the same orientations as the full set; 24 indexes only 192 of 800 pixels and is 119.7 deg off; 16 fails completely - quietly, returning orientations that still look plausible. That is why this is your choice and not an automatic one. After lowering it, compare the indexed map against a run with more families before you rely on it.\n\nIndexing reads only n_bands bands per pattern (12 by default), so the weakest families are rarely decisive - but rarely is not never, which is what the numbers above show.",
+    "reflectorNoSymmetry": "The CIF is stored in space group P 1: every atom listed, no symmetry recorded. PyEBSDIndex then treats each reflector family as a single pole, so the number of distinct inter-pole angles - and with it the band-triplet library - explodes. Re-exporting the phase in its real space group makes this small and is the better fix; lowering the reflector count here is the workaround."
+  },
+  "reflectors": {
+    "label": "Reflectors:",
+    "allOption": "all {{n}}",
+    "tiny": "negligible",
+    "tooBigTag": "(too big)",
+    "noSymmetry": "This CIF stores no symmetry ({{sg}}) - every reflector family is a single pole, which is why the library is so large. Re-exporting it in its real space group fixes this at the source.",
+    "budgetNote": "The full set does not fit the {{budget}} this machine can spare right now.",
+    "checkResult": "Fewer families can change the result - check the indexed map before trusting it.",
+    "unavailable": "Reflector cost unavailable for this file.",
+    "measuring": "Measuring reflector cost..."
   }
 }

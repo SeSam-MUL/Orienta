@@ -10,6 +10,7 @@ Wraps IndexingController for:
 
 import asyncio
 import logging
+import threading
 import uuid
 from pathlib import Path
 from typing import Optional, List, Dict, Literal
@@ -625,7 +626,24 @@ def _build_phase_configs(req):
     except Exception:
         pass
 
-    for p in paths:
+    # Reflector limits arrive aligned with `cif_paths`; carry each phase's own
+    # so a per-phase choice survives the split into PhaseConfigs (a single
+    # shared number would make the cheap phases pay for the expensive one).
+    limits = list(getattr(req, "max_reflectors", None) or [])
+
+    # Also register them against the PHASE, so the Hough builds that never see
+    # this request — the pseudo-symmetry resolver after a spherical run, the
+    # phase check, single-pixel pattern match — use the same numbers. Without
+    # this, a phase the user had made affordable for the run became
+    # un-indexable again the moment any of those ran.
+    try:
+        from ebsd_utils import set_phase_reflector_limit
+        for _i, _p in enumerate(paths):
+            set_phase_reflector_limit(_p, limits[_i] if _i < len(limits) else None)
+    except Exception:  # noqa: BLE001 — registering is an optimisation, not the run
+        logger.debug("could not register reflector limits", exc_info=True)
+
+    for _i, p in enumerate(paths):
         try:
             meta = get_phase_metadata(Path(p), cif_library_dir=cif_dir)
             name = meta.formula or Path(p).stem
@@ -637,6 +655,7 @@ def _build_phase_configs(req):
             cif_path=p if req.method == 'hough' else '',
             master_h5_path=p if req.method == 'dictionary' else '',
             sht_path=p if req.method == 'spherical' else '',
+            max_reflectors=(limits[_i] if _i < len(limits) else None),
         )
 
         # For Hough: load phase from CIF. hough_index_patterns treats
@@ -933,6 +952,10 @@ class IndexingStartRequest(BaseModel):
     n_bands: int = 12
     t_sigma: float = 2.0
     r_sigma: float = 2.0
+    # Reflector families per phase, aligned with `cif_paths`; null/absent = all.
+    # Hough only. See GET /api/indexing/hough/reflector-cost for what each
+    # choice costs, and ebsd_utils.create_indexer for why it is not automatic.
+    max_reflectors: Optional[List[Optional[int]]] = None
 
     # Dictionary params
     metric: str = "ncc"
@@ -1147,6 +1170,7 @@ async def start_indexing(req: IndexingStartRequest):
                 n_bands=req.n_bands,
                 t_sigma=req.t_sigma,
                 r_sigma=req.r_sigma,
+                max_reflectors=req.max_reflectors,
                 metric=req.metric,
                 keep_n=req.keep_n,
                 compute_mode=req.compute_mode,
@@ -2491,7 +2515,13 @@ async def get_pattern_match(
             # indexer's orientation is correct. (Bug 2026-05-22: broke
             # EDAX datasets with non-zero detector tilt, e.g. LoGainNi.h5
             # with det.tilt=10 deg gave R = 0.03 instead of R > 0.4.)
-            sim_b64_spherical = _render_sht_b64(
+            # OFF the event loop. This is a GPU render that at bw=384 on a
+            # full card ran for five minutes; inside `async def` it made the
+            # whole server deaf for that long -- health, export, everything
+            # -- and the process then died with the user's unsaved manual
+            # assignments (2026-09-07). A dialog must never stop the server.
+            sim_b64_spherical = await asyncio.to_thread(
+                _render_sht_b64,
                 sht_path=sht_path_local,
                 orientation_quat=quat_t,
                 pc_emsoft=(float(xpc), float(ypc), float(L_um)),
@@ -2767,7 +2797,11 @@ async def get_pattern_match(
             sht_map_local = (result.metadata or {}).get("sht_paths_by_phase") or {}
             det_local = (result.metadata or {}).get("detector_geometry")
             if sht_map_local and det_local and len(sht_map_local) >= 1:
-                phase_results = _compute_phase_compare_results(
+                # Off the event loop for the same reason as the render above:
+                # the first call builds a SphericalGPUBackend (seconds) and
+                # every call re-indexes the pixel per phase on the GPU.
+                phase_results = await asyncio.to_thread(
+                    _compute_phase_compare_results,
                     exp_pattern=exp,
                     detector_geometry=det_local,
                     sht_paths_by_phase=sht_map_local,
@@ -3826,40 +3860,217 @@ async def undo_grain_flip(req: GrainUndoRequest):
 # these routes only wire the result's patterns / SHTs / CIFs into it.
 # ---------------------------------------------------------------------------
 
-def _hough_quats_for_phase_batch(patterns, cif_path, det_params):
+#: Hough indexers, keyed on everything that changes what one computes.
+#: The phase check asks for one phase's Hough answer once PER GRAIN, and
+#: building the indexer — not running it — is the expensive half: measured on
+#: 2026-09-03, a build peaks at 48.6 GiB of Windows commit charge for a P1 CIF
+#: (Al7FeCu2.cif, written as "P 1") and 5.6 GiB for an mmm one, against an
+#: 83 GiB commit limit. Paying that per grain in a backend already holding
+#: 25 GB left no host memory for the OpenCL context, so every call died with
+#: "Context failed: OUT_OF_HOST_MEMORY" after ~7 s — 62 times in one run, which
+#: is the whole "Phase Verification does nothing" report. Reusing the indexer
+#: costs almost nothing to keep (measured +0.04 GiB) and is ~5x faster per call.
+_HOUGH_INDEXER_CACHE: dict = {}
+_HOUGH_INDEXER_CACHE_MAX = 4
+_HOUGH_INDEXER_LOCK = threading.Lock()
+
+
+def _hough_indexer_for(cif_path, det_params, n_bands: int = 12):
+    """(PhaseList, EBSDDetector, indexer) for one phase + geometry, cached.
+
+    The key carries the CIF's path AND mtime plus every detector value that
+    reaches `EBSDDetector`: a cached indexer reused under a projection centre
+    the caller did not ask for would return orientations that look perfectly
+    valid and are wrong — silent, and far worse than the rebuild it saves.
+    """
+    from orix.crystal_map import Phase, PhaseList
+    from ebsd_utils import sanitize_cif, prepare_reflectors, create_indexer
+    from kikuchipy.detectors import EBSDDetector
+
+    p = Path(cif_path)
+    try:
+        stamp = p.stat().st_mtime_ns
+    except OSError:
+        stamp = None
+    key = (
+        str(p.resolve() if p.exists() else p), stamp,
+        int(det_params["pat_height"]), int(det_params["pat_width"]),
+        float(det_params.get("sample_tilt", 70.0)),
+        float(det_params.get("tilt", 0.0)),
+        float(det_params["pc_x"]), float(det_params["pc_y"]), float(det_params["pc_z"]),
+        int(det_params.get("binning", 1)), int(n_bands),
+    )
+    with _HOUGH_INDEXER_LOCK:
+        hit = _HOUGH_INDEXER_CACHE.get(key)
+    if hit is not None:
+        return hit
+
+    phase = Phase.from_cif(sanitize_cif(str(cif_path)))
+    try:
+        phase.name = p.stem
+    except Exception:
+        pass
+    pl = PhaseList(phase)
+    det = EBSDDetector(
+        shape=(int(det_params["pat_height"]), int(det_params["pat_width"])),
+        sample_tilt=float(det_params.get("sample_tilt", 70.0)),
+        tilt=float(det_params.get("tilt", 0.0)),
+        pc=(float(det_params["pc_x"]), float(det_params["pc_y"]), float(det_params["pc_z"])),
+        convention="bruker",
+        binning=int(det_params.get("binning", 1)),
+    )
+    entry = (pl, det, create_indexer(det, pl, prepare_reflectors(pl), nBands=n_bands))
+    with _HOUGH_INDEXER_LOCK:
+        _HOUGH_INDEXER_CACHE[key] = entry
+        while len(_HOUGH_INDEXER_CACHE) > _HOUGH_INDEXER_CACHE_MAX:
+            _HOUGH_INDEXER_CACHE.pop(next(iter(_HOUGH_INDEXER_CACHE)))
+    return entry
+
+
+def _describe_hough_failure(exc, cif_path) -> str:
+    """Turn a Hough batch failure into something the user can act on.
+
+    `Context failed: OUT_OF_HOST_MEMORY` is pyopencl reporting that the driver
+    could not get host memory for its context. On this workload that is almost
+    never "the GPU is full" — it is the machine's Windows COMMIT charge, which
+    PyEBSDIndex drives through the roof while building its band-triplet
+    library: the library is sized from the reflector count, and that explodes
+    as symmetry drops. Measured 2026-09-03: 48.6 GiB of commit for a CIF
+    written as `P 1`, 5.6 GiB for the same detector with an `mmm` phase.
+
+    So the actionable half is the phase's symmetry, and the message says it.
+
+    ...but only when the numbers actually say that (fixed 2026-09-07)
+    -----------------------------------------------------------------
+    `OUT_OF_HOST_MEMORY` is pyopencl's catch-all for "the driver could not
+    create the context" and it is NOT proof of a shortage. On a real session it
+    hit `Al.cif` -- point group m-3m, 50 reflector families, a library this
+    module itself labels "negligible" -- with 6.7 GiB free, in the same run and
+    the same breath as the large P1 library. Blaming memory there sends the
+    user to close programs, which cannot help, and hides the real cause.
+
+    So the message is now decided by a MEASUREMENT: what this phase's library
+    would cost against what the machine can spare right now. Memory is named as
+    the cause only when the two numbers support it; otherwise the message says
+    plainly that the OpenCL context failed, gives both numbers so the user can
+    see it was not a shortage, and says the sentence that matters -- that this
+    is the Radon step's GPU context and not the phase.
+    """
+    text = str(exc)
+    name = Path(cif_path).stem
+    if "OUT_OF_HOST_MEMORY" not in text and not isinstance(exc, MemoryError):
+        return f"Hough failed for {name}: {text}"
+    sym = None
+    try:
+        from orix.crystal_map import Phase
+        from ebsd_utils import sanitize_cif
+        ph = Phase.from_cif(sanitize_cif(str(cif_path)))
+        sym = ph.point_group.name if ph.point_group is not None else None
+    except Exception:  # noqa: BLE001 — diagnosis must not fail the diagnosis
+        pass
+
+    need, have = _hough_memory_evidence(cif_path)
+    where = f" for {name}" + (f" (point group {sym})" if sym else "")
+
+    # Only a request that is actually large next to what is free supports the
+    # memory story. Half is deliberately generous: a request at half of free
+    # memory plausibly fails, one at a few per cent does not.
+    memory_is_plausible = (
+        need is not None and have is not None and need >= 0.5 * have
+    ) or (need is None or have is None)
+
+    if not memory_is_plausible:
+        msg = (f"The Hough step could not start{where}: the OpenCL context "
+               f"failed (OUT_OF_HOST_MEMORY). This is NOT a memory shortage — "
+               f"that index needs about {_fmt_bytes(need)} and "
+               f"{_fmt_bytes(have)} is free. PyEBSDIndex runs its Radon "
+               f"transform through OpenCL, and this is its context failing to "
+               f"open, which affects every phase equally — the smallest ones "
+               f"too. Nothing is wrong with this phase or with your patterns.")
+        return msg
+
+    lead = ("Not enough memory to build the Hough index" + where + ".")
+    if need is not None and have is not None:
+        lead += f" It needs about {_fmt_bytes(need)}; {_fmt_bytes(have)} is free."
+    if sym == "1":
+        lead += (" This CIF carries NO symmetry (P 1), which makes that index "
+                 "tens of GiB — re-export it in its real space group and this "
+                 "becomes small.")
+    return lead + (" Free memory (or close other programs) and try again; "
+                   "band-triplet libraries are sized from the reflector count, "
+                   "which grows steeply as symmetry drops.")
+
+
+def _fmt_bytes(n) -> str:
+    """MiB below a GiB, so a small library does not print as "0.00 GiB" — the
+    one number in the message that has to be believable."""
+    if n is None:
+        return "an unknown amount"
+    n = float(n)
+    return f"{n / 2**30:.2f} GiB" if n >= 2**30 else f"{n / 2**20:.0f} MiB"
+
+
+def _hough_memory_evidence(cif_path):
+    """``(library_bytes_for_this_phase, spare_bytes_now)``, either may be None.
+
+    Best-effort on purpose: this only decides the WORDING of a failure message,
+    so it must never raise and never become the reason a failure goes
+    unreported. `None` means "could not measure", and the caller then keeps the
+    older, cautious memory wording rather than asserting a cause it cannot
+    back."""
+    need = have = None
+    try:
+        import ebsd_utils
+        have = int(ebsd_utils._available_memory_bytes())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        import kikuchipy as kp
+        from orix.crystal_map import Phase, PhaseList
+        from ebsd_utils import (
+            get_phase_reflector_limit, predict_triplet_library,
+            prepare_reflectors, sanitize_cif,
+        )
+        # Same construction as GET /hough/reflector-cost, including the nominal
+        # detector: PyEBSDIndex sizes the library from the phase's poles and
+        # lattice alone, so this costs a CIF read and allocates nothing.
+        phase = Phase.from_cif(sanitize_cif(str(cif_path)))
+        pl = PhaseList(phase)
+        refl = prepare_reflectors(pl)
+        det = kp.detectors.EBSDDetector(shape=(60, 60), pc=(0.5, 0.5, 0.5),
+                                        sample_tilt=70.0)
+        rows = predict_triplet_library(det, pl, refl)
+        limit = get_phase_reflector_limit(cif_path)
+        # Largest count first; honour the user's per-phase cap, because that is
+        # the size the run would ACTUALLY have asked for.
+        for count, _n_rows, nbytes in rows:
+            if limit is None or int(count) <= int(limit):
+                need = int(nbytes)
+                break
+        if need is None and rows:
+            need = int(rows[-1][2])
+    except Exception:  # noqa: BLE001
+        pass
+    return need, have
+
+
+def _hough_quats_for_phase_batch(patterns, cif_path, det_params, err_out=None):
     """Batch Hough: (N, H, W) patterns + one phase's CIF → (N, 4) quaternions.
 
     Rows where Hough fails its own quality gate (fit > 3° or nmatch < 4 —
     the same rule the pipeline uses for the z_rot==2 fallback) come back as
     NaN. Returns an all-NaN array on a hard failure (fail-soft: the caller
     keeps the stored phase). One `hough_indexing` call for the whole stack —
-    per-pattern calls would pay the indexer setup N times.
+    per-pattern calls would pay the indexer setup N times — and the indexer
+    itself comes from `_hough_indexer_for`, so a run over many grains builds it
+    once rather than once per grain.
     """
     import numpy as _np
     N = int(_np.asarray(patterns).shape[0])
     out = _np.full((N, 4), _np.nan, dtype=_np.float64)
     try:
-        from orix.crystal_map import Phase, PhaseList
-        from ebsd_utils import sanitize_cif, prepare_reflectors, create_indexer
-        from kikuchipy.detectors import EBSDDetector
         from kikuchipy.signals import EBSD
-        phase = Phase.from_cif(sanitize_cif(str(cif_path)))
-        try:
-            phase.name = Path(cif_path).stem
-        except Exception:
-            pass
-        pl = PhaseList(phase)
-        H = int(det_params["pat_height"]); W = int(det_params["pat_width"])
-        det = EBSDDetector(
-            shape=(H, W),
-            sample_tilt=float(det_params.get("sample_tilt", 70.0)),
-            tilt=float(det_params.get("tilt", 0.0)),
-            pc=(float(det_params["pc_x"]), float(det_params["pc_y"]), float(det_params["pc_z"])),
-            convention="bruker",
-            binning=int(det_params.get("binning", 1)),
-        )
-        refl = prepare_reflectors(pl)
-        indexer = create_indexer(det, pl, refl, nBands=12)
+        pl, det, indexer = _hough_indexer_for(cif_path, det_params)
         sig = EBSD(_np.ascontiguousarray(
             _np.asarray(patterns, dtype=_np.float32))[:, None], detector=det)
         xm, _idx, _bands = sig.hough_indexing(
@@ -3873,6 +4084,13 @@ def _hough_quats_for_phase_batch(patterns, cif_path, det_params):
         out[:m][ok[:m]] = quats[:m][ok[:m]]
     except Exception as e:  # noqa: BLE001 — fail-soft, caller keeps stored phase
         logger.warning("batch hough for phase failed (%s): %s", cif_path, e)
+        # Fail-soft still, but no longer SILENT about why: an all-NaN result
+        # reads downstream as "Hough rejected every pixel", which is a
+        # statement about the data. When the run never happened at all the
+        # caller must be able to say so instead (2026-09-03: the user got
+        # "hough failed on every pixel" for what was an out-of-memory).
+        if err_out is not None:
+            err_out.append(_describe_hough_failure(e, cif_path))
     return out
 
 
@@ -3979,7 +4197,15 @@ def _phase_check_ctx(result, build_scorers: bool = True):
                 pats.append(p); have.append(i)
         out = np.full((flats.size, 4), np.nan, dtype=np.float64)
         if pats:
-            got = _hough_quats_for_phase_batch(np.stack(pats), cif, det)
+            errs = []
+            got = _hough_quats_for_phase_batch(np.stack(pats), cif, det, err_out=errs)
+            # The run itself failed — that is not the same as "Hough looked at
+            # these patterns and rejected them", and the caller must not report
+            # it as such. Raising is how check_map / apply_reassignments learn
+            # the difference; both already treat an exception as "skip this
+            # candidate" and carry the message.
+            if errs and not np.isfinite(got[:, 0]).any():
+                raise RuntimeError(errs[-1])
             out[np.asarray(have, dtype=np.int64)] = got
         return out
 
@@ -3997,6 +4223,121 @@ def _phase_name_of(xmap, pid: int) -> str:
         return str(xmap.phases[int(pid)].name)
     except Exception:
         return f"phase {pid}"
+
+
+class IslandCheckRequest(BaseModel):
+    result_id: str | None = None
+    #: Islands larger than this belong to the per-grain check. Default follows
+    #: MIN_GRAIN_PX (9 px is a grain, so up to 8 px is an island).
+    max_island_px: int = 8
+    margin_clear: float = 0.05
+    #: 0 disables the pseudo-symmetry stage (one render per variant per pixel).
+    max_variants: int = 8
+
+
+@router.post("/island-check")
+async def island_check(req: IslandCheckRequest):
+    """Render-check the wrong pixels sitting INSIDE a grain. Read-only.
+
+    The per-grain phase check skips anything below MIN_GRAIN_PX, so a small
+    island (up to MAX_ISLAND_PX) is never even counted — which is exactly the shape of the
+    defect reported on a deformed 7050 (matrix pixels in the middle of an
+    intermetallic particle). This asks the same question the user asks by
+    clicking into such a pixel: does the surrounding phase render better here,
+    or is this the right phase in a pseudo-symmetric variant?
+
+    No Hough anywhere: the candidate orientation comes from the island's own
+    neighbours, and the variants from the pixel's own orientation. That is what
+    makes it affordable per pixel — and it sidesteps the ~0.29 GiB that every
+    `hough_indexing` call leaks.
+
+    Reports only. Nothing in the stored result is modified.
+    """
+    global _phase_check_busy
+    if _phase_check_busy:
+        raise HTTPException(status_code=409, detail=_RENDER_RUN_BUSY_DETAIL)
+    result = _get_result(req.result_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="No indexing result available")
+    ctx = _phase_check_ctx(result)
+
+    _free_interactive_gpu_caches()
+    _phase_check_busy = True
+    try:
+        report = await asyncio.to_thread(
+            _island_work, ctx,
+            max_island_px=int(req.max_island_px),
+            margin_clear=float(req.margin_clear),
+            max_variants=int(req.max_variants))
+    finally:
+        _phase_check_busy = False
+
+    xmap = ctx["xmap"]
+    findings = _island_findings(report, xmap)[:200]
+    return {
+        "n_islands": report["n_islands"],
+        "n_phase_swap": report["n_phase_swap"],
+        "n_variant_flip": report["n_variant_flip"],
+        "n_unresolved": report["n_unresolved"],
+        "findings": findings,
+    }
+
+
+def _island_work(ctx, *, max_island_px: int = 8, margin_clear: float = 0.05,
+                 max_variants: int = 8):
+    """Run the enclosed-island render check for a prepared phase-check context.
+
+    Shared by the standalone /island-check route and stage 2 of /phase-check so
+    the two can never drift apart. Renders only -- no Hough, so none of the
+    ~0.24 GiB per call that `hough_indexing` leaks.
+    """
+    from backend.spherical_gpu.pipeline.island_check import check_islands
+
+    variants_fn = None
+    if max_variants > 0:
+        from backend.spherical_gpu.pseudosym import pseudosym_variant_quats
+
+        def variants_fn(q, pg):  # noqa: F811 -- deliberate conditional binding
+            if not pg:
+                return np.empty((0, 4))
+            return pseudosym_variant_quats(np.asarray(q, dtype=np.float64), str(pg))
+
+    with _silence_console():
+        return check_islands(
+            ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
+            ctx["phases"], ctx["score_fns"],
+            variants_fn=variants_fn,
+            # The fairness step: a stage-1 loss is judged at the STORED
+            # orientation, which on a small island is unreliable by
+            # definition. Hough re-orients the stored phase (one batched call
+            # per phase) before the loss is believed. Without this, 8 of 24
+            # findings on the real 7050 map were artefacts (2026-09-07).
+            fair_orientation_fn=ctx.get("hough_quats_fn"),
+            max_island_px=int(max_island_px),
+            margin_clear=float(margin_clear),
+            max_variants=int(max_variants),
+        )
+
+
+def _island_apply_count(island_report) -> int:
+    """How many islands the reassign would actually write."""
+    if not isinstance(island_report, dict):
+        return 0
+    return sum(1 for e in island_report.get("islands", [])
+               if e.get("decision") in ("phase", "variant"))
+
+
+def _island_findings(island_report, xmap):
+    """Island entries the user can act on, with phase NAMES resolved."""
+    if not isinstance(island_report, dict):
+        return []
+    return [
+        {**e,
+         "stored_name": _phase_name_of(xmap, e["stored_phase"]),
+         "enclosing_name": _phase_name_of(xmap, e["enclosing_phase"])}
+        for e in island_report.get("islands", [])
+        if e.get("decision") in ("phase", "variant")
+    ]
 
 
 class PhaseCheckRequest(BaseModel):
@@ -4066,7 +4407,33 @@ async def phase_check(req: PhaseCheckRequest):
     finally:
         _phase_check_busy = False
 
-    ctx["md"]["phase_check"] = {"report": report, "margin_map": margin_full}
+    # Stage 2 -- the wrong pixels INSIDE a grain.
+    #
+    # `check_map` skips anything below MIN_GRAIN_PX (9), so a small island
+    # (up to 8 px) is never even counted. That is the shape of the defect
+    # actually reported on the deformed 7050 (matrix pixels sitting in the
+    # middle of an intermetallic particle), so a "check phases" that cannot see
+    # it is answering a question the user did not ask. Measured on that map
+    # 2026-09-07: the per-grain stage found 3 grains / 23 px while this stage
+    # found 19 islands / 22 px, 17 of them Al inside Al7FeCu2 -- exactly the
+    # pixels in the complaint.
+    #
+    # It is folded into the same button rather than given its own because it
+    # costs almost nothing next to stage 1: no Hough (the candidate orientation
+    # is the island's own neighbour's), so it is renders only -- 4.0 s on that
+    # whole map. A failure here must not lose the stage-1 result, so it is
+    # caught and reported instead of raised.
+    island_report = None
+    try:
+        island_report = await asyncio.to_thread(_island_work, ctx)
+    except Exception as exc:  # noqa: BLE001 -- stage 1 still stands
+        logger.warning("[phase-check] island stage failed: %s", exc, exc_info=True)
+        island_error = str(exc)
+    else:
+        island_error = None
+
+    ctx["md"]["phase_check"] = {"report": report, "margin_map": margin_full,
+                                "islands": island_report}
     xmap = ctx["xmap"]
     suspects = [
         {
@@ -4082,7 +4449,8 @@ async def phase_check(req: PhaseCheckRequest):
             "margin": e.get("margin"),
             "decision": e.get("decision"),
         }
-        for e in report["grains"] if e.get("decision") in ("reassign", "keep")
+        for e in report["grains"]
+        if e.get("decision") in ("reassign", "keep", "undecided")
         and e.get("best_alt_phase") is not None
     ][:50]
     return {
@@ -4090,7 +4458,29 @@ async def phase_check(req: PhaseCheckRequest):
         "n_checked": report["n_checked"],
         "n_suspect": report["n_suspect"],
         "n_reassign": report["n_reassign"],
+        # A check that could not run must not read as a check that passed.
+        "n_unevaluated": report.get("n_unevaluated", 0),
+        "unevaluated_reasons": report.get("unevaluated_reasons", []),
+        # Stage-1 fairness step (stored phase Hough-oriented before a loss is
+        # believed): grains it could not settle, and grains it saved from a
+        # wrong flip. Never folded into n_reassign.
+        "n_grains_undecided": report.get("n_undecided", 0),
+        "n_grains_rescued": report.get("n_rescued", 0),
         "suspects": suspects,
+        # Stage 2. `n_islands_reassign` is what the Reassign button adds on top
+        # of `n_reassign`; `island_error` is non-null only if the stage could
+        # not run, so "0 islands" and "islands not checked" stay distinguishable.
+        "n_islands": (island_report or {}).get("n_islands", 0),
+        "n_islands_reassign": _island_apply_count(island_report),
+        "n_islands_unresolved": (island_report or {}).get("n_unresolved", 0),
+        # Stage-1 losers the fairness step could not settle: Hough found no
+        # orientation for the stored phase, so "wrong phase" and "wrong
+        # orientation" are indistinguishable. Reported, never applied.
+        "n_islands_undecided": (island_report or {}).get("n_undecided", 0),
+        # Stage-1 losers that were a bad ORIENTATION, not a bad phase.
+        "n_islands_rescued": (island_report or {}).get("n_rescued", 0),
+        "island_findings": _island_findings(island_report, xmap)[:200],
+        "island_error": island_error,
     }
 
 
@@ -4117,15 +4507,32 @@ async def phase_reassign(req: PhaseReassignRequest):
     from backend.spherical_gpu.pipeline.phase_reassignment import apply_reassignment
     report = pc["report"]
 
+    island_report = pc.get("islands")
+
     def _work():
         with _silence_console():
-            return apply_reassignment(
+            pf, q, applied, skipped = apply_reassignment(
                 ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
                 report, ctx["phases"], ctx["hough_quats_fn"],
             )
+            # Stage 2 on top of stage 1, in the same pass and the same undo.
+            # The island findings carry their own winning orientations, so this
+            # adds no Hough call and cannot disagree with what was reported.
+            # Order matters only where the two overlap, and they cannot: a
+            # grain reassignment moves whole grains (>= MIN_GRAIN_PX), an island
+            # finding only pixels below that size that are enclosed by another
+            # phase.
+            isl_applied = []
+            if isinstance(island_report, dict):
+                from backend.spherical_gpu.pipeline.island_check import (
+                    apply_island_findings,
+                )
+                pf, q, isl_applied = apply_island_findings(
+                    q, pf, ctx["n_rows"], ctx["n_cols"], island_report)
+            return pf, q, applied, skipped, isl_applied
 
     _free_interactive_gpu_caches()
-    new_pf, new_q, applied, skipped = await asyncio.to_thread(_work)
+    new_pf, new_q, applied, skipped, isl_applied = await asyncio.to_thread(_work)
 
     n = ctx["n_rows"] * ctx["n_cols"]
     changed_flat = np.flatnonzero(
@@ -4166,6 +4573,12 @@ async def phase_reassign(req: PhaseReassignRequest):
         mm = pc.get("margin_map")
         if mm is not None:
             np.asarray(mm)[changed_flat] = np.nan
+        applied_island_px = {p for a in isl_applied for p in a["pixels"]}
+        if isinstance(island_report, dict):
+            for e in island_report.get("islands", []):
+                if (e.get("decision") in ("phase", "variant")
+                        and applied_island_px.issuperset(e["pixels"])):
+                    e["decision"] = "applied"
         for a in applied:
             for e in report.get("grains", []):
                 if (e.get("grain_id") == a.get("grain_id")
@@ -4188,6 +4601,11 @@ async def phase_reassign(req: PhaseReassignRequest):
     return {
         "n_grains_applied": len(applied),
         "n_grains_skipped": len(skipped),
+        # Stage 2, reported separately: "3 grains" and "19 single pixels inside
+        # grains" are different repairs and must not be summed into one number
+        # the user cannot take apart.
+        "n_islands_applied": len(isl_applied),
+        "n_island_pixels": sum(len(a["pixels"]) for a in isl_applied),
         "n_pixels_changed": n_changed,
         "applied": [
             {"phase_from": _phase_name_of(xmap, a["phase_id"]),
@@ -4243,6 +4661,12 @@ class AssignPhaseRequest(BaseModel):
     target_phase_id: int
     threshold_deg: float = 5.0
     result_id: str | None = None
+    #: The target phase's orientation AT the clicked pixel [w,x,y,z], as the
+    #: Compare-phases panel already computed and displayed it (with its
+    #: render-NCC). Used ONLY if Hough returns nothing for every pixel, and
+    #: then as a rigid correction over the grain -- see
+    #: phase_reassignment.rigid_grain_quats. Absent = old behaviour exactly.
+    seed_quat: Optional[List[float]] = None
 
 
 @router.post("/pattern-match/assign-phase")
@@ -4348,6 +4772,41 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
                 report, ctx["phases"], ctx["hough_quats_fn"])
 
     new_pf, new_q, applied, skipped = await asyncio.to_thread(_work)
+
+    # Hough could not orient the target phase anywhere in this grain.
+    #
+    # That is a routine outcome here and not a reason to refuse: the user is
+    # looking at a panel that has ALREADY re-indexed this pixel for the target
+    # phase and printed its render-NCC, so a good orientation exists and was
+    # shown to them. The observed failure is not even about the phase -- the
+    # driver returns `OUT_OF_HOST_MEMORY` when it cannot create the OpenCL
+    # context, which on this machine hit `Al.cif` (50 reflectors, "negligible")
+    # exactly as it hit the large P1 library, with 6.7 GiB free. Refusing an
+    # assignment the evidence supports, because a second, unrelated method
+    # could not start, is the tool failing the user.
+    orientation_source = "hough"
+    if not applied and req.seed_quat is not None:
+        from backend.spherical_gpu.pipeline.phase_reassignment import (
+            rigid_grain_quats,
+        )
+        q_click = ctx["full_q"][flat]
+        if np.all(np.isfinite(q_click)):
+            try:
+                new_pf = ctx["phase_full"].copy()
+                new_q = np.asarray(ctx["full_q"], dtype=np.float64).copy()
+                new_pf[pix] = tpid
+                new_q[pix] = rigid_grain_quats(ctx["full_q"][pix], q_click,
+                                               req.seed_quat)
+            except Exception as exc:  # noqa: BLE001 -- fall through to the 409
+                logger.warning("[assign-phase] seed fallback failed: %s", exc,
+                               exc_info=True)
+            else:
+                orientation_source = "seed"
+                applied = [{"grain_id": g0, "phase_id": cur_pid,
+                            "best_alt_phase": tpid, "pixels": int(pix.size),
+                            "centroid": [float(rr.mean()), float(cc.mean())]}]
+                skipped = []
+
     if not applied:
         reason = (skipped[0].get("skip_reason") if skipped else "nothing to change")
         raise HTTPException(status_code=409,
@@ -4401,6 +4860,11 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
         "phase_from": _phase_name_of(xmap, cur_pid),
         "phase_to": _phase_name_of(xmap, tpid),
         "n_hough_filled": int(applied[0].get("n_hough_filled", 0)),
+        # "hough" = per-pixel Hough orientations (independent measurements).
+        # "seed"  = the panel's own orientation carried rigidly across the
+        #           grain, because Hough produced nothing. The weaker of the
+        #           two, so it is never used silently -- the UI says so.
+        "orientation_source": orientation_source,
         "unify_recommended": unify_hint,
         "undo_available": True,
     }
@@ -4602,30 +5066,76 @@ def _annotate_compare_rows_with_delta(rows, stored_quat, stored_phase_id,
     fraction of a degree off the very sharp render-NCC optimum (~1-2° FWHM),
     NOT a wrong pseudo-symmetry variant. Surfacing the Δ° lets the user see
     that instantly, and the quat lets them adopt the refined orientation.
+    Two fields, two scopes (fixed 2026-09-07)
+    -----------------------------------------
+    ``disorientation_deg`` compares the row against the STORED orientation, so
+    it only means anything for the pixel's own phase and stays gated on that.
+
+    ``quat_wxyz`` is just "the orientation this row is about". It was gated the
+    same way only because its first consumer was the same-phase variant adopt —
+    and that quietly broke its second consumer: "Assign <other phase> to this
+    grain" needs precisely the orientation of a DIFFERENT phase's row, found it
+    missing, and fell back to asking Hough, which on this machine cannot open
+    its OpenCL context. The user was shown Al7FeCu2 at R = 0.42 against Al at
+    0.16 and then told the assignment was impossible, with the answer sitting
+    unused in the same response.
+
+    So every row carries its quaternion now. It costs one Rotation.from_euler
+    per row and it is the same number the panel already prints as
+    ``Euler: (…)°``.
+
     Fail-soft: annotation errors leave the rows untouched."""
-    if not rows or stored_quat is None or stored_phase_id is None:
+    if not rows:
         return
     try:
         from backend.spherical_gpu.pseudosym import same_orientation_angle_deg
         from orix.quaternion import Rotation as _Rot
         for row_ in rows:
-            try:
-                if int(row_.get("phase_id")) != int(stored_phase_id):
-                    continue
-            except (TypeError, ValueError):
-                continue
             eu = row_.get("euler_deg") or []
             if len(eu) != 3:
                 continue
             q_row = np.asarray(_Rot.from_euler(
                 np.deg2rad(np.asarray(eu, dtype=float))[None, :]).data
             ).reshape(1, 4).astype(np.float64)
+            row_["quat_wxyz"] = [float(v) for v in q_row.reshape(4)]
+
+            # Δ° against the stored orientation: same phase only.
+            if stored_quat is None or stored_phase_id is None:
+                continue
+            try:
+                if int(row_.get("phase_id")) != int(stored_phase_id):
+                    continue
+            except (TypeError, ValueError):
+                continue
             row_["disorientation_deg"] = float(same_orientation_angle_deg(
                 q_row, np.asarray(stored_quat, dtype=np.float64).reshape(4),
                 point_group or "1")[0])
-            row_["quat_wxyz"] = [float(v) for v in q_row.reshape(4)]
     except Exception:
         logger.debug("compare-rows Δ° annotation failed", exc_info=True)
+
+
+#: Largest bandwidth the Compare-phases RE-INDEX may use. Not a tuning knob.
+#:
+#: 1. Numerics. The SHT indexer's associated-Legendre tables are built by an
+#:    unnormalised recursion (indexer.py, ``pmm *= sinphi*(2k-1)`` = (2m-1)!!)
+#:    that overflows float64 at m = 151. From bandwidth ~160 upward the tables
+#:    are NaN and the correlation is garbage -- the log fills with
+#:    "invalid value encountered in multiply". 128 is the value every
+#:    validated run used; 256 and 384 have never produced a correct re-index.
+#: 2. Memory. A Tier1Indexer at 384 asked for ~88 GB of host commit and 5.7 GB
+#:    of VRAM on a card that had 0.8 GB free; the route was synchronous, so
+#:    the whole server went deaf for five minutes and then died -- taking the
+#:    user's unsaved manual assignments with it (2026-09-07).
+#:
+#: The RENDER (forward.py, a different code path with its own tables) is not
+#: affected and keeps the user's requested bandwidth.
+COMPARE_INDEX_BW_MAX = 128
+
+
+def _compare_index_bandwidth(max_bandwidth) -> int:
+    """Bandwidth for the per-pixel re-index behind Compare phases."""
+    bw = int(max_bandwidth) if max_bandwidth is not None else COMPARE_INDEX_BW_MAX
+    return max(8, min(bw, COMPARE_INDEX_BW_MAX))
 
 
 def _compute_phase_compare_results(
@@ -4680,7 +5190,9 @@ def _compute_phase_compare_results(
     vendor = str(det.get("vendor", "Bruker"))
     sample_tilt = float(det.get("sample_tilt", 70.0))
     det_tilt = float(det.get("tilt", 0.0))
-    bw = int(max_bandwidth) if max_bandwidth is not None else 128
+    # The requested bandwidth is honoured by the RENDER further down. The
+    # re-index is capped -- see _compare_index_bandwidth for the two reasons.
+    bw = _compare_index_bandwidth(max_bandwidth)
 
     # Normalise pattern to (1, H, W) float32 in the indexer's expected layout
     pat = np.asarray(exp_pattern, dtype=np.float32)
@@ -6381,6 +6893,126 @@ async def list_methods():
             },
         ]
     }
+
+
+@router.get("/phase-check/phases")
+async def phase_check_phases(result_id: str | None = None):
+    """The phases of a result and the CIF each one would be Hough-indexed from.
+
+    Phase Verification and the pseudo-symmetry resolver build Hough indexers
+    from these CIFs, so this is what the Phase Maps page needs in order to
+    offer the reflector control for the phase that is failing. Scorers are NOT
+    built (`build_scorers=False`) — this is a lookup, and a scorer allocates an
+    SHT grid on the GPU.
+    """
+    result = _get_result(result_id)
+    if result is None:
+        raise HTTPException(status_code=400, detail="No indexing result available")
+    ctx = _phase_check_ctx(result, build_scorers=False)
+    from ebsd_utils import phase_reflector_limits
+    limits = phase_reflector_limits()
+    xmap = ctx["xmap"]
+    out = []
+    for pid, cif in sorted(ctx["cifs"].items()):
+        stem = Path(cif).stem
+        out.append({
+            "phase_id": int(pid),
+            "name": _phase_name_of(xmap, int(pid)),
+            "cif_path": cif,
+            "point_group": ctx["phases"].get(int(pid)),
+            "max_reflectors": limits.get(stem.lower()),
+        })
+    return {"phases": out}
+
+
+class ReflectorLimitRequest(BaseModel):
+    cif_path: str
+    # null clears the limit for that phase (i.e. use all its families).
+    max_reflectors: Optional[int] = None
+
+
+@router.post("/hough/reflector-limit")
+async def set_hough_reflector_limit(req: ReflectorLimitRequest):
+    """Remember one phase's reflector-family limit for EVERY Hough build.
+
+    The limit is a property of the phase, not of one run. The same CIF becomes a
+    Hough indexer in nine places — the main run, the pseudo-symmetry resolver
+    that follows a spherical run, the phase check, single-pixel pattern match,
+    the quick test, PC refinement — and only the first reads the indexing
+    request. Registering it here is what makes the other eight honour it, so a
+    phase the user has made affordable stays affordable wherever it is used.
+    """
+    from ebsd_utils import phase_reflector_limits, set_phase_reflector_limit
+    set_phase_reflector_limit(req.cif_path, req.max_reflectors)
+    return {"limits": phase_reflector_limits()}
+
+
+@router.get("/hough/reflector-limit")
+async def get_hough_reflector_limits():
+    """Every remembered reflector limit, keyed by phase (lower-case CIF stem)."""
+    from ebsd_utils import phase_reflector_limits
+    return {"limits": phase_reflector_limits()}
+
+
+@router.get("/hough/reflector-cost")
+async def hough_reflector_cost(cif_path: str, n_bands: int = 12):
+    """What a Hough index for this phase would cost, per reflector-family count.
+
+    Hough builds a band-triplet library sized from the number of reflector
+    families, and it grows as O(npoles * nangs**3) — so the same 70 families
+    cost a few MiB for a cubic phase and 44.7 GiB for one whose CIF carries no
+    symmetry. This endpoint reports that curve so the choice can be made with
+    the numbers in view.
+
+    Nothing large is allocated to find out: the sizes come from the REFUSED
+    request (see `ebsd_utils.predict_triplet_library`). The detector is nominal
+    on purpose — PyEBSDIndex builds the library from the phase's poles and
+    lattice alone, so the figures do not depend on it.
+    """
+    path = Path(cif_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"CIF not found: {cif_path}")
+    try:
+        import kikuchipy as kp
+        from orix.crystal_map import Phase, PhaseList
+        from ebsd_utils import (
+            _available_memory_bytes, _triplet_library_budget_bytes,
+            predict_triplet_library, prepare_reflectors, sanitize_cif,
+        )
+
+        phase = Phase.from_cif(sanitize_cif(str(path)))
+        phase.name = path.stem
+        pl = PhaseList(phase)
+        refl = prepare_reflectors(pl)
+        n_full = len(refl.hkl) if not isinstance(refl, list) else len(refl[0].hkl)
+        det = kp.detectors.EBSDDetector(shape=(60, 60), pc=(0.5, 0.5, 0.5),
+                                        sample_tilt=70.0)
+        budget = _triplet_library_budget_bytes()
+        table = [
+            {"reflectors": int(c), "rows": int(rows), "bytes": int(nbytes),
+             "fits": (nbytes or 0) <= budget}
+            for c, rows, nbytes in predict_triplet_library(det, pl, refl, nBands=n_bands)
+        ]
+        return {
+            "cif_path": str(path),
+            "phase_name": phase.name,
+            "point_group": (phase.point_group.name if phase.point_group else None),
+            "space_group": getattr(phase.space_group, "short_name", None),
+            "reflectors_available": int(n_full),
+            "budget_bytes": int(budget),
+            "available_bytes": int(_available_memory_bytes()),
+            # True when this phase's CIF carries no symmetry at all — the usual
+            # reason a phase lands in the unaffordable column, and something the
+            # user can fix at the source rather than work around here.
+            "no_symmetry": (phase.point_group is not None
+                            and phase.point_group.name == "1"),
+            "table": table,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001
+        logger.warning("reflector-cost failed for %s", cif_path, exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Could not read {path.name}: {e}")
 
 
 @router.get("/files/{method}")

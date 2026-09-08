@@ -701,6 +701,19 @@
     "phaseTestClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
     "phaseTestExcludedToggle": "Vom EDS-Chemie-Filter ausgeschlossene Phasen ein- oder ausblenden",
     "matchesClearMarkers": "Alle nummerierten Marker aus den Vergleichspanels entfernen",
-    "edsPriorToggle": "Gewichtet die Phasenwahl mit der gemessenen EDS-Chemie jedes Pixels. Gilt für ALLE gewählten Phasen gleichermaßen — aus heißt: allein das Muster entscheidet."
+    "edsPriorToggle": "Gewichtet die Phasenwahl mit der gemessenen EDS-Chemie jedes Pixels. Gilt für ALLE gewählten Phasen gleichermaßen — aus heißt: allein das Muster entscheidet.",
+    "reflectorCount": "Wie viele Reflektorfamilien diese Phase zur Hough-Bandtriplett-Bibliothek beitraegt.\n\nHough baut diese Bibliothek einmal pro Lauf und bemisst sie an der Zahl der Familien; sie waechst etwa mit der DRITTEN POTENZ der Zahl verschiedener Winkel zwischen den Polen. Dieselben 70 Familien kosten deshalb bei einer kubischen Phase wenige MiB und bei einer Phase ohne Symmetrie in der CIF zig GiB - und unter Windows wird der Speicher schon beim Anfordern belegt, eine unmoegliche Anforderung kann die Maschine also lahmlegen. Orienta lehnt ab, was nicht passt, statt es zu versuchen.\n\nWeniger Familien sind NICHT gratis. Gemessen an Ni (58 Familien, 800 echte Muster): 40 und 32 liefern exakt dieselben Orientierungen wie die volle Liste; 24 indiziert nur noch 192 von 800 Pixeln und liegt 119,7 Grad daneben; 16 versagt vollstaendig - lautlos, mit Orientierungen, die weiterhin plausibel aussehen. Deshalb ist das deine Entscheidung und keine automatische. Vergleiche nach dem Absenken die indizierte Karte mit einem Lauf mit mehr Familien, bevor du dich darauf verlaesst.\n\nDie Indizierung liest pro Muster nur n_bands Baender (Standard 12), die schwaechsten Familien geben also selten den Ausschlag - aber selten ist nicht nie, und genau das zeigen die Zahlen oben.",
+    "reflectorNoSymmetry": "Die CIF ist in Raumgruppe P 1 gespeichert: alle Atome einzeln aufgelistet, keine Symmetrie eingetragen. PyEBSDIndex behandelt dann jede Reflektorfamilie als einzelnen Pol, wodurch die Zahl verschiedener Polwinkel - und mit ihr die Bandtriplett-Bibliothek - explodiert. Ein Neuexport der Phase in ihrer echten Raumgruppe macht das klein und ist die bessere Loesung; die Reflektorzahl hier zu senken ist der Notbehelf."
+  },
+  "reflectors": {
+    "label": "Reflektoren:",
+    "allOption": "alle {{n}}",
+    "tiny": "vernachlaessigbar",
+    "tooBigTag": "(zu gross)",
+    "noSymmetry": "Diese CIF enthaelt keine Symmetrie ({{sg}}) - jede Reflektorfamilie ist ein einzelner Pol, daher die riesige Bibliothek. Ein Neuexport in der echten Raumgruppe behebt das an der Quelle.",
+    "budgetNote": "Die vollstaendige Liste passt nicht in die {{budget}}, die diese Maschine gerade entbehren kann.",
+    "checkResult": "Weniger Familien koennen das Ergebnis veraendern - pruefe die indizierte Karte, bevor du ihr traust.",
+    "unavailable": "Reflektorkosten fuer diese Datei nicht ermittelbar.",
+    "measuring": "Reflektorkosten werden gemessen..."
   }
 }

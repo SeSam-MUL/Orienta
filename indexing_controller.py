@@ -75,6 +75,11 @@ class IndexingConfig:
     n_bands: int = 12
     t_sigma: float = 2.0
     r_sigma: float = 2.0
+    # How many reflector families each phase may contribute to the Hough
+    # band-triplet library. One number for all phases, or one per phase
+    # (None = that phase keeps all of them). The USER's dial: trimming changes
+    # the answer, so nothing picks it for them — see ebsd_utils.create_indexer.
+    max_reflectors: Optional[object] = None
 
     # Dictionary-specific
     metric: str = 'ncc'     # 'ncc' or 'ndp'
@@ -140,6 +145,10 @@ class PhaseConfig:
     phase_list: object = None          # orix PhaseList (loaded from CIF)
     dictionary: object = None          # kikuchipy EBSD signal (for dictionary indexing)
     color: str = ""                    # Display color (auto-assigned if empty)
+    # Per-phase Hough reflector-family limit (None = all). Per phase because
+    # the cost is per phase: a cubic phase carries all 64 families for a few
+    # MiB while a symmetry-less one would need 44.7 GiB for 70.
+    max_reflectors: Optional[int] = None
 
 
 @dataclass
@@ -676,6 +685,7 @@ def hough_index_patterns(
             nBands=config.n_bands,
             tSigma=config.t_sigma,
             rSigma=config.r_sigma,
+            max_reflectors=config.max_reflectors,
         )
     _check_cancel()
 
@@ -3828,6 +3838,7 @@ def run_single_phase_method(
         n_bands=config.n_bands,
         t_sigma=config.t_sigma,
         r_sigma=config.r_sigma,
+        max_reflectors=phase_config.max_reflectors,
         metric=config.metric,
         keep_n=config.keep_n,
         bandwidth=config.bandwidth,

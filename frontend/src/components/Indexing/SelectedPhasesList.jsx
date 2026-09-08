@@ -9,6 +9,7 @@
 import { useTranslation } from 'react-i18next';
 import DictPhaseCard from './DictPhaseCard';
 import DegeneracyWarningBanner from './DegeneracyWarningBanner';
+import ReflectorBudget from './ReflectorBudget';
 import { colors as C } from '../../theme/tokens';
 
 const PHASE_COLORS = ['#c3e88d', '#82aaff', '#f78c6c', '#c792ea', '#ffcb6b', '#89ddff', '#ff5370'];
@@ -27,6 +28,9 @@ export default function SelectedPhasesList({
   onGenerateDict,
   detectorShape = null,
   geom = null,
+  maxReflectors = {},
+  onMaxReflectorsChange,
+  nBands = 12,
 }) {
   const { t } = useTranslation('indexing');
   return (
@@ -111,6 +115,16 @@ export default function SelectedPhasesList({
                 degeneracy={degeneracy.byPhaseIndex?.[idx]}
                 onRemove={() => onRemovePhase && onRemovePhase(idx)}
                 t={t}
+                // Hough only: the band-triplet library is a Hough structure,
+                // and neither Dictionary nor Spherical builds one.
+                reflectorControl={method === 'hough' && phase?.path ? (
+                  <ReflectorBudget
+                    cifPath={phase.path}
+                    value={maxReflectors[phase.path] ?? null}
+                    nBands={nBands}
+                    onChange={(n) => onMaxReflectorsChange?.(phase.path, n)}
+                  />
+                ) : null}
               />
             );
           })}
@@ -152,7 +166,7 @@ export default function SelectedPhasesList({
 // SimplePhaseCard — used for hough / spherical methods
 // ---------------------------------------------------------------------------
 
-function SimplePhaseCard({ phase, color, degeneracy, onRemove, t }) {
+function SimplePhaseCard({ phase, color, degeneracy, onRemove, t, reflectorControl = null }) {
   // Canonical phase-identity label (formula → structure → α/β tag) — matches the
   // Phase-Tester. Falls back to the raw formula for older/un-enriched entries.
   const displayLabel = phase?.display_label || phase?.formula || '—';
@@ -207,6 +221,7 @@ function SimplePhaseCard({ phase, color, degeneracy, onRemove, t }) {
         >
           {filename}
         </div>
+        {reflectorControl}
       </div>
       <button
         onClick={onRemove}

@@ -155,6 +155,81 @@ Typical entry points:
   (and logs it). Set a real pixel size in PC Refinement for physically accurate
   geometry.
 
+## Hough: reflectors, memory, and why the app can refuse a phase
+
+Hough does not compare full patterns. It detects a handful of bands per pattern
+(`n_bands`, 12 by default) and identifies the orientation from the **angles
+between them**, using a lookup table built once per run: the **band-triplet
+library**. PyEBSDIndex sizes that library from the number of **reflector
+families** the phase contributes, and it grows roughly with the **cube** of the
+number of distinct inter-pole angles.
+
+That is why the same number of families costs wildly different amounts.
+Measured on a 156x128 detector:
+
+| Phase (CIF) | Symmetry | Families | Library |
+|---|---|---:|---:|
+| Al (Fm-3m) | m-3m | 64 | a few MiB |
+| MgCuAl2 (Cmcm) | mmm | 70 | 0.59 GiB |
+| beta-AlFeSi | 2/m | 70 | 3.55 GiB |
+| Al7FeCu2 **stored as P 1** | 1 | 70 | **44.7 GiB** |
+
+Symmetry is what makes a phase cheap: in a cubic phase one family stands for up
+to 48 equivalent poles, so a few families describe many directions. With no
+symmetry each family is a **single** pole, and the angle count — and with it the
+library — explodes.
+
+**On Windows the memory is claimed the moment it is requested**, whether or not
+it is ever written. So an impossible request is not a slow run: it is a machine
+that starts swapping, and unrelated things begin to fail. Orienta therefore
+**refuses** a library that does not fit rather than attempting it. The budget is
+half of what the machine actually has free (never a fixed number, so it adapts
+to the computer you are on), and the refusal names the phase, its symmetry, and
+what each reflector count would cost.
+
+### The Reflectors control
+
+Each phase card in a **Hough** run carries a **Reflectors** dropdown listing
+every option with its price, e.g. `all 70 — 44.73 GiB (too big)`, `40 — 1.45
+GiB`, `32 — 0.32 GiB`. Options that do not fit stay selectable and are marked;
+hiding them would read as "this was never possible" and the run would then fail
+with no visible reason.
+
+**Lowering it is not free, and Orienta will not do it for you.** Measured on Ni
+(m-3m, 58 families, 800 real patterns):
+
+| Families | Median fit | Indexed | Deviation from the full set |
+|---:|---:|---:|---:|
+| 58 (all) | 0.793 deg | 495/800 | reference |
+| 40 | 0.793 deg | 495/800 | **0.000 deg** |
+| 32 | 0.793 deg | 495/800 | **0.000 deg** |
+| 24 | 0.756 deg | 192/800 | **119.7 deg** |
+| 16 | 180 deg | 4/800 | broken |
+
+Down to a point the result is *identical*; past it the run collapses — and it
+does so **quietly**, returning orientations that still look like data. No
+program can tell a safe trim from an unsafe one without indexing and comparing,
+which is why the number is yours to set. **After lowering it, compare the map
+against a run with more families before you rely on it.**
+
+### If a phase is refused
+
+1. **Check the symmetry first.** If the card says the CIF stores no symmetry
+   (`P 1`), that is the real problem and it is fixable at the source: re-export
+   the phase in its actual space group. Al7Cu2Fe as `P 1` needs 44.7 GiB; the
+   same phase with its real tetragonal symmetry needs a fraction of that, and
+   the reflector count never has to be touched.
+2. **Lower the reflector count** for that phase, then verify as above.
+3. **Free memory** — the budget follows what is available, so closing other
+   programs raises it.
+4. **Use Dictionary or Spherical indexing** for that phase, which build no
+   band-triplet library at all.
+
+An advanced override exists for the budget itself:
+`ORIENTA_HOUGH_LIBRARY_BUDGET_MB` (megabytes). It raises or lowers the ceiling
+for people who know their machine — it does not make an impossible allocation
+possible.
+
 ## EDS-guided phase assignment (e.g. Al vs Si)
 
 Some phases are almost identical crystallographically but clearly different

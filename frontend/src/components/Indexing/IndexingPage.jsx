@@ -1483,6 +1483,10 @@ export default function IndexingPage({ isActive }) {
   const [phaseDropdownOpen, setPhaseDropdownOpen] = useState(false);
   const [phasePanelOpen, setPhasePanelOpen]       = useState(false);
   const [selectedDictPaths, setSelectedDictPaths] = useState({}); // { masterPath: dictPath }
+  // { cifPath: reflectorFamilies } for Hough. Keyed by PATH, not by list
+  // position, so removing a phase cannot silently hand its limit to whichever
+  // phase slides into that index. Absent = use all of that phase's families.
+  const [maxReflectors, setMaxReflectors] = useState({});
 
   // --- EDS chemistry prior (one switch for the whole run) ---
   // Was a per-phase 0-100 % slider until 2026-08-05. The backend weight is
@@ -2451,7 +2455,16 @@ export default function IndexingPage({ isActive }) {
     };
 
     if (method === 'hough') {
-      return { ...common, n_bands: bands, t_sigma: tSigma, r_sigma: rSigma };
+      return {
+        ...common,
+        n_bands: bands,
+        t_sigma: tSigma,
+        r_sigma: rSigma,
+        // Aligned with cif_paths, which is how the backend reads it. Built
+        // from `phases` rather than from the map's own order so the two can
+        // never drift apart; null = that phase keeps all its families.
+        max_reflectors: phases.map((ph) => maxReflectors[ph?.path] ?? null),
+      };
     } else if (method === 'dictionary') {
       return { ...common, metric, keep_n: keepN, resolution, energy_kv: energy, compute_mode: computeMode };
     } else if (method === 'spherical') {
@@ -2931,6 +2944,21 @@ export default function IndexingPage({ isActive }) {
           onGenerateDict={handleGenerateDictForPhase}
           detectorShape={genDictDetectorShape}
           geom={detectorGeom}
+          maxReflectors={maxReflectors}
+          nBands={bands}
+          onMaxReflectorsChange={(path, n) => {
+            setMaxReflectors((prev) => {
+              const next = { ...prev };
+              if (n == null) delete next[path];
+              else next[path] = n;
+              return next;
+            });
+            // Tell the backend straight away. The limit belongs to the phase,
+            // and the builds that most need it (pseudo-symmetry after a
+            // spherical run, Phase Verification) may run without any Hough run
+            // ever being started from this page.
+            indexApi.setHoughReflectorLimit(path, n).catch(() => {});
+          }}
         />
         {dictPhasesWithoutDict.length > 0 && (
           <div

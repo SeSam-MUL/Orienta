@@ -595,6 +595,28 @@ export const indexApi = {
   gpuStatus: () => api.get('/api/indexing/gpu-status'),
   getLastResult: () => api.get('/api/indexing/result/last'),
   methods: () => api.get('/api/indexing/methods'),
+  // What a Hough index for one phase would cost at each reflector-family
+  // count. Read-only and allocation-free on the backend, so it is safe to call
+  // while typing.
+  houghReflectorCost: (cifPath, nBands = 12) =>
+    api.get('/api/indexing/hough/reflector-cost', {
+      params: { cif_path: cifPath, n_bands: nBands },
+    }),
+  // Remember one phase's reflector limit for EVERY Hough build, not just the
+  // next run — the pseudo-symmetry resolver, the phase check and pattern match
+  // build their own indexers and never see the run request.
+  setHoughReflectorLimit: (cifPath, maxReflectors) =>
+    api.post('/api/indexing/hough/reflector-limit', {
+      cif_path: cifPath, max_reflectors: maxReflectors,
+    }),
+  getHoughReflectorLimits: () => api.get('/api/indexing/hough/reflector-limit'),
+  // The result's phases with the CIF each would be Hough-indexed from — what
+  // the Phase Maps page needs to offer the reflector control where the
+  // failure actually appears.
+  phaseCheckPhases: (resultId = null) =>
+    api.get('/api/indexing/phase-check/phases', {
+      params: resultId ? { result_id: resultId } : {},
+    }),
   discoverFiles: (method, materialHint = '', currentPc = null) =>
     api.get(`/api/indexing/files/${method}`, {
       params: {
@@ -661,9 +683,17 @@ export const indexApi = {
   // Manual per-grain PHASE reassignment from the Compare-phases view (the
   // surgical sibling of the map-wide Phase Verification). Undo shares
   // /phase-reassign/undo.
-  assignPhaseToGrain: ({ row, col, targetPhaseId, thresholdDeg = 5.0 }) =>
+  // `seedQuat` is the target phase's orientation at the clicked pixel, exactly
+  // as the panel computed it and showed its render-NCC. The backend uses it
+  // ONLY when Hough cannot orient the phase anywhere in the grain -- which on
+  // this machine is an OpenCL context failure that hits even the smallest
+  // phase, so refusing the assignment for it would refuse evidence the user is
+  // looking at. Omitting it reproduces the old behaviour exactly.
+  assignPhaseToGrain: ({ row, col, targetPhaseId, thresholdDeg = 5.0,
+                         seedQuat = null }) =>
     api.post('/api/indexing/pattern-match/assign-phase', {
       row, col, target_phase_id: targetPhaseId, threshold_deg: thresholdDeg,
+      seed_quat: seedQuat ?? null,
     }),
   undoGrainFlip: () =>
     api.post('/api/indexing/pattern-match/undo-grain', {}),
@@ -1008,13 +1038,22 @@ export const edsApi = {
   // Options object rather than positional args: the request grew a mode,
   // a cluster count and a phase selection, and positional arguments for
   // that many optional fields are a bug waiting to happen.
+  // `scaleUm` is a LENGTH and `scale` is a pixel count, so exactly one of
+  // them travels. Sending both would put two different statements about the
+  // same smoothing box in one request, and the loser would be decided by a
+  // precedence rule nobody reading the request can see. The physical width
+  // is the whole point of the field: "scale 5" is a 2.5 um box at a 0.5 um
+  // step and a 3.75 um box at a 0.75 um step — the same setting, a 50 %
+  // different analysis.
   autoClassify: (opts = {}) =>
     api.post('/api/eds/auto-classify', {
       tolerance: opts.tolerance ?? 15.0,
       min_score: opts.minScore ?? 0.3,
       ...(opts.mode ? { mode: opts.mode } : {}),
       ...(opts.nClusters != null ? { n_clusters: opts.nClusters } : {}),
-      ...(opts.scale != null ? { scale: opts.scale } : {}),
+      ...(opts.scaleUm != null
+        ? { scale_um: opts.scaleUm }
+        : (opts.scale != null ? { scale: opts.scale } : {})),
       ...(opts.rules ? { rules: opts.rules } : {}),
       ...(opts.phaseKeys ? { phase_keys: opts.phaseKeys } : {}),
       // Only sent when in use, so the automatic path stays byte-for-byte
@@ -1104,6 +1143,91 @@ export const edsApi = {
       combine,
       margin_px,
     }),
+};
+
+// --- EDS export + analysis presets ---
+/**
+ * Data export and portable analysis presets for the EDS phase map.
+ *
+ * Kept apart from ``edsApi`` on purpose: these routes live in their own
+ * backend module (``routes/eds_export.py``) and answer a different question.
+ * ``edsApi`` builds and edits the map; this one gets the numbers out of the
+ * app and moves the recipe between datasets.
+ *
+ * Preset names travel in the PATH, so every one of them is encoded — a
+ * preset called "Al / Si matrix" is a legitimate name and an unescaped
+ * slash would silently address a different route.
+ */
+const presetPath = (name) => `/api/eds/presets/${encodeURIComponent(String(name ?? ''))}`;
+
+export const edsExportApi = {
+  // Cheap dry run. `connectivity` and `min_particle_px` are sent because
+  // they change the particle COUNT, and the whole point of the preview is
+  // that the dialog can state that count before anything is written.
+  exportPreview: ({ connectivity, minParticlePx } = {}) =>
+    api.get('/api/eds/export/preview', {
+      params: {
+        ...(connectivity != null ? { connectivity } : {}),
+        ...(minParticlePx != null ? { min_particle_px: minParticlePx } : {}),
+      },
+    }),
+  runExport: (opts = {}) =>
+    api.post('/api/eds/export', {
+      dest_dir: opts.destDir,
+      artefacts: opts.artefacts,
+      decimal: opts.decimal ?? '.',
+      delimiter: opts.delimiter ?? ',',
+      connectivity: opts.connectivity ?? 8,
+      min_particle_px: opts.minParticlePx ?? 0,
+      preset_name: opts.presetName ?? '',
+      // Null, not omitted: "no preset was involved" and "a preset was
+      // applied and it fitted" are different records, and provenance.json
+      // has to be able to tell them apart.
+      compatibility: opts.compatibility ?? null,
+    }),
+
+  listPresets: () => api.get('/api/eds/presets'),
+  getPreset: (name) => api.get(presetPath(name)),
+  // The metadata is not decoration: `check_compatibility` gates two of its
+  // warnings on it. `element_set_differs` can only fire against
+  // `authored_elements`, `step_size_differs` only against
+  // `authored_step_um`, and `matrix_element` powers the strongest of the
+  // refusals. A preset saved without them is a preset whose warnings can
+  // never fire.
+  //
+  // Each field is OMITTED when it is not known, never sent empty: a preset
+  // recording "authored against no elements" or "authored at step 0" is a
+  // false record, and a false record is worse than none — the check would
+  // compare this scan against a claim nobody made.
+  savePreset: (opts = {}) =>
+    api.post('/api/eds/presets', {
+      name: opts.name,
+      settings: opts.settings,
+      overwrite: !!opts.overwrite,
+      author: opts.author ?? '',
+      notes: opts.notes ?? '',
+      ...(opts.authoredElements?.length
+        ? { authored_elements: [...opts.authoredElements] } : {}),
+      ...(Number.isFinite(Number(opts.authoredStepUm)) && Number(opts.authoredStepUm) > 0
+        ? { authored_step_um: Number(opts.authoredStepUm) } : {}),
+      ...(opts.materialClass ? { material_class: opts.materialClass } : {}),
+      ...(opts.matrixElement ? { matrix_element: opts.matrixElement } : {}),
+      // `tags` is a free-text list the backend has accepted since the feature
+      // shipped (`PresetSaveRequest.tags`) and the UI never sent, so every
+      // preset saved through the dialog reached disk with `tags: []` and the
+      // tag filter in the picker had nothing to filter on. Omitted rather
+      // than sent empty, like the two fields above: the backend already
+      // defaults it, and an explicit `[]` from a caller that simply has none
+      // reads like a deliberate "no tags".
+      ...(opts.tags?.length ? { tags: [...opts.tags] } : {}),
+    }),
+  deletePreset: (name) => api.delete(presetPath(name)),
+  // Runs against the CURRENTLY loaded file. `ok: false` is not an error to
+  // swallow — it is the answer, and the Apply button gates on it.
+  checkPreset: (name) => api.post(`${presetPath(name)}/check`),
+  importPreset: (jsonText) =>
+    api.post('/api/eds/presets/import', { json_text: jsonText }),
+  exportPresetFile: (name) => api.get(`${presetPath(name)}/export`),
 };
 
 // --- Install Wizard ---

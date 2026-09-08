@@ -102,8 +102,16 @@ def test_unmappable_space_group_number_raises_a_readable_error():
 
 
 @pytest.mark.parametrize("cif_name", ["beta-AlFeSi.cif"])
-def test_real_cif_builds_an_indexer_instead_of_asking_for_1_4_tib(cif_name):
-    """End-to-end regression on the file the bug was reported against."""
+def test_real_cif_builds_an_indexer_instead_of_asking_for_1_4_tib(cif_name, monkeypatch):
+    """End-to-end regression on the file the bug was reported against.
+
+    The budget is pinned because it is otherwise HALF OF WHATEVER THIS MACHINE
+    HAS FREE — correct in production, useless in a test: this phase provisions
+    3.55 GiB, so the test passed alone and failed inside the full suite, purely
+    because earlier tests had taken the memory. The subject here is the Laue
+    class, not the machine.
+    """
+    monkeypatch.setenv("ORIENTA_HOUGH_LIBRARY_BUDGET_MB", "8192")
     cif = Path(__file__).resolve().parents[1] / "Database" / "CIF_Library" / cif_name
     if not cif.exists():
         pytest.skip(f"{cif_name} not available (Database/ is not in version control)")
