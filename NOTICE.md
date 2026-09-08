@@ -11,6 +11,12 @@ the third-party works listed below. Each retains its own license.
 | pcadi (pattern-center–aware dictionary indexing core) | `backend/dict_gpu/_pcadi/` | Vendored from the `pcadi` project | MIT |
 | GPU dictionary / spherical projection math | `backend/dict_gpu/`, `backend/spherical_gpu/` | Translated/adapted from **kikuchipy** 0.11.3 (Lambert & detector projection) | GPL-3.0-or-later |
 | Spherical-harmonic math kernels (Wigner-d, SHT, cubochoric grids) | `backend/spherical_gpu/_math/` | Vendored/adapted from **ebsdtorch** (Zachary Varley, 2024); see `LICENSE.ebsdtorch` there | MIT |
+| GPU dictionary projection (second package) | `backend/dictionary_gpu/` | Vectorised port of **kikuchipy**'s direction-cosine / Lambert projection (itself adapted from EMsoft) | GPL-3.0-or-later |
+| GPU forward model (Monte-Carlo, master pattern, SHT writer) | `backend/forward_sim/` | Ported from **ebsdtorch** (MIT); plus tabulated data transcribed from **EMsoft** and **SHTfile** — see the two rows below | MIT / BSD-3-Clause |
+| WEKO elastic scattering coefficients (Z = 1..98) | `backend/forward_sim/crystal/scattering_factors.py` | Transcribed verbatim from **EMsoft** `Source/EMsoftLib/others.f90` (GETWK tables) | BSD-3-Clause — `licenses/EMsoft-License.txt` |
+| Monte-Carlo RNG stream (LFSR113) | `backend/forward_sim/mc/cupy_mc_kernel.py` | Ported from **EMsoft** `EMMC.cl` | BSD-3-Clause — `licenses/EMsoft-License.txt` |
+| Two 230-entry space-group lookup tables | `backend/forward_sim/io/sht_writer.py` | Ported from **SHTfile** `sht_file.in.hpp` (EMsoft-org/SHTfile) | BSD-3-Clause — `licenses/SHTfile-License.txt` |
+| Oxford H5OINA reader workaround | `safe_loader.py` | Body copied verbatim from **kikuchipy** 0.11.3 `oxford_h5ebsd/_api.py`, with a widened `except` clause | GPL-3.0-or-later |
 
 Because parts of this project are derived from GPL-3.0 code (kikuchipy), the
 combined work is distributed under GPL-3.0-or-later. The MIT-licensed pcadi code
@@ -40,16 +46,30 @@ These academic attributions are in addition to the source-license obligations ab
 
 ## Key runtime dependencies
 
-These are required dependencies, installed separately (not redistributed in this
-repository). Each is governed by its own license:
+Except for the two bundled JavaScript files noted below, these are required
+dependencies **installed separately** and not redistributed in this repository.
+Each is governed by its own license:
 
 - **kikuchipy**, **orix**, **diffsims**, **hyperspy** — GPL-3.0 (these GPL-3.0
   upstreams are the reason the combined work is licensed GPL-3.0-or-later)
+- **PyQt5** (Riverbank Computing) — **GPL-3.0**. A leftover of the retired Qt
+  interface; it is still listed in `requirements.txt` but no shipped code path
+  imports it. Note that Riverbank licenses PyQt5 under GPL v3 **only**, not
+  "or later" — removing this dependency is tracked in the README's
+  *Known limitations*.
 - **NumPy**, **SciPy**, **pandas**, **scikit-learn**, **scikit-image**, **matplotlib**, **h5py**, **Pillow** — BSD / PSF-style
 - **PyTorch**, **torchvision** — BSD-3-Clause
 - **FastAPI**, **uvicorn**, **pydantic**, **httpx**, **requests** — MIT / BSD
-- **React**, **Vite**, **Electron**, **zustand**, **three.js** — MIT
-- **vanta.js** (bundled in `frontend/public/vendor/`, dashboard background only) — MIT
+- **React**, **Vite**, **Electron**, **zustand** — MIT
+
+**Redistributed in this repository** (both under `frontend/public/vendor/`, loaded
+directly by `frontend/index.html`, dashboard background only):
+
+- **three.js** — MIT. Its `@license` header (Copyright 2010-2021 Three.js Authors)
+  is intact at the top of `three.min.js`.
+- **vanta.js** 0.5.24 (Copyright 2020 Teng Bao) — MIT. The minified bundle carries
+  no header of its own, so the required notice is reproduced in
+  `frontend/public/vendor/LICENSE.vanta.txt`.
 
 ## Public-domain / government works
 
