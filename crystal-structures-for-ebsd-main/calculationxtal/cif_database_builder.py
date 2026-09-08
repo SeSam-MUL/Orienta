@@ -49,7 +49,24 @@ except ImportError:
     _MP_AVAILABLE = False
 
 # --- CONFIGURATION ---
-MP_API_KEY = "Fd6So1NzJA4usfiT" # Ihr eingefügter API Schlüssel
+# The Materials Project API key is per user and is NEVER stored in this source
+# file. It comes from the app's user config (Settings -> API keys), the same
+# place backend/api/services/crystal_hint_mp.py reads it from, with the
+# MP_API_KEY environment variable as a fallback for standalone runs.
+# Empty string = not configured; the Materials Project lookups below are then
+# skipped and the builder works offline from the local CIF files.
+def _load_mp_api_key() -> str:
+    try:
+        from backend.api.services import user_config_manager as _uc
+        key = _uc.get_api_key("materials_project")
+        if key:
+            return key
+    except Exception:
+        pass
+    return os.environ.get("MP_API_KEY", "")
+
+
+MP_API_KEY = _load_mp_api_key()
 
 SCRIPT_DIR = Path(__file__).parent
 SEARCH_FOLDER = SCRIPT_DIR / 'Cif_Files'
