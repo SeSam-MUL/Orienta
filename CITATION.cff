@@ -1,6 +1,5 @@
 # Citation File Format — https://citation-file-format.github.io/
 # GitHub reads this for the "Cite this repository" button; Zenodo imports it too.
-# FILL the <...> placeholders before the public release / DOI mint.
 cff-version: 1.2.0
 message: "If you use this software, please cite it using these metadata."
 title: "Orienta"
@@ -27,11 +26,15 @@ authors:
     family-names: "Weißensteiner"
     orcid: "https://orcid.org/0000-0002-8917-5231"
     affiliation: "Montanuniversität Leoben"
-version: "0.1.0"
-date-released: "2026-06-29"
+version: "0.2.5"
+date-released: "2026-09-08"
 license: "GPL-3.0-or-later"
-url: "https://doi.org/10.5281/zenodo.21021938"
-# repository-code: add the public source repository URL here once it is created.
+repository-code: "https://github.com/SeSam-MUL/Orienta"
+# The concept DOI always resolves to the newest archived version — that is what
+# a general "we used Orienta" citation should point at. The DOI of this exact
+# release is listed below under identifiers.
+url: "https://doi.org/10.5281/zenodo.21021937"
+doi: "10.5281/zenodo.21021937"
 keywords:
   - EBSD
   - electron backscatter diffraction
@@ -41,10 +44,10 @@ keywords:
   - EDS
   - phase mapping
   - kikuchipy
-doi: "10.5281/zenodo.21021938"
 identifiers:
+  - type: doi
+    value: "10.5281/zenodo.21021937"
+    description: "Concept DOI — always resolves to the latest archived version"
   - type: doi
     value: "10.5281/zenodo.21021938"
     description: "Zenodo archive of version 0.1.0"
-# After publishing, Zenodo also mints a concept DOI (always resolves to the
-# latest version); you may add it here as a second identifier.

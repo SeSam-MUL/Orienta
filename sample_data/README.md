@@ -21,9 +21,10 @@ The example EBSD measurements are large (~800 MB total), so they are **not** in
 the source repository. Download them and place the files in
 `sample_data/patterns/` (see [`patterns/README.md`](patterns/README.md)):
 
-- **GitHub:** the `v0.1.0` **Release** of this repository → *Assets*.
+- **GitHub:** the latest **Release** of this repository → *Assets*.
 - **Zenodo:** the archived release, DOI
-  [10.5281/zenodo.21021938](https://doi.org/10.5281/zenodo.21021938)
+  [10.5281/zenodo.21021937](https://doi.org/10.5281/zenodo.21021937)
+  (concept DOI — always resolves to the newest version)
   (`sample_data/patterns/` inside the archive).
 
 | File | Sample | Notes |
