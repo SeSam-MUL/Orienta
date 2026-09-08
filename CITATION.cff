@@ -40,10 +40,15 @@ keywords:
   - electron backscatter diffraction
   - crystallography
   - indexing
+  - crystal orientation
   - pattern center
+  - dictionary indexing
+  - spherical indexing
+  - hough indexing
   - EDS
   - phase mapping
   - kikuchipy
+  - python
 identifiers:
   - type: doi
     value: "10.5281/zenodo.21021937"

@@ -29,11 +29,17 @@
   "language": "eng",
   "keywords": [
     "EBSD",
+    "electron backscatter diffraction",
+    "crystallography",
     "indexing",
     "crystal orientation",
+    "pattern center",
     "dictionary indexing",
     "spherical indexing",
     "hough indexing",
+    "EDS",
+    "phase mapping",
+    "kikuchipy",
     "python"
   ],
   "grants": [
