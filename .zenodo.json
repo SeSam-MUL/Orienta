@@ -47,5 +47,13 @@
       "id": "10.13039/501100000780::101124514"
     }
   ],
+  "related_identifiers": [
+    {
+      "identifier": "10.5281/zenodo.21021937",
+      "relation": "isSupplementedBy",
+      "resource_type": "dataset",
+      "scheme": "doi"
+    }
+  ],
   "notes": "Christian Doppler Research Association (CD Laboratory for Deformation-Precipitation Interactions in Aluminum Alloys) and the Canon Foundation in Europe also funded this work; they are named in the description because the funder list here only carries registered funders."
 }
