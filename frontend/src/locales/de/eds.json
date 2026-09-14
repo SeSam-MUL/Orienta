@@ -128,7 +128,18 @@
     "elementTooltip": "{{el}}: gemessen {{measured}} at%, diese Phase erwartet {{expected}} at%. Ein Element, das die Phase braucht und das dem Pixel fehlt, schliesst sie aus.",
     "onTheMap": "Auf der Karte",
     "thisPixelAlone": "Nur dieses Pixel — die Karte entscheidet nach Zusammensetzungsgruppe:",
-    "handSet": "von Hand gesetzt"
+    "handSet": "von Hand gesetzt",
+    "librarySkipped_one": "1 CIF nicht gelesen",
+    "librarySkipped_other": "{{count}} CIFs nicht gelesen",
+    "librarySuspect_one": "1 Phase mit fragwürdiger Zusammensetzung",
+    "librarySuspect_other": "{{count}} Phasen mit fragwürdiger Zusammensetzung",
+    "noMatch": {
+      "notEnriched": "{{phase}} passt zu diesem Pixel ({{score}}), wurde aber verworfen: {{element}} liegt hier bei {{measured}} At.-%, der Kartenuntergrund bei {{background}} At.-%. Eine Phase, die {{element}} braucht, wird erst ab {{required}} At.-% vergeben — eine Phase, die den Großteil der Karte ausmacht, kann diese Schwelle nie erreichen, und die Phasenkarte wendet dieselbe Regel an und lässt diese Pixel ebenfalls unzugeordnet. Benenne die Region in der Phasenkarte von Hand, oder schneide auf einen Bereich zu, in dem die Phase in der Minderheit ist — falls es einen gibt.",
+      "belowMinScore": "Die nächste Phase der Bibliothek, {{phase}}, erreicht für diese Chemie nur {{score}} (Minimum {{min}}).",
+      "noCandidate": "Keine Phase der Bibliothek besteht ausschließlich aus den Elementen, die dieses Pixel zeigt ({{elements}}).",
+      "emptyLibrary": "Keine CIF-Phasen vorhanden — CIF-Dateien nach Database/CIF_Library legen oder die CIF-Datenbank bauen.",
+      "noChemistry": "Dieses Pixel trägt keine EDS-Chemie, gegen die verglichen werden könnte."
+    }
   },
   "swipe": {
     "labelA": "A:",
@@ -478,5 +489,14 @@
     "addRatioNumerator": "Zähler des Verhältnisses",
     "addRatioDenominator": "Nenner des Verhältnisses",
     "ratioPerElement": "{{element}} : …"
+  },
+  "quantNote": {
+    "headline_zero": "Wie diese Zusammensetzung gerechnet wurde",
+    "headline_one": "Wie diese Zusammensetzung gerechnet wurde — 1 Vorbehalt",
+    "headline_other": "Wie diese Zusammensetzung gerechnet wurde — {{count}} Vorbehalte",
+    "noZaf": "Standardlose Cliff-Lorimer-Rechnung mit modellierten k-Faktoren. Ohne ZAF-Matrixkorrektur — halbquantitativ, keine Analyse mit Standards.",
+    "calibratedOn": "Detektorantwort kalibriert an {{matrix}} bei {{kv}} kV.",
+    "overlap": "Das Fenster {{window}} liegt unter der {{interferer}}-Emission und liest deshalb zu hoch, wo dieses Element vorkommt.",
+    "beamAssumed": "Die Beschleunigungsspannung steht nicht in der Datei — {{kv}} kV angenommen. Die Ueberspannung jedes k-Faktors haengt davon ab."
   }
 }

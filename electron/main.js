@@ -175,6 +175,10 @@ function startBackend() {
   ], {
     cwd: projectRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
+    // No console window for the backend on Windows. Without this every spawn
+    // flashed a console — harmless once, but a restart loop against a busy
+    // port opened and closed them "wie wild" and the desktop was unusable.
+    windowsHide: true,
     // On macOS/Linux, start the backend as its own process-group leader so
     // killBackend() can signal the whole group via process.kill(-pid) and not
     // orphan uvicorn workers / leave port 8000 bound. On Windows `detached` has
@@ -208,10 +212,155 @@ function startBackend() {
   backendProcess.on('exit', (code) => {
     logBackendLine(`Backend exited with code ${code}`);
     backendProcess = null;
+    maybeRestartBackend(code);
   });
 }
 
-function waitForBackend(retries = 30) {
+// --- Is somebody else already on our port? -------------------------------
+// A backend left over from an earlier session (or started by hand) keeps
+// port 8000. Our own backend then fails to bind, exits with code 1 after a
+// few seconds, and a naive restart loop does that three times in a row —
+// measured 2026-09-09: three console windows opening and closing while the
+// page happily talked to the stale backend. So: ask the port first, and if
+// it answers, ask the USER what to do instead of spawning anything.
+
+function probeBackendHealth(timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/api/health`, (res) => {
+      let body = '';
+      res.on('data', (d) => { body += d; });
+      res.on('end', () => {
+        try { resolve(res.statusCode === 200 ? JSON.parse(body) : null); }
+        catch { resolve(res.statusCode === 200 ? {} : null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.setTimeout(timeoutMs, () => { req.destroy(); resolve(null); });
+  });
+}
+
+function portOwnerPid() {
+  try {
+    if (process.platform === 'win32') {
+      const out = execSync('netstat -ano -p tcp', { encoding: 'utf8' });
+      const line = out.split(/\r?\n/).find((l) => l.includes(`:${BACKEND_PORT} `) && l.includes('LISTENING'));
+      const pid = line && line.trim().split(/\s+/).pop();
+      return pid ? Number(pid) : null;
+    }
+    const out = execSync(`lsof -ti tcp:${BACKEND_PORT} -sTCP:LISTEN`, { encoding: 'utf8' });
+    const pid = out.trim().split(/\s+/)[0];
+    return pid ? Number(pid) : null;
+  } catch {
+    return null;
+  }
+}
+
+function killPid(pid) {
+  try {
+    if (process.platform === 'win32') execSync(`taskkill /PID ${Number(pid)} /T /F`, { stdio: 'ignore' });
+    else process.kill(pid, 'SIGTERM');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForPortFree(maxMs = 10000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    if (!(await probeBackendHealth(500))) return true;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
+}
+
+/**
+ * If a backend already answers on the port, let the user decide: stop it and
+ * start ours (the default — a stale backend may hold dead file handles, see
+ * the 2026-08-05 note in CLAUDE.md), or keep using it (a deliberate
+ * `--headless` batch, for instance). Returns true when it is safe to spawn.
+ */
+async function resolveBusyPort() {
+  const health = await probeBackendHealth();
+  if (!health) return true; // nobody there — go ahead
+  const pid = portOwnerPid();
+  const who = pid ? `process ${pid}` : 'another process';
+  const py = health.python_executable ? `\n(${health.python_executable})` : '';
+  logBackendLine(`Port ${BACKEND_PORT} already answers /api/health — owned by ${who}`);
+  const choice = dialog.showMessageBoxSync({
+    type: 'question',
+    title: 'A backend is already running',
+    message: `Port ${BACKEND_PORT} is already used by an Orienta backend (${who}).${py}`,
+    detail: 'Usually this is a backend left over from an earlier session. Stopping it and ' +
+            'starting a fresh one is the safe choice; keep it only if you know it is running a job.',
+    buttons: ['Stop it and start fresh', 'Keep using it'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (choice !== 0) {
+    logBackendLine('User chose to keep the existing backend; not starting our own.');
+    keepBackendOnQuit = true; // it is not ours to kill on quit either
+    return false;
+  }
+  if (!pid || !killPid(pid) || !(await waitForPortFree())) {
+    dialog.showErrorBox('Could not free the port',
+      `The process on port ${BACKEND_PORT} could not be stopped. Stop it yourself (Task Manager, ` +
+      `python.exe started ${health.python_executable || ''}) and start Orienta again.`);
+    return false;
+  }
+  logBackendLine(`Stopped stale backend ${pid}; port ${BACKEND_PORT} is free.`);
+  return true;
+}
+
+// A backend that dies while the window is open (out of memory on a large
+// scan — bug report #4/8 —, a crash in a scientific library) used to leave
+// the page on "Backend not connected" until the user restarted the whole
+// app. Start it again, a few times at most: a backend that dies on every
+// start is a configuration problem the dialog should report, not a loop.
+const MAX_BACKEND_RESTARTS = 3;
+let backendRestarts = 0;
+
+async function maybeRestartBackend(code) {
+  if (userInitiatedQuit || keepBackendOnQuit) return;
+  // Exit code 1 within seconds of spawning is "could not bind": do not loop,
+  // resolve the port instead (asks the user, stops the stale one on request).
+  if (await probeBackendHealth()) {
+    logBackendLine('Backend exited but the port still answers — another backend owns it.');
+    if (await resolveBusyPort()) {
+      startBackend();
+    }
+    return;
+  }
+  if (backendRestarts >= MAX_BACKEND_RESTARTS) {
+    logBackendLine(`Backend died ${backendRestarts} times — not restarting again.`);
+    dialog.showErrorBox(
+      'Backend keeps stopping',
+      `The Python backend stopped ${backendRestarts} times in this session (last exit code ${code}). ` +
+      'See logs/backend-console.log for the reason, then restart the app.'
+    );
+    return;
+  }
+  backendRestarts += 1;
+  logBackendLine(`Backend stopped unexpectedly (exit code ${code}) — restarting (${backendRestarts}/${MAX_BACKEND_RESTARTS}) in 1 s`);
+  setTimeout(() => {
+    if (userInitiatedQuit) return;
+    startBackend();
+    waitForBackend().then(
+      () => logBackendLine('Backend back after restart'),
+      (err) => logBackendLine(`Backend did not come back: ${err.message}`),
+    );
+  }, 1000);
+}
+
+// 360 x 500 ms = 3 minutes. The first start of a fresh installation imports
+// the scientific stack cold and blew past the old 15 s (30 retries): the
+// "Backend Startup Failed" dialog appeared over a backend that was still
+// loading. Found by tasks/install_smoke/fresh_install.ps1; start_app.py has
+// the same limit (BACKEND_START_TIMEOUT_S).
+const BACKEND_START_RETRIES = 360;
+
+function waitForBackend(retries = BACKEND_START_RETRIES) {
   return new Promise((resolve, reject) => {
     let attempts = 0;
 
@@ -231,7 +380,7 @@ function waitForBackend(retries = 30) {
         if (attempts < retries) {
           setTimeout(check, 500);
         } else {
-          reject(new Error('Backend not reachable after 15 seconds'));
+          reject(new Error(`Backend not reachable after ${Math.round(retries * 0.5)} seconds`));
         }
       });
 
@@ -490,7 +639,18 @@ ipcMain.handle('window:openPoleFigure', () => {
 app.whenReady().then(async () => {
   console.log('Starting Orienta...');
 
-  startBackend();
+  // Somebody already on the port? Ask before spawning a backend that would
+  // only fail to bind (and, in a restart loop, flash console windows).
+  const spawnOurs = await resolveBusyPort();
+  if (spawnOurs) startBackend();
+
+  // Window first, backend in the background. A cold start takes 30-40 s
+  // (longer on a slow disk); with the window held back until /api/health
+  // answered, the user saw NOTHING for that long and read it as a hang. The
+  // page shows "Backend is starting… N s" and connects on its own; only if
+  // the backend never answers within the grace period does the dialog
+  // appear — over the window, with the page's own message behind it.
+  createWindow();
 
   try {
     console.log('Waiting for backend...');
@@ -500,13 +660,12 @@ app.whenReady().then(async () => {
     console.error('Backend failed to start:', err.message);
     dialog.showErrorBox(
       'Backend Startup Failed',
-      'The Python backend could not be started.\n\n' +
-      'Make sure Python and the required packages are installed.\n\n' +
+      'The Python backend did not answer within 3 minutes.\n\n' +
+      'See logs/backend-console.log for the reason — usually a missing package, ' +
+      'a port already in use, or an import error.\n\n' +
       `Error: ${err.message}`
     );
   }
-
-  createWindow();
 });
 
 function killBackend() {

@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,14 @@ def _project_root() -> Path:
 
 def _install_script_path() -> Path:
     return _project_root() / "simulation" / "install_emsoft.sh"
+
+
+# The first command sent to a freshly registered distro boots the WSL VM and
+# initialises the distro: measured 41 s on a warm desktop (Stage 2 smoke test,
+# tasks/install_smoke/wizard_wsl.ps1). The old 10 s made the wizard's very
+# first action after "Install" fail with "WSL is not responding".
+WSL_COLD_START_S = 90
+WSL_CMD_S = 60
 
 
 def _detect_platform() -> dict:
@@ -68,6 +76,7 @@ class ResetPasswordRequest(BaseModel):
 
 class ValidatePasswordRequest(BaseModel):
     password: str
+    distro: str = ""  # which WSL distro; "" = the default one
 
 
 # ---------------------------------------------------------------------------
@@ -219,11 +228,15 @@ def _check_wsl_sync() -> dict:
             capture_output=True, text=True, timeout=5
         )
         if result.returncode == 0 and result.stdout.strip():
+            # wsl.exe prints UTF-16: drop the NULs and the BOM, then keep only
+            # names the wizard can pass back to `wsl -d` (the page sends this
+            # value to validate-password and the install socket; a name with a
+            # BOM in it would read as "wrong password" there).
             lines = [
-                line.strip().replace("\x00", "")
+                line.replace("\x00", "").replace("﻿", "").strip()
                 for line in result.stdout.splitlines()
-                if line.strip().replace("\x00", "")
             ]
+            lines = [ln for ln in lines if ln and _validate_distro_name(ln)]
             if lines:
                 # Prefer Ubuntu distros over docker-desktop etc.
                 distro = lines[0]
@@ -236,8 +249,8 @@ def _check_wsl_sync() -> dict:
                 corrupted = False
                 try:
                     user_result = subprocess.run(
-                        ["wsl", "bash", "-c", "whoami"],
-                        capture_output=True, text=True, timeout=10
+                        ["wsl", "-d", distro, "bash", "-c", "whoami"],
+                        capture_output=True, text=True, timeout=WSL_COLD_START_S
                     )
                     if user_result.returncode == 0:
                         username = user_result.stdout.strip().replace("\x00", "")
@@ -248,6 +261,13 @@ def _check_wsl_sync() -> dict:
                         )
                         if "ERROR_FILE_NOT_FOUND" in combined or "ext4.vhdx" in combined:
                             corrupted = True
+                except subprocess.TimeoutExpired:
+                    # Slow is not broken. A freshly installed distro boots its
+                    # VM on the first command (measured 41 s); calling that
+                    # "corrupted" used to offer a repair that UNREGISTERS it.
+                    logger.warning("WSL distro %s did not answer within %d s — "
+                                   "reporting 'no user yet', not 'corrupted'",
+                                   distro, WSL_COLD_START_S)
                 except Exception:
                     corrupted = True
 
@@ -284,10 +304,43 @@ def _validate_distro_name(name: str) -> bool:
     return bool(re.match(r'^[A-Za-z0-9._-]+$', name))
 
 
-def _install_wsl_sync(distro: str, repair: bool, broken_distro: str) -> dict:
-    """Trigger WSL installation (or repair) using UAC elevation.
+def _wsl_feature_present() -> bool:
+    """Is the Windows Subsystem for Linux itself installed?
 
-    Returns dict with keys: success, message.
+    ``wsl --status`` exits 0 once the optional component is there, with or
+    without a distribution. Anything else (stub wsl.exe, missing binary,
+    hang) counts as absent — the elevated feature install is harmless when
+    the feature already exists, the reverse is not.
+    """
+    try:
+        r = subprocess.run(["wsl", "--status"], capture_output=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.returncode == 0
+
+
+def _run_elevated(exe: str, args: str) -> bool:
+    """Run `exe args` through the UAC prompt. False when it was denied."""
+    import ctypes
+    ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, args, None, 1)  # SW_SHOWNORMAL
+    return ret > 32  # ShellExecuteW returns > 32 on success
+
+
+def _install_wsl_sync(distro: str, repair: bool, broken_distro: str) -> dict:
+    """Install WSL (or repair a distro) in two stages with different rights.
+
+    WSL distributions are registered PER USER (HKCU + %LOCALAPPDATA%); only
+    the Windows feature is machine-wide. Installing the distro inside the
+    elevated window put it into whichever ADMIN answered the UAC prompt —
+    on a lab PC that is someone else, and the user then sees "WSL installed
+    cleanly, but no Ubuntu". So:
+
+      stage "feature": the feature only, elevated, then a restart;
+      stage "distro":  the distribution, UNELEVATED, as the user who will
+                       use it. No administrator at all when the feature is
+                       already there.
+
+    Returns dict with keys: success, stage, message.
     """
     if _detect_platform()["os"] != "windows":
         return {"success": False, "message": "WSL installation is only available on Windows."}
@@ -310,36 +363,75 @@ def _install_wsl_sync(distro: str, repair: bool, broken_distro: str) -> dict:
                     "message": f"Could not unregister '{broken_distro}': {stderr}",
                 }
 
-        # Use ShellExecuteW with "runas" to trigger UAC elevation (Windows-only)
-        import ctypes
-        cmd_args = (
-            f"/c wsl --install -d {distro} --no-launch"
-            " & echo."
-            " & echo WSL installation complete. You can close this window."
-            " & pause"
-        )
-        ret = ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", "cmd.exe", cmd_args, None, 1  # SW_SHOWNORMAL
-        )
-        # ShellExecuteW returns > 32 on success
-        if ret > 32:
+        if not _wsl_feature_present():
+            cmd_args = (
+                "/c wsl --install --no-distribution & wsl --update"
+                " & echo."
+                " & echo The Windows Subsystem for Linux is installed."
+                " & echo Restart Windows, then click Install again to add the Linux distribution."
+                " & pause"
+            )
+            if _run_elevated("cmd.exe", cmd_args):
+                return {
+                    "success": True,
+                    "stage": "feature",
+                    "message": (
+                        "Installing the Windows Subsystem for Linux in an elevated window. "
+                        "Restart Windows when it finishes, then click Install again to add "
+                        "the Linux distribution — that step needs no administrator."
+                    ),
+                }
             return {
-                "success": True,
+                "success": False,
+                "stage": "feature",
                 "message": (
-                    "WSL installation started in an elevated command window. "
-                    "After it completes, you may need to restart your PC."
+                    "Could not start the installation — the administrator prompt was denied. "
+                    "Ask an administrator to run once: wsl --install --no-distribution"
                 ),
             }
+
+        # Feature present: the distribution goes into THIS user's profile, so it
+        # must run as this user. A console of its own shows wsl's download
+        # progress and any error; the wizard's status refresh turns green when
+        # the distro is registered.
+        # `-d` rather than the positional form: the inbox wsl.exe of older
+        # Windows 10/11 builds only knows `--install -d <distro>`.
+        creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+        subprocess.Popen(
+            ["wsl", "--install", "-d", distro, "--no-launch"],
+            creationflags=creationflags,
+        )
         return {
-            "success": False,
+            "success": True,
+            "stage": "distro",
             "message": (
-                "Could not start WSL installation — administrator prompt may have been denied. "
-                f"You can install manually: wsl --install -d {distro}"
+                f"Installing {distro} for your account — a console window shows the "
+                "download. No administrator needed; the status above turns green "
+                "when it is done."
             ),
         }
 
     except Exception as exc:
         return {"success": False, "message": f"Error: {exc}"}
+
+
+def _text(raw) -> str:
+    """Decode subprocess output that may be bytes (our stdin helper) or str
+    (a test double), dropping the NULs wsl.exe's UTF-16 messages leave."""
+    if raw is None:
+        return ""
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    return raw.replace("\x00", "")
+
+
+def _run_with_stdin(args: list, data: str, timeout: float) -> subprocess.CompletedProcess:
+    """Run `args` with `data` on stdin. Bytes on purpose: in text mode
+    Python turns the trailing '\\n' into '\\r\\n' on Windows, and chpasswd
+    would store a password ending in a carriage return."""
+    raw = subprocess.run(args, input=data.encode("utf-8"), capture_output=True, timeout=timeout)
+    return subprocess.CompletedProcess(raw.args, raw.returncode,
+                                       stdout=_text(raw.stdout), stderr=_text(raw.stderr))
 
 
 def _create_user_sync(username: str, password: str, distro: str) -> dict:
@@ -370,17 +462,14 @@ def _create_user_sync(username: str, password: str, distro: str) -> dict:
 
     try:
         escaped_user = shlex.quote(username)
-        escaped_combo = shlex.quote(f"{username}:{password}")
+        wsl_cmd = _wsl_prefix(distro)
 
-        wsl_cmd = ["wsl"]
-        if distro:
-            wsl_cmd += ["-d", distro]
-
-        # Check if user already exists
+        # Check if user already exists. This is typically the first command a
+        # brand-new distro ever runs, so it gets the cold-start budget.
         check = subprocess.run(
             wsl_cmd + ["-u", "root", "bash", "-c",
                         f"id {escaped_user} >/dev/null 2>&1 && echo EXISTS || echo NOTFOUND"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True, text=True, timeout=WSL_COLD_START_S,
         )
         user_exists = "EXISTS" in check.stdout
 
@@ -388,17 +477,16 @@ def _create_user_sync(username: str, password: str, distro: str) -> dict:
             create = subprocess.run(
                 wsl_cmd + ["-u", "root", "bash", "-c",
                             f"useradd -m -s /bin/bash -G sudo {escaped_user}"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=WSL_CMD_S,
             )
             if create.returncode != 0:
                 err = create.stderr.strip() or create.stdout.strip() or "Unknown error"
                 return {"success": False, "message": f"Failed to create user: {err}"}
 
-        # Set password
-        pw_result = subprocess.run(
-            wsl_cmd + ["-u", "root", "bash", "-c",
-                        f"echo {escaped_combo} | chpasswd"],
-            capture_output=True, text=True, timeout=10,
+        # Set password — on stdin, never on the command line (visible in `ps`).
+        pw_result = _run_with_stdin(
+            wsl_cmd + ["-u", "root", "chpasswd"],
+            f"{username}:{password}\n", timeout=WSL_CMD_S,
         )
         if pw_result.returncode != 0:
             err = pw_result.stderr.strip() or "Unknown error"
@@ -408,19 +496,19 @@ def _create_user_sync(username: str, password: str, distro: str) -> dict:
         subprocess.run(
             wsl_cmd + ["-u", "root", "bash", "-c",
                         f"usermod -aG sudo {escaped_user}"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=WSL_CMD_S,
         )
 
         # Set default user via /etc/wsl.conf
         subprocess.run(
             wsl_cmd + ["-u", "root", "bash", "-c",
                         f'printf "[user]\\ndefault={escaped_user}\\n" > /etc/wsl.conf'],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=WSL_CMD_S,
         )
 
         # Terminate WSL to apply default user change
         terminate_cmd = ["wsl", "--terminate", distro] if distro else ["wsl", "--shutdown"]
-        subprocess.run(terminate_cmd, capture_output=True, text=True, timeout=10)
+        subprocess.run(terminate_cmd, capture_output=True, text=True, timeout=WSL_CMD_S)
 
         action = "configured" if user_exists else "created"
         return {
@@ -448,16 +536,11 @@ def _reset_password_sync(username: str, password: str, distro: str) -> dict:
         return {"success": False, "message": "Password must be at least 4 characters."}
 
     try:
-        escaped_combo = shlex.quote(f"{username}:{password}")
+        wsl_cmd = _wsl_prefix(distro)
 
-        wsl_cmd = ["wsl"]
-        if distro:
-            wsl_cmd += ["-d", distro]
-
-        result = subprocess.run(
-            wsl_cmd + ["-u", "root", "bash", "-c",
-                        f"echo {escaped_combo} | chpasswd"],
-            capture_output=True, text=True, timeout=10,
+        result = _run_with_stdin(
+            wsl_cmd + ["-u", "root", "chpasswd"],
+            f"{username}:{password}\n", timeout=WSL_COLD_START_S,
         )
         if result.returncode == 0:
             return {"success": True, "message": f"Password for '{username}' has been reset."}
@@ -470,20 +553,118 @@ def _reset_password_sync(username: str, password: str, distro: str) -> dict:
         return {"success": False, "message": f"Error: {exc}"}
 
 
-def _validate_password_sync(password: str) -> bool:
-    """Validate sudo password. On Windows: via WSL. On Linux/Mac: directly."""
+def _wsl_prefix(distro: str) -> list:
+    """``wsl`` or ``wsl -d <distro>``; an unvalidated name is refused, not passed on."""
+    if not distro:
+        return ["wsl"]
+    if not _validate_distro_name(distro):
+        raise ValueError(f"Invalid distro name: {distro!r}")
+    return ["wsl", "-d", distro]
+
+
+def _validate_password_sync(password: str, distro: str = "") -> bool:
+    """Validate the sudo password. On Windows via WSL, on Linux/macOS directly.
+
+    ``-k`` first: with a warm sudo timestamp any password "works", which is
+    how a typo used to pass this check and fail 20 minutes into the build.
+    The password travels on stdin (``-S``), not in the command line.
+
+    Raises ValueError for an unusable distro name — that is not "wrong
+    password" and must not be reported as one.
+    """
+    sudo_cmd = ["sudo", "-k", "-S", "-v"]
+    cmd = _wsl_prefix(distro) + sudo_cmd if _detect_platform()["os"] == "windows" else sudo_cmd
     try:
-        escaped = shlex.quote(password)
-        test_cmd = f'echo {escaped} | sudo -S echo "SUDO_OK" 2>/dev/null'
-        plat = _detect_platform()
-        if plat["os"] == "windows":
-            cmd = ["wsl", "bash", "-c", test_cmd]
-        else:
-            cmd = ["bash", "-c", test_cmd]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        return "SUDO_OK" in result.stdout
+        result = _run_with_stdin(cmd, password + "\n", timeout=WSL_COLD_START_S)
+        return result.returncode == 0
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return False
+
+
+# ---------------------------------------------------------------------------
+# EMsoft install wrapper
+# ---------------------------------------------------------------------------
+
+_ASKPASS_EOF = "ORIENTA_ASKPASS_EOF"
+
+
+def build_install_wrapper(script_content: str, password: str) -> str:
+    """Bash text that runs `script_content` with sudo answered automatically.
+
+    The password reaches sudo through ``SUDO_ASKPASS`` (a 0700 helper in the
+    distro's own tmp, deleted on exit) and ``sudo -A``. The old wrapper piped
+    it into ``sudo -S`` — and a pipe REPLACES stdin, so every
+    ``echo <path> | sudo tee <file>`` in install_emsoft.sh wrote either
+    nothing or, once sudo's timestamp was warm, the password itself into
+    /etc/fstab and the OpenCL ICD files. With askpass the script's stdin is
+    its own.
+
+    A background ``sudo -n -v`` keeps the timestamp warm so child scripts
+    that call plain ``sudo`` (sh, not bash — they never see the function
+    below) do not prompt either.
+    """
+    if "\n" in password or "\r" in password:
+        raise ValueError("password must not contain line breaks")
+    if _ASKPASS_EOF in password:
+        raise ValueError("password contains the wrapper delimiter")
+    quoted_pw = shlex.quote(password)
+    return (
+        "#!/usr/bin/env bash\n"
+        "# Generated by Orienta: runs simulation/install_emsoft.sh with sudo answered\n"
+        "# through SUDO_ASKPASS, so the script's stdin stays its own.\n"
+        "# /tmp on purpose, not $TMPDIR: a login profile may point TMPDIR at\n"
+        "# /mnt/c, where chmod is a no-op and the helper would be world-readable.\n"
+        "rm -f /tmp/_orienta_askpass.* 2>/dev/null  # leftovers of a killed run\n"
+        '_ORIENTA_ASKPASS="$(mktemp /tmp/_orienta_askpass.XXXXXX)" || exit 1\n'
+        f"cat > \"$_ORIENTA_ASKPASS\" <<'{_ASKPASS_EOF}'\n"
+        "#!/bin/sh\n"
+        f"printf '%s' {quoted_pw}\n"
+        f"{_ASKPASS_EOF}\n"
+        'chmod 700 "$_ORIENTA_ASKPASS"\n'
+        'export SUDO_ASKPASS="$_ORIENTA_ASKPASS"\n'
+        "export DEBIAN_FRONTEND=noninteractive\n"
+        "_ORIENTA_KEEPALIVE=\n"
+        "_orienta_cleanup() {\n"
+        '  [ -n "$_ORIENTA_KEEPALIVE" ] && kill "$_ORIENTA_KEEPALIVE" 2>/dev/null\n'
+        '  rm -f "$_ORIENTA_ASKPASS"\n'
+        "}\n"
+        "trap _orienta_cleanup EXIT INT TERM HUP\n"
+        "\n"
+        'echo "Verifying sudo access..."\n'
+        "# -k: a warm timestamp from an earlier terminal session must not let a\n"
+        "# typo through here and fail 20 minutes into the build.\n"
+        "if ! command sudo -k -A -v 2>/dev/null; then\n"
+        '  echo "ERROR: sudo password is incorrect. Aborting installation."\n'
+        "  exit 1\n"
+        "fi\n"
+        'echo "Sudo access verified."\n'
+        "\n"
+        "# Keep the sudo timestamp warm for child scripts that call plain sudo.\n"
+        "# Detached from our stdio so it can never hold the log pipe open; the\n"
+        "# subshell kills its own sleep on TERM so nothing outlives the wrapper.\n"
+        "( trap 'kill $_s 2>/dev/null; exit 0' TERM INT HUP\n"
+        "  while :; do sleep 60 & _s=$!; wait $_s; command sudo -A -n -v || exit; done\n"
+        ") >/dev/null 2>&1 </dev/null &\n"
+        "_ORIENTA_KEEPALIVE=$!\n"
+        "\n"
+        "sudo() { command sudo -A \"$@\"; }\n"
+        "export -f sudo\n"
+        "\n"
+        + script_content
+        + "\n"
+    )
+
+
+def write_wrapper_file(wrapper: str) -> str:
+    """Write the wrapper to a private temp file (mkstemp: 0600) and return its path.
+
+    Never widen the mode: the file holds the password for the whole build.
+    ``bash <file>`` does not need it to be executable.
+    """
+    fd, temp_path = tempfile.mkstemp(suffix=".sh", prefix="_emsoft_install_")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(wrapper)
+    return temp_path
 
 
 # ---------------------------------------------------------------------------
@@ -507,10 +688,11 @@ async def trigger_wsl_install(
     repair: bool = Query(default=False, description="Repair mode (unregister broken distro first)"),
     broken_distro: str = Query(default="", description="Name of broken distro to unregister"),
 ):
-    """Trigger WSL installation via UAC elevation.
+    """Install WSL in two stages: the Windows feature elevated (UAC) if it is
+    missing, otherwise the distribution unelevated as the current user.
 
-    Uses ShellExecuteW with 'runas' to show the UAC prompt.
     In repair mode, first unregisters the broken distro then installs fresh.
+    Answers {success, stage, message}; a denied prompt is success=false.
     """
     loop = asyncio.get_running_loop()
     result = await loop.run_in_executor(
@@ -548,7 +730,10 @@ async def reset_wsl_password(body: ResetPasswordRequest):
 async def validate_password(body: ValidatePasswordRequest):
     """Validate WSL sudo password by running a test sudo command."""
     loop = asyncio.get_running_loop()
-    valid = await loop.run_in_executor(None, _validate_password_sync, body.password)
+    try:
+        valid = await loop.run_in_executor(None, _validate_password_sync, body.password, body.distro)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"valid": valid}
 
 
@@ -561,7 +746,7 @@ async def ws_install_emsoft(websocket: WebSocket):
     """Stream EMsoft installation output line by line.
 
     Protocol:
-    1. Client connects and sends JSON: {"password": "<sudo_password>"}
+    1. Client connects and sends JSON: {"password": "<sudo_password>", "distro": "<optional>"}
     2. Server streams: {"type": "log", "line": "<output_line>"}
     3. Server sends final: {"type": "done", "success": bool, "message": "<msg>"}
     """
@@ -580,6 +765,13 @@ async def ws_install_emsoft(websocket: WebSocket):
             return
 
         password = data.get("password", "")
+        distro = str(data.get("distro") or "")
+        if distro and not _validate_distro_name(distro):
+            await websocket.send_json({
+                "type": "done", "success": False,
+                "message": "Invalid distro name.",
+            })
+            return
 
         script_path = _install_script_path()
         if not script_path.exists():
@@ -599,37 +791,15 @@ async def ws_install_emsoft(websocket: WebSocket):
             })
             return
 
-        # Build wrapper script that overrides sudo to auto-pipe the password
-        escaped_pw = shlex.quote(password)
-        wrapper = (
-            "#!/usr/bin/env bash\n"
-            f"_SUDO_PASS={escaped_pw}\n"
-            "\n"
-            "# Verify sudo access before starting installation\n"
-            'echo "Verifying sudo access..."\n'
-            'echo "$_SUDO_PASS" | command sudo -S echo "SUDO_OK" 2>/dev/null\n'
-            "if [ $? -ne 0 ]; then\n"
-            '  echo "ERROR: sudo password is incorrect. Aborting installation."\n'
-            "  exit 1\n"
-            "fi\n"
-            'echo "Sudo access verified."\n'
-            "\n"
-            "# Override sudo to automatically provide password\n"
-            "sudo() {\n"
-            '  echo "$_SUDO_PASS" | command sudo -S "$@"\n'
-            "}\n"
-            "export -f sudo\n"
-            "\n"
-            + script_content
-            + "\n"
-            "\n"
-            "unset _SUDO_PASS\n"
-        )
-
-        # Write wrapper to temp file with Unix line endings and random name
-        fd, temp_path = tempfile.mkstemp(suffix=".sh", prefix="_emsoft_install_")
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(wrapper)
+        try:
+            wrapper = build_install_wrapper(script_content, password)
+        except ValueError as exc:
+            await websocket.send_json({
+                "type": "done", "success": False,
+                "message": f"Unusable password: {exc}",
+            })
+            return
+        temp_path = write_wrapper_file(wrapper)
 
         # Platform-aware script execution
         plat = _detect_platform()
@@ -640,12 +810,12 @@ async def ws_install_emsoft(websocket: WebSocket):
             if len(script_exec_path) >= 2 and script_exec_path[1] == ":":
                 drive = script_exec_path[0].lower()
                 script_exec_path = f"/mnt/{drive}{script_exec_path[2:]}"
-            exec_cmd = ["wsl", "bash", "-l", script_exec_path]
+            exec_cmd = _wsl_prefix(distro) + ["bash", "-l", script_exec_path]
             not_found_msg = "WSL is not installed. Please install WSL first: wsl --install"
         else:
-            # Linux/macOS: run directly
+            # Linux/macOS: run directly. No chmod — the file holds the
+            # password, and `bash <file>` needs no execute bit.
             script_exec_path = temp_path
-            os.chmod(temp_path, 0o755)
             exec_cmd = ["bash", "-l", script_exec_path]
             not_found_msg = "bash is not available."
 
@@ -658,6 +828,9 @@ async def ws_install_emsoft(websocket: WebSocket):
         try:
             process = await asyncio.create_subprocess_exec(
                 *exec_cmd,
+                # EOF on stdin: an apt/dpkg conffile prompt must fail fast, not
+                # sit on the backend's stdin until the 30-minute silence timeout.
+                stdin=asyncio.subprocess.DEVNULL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )

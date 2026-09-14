@@ -54,7 +54,16 @@ not require any Settings changes.
 
 3. **Step 0 / 1 — WSL:** the wizard reports your platform and WSL state. If WSL is
    missing or needs repair, use the install/repair action and pick a distro
-   (Ubuntu 22.04/20.04/24.04 or Debian).
+   (Ubuntu 22.04/20.04/24.04 or Debian). The install runs in two stages with
+   different rights, because a Linux distribution belongs to the Windows
+   **user** who installs it, not to the machine:
+   - If the Windows Subsystem for Linux itself is missing, an administrator
+     prompt installs only that feature. Restart Windows, then click Install
+     again.
+   - The distribution is then installed **as you**, without an administrator
+     prompt; a console window shows the download. On a shared PC this matters:
+     had the distro been installed inside the administrator prompt, it would
+     have landed in the administrator's profile and stayed invisible to you.
 4. **Step 2 — User:** create a Linux user (username + password) inside WSL, or
    reset an existing user's password. EMsoft runs under this user.
 5. **Step 3 — EMsoft:** start the EMsoft install. The build log **streams live** to

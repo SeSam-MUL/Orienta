@@ -13,11 +13,12 @@ matplotlib-scalebar>=0.8
 spglib
 pymatgen
 
-# GUI (Legacy PyQt5 layer — Stage 1 of removal complete; Stage 2 needs to
-# detangle simulation/* QThread workers from backend lazy imports before
-# PyQt5 / pyqtdarktheme can be uninstalled. See tasks/pyqt5-removal-stage2-backlog.md)
+# Legacy PyQt5 layer — Stage 1 of removal complete; Stage 2 needs to detangle
+# simulation/* QThread workers from backend lazy imports before PyQt5 can be
+# uninstalled. (pyqtdarktheme was dropped 2026-09-09: nothing imports it, and
+# it capped the environment at Python < 3.12.)
 pyqt5>=5.15
-pyqtdarktheme
+tqdm  # crystal-structures-for-ebsd-main/calculationxtal/cif_database_builder.py
 
 # Web backend (FastAPI + Electron/React stack)
 fastapi

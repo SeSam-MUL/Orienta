@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
+import {
+  estimateCpuSphericalSeconds, formatRoughDuration, isSphericalCpuFallback,
+} from '../Indexing/cpuEstimate';
 import { colors, spacing } from '../../theme/tokens';
 import { Button, GroupBox, Input } from '../../theme/components';
 import { batchV2Api, indexApi } from '../../services/api';
@@ -23,6 +26,65 @@ const METHODS = [
   { value: 'spherical', labelKey: 'methods.spherical' },
   { value: 'dictionary', labelKey: 'methods.dictionary' },
 ];
+
+// The spherical settings a batch carries, under the EXACT key names
+// `batch_manager.run_single_indexing_job` reads. Both the form state and the
+// create-batch request use these names, so nothing has to be translated on the
+// way — which is how the earlier version silently dropped all of them (the form
+// wrote `bandwidth`, the backend read `spherical_bandwidth`, and `createBatch`
+// sent neither).
+//
+// `backend` defaults to the GPU engine, matching the interactive Indexing page
+// (IndexingPage.jsx). The BACKEND's own default stays "emsphinx" for a request
+// that says nothing; that is deliberate and documented there.
+export const SPHERICAL_DEFAULTS = {
+  backend: 'spherical_gpu',
+  spherical_bandwidth: 88,
+  spherical_nregions: 10,
+  spherical_refine: true,
+};
+export const SPHERICAL_CONFIG_KEYS = Object.keys(SPHERICAL_DEFAULTS);
+
+/** The create-batch config, from the wizard's per-file settings.
+ *
+ * Exported and pure so the wire can be tested without driving seven wizard
+ * steps: the bug this replaces was a builder that simply left the spherical
+ * settings out, and no component test could see that because they all mock the
+ * api module and can therefore only prove what the UI *asked* for.
+ *
+ * Every key here is spelled the way the backend reads it. Nothing is renamed on
+ * the way out.
+ */
+export function buildBatchConfig(method, cfg) {
+  const spherical = method === 'spherical'
+    ? Object.fromEntries(SPHERICAL_CONFIG_KEYS.map(
+        (k) => [k, cfg[k] ?? SPHERICAL_DEFAULTS[k]]))
+    : {};
+  return {
+    ...spherical,
+    auto_export: cfg.auto_export,
+    export_dir: cfg.export_dir,
+    export_formats: cfg.export_formats,
+    // Opt-in: copy per-element counts + X/Y/Header from the source h5oina into
+    // the light result so EDS-aware downstream tools can work without touching
+    // the multi-GB source file.
+    include_eds: !!cfg.include_eds_in_export,
+    preprocessing: {
+      frame_averaging: cfg.frame_averaging,
+      frame_averaging_window: cfg.frame_averaging_window,
+      background_removal: cfg.background_removal,
+      background_method: cfg.background_method,
+      gauss_background: cfg.gauss_background,
+      circular_mask: cfg.circular_mask,
+      nregions_ahe: cfg.nregions_ahe,
+    },
+    postprocessing: {
+      ci_threshold: cfg.postproc_ci_threshold || 0,
+      uncertainty_threshold: cfg.postproc_uncertainty_threshold || 0,
+      min_cluster_size: cfg.postproc_min_cluster_size || 0,
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 function StepHeader({ currentStep, onStepClick }) {
@@ -68,7 +130,9 @@ function PhaseChip({ label, detail, selected, onToggle, title }) {
 
 // ===========================================================================
 export default function BatchWorkflow({ isActive = true }) {
-  const { t } = useTranslation('batch');
+  // Two namespaces: the spherical engine text lives in `indexing` and is
+  // reused here word for word rather than translated a second time.
+  const { t } = useTranslation(['batch', 'indexing']);
   const store = useBatchConfigStore();
   const batchStore = useBatchStore();
   const { files, activeFileIndex, currentStep, method, globalPhases } = store;
@@ -78,6 +142,11 @@ export default function BatchWorkflow({ isActive = true }) {
   const [discoveredPhases, setDiscoveredPhases] = useState([]);
   const [selectedPhaseIndices, setSelectedPhaseIndices] = useState(new Set());
   const [loadingPhases, setLoadingPhases] = useState(false);
+  // Runtime probe + CPU confirmation, mirroring the Indexing page. Without
+  // these a CUDA-less machine would run torch-CPU spherical across the whole
+  // folder silently, now that the wizard defaults to the GPU engine.
+  const [runtimeInfo, setRuntimeInfo] = useState(null);
+  const [cpuWarnOpen, setCpuWarnOpen] = useState(false);
 
   // Phase discovery. Fires on method change AND whenever this page
   // becomes visible again — BatchPage uses display:none so a newly
@@ -172,38 +241,55 @@ export default function BatchWorkflow({ isActive = true }) {
     store.applyGlobalPhases(phases);
   };
 
-  const handleStartBatch = async () => {
+  // Probe the runtime whenever a spherical batch is on the table. Silent on
+  // failure: the notice simply stays hidden if the backend is unreachable,
+  // which is also why isSphericalCpuFallback treats null as "no alarm".
+  useEffect(() => {
+    if (!isActive || method !== 'spherical') return undefined;
+    let cancelled = false;
+    indexApi.gpuStatus()
+      .then((r) => { if (!cancelled && r?.data) setRuntimeInfo(r.data); })
+      .catch(() => { /* banner stays hidden */ });
+    return () => { cancelled = true; };
+  }, [isActive, method]);
+
+  const readyFiles = files.filter((f) => f.ready);
+  const sphericalBackend = files[0]?.config?.backend ?? SPHERICAL_DEFAULTS.backend;
+  const sphericalOnCpu = isSphericalCpuFallback({
+    method, backend: sphericalBackend, runtime: runtimeInfo,
+  });
+  // Patterns across the WHOLE batch — grid_shape comes from quick-load and is
+  // the only per-file size the wizard knows. Files that were never probed
+  // contribute nothing, so the estimate is a lower bound, never an invented
+  // number; when nothing is known at all formatRoughDuration returns '' and
+  // the wordings without an estimate are used.
+  const batchPatterns = readyFiles.reduce((sum, f) => {
+    const g = f.grid_shape;
+    return sum + (Array.isArray(g) && g.length >= 2 ? (g[0] || 0) * (g[1] || 0) : 0);
+  }, 0);
+  const cpuEstimate = formatRoughDuration(estimateCpuSphericalSeconds(
+    batchPatterns,
+    files[0]?.config?.spherical_bandwidth ?? SPHERICAL_DEFAULTS.spherical_bandwidth,
+  ));
+
+  const handleStartBatch = async (confirmedCpu = false) => {
     setError(null);
     const ready = store.getReadyFiles();
     if (ready.length === 0) {
       setError(t('step6.noReadyFiles'));
       return;
     }
+    // Same gate as the Indexing page: a CPU spherical run is not refused, but
+    // it is not started by accident either.
+    if (sphericalOnCpu && !confirmedCpu) {
+      setCpuWarnOpen(true);
+      return;
+    }
     const cfg = ready[0].config;
-    const preprocessing = {
-      frame_averaging: cfg.frame_averaging, frame_averaging_window: cfg.frame_averaging_window,
-      background_removal: cfg.background_removal, background_method: cfg.background_method,
-      gauss_background: cfg.gauss_background, circular_mask: cfg.circular_mask, nregions_ahe: cfg.nregions_ahe,
-    };
     try {
-      const postprocessing = {
-        ci_threshold: cfg.postproc_ci_threshold || 0,
-        uncertainty_threshold: cfg.postproc_uncertainty_threshold || 0,
-        min_cluster_size: cfg.postproc_min_cluster_size || 0,
-      };
       const data = await batchStore.createBatch(
         ready.map((f) => f.file_path), ready[0].config.phases,
-        {
-          auto_export: cfg.auto_export,
-          export_dir: cfg.export_dir,
-          export_formats: cfg.export_formats,
-          // Opt-in: copy per-element counts + X/Y/Header from the source
-          // h5oina into the light result so EDS-aware downstream tools
-          // can work without touching the multi-GB source file.
-          include_eds: !!cfg.include_eds_in_export,
-          preprocessing,
-          postprocessing,
-        },
+        buildBatchConfig(method, cfg),
       );
       // Preflight gate: refuse to start if any check failed.
       // Delete the just-created orphan batch so the user can fix and retry
@@ -568,10 +654,41 @@ export default function BatchWorkflow({ isActive = true }) {
     return (
       <>
         {method === 'spherical' && <GroupBox title={t('step5.sphericalTitle')}>
+          {sphericalOnCpu && (
+            <div style={{
+              fontSize: '9pt', color: '#f1fa8c', lineHeight: 1.4,
+              padding: '5px 9px', borderRadius: 4, marginBottom: 8,
+              background: '#f1fa8c14', border: '1px solid #f1fa8c44',
+            }}>
+              {'⚠'}{' '}
+              {cpuEstimate
+                ? t('indexing:spherical.cpuFallbackWithEstimate', { n: batchPatterns, estimate: cpuEstimate })
+                : t('indexing:spherical.cpuFallback')}
+            </div>
+          )}
+          {/* These field names ARE the keys the backend reads
+              (batch_manager.run_single_indexing_job). No renaming happens
+              between here and there — a translation table is how the previous
+              version lost every one of these settings. */}
           <div style={{ display: 'grid', gridTemplateColumns: '120px 1fr', gap: '6px 12px', fontSize: '10pt', color: colors.text, alignItems: 'center' }}>
-            <span>{t('step5.bandwidth')}</span><Input value={cfg.bandwidth ?? 88} type="number" title={t('step5.bandwidthTooltip')} onChange={(e) => u({ bandwidth: +e.target.value || 88 })} />
-            <span>{t('step5.nRegions')}</span><Input value={cfg.nregions ?? 10} type="number" title={t('step5.nRegionsTooltip')} onChange={(e) => u({ nregions: +e.target.value || 10 })} />
-            <span>{t('step5.refine')}</span><input type="checkbox" checked={cfg.refine ?? true} title={t('step5.refineTooltip')} onChange={(e) => u({ refine: e.target.checked })} style={{ accentColor: colors.accent }} />
+            {/* Label, options and tooltip come from the Indexing page's own
+                strings — one text in four languages, so the two screens cannot
+                end up claiming different things about the same dropdown (the
+                batch copy used to say "needs a CUDA card" while the Indexing
+                page said "falls back to CPU automatically"). */}
+            <span>{t('indexing:spherical.backend')}</span>
+            <select
+              value={cfg.backend ?? SPHERICAL_DEFAULTS.backend}
+              title={t('indexing:spherical.backendTip')}
+              onChange={(e) => u({ backend: e.target.value })}
+              style={{ background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text, borderRadius: 4, padding: '2px 6px' }}
+            >
+              <option value="spherical_gpu">{t('indexing:spherical.backendGpu')}</option>
+              <option value="emsphinx">{t('indexing:spherical.backendEmsphinx')}</option>
+            </select>
+            <span>{t('step5.bandwidth')}</span><Input value={cfg.spherical_bandwidth ?? SPHERICAL_DEFAULTS.spherical_bandwidth} type="number" title={t('step5.bandwidthTooltip')} onChange={(e) => u({ spherical_bandwidth: +e.target.value || SPHERICAL_DEFAULTS.spherical_bandwidth })} />
+            <span>{t('step5.nRegions')}</span><Input value={cfg.spherical_nregions ?? SPHERICAL_DEFAULTS.spherical_nregions} type="number" title={t('step5.nRegionsTooltip')} onChange={(e) => u({ spherical_nregions: +e.target.value || SPHERICAL_DEFAULTS.spherical_nregions })} />
+            <span>{t('step5.refine')}</span><input type="checkbox" checked={cfg.spherical_refine ?? SPHERICAL_DEFAULTS.spherical_refine} title={t('step5.refineTooltip')} onChange={(e) => u({ spherical_refine: e.target.checked })} style={{ accentColor: colors.accent }} />
           </div>
         </GroupBox>}
         {method === 'dictionary' && <GroupBox title={t('step5.dictionaryTitle')}>
@@ -617,7 +734,7 @@ export default function BatchWorkflow({ isActive = true }) {
         </div>
         <div style={{ marginTop: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span style={{ fontSize: '10pt', color: colors.text }}>{t('step6.readySummary', { ready: ready.length, total: files.length, jobs: totalJobs })}</span>
-          <Button onClick={handleStartBatch} variant="primary" disabled={ready.length === 0} title={t('step6.startBatchTooltip')}>
+          <Button onClick={() => handleStartBatch()} variant="primary" disabled={ready.length === 0} title={t('step6.startBatchTooltip')}>
             {t('step6.startBatch')}
           </Button>
         </div>
@@ -653,6 +770,43 @@ export default function BatchWorkflow({ isActive = true }) {
           </div>
         )}
       </div>
+      {cpuWarnOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1000,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <div style={{
+            background: colors.bgSecondary, border: `1px solid ${colors.border}`,
+            borderRadius: 6, padding: 20, maxWidth: 520,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+          }}>
+            <div style={{ fontSize: '12pt', fontWeight: 'bold', color: '#f1fa8c', marginBottom: 10 }}>
+              {'⚠'} {t('indexing:spherical.cpuConfirmTitle')}
+            </div>
+            <div style={{ fontSize: '10pt', color: colors.text, lineHeight: 1.55, marginBottom: 16 }}>
+              {cpuEstimate
+                ? t('indexing:spherical.cpuConfirmBodyWithEstimate', { n: batchPatterns, estimate: cpuEstimate })
+                : t('indexing:spherical.cpuConfirmBody')}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <Button onClick={() => setCpuWarnOpen(false)} variant="default">
+                {t('indexing:spherical.cpuConfirmCancel')}
+              </Button>
+              <Button
+                onClick={() => { setCpuWarnOpen(false); handleStartBatch(true); }}
+                variant="primary"
+              >
+                {t('indexing:spherical.cpuConfirmStart')}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -12,7 +12,7 @@ import { indexApi } from '../../services/api';
 import { colors as C } from '../../theme/tokens';
 import { Button, GroupBox, NumberInput, Select, ProgressBar } from '../../theme/components';
 
-export default function BatchIndexingDialog({ open, onClose }) {
+export default function BatchIndexingDialog({ open, onClose, sphericalParams = null }) {
   const { t } = useTranslation('indexing');
   const METHODS = [
     { value: 'hough', label: t('batchDialog.methodHough') },
@@ -24,6 +24,11 @@ export default function BatchIndexingDialog({ open, onClose }) {
   const [globalMethod, setGlobalMethod] = useState('hough');
   const [globalCifs, setGlobalCifs] = useState('');
   const [globalMasterH5, setGlobalMasterH5] = useState('');
+  // Spherical needs a master (.sht) per phase, exactly like the Indexing page.
+  // There was no field for it, so the dialog sent `sht_paths: []` and the
+  // backend resolved the empty path to its own working directory as the
+  // master file — no error, no indexing.
+  const [globalSht, setGlobalSht] = useState('');
   const [autoExport, setAutoExport] = useState(true);
   const [exportDir, setExportDir] = useState('');
   const [cleanupMemory, setCleanupMemory] = useState(true);
@@ -37,6 +42,7 @@ export default function BatchIndexingDialog({ open, onClose }) {
   // Discovered CIF/H5 files from database
   const [availableCifs, setAvailableCifs] = useState([]);
   const [availableH5s, setAvailableH5s] = useState([]);
+  const [availableShts, setAvailableShts] = useState([]);
 
   useEffect(() => {
     if (!open) return;
@@ -46,6 +52,9 @@ export default function BatchIndexingDialog({ open, onClose }) {
     }).catch(() => {});
     indexApi.discoverFiles('dictionary').then(r => {
       setAvailableH5s((r.data?.files || []).map(f => f.path));
+    }).catch(() => {});
+    indexApi.discoverFiles('spherical').then(r => {
+      setAvailableShts((r.data?.files || []).map(f => f.path));
     }).catch(() => {});
   }, [open]);
 
@@ -60,12 +69,13 @@ export default function BatchIndexingDialog({ open, onClose }) {
       method: globalMethod,
       cifs: globalCifs,
       masterH5: globalMasterH5,
+      sht: globalSht,
       selectionMode: 'full',
       rowStart: 0, rowEnd: -1, colStart: 0, colEnd: -1,
     }));
     setFiles(prev => [...prev, ...newFiles]);
     setFileInput('');
-  }, [fileInput, globalMethod, globalCifs, globalMasterH5]);
+  }, [fileInput, globalMethod, globalCifs, globalMasterH5, globalSht]);
 
   const removeFile = useCallback((idx) => {
     setFiles(prev => prev.filter((_, i) => i !== idx));
@@ -82,8 +92,9 @@ export default function BatchIndexingDialog({ open, onClose }) {
       method: globalMethod,
       cifs: globalCifs,
       masterH5: globalMasterH5,
+      sht: globalSht,
     })));
-  }, [globalMethod, globalCifs, globalMasterH5]);
+  }, [globalMethod, globalCifs, globalMasterH5, globalSht]);
 
   // Start batch
   const startBatch = useCallback(async () => {
@@ -94,7 +105,17 @@ export default function BatchIndexingDialog({ open, onClose }) {
       method: f.method,
       cif_paths: f.cifs ? f.cifs.split(',').map(s => s.trim()).filter(Boolean) : [],
       master_h5_paths: f.masterH5 ? [f.masterH5.trim()] : [],
-      sht_paths: [],
+      sht_paths: f.sht ? [f.sht.trim()] : [],
+      // The spherical settings of the Indexing page — engine, bandwidth,
+      // regions, refine, circmask, gausbckg — in one object, from one
+      // definition (IndexingPage.sphericalParams). `normed` is NOT among them:
+      // the page has no control for it, so the request model's default stands
+      // for both routes. The batch config used to carry none of these, so
+      // every spherical batch ran the WSL CPU path at the model's defaults
+      // whatever the page showed: gausbckg alone differs between that default
+      // (false) and IndexingConfig's (true).
+      // Sent for every method; the backend reads them only for spherical.
+      ...(sphericalParams || {}),
       selection_mode: f.selectionMode,
       row_start: f.rowStart,
       row_end: f.rowEnd,
@@ -108,7 +129,7 @@ export default function BatchIndexingDialog({ open, onClose }) {
     } catch (err) {
       alert(t('batchDialog.startFailed', { error: err.response?.data?.detail || err.message }));
     }
-  }, [files, autoExport, exportDir, cleanupMemory]);
+  }, [files, autoExport, exportDir, cleanupMemory, sphericalParams, t]);
 
   // Poll status
   useEffect(() => {
@@ -222,6 +243,23 @@ export default function BatchIndexingDialog({ open, onClose }) {
               <input type="text" value={globalMasterH5} onChange={e => setGlobalMasterH5(e.target.value)}
                 placeholder={t('batchDialog.dictH5Placeholder')}
                 title={t('hoverTips.batchH5Input')}
+                style={{ flex: 1, minWidth: 120, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: '2px 6px', fontSize: '9pt' }} />
+              {/* Spherical's master. Without this field the dialog offered
+                  "Spherical" in its method menu and then sent no master. */}
+              <span style={{ color: C.textSecondary }}>{t('batchDialog.sht')}</span>
+              <select
+                value=""
+                onChange={e => { if (e.target.value) setGlobalSht(e.target.value); }}
+                title={t('hoverTips.batchPickSht')}
+                style={{ background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, fontSize: '9pt', maxWidth: 160 }}
+              >
+                <option value="">{t('batchDialog.pickSht')}</option>
+                {availableShts.map(p => <option key={p} value={p}>{p.split(/[/\\]/).pop()}</option>)}
+              </select>
+              <input type="text" value={globalSht} onChange={e => setGlobalSht(e.target.value)}
+                placeholder={t('batchDialog.shtPlaceholder')}
+                title={t('hoverTips.batchShtInput')}
+                data-testid="batch-sht-input"
                 style={{ flex: 1, minWidth: 120, background: C.bg, color: C.text, border: `1px solid ${C.border}`, borderRadius: 4, padding: '2px 6px', fontSize: '9pt' }} />
               <button onClick={applyGlobalSettings} title={t('hoverTips.batchApplyToAll')} style={{
                 background: C.purple, color: '#fff', border: 'none', borderRadius: 4,

@@ -75,6 +75,28 @@ export const LAYER_SOURCES = {
       // as a ~20-pixel block with a 100 nm scalebar, reported 2026-09-07.
       { id: 'phase-margin',     label: 'Phase Check',      kind: 'phase_margin',
         defaultBlend: 'normal', defaultOpacity: 0.85, sparse: true },
+      // Provenance of the grain-based phase assignment: which pixels the
+      // automation changed (cyan) and which grains it refused to judge
+      // (orange). Data comes from POST /api/indexing/grain-phase-assign and
+      // travels with the NEW result it produces, so this layer 400s on any
+      // other result (per-layer failure isolation shows the error chip).
+      //
+      // It sits in this group because it is the sibling of Phase Check — the
+      // other render-verified per-grain layer, served by the same
+      // /api/phasemap/layer path with an underscored backend kind. It carries
+      // no `requiresCompute`: the run that produces it is the grain
+      // assignment, not "Compute Diagnostics".
+      //
+      // `labelKey`/`tipKey` are read by layerLabel() and the layer row: the
+      // legend is the whole point of a provenance layer, so it has to be
+      // readable in the user's language.
+      //
+      // `sparse` for the same reason as Phase Check: it paints only the pixels
+      // the automation touched, so its extent is a finding about those pixels,
+      // not a statement about the region the result covers.
+      { id: 'assignment-source', label: 'Assignment Source', kind: 'assignment_source',
+        defaultBlend: 'normal', defaultOpacity: 0.85, sparse: true,
+        labelKey: 'layers.assignmentSource', tipKey: 'layers.assignmentSourceTip' },
     ],
   },
   refinement: {

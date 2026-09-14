@@ -60,6 +60,17 @@ def test_no_cov_std_mean_path_exists():
     assert not any("std" in name and "mean" in name for name in dir(pq))
 
 
+def test_image_quality_from_file_none_source_returns_none():
+    # No source path → nothing to load, never raises.
+    assert pq.image_quality_from_file(None) is None
+
+
+def test_image_quality_from_file_bogus_path_returns_none(tmp_path):
+    # A path that can't be loaded returns None (best-effort, no raise).
+    bogus = tmp_path / "does_not_exist.h5oina"
+    assert pq.image_quality_from_file(str(bogus), 2, 3) is None
+
+
 def test_native_read_does_not_mutate_shared_session(tmp_path, monkeypatch):
     # read_native_band_contrast on an explicit path must open its OWN handle.
     p = tmp_path / "s.h5oina"

@@ -36,6 +36,8 @@ import {
   IDENTITY_VIEW, isZoomed, viewToTransform, wheelFactor, zoomedRect,
 } from './zoomView';
 import RegionPanel from './RegionPanel';
+import SuggestLibrarySkipped from './SuggestLibrarySkipped';
+import QuantificationNote from './QuantificationNote';
 
 /** Store key for a phase colour.
  *
@@ -1111,6 +1113,28 @@ export function PhaseMapControls({ handle }) {
               : t('phaseMap.statsPhasesOther', { count: realPhases.length })}
             {phaseMap.k_used > 0 && ` · ${t('phaseMap.kUsed', { k: phaseMap.k_used })}`}
           </div>
+        )}
+
+        {/* --- Library notes ---
+                Same chips the suggestion panel shows, and this is where they
+                matter most: those compositions were just used to score every
+                pixel of the map above. A phase whose stored composition its own
+                CIF contradicts produces a map that is confidently wrong, and
+                until now the note only existed on the other panel. --- */}
+        {hasMap && phaseMap.library_skipped?.length > 0 && (
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            <SuggestLibrarySkipped skipped={phaseMap.library_skipped} />
+          </div>
+        )}
+
+        {/* --- How good the numbers under the map are ---
+                The same note the pixel table and the region panel carry, and
+                it belongs here most of all: these at% are what every candidate
+                was scored against. A window the quantification could not price
+                is left out and the rest renormalise without it, so the note
+                names the element the classifier had to treat as unmeasured. --- */}
+        {hasMap && phaseMap.quantification && (
+          <QuantificationNote provenance={phaseMap.quantification} />
         )}
 
         {/* --- Cluster report. The point of clustering is that ambiguity can

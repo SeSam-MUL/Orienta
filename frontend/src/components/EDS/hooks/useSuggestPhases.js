@@ -22,6 +22,14 @@ export function useSuggestPhases() {
   const [mapPhase, setMapPhase] = useState(null);     // what the MAP says here
   const [librarySource, setLibrarySource] = useState(null);
   const [librarySize, setLibrarySize] = useState(null);
+  // Why the list is empty, when it is. The backend sends a stable code plus
+  // its numbers; absent on a successful answer, so it cannot become noise.
+  const [cifNoMatch, setCifNoMatch] = useState(null);
+  // CIFs that are on disk in Database/CIF_Library and did NOT become phases
+  // (unreadable, empty composition, duplicate filename). The user put those
+  // files there, so "the library never saw your phase" has to be visible in
+  // the panel and not only in the backend log. [] when everything read.
+  const [librarySkipped, setLibrarySkipped] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -51,6 +59,8 @@ export function useSuggestPhases() {
       setMapPhase(data.map_phase || null);
       setLibrarySource(data.library_source || null);
       setLibrarySize(data.library_size ?? null);
+      setCifNoMatch(data.cif_no_match || null);
+      setLibrarySkipped(data.library_skipped || []);
     } catch (e) {
       if (token.cancel) return;
       setError(e?.response?.data?.detail || e?.message || 'Phase suggestion failed.');
@@ -61,6 +71,8 @@ export function useSuggestPhases() {
       setMapPhase(null);
       setLibrarySource(null);
       setLibrarySize(null);
+      setCifNoMatch(null);
+      setLibrarySkipped([]);
     } finally {
       if (!token.cancel) setLoading(false);
     }
@@ -80,12 +92,15 @@ export function useSuggestPhases() {
     setMapPhase(null);
     setLibrarySource(null);
     setLibrarySize(null);
+    setCifNoMatch(null);
+    setLibrarySkipped([]);
     setError(null);
     setLoading(false);
   }, []);
 
   return {
-    suggestions, pixel, atomicPct, mapPhase, librarySource, librarySize, loading, error,
+    suggestions, pixel, atomicPct, mapPhase, librarySource, librarySize,
+    cifNoMatch, librarySkipped, loading, error,
     run, followPixel, clear,
   };
 }

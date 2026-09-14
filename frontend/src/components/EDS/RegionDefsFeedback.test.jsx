@@ -22,7 +22,8 @@ vi.mock('../../services/api', () => ({
 }));
 
 import RegionDefs, { reasonText } from './RegionDefs';
-import { ENRICHED_AT, DEPLETED_AT, enrichmentKind } from './RegionInspector';
+import { ENRICHED_AT_FALLBACK, enrichmentKind, enrichmentThresholds }
+  from './RegionInspector';
 
 const DEFS = [{ name: 'a', elements: [{ element: 'Si', min_at_pct: 20 }] }];
 
@@ -110,13 +111,18 @@ describe('the enrichment legend and the colours agree', () => {
   it('depletion is the reciprocal of enrichment, not a rounder number', () => {
     // The legend said 0.8 while the code used 0.77; between them the words
     // and the colour contradicted each other.
-    expect(DEPLETED_AT).toBeCloseTo(1 / ENRICHED_AT, 2);
+    // whatever the backend currently sends, the two sides stay reciprocal
+    for (const factor of [1.15, 1.3, 2.0]) {
+      const th = enrichmentThresholds({ enrichment_factor: factor });
+      expect(th.depleted).toBeCloseTo(1 / th.enriched, 2);
+    }
   });
 
   it('colours match the thresholds exactly at the boundary', () => {
-    expect(enrichmentKind(ENRICHED_AT)).toBe('enriched');
-    expect(enrichmentKind(DEPLETED_AT)).toBe('depleted');
-    expect(enrichmentKind(1.0)).toBe('flat');
+    const th = enrichmentThresholds({ enrichment_factor: ENRICHED_AT_FALLBACK });
+    expect(enrichmentKind(th.enriched, th)).toBe('enriched');
+    expect(enrichmentKind(th.depleted, th)).toBe('depleted');
+    expect(enrichmentKind(1.0, th)).toBe('flat');
   });
 
   it('an unmeasurable factor is not silently called flat', () => {

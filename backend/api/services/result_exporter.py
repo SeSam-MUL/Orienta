@@ -722,8 +722,21 @@ def _write_ctf(
     mad   = np.zeros(n, dtype=np.float32)  # column kept for CTF spec compliance
     if has_real_bc:
         bc = quality["bc"].astype(int)
+        bc_is_computed = False
     else:
-        bc = np.zeros(n, dtype=int)  # no native Band Contrast — honest empty column, never a CI surrogate
+        # No native Band Contrast — try a computed FFT image quality from the
+        # source patterns (heavy, opt-in). Falls back to honest zeros (never a
+        # CI surrogate) when the helper can't produce a matching-size result.
+        from backend.api.services.pattern_quality import image_quality_from_file
+        iq = image_quality_from_file(source_h5_path)
+        if iq is not None and iq.size == n:
+            iqf = np.asarray(iq, dtype=float).ravel()
+            mx = float(iqf.max())
+            bc = np.clip(iqf / mx * 255.0, 0, 255).astype(int) if mx > 0 else np.zeros(n, dtype=int)
+            bc_is_computed = mx > 0
+        else:
+            bc = np.zeros(n, dtype=int)
+            bc_is_computed = False
     bs = np.full(n, 255, dtype=int)
 
     # Grid dimensions (infer from coordinate range)
@@ -835,7 +848,11 @@ def _write_ctf(
         # BC column of 0 isn't mistaken for a real (or CI-surrogate) signal.
         # Byte-identical to the original line when native BC IS present.
         prj = "Orienta multi-phase batch"
-        if not has_real_bc:
+        if has_real_bc:
+            pass  # native BC → byte-identical to the original line
+        elif bc_is_computed:
+            prj += " — BC column = computed FFT image quality (no native Band Contrast)"
+        else:
             prj += " — BC column = 0 (no native Band Contrast in source)"
         f.write(f"Prj\t{prj}\n")
         f.write(f"Author\tOrienta\n")
@@ -852,7 +869,13 @@ def _write_ctf(
         # rather than written into the file — Channel CTF parsers are
         # picky about non-spec lines and adding "# ..." can cause MTEX
         # import to fail in some versions.
-        if not has_real_bc:
+        if not has_real_bc and bc_is_computed:
+            logger.warning(
+                "CTF %s: no native Band Contrast — BC column holds a "
+                "computed FFT image quality (rescaled 0..255), not a "
+                "measured Band Contrast and not a CI surrogate.", ctf_path,
+            )
+        elif not has_real_bc:
             logger.warning(
                 "CTF %s: no native Band Contrast available — writing BC "
                 "column = 0 (honest empty column, not a CI surrogate). "
@@ -1155,17 +1178,37 @@ def export_ang_ctf(
         prop: Dict[str, np.ndarray] = {"ci": ci_flat}
         bc_quality = _read_h5oina_quality(source_h5_path, n_pixels)
         bc_arr = bc_quality.get("bc")
-        if bc_arr is not None:
-            prop["iq"] = bc_arr.astype(np.float32)
-        # When there is no native Band Contrast, orix writes zeros into the
-        # ANG IQ column (no fake). Record that honestly in the header so the
-        # empty IQ column isn't mistaken for a confidence surrogate.
         ang_iq_note = None
-        if bc_arr is None:
-            ang_iq_note = (
-                "# NOTE: IQ column = 0 (no native Band Contrast in source; "
-                "not a confidence surrogate)"
-            )
+        if bc_arr is not None:
+            # Native Band Contrast → real IQ column, no provenance note.
+            prop["iq"] = bc_arr.astype(np.float32)
+        else:
+            # No native Band Contrast — try a computed FFT image quality from
+            # the source patterns (heavy, opt-in). Rescale to 0..255 to match
+            # the ANG IQ column's usual range. Fall back to honest zeros + note.
+            from backend.api.services.pattern_quality import image_quality_from_file
+            iq = image_quality_from_file(source_h5_path, n_rows, n_cols)
+            if iq is not None and iq.size == n_pixels:
+                iqf = np.asarray(iq, dtype=np.float64).ravel()
+                mx = float(iqf.max())
+                if mx > 0:
+                    prop["iq"] = np.clip(iqf / mx * 255.0, 0, 255).astype(np.float32)
+                    ang_iq_note = (
+                        "# NOTE: IQ column = computed FFT image quality "
+                        "(no native Band Contrast; not a confidence surrogate)"
+                    )
+                else:
+                    ang_iq_note = (
+                        "# NOTE: IQ column = 0 (no native Band Contrast in source; "
+                        "not a confidence surrogate)"
+                    )
+            else:
+                # orix writes zeros into the ANG IQ column (no fake). Record
+                # that honestly so the empty column isn't read as a surrogate.
+                ang_iq_note = (
+                    "# NOTE: IQ column = 0 (no native Band Contrast in source; "
+                    "not a confidence surrogate)"
+                )
 
         rotations = Rotation.from_euler(euler_flat, degrees=False)
         xmap = CrystalMap(

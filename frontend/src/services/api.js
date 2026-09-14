@@ -8,6 +8,7 @@
 import axios from 'axios';
 import { addBreadcrumb, addHttpBreadcrumb, formatBreadcrumbs } from './breadcrumbs';
 import { reportError } from './errorReporter';
+import { normalizeRect } from './rect';
 
 // In dev mode with Vite proxy, use relative URLs. In Electron/production, use full URL.
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -947,7 +948,7 @@ export const dbApi = {
     api.get(`/api/database/sphere/${encodeURIComponent(filename)}`, { params }),
 
   // Full-unit-cell crystal structure of a local .cif/.xtal (3D ball-and-stick viewer).
-  // Returns { source, lattice, cell_vectors, space_group, atoms[], bonds[], polyhedra[], meta }.
+  // Returns { source, lattice, cell_vectors, space_group, atoms[], bonds[], meta }.
   structure: (filename) =>
     api.get(`/api/database/structure/${encodeURIComponent(filename)}`),
 
@@ -1026,12 +1027,17 @@ export const edsApi = {
   probe: (row, col, displayMode = 'at_pct') =>
     api.post('/api/eds/probe', { row, col, display_mode: displayMode }),
   linescan: (body) => api.post('/api/eds/linescan', body),
-  regionQuantify: (rowStart, rowEnd, colStart, colEnd, mode = 'at_pct') =>
-    api.post('/api/eds/region-quantify', {
-      row_start: rowStart, row_end: rowEnd,
-      col_start: colStart, col_end: colEnd,
+  // A rectangle drawn bottom-right to top-left is the same rectangle; it is
+  // ordered here rather than at each caller, because one of them is four
+  // number fields the user types into (see services/rect.js).
+  regionQuantify: (rowStart, rowEnd, colStart, colEnd, mode = 'at_pct') => {
+    const r = normalizeRect({ rowStart, rowEnd, colStart, colEnd });
+    return api.post('/api/eds/region-quantify', {
+      row_start: r.rowStart, row_end: r.rowEnd,
+      col_start: r.colStart, col_end: r.colEnd,
       display_mode: mode,
-    }),
+    });
+  },
   suggestPhases: (row, col) =>
     api.post('/api/eds/suggest-phases', { row, col }),
   cifPhases: () => api.get('/api/eds/cif-phases'),
@@ -1067,12 +1073,16 @@ export const edsApi = {
   getPhaseMap: (includeImage = true) =>
     api.get('/api/eds/phase-map', { params: { include_image: includeImage } }),
   clearPhaseMap: () => api.delete('/api/eds/phase-map'),
-  assignRegion: (rowStart, rowEnd, colStart, colEnd, phaseIndex) =>
-    api.post('/api/eds/phase-map/assign-region', {
-      row_start: rowStart, row_end: rowEnd,
-      col_start: colStart, col_end: colEnd,
+  // Same ordering as regionQuantify: a reversed rectangle slices an empty
+  // array server-side and paints 0 pixels without saying so.
+  assignRegion: (rowStart, rowEnd, colStart, colEnd, phaseIndex) => {
+    const r = normalizeRect({ rowStart, rowEnd, colStart, colEnd });
+    return api.post('/api/eds/phase-map/assign-region', {
+      row_start: r.rowStart, row_end: r.rowEnd,
+      col_start: r.colStart, col_end: r.colEnd,
       phase_index: phaseIndex,
-    }),
+    });
+  },
   assignPolygon: (vertices, phaseIndex) =>
     api.post('/api/eds/phase-map/assign-polygon', {
       vertices, phase_index: phaseIndex,
@@ -1237,12 +1247,14 @@ export const installApi = {
     api.post('/api/install/wsl-install', null, {
       params: { distro, repair, broken_distro: brokenDistro },
     }),
-  createUser: (username, password) =>
-    api.post('/api/install/wsl-create-user', { username, password }),
-  resetPassword: (username, password) =>
-    api.post('/api/install/wsl-reset-password', { username, password }),
-  validatePassword: (password) =>
-    api.post('/api/install/validate-password', { password }),
+  // `distro` is the name the wizard reported; every step must address the SAME
+  // distro, or the user is created in one and the password checked in another.
+  createUser: (username, password, distro = '') =>
+    api.post('/api/install/wsl-create-user', { username, password, distro }),
+  resetPassword: (username, password, distro = '') =>
+    api.post('/api/install/wsl-reset-password', { username, password, distro }),
+  validatePassword: (password, distro = '') =>
+    api.post('/api/install/validate-password', { password, distro }),
 };
 
 // --- Dictionary GPU (stand-alone tool) ---

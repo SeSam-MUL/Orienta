@@ -301,10 +301,25 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
   // re-runs the loop for the now-missing entry. Mask layers (kind='mask')
   // are derived from another layer's bitmap and have no remote source —
   // skip them.
+  //
+  // A layer that ALREADY FAILED is skipped too, and that is not a nicety: a
+  // failed fetch leaves no bitmap, records the error and calls force(), which
+  // bumps bitmapVersion — so the layer was re-selected by the very re-render
+  // its own failure had triggered and fetched again, at network speed, for as
+  // long as the page stayed open. One unusable EDS window was enough to start
+  // it with no user action at all (the page defaults to at% and the "All Maps"
+  // grid seeds a layer per element).
+  //
+  // The skip is not permanent. Every path that can make a retry meaningful
+  // goes through cacheFlush, which deletes the matching errorRef entries:
+  // a display-mode change (at% can fail where counts succeeds — exactly this
+  // case), a file or dataset switch, removeLayer, and an explicit
+  // invalidateBitmapsForLayer.
   useEffect(() => {
     Promise.all(
       state.layers
-        .filter((l) => l.visible && l.kind !== 'mask' && !cacheRef.current.has(l.id))
+        .filter((l) => l.visible && l.kind !== 'mask'
+          && !cacheRef.current.has(l.id) && !errorRef.current.has(l.id))
         .map((l) => doFetch(l)),
     );
   }, [state.layers, doFetch, bitmapVersion]);

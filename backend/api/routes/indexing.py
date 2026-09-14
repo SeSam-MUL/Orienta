@@ -13,11 +13,11 @@ import logging
 import threading
 import uuid
 from pathlib import Path
-from typing import Optional, List, Dict, Literal
+from typing import Callable, Optional, List, Dict, Literal
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend.api.services.image_utils import array_to_base64_png, array_to_base64_raw, colormap_array_to_base64
 from backend.api.services.calibration_store import calibration_store
@@ -363,17 +363,241 @@ def reactivate_result_for_source(path: str) -> "str | None":
     return match
 
 
+def _xmap_phase_list_ids(xmap) -> list:
+    """Ascending ids of an xmap's real (non-negative) PHASE LIST entries.
+
+    Not the same question as ``phase_map._real_phase_ids``, which reports
+    the ids actually PRESENT in the per-pixel data.
+
+    Defensive on purpose: callers pass whatever the indexing backend built,
+    and ``xmap.phases`` yields ``(id, Phase)`` on orix 0.12+ but bare Phase
+    objects on older releases. Returns ``[]`` when there is nothing to read.
+    """
+    ids: list[int] = []
+    try:
+        entries = list(xmap.phases) if xmap is not None else []
+    except Exception:
+        return []
+    for entry in entries:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            pid = entry[0]
+        else:
+            pid = getattr(entry, "id", None)
+        try:
+            pid_i = int(pid)
+        except (TypeError, ValueError):
+            continue
+        if pid_i >= 0:
+            ids.append(pid_i)
+    return sorted(set(ids))
+
+
+def _declared_phase_id_base(xmap):
+    """The base the PRODUCER of this map recorded, or ``None``.
+
+    The first question, before any reasoning about ids or names: the function
+    that built the map knows which convention it used, and
+    ``indexing_controller.declare_phase_id_base`` is where it says so.
+    Everything below this in :func:`_attach_indexing_metadata` and
+    :func:`_inject_phase_names` exists for maps that carry no declaration —
+    a result re-imported from disk, a test double, an older code path.
+
+    Fail-soft by design: a missing indexing_controller must not take an
+    indexing run down at the naming step.
+    """
+    try:
+        from indexing_controller import declared_phase_id_base
+    except Exception:  # pragma: no cover — the module is imported all over
+        return None
+    return declared_phase_id_base(xmap)
+
+
+def _phase_id_base(real_ids: list, n_phases: int):
+    """0 or 1 — the offset between xmap phase ids and phase POSITION.
+
+    Two producers, two conventions, and the id alone does not say which:
+
+    * ``spherical_gpu_index_patterns`` builds ``PhaseList(ids=1..N)`` on
+      purpose, and EMSphInx's single-phase .ang header is 1-based too.
+    * ``build_consensus_xmap`` — the multi-phase merge behind the EMSphInx
+      CPU backend and the per-phase-routing path — writes orix-native
+      ``phase_idx``, i.e. 0..N-1.
+
+    Deciding by count is not enough: orix DROPS a phase that won no pixels
+    from ``xmap.phases``, so the surviving ids can be a sparse subset. Decide
+    by which id WINDOW the surviving ids fit in instead. ``None`` when they
+    fit both (all strictly inside 1..N-1) or neither — ``None`` is NOT a
+    licence to guess, it hands the question to
+    :func:`_phase_id_base_from_names`.
+    """
+    if not real_ids or n_phases <= 0:
+        return None
+    lo, hi = min(real_ids), max(real_ids)
+    one_based = lo >= 1 and hi <= n_phases
+    zero_based = lo >= 0 and hi <= n_phases - 1
+    if one_based and not zero_based:
+        return 1
+    if zero_based and not one_based:
+        return 0
+    return None
+
+
+def _phase_id_base_from_names(xmap, sht_paths: list, derived_names: list | None = None):
+    """0 or 1 read off the phase NAMES, or ``None`` when they don't say.
+
+    The window test in :func:`_phase_id_base` abstains whenever the surviving
+    ids sit strictly inside ``1..N-1`` — and abstaining there is not harmless:
+    two phases, 0-based ids, FIRST phase wins nothing, and the survivor ``[1]``
+    fits both windows. Assuming 1-based then keys ``{1: first, 2: second}``
+    while the survivor is the *second* phase, so every indexed pixel in the map
+    renders against the first phase's master. That is the whole original defect
+    at full map scale, behind a log line.
+
+    It is decidable, because a file name carries its phase name
+    ("Name (Formula) [Pearson] {kV}.sht") and, by the time this runs, the xmap
+    carries phase names too: either the ones the indexing backend wrote
+    (``build_consensus_xmap`` copies the ``PhaseConfig`` name,
+    ``spherical_gpu_index_patterns`` the master's formula) or the ones
+    ``_inject_phase_names`` assigned. Match each surviving phase name back to a
+    path (exact name first, then the element-ratio fingerprint that
+    ``_match_library_shts_for_xmap`` uses on import) and read the base off
+    ``phase_id - path_index``. Every match must agree, otherwise ``None``.
+
+    ``derived_names`` is an optional parallel list of alternative names per
+    path — ``_inject_phase_names`` passes the ``get_phase_metadata`` formulas
+    it computed, which is what ``_build_phase_configs`` named the phases with.
+
+    A key claimed by two DIFFERENT names is dropped rather than resolved
+    first-index-wins: the ratio fingerprint deliberately cancels multipliers,
+    so "Al" and "Al2" fingerprint identically, and silently picking the lower
+    index there would be the same off-by-one through a different door.
+    """
+    try:
+        entries = list(xmap.phases) if xmap is not None else []
+    except Exception:
+        return None
+    if not entries or not sht_paths:
+        return None
+
+    by_name: dict[str, int] = {}
+    by_formula: dict[tuple, int] = {}
+    _fkey_owner: dict[tuple, str] = {}
+
+    def _offer(text: str, i: int) -> None:
+        if not text:
+            return
+        if by_name.setdefault(text, i) != i:
+            by_name[text] = None          # two files, one name → undecidable
+        fkey = _formula_ratio_key(text)
+        if fkey is None:
+            return
+        owner = _fkey_owner.setdefault(fkey, text)
+        if owner != text or by_formula.setdefault(fkey, i) != i:
+            by_formula[fkey] = None       # e.g. "Al" vs "Al2"
+
+    for i, p in enumerate(sht_paths):
+        try:
+            _offer(_smart_phase_name_from_path(Path(str(p))), i)
+        except Exception:
+            pass
+        if derived_names and i < len(derived_names):
+            _offer(str(derived_names[i] or ""), i)
+
+    bases = set()
+    for entry in entries:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            pid, phase = entry
+        else:
+            phase, pid = entry, getattr(entry, "id", None)
+        try:
+            pid_i = int(pid)
+        except (TypeError, ValueError):
+            continue
+        if pid_i < 0:
+            continue
+        name = str(getattr(phase, "name", "") or "")
+        idx = by_name.get(name)
+        if idx is None:
+            fkey = _formula_ratio_key(name)
+            if fkey is not None:
+                idx = by_formula.get(fkey)
+        if idx is None:
+            continue
+        bases.add(pid_i - idx)
+    if len(bases) == 1:
+        base = bases.pop()
+        if base in (0, 1):
+            return base
+    return None
+
+
+def _derived_phase_names(paths: list) -> list:
+    """The names a phase file is given, as ``_inject_phase_names`` gives them.
+
+    ``get_phase_metadata`` formula first, the smart stem when the metadata has
+    nothing better than the stem anyway. This is also what
+    ``_build_phase_configs`` names a ``PhaseConfig`` with, so it is the name
+    that ends up ON the xmap — and therefore the name any later tiebreak has
+    to match against.
+
+    It exists as its own function because ``_attach_indexing_metadata`` runs
+    AFTER ``_inject_phase_names`` and needs the same list: by then the xmap
+    carries formulas, and a tiebreak offered only the file stems can no longer
+    match anything. See the ``derived_names`` argument of
+    :func:`_phase_id_base_from_names`.
+
+    Returns ``[]`` when the metadata module cannot be imported, and says so.
+    ``_inject_phase_names`` has always treated that as "leave the names
+    alone"; an empty list reproduces exactly that for it, and leaves the
+    tiebreak in ``_attach_indexing_metadata`` with only the file stems — what
+    it had before. A broken import must not take an indexing run down with it,
+    and that call site has no handler of its own.
+    """
+    try:
+        from phase_metadata import get_phase_metadata
+    except Exception as exc:
+        logger.warning(
+            "_derived_phase_names: phase_metadata unavailable (%s) — phase "
+            "names cannot be derived from the files this run.", exc)
+        return []
+
+    cif_dir = None
+    try:
+        from path_utils import get_local_database_path, DATABASE_SUBFOLDERS
+        cif_dir = get_local_database_path() / DATABASE_SUBFOLDERS["cif_library"]
+    except Exception:
+        pass
+
+    names: list = []
+    for p in paths or []:
+        path_obj = Path(p)
+        try:
+            meta = get_phase_metadata(path_obj, cif_library_dir=cif_dir)
+            if meta.source == "stem" or not meta.formula:
+                name = _smart_phase_name_from_path(path_obj)
+            else:
+                name = meta.formula
+        except Exception:
+            name = _smart_phase_name_from_path(path_obj)
+        names.append(name)
+    return names
+
+
 def _attach_indexing_metadata(
     result,
     method_name: str,
     sht_paths: list | None = None,
     det_params: dict | None = None,
+    name_source_paths: list | None = None,
 ) -> None:
     """Populate result.metadata fields needed by the SHT forward renderer.
 
     Sets:
       - ``indexing_method``: "spherical" | "dictionary" | "hough"
-      - ``sht_paths_by_phase``: {phase_id: absolute_sht_path} (spherical only)
+      - ``sht_paths_by_phase``: {phase_id: absolute_sht_path} (spherical only),
+        keyed by the ids ``result.xmap`` actually carries — 1-based for the
+        spherical-GPU backend and EMSphInx's .ang, 0-based for anything that
+        came out of ``build_consensus_xmap``
       - ``detector_geometry``: vendor-normalized PC + detector shape + tilt
         + pixel size + binning, in the same dict shape produced upstream by
         the indexing route.
@@ -391,12 +615,75 @@ def _attach_indexing_metadata(
     md = result.metadata
     md["indexing_method"] = method_name
     if method_name == "spherical" and sht_paths:
-        # Phase ids in xmap conventionally start at 1; if there's a
-        # not_indexed entry at id=-1 we still align positively to the
-        # supplied sht_paths in order.
+        # Key by the xmap's OWN phase ids. Every consumer resolves this map
+        # with a raw ``xmap.phase_id`` (forward_diagnostics, refinement,
+        # sht_pattern_renderer, the export's /Indexing/Phases writer), so the
+        # base has to come from the xmap — not from an assumption. The old
+        # hard-coded ``i + 1`` was right for the spherical-GPU backend and for
+        # EMSphInx's 1-based .ang, and off by one for every result that came
+        # out of ``build_consensus_xmap`` (0-based): the first phase got no
+        # master at all and each later phase got its predecessor's, which
+        # rendered the whole forward-NCC map against the wrong simulation.
+        resolved = [str(Path(p).resolve()) for p in sht_paths]
+        real_ids = _xmap_phase_list_ids(getattr(result, "xmap", None))
+        # Ask the producer first — it knows. The id window and the name
+        # tiebreak below are for maps that carry no declaration.
+        base = _declared_phase_id_base(getattr(result, "xmap", None))
+        if base is None:
+            base = _phase_id_base(real_ids, len(resolved))
+        if base is None:
+            # Ids fit both windows (or neither) — usually because orix pruned
+            # a phase that won no pixels. The names decide it; guessing here
+            # would reinstate the very shift this function exists to prevent.
+            #
+            # The derived names have to come along, and they have to be the
+            # names that are actually ON the map. This runs AFTER
+            # _inject_phase_names, which derives its names from
+            # ``cif_paths or master_h5_paths or sht_paths`` — so on a
+            # spherical run that also carries CIFs the xmap says "Al13Fe4"
+            # while the SHT file is called "Iron aluminide (Al13Fe4) ...".
+            # A tiebreak offered only what it can read off the SHT filenames
+            # then has nothing to match, abstains, and the fallback below
+            # keeps 1-based on a 0-based build_consensus_xmap: every phase
+            # renders against its predecessor's master — the defect this
+            # function exists to prevent, one door further along.
+            #
+            # ``name_source_paths`` is that list, passed by the caller. It is
+            # only used when it is the same length as the SHT list, because
+            # the match is positional: entry i of one is phase i of the other.
+            _names = None
+            if name_source_paths and len(name_source_paths) == len(resolved):
+                _names = _derived_phase_names(name_source_paths)
+            else:
+                _names = _derived_phase_names(resolved)
+            base = _phase_id_base_from_names(
+                getattr(result, "xmap", None), resolved, derived_names=_names)
+            if base is not None:
+                # Still a WARNING, not an INFO: the ids alone did not settle
+                # this, a tiebreak did. Announcing a tiebreak as a confident
+                # resolution is how the operator stops looking — name the
+                # mechanism and the answer and let them check it.
+                logger.warning(
+                    "sht_paths_by_phase: phase ids %s do not settle the id "
+                    "base against %d SHT file(s) (a phase that won no pixels "
+                    "is dropped by orix); resolved as %d-based by matching "
+                    "the phase names to the SHT filenames. Verify the "
+                    "per-phase masters if a forward map looks wrong.",
+                    real_ids, len(resolved), base,
+                )
+        if base is None:
+            if real_ids:
+                logger.warning(
+                    "sht_paths_by_phase: %d phase id(s) %s settle neither a "
+                    "0- nor a 1-based convention for %d SHT file(s) (they fit "
+                    "both windows, or neither), and their names match no SHT "
+                    "filename — keeping the 1-based convention; forward "
+                    "rendering may pick the wrong master.",
+                    len(real_ids), real_ids, len(resolved),
+                )
+            base = 1
         md["sht_paths_by_phase"] = {
-            i + 1: str(Path(p).resolve())
-            for i, p in enumerate(sht_paths)
+            i + base: p for i, p in enumerate(resolved)
         }
     if det_params:
         # Store a defensive copy so later mutations of det_params don't
@@ -511,37 +798,43 @@ def _inject_phase_names(result, req) -> None:
          Iterating ``enumerate`` and assigning paths[0] to position 0 then
          renamed ``not_indexed`` to "Ni" and skipped the real phase. Fix:
          only touch entries with ``id >= 0``, consume paths in order.
+      4. AND IT WAS STILL POSITIONAL: skipping the ``not_indexed`` entry is
+         not the same as keying on the id. orix DROPS a phase that won no
+         pixels, so "the k-th surviving entry" and "the k-th path" are
+         different things the moment one phase stays empty — the survivor of
+         a two-phase run whose FIRST phase won nothing was renamed to the
+         first path's phase. That is not cosmetic: ``_attach_indexing_metadata``
+         reads these names back to resolve the SHT id base, so a mislabelled
+         phase also renders against the wrong master. Names are now assigned
+         by ``phase_id - base``, with the base decided exactly as it is for
+         the SHT map (id window, then the phase names the backend itself
+         wrote, then the lowest surviving id = the historical behaviour).
     """
     if result is None or result.xmap is None:
         return
     try:
-        from phase_metadata import get_phase_metadata
-        from pathlib import Path
-
-        paths = req.cif_paths or req.master_h5_paths or req.sht_paths or []
+        # One source path per phase OF THIS RUN, in the phase order the run
+        # used. `cif_paths or master_h5_paths or sht_paths` is the same
+        # precedence applied to three lists that were filtered independently:
+        # with one phase missing its CIF and another missing its .sht the
+        # lists are equally long and describe different phases, so entry i of
+        # the name list is a different phase from entry i of the run's list —
+        # and every phase is labelled with its neighbour's name. See
+        # PhaseFiles. A request without per-phase records keeps the old
+        # behaviour, which is correct whenever the lists do line up.
+        paths = getattr(req, "phase_name_sources", lambda: None)()
+        if paths is None:
+            paths = req.cif_paths or req.master_h5_paths or req.sht_paths or []
         if not paths:
             return
 
-        cif_dir = None
-        try:
-            from path_utils import get_local_database_path, DATABASE_SUBFOLDERS
-            cif_dir = get_local_database_path() / DATABASE_SUBFOLDERS["cif_library"]
-        except Exception:
-            pass
-
-        phase_names: list[str] = []
-        for p in paths:
-            path_obj = Path(p)
-            name = ""
-            try:
-                meta = get_phase_metadata(path_obj, cif_library_dir=cif_dir)
-                if meta.source == "stem" or not meta.formula:
-                    name = _smart_phase_name_from_path(path_obj)
-                else:
-                    name = meta.formula
-            except Exception:
-                name = _smart_phase_name_from_path(path_obj)
-            phase_names.append(name)
+        # One derivation, used here and by _attach_indexing_metadata, which
+        # has to match these names back to the same files a moment later.
+        # This used to be an inline copy; the two could drift, and a tiebreak
+        # keyed on names the map does not carry picks the wrong master.
+        phase_names: list[str] = _derived_phase_names(paths)
+        if not phase_names:
+            return
 
         try:
             phases_iter = list(result.xmap.phases)
@@ -550,28 +843,74 @@ def _inject_phase_names(result, req) -> None:
             return
 
         # Filter to real phases (id >= 0) preserving order; tuple or Phase-obj.
+        # ``pid`` stays None when the entry carries no usable id (older orix,
+        # test doubles) — those keep the historical positional handling.
         real_entries: list = []
         for entry in phases_iter:
             if isinstance(entry, tuple) and len(entry) == 2:
                 pid, phase_obj = entry
-                try:
-                    if int(pid) < 0:
-                        continue
-                except Exception:
-                    pass
             else:
                 phase_obj = entry
-                pid = getattr(entry, "id", 0)
-                try:
-                    if int(pid) < 0:
-                        continue
-                except Exception:
-                    pass
-            real_entries.append(phase_obj)
+                pid = getattr(entry, "id", None)
+            try:
+                pid_i = int(pid)
+            except (TypeError, ValueError):
+                pid_i = None
+            if pid_i is not None and pid_i < 0:
+                continue
+            real_entries.append((pid_i, phase_obj))
 
-        # Assign names in order. If the user sent fewer paths than real
-        # phases, only rename the first N.
-        for phase_obj, name in zip(real_entries, phase_names):
+        ids = [pid for pid, _ in real_entries if pid is not None]
+        if not ids or len(ids) != len(real_entries):
+            # No usable ids at all — position is the only ordering there is.
+            pairs = list(zip([obj for _, obj in real_entries], phase_names))
+        else:
+            # The producer's own declaration first (see
+            # _declared_phase_id_base); the window and the names are for maps
+            # that carry none.
+            base = _declared_phase_id_base(result.xmap)
+            how = "the producer's declaration"
+            if base is None:
+                base = _phase_id_base(ids, len(phase_names))
+                how = "id window"
+            if base is None:
+                # The names the indexing backend itself wrote are still on the
+                # xmap at this point (build_consensus_xmap copies the
+                # PhaseConfig name, spherical_gpu the master's formula), so
+                # they can settle it — feed the tiebreak the same metadata
+                # names PhaseConfig was built from, not just the file stems.
+                base = _phase_id_base_from_names(
+                    result.xmap, paths, derived_names=phase_names)
+                how = "phase names"
+            if base is None:
+                base = min(ids)
+                how = "lowest surviving id"
+                logger.warning(
+                    "_inject_phase_names: phase ids %s are ambiguous against "
+                    "%d file(s) and their names match none of them — falling "
+                    "back to the lowest id (%d) as the first file; phase "
+                    "labels may be off by one.",
+                    ids, len(phase_names), base,
+                )
+            elif how == "phase names":
+                # Only the NAME tiebreak is worth a warning: it is the one
+                # answer that was inferred rather than known. A declared base
+                # is what the producer used to build the map, and the id
+                # window is decided by the ids themselves.
+                logger.warning(
+                    "_inject_phase_names: phase ids %s fit both id windows for "
+                    "%d file(s); resolved as %d-based via %s.",
+                    ids, len(phase_names), base, how,
+                )
+            # Assign by id. If the user sent fewer paths than real phases,
+            # the out-of-range ones keep their existing name.
+            pairs = [
+                (obj, phase_names[pid - base])
+                for pid, obj in real_entries
+                if 0 <= pid - base < len(phase_names)
+            ]
+
+        for phase_obj, name in pairs:
             if not name:
                 continue
             try:
@@ -580,6 +919,376 @@ def _inject_phase_names(result, req) -> None:
                 logger.debug(f"_inject_phase_names: could not set name: {e}")
     except Exception as e:
         logger.warning(f"Could not set phase names: {e}")
+
+
+def _release_phase_gpu_memory(exc: BaseException | None = None) -> None:
+    """Hand one multi-phase iteration's VRAM back to the driver.
+
+    Called between the phases of a multi-phase Dictionary/Spherical run, both
+    after a phase that succeeded and after one that failed.
+
+    Why the ``exc`` argument matters. A phase that dies inside
+    ``run_dictionary_index`` dies with its dictionary tensors still bound as
+    locals of that frame, and the raised exception keeps the frame alive
+    through its traceback. So every reclamation that runs while the exception
+    is still in flight — including the ``finally: _release_cuda_cache()`` that
+    ``dictionary_index_patterns`` already has — reclaims nothing: the tensors
+    are *live*, not merely cached. Measured on a synthetic 2-phase run
+    (20,000 x 60 x 60 dictionary) through the real
+    ``run_single_phase_method``: 550.3 MiB still allocated inside the except
+    block, referrer = ``FRAME run_dictionary_index (indexer.py:491)``.
+
+    Python does drop them at the implicit ``del`` that ends an ``except ... as
+    e`` clause — but only back into PyTorch's caching allocator, and nothing
+    in the loop emptied that cache. ``cudaMemGetInfo`` counts cached-but-idle
+    blocks as USED, and that is the number the *next* phase sizes itself from:
+    ``run_dictionary_index`` derives ``initial_budget_bytes`` (the PCA
+    memory-pressure test) and ``compute_tile_size`` from
+    ``detect_gpu().vram_free_gb``. Measured with 3.22 GB stranded in the
+    cache: free reads 8.41 GB instead of 11.63, so the budget reads 6.41 GB
+    instead of 9.63 — enough to trip PCA on a dictionary that would have run
+    exactly, and the PCA branch peaks at ~3x the fp32 dictionary size. The
+    phase that had room then dies of "CUDA out of memory".
+
+    So: clear the traceback frames first (that is what actually drops the
+    tensors), then run the project's existing reclamation. No second copy of
+    it — ``indexing_controller._release_cuda_cache`` is the one function.
+
+    Call this AFTER formatting the traceback for the log; ``clear_frames``
+    only discards frame locals, but the order keeps the log honest.
+    """
+    if exc is not None:
+        import traceback as _tb
+        try:
+            _tb.clear_frames(exc.__traceback__)
+        except Exception:  # pragma: no cover — clear_frames is best-effort
+            logger.debug("clear_frames failed", exc_info=True)
+        try:
+            exc.__traceback__ = None
+        except Exception:  # pragma: no cover
+            pass
+    try:
+        from indexing_controller import _release_cuda_cache
+        _release_cuda_cache()
+    except Exception:  # pragma: no cover — never let cleanup kill the run
+        logger.debug("inter-phase CUDA release failed", exc_info=True)
+
+
+class MultiPhaseRunFailed(ValueError):
+    """A multi-phase run lost at least one phase.
+
+    Carries a message composed for the user (which phases died, why, and what
+    to do about it). Subclasses ``ValueError`` so existing callers and tests
+    that catch ValueError are unaffected; the separate type exists only so the
+    task handler can show the message WITHOUT the raw traceback stapled under
+    it — the advice is the last line of the message, and appending a traceback
+    buries exactly the part the user needs.
+    """
+
+
+def _load_phase_dictionary(pc, progress=None) -> bool:
+    """Attach one phase's precomputed dictionary, as late as possible.
+
+    ``run_single_phase_method`` raises unless a Dictionary phase carries BOTH
+    ``pc.dictionary`` and ``pc.phase_list``, and ``_build_phase_configs`` only
+    fills ``master_h5_path``. This used to be done for EVERY phase in one pass
+    before the loop started — so a three-phase run held three dictionaries in
+    RAM for its whole duration. Measured on the user's own library, all three
+    non-lazy ``kp.load`` results (the load is eager: ``sig.data`` comes back as
+    a plain ndarray):
+
+        Al           100,347 entries    8.01 GB   (RSS 0.03 -> 8.63 GB, 8.5 s)
+        sd_0302719   200,703 entries   16.03 GB
+        Al7FeCu2     301,055 entries   24.05 GB
+                                       -------
+        held at once before the loop   48.09 GB
+
+    Loading per phase and letting go afterwards makes the peak the largest
+    single dictionary instead of their sum. It does NOT change what the
+    indexer receives: the same eager signal, just later.
+
+    (The parenthesis that used to stand here said ``lazy=True`` would save
+    nothing "because the GPU path calls ``np.asarray(sig.data)``". That stopped
+    being the reason when the GPU path learned to stream a dictionary from disk
+    a tile at a time — a streamed dictionary never becomes one array. Loading
+    eagerly is still what this function does; the honest statement of why is
+    that the CPU path hands the signal to kikuchipy, which materialises it, and
+    the streaming decision belongs to the indexer, not here.)
+
+    Returns True when this call did the loading, so the caller knows it owns
+    the reference and may drop it. A dictionary supplied by someone else is
+    left alone.
+    """
+    if getattr(pc, "dictionary", None) is not None:
+        return False
+    if not getattr(pc, "master_h5_path", ""):
+        return False
+    import kikuchipy as kp
+    from pathlib import Path as _P
+    if progress:
+        progress(f"Loading dictionary {_P(pc.master_h5_path).name}...")
+    pc.dictionary = kp.load(pc.master_h5_path)
+    if getattr(pc, "phase_list", None) is None:
+        # The dictionary's own xmap carries the correct phase.
+        dict_xmap = getattr(pc.dictionary, "xmap", None)
+        if dict_xmap is not None:
+            pc.phase_list = dict_xmap.phases
+    return True
+
+
+def _drop_phase_dictionary(pc) -> None:
+    """Release a dictionary attached by ``_load_phase_dictionary``.
+
+    ``pc.phase_list`` stays — it is small, and the merge downstream reads it.
+
+    This alone does NOT free the memory on the CPU indexing path: that path
+    puts the same signal into ``IndexingResult.metadata['dictionary']``, and
+    every surviving ``PhaseMethodResult`` is held in ``all_results`` until the
+    run ends — so the peak was still the sum of all dictionaries, which is the
+    thing loading per phase is supposed to remove. See
+    ``_detach_dictionary_from_result``, which the loop calls as well.
+    """
+    try:
+        pc.dictionary = None
+    except Exception:  # pragma: no cover — defensive
+        logger.debug("could not drop phase dictionary", exc_info=True)
+    import gc
+    gc.collect()
+
+
+def _detach_dictionary_from_result(pmr) -> None:
+    """Swap a result's held dictionary for the path it came from.
+
+    Takes a ``PhaseMethodResult`` (what the multi-phase loop has) or a bare
+    ``IndexingResult`` (what a single-phase run has). One function on purpose:
+    the guard below — keep the object when there is no file to read it back
+    from — is the part that must not be re-implemented slightly differently
+    for the second caller.
+
+    The CPU path returns ``metadata['dictionary']`` — the whole eager
+    kikuchipy signal, gigabytes of it — "retained for pattern comparison
+    viewer". In a multi-phase run every phase's result lives in
+    ``all_results`` until the merge, so all of them stayed resident at once.
+    Measured on three 0.289 GB dictionaries through the real loop with the
+    GPU detector disabled: 3 of 3 still reachable afterwards, RSS 0.97 ->
+    1.88 GB, and ``dict_path`` was None.
+
+    A SINGLE-phase run has the same problem for longer. There is one
+    dictionary rather than three, but the result goes into the result
+    registry and stays there for the rest of the session, so the run pins as
+    much RAM as the dictionary is big — measured on the user's own library
+    8.01 / 16.03 / 24.05 GB (see ``_load_phase_dictionary``) — until another
+    result replaces it. Nothing about the single-phase path makes the held
+    object more necessary than it is in the loop: the dialog reads one row
+    from the file either way.
+
+    That None is the second half of the defect: the multi-phase pattern-match
+    dialog reads ``dict_path`` (via ``per_phase_match_sources``), so a
+    multi-phase CPU run offered no simulated pattern at all. Handing over the
+    path therefore costs nothing and gains that back —
+    ``tools/pattern_comparison`` already prefers a path over a held signal and
+    reads one row from the file (see ``_load_pattern_from_dict_file``).
+
+    The path comes from ``metadata['dict_path']`` and from nowhere else. The
+    PhaseConfig's ``master_h5_path`` looks like a reasonable fallback and is
+    not one: for a phase with no pre-generated dictionary the page hands the
+    run its MASTER, which the indexer projects in memory — a dictionary that
+    was never on disk. Substituting the master path there would tell the
+    dialog to read a master's Lambert hemispheres as detector patterns.
+    ``dict_path`` is the only value that knows whether that projection
+    happened (``dictionary_index_patterns`` clears it when it does), so a
+    result without one keeps its object: it is the dialog's only source.
+    """
+    result = getattr(pmr, "indexing_result", pmr)
+    metadata = getattr(result, "metadata", None)
+    if not isinstance(metadata, dict) or metadata.get("dictionary") is None:
+        return
+    from pathlib import Path as _P
+    path = metadata.get("dict_path")
+    if not path or not _P(path).is_file():
+        logger.debug(
+            "keeping the in-memory dictionary for %s — no dictionary file to "
+            "read it back from", getattr(pmr, "phase_name", "?"))
+        return
+    metadata["dictionary"] = None
+    import gc
+    gc.collect()
+
+
+def _run_phases_or_raise(phase_configs, run_one, progress, method_label: str):
+    """Run every phase in turn; raise unless all of them finished.
+
+    ``run_one(phase_config)`` does one phase — the route passes a closure over
+    ``run_single_phase_method`` with the signal, detector and config bound.
+
+    Three things live here rather than in the route body so they can be
+    tested: the VRAM handover between phases (see
+    ``_release_phase_gpu_memory``), the rule that a lost phase fails the run
+    (see ``_multi_phase_failure_error``), and the fact that a user cancel is
+    not a phase failure.
+    """
+    from indexing_controller import IndexingCancelled
+
+    all_results = []
+    phase_errors = []
+    n = len(phase_configs)
+    for i, pc in enumerate(phase_configs):
+        progress(
+            f"Phase {i+1}/{n}: {pc.name} — {method_label} indexing...",
+            0.1 + 0.8 * (i / n) if n else 0.1,
+        )
+        exc_to_release = None
+        try:
+            try:
+                all_results.append(run_one(pc))
+            except IndexingCancelled as exc:
+                # Stop means stop. IndexingCancelled subclasses Exception, so
+                # the handler below used to record it as a phase error and
+                # carry on: pressing Stop during a three-phase run still ran
+                # all three, then failed with "1 of 3 phases failed — Al:
+                # Indexing cancelled by user". Re-raise so the task handler's
+                # cancel branch ("Cancelled by user") is reachable again.
+                exc_to_release = exc
+                progress(f"Phase {pc.name} cancelled by user")
+                raise
+            except Exception as e:
+                exc_to_release = e
+                import traceback
+                logger.warning(f"Phase {pc.name} failed: {e}\n{traceback.format_exc()}")
+                progress(f"Phase {pc.name} FAILED: {e}")
+                phase_errors.append(f"{pc.name}: {e}")
+        finally:
+            # Runs on every exit path — success, failure and cancel — and
+            # OUTSIDE the handlers above, so a fault in the cleanup itself is
+            # never booked as a phase failure. On the failure paths the
+            # exception is passed in because its traceback is what pins the
+            # dead phase's tensors; see _release_phase_gpu_memory.
+            _release_phase_gpu_memory(exc_to_release)
+
+    # Every phase has to finish. The merge downstream competes the phases
+    # pixel by pixel through nanargmax, so a phase that never ran does not
+    # leave its pixels unclassified — it loses every comparison and its pixels
+    # go to a phase that did return. A run that lost a phase used to end on
+    # "Indexing complete. Mean CI: ..." over a map that was wrong exactly
+    # where the missing phase belonged.
+    if phase_errors:
+        raise MultiPhaseRunFailed(_multi_phase_failure_error(
+            phase_errors, n, len(all_results)))
+    if not all_results:
+        raise MultiPhaseRunFailed(
+            "Multi-phase indexing produced no results and reported no "
+            "per-phase errors — nothing ran.")
+    return all_results
+
+
+def _multi_phase_failure_error(
+    phase_errors: list[str], n_phases: int, n_survived: int
+) -> str:
+    """Compose the message for a multi-phase run that lost at least one phase.
+
+    Why any loss is fatal rather than partial. ``compute_comparison_maps``
+    fills a ``(n_phases, n_methods, n_pixels)`` array with NaN and writes only
+    the phases that came back; the winner is ``nanargmax`` down the phase
+    axis. A phase that never ran is therefore not "missing" — it is a NaN
+    column that loses every comparison, so every pixel that belonged to it is
+    handed to whichever phase did return, and the Mean CI printed at the end
+    is that phase's score measured on pixels where it is the wrong answer.
+
+    The result is not a subset of the truth; it is a different map. Marking it
+    ``status: partial`` would label a map that is wrong where it looks most
+    confident, so the run fails instead.
+    """
+    lines = []
+    if n_survived == 0:
+        lines.append(
+            f"All {n_phases} phases failed during multi-phase indexing."
+        )
+    else:
+        lines.append(
+            f"{len(phase_errors)} of {n_phases} phases failed, so this run "
+            f"has no result. A map merged from the {n_survived} surviving "
+            f"phase(s) would not be a partial map: every pixel that belonged "
+            f"to a missing phase is given to a phase that did return, and the "
+            f"reported Mean CI is that phase measured where it is wrong."
+        )
+    lines.append("Failed:")
+    lines.extend(f"  - {err}" for err in phase_errors)
+
+    if any("out of memory" in err.lower() for err in phase_errors):
+        free_note = ""
+        try:
+            import torch
+            if torch.cuda.is_available():
+                free_b, total_b = torch.cuda.mem_get_info(0)
+                free_note = (f" The card reports {free_b / 1024**3:.2f} GB free "
+                             f"of {total_b / 1024**3:.2f} GB now.")
+        except Exception:  # pragma: no cover — diagnostics only
+            pass
+        lines.append(
+            "The GPU ran out of memory." + free_note + " The dictionary is "
+            "uploaded whole, so a phase needs about (entries x detector "
+            "pixels x 4) bytes of VRAM: index the phases one at a time, "
+            "regenerate the offending dictionary at a coarser angular step, "
+            "or index a smaller region."
+        )
+    return "\n".join(lines)
+
+
+#: Every knob :class:`IndexingParams` offers that ``IndexingConfig`` takes
+#: under the same name. Read off the source object rather than passed
+#: individually so a field added to one model reaches the indexer without a
+#: second edit somewhere else.
+_INDEXING_CONFIG_FIELDS = (
+    "n_bands", "t_sigma", "r_sigma", "max_reflectors",
+    "metric", "keep_n", "compute_mode",
+    "bandwidth", "normed", "refine", "nregions", "circmask", "gausbckg",
+    "backend",
+    "row_start", "row_end", "col_start", "col_end",
+)
+
+
+def build_indexing_config(src, *, method, selection_mode):
+    """The ONE ``IndexingConfig`` construction, for every caller.
+
+    ``src`` is an :class:`IndexingParams` — an :class:`IndexingStartRequest`
+    from the Indexing page or a :class:`BatchDatasetConfig` from the "Batch…"
+    dialog. A field the source does not carry is left at ``IndexingConfig``'s
+    own default rather than repeated here, so there is exactly one place where
+    each default lives.
+
+    There used to be a second, shorter construction in the batch route
+    (method, selection_mode, n_bands, metric, keep_n and nothing else). What
+    it left out was not cosmetic: ``sht_file`` stayed ``""``, and
+    ``spherical_index_patterns`` resolves that to ``Path("").resolve()`` — the
+    backend's WORKING DIRECTORY — and writes it into the NML as the master
+    file, without raising; ``backend`` stayed at its default, so the GPU
+    branch of that route could not be reached at all. The spherical branch of
+    ``POST /api/indexing/batch/start`` was therefore dead, while the dialog
+    offered "Spherical" in its method menu.
+
+    ``sht_file`` is set from the first SHT path, exactly as ``start_indexing``
+    did it inline: one phase per dataset on that route, and the multi-phase
+    spherical paths pass their list separately.
+    """
+    from indexing_controller import IndexingConfig
+
+    kwargs = {name: getattr(src, name)
+              for name in _INDEXING_CONFIG_FIELDS if hasattr(src, name)}
+    # Pydantic hands these over as its own dict subclasses; the dataclass
+    # stores whatever it is given, and the indexer mutates neither. Copy so a
+    # later edit of the request cannot reach a running job.
+    for name in ("eds_phase_strengths", "eds_expected_overrides"):
+        value = getattr(src, name, None)
+        if value is not None:
+            kwargs[name] = dict(value)
+
+    config = IndexingConfig(method=method, selection_mode=selection_mode,
+                            **kwargs)
+
+    sht_paths = list(getattr(src, "sht_paths", None) or [])
+    if sht_paths:
+        config.sht_file = sht_paths[0]
+    return config
 
 
 def _build_phase_configs(req):
@@ -710,8 +1419,212 @@ def _build_eds_phase_weights(req, method_paths, selection_mask, full_grid_order:
     if measured is None:
         return None
     overrides = [req.eds_expected_overrides.get(p) for p in method_paths]
-    expected = expected_at_pct_for_phases(_phase_formulas_for_paths(method_paths), overrides)
+    # `paths` as well as formulas: the composition of the structure a master
+    # was SIMULATED from beats the label in its file name (see
+    # eds_indexing_prior.composition_from_structure).
+    expected = expected_at_pct_for_phases(
+        _phase_formulas_for_paths(method_paths), overrides, paths=method_paths)
     return chemistry_weight_matrix(measured, expected, strengths)
+
+
+def _method_phase_paths(req) -> list:
+    """The phase files the run was built from, in phase order."""
+    if req.method == "spherical":
+        return list(req.sht_paths or [])
+    if req.method == "dictionary":
+        return list(req.master_h5_paths or [])
+    return list(req.cif_paths or [])
+
+
+def _phase_point_group_and_name(xmap, pid: int, path: str) -> tuple:
+    """(point-group name, display name) of run phase ``pid`` built from ``path``.
+
+    From the xmap when the phase is in it; otherwise from the phase file,
+    because a phase with no pixel is dropped from ``xmap.phases`` by orix.
+    (None, "") when neither can say -- the caller then skips the phase.
+    """
+    from pathlib import Path as _P
+    try:
+        ph = xmap.phases[int(pid)]
+        pg = getattr(ph, "point_group", None)
+        pg_name = getattr(pg, "name", None) if pg is not None else None
+        if pg_name:
+            return str(pg_name), str(getattr(ph, "name", "") or _P(path).stem)
+    except Exception:
+        pass
+    name = _P(path).stem
+    suffix = _P(path).suffix.lower()
+    try:
+        if suffix == ".sht":
+            from backend.spherical_gpu.pipeline.sht_io import read_sht_master
+            return str(read_sht_master(path).point_group), name
+        if suffix == ".cif":
+            from ebsd_utils import sanitize_cif
+            from orix.crystal_map import Phase as _Phase
+            pg = _Phase.from_cif(sanitize_cif(path)).point_group
+            return (str(pg.name) if pg is not None else None), name
+        if suffix in (".h5", ".hdf5"):
+            # A kikuchipy master / dictionary carries its phase in the file
+            # header; lazy so the pattern data stays on disk.
+            import kikuchipy as kp
+            pg = getattr(getattr(kp.load(path, lazy=True), "phase", None), "point_group", None)
+            return (str(pg.name) if pg is not None else None), name
+    except Exception:
+        logger.debug("point group of %s not readable", path, exc_info=True)
+    return None, name
+
+
+def _ensure_phases_in_list(xmap, needed_ids, names, point_groups) -> None:
+    """Make sure every id in ``needed_ids`` is in ``xmap.phases``.
+
+    orix prunes a phase no pixel carries when the map is built, so a run
+    that indexed nothing as Si has no Si entry -- and writing id 2 into such
+    a map leaves it unprintable, uncolourable and unexportable (measured:
+    ``repr`` IndexError, ``xmap.phases[2]`` KeyError, the legend says
+    "Phase 2"). The list is rebuilt with the missing phases appended, in id
+    order, keeping the existing Phase objects.
+    """
+    from orix.crystal_map import Phase, PhaseList
+    # Walk the list itself, NOT the >= 0 helper: orix keeps "not_indexed"
+    # under id -1 whenever a pixel is unindexed (every consensus map), and
+    # a rebuild that drops it breaks the map the same way C1 did.
+    phases, ids = [], []
+    for entry in list(xmap.phases):
+        pid, ph = (entry if isinstance(entry, tuple) else (getattr(entry, "id", None), entry))
+        if pid is None:
+            continue
+        phases.append(ph); ids.append(int(pid))
+    have = set(ids)
+    missing = sorted(int(i) for i in needed_ids if int(i) >= 0 and int(i) not in have)
+    if not missing:
+        return
+    for pid in missing:
+        phases.append(Phase(name=names.get(pid) or f"Phase {pid}",
+                            point_group=point_groups.get(pid)))
+        ids.append(pid)
+    order = np.argsort(ids, kind="stable")
+    xmap.phases = PhaseList(phases=[phases[i] for i in order], ids=[ids[i] for i in order])
+
+
+def _apply_particle_rescue(result, req, selection_mask, progress=None):
+    """Post-pass for pattern-degenerate phase pairs (Al/Si): particles the
+    prior left on the matrix phase because the EDS volume dilutes them, and
+    rim pixels the prior put on the particle although the surface is matrix.
+    Decided by orientation continuity with the surrounding matrix, see
+    :mod:`backend.api.services.eds_particle_rescue`.
+
+    Runs only when the EDS prior was on for the run (any strength > 0): with
+    the prior off the run stays bit-identical. Writes the new phase ids into
+    the xmap in place (the same way ``assign-phase`` does), records the
+    report under ``metadata["eds_particle_rescue"]`` and returns it, or
+    ``None`` when nothing applied. Never raises: a failure here must not lose
+    an indexing result, so it is logged and the result is left as it was.
+    """
+    try:
+        xmap = getattr(result, "xmap", None)
+        if xmap is None:
+            return None
+        paths = _method_phase_paths(req)
+        if len(paths) < 2:
+            return None
+        # The prior's own gate, per phase of THIS method (the dict may carry
+        # strengths keyed to another method's files): a phase the prior did
+        # not weigh gets no rescue either, in either direction.
+        strengths = req.eds_phase_strengths or {}
+        active = {p: float(strengths.get(p, 0.0)) > 0.0 for p in paths}
+        if not any(active.values()):
+            return None
+        from backend.api.services.eds_particle_rescue import (
+            rescue_particles, select_rescue_pairs,
+        )
+        from backend.api.services.eds_indexing_prior import (
+            expected_at_pct_for_phases, measured_atpct_per_pixel,
+        )
+        # Phase ids follow the producer's declared base (spherical 1..N,
+        # consensus 0..N-1) in path order. NOT read off xmap.phases: orix
+        # drops a phase no pixel carries, and "no pixel carries Si" is
+        # exactly the run this pass is for.
+        from indexing_controller import declared_phase_id_base
+        base = declared_phase_id_base(xmap)
+        if base is None:
+            return None
+        ids = [base + i for i in range(len(paths))]
+        overrides = [(req.eds_expected_overrides or {}).get(p) for p in paths]
+        expected_list = expected_at_pct_for_phases(
+            _phase_formulas_for_paths(paths), overrides, paths=paths)
+        expected = {}
+        for pid, path, exp in zip(ids, paths, expected_list):
+            if active.get(path, False):
+                expected[pid] = exp          # a phase the prior skipped never pairs
+        point_groups, names, symmetries = {}, {}, {}
+        for pid, path in zip(ids, paths):
+            pg_name, name = _phase_point_group_and_name(xmap, pid, path)
+            point_groups[pid] = pg_name
+            names[pid] = name
+            if pg_name:
+                from orix.crystal_map import Phase as _Phase
+                symmetries[pid] = _Phase(point_group=pg_name).point_group
+        pairs = select_rescue_pairs(ids, expected, point_groups, names)
+        if not pairs:
+            return None
+
+        H, W = result.original_shape
+        rows = _full_grid_rows(result, int(H), int(W))
+        full_grid = rows.size == int(H) * int(W)
+        measured = measured_atpct_per_pixel(
+            None if full_grid else selection_mask, expected_shape=(int(H), int(W)))
+        if measured is None or len(measured) != rows.size:
+            return None
+        pid_rows = np.asarray(xmap.phase_id).reshape(-1).astype(int)
+        q_rows = np.asarray(xmap.rotations.data, dtype=np.float64).reshape(-1, 4)
+        if pid_rows.size != rows.size or q_rows.shape[0] != rows.size:
+            return None
+        pid_2d = np.full((H, W), -1, dtype=int)
+        pid_2d.reshape(-1)[rows] = pid_rows
+        q_2d = np.zeros((H, W, 4), dtype=np.float64)
+        q_2d.reshape(-1, 4)[rows] = q_rows
+
+        reports, n_up, n_down = [], 0, 0
+        for pair in pairs:
+            # A measured pixel without the element in its dict measured ZERO
+            # of it (the quantification drops zeros); only a missing dict is
+            # "unmeasured". A true 0 at% Si pixel is matrix, not a hole.
+            el_2d = np.full((H, W), np.nan, dtype=np.float64)
+            el_2d.reshape(-1)[rows] = [
+                float(m.get(pair.element, 0.0)) if m else np.nan for m in measured]
+            res = rescue_particles(pid_2d, q_2d, el_2d, pair, symmetries[pair.matrix_pid])
+            reports.append(res.report)
+            if res.n_changed:
+                pid_2d = res.phase_id_2d
+                n_up += int(res.to_particle.sum())
+                n_down += int(res.to_matrix.sum())
+        if not (n_up or n_down):
+            report = {"pairs": reports, "n_to_particle": 0, "n_to_matrix": 0}
+            result.metadata["eds_particle_rescue"] = report
+            return report
+        new_rows = pid_2d.reshape(-1)[rows]
+        changed_rows = np.flatnonzero(new_rows != pid_rows)
+        _ensure_phases_in_list(xmap, {int(p) for p in np.unique(new_rows)}, names, point_groups)
+        xmap._phase_id[np.asarray(xmap.is_in_data, dtype=bool)] = new_rows
+        report = {
+            "pairs": reports,
+            "n_to_particle": int(n_up), "n_to_matrix": int(n_down),
+            "changed_rows": [int(i) for i in changed_rows],
+            "old_phase_ids": [int(pid_rows[i]) for i in changed_rows],
+        }
+        result.metadata["eds_particle_rescue"] = report
+        if progress is not None:
+            parts = []
+            for r in reports:
+                if r.get("n_to_particle") or r.get("n_to_matrix"):
+                    parts.append(
+                        f"{r['element']}: {r['n_to_particle']} px -> {r['particle_name'] or r['particle_pid']}, "
+                        f"{r['n_to_matrix']} px -> {r['matrix_name'] or r['matrix_pid']}")
+            progress("EDS particle rescue by orientation continuity: " + "; ".join(parts))
+        return report
+    except Exception:
+        logger.warning("EDS particle rescue failed; result left unchanged", exc_info=True)
+        return None
 
 
 def get_last_indexing_result():
@@ -939,14 +1852,19 @@ def _master_h5_for_phase(entry, files=None):
     return None
 
 
-class IndexingStartRequest(BaseModel):
-    method: str = "hough"  # "hough", "dictionary", "spherical"
-    selection_mode: str = "full"  # "full", "region", "mask"
+class IndexingParams(BaseModel):
+    """The knobs an indexing run takes, whatever started it.
 
-    # Phase files
-    cif_paths: List[str] = []
-    sht_paths: List[str] = []
-    master_h5_paths: List[str] = []
+    Shared by :class:`IndexingStartRequest` (the Indexing page) and
+    :class:`BatchDatasetConfig` (the "Batch…" dialog) so the two cannot drift.
+    They did: the batch config carried three of these fields, so a batch
+    spherical run reached the indexer with ``sht_file=""`` (which
+    ``spherical_index_patterns`` resolved to the WORKING DIRECTORY as the
+    master file, without an error) and ``backend="emsphinx"`` whatever the
+    user had chosen — the GPU branch of that route was unreachable and the
+    CPU branch ran against nothing. See :func:`build_indexing_config`, which
+    is now the one construction for both.
+    """
 
     # Hough params
     n_bands: int = 12
@@ -974,6 +1892,126 @@ class IndexingStartRequest(BaseModel):
     backend: str = "emsphinx"
     circmask: int = -1
     gausbckg: bool = False
+
+
+class PhaseFiles(BaseModel):
+    """The files ONE phase brings, kept together.
+
+    The page has a list of phases and each phase has up to three files — a CIF
+    for Hough, a master .h5 for Dictionary, an .sht for Spherical. It used to
+    put them on the wire as three INDEPENDENTLY FILTERED lists, one per
+    extension. That is lossless only while every phase has every file: with
+    phase 2 missing its CIF and phase 3 missing its .sht the two lists are the
+    same LENGTH and describe different phases, and nothing downstream can see
+    it. ``_inject_phase_names`` then labels a phase from one list while
+    ``_attach_indexing_metadata`` keys its master from the other, and a run
+    can come back labelled as one phase and rendered against another's master.
+
+    One record per phase removes the question instead of answering it.
+    ``name`` is optional and only used for the log — the backend derives its
+    own names from the files (``_derived_phase_names``) so that what is on the
+    map and what a later lookup matches against cannot drift.
+    """
+    name: Optional[str] = None
+    cif: Optional[str] = None
+    sht: Optional[str] = None
+    master: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _must_bring_a_file(self):
+        """A record with no file at all is a phase nothing can run.
+
+        It would sit in the list, shift nothing (the derivation drops it from
+        every list) and quietly reduce the phase count — which is how a run
+        comes back with fewer phases than the page showed and no reason
+        anywhere. Refuse it at the door instead.
+        """
+        if not (self.cif or self.sht or self.master):
+            raise ValueError(
+                f"phase {self.name or '(unnamed)'} carries no file: give it a "
+                "cif, an sht or a master .h5")
+        return self
+
+
+#: Which file of a phase each method runs on.
+_METHOD_PHASE_FILE = {"hough": "cif", "dictionary": "master",
+                      "spherical": "sht"}
+
+
+def phase_file_lists(phases, method: str):
+    """``(paths, name_sources)`` for ``method``, aligned phase by phase.
+
+    ``paths[i]`` is the file the method runs on and ``name_sources[i]`` is the
+    file phase i is NAMED after — the per-phase form of the historical
+    ``cif_paths or master_h5_paths or sht_paths`` precedence, which is what
+    makes the two lists describe the same phase even when the phases carry
+    different files.
+
+    Phases without a file for this method are left out of BOTH lists: a phase
+    with no .sht cannot take part in a spherical run, and silently keeping a
+    hole in one list is the defect this exists to prevent.
+    """
+    attr = _METHOD_PHASE_FILE.get(str(method or "").lower())
+    paths: List[str] = []
+    names: List[str] = []
+    for phase in phases or []:
+        path = getattr(phase, attr, None) if attr else None
+        if not path:
+            continue
+        paths.append(str(path))
+        names.append(str(phase.cif or phase.master or phase.sht or path))
+    return paths, names
+
+
+def phases_without_a_file(phases, method: str) -> List[str]:
+    """The phases this method cannot run, by name. Pure; see the reporter."""
+    attr = _METHOD_PHASE_FILE.get(str(method or "").lower())
+    return [str(p.name or p.cif or p.master or p.sht or "(unnamed)")
+            for p in phases or []
+            if not (getattr(p, attr, None) if attr else None)]
+
+
+def report_phases_without_a_file(req, progress=None) -> None:
+    """Say which selected phases cannot take part, BEFORE the run starts.
+
+    "I selected four phases and got three" has to be answerable, and the phase
+    list on screen does not show which file each phase has for which method.
+
+    Called once, up front, on purpose: the derivation itself is pure, so the
+    only place this could have been noticed otherwise was when the names were
+    matched back after the run — hours into a dictionary run, and only in the
+    server log. It goes through the run's own progress channel too, which is
+    the log box the user is watching.
+    """
+    phases = getattr(req, "phases", None)
+    if not phases:
+        return
+    dropped = phases_without_a_file(phases, getattr(req, "method", ""))
+    if not dropped:
+        return
+    attr = _METHOD_PHASE_FILE.get(str(getattr(req, "method", "")).lower())
+    msg = (f"{len(dropped)} phase(s) have no {attr or 'matching'} file and "
+           f"cannot take part in this {getattr(req, 'method', '?')} run: "
+           f"{', '.join(dropped)}")
+    logger.warning("%s", msg)
+    if progress is not None:
+        progress(f"WARNING: {msg}")
+
+
+class IndexingStartRequest(IndexingParams):
+    method: str = "hough"  # "hough", "dictionary", "spherical"
+    selection_mode: str = "full"  # "full", "region", "mask"
+
+    # Phase files, ONE RECORD PER PHASE — the form the Indexing page sends.
+    # See PhaseFiles. Absent (older client, the batch route, a test) means the
+    # three lists below are the whole truth, exactly as before.
+    phases: Optional[List[PhaseFiles]] = None
+
+    # Phase files, split by extension. Derived from `phases` when that is
+    # given, so every existing reader keeps working off ONE source.
+    cif_paths: List[str] = []
+    sht_paths: List[str] = []
+    master_h5_paths: List[str] = []
 
     # Region selection
     row_start: int = 0
@@ -1004,6 +2042,48 @@ class IndexingStartRequest(BaseModel):
     # EDS chemistry prior — {phase_file_path: strength 0..1} and {phase_file_path: {El: at%}}
     eds_phase_strengths: Dict[str, float] = {}
     eds_expected_overrides: Dict[str, Dict[str, float]] = {}
+
+    @model_validator(mode="after")
+    def _derive_file_lists_from_phases(self):
+        """With ``phases`` given, the three lists are its projection.
+
+        Done here rather than at each reader, so there is exactly one place
+        where "which files does this run use" is answered and the per-extension
+        lists cannot disagree with the per-phase records. Without ``phases``
+        nothing happens at all and an older client is unaffected.
+
+        A client that sends both is telling us the same thing twice; the
+        records win, because they are the form that cannot be ambiguous, and
+        the disagreement is logged rather than silently resolved.
+        """
+        if not self.phases:
+            return self
+        derived = {
+            "cif_paths": [p.cif for p in self.phases if p.cif],
+            "sht_paths": [p.sht for p in self.phases if p.sht],
+            "master_h5_paths": [p.master for p in self.phases if p.master],
+        }
+        for field, value in derived.items():
+            sent = getattr(self, field) or []
+            if sent and list(sent) != value:
+                logger.warning(
+                    "indexing request carries both phases[] and %s, and they "
+                    "disagree (%s vs %s) — using the per-phase records",
+                    field, sent, value)
+            setattr(self, field, value)
+        return self
+
+    def phase_name_sources(self) -> Optional[List[str]]:
+        """The file each phase of THIS run is named after, or ``None``.
+
+        Aligned with the path list the method runs on, phase by phase — see
+        :func:`phase_file_lists`. ``None`` when the request carries no
+        per-phase records, which leaves every caller on its historical
+        whole-list behaviour.
+        """
+        if not self.phases:
+            return None
+        return phase_file_lists(self.phases, self.method)[1]
 
 
 class SinglePixelPhaseTestRequest(BaseModel):
@@ -1108,6 +2188,970 @@ async def eds_preflight(req: EdsPreflightRequest):
         raise HTTPException(status_code=500, detail=f"EDS preflight failed: {exc}")
 
 
+# =============================================================================
+# Grain-based phase assignment
+#
+# Decide the phase ONCE per orientation grain instead of once per pixel. The
+# per-pixel EDS chemistry is blurry and offset from the diffraction grid, so
+# weighing it pixel by pixel rings every particle with a wrong phase; a grain's
+# eroded interior is the part of it whose chemistry is not mixed with its
+# neighbour's. The stages live in backend/api/services/: eds_registration
+# (the offset), grain_segmentation (chemistry-free grains), and
+# grain_phase_assignment (the per-grain decision and the render gate).
+# =============================================================================
+
+#: How each pixel got its phase, written to ``metadata["assignment_source"]``.
+#: The phase-map layer and the export read these numbers, so they are a
+#: contract, not an implementation detail.
+ASSIGNMENT_SOURCE = {"kept": 0, "grain": 1, "ambiguous": 2}
+
+#: What BOTH render-verified routes say when the other one is already running.
+#:
+#: They share one flag (``_phase_check_busy``) because they contend for the
+#: same VRAM: each loads one master per phase onto the GPU and holds it for
+#: minutes, and two at once is the out-of-memory case. The flag is named for
+#: the phase check for historical reasons; this message is the half a user
+#: ever sees, so it must not name only one of them -- starting a grain
+#: assignment and then clicking Phase Check used to answer "A phase check is
+#: already running", which is false.
+_RENDER_RUN_BUSY_DETAIL = (
+    "A render-verified run is already in progress -- wait for it to finish. "
+    "The phase check and the grain phase assignment each load one master per "
+    "phase onto the GPU, and two at once is the out-of-memory case.")
+
+#: Decisions echoed in the response. A map can hold thousands of grains and
+#: the response is read by a browser, so the list is bounded -- but the
+#: response also reports the untruncated total and says that it truncated,
+#: because a silently shortened list reads as "the feature barely fired".
+DECISION_RESPONSE_CAP = 500
+
+#: Point groups that are subgroups of m-3m, by name as ``orix`` spells them.
+#:
+#: The segmentation must run under ONE symmetry for the whole map, because it
+#: is deliberately chemistry-free: it exists to correct the per-pixel phase
+#: labels, so it must not depend on them. The design spec asks for the common
+#: supergroup of the phases present. This is the part of that we can serve
+#: honestly: every crystallographic point group EXCEPT the seven hexagonal
+#: ones is a subgroup of m-3m, because m-3m's rotations have orders 1, 2, 3
+#: and 4 only -- a 6-fold axis (proper, in 6/622/6mm..., or improper, in
+#: -6 = 3/m) has no image in it. Trigonal groups DO fit: the 3-fold sits on
+#: <111> and -3m's 2-folds on the <110> directions perpendicular to it.
+#:
+#: A phase outside this set is refused by name rather than segmented under a
+#: coarser symmetry, which would merge orientations that are genuinely
+#: distinct for it. No general supergroup algorithm is attempted here; the
+#: case that cannot be served fails loud.
+#:
+#: NOTE the cost that remains even inside the set: m-3m is COARSER than, say,
+#: mmm, so two orthorhombic grains 90 deg apart about z merge into one. That
+#: is the spec's stated limitation of the common-supergroup approach, not a
+#: defect of this list.
+_M3M_SUBGROUP_POINT_GROUPS = frozenset({
+    "1", "-1",
+    "2/m", "112", "121", "211", "m11", "1m1", "11m",
+    "222", "mm2", "mmm",
+    "4", "-4", "4/m", "422", "4mm", "-42m", "4/mmm",
+    "3", "-3", "32", "312", "321", "3m", "-3m",
+    "23", "m-3", "432", "-43m", "m-3m",
+})
+
+#: Placed in the At.% maps at pixels with no measured chemistry, AFTER those
+#: pixels have been relabelled into single-pixel grains of their own. It is
+#: therefore structurally unreachable: ``decide_grains`` only ever reads
+#: ``labels == grain_id`` pixels, and a one-pixel grain is refused by the
+#: ``min_px`` branch before any chemistry is touched.
+#:
+#: WHAT PROTECTS THAT IS THE POST-CONDITION two steps below, not this value.
+#: The route checks that every pixel carrying the placeholder is alone in its
+#: grain, and raises if not; that is a hard check on the actual arrays.
+#:
+#: The sign is belt-and-braces and a WEAK brace, so do not read it as a net.
+#: Measured on the 36-px Si interior in the tests: 1, 2 or 3 leaked placeholder
+#: pixels give a spread of 0.00 at% and an UNCHANGED median for both -1.0 and
+#: 0.0, because p90-p10 is robust to a few outliers -- a leak that small
+#: produces a plausible composition and a decided grain, not an ambiguous one.
+#: The difference only appears once about 4 of 36 leak (past the tenth
+#: percentile), and there it is worth 0.5 at% of spread (48.0 against 47.5),
+#: both of which are already over the limit. So the sign buys a slightly
+#: earlier ``ambiguous`` in a regime the post-condition has already refused.
+#: It stays because it costs nothing, and because 0 at% is the one value that
+#: would read as "measured and absent" and trip chemistry_fit's missing-major
+#: veto on an absence nobody observed.
+_UNMEASURED_AT_PCT = -1.0
+
+
+class GrainPhaseAssignRequest(BaseModel):
+    """Decide the phase per orientation grain instead of per pixel."""
+    threshold_deg: float = Field(5.0, ge=0.5, le=30.0)
+    min_px: int = Field(5, ge=1)
+    spread_limit: float = Field(20.0, ge=1.0)
+    apply_registration: bool = True
+
+
+#: How many pixels of ONE scope the render scorer actually renders.
+#:
+#: Same number, and the same job, as ``phase_reassignment.SAMPLE_PX_MAX``,
+#: which samples per grain for the render-verified phase check. It is a COST
+#: cap, not an accuracy statement: every render is a forward simulation from
+#: the phase's master plus a dynamic-background pass on each side.
+#:
+#: BOTH FACTORS ARE MEASURED, neither is estimated.
+#:
+#: Per render, on this box (RTX 4070, ``build_render_score_fn`` on a real
+#: 20 kV Al SHT, 156x128 detector): **37.0 ms** the first time a phase's
+#: scorer touches a pixel and 18.6 ms after that. The 37 is the figure that
+#: governs here: the experimental pattern's dynamic background is cached
+#: inside ``build_render_score_fn``, i.e. PER PHASE, and this route's scopes
+#: are disjoint per grain, so a (pixel, phase) pair is essentially never
+#: rendered twice. One-off costs beside that: 1.97 s to build one phase's
+#: scorer, 6.8 s for the first render in a process.
+#:
+#: Renders per map, counted by running the REAL gate over a 301x402 scan with
+#: 500 shelled 8x8 particles (the shape this route exists for; every grain a
+#: rim repair with one 28-px disputed group), with a counting renderer:
+#:
+#:   max_px      8       16       32       64
+#:   renders  8 000   16 000   28 000   28 000
+#:   at 37 ms  4.9 min  9.9 min  17.3 min 17.3 min
+#:
+#: 1000 scorer calls in every case -- two per grain, which is the gate's own
+#: structure and not something this number changes. The cap stops mattering
+#: above 28 because that is the group size; a rim group of 4 px renders 4
+#: pixels whatever this is.
+#:
+#: 16 STAYS ON THE PRECEDENT: it is what the neighbouring render-verified
+#: phase check (``phase_reassignment.SAMPLE_PX_MAX``) already samples per
+#: grain, for the same question, on the same box. Nothing measured here shows
+#: a verdict flipping between 8 and 16 -- a larger sample gives a
+#: LOWER-variance median, so raising the cap makes the fixed 0.03 margin
+#: harder to cross by noise, not easier -- so the choice is the cost table
+#: above against a precedent, and not an accuracy claim.
+#:
+#: THE HONEST LIMIT: the cap is what keeps the cost flat as particles grow, so
+#: on a map with LARGE particles a whole-grain verdict rests on 16 pixels of
+#: hundreds. That is a deliberate trade and it is reported --
+#: ``render.n_pixels_rendered`` in the response says how much was actually
+#: looked at.
+GRAIN_RENDER_MAX_PX = 16
+
+
+def _render_scorer_for(result, labels: np.ndarray,
+                       max_px: Optional[int] = None
+                       ) -> "Callable[..., Optional[float]]":
+    """The forward-render scorer ``verify_decisions_with_evidence`` asks for.
+
+    Contract (``backend/api/services/grain_phase_assignment.py``)::
+
+        render_scorer(grain_id: int, phase_id: int, pixels=None) -> float | None
+
+    ``pixels`` is a boolean mask over the full map naming the pixels to score;
+    ``None`` means the scorer's own default scope, which that contract defines
+    as the grain's ERODED INTERIOR. ``labels`` is therefore not optional
+    context: without the (rows, cols) label map a scorer cannot turn a
+    ``grain_id`` into pixels at all, so the whole-grain path -- which calls with
+    two arguments -- would have nothing to score.
+
+    WHAT IT ANSWERS: the median per-pixel render-NCC over up to ``max_px``
+    pixels of the scope, each rendered from that phase's master (SHT) at that
+    pixel's OWN stored orientation and correlated against its experimental
+    pattern. Median rather than mean, because that is the estimator every
+    other render comparison in this codebase uses
+    (``variant_unification``, ``phase_reassignment._agg``) and because one
+    unreadable pattern must not drag a grain's verdict.
+
+    The default scope goes through ``grain_phase_assignment._interior`` -- the
+    SAME function the chemistry aggregation uses, deliberately, so the phase
+    proposed from a set of pixels is verified on those pixels. It erodes by one
+    8-connected pixel and falls back to the full grain when the erosion leaves
+    nothing at all.
+
+    THE CACHE KEY IS ``(grain_id, phase_id, pixels)``, ALL THREE. A mask is not
+    hashable, so the third part is ``np.flatnonzero(mask.ravel()).tobytes()``
+    -- the scope's flat indices, exactly, not a digest and not a summary like a
+    pixel count, so two different scopes can never collide; ``None`` for the
+    default scope, which ``grain_id`` already determines.
+
+    WHAT A TWO-PART KEY WOULD ACTUALLY BREAK is cross-group contamination, not
+    self-comparison. ``_disputed_score`` calls with ``(gid, proposed, mask)``
+    and ``(gid, carried, mask)``, and ``carried != proposed`` by construction,
+    so the two sides of one comparison never collide. But a rim BORDERING TWO
+    PHASES splits into two groups scored under the same ``proposed_phase``:
+    ``(gid, proposed, maskA)`` and ``(gid, proposed, maskB)`` are the same
+    2-tuple, so group B would be served group A's number and the
+    pixel-weighted mean would be computed from a score measured somewhere else
+    entirely. Total key storage is bounded by the map: the masks partition the
+    disputed pixels, so it is at most 8 bytes per scan pixel across the run.
+
+    ``None`` as the RETURN means "cannot be computed" -- never NaN, never an
+    infinity (``nan >= x + margin`` is False, so a NaN would refuse while
+    printing ``nan`` where a measurement belongs; ``inf >= x + margin`` is
+    True, so an infinity would ADOPT). ``build_render_score_fn`` answers
+    ``-inf`` for a pixel it could not score at all (no experimental pattern, or
+    a CUDA OOM that survived its one cache-release retry); those pixels are
+    dropped, and a scope with no finite pixel left comes back ``None``. A
+    ONE-PIXEL scope is answered, not refused: the rim path partitions the
+    disputed pixels by the phase they carry, so a group of one is reachable.
+
+    NOTHING IS CAUGHT AROUND THE RENDER. The two failures that are genuinely
+    expected per pixel are already turned into ``-inf`` inside
+    ``build_render_score_fn`` (a missing pattern -- ``get_experimental_pattern``
+    returns None rather than raising -- and a persistent CUDA OOM). Anything
+    else escaping it is a signature mismatch, a shape bug or an exhausted
+    machine, and ``except Exception: None`` would turn every one of those into
+    "the render has no opinion", permanently and silently: the exact failure
+    class this route exists to remove.
+
+    ``max_px`` defaults to ``GRAIN_RENDER_MAX_PX``, read HERE rather than bound
+    as a def-time default so the module attribute is the single place the
+    number lives. It applies to EVERY scope, so the ``2 * n_disputed`` render
+    count in ``_disputed_score``'s docstring is an upper bound once a disputed
+    group is larger than the cap.
+
+    THE CONTEXT IS BUILT LAZILY, on the first scorer call. Constructing it
+    loads one SHT grid per phase onto the GPU and takes ~2 s each, and a run
+    where the chemistry proposed nothing never asks a single question -- so it
+    must not pay for a renderer, and must not fail on a result that has no
+    detector geometry when it was never going to render anything. The failure
+    is not softened by the delay: the ``HTTPException`` raises out of the first
+    scorer call, through the gate, out of the route.
+
+    DIAGNOSTICS. The returned callable carries ``render_stats``: call and
+    ``None`` counts, the ``None`` reasons, pixels rendered and seconds spent.
+    Because ``_disputed_score`` returns on the FIRST ``None``, one unanswerable
+    group refuses a whole grain -- honest per grain, invisible in aggregate --
+    so the route reports these beside the refusal counts. A scorer that answers
+    ``None`` too often would otherwise look like a feature that does not fire.
+    ``phases_with_scorer`` is ``None`` until the context is built, which is how
+    a run that never rendered is told apart from one where no phase could be.
+
+    THE FOUR ``None`` REASONS, kept separate because they send a reader to
+    different places:
+
+    ``no-sht``            the result carries no master for that phase -- it
+                          cannot be rendered at all, and never will be until
+                          one is simulated.
+    ``no-scorer``         the master IS in the result, but ``_phase_check_ctx``
+                          built no scorer for it. It builds them only for
+                          phases that currently OWN pixels, so this is exactly
+                          the phase a systematically mis-indexed map wants to
+                          adopt -- see the concern in this task's report -- and
+                          it also covers a master that failed to load (logged
+                          by ``_phase_check_ctx`` itself).
+    ``no-orientation``    every pixel of the scope is unindexed.
+    ``no-render-score``   the renderer answered, and nothing it returned was
+                          finite.
+
+    Kept as a module-level factory so the renderer is substituted in one place.
+    """
+    from backend.api.services.grain_phase_assignment import _interior
+
+    labels = np.asarray(labels)
+    limit = int(GRAIN_RENDER_MAX_PX if max_px is None else max_px)
+    if limit < 1:
+        raise ValueError(
+            f"max_px={limit} would render nothing, so every scope would come "
+            "back as 'cannot be computed' and every reassignment would be "
+            "refused for a reason that is not about the data")
+
+    # Cheap and GPU-free, so it is read eagerly: it is what separates "no
+    # master exists for this phase" from "a master exists and no scorer was
+    # built for it", which are different things to go and do something about.
+    #
+    # ``int(key)``, because a result re-imported from a file keys this map by
+    # STRING (a JSON round trip leaves them that way) and the phase ids arrive
+    # here as ints -- without the cast every phase whose master is present
+    # would be reported as having none. The VALUE has to be truthy for the
+    # same reason ``_phase_check_ctx`` skips it (``if not sht: continue``): an
+    # empty path is not a master, and saying "its master is in the result"
+    # about one sends the operator looking for a file that was never named.
+    sht_phases: set[int] = set()
+    for key, path in ((getattr(result, "metadata", None) or {}
+                       ).get("sht_paths_by_phase") or {}).items():
+        if not path:
+            continue
+        try:
+            sht_phases.add(int(key))
+        except (TypeError, ValueError):
+            continue
+
+    stats: dict = {
+        "n_calls": 0, "n_none": 0, "n_cache_hits": 0,
+        "n_pixels_rendered": 0, "seconds": 0.0, "none_reasons": {},
+        "phases_with_scorer": None,
+        "max_px": limit,
+    }
+    cache: dict[tuple, tuple] = {}
+    warned: set[int] = set()
+    state: dict = {}
+
+    def _ctx() -> dict:
+        """The render context, built once on first use."""
+        if state:
+            return state
+        try:
+            ctx = _phase_check_ctx(result, build_scorers=True)
+        except HTTPException as exc:
+            # Its own message names the phase-check feature, which is not what
+            # the operator asked for. Re-raised with the operation named and
+            # the original reason carried through -- never downgraded to "no
+            # render score", which would present a setup failure as a
+            # measurement.
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=("The forward render cannot be set up for this result, "
+                        "so no reassignment could be verified against it: "
+                        f"{exc.detail}")) from exc
+        n_rows, n_cols = int(ctx["n_rows"]), int(ctx["n_cols"])
+        if labels.shape != (n_rows, n_cols):
+            raise HTTPException(
+                status_code=500,
+                detail=(f"The grain labels are {labels.shape} but the result's "
+                        f"scan grid is {(n_rows, n_cols)}; a grain id cannot be "
+                        "turned into pixels across two different grids"))
+        state["score_fns"] = ctx["score_fns"]
+        state["full_q"] = np.asarray(ctx["full_q"], dtype=np.float64)
+        stats["phases_with_scorer"] = sorted(int(p) for p in ctx["score_fns"])
+        return state
+
+    def _scope_flats(grain_id: int, mask: Optional[np.ndarray]) -> np.ndarray:
+        if mask is None:
+            window, interior, _eroded = _interior(labels, grain_id, True)
+            mask = np.zeros(labels.shape, dtype=bool)
+            mask[window] = interior
+        return np.flatnonzero(mask.ravel())
+
+    def _sample(flats: np.ndarray, quats: np.ndarray) -> tuple:
+        """Up to ``limit`` pixels, spread evenly over the scope.
+
+        Evenly rather than the first ``limit``: the flat indices are sorted, so
+        the head of any scope is its top rows alone.
+        """
+        n = int(flats.size)
+        if n <= limit:
+            return flats, quats
+        take = np.asarray([int(i * (n / float(limit))) for i in range(limit)],
+                          dtype=np.int64)
+        return flats[take], quats[take]
+
+    def _compute(grain_id: int, phase: int,
+                 mask: Optional[np.ndarray]) -> tuple:
+        ctx = _ctx()
+        fn = ctx["score_fns"].get(phase)
+        if fn is None:
+            has_sht = phase in sht_phases
+            if phase not in warned:
+                warned.add(phase)
+                logger.warning(
+                    "[grain-assign] no forward render for phase %s: %s -- "
+                    "every decision about it will be refused", phase,
+                    ("its master is in the result but no scorer was built for "
+                     "it, which happens when the phase currently owns no "
+                     "pixels (or when its master failed to load)") if has_sht
+                    else "the result carries no master (SHT) for it")
+            return None, "no-scorer" if has_sht else "no-sht"
+
+        flats = _scope_flats(grain_id, mask)
+        quats = ctx["full_q"][flats]
+        keep = np.isfinite(quats).all(axis=1)
+        # A NaN quaternion is an unindexed pixel: there is no orientation to
+        # render at, and rendering at a NaN produces a number about nothing.
+        flats, quats = flats[keep], quats[keep]
+        if flats.size == 0:
+            return None, "no-orientation"
+
+        flats, quats = _sample(flats, quats)
+        t0 = _time.perf_counter()
+        raw = np.asarray(fn(flats, quats), dtype=np.float64).reshape(-1)
+        stats["seconds"] += _time.perf_counter() - t0
+        stats["n_pixels_rendered"] += int(flats.size)
+        if raw.size != flats.size:
+            raise ValueError(
+                f"the render scorer for phase {phase} answered {raw.size} "
+                f"score(s) for {flats.size} pixel(s); a score cannot be "
+                "matched to a pixel by position if the two disagree")
+
+        good = raw[np.isfinite(raw)]
+        if good.size == 0:
+            return None, "no-render-score"
+        value = float(np.median(good))
+        if not np.isfinite(value):
+            # Unreachable from a non-empty finite sample, and stated as a
+            # raise rather than a fallback because the one thing that must
+            # not happen here is a non-finite number reaching the gate.
+            raise RuntimeError(
+                f"the median of {good.size} finite render score(s) for phase "
+                f"{phase} is {value!r}")
+        return value, None
+
+    def _render_score(grain_id: int, phase_id: int,
+                      pixels: Optional[np.ndarray] = None) -> Optional[float]:
+        gid, phase = int(grain_id), int(phase_id)
+        if pixels is None:
+            key = (gid, phase, None)
+            mask = None
+        else:
+            mask = np.asarray(pixels, dtype=bool)
+            if mask.shape != labels.shape:
+                raise ValueError(
+                    f"the pixel mask has shape {mask.shape} but the map is "
+                    f"{labels.shape}; a mask over a different grid names "
+                    "different pixels")
+            key = (gid, phase, np.flatnonzero(mask.ravel()).tobytes())
+
+        stats["n_calls"] += 1
+        if key in cache:
+            stats["n_cache_hits"] += 1
+            value, reason = cache[key]
+        else:
+            value, reason = _compute(gid, phase, mask)
+            cache[key] = (value, reason)
+        if value is None:
+            stats["n_none"] += 1
+            stats["none_reasons"][reason] = (
+                stats["none_reasons"].get(reason, 0) + 1)
+        return value
+
+    _render_score.render_stats = stats
+    return _render_score
+
+
+def _segmentation_point_group(xmap) -> str:
+    """The symmetry the grain segmentation runs under, from the phase list.
+
+    Derived rather than assumed: the whole point of segmenting chemistry-free
+    is that the segmentation must not depend on the labels it is correcting.
+    Returns ``"m-3m"`` when every phase in the result is a subgroup of it, and
+    raises naming the offending phase and its group otherwise.
+    """
+    try:
+        entries = list(xmap.phases)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot read the result's phase list: {exc}")
+
+    seen: list[tuple[str, str]] = []
+    for entry in entries:
+        if isinstance(entry, tuple) and len(entry) == 2:
+            pid, phase_obj = entry
+        else:
+            pid, phase_obj = getattr(entry, "id", 0), entry
+        try:
+            if int(pid) < 0:
+                continue          # the not_indexed entry
+        except (TypeError, ValueError):
+            pass
+        name = str(getattr(phase_obj, "name", "") or pid)
+        pg = getattr(phase_obj, "point_group", None)
+        pg_name = str(getattr(pg, "name", "") or "") if pg is not None else ""
+        if not pg_name:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Phase '{name}' has no point group, so it cannot be "
+                        "shown to share a symmetry with the other phases. "
+                        "Re-run indexing, or re-import the result from a file "
+                        "that carries the phase symmetry."))
+        seen.append((name, pg_name))
+
+    if not seen:
+        raise HTTPException(
+            status_code=400,
+            detail="The result has no indexed phase to segment grains for")
+
+    outside = [(n, g) for n, g in seen
+               if g not in _M3M_SUBGROUP_POINT_GROUPS]
+    if outside:
+        named = ", ".join(f"'{n}' ({g})" for n, g in outside)
+        raise HTTPException(
+            status_code=400,
+            detail=(f"Grain segmentation needs one symmetry for the whole map, "
+                    f"and {named} is not a subgroup of m-3m, so segmenting "
+                    "under m-3m would merge orientations that are genuinely "
+                    "distinct for it. Index this scan without that phase, or "
+                    "assign its grains by hand."))
+    return "m-3m"
+
+
+def _full_grid_rows(active, n_rows: int, n_cols: int):
+    """Indices of the scan grid the result's rows correspond to.
+
+    A region-of-interest result holds one row per SELECTED pixel, not one per
+    scan pixel; everything downstream works on the full grid, so the mapping
+    has to be explicit rather than a reshape that happens to fit.
+    """
+    n_px = n_rows * n_cols
+    n_xmap = int(np.asarray(active.xmap.phase_id).reshape(-1).size)
+    if n_xmap == n_px:
+        return np.arange(n_px)
+    flat = np.flatnonzero(np.asarray(active.selection_mask, dtype=bool).ravel())
+    if flat.size != n_xmap:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"The result has {n_xmap} rows but its selection mask "
+                    f"selects {flat.size} of {n_px} pixels; they are not the "
+                    "same map"))
+    return flat
+
+
+def _filled_for_registration(a, name: str) -> "np.ndarray":
+    """The map with unmeasured pixels set to its own finite mean.
+
+    ``measure_offset`` refuses a single non-finite value, and both of its
+    inputs legitimately carry them: the pattern-quality reference is NaN at
+    every unindexed pixel, and an EDS map is NaN wherever the quantification
+    had nothing to work with. Filling with the mean is not a measurement being
+    invented -- the maps are z-standardised inside ``measure_offset``, so the
+    mean maps to 0 and contributes exactly nothing to the correlation at every
+    candidate shift, which is what "this pixel says nothing about the offset"
+    should do. Nothing filled here reaches the chemistry.
+
+    THIS FILL FEEDS ELEMENT SELECTION, NOT ONLY THE MEASUREMENT.
+    ``_registration_element`` correlates EVERY candidate map through this
+    function before choosing one, so the fill policy decides which map is
+    trusted as well as what offset comes out of it. Measured through the route
+    with a 36-px hole and the fill swapped for a 0.0: with the hole in one
+    element, both fills fall back to the untouched sibling and agree exactly;
+    with holes in two elements, the mean picks Al at (-0.0481, -0.0044) while
+    the zero picks Si at (+0.0071, +0.0008) -- a different map, on numbers the
+    response reports as healthy either way. Since nothing gates on the
+    registration's goodness of fit, a bad fill here is silent: change it only
+    with a measurement, and expect the element choice to move, not just the
+    offset.
+    """
+    arr = np.asarray(a, dtype=np.float64)
+    bad = ~np.isfinite(arr)
+    if not bad.any():
+        return arr
+    good = arr[~bad]
+    if good.size == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{name} has no measured pixel, so it cannot be registered")
+    out = arr.copy()
+    out[bad] = float(good.mean())
+    return out
+
+
+def _pearson(a, b) -> float:
+    """Plain Pearson correlation over two finite same-shaped maps."""
+    x = np.asarray(a, dtype=np.float64).ravel()
+    y = np.asarray(b, dtype=np.float64).ravel()
+    sx, sy = float(x.std()), float(y.std())
+    if sx <= 0.0 or sy <= 0.0:
+        return 0.0
+    return float(((x - x.mean()) * (y - y.mean())).mean() / (sx * sy))
+
+
+def _registration_element(at2d: dict, reference) -> tuple[str, float]:
+    """Which element map to register against the reference, and how well.
+
+    Picked by the strongest |correlation| with the reference rather than by
+    variance. On an Al alloy the highest-variance element is the matrix major
+    one, which is ANTI-correlated with a particle-shaped reference -- and
+    ``measure_offset`` maximises the raw product, so handing it an
+    anti-correlated pair puts the optimum wherever the anti-correlation is
+    weakest, i.e. nowhere meaningful. The sign is irrelevant to WHERE the
+    structure sits, so the caller negates the map when the correlation is
+    negative and the offset is unchanged.
+
+    NOTE this runs every candidate through ``_filled_for_registration``, so
+    the unmeasured-pixel fill is part of the SELECTION rule and not only of
+    the later measurement: a fill that damages one map makes that map lose
+    this contest, and the route silently registers on a different element.
+    Measured, swapping the mean fill for a 0.0 moves the choice from Al to Si
+    on a two-element scene with holes in both. See ``_filled_for_registration``
+    for the numbers. Nothing gates on the registration's goodness of fit, so
+    that switch is invisible in the response apart from ``registration.
+    element`` itself.
+    """
+    best_el, best_corr = "", 0.0
+    for el, m in at2d.items():
+        c = _pearson(_filled_for_registration(m, f"EDS {el} map"), reference)
+        if abs(c) > abs(best_corr):
+            best_el, best_corr = el, c
+    if not best_el:
+        raise HTTPException(
+            status_code=400,
+            detail=("No EDS element map carries any structure in common with "
+                    "the pattern-quality map, so the EDS/EBSD offset cannot "
+                    "be measured. Re-run with apply_registration=false to "
+                    "decide phases on the unshifted chemistry."))
+    return best_el, best_corr
+
+
+def _grain_phase_assign_blocking(active, req: GrainPhaseAssignRequest) -> dict:
+    """The body of ``grain_phase_assign``; see that docstring."""
+    import copy
+    from dataclasses import asdict
+
+    from backend.api.services.eds_registration import measure_offset, sample_shifted
+    from backend.api.services import grain_segmentation as _seg
+    from backend.api.services import grain_phase_assignment as _gpa
+    from backend.api.services.eds_indexing_prior import expected_at_pct_for_phases
+    from backend.api.routes import eds as _eds_routes
+
+    n_rows, n_cols = (int(v) for v in active.original_shape)
+    n_px = n_rows * n_cols
+    xmap = active.xmap
+
+    # --- the result, on the full scan grid ---------------------------------
+    flat_of_row = _full_grid_rows(active, n_rows, n_cols)
+    eul = np.full((n_px, 3), np.nan, dtype=np.float64)
+    eul[flat_of_row] = np.asarray(
+        xmap.rotations.to_euler(), dtype=np.float64).reshape(-1, 3)
+    eul = eul.reshape(n_rows, n_cols, 3)
+    pid = np.full(n_px, -1, dtype=np.int64)
+    pid[flat_of_row] = np.asarray(xmap.phase_id).reshape(-1)
+    pid = pid.reshape(n_rows, n_cols)
+
+    # --- what each phase is supposed to be made of -------------------------
+    md = getattr(active, "metadata", None) or {}
+    paths = md.get("sht_paths_by_phase") or {}
+    if not paths:
+        raise HTTPException(
+            status_code=400,
+            detail=("This result carries no per-phase file map "
+                    "(sht_paths_by_phase), so there is no formula to take an "
+                    "expected composition from. Re-run spherical indexing, or "
+                    "re-import a result that carries it."))
+    keys = sorted(paths, key=lambda k: int(k))
+    ordered_paths = [str(paths[k]) for k in keys]
+    expected_list = expected_at_pct_for_phases(
+        _phase_formulas_for_paths(ordered_paths), paths=ordered_paths)
+    # Keyed by the REAL phase ids, not by position: the ids need not be
+    # 1..P (a re-imported result keys them by string, an ROI result can be
+    # missing one), and a positional key would hand one phase's composition
+    # to another -- a confident wrong answer of exactly the kind this whole
+    # step exists to remove.
+    expected = {int(k): e for k, e in zip(keys, expected_list)}
+    empty = [ordered_paths[i] for i, e in enumerate(expected_list) if not e]
+    if empty:
+        raise HTTPException(
+            status_code=400,
+            detail=("No expected composition could be read for: "
+                    + ", ".join(empty)
+                    + ". An empty expected composition scores a perfect fit "
+                      "against every pixel, so that phase would win every "
+                      "grain on the map."))
+
+    # --- the chemistry -----------------------------------------------------
+    at_maps, e_rows, e_cols, _src = _eds_routes._build_at_pct_maps_for_loaded_file()
+    if (int(e_rows), int(e_cols)) != (n_rows, n_cols):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"EDS grid {e_rows}x{e_cols} does not match the EBSD grid "
+                    f"{n_rows}x{n_cols}"))
+    at2d = {el: np.asarray(v, dtype=np.float64).reshape(n_rows, n_cols)
+            for el, v in at_maps.items()}
+    if not at2d:
+        raise HTTPException(status_code=400,
+                            detail="No EDS element data in this file")
+    n_unmeasured_raw = int(np.count_nonzero(
+        ~np.logical_and.reduce([np.isfinite(m) for m in at2d.values()])))
+
+    # --- registration ------------------------------------------------------
+    dy = dx = 0.0
+    registration = {"applied": False, "element": None, "signal_negated": None,
+                    "corr_before": None, "corr_after": None}
+    if req.apply_registration:
+        from backend.api.services.result_exporter import confidence_rows_for_export
+        if getattr(active, "confidence_scores", None) is None:
+            raise HTTPException(
+                status_code=400,
+                detail=("This result has no confidence scores, so there is no "
+                        "pattern-quality map to register the EDS grid against. "
+                        "Re-run with apply_registration=false."))
+        ci_rows = np.asarray(confidence_rows_for_export(
+            active.confidence_scores, (n_rows, n_cols)), dtype=np.float64)
+        ci = np.full(n_px, np.nan)
+        if ci_rows.size == n_px:
+            ci[:] = ci_rows
+        elif ci_rows.size == flat_of_row.size:
+            ci[flat_of_row] = ci_rows
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Confidence scores have {ci_rows.size} values, which "
+                        f"is neither one per scan pixel ({n_px}) nor one per "
+                        f"result row ({flat_of_row.size})"))
+        # High where the patterns are POOR, which is where the particles are.
+        ref = _filled_for_registration(
+            float(np.nanmax(ci)) - ci.reshape(n_rows, n_cols),
+            "pattern-quality reference")
+        element, corr = _registration_element(at2d, ref)
+        signal = _filled_for_registration(at2d[element], f"EDS {element} map")
+        if corr < 0.0:
+            signal = -signal
+        try:
+            dy, dx = (float(v) for v in measure_offset(signal, ref))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"EDS/EBSD registration failed on the {element} map: "
+                        f"{exc} Re-run with apply_registration=false to decide "
+                        "phases on the unshifted chemistry."))
+        # corr_before/corr_after are the goodness of the alignment this route
+        # measured, reported because nothing GATES on them: measure_offset has
+        # no goodness-of-fit test (Task 1's deferred item), so two maps with no
+        # structure in common still yield a confident sub-pixel number. These
+        # two figures are what makes such a run recognisable.
+        registration = {
+            "applied": True, "element": element,
+            "signal_negated": bool(corr < 0.0),
+            "corr_before": _pearson(signal, ref),
+            "corr_after": _pearson(sample_shifted(signal, dy, dx), ref),
+        }
+        at2d = {el: sample_shifted(v, dy, dx) for el, v in at2d.items()}
+
+    # --- pixels with no measured chemistry ---------------------------------
+    # THE NaN POLICY. An At.% map is NaN wherever the quantification had
+    # nothing to work with, and the sub-pixel resample above SPREADS that (a
+    # bilinear sample that draws on an unmeasured neighbour is itself
+    # unmeasured), so finiteness is judged after the shift. Such a pixel is
+    # taken out of its grain -- it gets a grain of its own, below min_px, so
+    # it is never decided and never written to -- rather than filled in.
+    # Substituting 0 at% would state that an element was measured and found
+    # absent, which would trip chemistry_fit's missing-major veto on an
+    # absence nobody observed. The cost is stated plainly: a grain riddled
+    # with unmeasured pixels loses interior to the erosion around each hole,
+    # and once fewer than four interior pixels survive, decide_grains reports
+    # it ambiguous instead of deciding it.
+    finite = np.ones((n_rows, n_cols), dtype=bool)
+    for m in at2d.values():
+        finite &= np.isfinite(m)
+    n_unmeasured = int((~finite).sum())
+    # The strictness costs pixels and the cost has to be visible. A bilinear
+    # sample touches four neighbours for ANY non-zero shift, so even a
+    # near-zero measured offset roughly quadruples this count: measured on a
+    # synthetic 301x402 map, 5998 unmeasured pixels became 22246 at an offset
+    # of (0.007, 0.004) px. That is conservative in the safe direction --
+    # excluded, never invented -- but a scan with many unmeasured pixels loses
+    # real grain interior to it, and the operator can compare the two numbers
+    # and turn registration off.
+    if n_unmeasured != n_unmeasured_raw:
+        logger.info("[grain-assign] unmeasured px %d -> %d after the %.3f/%.3f "
+                    "px resample", n_unmeasured_raw, n_unmeasured, dy, dx)
+    if not finite.any():
+        raise HTTPException(
+            status_code=400,
+            detail=("No pixel has a measurable At.% composition after "
+                    "registration, so no grain can be decided"))
+
+    # --- grains, from the orientations alone -------------------------------
+    point_group = _segmentation_point_group(xmap)
+    try:
+        labels = _seg.segment_grains(eul, point_group, float(req.threshold_deg))
+    except ValueError as exc:
+        raise HTTPException(status_code=400,
+                            detail=f"Grain segmentation failed: {exc}")
+    labels = np.asarray(labels, dtype=np.int64)
+
+    if n_unmeasured:
+        nxt = int(labels.max()) + 1
+        labels[~finite] = np.arange(nxt, nxt + n_unmeasured, dtype=np.int64)
+        at2d = {el: np.where(finite, m, _UNMEASURED_AT_PCT)
+                for el, m in at2d.items()}
+        # The placeholder is only harmless while every pixel carrying it is
+        # alone in its grain. Checked, not assumed.
+        sizes = np.bincount(labels.ravel())
+        if np.any(sizes[labels[~finite]] != 1):
+            raise HTTPException(
+                status_code=500,
+                detail=("Internal error: an unmeasured pixel shares a grain "
+                        "with another pixel, so its placeholder composition "
+                        "would be read as a measurement"))
+
+    # --- one decision per grain, then the render gate ----------------------
+    try:
+        decisions = _gpa.decide_grains(
+            labels, pid, at2d, expected,
+            min_px=int(req.min_px), spread_limit=float(req.spread_limit))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Every label gets a decision, and an unindexed or unmeasured pixel is a
+    # label of its own, so n_grains counts those too. n_grains_above_min_px is
+    # the number a reader means by "grains".
+    n_grains = len(decisions)
+    n_grains_above_min = sum(1 for d in decisions if d.n_px >= int(req.min_px))
+    n_proposed = sum(1 for d in decisions if d.decision == "reassign")
+    # Held in a name rather than inlined into the call: the scorer carries its
+    # own diagnostics, and a function's attributes cannot be read back out of
+    # an expression. The refusal counts below say how many decisions had no
+    # score; these say WHY, which separates a broken installation from a
+    # render that genuinely disagreed.
+    scorer = _render_scorer_for(active, labels)
+    decisions, evidence = _gpa.verify_decisions_with_evidence(
+        decisions, scorer, _gpa.RENDER_ADOPT_MARGIN, labels, pid)
+    render_stats = getattr(scorer, "render_stats", None)
+    if render_stats:
+        logger.info(
+            "[grain-assign] render: %d call(s), %d cached, %d unanswered %s, "
+            "%d px rendered in %.1f s",
+            render_stats["n_calls"], render_stats["n_cache_hits"],
+            render_stats["n_none"], render_stats["none_reasons"] or "",
+            render_stats["n_pixels_rendered"], render_stats["seconds"])
+
+    # --- apply, onto a copy ------------------------------------------------
+    indexed = pid >= 0
+    new_pid = pid.copy()
+    source = np.zeros((n_rows, n_cols), dtype=np.int8)
+    for d in decisions:
+        if d.decision == "keep":
+            continue
+        # `& indexed` is not defensive padding. A grain can hold pixels whose
+        # phase id is -1 while their orientation is perfectly good (a cleaned
+        # -out pixel keeps its rotation; so does every pixel outside an ROI),
+        # and writing a phase there would invent one for a pixel that has no
+        # diffraction evidence at all -- the exact class of defect this step
+        # exists to remove.
+        m = (labels == d.grain_id) & indexed
+        if d.decision == "reassign":
+            new_pid[m] = int(d.proposed_phase)
+            source[m] = ASSIGNMENT_SOURCE["grain"]
+        else:
+            source[m] = ASSIGNMENT_SOURCE["ambiguous"]
+
+    new_result = copy.deepcopy(active)
+    new_xmap = new_result.xmap
+    want = new_pid.reshape(-1)[flat_of_row]
+    if not hasattr(new_xmap, "_phase_id"):
+        raise HTTPException(
+            status_code=500,
+            detail="This orix CrystalMap has no _phase_id to write through")
+    # orix's phase_id setter persists the write but then raises on array
+    # values (its `value == -1` check is scalar-minded) -- write via the
+    # in-data mask directly, which is what the setter's first line does.
+    # Same idiom as the grain-flip and phase-reassign paths above.
+    new_xmap._phase_id[np.asarray(new_xmap.is_in_data, dtype=bool)] = want
+    if not np.array_equal(np.asarray(new_xmap.phase_id).reshape(-1), want):
+        raise HTTPException(
+            status_code=500,
+            detail="The new phase ids did not take on the copied CrystalMap")
+
+    new_result.metadata = dict(getattr(new_result, "metadata", None) or {})
+    new_result.metadata["assignment_source"] = source
+    new_result.metadata["grain_assign"] = {
+        "offset": {"dy": dy, "dx": dx},
+        "registration": dict(registration),
+        "point_group": point_group,
+        "threshold_deg": float(req.threshold_deg),
+        "min_px": int(req.min_px),
+        "spread_limit": float(req.spread_limit),
+        "n_grains": n_grains,
+        "n_grains_above_min_px": n_grains_above_min,
+        "n_unmeasured_px": n_unmeasured,
+        "from_result": md.get("source_file"),
+    }
+    result_id = _store_result(new_result, "grain")
+
+    changed = [asdict(d) for d in decisions if d.decision != "keep"]
+    n_no_score = sum(1 for e in evidence.values()
+                     if e["verdict"] == "no-render-score")
+    n_refused = sum(1 for e in evidence.values() if e["verdict"] == "refused")
+    n_px_worse = sum(int(e["n_px_worse"]) for e in evidence.values()
+                     if e["verdict"] == "adopted" and e["n_px_worse"] is not None)
+    return {
+        "result_id": result_id,
+        "offset": {"dy": dy, "dx": dx},
+        "registration": registration,
+        "point_group": point_group,
+        "n_grains": n_grains,
+        "n_grains_above_min_px": n_grains_above_min,
+        "n_unmeasured_px": n_unmeasured,
+        "n_unmeasured_px_before_shift": n_unmeasured_raw,
+        "n_proposed_reassign": n_proposed,
+        "n_reassigned": sum(1 for d in decisions if d.decision == "reassign"),
+        "n_ambiguous": sum(1 for d in decisions if d.decision == "ambiguous"),
+        "n_refused_by_render": n_refused,
+        "n_refused_no_render_score": n_no_score,
+        "n_px_worse_adopted": n_px_worse,
+        # None when the scorer reports no diagnostics (an injected one in a
+        # test, say) -- not {}, which would read as "measured and zero".
+        "render": render_stats,
+        "n_pixels_changed": int((new_pid != pid).sum()),
+        "decisions": changed[:DECISION_RESPONSE_CAP],
+        "decisions_total": len(changed),
+        "decisions_truncated": len(changed) > DECISION_RESPONSE_CAP,
+    }
+
+
+@router.post("/grain-phase-assign")
+async def grain_phase_assign(req: GrainPhaseAssignRequest):
+    """Produce a NEW result whose phases were decided per orientation grain.
+
+    The input result is never modified: the two live side by side in the
+    gallery so the operator can compare them.
+
+    Stages, in order: expand the (possibly ROI) result onto the scan grid;
+    read each phase's expected At.% from its formula; measure and apply the
+    EDS/EBSD registration offset; segment grains from the orientation field
+    alone, under the common symmetry of the phases present; decide one phase
+    per grain from its eroded interior; gate every change on the forward
+    render; write the survivors onto a copy.
+
+    UNMEASURED CHEMISTRY. A pixel whose At.% is not finite -- after the
+    sub-pixel resample, which spreads it -- is taken OUT of its grain and
+    given a grain of its own, so it takes no part in any decision and keeps
+    whatever phase it had. It is never filled in: substituting 0 at% would
+    assert that an element was measured and found absent, which trips
+    chemistry_fit's missing-major veto on an absence nobody observed. A grain
+    with enough such holes loses its interior to the erosion around them and
+    is reported ambiguous rather than decided.
+
+    Finiteness is judged AFTER the sub-pixel resample, which spreads it: a
+    bilinear sample drawing on an unmeasured neighbour is itself unmeasured.
+    That is strict, and the strictness is visible rather than hidden --
+    ``n_unmeasured_px_before_shift`` against ``n_unmeasured_px`` in the
+    response, which on a synthetic 301x402 map went 5998 -> 22246 at an offset
+    of (0.007, 0.004) px, because bilinear touches four neighbours at any
+    non-zero shift. Turning registration off removes the amplification.
+
+    ``n_grains`` counts every label, and an unindexed or unmeasured pixel is a
+    label of its own; ``n_grains_above_min_px`` is what a reader means by
+    "grains".
+
+    THE RENDER GATE IS A VETO, never a reason to write. Nothing reaches the
+    map on chemistry alone: a proposal is applied only if the forward render
+    of the proposed phase beats the incumbent by ``RENDER_ADOPT_MARGIN`` at
+    the pixels in dispute, and a proposal the renderer cannot score at all is
+    refused rather than waved through. Every one of those outcomes is
+    countable from the response -- ``n_proposed_reassign`` against
+    ``n_reassigned``, ``n_refused_by_render`` and
+    ``n_refused_no_render_score`` -- and ``render`` says how much rendering
+    was done and why any of it came back unanswerable, so a scorer that is
+    silently refusing everything cannot be mistaken for a feature that simply
+    does not fire.
+
+    THIS IS THE SLOW STAGE, AND IT HOLDS GPU MEMORY FOR ALL OF IT. Measured
+    (see ``GRAIN_RENDER_MAX_PX``): two scorer calls per proposed grain and up
+    to ``GRAIN_RENDER_MAX_PX`` renders per call, at ~37 ms a render -- about
+    ten minutes for a 301x402 scan with 500 shelled particles, with one SHT
+    grid per phase resident throughout. It therefore takes the same
+    single-flight flag as the phase check (they contend for the same VRAM, and
+    two concurrent SHT-loading runs are the OOM case) and frees the
+    interactive caches first, exactly as every other scorer-building path in
+    this file does. Without that, an OOM degrades every pixel to ``-inf``, the
+    whole ten-minute run refuses everything, and the only trace is
+    ``render.none_reasons``.
+
+    It runs off the event loop, but there is no progress channel yet.
+    """
+    global _phase_check_busy
+    if _phase_check_busy:
+        raise HTTPException(status_code=409, detail=_RENDER_RUN_BUSY_DETAIL)
+    active = _get_result()
+    if active is None:
+        raise HTTPException(status_code=400,
+                            detail="No indexing result available")
+    _free_interactive_gpu_caches()
+    _phase_check_busy = True
+    try:
+        return await asyncio.to_thread(_grain_phase_assign_blocking, active, req)
+    finally:
+        _phase_check_busy = False
+
+
 @router.post("/start")
 async def start_indexing(req: IndexingStartRequest):
     """Start an indexing job as a background task."""
@@ -1164,33 +3208,8 @@ async def start_indexing(req: IndexingStartRequest):
             indexing_method = method_map.get(req.method, IndexingMethod.HOUGH)
             selection_mode = selection_map.get(req.selection_mode, PixelSelectionMode.FULL)
 
-            config = IndexingConfig(
-                method=indexing_method,
-                selection_mode=selection_mode,
-                n_bands=req.n_bands,
-                t_sigma=req.t_sigma,
-                r_sigma=req.r_sigma,
-                max_reflectors=req.max_reflectors,
-                metric=req.metric,
-                keep_n=req.keep_n,
-                compute_mode=req.compute_mode,
-                bandwidth=req.bandwidth,
-                normed=req.normed,
-                refine=req.refine,
-                nregions=req.nregions,
-                circmask=req.circmask,
-                gausbckg=req.gausbckg,
-                backend=req.backend,
-                row_start=req.row_start,
-                row_end=req.row_end,
-                col_start=req.col_start,
-                col_end=req.col_end,
-                eds_phase_strengths=dict(req.eds_phase_strengths or {}),
-                eds_expected_overrides=dict(req.eds_expected_overrides or {}),
-            )
-
-            if req.sht_paths:
-                config.sht_file = req.sht_paths[0]
+            config = build_indexing_config(
+                req, method=indexing_method, selection_mode=selection_mode)
 
             def _progress(msg, pct=None):
                 _indexing_tasks[task_id]["message"] = msg
@@ -1319,6 +3338,8 @@ async def start_indexing(req: IndexingStartRequest):
                 det_params = build_spherical_det_params(signal, detector, _ebsd_file_path)
 
             result = None
+            # Before any work: name the phases this method cannot run.
+            report_phases_without_a_file(req, _progress)
             n_phase_files = len(req.cif_paths) + len(req.master_h5_paths) + len(req.sht_paths)
 
             # ============================================================
@@ -1517,27 +3538,6 @@ async def start_indexing(req: IndexingStartRequest):
                 else:
                     phase_configs = _build_phase_configs(req)
 
-                    # Multi-phase Dictionary needs BOTH pc.dictionary AND
-                    # pc.phase_list on every PhaseConfig — run_single_phase_method
-                    # raises when either is None (indexing_controller.py DICTIONARY
-                    # branch). But _build_phase_configs only fills master_h5_path for
-                    # the dictionary method, so this loop was ALWAYS broken: the first
-                    # phase raised "Dictionary signal required", every phase failed,
-                    # and the run died with "All phases failed during multi-phase
-                    # indexing". Populate both here, defensively (no-op when already
-                    # set), by loading each precomputed dictionary once; its own xmap
-                    # carries the correct phase. Spherical is unaffected — its configs
-                    # have no master_h5_path and use sht_path instead.
-                    if indexing_method == IndexingMethod.DICTIONARY:
-                        import kikuchipy as kp
-                        for pc in phase_configs:
-                            if getattr(pc, "dictionary", None) is None and pc.master_h5_path:
-                                pc.dictionary = kp.load(pc.master_h5_path)
-                            if getattr(pc, "phase_list", None) is None:
-                                _dict_xmap = getattr(pc.dictionary, "xmap", None)
-                                if _dict_xmap is not None:
-                                    pc.phase_list = _dict_xmap.phases
-
                     comparison_config = ComparisonConfig(
                         phases=phase_configs,
                         methods=[indexing_method],
@@ -1555,13 +3555,14 @@ async def start_indexing(req: IndexingStartRequest):
                         col_end=req.col_end,
                     )
 
-                    all_results = []
-                    phase_errors = []
-                    for i, pc in enumerate(phase_configs):
-                        _progress(
-                            f"Phase {i+1}/{len(phase_configs)}: {pc.name} — {req.method} indexing...",
-                            0.1 + 0.8 * (i / len(phase_configs)),
-                        )
+                    def _run_one_phase(pc):
+                        # Dictionary phases carry their precomputed dictionary
+                        # on the PhaseConfig. Attach it here, for this phase
+                        # only, and let go of it again afterwards — see
+                        # _load_phase_dictionary.
+                        loaded_here = False
+                        if indexing_method == IndexingMethod.DICTIONARY:
+                            loaded_here = _load_phase_dictionary(pc, _progress)
                         try:
                             pmr = run_single_phase_method(
                                 signal=signal,
@@ -1573,17 +3574,20 @@ async def start_indexing(req: IndexingStartRequest):
                                 h5_path=_ebsd_file_path if indexing_method == IndexingMethod.SPHERICAL else '',
                                 detector_params=det_params if indexing_method == IndexingMethod.SPHERICAL else None,
                             )
-                            all_results.append(pmr)
-                        except Exception as e:
-                            import traceback
-                            logger.warning(f"Phase {pc.name} failed: {e}\n{traceback.format_exc()}")
-                            _progress(f"Phase {pc.name} FAILED: {e}")
-                            phase_errors.append(f"{pc.name}: {e}")
-                            continue
+                            # The CPU path hands the whole dictionary back
+                            # inside the result, and every result lives until
+                            # the merge — so without this the peak is still
+                            # the sum of all phases. See
+                            # _detach_dictionary_from_result.
+                            if indexing_method == IndexingMethod.DICTIONARY:
+                                _detach_dictionary_from_result(pmr)
+                            return pmr
+                        finally:
+                            if loaded_here:
+                                _drop_phase_dictionary(pc)
 
-                    if not all_results:
-                        error_details = "; ".join(phase_errors) if phase_errors else "unknown"
-                        raise ValueError(f"All phases failed during multi-phase indexing: {error_details}")
+                    all_results = _run_phases_or_raise(
+                        phase_configs, _run_one_phase, _progress, req.method)
 
                 # GPU fast-path already produced a complete IndexingResult;
                 # skip the legacy per-phase merge code that needs all_results.
@@ -1912,6 +3916,15 @@ async def start_indexing(req: IndexingStartRequest):
                     cancel_check=_cancel_check,
                     detector=detector,   # store-resolved (refined PC) — P2-B
                 )
+                # The run is over; the result now goes into the registry for
+                # the rest of the session. Let go of the dictionary it is
+                # holding (multi-GB) when there is a file to read the
+                # pattern-match dialog's one row back from — the same rule and
+                # the same function as the multi-phase loop.
+                import gc as _gc
+                _detach_dictionary_from_result(result)
+                del dictionary
+                _gc.collect()
 
             # --- Spherical indexing (EMSphinx, single phase) ---
             elif indexing_method == IndexingMethod.SPHERICAL:
@@ -1923,7 +3936,11 @@ async def start_indexing(req: IndexingStartRequest):
                 # Phase 5: dispatch on backend selector. Default "emsphinx" runs the
                 # WSL EMSphInx CLI (legacy CPU path); "spherical_gpu" runs the
                 # in-process PyTorch backend (~11x faster, GPU required).
-                backend_choice = getattr(config, "backend", "emsphinx")
+                # Through the one rule (indexing_controller.SPHERICAL_BACKENDS),
+                # like every other dispatcher: a value the batch route refuses
+                # must not be accepted here and quietly run the CPU path.
+                from indexing_controller import resolve_spherical_backend
+                backend_choice = resolve_spherical_backend(config)
                 if backend_choice == "spherical_gpu":
                     _progress("Running spherical (PyTorch GPU) indexing...")
                     from indexing_controller import spherical_gpu_index_patterns
@@ -1958,6 +3975,15 @@ async def start_indexing(req: IndexingStartRequest):
                 method_name=req.method,
                 sht_paths=req.sht_paths if req.method == "spherical" else None,
                 det_params=det_params,
+                # The same list _inject_phase_names used one line up, so the
+                # id tiebreak is offered the names that are now on the xmap
+                # rather than what it can read off the SHT filenames. Both go
+                # through req.phase_name_sources() when the request carries
+                # per-phase records — two independent copies of this
+                # precedence is how the label and the master came apart.
+                name_source_paths=(
+                    req.phase_name_sources()
+                    or req.cif_paths or req.master_h5_paths or req.sht_paths),
             )
 
             # Unified EDS-adjusted-pixel log line — covers all three methods.
@@ -1967,6 +3993,11 @@ async def start_indexing(req: IndexingStartRequest):
             _eds_n = int((result.metadata or {}).get("eds_n_adjusted", 0)) if getattr(result, "metadata", None) else 0
             if _eds_n:
                 _progress(f"EDS chemistry prior: adjusted {_eds_n} pixels")
+
+            # Particles the prior cannot see (pattern-degenerate pairs such
+            # as Al/Si, EDS volume larger than the particle): decided by
+            # orientation continuity with the matrix. No-op with the prior off.
+            _apply_particle_rescue(result, req, selection_mask, _progress)
 
             # Don't overwrite a multi-pixel result with a single-pixel quick test
             if not (req.quick_test and _get_result() is not None):
@@ -2055,7 +4086,16 @@ async def start_indexing(req: IndexingStartRequest):
             tb = traceback.format_exc()
             logger.exception("Indexing failed")
             _indexing_tasks[task_id]["status"] = "failed"
-            _indexing_tasks[task_id]["error"] = f"{e}\n{tb}"
+            if isinstance(e, MultiPhaseRunFailed):
+                # This message ends with what the user should DO about it;
+                # stapling the traceback underneath buries exactly that line.
+                # Keep it in the log and under its own key, like the
+                # MemoryError branch above — the status endpoint returns the
+                # whole state dict, so nothing is lost.
+                _indexing_tasks[task_id]["error"] = str(e)
+                _indexing_tasks[task_id]["traceback"] = tb
+            else:
+                _indexing_tasks[task_id]["error"] = f"{e}\n{tb}"
             # Same defensive cleanup on hard failures (e.g. OOM partway
             # through). Cheap when CUDA isn't in use.
             try:
@@ -3394,6 +5434,9 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
     from backend.spherical_gpu._math.sht_newton import (
         newton_refine, cc_at_rotation, _zxz_to_zyz,
     )
+    from backend.spherical_gpu.pipeline._frame import (
+        apply_frame_fix_zxz, invert_frame_fix_zxz,
+    )
     try:
         n_cols = int(result.original_shape[1])
         pairs = []                      # (flat_idx, exp_pattern, quat)
@@ -3452,9 +5495,19 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
             flm = flm.squeeze(0)
 
         seed_q = np.stack([q for (_fi, _p, q) in pairs])
+        # newton_refine / cc_at_rotation live in the cc-VOLUME frame; the
+        # stored quaternions left the pipeline through the constant
+        # crystal-frame C2<1 -1 0> of ``pipeline/_frame.py``. Undo it on the
+        # way in and re-apply it on the way out -- exactly what
+        # refiner.refine_index_result does for its ANALYTIC_NEWTON branch.
+        # Without this the seed sits a full 180 deg from the peak it is meant
+        # to polish; that operator is a symmetry of m-3m / 4/mmm but NOT of the
+        # z_rot==2 phases this tool exists for, so on those the polish started
+        # outside the ~2 deg basin and the move guard threw every pixel away.
+        _e0, _e1, _e2 = invert_frame_fix_zxz(
+            *np.asarray(_R(seed_q).to_euler(), dtype=np.float64).T)
         eu_seed = torch.as_tensor(
-            np.asarray(_R(seed_q).to_euler(), dtype=np.float64),
-            device=indexer.device)
+            np.stack([_e0, _e1, _e2], axis=-1), device=indexer.device)
 
         refined_by_flat: dict[int, np.ndarray] = {}
         moves, n_guard = [], 0
@@ -3463,8 +5516,13 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
             eu_i, cc_i, converged = newton_refine(flm, gln[i], eu_seed[i], L)
             move = None
             if converged and float(cc_i) > cc0:
+                # Back out of the volume frame before it becomes a stored
+                # orientation again (see the seed comment above).
+                _eu_out = np.asarray(
+                    apply_frame_fix_zxz(*eu_i.cpu().numpy().reshape(3)),
+                    dtype=np.float64).reshape(1, 3)
                 q_i = np.asarray(
-                    _R.from_euler(eu_i.cpu().numpy().reshape(1, 3)).data
+                    _R.from_euler(_eu_out).data
                 ).reshape(4)
                 dot = abs(float(np.dot(q_i, q0)))
                 move = float(np.degrees(2.0 * np.arccos(min(dot, 1.0))))
@@ -4382,8 +6440,7 @@ async def phase_check(req: PhaseCheckRequest):
     (drives the 'Phase Check' diagnostic layer) and returns a summary."""
     global _phase_check_busy
     if _phase_check_busy:
-        raise HTTPException(status_code=409,
-                            detail="A phase check is already running — wait for it to finish")
+        raise HTTPException(status_code=409, detail=_RENDER_RUN_BUSY_DETAIL)
     result = _get_result(req.result_id)
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
@@ -4805,8 +6862,12 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
                 new_pf = ctx["phase_full"].copy()
                 new_q = np.asarray(ctx["full_q"], dtype=np.float64).copy()
                 new_pf[pix] = tpid
+                # `pg` is the symmetry of the phase the STORED orientations
+                # belong to — without it the rigid correction acts on whichever
+                # orbit member each pixel happens to be stored under and the
+                # assigned grain comes back speckled.
                 new_q[pix] = rigid_grain_quats(ctx["full_q"][pix], q_click,
-                                               req.seed_quat)
+                                               req.seed_quat, point_group=pg)
             except Exception as exc:  # noqa: BLE001 -- fall through to the 409
                 logger.warning("[assign-phase] seed fallback failed: %s", exc,
                                exc_info=True)
@@ -7215,15 +9276,25 @@ def _json_num_default(o):
     return str(o)
 
 
-def _write_render_geometry_attrs(idx_group, md) -> None:
+def _write_render_geometry_attrs(idx_group, md, xmap=None) -> None:
     """Persist the spherical render geometry on the /Indexing group so a
     re-imported result can still render simulated patterns.
 
     Stores two JSON strings:
       * detector_geometry     — vendor PC + detector shape + tilt + pixel size
-      * sht_paths_by_phase    — {phase_id: absolute .sht path}
+      * sht_paths_by_phase    — {written_phase_id: absolute .sht path}
     The SHT paths are absolute, so a re-render only works on the same machine
     (the pattern-match dialog fails loud with a clear message if the .sht moved).
+
+    The sht keys are translated from the LIVE xmap ids to the ON-DISK ids
+    (``/Indexing/Phases/<1..N>``) via the same helper that maps the per-pixel
+    phase ids. ``import-h5`` reads this attr as the fallback for per-phase
+    hints and shifts it by -1 because the loader re-keys the imported xmap to
+    orix 0..N-1 — which is only correct if what we wrote was 1..N. A live
+    xmap may be 0-based (``build_consensus_xmap``) or 1-based
+    (``spherical_gpu_index_patterns``), so writing its keys verbatim shifted
+    the restored map for one of the two. Without an ``xmap`` the keys are
+    written unchanged, exactly as before.
     """
     import json
     md = md or {}
@@ -7236,8 +9307,46 @@ def _write_render_geometry_attrs(idx_group, md) -> None:
     sht = md.get("sht_paths_by_phase")
     if sht:
         try:
-            idx_group.attrs["sht_paths_by_phase"] = json.dumps(
-                {str(k): str(v) for k, v in sht.items()})
+            from backend.api.services.result_exporter import (
+                xmap_phase_write_table as _wtbl,
+            )
+            if xmap is None:
+                # Nothing to translate against; documented behaviour is to
+                # write the live keys unchanged. Kept as its own branch so
+                # the drop rule below cannot mistake "no table" for "every
+                # key is stale" and write an empty dict.
+                idx_group.attrs["sht_paths_by_phase"] = json.dumps(
+                    {str(k): str(v) for k, v in sht.items()})
+                return
+            id_map = _wtbl(xmap)[1]
+            out = {}
+            dropped = []
+            for k, v in sht.items():
+                try:
+                    written = id_map.get(int(k))
+                except (TypeError, ValueError):
+                    written = None
+                if written is None:
+                    # A key that is not a live xmap id is a phase that won no
+                    # pixels, so orix pruned it and there is no /Indexing/Phases
+                    # entry to point at. Drop that ONE key rather than the
+                    # convention: reverting the whole dict to live keys used to
+                    # be silent, and import-h5 then shifts every key by -1 on
+                    # the assumption that what we wrote was 1..N. A phase with
+                    # no pixels has nothing to render anyway.
+                    dropped.append(k)
+                    continue
+                out[str(written)] = str(v)
+            if dropped:
+                logger.warning(
+                    "export: sht_paths_by_phase key(s) %s are not live xmap "
+                    "phase ids %s — those phases won no pixels and have no "
+                    "/Indexing/Phases entry, so their master paths are not "
+                    "written. The %d remaining key(s) use the on-disk 1..N "
+                    "convention.",
+                    dropped, sorted(id_map.keys()), len(out),
+                )
+            idx_group.attrs["sht_paths_by_phase"] = json.dumps(out)
         except Exception:
             logger.debug("export: could not serialise sht_paths_by_phase", exc_info=True)
 
@@ -7468,7 +9577,8 @@ async def export_indexing_result(req: ExportRequest):
                 idx.attrs["grid_shape"] = list(active.original_shape)
                 # Persist spherical render geometry so a re-imported result can
                 # still render simulated patterns (detector geometry + SHT refs).
-                _write_render_geometry_attrs(idx, getattr(active, "metadata", None))
+                _write_render_geometry_attrs(
+                    idx, getattr(active, "metadata", None), active.xmap)
                 # Where this result sat in the original scan. Read back by
                 # _read_scan_provenance on re-import, so a crop -> index ->
                 # "Save result" -> re-import round trip no longer claims the
@@ -7761,7 +9871,8 @@ async def export_indexing_result(req: ExportRequest):
                 idx.attrs["grid_shape"] = list(active.original_shape)
                 # Persist spherical render geometry so a re-imported result can
                 # still render simulated patterns (detector geometry + SHT refs).
-                _write_render_geometry_attrs(idx, getattr(active, "metadata", None))
+                _write_render_geometry_attrs(
+                    idx, getattr(active, "metadata", None), active.xmap)
                 # Where this result sat in the original scan. Read back by
                 # _read_scan_provenance on re-import, so a crop -> index ->
                 # "Save result" -> re-import round trip no longer claims the
@@ -8164,8 +10275,13 @@ _batch_state = {
     "log": [],
 }
 
-class BatchDatasetConfig(BaseModel):
-    """Configuration for one dataset in a batch job."""
+class BatchDatasetConfig(IndexingParams):
+    """Configuration for one dataset in a batch job.
+
+    Inherits the indexing knobs rather than listing a subset of them: it used
+    to carry n_bands, metric and keep_n only, so every spherical field the
+    dialog might send was dropped by the model before the route saw it.
+    """
     file_path: str  # Path to H5OINA/H5 file
     method: str = "hough"  # "hough", "dictionary", "spherical"
     cif_paths: List[str] = []
@@ -8178,10 +10294,6 @@ class BatchDatasetConfig(BaseModel):
     col_end: int = -1
     # Per-dataset PC override (None = use auto-detected)
     pc: Optional[List[float]] = None  # [pcx, pcy, pcz]
-    # Indexing params
-    n_bands: int = 12
-    metric: str = "ncc"
-    keep_n: int = 20
 
 
 class BatchRequest(BaseModel):
@@ -8324,16 +10436,27 @@ async def start_batch_indexing(req: BatchRequest):
                 # here while working everywhere else.
                 selection_mask = _crop_masked_selection(selection_mask)
 
-                config = IndexingConfig(
-                    method=indexing_method,
-                    selection_mode=selection_mode,
-                    n_bands=ds_config.n_bands,
-                    metric=ds_config.metric,
-                    keep_n=ds_config.keep_n,
-                )
+                # The same construction as the interactive route, not a
+                # shorter copy of it — the short copy is why this route's
+                # spherical branch could never run (no sht_file, no backend).
+                config = build_indexing_config(
+                    ds_config, method=indexing_method,
+                    selection_mode=selection_mode)
 
                 n_selected = int(selection_mask.sum())
                 _log(f"  Indexing {n_selected}/{n_rows*n_cols} pixels with {ds_config.method}...")
+                if indexing_method == IndexingMethod.SPHERICAL:
+                    # A batch runs unattended and its settings come from a
+                    # dialog the user closed hours ago. Say what it is actually
+                    # running with, so a result can be read back against it.
+                    # `normed` is not on the page; it stands at the request
+                    # model's default on both routes.
+                    _log(f"  spherical: backend={config.backend} "
+                         f"bandwidth={config.bandwidth} "
+                         f"nregions={config.nregions} refine={config.refine} "
+                         f"normed={config.normed} circmask={config.circmask} "
+                         f"gausbckg={config.gausbckg} "
+                         f"master={config.sht_file or '(none)'}")
 
                 # 4. Run indexing
                 result = None
@@ -8378,14 +10501,27 @@ async def start_batch_indexing(req: BatchRequest):
                     gc.collect()
 
                 elif indexing_method == IndexingMethod.SPHERICAL:
-                    det_params = {
-                        'pctr': list(detector.pc.flatten()[:3]),
-                        'thetac': float(detector.sample_tilt),
-                        'delta': float(getattr(detector, 'pixel_size', detector.shape[1] / 2)),
-                        'numsx': int(detector.shape[1]),
-                        'numsy': int(detector.shape[0]),
-                    }
-                    backend_choice = getattr(config, "backend", "emsphinx")
+                    # Same derivation as the interactive route and the batch
+                    # manager — `build_spherical_det_params` above. What stood
+                    # here was a third, hand-written copy whose keys matched
+                    # NOTHING either consumer reads:
+                    #   * the GPU branch below hands it to
+                    #     DetectorGeometry.from_params, which indexes
+                    #     params["pc_x"] outright -> KeyError before any work;
+                    #   * spherical_index_patterns reads pc_x/pc_y/pc_z (absent
+                    #     -> a fabricated 0.5/0.5/0.5) and 'tilt' (absent ->
+                    #     10.0 deg), while the real sample tilt sat unread under
+                    #     'thetac' — which in the EMSphInx NML means the CAMERA
+                    #     elevation, so the key was wrong in meaning as well as
+                    #     in name.
+                    det_params = build_spherical_det_params(
+                        signal, detector, ds_config.file_path)
+                    from indexing_controller import resolve_spherical_backend
+                    # One rule for the whole app (indexing_controller.
+                    # SPHERICAL_BACKENDS): an unrecognised value raises here
+                    # instead of quietly running the CPU path the caller did
+                    # not ask for.
+                    backend_choice = resolve_spherical_backend(config)
                     if backend_choice == "spherical_gpu":
                         from indexing_controller import spherical_gpu_index_patterns
                         result = spherical_gpu_index_patterns(
@@ -8415,6 +10551,11 @@ async def start_batch_indexing(req: BatchRequest):
                         if ds_config.method == "spherical" else None
                     ),
                     det_params=det_params,
+                    # Same precedence as _inject_phase_names — see there.
+                    name_source_paths=(
+                        getattr(ds_config, "cif_paths", None)
+                        or getattr(ds_config, "master_h5_paths", None)
+                        or getattr(ds_config, "sht_paths", None)),
                 )
 
                 # No scan-provenance seed here, deliberately. The loop's own

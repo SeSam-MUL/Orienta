@@ -39,6 +39,10 @@ class H5OINADataExtractor:
         self._grid_cache = None
         self._elements_cache = None
         self._electron_images_cache = None
+        # EDAX hex scans: resampling map onto a square grid, probed on demand
+        self._hex_probed = False
+        self._hex_map = None
+        self._hex_info = None
         # Pattern cache for smooth navigation (Phase 7)
         self._pattern_cache = {}
         self._pattern_cache_max_size = 50  # Cache last 50 patterns
@@ -77,6 +81,51 @@ class H5OINADataExtractor:
             pass
         return default
 
+    @property
+    def hex_map(self):
+        """Square resampling map, if this file is an EDAX hexagonal scan.
+
+        ``None`` for everything else, which keeps every square file on its
+        original code path. A hex scan stores one entry per slot of a padded
+        ``nRows x nColumns`` rectangle, so the plain reshape used everywhere
+        below would succeed and quietly hand back the hex layout — a map
+        that looks fine and is sheared by half a step on every other row.
+        """
+        if not self._hex_probed:
+            self._hex_probed = True
+            try:
+                import edax_hex
+
+                path = getattr(self.h5file, "filename", None)
+                if path and edax_hex.is_edax_hex_file(path):
+                    self._hex_info, self._hex_map = edax_hex.square_map_for_file(path)
+            except Exception:
+                logger.warning("Could not build the hex resampling map for %s",
+                               getattr(self.h5file, "filename", "?"), exc_info=True)
+                self._hex_info = self._hex_map = None
+        return self._hex_map
+
+    @property
+    def flat_point_count(self):
+        """How many entries a per-point channel has **in the file**.
+
+        Differs from ``n_rows * n_cols`` on a hex scan, where the file keeps
+        the padded rectangle and the grid is the square one we resample to.
+        """
+        if self.hex_map is not None:
+            return self._hex_info.n_points_padded
+        n_rows, n_cols = self.get_grid_dimensions()
+        return n_rows * n_cols
+
+    def _flat_to_map(self, arr):
+        """Reshape a per-point channel to the display grid, hex-aware."""
+        hex_map = self.hex_map
+        if hex_map is not None:
+            arr = arr[hex_map.point_index]
+            return arr.reshape(hex_map.n_rows, hex_map.n_cols, *arr.shape[1:])
+        n_rows, n_cols = self.get_grid_dimensions()
+        return arr.reshape(n_rows, n_cols, *arr.shape[1:])
+
     def get_grid_dimensions(self):
         """
         Get scan grid dimensions.
@@ -89,6 +138,12 @@ class H5OINADataExtractor:
 
         if self.root_key is None:
             return (1, 1)
+
+        # A hex scan is displayed on the square grid we resample it to, not
+        # on the padded rectangle its header describes.
+        if self.hex_map is not None:
+            self._grid_cache = (self.hex_map.n_rows, self.hex_map.n_cols)
+            return self._grid_cache
 
         header_path = f'{self.root_key}/EBSD/Header'
 
@@ -289,6 +344,14 @@ class H5OINADataExtractor:
         pattern = None
         if patterns_ds.ndim == 3:
             # Shape: (n_points, height, width)
+            hex_map = self.hex_map
+            if hex_map is not None:
+                # On a hex scan the caller's index refers to the square grid,
+                # and the dataset holds only the measured points — so the two
+                # are not the same number.
+                if index >= hex_map.pattern_index.size:
+                    return None
+                index = int(hex_map.pattern_index[index])
             if index >= patterns_ds.shape[0]:
                 return None
             pattern = patterns_ds[index, :, :]
@@ -317,13 +380,13 @@ class H5OINADataExtractor:
             return None
         arr = self.h5file[dataset_path][:]
         n_rows, n_cols = self.get_grid_dimensions()
-        expected = n_rows * n_cols
+        expected = self.flat_point_count
         if arr.ndim != 1 or arr.size != expected:
             raise ValueError(
                 f"Dataset {dataset_path!r}: expected 1D array of length "
                 f"{expected} (={n_rows}×{n_cols}), got shape={arr.shape}"
             )
-        return arr.reshape(n_rows, n_cols)
+        return self._flat_to_map(arr)
 
     def get_phases_metadata(self) -> list[dict]:
         """Return list of phases with name/lattice/color/etc. Empty list if no phases."""
@@ -374,8 +437,7 @@ class H5OINADataExtractor:
         if p not in self.h5file:
             return None
         arr = self.h5file[p][:]
-        n_rows, n_cols = self.get_grid_dimensions()
-        return arr.reshape(n_rows, n_cols)
+        return self._flat_to_map(arr)
 
     def _read_frame_header_meta(self) -> dict:
         """Read frame-relevant header fields from the current file.
@@ -902,9 +964,8 @@ class H5OINADataExtractor:
         if data is None:
             return None
 
-        n_rows, n_cols = self.get_grid_dimensions()
-        if data.size == n_rows * n_cols:
-            return data.reshape(n_rows, n_cols)
+        if data.size == self.flat_point_count:
+            return self._flat_to_map(data)
         return data
 
     def get_band_contrast_map(self):
@@ -938,12 +999,12 @@ class H5OINADataExtractor:
         n_rows, n_cols = self.get_grid_dimensions()
         arr = self.h5file[path][:]
         if arr.ndim == 1:
-            if arr.size != n_rows * n_cols:
+            if arr.size != self.flat_point_count:
                 raise ValueError(
                     f"Band Contrast at {path} has size {arr.size}, expected "
-                    f"{n_rows * n_cols} ({n_rows}x{n_cols}). Header/data mismatch."
+                    f"{self.flat_point_count} ({n_rows}x{n_cols}). Header/data mismatch."
                 )
-            arr = arr.reshape(n_rows, n_cols)
+            arr = self._flat_to_map(arr)
         elif arr.ndim != 2:
             raise ValueError(
                 f"Band Contrast at {path} has unexpected ndim={arr.ndim}, "

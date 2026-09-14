@@ -46,7 +46,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from eds_utils import counts_to_weight_pct, weight_pct_to_atomic_pct
+from eds_utils import (
+    build_counts_by_element, counts_to_weight_pct, weight_pct_to_atomic_pct,
+)
 
 
 @dataclass
@@ -236,17 +238,18 @@ def load_eds_at_pct_from_h5oina(h5oina_path: str) -> Dict[str, np.ndarray]:
         if not elements:
             return {}
 
-        counts: Dict[str, np.ndarray] = {}
-        for elem_name in elements:
-            data = reader.get_element_map(elem_name)
-            if data is None:
-                continue
-            # Strip Kα/Kβ suffix to get pure element symbol
-            pure = elem_name.split()[0].strip()
-            # If duplicate (Fe Kα1 vs Fe Kβ1), prefer Kα1
-            if pure in counts and "Kα1" not in elem_name and "Ka" not in elem_name.lower():
-                continue
-            counts[pure] = data
+        # build_counts_by_element, not a hand-rolled loop: the dict key is the
+        # element symbol, so two windows of one element (Fe Kalpha vs Fe Kbeta,
+        # Cu K vs Cu L) collapse to one entry. The old dedup here read the raw
+        # NAME and depended on iteration order -- under creation order the
+        # losing key survived holding the winning window's counts, which pairs
+        # a k-factor with the wrong line (Cu: 4.13 against 1.10, a silent
+        # 3.75x). The helper picks one window per element deterministically
+        # and logs the one it dropped.
+        counts = build_counts_by_element(
+            ((elem_name, reader.get_element_map(elem_name))
+             for elem_name in elements)
+        )
 
         if not counts:
             return {}

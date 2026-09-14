@@ -1,0 +1,24 @@
+# Core scientific and data handling libraries
+numpy
+pandas
+pymatgen
+spglib
+
+# GUI Framework
+PyQt5
+
+# File format support
+h5py
+xlsxwriter
+openpyxl
+
+# Web scraping for DOI search
+requests
+beautifulsoup4
+
+# Utility for progress bars
+tqdm
+
+# Optional plotting libraries
+matplotlib
+seaborn

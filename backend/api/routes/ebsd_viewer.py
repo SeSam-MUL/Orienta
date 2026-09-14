@@ -797,6 +797,21 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     _signal_masks.clear()
     _overview_cache.clear()
     crop_window_service.clear_all()
+    # The per-pixel EDS chemistry service warns once per cause so that a
+    # systematic problem (a window it cannot price, a grid mismatch) does not
+    # write one line per pixel. "Once" has to mean once per DATASET, or the
+    # next file's problem is swallowed by the last file's warning.
+    try:
+        from backend.api.services.eds_pixel_chemistry import reset_warning_dedupe
+        from backend.api.services.eds_indexing_prior import (
+            reset_prior_warning_dedupe,
+        )
+        reset_warning_dedupe()
+        # The map-level prior has the same dedupe for the same reason, and the
+        # same "once per dataset" is what makes it honest.
+        reset_prior_warning_dedupe()
+    except Exception:  # pragma: no cover - never block a load on this
+        logger.debug("could not re-arm the EDS chemistry warnings", exc_info=True)
     dataset_name = Path(path).stem
     _raw_signals[dataset_name] = signal
     _positions[dataset_name] = (0, 0)

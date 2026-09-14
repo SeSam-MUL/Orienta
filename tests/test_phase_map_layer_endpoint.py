@@ -667,3 +667,218 @@ def test_ipf_key_endpoint_accepts_orientation():
     assert resp_h.status_code == 200, resp_h.text
     assert resp_v.status_code == 200, resp_v.text
     assert resp_v.json()["image"] != resp_h.json()["image"]
+
+
+# ---------------------------------------------------------------------------
+# Assignment-source provenance layer (grain-based phase assignment).
+#
+# What the operator reads to know which pixels the automation touched, and
+# which it refused to judge. Numbers taken off this map are reported, so the
+# layer has to be wrong LOUDLY rather than quietly.
+#
+# The fixture map is deliberately NON-SQUARE. A square one cannot tell a
+# correct (rows, cols) read from a transposed one -- this plan has already
+# paid for that: a family of seven transposition mutants survived Task 5's
+# review because every scan in its tests was 16x16, and they died only once
+# one fixture became 16x20.
+# ---------------------------------------------------------------------------
+PROV_ROWS, PROV_COLS = 5, 7
+
+# The colours the legend promises, written out here rather than imported from
+# the route: a test that reads the same constant as the implementation cannot
+# notice the two drifting apart, and a legend that disagrees with the pixels
+# is the defect this layer exists to prevent.
+GRAIN_RGBA = (139, 233, 253, 255)       # cyan  -- assigned by the grain step
+AMBIGUOUS_RGBA = (255, 184, 108, 255)   # orange -- left alone, undecidable
+
+
+def _provenance_array():
+    """A provenance map holding all three codes in an asymmetric layout.
+
+    Asymmetric on purpose: with a rotated or flipped read the *shape* still
+    matches, so only the placement of the blocks can catch it.
+    """
+    src = np.zeros((PROV_ROWS, PROV_COLS), dtype=np.int8)
+    src[1:3, 1:3] = 1     # grain-assigned block, near the top-left
+    src[3:5, 4:7] = 2     # ambiguous block, bottom-right, wider than it is tall
+    return src
+
+
+def _fake_result_with_assignment_source(src="default"):
+    fake = _make_fake_result(n_rows=PROV_ROWS, n_cols=PROV_COLS)
+    fake.metadata = {}
+    if src is not None:
+        fake.metadata["assignment_source"] = (
+            _provenance_array() if isinstance(src, str) else src)
+    return fake
+
+
+def test_assignment_source_layer_paints_the_three_states():
+    """Cyan where the grain step assigned, orange where it refused to judge,
+    fully transparent where the pixel kept the phase it already had."""
+    from backend.api.routes.phase_map import _compute_layer_rgba
+    fake = _fake_result_with_assignment_source()
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=fake), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        arr = _compute_layer_rgba(kind="assignment_source")
+
+    assert arr.shape == (PROV_ROWS, PROV_COLS, 4)
+    assert arr.dtype == np.uint8
+    src = _provenance_array()
+    # Every pixel of each state carries exactly the promised RGBA.
+    assert (arr[src == 1] == np.array(GRAIN_RGBA, dtype=np.uint8)).all()
+    assert (arr[src == 2] == np.array(AMBIGUOUS_RGBA, dtype=np.uint8)).all()
+    assert (arr[src == 0, 3] == 0).all(), "kept pixels must be transparent"
+    # ... and the three states are where the provenance says they are, not
+    # merely present somewhere on the map.
+    assert ((arr[..., 3] == 255) == (src != 0)).all()
+    assert ((arr[..., 0] == GRAIN_RGBA[0]) & (arr[..., 2] == GRAIN_RGBA[2])
+            ).sum() == int((src == 1).sum())
+
+
+def test_assignment_source_layer_refuses_a_result_without_provenance():
+    """A result that did not come from the grain step must be REFUSED, not
+    served as an empty (all-transparent) image that reads as 'nothing was
+    touched'."""
+    from fastapi import HTTPException
+    from backend.api.routes.phase_map import _compute_layer_rgba
+    fake = _fake_result_with_assignment_source(src=None)
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=fake), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        with pytest.raises(HTTPException) as ei:
+            _compute_layer_rgba(kind="assignment_source")
+    assert ei.value.status_code == 400
+    # The sentence is the guarantee -- pin it, not just the status code.
+    assert str(ei.value.detail) == (
+        "This result has no assignment provenance — it was not produced by "
+        "the grain-based phase assignment.")
+
+
+def test_assignment_source_layer_refuses_a_transposed_provenance_array():
+    """A provenance array whose shape is the map's transpose must raise.
+
+    Reshaping it would succeed silently and scramble every pixel: the
+    operator would read a plausible-looking provenance map that points at
+    the wrong pixels. Only a non-square map can exercise this.
+    """
+    from fastapi import HTTPException
+    from backend.api.routes.phase_map import _compute_layer_rgba
+    transposed = _provenance_array().T
+    assert transposed.shape == (PROV_COLS, PROV_ROWS) != (PROV_ROWS, PROV_COLS)
+    fake = _fake_result_with_assignment_source(src=transposed)
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=fake), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        with pytest.raises(HTTPException) as ei:
+            _compute_layer_rgba(kind="assignment_source")
+    assert ei.value.status_code == 400
+    detail = str(ei.value.detail)
+    # Both shapes named, so the reader can see WHICH one is wrong.
+    assert f"({PROV_COLS}, {PROV_ROWS})" in detail
+    assert f"({PROV_ROWS}, {PROV_COLS})" in detail
+
+
+@pytest.mark.parametrize("code", [3, -1])
+def test_assignment_source_layer_refuses_an_unknown_code(code):
+    """A code outside the {0, 1, 2} contract must raise rather than fall
+    through to transparent -- transparent means 'unchanged', which would be
+    an invented answer.
+
+    ``-1`` is tested alongside ``3`` on purpose: the array is int8, so a
+    future "unindexed" marker would most plausibly be negative, and a guard
+    written as ``arr.max() > 2`` (or one that quietly allows -1) would let it
+    render as 'kept the phase it already had'.
+    """
+    from fastapi import HTTPException
+    from backend.api.routes.phase_map import _compute_layer_rgba
+    src = _provenance_array()
+    src[0, 0] = code
+    fake = _fake_result_with_assignment_source(src=src)
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=fake), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        with pytest.raises(HTTPException) as ei:
+            _compute_layer_rgba(kind="assignment_source")
+    assert ei.value.status_code == 400
+    assert str(code) in str(ei.value.detail)
+
+
+def test_assignment_source_layer_without_a_result_is_404():
+    from fastapi import HTTPException
+    from backend.api.routes.phase_map import _compute_layer_rgba
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=None), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        with pytest.raises(HTTPException) as ei:
+            _compute_layer_rgba(kind="assignment_source")
+    assert ei.value.status_code == 404
+
+
+def test_assignment_source_endpoint_delivers_the_colours_to_the_browser():
+    """End to end through /api/phasemap/layer: the PNG the frontend decodes
+    carries exactly the colours the legend describes, at the right pixels."""
+    import base64 as _b64
+    import io as _io
+    from PIL import Image
+    from fastapi.testclient import TestClient
+    from backend.api.main import app
+    fake = _fake_result_with_assignment_source()
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=fake), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        client = TestClient(app)
+        resp = client.get("/api/phasemap/layer",
+                          params={"kind": "assignment_source"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["shape"] == [PROV_ROWS, PROV_COLS]
+    png = _b64.b64decode(resp.json()["image"])
+    arr = np.array(Image.open(_io.BytesIO(png)).convert("RGBA"))
+    src = _provenance_array()
+    assert arr.shape == (PROV_ROWS, PROV_COLS, 4)
+    assert (arr[src == 1] == np.array(GRAIN_RGBA, dtype=np.uint8)).all()
+    assert (arr[src == 2] == np.array(AMBIGUOUS_RGBA, dtype=np.uint8)).all()
+    assert (arr[src == 0, 3] == 0).all()
+
+
+def test_assignment_source_endpoint_missing_provenance_returns_400():
+    from fastapi.testclient import TestClient
+    from backend.api.main import app
+    fake = _fake_result_with_assignment_source(src=None)
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=fake), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        client = TestClient(app)
+        resp = client.get("/api/phasemap/layer",
+                          params={"kind": "assignment_source"})
+    assert resp.status_code == 400, resp.text
+    assert "grain-based phase assignment" in resp.json()["detail"]
+
+
+def test_provenance_on_a_result_leaves_the_other_layers_alone():
+    """Control that SHOULD survive: the new branch must not intercept any
+    other kind. A phase layer renders identically with and without the
+    provenance block in metadata."""
+    from backend.api.routes.phase_map import _compute_layer_rgba
+    with_prov = _fake_result_with_assignment_source()
+    without = _fake_result_with_assignment_source(src=None)
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=with_prov), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        a = _compute_layer_rgba(kind="phase")
+    with patch("backend.api.routes.phase_map.get_last_indexing_result",
+               return_value=without), \
+         patch("backend.api.routes.phase_map.get_analysis_dataset",
+               return_value=None):
+        b = _compute_layer_rgba(kind="phase")
+    assert np.array_equal(a, b)
+    assert a.shape == (PROV_ROWS, PROV_COLS, 4)

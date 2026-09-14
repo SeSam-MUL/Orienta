@@ -52,6 +52,10 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   // R + discrimination) and reveals the Kikuchi bands the phase-ID relies on.
   // Default ON — without it the comparison degrades and the phase is misranked.
   const [bgRemove, setBgRemove] = useState(true);
+  // Geometry PC for the simulated pattern. Default OFF = stable map-mean PC, so
+  // clicking through pixels reuses the cached backend (no ~1 s/phase rebuild per
+  // click). ON = exact per-pixel PC (more accurate geometry, rebuilds each click).
+  const [usePixelPc, setUsePixelPc] = useState(false);
   const [aperture, setAperture] = useState('circular');
   const [apertureRadius, setApertureRadius] = useState(1.0);
   const [loading, setLoading] = useState(false);
@@ -279,7 +283,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
     const params = {
       pixel_index: pixelIndex, eds_weighting: edsMode,
       aperture, aperture_radius: apertureRadius, max_bandwidth: bandwidth,
-      bg_remove: bgRemove,
+      bg_remove: bgRemove, use_pixel_pc: usePixelPc,
     };
     if (subsetSelected) params.phase_keys = [...selectedKeys];
 
@@ -333,7 +337,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
     } finally {
       if (myRun === runIdRef.current) setLoading(false);
     }
-  }, [pixelIndex, edsMode, aperture, apertureRadius, bandwidth, bgRemove, subsetSelected, selectedKeys, stopPolling, t]);
+  }, [pixelIndex, edsMode, aperture, apertureRadius, bandwidth, bgRemove, usePixelPc, subsetSelected, selectedKeys, stopPolling, t]);
 
   const cancelRun = useCallback(async () => {
     const jobId = jobIdRef.current;
@@ -537,6 +541,11 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
             title={t('phaseTest.bgRemoveTip')}>
             <input type="checkbox" checked={bgRemove}
               onChange={(e) => setBgRemove(e.target.checked)} /> {t('phaseTest.bgRemove')}
+          </label>
+          <label style={{ fontSize: 10, color: C.textSecondary, display: 'flex', alignItems: 'center', gap: 4 }}
+            title={t('phaseTest.usePixelPcTip')}>
+            <input type="checkbox" checked={usePixelPc}
+              onChange={(e) => setUsePixelPc(e.target.checked)} /> {t('phaseTest.usePixelPc')}
           </label>
           <label style={{ fontSize: 10, color: C.textSecondary, display: 'flex', alignItems: 'center', gap: 4 }}
             title={t('hoverTips.phaseTestMask')}>

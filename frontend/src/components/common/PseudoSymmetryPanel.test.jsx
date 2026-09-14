@@ -51,6 +51,16 @@ describe('PseudoSymmetryPanel', () => {
     expect(queryByText('matchesDialog.suspicionHint')).toBeNull();
   });
 
+  it('hints suspicion on a mixed map too', () => {
+    // Since the render arbitration hands disputed pixels back to the sphere,
+    // a map that used the resolver reports "mixed", not "hough" — the clicked
+    // pixel can still be one of the Hough-substituted ones.
+    const { getByText } = render(
+      <PseudoSymmetryPanel selectedPixel={PIXEL}
+        matchData={{ ...SPHERICAL, orientation_source: 'mixed' }} />);
+    getByText('matchesDialog.suspicionHint');
+  });
+
   it('loads and renders the variant gallery', async () => {
     indexApi.patternMatchVariants.mockResolvedValue({ data: VARIANTS });
     const { getByText } = render(

@@ -531,7 +531,7 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
     return pf, q, applied, skipped
 
 
-def rigid_grain_quats(q_stored_grain, q_click, q_seed):
+def rigid_grain_quats(q_stored_grain, q_click, q_seed, point_group=None):
     """Carry one known orientation across a grain as a RIGID correction.
 
     ``q_new(i) = (q_seed · q_click⁻¹) · q_stored(i)``
@@ -557,8 +557,30 @@ def rigid_grain_quats(q_stored_grain, q_click, q_seed):
     measurements, this one propagates a single measurement. It is used only
     when Hough produced nothing at all, and the caller reports which of the two
     it used so the result is never silently the weaker one.
+
+    ``point_group`` -- the symmetry of the phase the STORED orientations belong
+    to (the grain's current phase) -- is what makes the correction well defined
+    (2026-09-10).  An orientation is an orbit ``{S·q}`` and the export stores an
+    arbitrary member of it per pixel; ``C`` acts on the left, so two pixels of
+    one uniform grain that happen to be stored under different members come out
+    at ``C·S_a·q`` and ``C·S_b·q``, which are the same orientation only if
+    ``C`` normalises the group.  Here ``C`` is the rotation from the old phase's
+    orientation to the new phase's -- an arbitrary element of SO(3) -- so it
+    normalises nothing, and the assigned grain came back speckled (measured on
+    a synthetic m-3 grain: four pixels holding ONE orientation ended 37.8 to
+    67.7 deg apart).  Given the point group, every pixel is first brought to the
+    orbit member nearest ``q_click`` -- the pixel the correction was defined
+    against -- exactly as
+    :func:`variant_unification.nearest_representative` does for the pseudo-
+    variant operators.  That moves the REPRESENTATIVE, never the orientation,
+    so the real intra-grain rotation field is untouched.
+
+    Omitting ``point_group`` keeps the old arithmetic verbatim and is only safe
+    when the caller knows ``C`` normalises the group.
     """
-    from backend.spherical_gpu.pseudosym import _qconj, _qmul
+    from backend.spherical_gpu.pseudosym import _qconj, _qmul, _sym_quats
+
+    from .variant_unification import nearest_representative
 
     q = np.asarray(q_stored_grain, dtype=np.float64).reshape(-1, 4)
     click = np.asarray(q_click, dtype=np.float64).reshape(4)
@@ -569,6 +591,11 @@ def rigid_grain_quats(q_stored_grain, q_click, q_seed):
     n_seed = np.linalg.norm(seed)
     if n_click < 1e-12 or n_seed < 1e-12:
         raise ValueError("click and seed orientations must be non-zero")
-    corr = _qmul(seed / n_seed, _qconj(click / n_click))
+    click_u = click / n_click
+    corr = _qmul(seed / n_seed, _qconj(click_u))
+    if point_group:
+        # Fail loud on an unknown group: silently skipping the snap would give
+        # back the speckled grain this argument exists to prevent.
+        q = nearest_representative(q, click_u, _sym_quats(str(point_group)))
     out = _qmul(np.broadcast_to(corr, q.shape), q)
     return out / (np.linalg.norm(out, axis=-1, keepdims=True) + 1e-12)

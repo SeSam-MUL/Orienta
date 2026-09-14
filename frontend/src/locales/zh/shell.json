@@ -10,7 +10,9 @@
     "shortcutsTooltip": "键盘快捷键 (?)"
   },
   "disconnected": {
-    "message": "后端未连接 — 使用以下命令启动服务器"
+    "starting": "后端正在启动… {{seconds}} 秒。安装或更新后的首次启动需要加载科学计算库，可能需要一到两分钟。",
+    "lost": "与后端的连接已断开 — 正在重新连接…",
+    "message": "后端未连接 — 3 分钟内没有响应。请完全关闭 Orienta 并重新启动；如果反复出现，请在 设置 → 报告问题 中生成报告（其中包含记录原因的 logs/backend-console.log）。"
   },
   "crash": {
     "title": "此模块已崩溃"

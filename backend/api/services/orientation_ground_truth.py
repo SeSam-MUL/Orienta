@@ -17,6 +17,18 @@ class VendorOrientations:
     header_meta: dict = field(default_factory=dict)
 
 
+def _hex_square_map(path: str):
+    """Square resampling map when *path* is an EDAX hex scan, else ``None``."""
+    try:
+        import edax_hex
+
+        if not edax_hex.is_edax_hex_file(path):
+            return None
+        return edax_hex.square_map_for_file(path)[1]
+    except Exception:
+        return None
+
+
 def _first_scan_group(h: h5py.File):
     for key in h:
         g = h[key]
@@ -58,6 +70,15 @@ def load_vendor_orientations(path: str) -> VendorOrientations:
             phase_id = np.asarray(data["Phase"][:], dtype=np.int64)
             n_cols = int(np.asarray(header["nColumns"])[0])
             n_rows = int(np.asarray(header["nRows"])[0])
+            # A hex scan reports the padded rectangle here. Left alone, these
+            # orientations would be compared pixel by pixel against results
+            # computed on the square grid the loader produces — same length,
+            # different points, no error anywhere. Resample to match.
+            square = _hex_square_map(path)
+            if square is not None:
+                euler = euler[square.point_index]
+                phase_id = phase_id[square.point_index]
+                n_rows, n_cols = square.n_rows, square.n_cols
             cs_id = None
             if "Coordinate System" in header and "ID" in header["Coordinate System"]:
                 cs_id = int(np.asarray(header["Coordinate System"]["ID"])[0])

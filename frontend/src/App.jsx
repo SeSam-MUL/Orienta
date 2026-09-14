@@ -18,7 +18,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, Comp
 import { useTranslation } from 'react-i18next';
 import i18n from './i18n';
 import { setLanguage, LANGUAGES } from './i18n';
-import { healthCheck, createWebSocket } from './services/api';
+import { healthCheck, createWebSocket, closeWebSocket } from './services/api';
 import { reportError } from './services/errorReporter';
 import { addBreadcrumb } from './services/breadcrumbs';
 import DiagnosticsExportButton from './components/common/DiagnosticsExportButton';
@@ -33,6 +33,7 @@ import Sidebar from './components/shared/Sidebar';
 import StatusBar from './components/shared/StatusBar';
 import ToastContainer from './components/shared/ToastContainer';
 import DevPanel from './components/shared/DevPanel';
+import { backendBanner, readEverConnected, rememberEverConnected } from './components/shared/backendBanner';
 // Dashboard is the initial route — keep it synchronous so the first paint is fast.
 import Dashboard from './components/Dashboard/Dashboard';
 
@@ -182,6 +183,15 @@ function App() {
   const { t, i18n } = useTranslation(['nav', 'shell']);
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [backendStatus, setBackendStatus] = useState('checking');
+  // For the banner: has this page ever reached the backend, and how long ago
+  // did it load? A cold start after installation takes 30-40 s; during that
+  // time the banner must say "starting", not "not connected — start it with".
+  const loadedAtRef = useRef(Date.now());
+  // Survives a reload (F5, Vite hot reload, Electron crash recovery): the
+  // reloaded page must not restart the "starting … N s" count on a backend
+  // that was already there — that is "connection lost", not a cold start.
+  const everConnectedRef = useRef(readEverConnected());
+  const [bannerTick, setBannerTick] = useState(0);
   const [h5ViewerOpen, setH5ViewerOpen] = useState(false);
   const [edsColorsOpen, setEdsColorsOpen] = useState(false);
   // Reachable from every page: a problem is reported where it happened, and
@@ -253,6 +263,8 @@ function App() {
     const check = () => {
       healthCheck()
         .then(() => {
+          everConnectedRef.current = true;
+          rememberEverConnected();
           setBackendStatus(prev => prev === 'connected' ? prev : 'connected');
           // Once connected, switch to slow polling
           if (intervalId && retryCount <= maxFastRetries) {
@@ -263,6 +275,7 @@ function App() {
         })
         .catch(() => {
           setBackendStatus(prev => prev === 'disconnected' ? prev : 'disconnected');
+          setBannerTick(Date.now()); // re-render the "starting … N s" counter
           retryCount++;
           // Go back to fast polling: the slow 30 s cadence was meant for a
           // healthy backend, and leaving it there meant a backend that died
@@ -290,13 +303,14 @@ function App() {
         // Handle backend push messages if needed
       });
       ws.onclose = () => {
-        reconnectTimer = setTimeout(connect, 5000);
+        // No reconnect after we closed it ourselves (unmount / dev remount).
+        if (!ws.__closingIntentionally) reconnectTimer = setTimeout(connect, 5000);
       };
     };
     connect();
     return () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (ws) ws.close();
+      closeWebSocket(ws);
     };
   }, []);
 
@@ -539,24 +553,38 @@ function App() {
           </span>
         </div>
 
-        {/* Backend disconnected banner */}
-        {backendStatus === 'disconnected' && (
-          <div role="alert" style={{
-            padding: '4px 12px',
-            background: `${colors.red}18`,
-            borderBottom: `1px solid ${colors.red}44`,
-            fontSize: '9pt',
-            color: colors.red,
-            textAlign: 'center',
-            flexShrink: 0,
-            animation: 'fadeSlideIn 0.25s ease-out',
-          }}>
-            {t('shell:disconnected.message')}{' '}
-            <code style={{ background: `${colors.red}22`, padding: '1px 4px', borderRadius: 2 }}>
-              python -m uvicorn backend.api.main:app --port 8000
-            </code>
-          </div>
-        )}
+        {/* Backend banner: "starting" (cold start, no instructions), "down"
+            (never answered within the grace period — how to start it by hand),
+            "lost" (was connected, went away — the poll keeps retrying). */}
+        {(() => {
+          void bannerTick; // the counter below depends on the poll tick
+          const banner = backendBanner({
+            status: backendStatus,
+            everConnected: everConnectedRef.current,
+            sinceLoadSec: (Date.now() - loadedAtRef.current) / 1000,
+          });
+          if (banner.kind === 'none') return null;
+          const tone = banner.kind === 'starting' ? colors.yellow : colors.red;
+          return (
+            <div role={banner.kind === 'starting' ? 'status' : 'alert'} data-backend-banner={banner.kind} style={{
+              padding: '4px 12px',
+              background: `${tone}18`,
+              borderBottom: `1px solid ${tone}44`,
+              fontSize: '9pt',
+              color: tone,
+              textAlign: 'center',
+              flexShrink: 0,
+              animation: 'fadeSlideIn 0.25s ease-out',
+            }}>
+              {banner.kind === 'starting' && t('shell:disconnected.starting', { seconds: banner.elapsed })}
+              {banner.kind === 'lost' && t('shell:disconnected.lost')}
+              {/* No "start it with python -m uvicorn …" any more: a user who
+                  followed that left an unmanaged backend on port 8000 that
+                  outlived the app and blocked the next start. */}
+              {banner.kind === 'down' && t('shell:disconnected.message')}
+            </div>
+          );
+        })()}
 
         {/* Content area — true QStackedWidget: all pages stay mounted, only active is visible */}
         {/* Each page gets its own ErrorBoundary so a crash in one page doesn't lock all others */}

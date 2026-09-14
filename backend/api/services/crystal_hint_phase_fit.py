@@ -531,6 +531,7 @@ def phase_nominal_at_pct(formula: str) -> dict[str, float]:
 def chemistry_fit(
     pixel_at_pct: dict[str, float],
     phase_at_pct: dict[str, float],
+    unmeasured=None,
 ) -> float:
     """Score how well a phase's nominal composition matches a pixel's
     measured EDS chemistry. Returns 0..1 (1 = identical, 0 = disjoint).
@@ -538,6 +539,17 @@ def chemistry_fit(
     Both vectors are restricted to metallic elements (O/C dropped), then
     renormalised to fractions summing to 1, and compared by L1 distance:
         score = 1 - 0.5 * sum_i |pixel_i - phase_i|     (L1 in [0,2])
+
+    ``unmeasured`` — elements the quantification could not price, whose window
+    was therefore left out and the rest renormalised without it. WITHOUT THIS
+    THE HOLE IS READ AS A MEASURED ZERO, and the missing-major veto below then
+    floors every phase whose major element is the one nobody could measure — a
+    20x suppression of exactly the phases the missing element identifies. "We
+    could not measure this" and "this is not here" are opposite statements.
+    Such an element is dropped from BOTH vectors and the phase side is
+    renormalised over what remains, so a 20 at% Cu phase does not pay a 20 %
+    penalty for an unpriceable Cu window; the elements that WERE measured still
+    decide.
 
     Neutral 1.0 (no effect on ranking) is returned when the match can't be
     computed — empty pixel chemistry (no EDS / dead pixel) or empty phase
@@ -552,8 +564,11 @@ def chemistry_fit(
             return {}
         return {el: v / tot for el, v in kept.items()}
 
-    p = _clean(pixel_at_pct)
-    q = _clean(phase_at_pct)
+    blind = frozenset(unmeasured or ())
+    p = _clean({el: v for el, v in (pixel_at_pct or {}).items()
+                if el not in blind})
+    q = _clean({el: v for el, v in (phase_at_pct or {}).items()
+                if el not in blind})
     if not p or not q:
         return 1.0  # fail-soft: no usable chemistry on one side
     l1 = 0.0
@@ -594,7 +609,47 @@ def chemistry_fit(
     # instead of on the edge of a noisy distribution. Measured on ProbeB:
     # alpha grain retained 79.8 % -> 100 %, while the Si-rim veto and the Al
     # matrix stay at 100 % vetoed.
-    _MAJOR_REQ, _ABSENT = 0.05, 0.012
+    #
+    # 2026-09-12: _ABSENT raised 0.012 -> 0.020. IT IS AN ABSOLUTE At.% FLOOR,
+    # SO IT IS TIED TO THE QUANTIFICATION SCALE, and the k-factors were
+    # corrected that day (tasks/eds-quantification-wrong-2026-09-10.md). The
+    # 2026-08-05 note above places it by naming its two populations -- matrix
+    # and Si-boundary pixels "at Mn ~0.3 at%" against a real alpha particle
+    # "at Mn 1.8-2.2". Both moved. Re-measured on the corrected scale over the
+    # 268x201 reference scan (tasks/eds_prior_audit/06_veto_constants.py), Mn
+    # At.% per region of the pattern-only 4-phase map:
+    #
+    #     Al matrix    p05 0.52   median 0.78   p95 1.55
+    #     Al7Cu2Fe     p05 0.97   median 1.37   p95 1.81
+    #     beta         p05 1.76   median 2.24   p95 2.69
+    #     alpha        p05 2.36   median 3.51   p95 5.01
+    #
+    # The empty gap is now 1.55 .. 2.36, and 2.0 at% is its middle -- the same
+    # placement rule as before, on the numbers that exist now. Sweep of the
+    # per-pixel top-1 rate of the prior used as a classifier over the four
+    # reference phases (07_joint_sweep.py; the last column is the 2026-08-04
+    # defect above, the share of Si-particle NEIGHBOUR pixels handed to an
+    # Fe phase on the Al/Si file):
+    #
+    #   _ABSENT   alpha  Al7Cu2Fe   beta   matrix    ALL   Si rim -> Fe
+    #    0.012    89.37    99.92   99.41   82.53   88.18      20.34 %
+    #    0.016    89.37    99.92   99.41   83.41   88.64      20.34 %
+    #    0.020    89.37    99.92   99.41   83.89   88.90       6.78 %   <-- chosen
+    #    0.025    89.37    99.92   99.41   84.64   89.29       3.39 %
+    #    0.030    42.30    99.92   99.90   85.90   78.71
+    #
+    # 0.025 scores better on every column and is NOT chosen: alpha's own p05 is
+    # 2.36, so 2.5 at% sits inside the distribution it must not cut, and one
+    # step further (3.0) costs 47 points of alpha. That is exactly the edge the
+    # 2026-08-05 note was written about. 2.0 is 1.29x below it and 1.29x above
+    # the matrix p95.
+    #
+    # _MAJOR_REQ stays at 0.05, measured and deliberate. Lowering it to 0.02
+    # buys 1.6 points of matrix (06_veto_constants.py) by making alpha's 2.7 at%
+    # Mn a REQUIRED element -- and that is wrong for this phase: Fe and Mn share
+    # one site, so alpha in a Mn-free alloy is still alpha. A veto must not
+    # demand an element the structure lets the alloy choose.
+    _MAJOR_REQ, _ABSENT = 0.05, 0.020
     for el, frac in q.items():
         if frac >= _MAJOR_REQ and p.get(el, 0.0) < _ABSENT:
             return min(score, 0.05)
@@ -611,7 +666,46 @@ def chemistry_fit(
     # cutoff, so matrix pixels are untouched and Al still wins there; only
     # genuine multi-element particle pixels demote the pure-matrix phase and
     # let the intermetallic that DOES contain Fe/Si/Mn rank up.
-    _PRESENT_SIG = 0.05
+    #
+    # 2026-09-12: 0.05 -> 0.02. ANOTHER ABSOLUTE At.% FLOOR, so the k-factor
+    # correction moved it too. It buys the alpha region and it is NOT free, and
+    # the trade is this:
+    #
+    # WHAT IT BUYS. The 5 at% version could no longer charge a phase for an
+    # element that is plainly there. That was the alpha/beta flip: the alpha
+    # region measures Mn 3.5 at% against a 0.8 at% background, beta contains no
+    # Mn at all, and beta was not charged for it.
+    #
+    # WHAT IT COSTS, AND WHY THE MATRIX FALLS. The original intent -- "trace
+    # levels (matrix Fe/Si/Mn ~1 at%) are below the cutoff" -- is only half met
+    # at 2 at%. The reference scan's Al matrix reads Fe 1.81 and Mn 0.86, which
+    # do clear, but also Si 4.85, Cu 2.79 and Zn 2.81. At the old floor NOTHING
+    # on a mean matrix pixel was charged (Si at 4.85 sat just under 5); at 2 at%
+    # Al.cif is charged about 10.5 % unexplained, of which Cu and Zn are 5.6
+    # points. Those are exactly the two channels that do NOT reproduce across
+    # scans of one sample (Cu spreads 36-58 %, Zn 16-39 %; the Zn window is
+    # contaminated by Cu L emission), so part of this cost is paid in the
+    # least trustworthy currency available. It is 1.14 of the 2.01 points the
+    # Al-matrix region loses; the rest is the interaction-volume halo, which
+    # tasks/eds_prior_audit/14_matrix_misses.py shows is real (the pixels handed
+    # over have lower band contrast, p = 1.6e-223, Fe 5.35 against 0.80 at%, and
+    # sit a median 6 px from a particle). Weighting Cu and Zn down is the proper
+    # repair and is a feature, not a constant.
+    #
+    # Sweep of the per-pixel top-1 rate over the four reference phases
+    # (tasks/eds_prior_audit/07_joint_sweep.py, at _ABSENT = 0.020):
+    #
+    #   floor   alpha  Al7Cu2Fe   beta   matrix    ALL
+    #    0.05   43.84    99.92   99.90   85.03   78.63
+    #    0.03   82.77    99.92   99.90   84.89   87.87
+    #    0.02   89.37    99.92   99.41   83.89   88.90   <-- chosen
+    #
+    # Below 0.02 the floor stops deciding: the enrichment rule below takes over
+    # wherever a background is supplied, and 0.015 / 0.012 measure the same
+    # 89.37 % (06_veto_constants.py). 0.02 is the lowest value that is still a
+    # statement about At.%, and it is above every trace level in both test
+    # datasets.
+    _PRESENT_SIG = 0.02
     unexplained = sum(
         frac for el, frac in p.items()
         if frac >= _PRESENT_SIG and q.get(el, 0.0) < _ABSENT

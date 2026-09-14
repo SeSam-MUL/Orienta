@@ -1717,7 +1717,7 @@ async def structure_file(filename: str):
 
     Used by the Database Browser's interactive 3D crystal-structure viewer.
     Returns ``{source, lattice, cell_vectors, space_group, atoms[], bonds[],
-    polyhedra[], meta}``. 404 if the file is absent; 422 if it cannot be parsed.
+    meta}``. 404 if the file is absent; 422 if it exists but cannot be parsed.
     """
     import asyncio  # noqa: PLC0415
     import glob as _glob  # noqa: PLC0415

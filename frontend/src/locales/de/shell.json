@@ -10,7 +10,9 @@
     "shortcutsTooltip": "Tastenkürzel (?)"
   },
   "disconnected": {
-    "message": "Backend nicht verbunden — Server starten mit"
+    "starting": "Backend startet… {{seconds}} s. Der erste Start nach einer Installation oder einem Update lädt die wissenschaftlichen Bibliotheken und kann ein bis zwei Minuten dauern.",
+    "lost": "Verbindung zum Backend verloren — verbinde neu…",
+    "message": "Backend nicht verbunden — es hat innerhalb von 3 Minuten nicht geantwortet. Orienta ganz schließen und neu starten; wiederholt sich das, unter Einstellungen → Problem melden einen Bericht erzeugen (er enthält logs/backend-console.log mit der Ursache)."
   },
   "crash": {
     "title": "Dieses Modul ist abgestürzt"

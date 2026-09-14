@@ -348,3 +348,68 @@ describe('useEdsLayerStack', () => {
     expect(alCallsAfter).toBe(alCallsBefore);
   });
 });
+
+describe('a layer whose fetch fails', () => {
+  const REASON = "EDS quantification: no K line data for element 'Xx'.";
+
+  function failOnce() {
+    // The shape axios raises for a 400 from /api/eds/map/{element}.
+    const err = new Error('Request failed with status code 400');
+    err.response = { status: 400, data: { detail: REASON } };
+    return err;
+  }
+
+  it('is fetched exactly once, not re-fetched for as long as the page is open',
+    async () => {
+      // The failure path records the error and calls force(); bitmapVersion is
+      // in the fetch effect's deps, and the effect's filter only asked for
+      // "visible and not cached" — so the failed layer was re-selected on the
+      // very re-render its own failure triggered and fetched again at network
+      // speed. Reachable with no user action: the page defaults to at_pct and
+      // the "All Maps" grid seeds a layer per element.
+      edsApi.getMap.mockRejectedValue(failOnce());
+      const initial = [
+        { id: 'eds-Xx Kα1', kind: 'eds-element', element: 'Xx Kα1', visible: true, opacity: 1, blend: 'normal' },
+      ];
+      const { result } = renderHook(
+        () => useEdsLayerStack({ initialLayers: initial, displayMode: 'at_pct' }));
+
+      await waitFor(() => expect(result.current.errors.get('eds-Xx Kα1')).toBeTruthy());
+      const after = edsApi.getMap.mock.calls.length;
+      // Give the loop every chance to run again.
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(edsApi.getMap.mock.calls.length).toBe(after);
+      expect(after).toBe(1);
+    });
+
+  it('carries the reason the backend gave, for the tile to show', async () => {
+    edsApi.getMap.mockRejectedValue(failOnce());
+    const initial = [
+      { id: 'eds-Xx Kα1', kind: 'eds-element', element: 'Xx Kα1', visible: true, opacity: 1, blend: 'normal' },
+    ];
+    const { result } = renderHook(
+      () => useEdsLayerStack({ initialLayers: initial, displayMode: 'at_pct' }));
+    await waitFor(() => expect(result.current.errors.get('eds-Xx Kα1')).toBe(REASON));
+  });
+
+  it('is retried when the display mode changes', async () => {
+    // The skip must not be permanent: at% can fail where counts succeeds, and
+    // that is exactly the case this guards (a window with no k-factor).
+    edsApi.getMap.mockRejectedValue(failOnce());
+    const initial = [
+      { id: 'eds-Xx', kind: 'eds-element', element: 'Xx', visible: true, opacity: 1, blend: 'normal' },
+    ];
+    const { result, rerender } = renderHook(
+      ({ mode }) => useEdsLayerStack({ initialLayers: initial, displayMode: mode }),
+      { initialProps: { mode: 'at_pct' } },
+    );
+    await waitFor(() => expect(result.current.errors.get('eds-Xx')).toBeTruthy());
+    const failed = edsApi.getMap.mock.calls.length;
+
+    edsApi.getMap.mockResolvedValue({ data: { image: TINY_PNG, shape: [128, 156] } });
+    rerender({ mode: 'counts' });
+    await waitFor(() => expect(result.current.bitmaps.has('eds-Xx')).toBe(true));
+    expect(edsApi.getMap.mock.calls.length).toBeGreaterThan(failed);
+    expect(result.current.errors.has('eds-Xx')).toBe(false);
+  });
+});

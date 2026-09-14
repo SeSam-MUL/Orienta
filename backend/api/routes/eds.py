@@ -10,12 +10,19 @@ Wraps eds_utils for:
 
 import asyncio
 import logging
+import math
 from pathlib import Path
 from typing import Optional, List, Dict
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+
+try:  # eds_utils lives at the repo root; see the lazy-import note below
+    from eds_utils import UnknownLineError as _UnknownLineError
+except ImportError:  # pragma: no cover - project-internal module
+    class _UnknownLineError(ValueError):
+        """Stand-in so the `except` clauses stay valid without eds_utils."""
 
 from backend.api.services.image_utils import colormap_array_to_base64, element_color_overlay_to_base64
 # EDS is per-dataset data: when the active dataset is a crop, every map here
@@ -25,7 +32,9 @@ from backend.api.services.h5_session import get_active_extractor as get_extracto
 from backend.api.services.cif_phase_library import (
     auto_classify_pixels,
     candidates_for,
+    explain_no_match,
     load_cif_phase_library,
+    load_cif_phase_library_with_skips,
     suggest_phases_from_cif_library,
 )
 from backend.api.services.chemistry_score import (
@@ -46,6 +55,185 @@ from backend.api.services.phase_map_store import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class BeamVoltage(float):
+    """A beam voltage in kV that remembers whether it was read or assumed.
+
+    A plain ``float`` everywhere one is expected -- arithmetic, comparison,
+    JSON -- so the call sites that only want the number need no change. Same
+    pattern as ``eds_utils.ElementLine`` and ``QuantMap``.
+    """
+
+    def __new__(cls, kv, assumed: bool = False, reason: str = ""):
+        obj = super().__new__(cls, kv)
+        obj._assumed = bool(assumed)
+        obj._reason = reason
+        return obj
+
+    @property
+    def assumed(self) -> bool:
+        return self._assumed
+
+    @property
+    def reason(self) -> str:
+        return self._reason
+
+    def __reduce__(self):
+        return (BeamVoltage, (float(self), self._assumed, self._reason))
+
+
+def _quant_provenance(maps):
+    """The quantification's own account of itself, ready for JSON.
+
+    eds_utils attaches a ``.provenance`` to every wt%/at% result: which model
+    produced the k-factors, what it was calibrated on, that there is NO ZAF
+    matrix correction, any line whose response is extrapolated, and any known
+    spectral overlap. Until 2026-09-12 nothing read it -- the routes pulled the
+    numbers out with ``float(...)`` and dropped the rest -- so the surface
+    showed a composition with nothing to say how provisional it is. That is a
+    shape this project keeps hitting: a warning the backend builds correctly
+    and no one ever displays.
+
+    Returns None when there is nothing to report, so a caller can leave the key
+    out rather than ship an empty object.
+    """
+    prov = getattr(maps, "provenance", None)
+    if not prov:
+        return None
+    return {
+        "summary": prov.get("summary"),
+        "method": prov.get("method"),
+        # None means "no ZAF", and the UI is expected to say so; the key is
+        # always present precisely so its absence cannot be mistaken for "yes".
+        "matrix_correction": prov.get("matrix_correction"),
+        "source_data": prov.get("source_data"),
+        "beam_kv": prov.get("beam_kv"),
+        "calibration": prov.get("calibration"),
+        "lines": prov.get("lines"),
+        # tuples -> lists, so this survives JSON without surprising the client
+        "spectral_overlaps": [
+            {**o, "window": list(o.get("window", ())),
+             "interferer": list(o.get("interferer", ()))}
+            for o in prov.get("spectral_overlaps", [])
+        ],
+        "beam_kv_assumed": bool(prov.get("beam_kv_assumed", False)),
+        # Windows that were measured but could not be priced, one entry each.
+        # The composition on screen renormalises to 100 % WITHOUT them, so the
+        # client needs this to say which column is missing and why.
+        "excluded_windows": [dict(e) for e in prov.get("excluded_windows", [])],
+        "warnings": list(prov.get("warnings", [])),
+    }
+
+
+def _note_assumed_voltage(maps, beam_kv) -> None:
+    """Record on the result that its beam voltage was a guess.
+
+    eds_utils only warns when the voltage differs from the 20 kV the response
+    curve was measured at by more than 0.5, so an ASSUMED 20 is invisible
+    there -- indistinguishable from a measured 20. It is not the same thing:
+    every k-factor's overvoltage term rides on this number.
+    """
+    if not getattr(beam_kv, "assumed", False):
+        return
+    prov = getattr(maps, "provenance", None)
+    if not isinstance(prov, dict):
+        return
+    prov["beam_kv_assumed"] = True
+    note = (f"beam voltage {beam_kv.reason} — {float(beam_kv):g} kV "
+            "assumed; the overvoltage of every k-factor depends on it")
+    warnings = prov.setdefault("warnings", [])
+    if note not in warnings:
+        warnings.insert(0, note)
+
+
+def _beam_kv(ext, default: float = 20.0) -> float:
+    """Accelerating voltage of the EDS acquisition, in kV.
+
+    Every k-factor carries an overvoltage term U = beam_kv / absorption edge,
+    and eds_utils refuses a line below U = 1.5 rather than return the runaway
+    factor that ln(U) -> 0 produces. Both need the real voltage: pinned at 20
+    the guard checks the wrong U on a 15 or 10 kV scan -- Cu K is U = 2.2 at
+    20 kV but 1.11 at 10 -- and the measured response curve, which was taken
+    at 20 kV, gets used without the provenance warning that says so.
+
+    Falls back to the default when the header is unreadable rather than
+    failing the request: a missing header is not a reason to refuse a map.
+
+    Only a real number is trusted. Anything else -- a stand-in object, a
+    string, a bool -- falls back, because `float()` will happily turn some of
+    those into a number that is not a voltage, and a wrong voltage here does
+    not fail loudly: it silently refuses every element whose line the bogus
+    overvoltage cannot excite.
+
+    Returns a :class:`BeamVoltage`, which IS a float everywhere a float is
+    expected and additionally says whether it was READ or ASSUMED. That
+    distinction has to survive: the k-factors, the overvoltage guard and the
+    provenance the UI now shows all depend on the voltage, and an assumed 20
+    that happens to be right looks exactly like a measured 20 that is right --
+    until the day it is a 15 kV scan and nothing says so.
+    """
+    def _fallback(why: str) -> "BeamVoltage":
+        try:
+            from backend.api.services.eds_pixel_chemistry import warn_once
+            warn_once(
+                f"beam_voltage_assumed:{why}",
+                "EDS beam voltage %s; assuming %g kV for the whole dataset. "
+                "Every k-factor carries an overvoltage term, so a wrong "
+                "voltage silently refuses elements rather than failing. "
+                "(logged once per dataset)",
+                why, default)
+        except Exception:      # pragma: no cover - never break a request on a log
+            logger.debug("EDS beam voltage %s; assuming %g kV", why, default)
+        return BeamVoltage(default, assumed=True, reason=why)
+
+    try:
+        header = ext.get_eds_header() or {}
+    except Exception:          # header shapes vary across vendors/versions
+        return _fallback("header unreadable")
+    if "beam_voltage_kV" not in header:
+        return _fallback("not recorded in the file header")
+    raw = header.get("beam_voltage_kV")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return _fallback(f"header value is not a number ({type(raw).__name__})")
+    kv = float(raw)
+    if not math.isfinite(kv) or kv <= 0.0:
+        return _fallback(f"header value is not a usable voltage ({raw!r})")
+    return BeamVoltage(kv, assumed=False, reason="")
+
+
+def _window_counts(ext, elements=None, index=None, indices=None,
+                   dtype=np.float64):
+    """``(raw window name, counts)`` pairs for ``build_counts_by_element``.
+
+    Hand this to :func:`eds_utils.build_counts_by_element`; do **not** build
+    the ``{element: counts}`` dict in a loop here. That dict is keyed by
+    element symbol, so two windows of one element (``Cu Kalpha`` and
+    ``Cu Lalpha``) collapse into a single entry -- and Python keeps the FIRST
+    key object with the LAST value, which pairs a ``Cu K`` key with the Cu L
+    counts and prices it at k = 4.13 instead of 1.10. Measured 2026-09-12: a
+    silent 3.75x. ``build_counts_by_element`` picks one window per element
+    deterministically and logs the one it dropped.
+
+    ``index`` selects a single pixel (as a length-1 array), ``indices`` a
+    subset; neither means the whole map. Windows the extractor has no data
+    for are skipped.
+    """
+    if elements is None:
+        elements = ext.get_available_elements()
+    for name in elements:
+        data = ext.get_element_map(name)
+        if data is None:
+            continue
+        if index is not None:
+            if index >= len(data):
+                continue
+            yield name, np.array([float(data[index])])
+        elif indices is not None:
+            yield name, np.asarray(data[indices], dtype=dtype)
+        else:
+            yield name, np.asarray(data, dtype=dtype)
+
 
 # The user's phase-colour choices, keyed on phase name. The frontend already
 # persists these for the EBSD phase map; the EDS map honours the same ones so
@@ -112,6 +300,36 @@ def _resolve_element_name(element: str, ext) -> str:
     return element  # Return as-is, let the caller handle 404
 
 
+def _quantified_map(maps, el, mode: str):
+    """One element's quantified map, or a 400 that says why it has none.
+
+    The old line was ``maps.get(el, raw_data)``: for an element the
+    quantification does not carry it fell back to the RAW COUNTS and the
+    response still said ``mode: "at_pct"`` — a counts map, values in the
+    thousands, labelled as atomic percent, with nothing to mark it. That
+    fallback was unreachable while one unusable window failed the whole
+    request; the per-window skip (eds_utils._resolve_k_factors) made it live.
+
+    Refusing is the honest answer for a single-element request: this element
+    has no composition, and the reason is the one recorded when its window was
+    dropped. The blast radius stays the window — every other element's map is
+    unaffected, and ``mode=counts`` still draws this one, because the counts
+    are a real measurement.
+    """
+    arr = maps.get(el)
+    if arr is not None:
+        return arr
+    prov = getattr(maps, "provenance", None) or {}
+    for entry in prov.get("excluded_windows", []):
+        if str(entry.get("element")) == str(el):
+            raise HTTPException(status_code=400, detail=str(entry.get("reason")))
+    raise HTTPException(
+        status_code=400,
+        detail=(f"No {mode} for {el!s}: it is not part of the quantified "
+                "composition of this scan. Use mode=counts for its raw map."),
+    )
+
+
 @router.get("/map/{element}")
 async def get_eds_map(element: str, mode: str = "counts", cmap: str = "hot", color: str = ""):
     """Get EDS element map with optional quantification."""
@@ -129,31 +347,29 @@ async def get_eds_map(element: str, mode: str = "counts", cmap: str = "hot", col
     else:
         # Convert using eds_utils
         try:
-            from eds_utils import parse_element_name
+            from eds_utils import build_counts_by_element, parse_element_name
             el = parse_element_name(element)
 
             # Get all element maps for quantification
-            all_elements = ext.get_available_elements()
-            counts_dict = {}
-            for el_name in all_elements:
-                el_map = ext.get_element_map(el_name)
-                if el_map is not None:
-                    pure_el = parse_element_name(el_name)
-                    counts_dict[pure_el] = el_map.astype(np.float64)
+            beam_kv = _beam_kv(ext)
+            counts_dict = build_counts_by_element(_window_counts(ext),
+                                                  beam_kv=beam_kv)
 
             if mode == "wt_pct":
                 from eds_utils import counts_to_weight_pct
-                wt_maps = counts_to_weight_pct(counts_dict)
-                data = wt_maps.get(el, raw_data).reshape(raw_data.shape)
+                wt_maps = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
+                data = _quantified_map(wt_maps, el, mode).reshape(raw_data.shape)
             elif mode == "at_pct":
                 from eds_utils import counts_to_weight_pct, weight_pct_to_atomic_pct
-                wt_maps = counts_to_weight_pct(counts_dict)
+                wt_maps = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
                 at_maps = weight_pct_to_atomic_pct(wt_maps)
-                data = at_maps.get(el, raw_data).reshape(raw_data.shape)
+                data = _quantified_map(at_maps, el, mode).reshape(raw_data.shape)
             else:
                 data = raw_data
         except ImportError:
             data = raw_data
+        except _UnknownLineError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
 
     # Use single-color overlay when a hex color is provided, otherwise matplotlib cmap
     if color:
@@ -190,7 +406,10 @@ async def quantify_pixel(req: QuantifyRequest):
     index = req.row * n_cols + req.col
 
     try:
-        from eds_utils import parse_element_name, counts_to_weight_pct, weight_pct_to_atomic_pct
+        from eds_utils import (
+            build_counts_by_element, counts_to_weight_pct,
+            parse_element_name, weight_pct_to_atomic_pct,
+        )
     except ImportError as e:
         # eds_utils is a project-internal module — an ImportError is a
         # packaging/path bug, not a missing optional dependency. Returning
@@ -200,23 +419,25 @@ async def quantify_pixel(req: QuantifyRequest):
         raise HTTPException(status_code=500, detail=f"eds_utils not available: {e}")
 
     try:
-        counts_dict = {}
-        for el_name in elements:
-            data = ext.get_element_map(el_name)
-            if data is not None and index < len(data):
-                pure_el = parse_element_name(el_name)
-                counts_dict[pure_el] = np.array([float(data[index])])
+        beam_kv = _beam_kv(ext)
+        counts_dict = build_counts_by_element(
+            _window_counts(ext, elements, index=index), beam_kv=beam_kv)
 
         # Single pixel quantification
-        wt_pct = counts_to_weight_pct(counts_dict)
+        wt_pct = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
         at_pct = weight_pct_to_atomic_pct(wt_pct)
+        _note_assumed_voltage(at_pct, beam_kv)
 
         result = {}
         for el in counts_dict:
+            # An element the quantification LEFT OUT (no usable k-factor for
+            # its window — see eds_utils._resolve_k_factors) has no wt%/at%,
+            # and 0.0 would read as a measured zero. Its counts are real, so
+            # they stay; the reason is in `quantification.excluded_windows`.
             result[el] = {
                 "counts": float(counts_dict[el][0]),
-                "wt_pct": float(wt_pct[el][0]) if el in wt_pct else 0.0,
-                "at_pct": float(at_pct[el][0]) if el in at_pct else 0.0,
+                "wt_pct": float(wt_pct[el][0]) if el in wt_pct else None,
+                "at_pct": float(at_pct[el][0]) if el in at_pct else None,
             }
 
         return {
@@ -224,7 +445,10 @@ async def quantify_pixel(req: QuantifyRequest):
             "col": req.col,
             "data": result,
             "display_mode": req.display_mode,
+            "quantification": _quant_provenance(at_pct),
         }
+    except _UnknownLineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as e:
         logger.exception("Failed to quantify pixel (%d, %d)", req.row, req.col)
         raise HTTPException(status_code=500, detail=str(e))
@@ -255,33 +479,41 @@ async def region_quantify(req: RegionQuantifyRequest):
     linear_indices = (row_indices[:, None] * n_cols + col_indices[None, :]).ravel()
 
     try:
-        from eds_utils import parse_element_name, counts_to_weight_pct, weight_pct_to_atomic_pct
+        from eds_utils import (
+            build_counts_by_element, counts_to_weight_pct,
+            weight_pct_to_atomic_pct,
+        )
 
         # Build counts arrays for the region pixels
-        counts_dict = {}
-        for el_name in elements:
-            data = ext.get_element_map(el_name)
-            if data is not None:
-                pure_el = parse_element_name(el_name)
-                region_counts = data[linear_indices].astype(np.float64)
-                counts_dict[pure_el] = region_counts
+        beam_kv = _beam_kv(ext)
+        counts_dict = build_counts_by_element(
+            _window_counts(ext, elements, indices=linear_indices),
+            beam_kv=beam_kv)
 
         if not counts_dict:
             return {"row_start": r0, "row_end": r1, "col_start": c0, "col_end": c1,
                     "n_pixels": len(linear_indices), "data": {}}
 
-        wt_pct = counts_to_weight_pct(counts_dict)
+        wt_pct = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
         at_pct = weight_pct_to_atomic_pct(wt_pct)
+        _note_assumed_voltage(at_pct, beam_kv)
+
+        def _stats(arr):
+            # None, not a block of zeros: an element the quantification left
+            # out has no wt%/at%, and "mean 0.00 +- 0.00" is a measurement
+            # nobody made. See eds_utils._resolve_k_factors.
+            if arr is None:
+                return None
+            return {"mean": float(np.mean(arr)), "std": float(np.std(arr)),
+                    "min": float(np.min(arr)), "max": float(np.max(arr))}
 
         result = {}
         for el in counts_dict:
             c_arr = counts_dict[el]
-            w_arr = wt_pct.get(el, np.zeros_like(c_arr))
-            a_arr = at_pct.get(el, np.zeros_like(c_arr))
             result[el] = {
-                "counts":  {"mean": float(np.mean(c_arr)),  "std": float(np.std(c_arr)),  "min": float(np.min(c_arr)),  "max": float(np.max(c_arr))},
-                "wt_pct":  {"mean": float(np.mean(w_arr)),  "std": float(np.std(w_arr)),  "min": float(np.min(w_arr)),  "max": float(np.max(w_arr))},
-                "at_pct":  {"mean": float(np.mean(a_arr)),  "std": float(np.std(a_arr)),  "min": float(np.min(a_arr)),  "max": float(np.max(a_arr))},
+                "counts": _stats(c_arr),
+                "wt_pct": _stats(wt_pct.get(el)),
+                "at_pct": _stats(at_pct.get(el)),
             }
 
         return {
@@ -289,7 +521,10 @@ async def region_quantify(req: RegionQuantifyRequest):
             "col_start": c0, "col_end": c1,
             "n_pixels": int(len(linear_indices)),
             "data": result,
+            "quantification": _quant_provenance(at_pct),
         }
+    except _UnknownLineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except ImportError:
         # Fallback: counts only
         raw = {}
@@ -358,7 +593,7 @@ async def suggest_phases(req: PhaseSuggestionRequest):
 
     try:
         from eds_utils import (
-            parse_element_name, counts_to_weight_pct,
+            build_counts_by_element, parse_element_name, counts_to_weight_pct,
             weight_pct_to_atomic_pct, suggest_phases as _suggest_simple,
         )
 
@@ -374,19 +609,23 @@ async def suggest_phases(req: PhaseSuggestionRequest):
             )
         index = req.row * n_cols + req.col
 
-        counts_dict = {}
-        for el_name in elements:
-            data = ext.get_element_map(el_name)
-            if data is not None and index < len(data):
-                pure_el = parse_element_name(el_name)
-                counts_dict[pure_el] = np.array([float(data[index])])
+        beam_kv = _beam_kv(ext)
+        counts_dict = build_counts_by_element(
+            _window_counts(ext, elements, index=index), beam_kv=beam_kv)
 
-        wt = counts_to_weight_pct(counts_dict)
+        wt = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
         at = weight_pct_to_atomic_pct(wt)
         at_scalar = {el: float(v[0]) for el, v in at.items()}
 
-        # 1) Try the user's curated CIF library first.
-        cif_library = load_cif_phase_library(_crystal_db_path())
+        # 1) Try the user's curated CIF library first. Off the event loop:
+        # a cold load reads the spreadsheet and any CIF it does not list,
+        # which is ~0.25 s per unlisted file — seconds on a fresh install,
+        # during which nothing else (health, progress, WebSocket) is served.
+        cif_library, library_skipped = await asyncio.to_thread(
+            load_cif_phase_library_with_skips, _crystal_db_path())
+        # Bound before the branch: explain_no_match below reads them on
+        # every path, including the one where there is no library at all.
+        matrix_element, background = None, None
         if cif_library:
             # The enrichment gate asks whether an element is enriched over
             # THIS MAP's background, so a single-pixel caller has to supply
@@ -425,8 +664,26 @@ async def suggest_phases(req: PhaseSuggestionRequest):
                     "atomic_pct": at_scalar,
                     "library_source": "cif",
                     "library_size": len(cif_library),
+                    # CIFs that are on disk and did NOT become phases. The
+                    # user put them there; without this the panel just does
+                    # not offer them and the only trace is a log line.
+                    "library_skipped": library_skipped,
                     "map_phase": _map_phase_at(req.row, req.col),
                 }
+
+        # Nothing from the CIF library. Say WHY before falling back: the
+        # enrichment gate can veto a phase that fits perfectly (it asks
+        # whether the element is enriched over THIS map's median, so a phase
+        # filling the map never clears it), and the fallback below holds no
+        # Mg phase at all — which is how "75 at% Mg, 25 at% Si shows no
+        # Mg2Si" ended up as an empty list with no explanation.
+        no_match = explain_no_match(
+            at_scalar, cif_library,
+            matrix_element=matrix_element, background=background,
+        )
+        if no_match is not None:
+            logger.info("no CIF phase at (%d, %d): %s",
+                        req.row, req.col, no_match["message"])
 
         # 2) Fall back to the hardcoded library so the feature isn't
         # dead-on-arrival for users who haven't built their CIF DB.
@@ -436,14 +693,28 @@ async def suggest_phases(req: PhaseSuggestionRequest):
             {"name": s.phase_name, "score": s.score, "expected": s.expected_composition}
             for s in raw_suggestions
         ]
-        return {
+        out = {
             "suggestions": suggestions,
             "atomic_pct": at_scalar,
             "library_source": "default",
             "library_size": len(DEFAULT_PHASE_LIBRARY),
+            # Reported on this path TOO, and it matters more here: a library
+            # that skipped the user's phase is one reason the CIF branch above
+            # found nothing and we fell back to the hardcoded list.
+            "library_skipped": library_skipped,
         }
+        # Only when the panel really has nothing to show. With hardcoded hits
+        # on screen, "here is why there is nothing" is a contradiction, and the
+        # field would stop meaning "this answer is empty, here is why". The log
+        # line above stays unconditional — the reason is worth recording even
+        # when the fallback covered for it.
+        if not suggestions and no_match is not None:
+            out["cif_no_match"] = no_match
+        return out
     except HTTPException:
         raise
+    except _UnknownLineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except Exception as e:
         logger.exception("Phase suggestion failed at (%d, %d)", req.row, req.col)
         raise HTTPException(status_code=500, detail=str(e))
@@ -457,23 +728,24 @@ async def cif_phases():
     - Show the user how many curated phases are available for matching.
     - Populate manual-assign dropdowns once the phase-map builder lands.
 
-    Returns ``{"phases": [], "source": "none", "message": ...}`` when the
-    Excel database hasn't been built yet — the frontend treats that as
-    "use the hardcoded library" rather than an error.
+    Returns ``{"phases": [], "source": "none", "message": ...}`` when there
+    is nothing to offer — the frontend treats that as "use the hardcoded
+    library" rather than an error.
+
+    NOT gated on the spreadsheet existing. ``load_cif_phase_library`` also
+    reads the CIFs in ``Database/CIF_Library`` that no xlsx row lists, so a
+    user who has only ever downloaded CIFs has a library; refusing one here
+    would leave this list empty while suggest-phases, which calls the same
+    loader, happily named those phases.
     """
     db_path = _crystal_db_path()
-    if not db_path.is_file():
-        return {
-            "phases": [],
-            "source": "none",
-            "message": "Database/crystal_database.xlsx not found — build the CIF database first",
-        }
-    library = load_cif_phase_library(db_path)
+    library = await asyncio.to_thread(load_cif_phase_library, db_path)
     if not library:
         return {
             "phases": [],
             "source": "none",
-            "message": "CIF database is empty or unparseable",
+            "message": ("No CIF phases found — put CIF files in "
+                        "Database/CIF_Library or build the CIF database"),
         }
     phases = [
         {
@@ -527,15 +799,15 @@ async def generate_chemistry_mask(req: ChemMaskRequest):
     n_pixels = n_rows * n_cols
 
     try:
-        from eds_utils import parse_element_name, counts_to_weight_pct, weight_pct_to_atomic_pct
+        from eds_utils import (
+            build_counts_by_element, parse_element_name, counts_to_weight_pct,
+            weight_pct_to_atomic_pct,
+        )
 
         # Build element data maps
-        counts_dict = {}
-        for el_name in elements:
-            data = ext.get_element_map(el_name)
-            if data is not None:
-                pure_el = parse_element_name(el_name)
-                counts_dict[pure_el] = data.astype(np.float64)
+        beam_kv = _beam_kv(ext)
+        counts_dict = build_counts_by_element(_window_counts(ext, elements),
+                                              beam_kv=beam_kv)
 
         # Pre-compute unit maps to avoid redundant conversions
         wt_maps_cache = None
@@ -545,11 +817,13 @@ async def generate_chemistry_mask(req: ChemMaskRequest):
             nonlocal wt_maps_cache, at_maps_cache
             if unit == "wt_pct":
                 if wt_maps_cache is None:
-                    wt_maps_cache = counts_to_weight_pct(counts_dict)
+                    wt_maps_cache = counts_to_weight_pct(counts_dict,
+                                                         beam_kv=beam_kv)
                 return wt_maps_cache
             elif unit == "at_pct":
                 if wt_maps_cache is None:
-                    wt_maps_cache = counts_to_weight_pct(counts_dict)
+                    wt_maps_cache = counts_to_weight_pct(counts_dict,
+                                                         beam_kv=beam_kv)
                 if at_maps_cache is None:
                     at_maps_cache = weight_pct_to_atomic_pct(wt_maps_cache)
                 return at_maps_cache
@@ -629,6 +903,8 @@ async def generate_chemistry_mask(req: ChemMaskRequest):
             "shape": [n_rows, n_cols],
             "filter_stats": filter_stats,
         }
+    except _UnknownLineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     except ImportError:
         raise HTTPException(status_code=500, detail="eds_utils not available for chemistry mask generation")
     except Exception as e:
@@ -730,7 +1006,8 @@ def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
 
     try:
         from eds_utils import (
-            parse_element_name, counts_to_weight_pct, weight_pct_to_atomic_pct,
+            build_counts_by_element, counts_to_weight_pct,
+            weight_pct_to_atomic_pct,
         )
     except ImportError:
         raise HTTPException(status_code=500, detail="eds_utils not available — At.% conversion impossible")
@@ -739,18 +1016,19 @@ def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
     elements = ext.get_available_elements()
     n_rows, n_cols = ext.get_grid_dimensions()
 
-    counts_dict: dict = {}
-    for el_name in elements:
-        data = ext.get_element_map(el_name)
-        if data is not None:
-            pure_el = parse_element_name(el_name)
-            counts_dict[pure_el] = data.astype(np.float64)
+    beam_kv = _beam_kv(ext)
+    counts_dict = build_counts_by_element(_window_counts(ext, elements),
+                                          beam_kv=beam_kv)
 
     if not counts_dict:
         raise HTTPException(status_code=400, detail="No EDS element data in this file")
 
-    wt_maps = counts_to_weight_pct(counts_dict)
-    at_maps = weight_pct_to_atomic_pct(wt_maps)
+    try:
+        wt_maps = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
+        at_maps = weight_pct_to_atomic_pct(wt_maps)
+        _note_assumed_voltage(at_maps, beam_kv)
+    except _UnknownLineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
     # Authoritative file-path tag for the store: the h5_session knows
     # exactly which file is open. Using ``ext.file_path`` is fragile
@@ -907,11 +1185,18 @@ async def auto_classify(req: AutoClassifyRequest):
     previous classification (any manual edits from M4 are lost — by
     design, the re-classify is the "I want to start over" path).
     """
-    cif_library = load_cif_phase_library(_crystal_db_path())
+    # ...WITH the skips, not without. This route is the one that USES a
+    # stored composition -- it scores every candidate against every pixel --
+    # so it is the last place that may drop the note saying one of those
+    # compositions is contradicted by its own CIF. `suggest-phases` already
+    # carried it; the map did not, and the map is where the number acts.
+    cif_library, library_skipped = await asyncio.to_thread(
+        load_cif_phase_library_with_skips, _crystal_db_path())
     if not cif_library:
         raise HTTPException(
             status_code=400,
-            detail="No CIF library available — build Database/crystal_database.xlsx first",
+            detail=("No CIF library available — put CIF files in "
+                    "Database/CIF_Library or build the CIF database"),
         )
 
     # Restrict to the phases the user ticked. Only a strict subset filters —
@@ -942,11 +1227,12 @@ async def auto_classify(req: AutoClassifyRequest):
     # on the event loop that stalls /health, the WebSocket pumps and every
     # other request for the duration.
     return await asyncio.to_thread(
-        _auto_classify_blocking, req, cif_library, mode,
+        _auto_classify_blocking, req, cif_library, mode, library_skipped,
     )
 
 
-def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
+def _auto_classify_blocking(req, cif_library, mode: str,
+                            library_skipped=None) -> dict:
     """The CPU-bound body of :func:`auto_classify`, run off the event loop."""
     at_maps, n_rows, n_cols, file_path = _build_at_pct_maps_for_loaded_file()
 
@@ -970,6 +1256,25 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
         keep = set(rule_set.phase_keys)
         cif_library = {k: v for k, v in cif_library.items() if k in keep}             if isinstance(cif_library, dict) else cif_library
 
+    # A window the quantification could not price is left OUT of the maps and
+    # the rest renormalise without it. Both scorers read an element that is
+    # not in the composition as a measured ZERO, so without this the missing-
+    # major veto rules out exactly the phases that element identifies -- and
+    # `candidates_for` drops them before scoring even starts. Reachable today:
+    # the beam voltage comes from the file, so a low-kV scan cannot price Cu K
+    # and every Cu-bearing phase would quietly vanish from a 7xxx phase map.
+    unmeasured = {str(e.get("element")) for e in
+                  (getattr(at_maps, "provenance", None) or {}).get(
+                      "excluded_windows", []) if e.get("element")}
+    if unmeasured:
+        logger.warning(
+            "Phase map: %s could not be quantified on this scan, so the "
+            "classifier treats %s as UNMEASURED rather than absent -- phases "
+            "containing it are still offered and are judged on the elements "
+            "that were measured.",
+            ", ".join(sorted(unmeasured)),
+            "them" if len(unmeasured) > 1 else "it")
+
     if mode == "pixel":
         phase_grid, score_grid, candidates, ambiguous = auto_classify_pixels(
             at_pct_per_element=at_maps,
@@ -979,12 +1284,14 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
             tolerance=req.tolerance,
             min_score=req.min_score,
             rule_set=rule_set,
+            unmeasured=unmeasured,
         )
     else:
         # Same helper auto_classify_pixels uses — the index into this list is
         # the phase id persisted in the sidecar and handed to indexing, so
         # the two modes must never build it differently.
-        candidates = candidates_for(cif_library, at_maps.keys())
+        candidates = candidates_for(cif_library, at_maps.keys(),
+                                    unmeasured=unmeasured)
         phase_grid, cluster_grid, matches, k_used = cluster_and_match(
             at_pct_per_element=at_maps,
             n_rows=n_rows,
@@ -997,6 +1304,12 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
             element_weights=req.element_weights,
             region_defs=region_defs,
             cluster_remainder=req.cluster_remainder,
+            # Cluster mode is the DEFAULT. Without this the warning logged
+            # above -- "phases containing it are still offered and are judged
+            # on the elements that were measured" -- was false for almost
+            # every user: measured Al7FeCu2 against a Cu-less composition
+            # scores 0.0500 without it and 1.0 with it.
+            unmeasured=unmeasured,
         )
         score_grid = np.zeros((n_rows, n_cols), dtype=np.float32)
         ambiguous = np.zeros((n_rows, n_cols), dtype=bool)
@@ -1079,6 +1392,12 @@ def _auto_classify_blocking(req, cif_library, mode: str) -> dict:
     response["k_used"] = k_used
     response["clusters"] = clusters_payload
     response["n_ambiguous"] = int(np.asarray(ambiguous).sum())
+    # The phase map is only as quantitative as the at% it was clustered from.
+    response["quantification"] = _quant_provenance(at_maps)
+    # Files that never became phases, and phases whose stored composition
+    # their own CIF contradicts. The second kind matters here more than
+    # anywhere: those numbers were just used to classify every pixel.
+    response["library_skipped"] = library_skipped
     return response
 
 
@@ -1463,22 +1782,46 @@ async def probe(req: ProbeRequest):
     # --- Element values (reuse quantify_pixel's math) ---
     elements_out: Dict[str, dict] = {}
     try:
-        from eds_utils import parse_element_name, counts_to_weight_pct, weight_pct_to_atomic_pct
+        from eds_utils import (
+            build_counts_by_element, counts_to_weight_pct,
+            weight_pct_to_atomic_pct,
+        )
         index = req.row * n_cols + req.col
-        counts_dict: Dict[str, np.ndarray] = {}
-        for el_name in ext.get_available_elements():
-            data = ext.get_element_map(el_name)
-            if data is not None and index < len(data):
-                pure_el = parse_element_name(el_name)
-                counts_dict[pure_el] = np.array([float(data[index])])
-        wt_pct = counts_to_weight_pct(counts_dict) if counts_dict else {}
+        beam_kv = _beam_kv(ext)
+        counts_dict = build_counts_by_element(
+            _window_counts(ext, index=index), beam_kv=beam_kv)
+        wt_pct = (counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
+                  if counts_dict else {})
         at_pct = weight_pct_to_atomic_pct(wt_pct) if wt_pct else {}
         for el, c in counts_dict.items():
             elements_out[el] = {
                 "counts": float(c[0]),
-                "wt_pct": float(wt_pct.get(el, [0.0])[0]) if el in wt_pct else 0.0,
-                "at_pct": float(at_pct.get(el, [0.0])[0]) if el in at_pct else 0.0,
+                # None, not 0.0, for a window the quantification left out —
+                # same rule as /quantify/pixel and the ImportError branch
+                # below: a fabricated zero reads as a real measurement.
+                "wt_pct": float(wt_pct[el][0]) if el in wt_pct else None,
+                "at_pct": float(at_pct[el][0]) if el in at_pct else None,
             }
+    except _UnknownLineError as exc:
+        # Reached only when NOT ONE window could be priced (a single unusable
+        # window is skipped inside the quantification and named in its
+        # provenance). Even then this is a multi-layer tooltip: answer with
+        # the counts and the other layers rather than 400 the whole hover,
+        # exactly as the ImportError branch below does. The 400 that used to
+        # be here made one stray window cost the user every value on the
+        # pixel, including BC and phase, which do not go through EDS physics
+        # at all.
+        logger.warning("EDS probe: nothing quantifiable at (%d, %d) (%s) — "
+                       "returning counts only", req.row, req.col, exc)
+        index = req.row * n_cols + req.col
+        for el_name in ext.get_available_elements():
+            data = ext.get_element_map(el_name)
+            if data is not None and index < len(data):
+                elements_out[el_name] = {
+                    "counts": float(data[index]),
+                    "wt_pct": None,
+                    "at_pct": None,
+                }
     except ImportError:
         # eds_utils is a project-internal module — failing to import it is a
         # real packaging bug. Return counts only (the probe is multi-layer and
@@ -1601,24 +1944,23 @@ async def linescan(req: LinescanRequest):
     if requested_elements:
         try:
             from eds_utils import (
+                build_counts_by_element,
                 parse_element_name,
                 counts_to_weight_pct,
                 weight_pct_to_atomic_pct,
             )
 
             elements = ext.get_available_elements()
-            counts_dict: Dict[str, np.ndarray] = {}
-            for el_name in elements:
-                data = ext.get_element_map(el_name)
-                if data is not None:
-                    pure_el = parse_element_name(el_name)
-                    counts_dict[pure_el] = np.asarray(data, dtype=np.float32)
+            beam_kv = _beam_kv(ext)
+            counts_dict = build_counts_by_element(
+                _window_counts(ext, elements, dtype=np.float32),
+                beam_kv=beam_kv)
             if req.display_mode == "counts":
                 full = counts_dict
             elif req.display_mode == "wt_pct":
-                full = counts_to_weight_pct(counts_dict)
+                full = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
             else:  # at_pct (default)
-                wt = counts_to_weight_pct(counts_dict)
+                wt = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
                 full = weight_pct_to_atomic_pct(wt)
             # Reshape each 1D map to 2D for sampling.
             for lid in requested_elements:
@@ -1979,6 +2321,10 @@ def _region_detail(state, sid: int) -> dict:
         "pieces": [],
         "neighbours": [],
         "candidates": [],
+        # The threshold the inspector colours "enriched" / "depleted" at.
+        # Sent rather than duplicated in the frontend: it is a calibrated
+        # value that moves, and a second copy is a second thing to forget.
+        "enrichment_factor": float(_ENRICHMENT_FOR_SEED),
     }
     if n_px == 0:
         return detail
@@ -2216,9 +2562,18 @@ async def seed_region_def_from_pixel(req: SeedFromPixelRequest):
 
 
 #: A pixel has to read this many times the map background for an element to
-#: be worth a clause. Same threshold the inspector paints "concentrated
-#: here" at, so the panel and the seed agree about what is interesting.
-_ENRICHMENT_FOR_SEED = 1.3
+#: be worth a clause. The SAME constant the classifier gates presence on and
+#: the same one the inspector paints "concentrated here" at, so the panel, the
+#: seed and the classification cannot disagree about what is interesting.
+#:
+#: It used to be a hand-copied 1.3. When the constant was re-measured to 1.15
+#: on 2026-09-12 (correcting the k-factors moved the sweep it was calibrated
+#: on) the copy stayed behind, and an element enriched 1.2x read "flat" in the
+#: inspector and was not offered as a seed clause while the classifier counted
+#: it as present. Imported now, so there is one place to change.
+from backend.api.services.chemistry_score import (  # noqa: E402
+    _ENRICHMENT as _ENRICHMENT_FOR_SEED,
+)
 
 
 def _seed_name(clauses) -> str:

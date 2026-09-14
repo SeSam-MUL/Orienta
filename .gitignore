@@ -114,10 +114,16 @@ Test_data/*.tiff
 /db_snapshot.md
 /snap*.md
 /rows*.md
-# Root diagnostic/debug scratch scripts (guard against new ones; untrack later)
+# Root diagnostic/debug scratch scripts. The 418 historical ones were untracked
+# and moved to _archive/root-diagnostics/ on 2026-09-07; these rules keep new
+# ones out of the repo.
 /debug_*.py
 /diag_*.py
 /friedel_test.py
+
+# Local archive of retired scratch work (2026-09-07 cleanup). Nothing here is
+# read by the app; the folder can be deleted wholesale.
+/_archive/
 # Machine-specific local config (the tracked copies get git rm --cached too)
 .claude/settings.local.json
 frontend/.npmrc
@@ -128,3 +134,10 @@ tests/data/dict_gpu/**/__pycache__/
 tests/data/dict_gpu/**/*.pyc
 # Release archives built by tasks/golive/make_release_archive.py
 release/
+
+# User bug reports (screenshots may show customer samples - never commit)
+bug-reports/
+
+# simulation/install_emsoft.sh downloads llvm.sh into its current directory,
+# which is the backend's cwd when run through the wizard (seen in the repo root).
+/llvm.sh

@@ -24,13 +24,13 @@ The coset machinery (:func:`extract_topk_peaks`, :func:`topk_distinct`,
 from __future__ import annotations
 
 import logging
-import math
 import time
 from pathlib import Path
 
 import numpy as np
 
 from ..pseudosym import same_orientation_angle_deg
+from ._frame import decode_cells_to_zxz
 
 logger = logging.getLogger(__name__)
 
@@ -71,25 +71,21 @@ def topk_distinct(
 def _decode_bins(flat_idx: np.ndarray, L: int) -> np.ndarray:
     """Decode cc-volume flat bin indices -> Bunge ZXZ Euler (radians).
 
-    Mirrors ``Tier1Indexer._decode_peak`` (integer-bin, no sub-bin refinement);
-    bin resolution ~ 2*pi/(2L-1). Sufficient for variant selection — the resolved
-    orientation is a coset variant of a peak, so its precision is the peak's.
+    Integer-bin (no sub-bin refinement) call into ``._frame.decode_cells_to_zxz``
+    -- the single copy of the decode, half-turn constant and crystal-frame
+    correction included; bin resolution ~ 2*pi/(2L-1). Sufficient for variant
+    selection — the resolved orientation is a coset variant of a peak, so its
+    precision is the peak's.
     """
     size = 2 * L - 1
-    off = L - 1
-    scale = 2.0 * math.pi / size
-    hp = math.pi / 2.0
-    tp = 2.0 * math.pi
     a = flat_idx // (size * size)
     rem = flat_idx % (size * size)
     b = rem // size
     c = rem % size
-    alpha = ((a - off + size) % size) * scale
-    gamma = ((off - c + size) % size) * scale
-    phi1 = (alpha + hp) % tp
-    phi2 = (gamma - hp) % tp
-    phi1 = (phi1 + 3.0 * hp) % tp
-    return np.stack([phi1, b * scale, phi2], axis=1)
+    phi1, Phi, phi2 = decode_cells_to_zxz(
+        a.astype(np.float64), b.astype(np.float64), c.astype(np.float64), L,
+    )
+    return np.stack([phi1, Phi, phi2], axis=1)
 
 
 def extract_topk_peaks(

@@ -20,10 +20,11 @@
 import { useState, useEffect, useCallback, useRef, useReducer, useMemo, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
 import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phaseMapApi } from '../../services/api';
-import { estimateCpuSphericalSeconds, formatRoughDuration } from './cpuEstimate';
+import { estimateCpuSphericalSeconds, formatRoughDuration, isSphericalCpuFallback } from './cpuEstimate';
 import NavigationCanvas from './NavigationCanvas';
 import EdsOverlayPanel from './EdsOverlayPanel';
 import BatchIndexingDialog from './BatchIndexingDialog';
+import { buildPhaseRecords } from './phaseRecords';
 import GenerateDictionaryDialog from './GenerateDictionaryDialog';
 import {
   dictionaryTargets, detectorShapeFromSignalShape,
@@ -45,6 +46,7 @@ import { useWheelZoom } from '../common/useWheelZoom';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
 import PseudoSymmetryPanel from '../common/PseudoSymmetryPanel';
+import { orientationSourceBadge } from '../common/orientationSource';
 import NeighbourhoodZoom from '../common/NeighbourhoodZoom';
 import { detectPhaseDegeneracy } from './phaseDegeneracy';
 import FloatingPhasePanel from './FloatingPhasePanel';
@@ -734,14 +736,17 @@ function PatternMatchesDialog({ open, onClose }) {
               {/* Orientation provenance: low-symmetry phases (z_rot==2 —
                   orthorhombic mmm and the cubic approximants m-3/23) get the
                   orientation from Hough, because the spherical SO(3) correlation
-                  can't form a sharp peak for them. The exact per-class reason is
-                  in orientation_source_reason (shown as the tooltip). */}
-              {matchData.orientation_source === 'hough' && (
+                  can't form a sharp peak for them. 'mixed' = the map kept both
+                  (other phases, Hough failures, and every pixel the render
+                  arbitration handed back to the sphere). The per-map counts and
+                  the exact reason are in orientation_source_reason (tooltip). */}
+              {orientationSourceBadge(matchData.orientation_source) && (
                 <div
                   style={{ fontSize: '8pt', color: '#ffb86c', textAlign: 'center', marginTop: 3, cursor: 'help' }}
-                  title={matchData.orientation_source_reason || t('matchesDialog.orientationHoughTip')}
+                  title={matchData.orientation_source_reason
+                    || t(orientationSourceBadge(matchData.orientation_source).tipKey)}
                 >
-                  ⬡ {t('matchesDialog.orientationFromHough')}
+                  ⬡ {t(orientationSourceBadge(matchData.orientation_source).labelKey)}
                 </div>
               )}
 
@@ -2412,6 +2417,22 @@ export default function IndexingPage({ isActive }) {
     }
   }
 
+  // The spherical settings of THIS page, in the names the backend reads.
+  // One definition: the interactive request and the batch dialog both take
+  // them from here, so a batch cannot quietly run at the model defaults while
+  // the page shows something else (gausbckg in particular defaults to false on
+  // the request model and true in IndexingConfig).
+  function sphericalParams() {
+    return {
+      bandwidth: Number(bandwidth),
+      nregions,
+      refine,
+      gausbckg,
+      circmask: circmask === 'Inscribed circle (0)' ? 0 : (circmask === 'Custom radius' ? circmaskRadius : -1),
+      backend: sphericalBackend,
+    };
+  }
+
   function buildParams() {
     const selectionParams =
       selMode === 'full'   ? { selection_mode: 'full' } :
@@ -2437,6 +2458,12 @@ export default function IndexingPage({ isActive }) {
     const common = {
       method,
       dataset: selectedDataset || undefined,
+      // One record per phase. The three lists below are derived from these by
+      // the backend and are sent for older backends only — three independent
+      // filters cannot say WHICH phase an entry belongs to, and that is how a
+      // run came back labelled as one phase and rendered against another's
+      // master. See phaseRecords.js.
+      phases: buildPhaseRecords(allFiles, edsPhaseLabels),
       cif_paths: allFiles.filter(f => f.toLowerCase().endsWith('.cif')),
       master_h5_paths: allFiles.filter(f => /\.(h5|hdf5)$/i.test(f)),
       sht_paths: allFiles.filter(f => f.toLowerCase().endsWith('.sht')),
@@ -2468,15 +2495,7 @@ export default function IndexingPage({ isActive }) {
     } else if (method === 'dictionary') {
       return { ...common, metric, keep_n: keepN, resolution, energy_kv: energy, compute_mode: computeMode };
     } else if (method === 'spherical') {
-      return {
-        ...common,
-        bandwidth: Number(bandwidth),
-        nregions,
-        refine,
-        gausbckg,
-        circmask: circmask === 'Inscribed circle (0)' ? 0 : (circmask === 'Custom radius' ? circmaskRadius : -1),
-        backend: sphericalBackend,
-      };
+      return { ...common, ...sphericalParams() };
     } else if (method === 'embedding') {
       return { ...common, encoder_path: encoderPath, faiss_path: faissPath, k: embK };
     }
@@ -2684,10 +2703,9 @@ export default function IndexingPage({ isActive }) {
   // tensors"; now it runs, so the job here is to make sure the user knows a
   // full map may take hours before they start one. EMSphInx is a separate
   // CPU program, so the warning only applies to the spherical_gpu backend.
-  const sphericalOnCpu = showSpherical
-    && sphericalBackend === 'spherical_gpu'
-    && runtimeInfo !== null
-    && runtimeInfo.device !== 'cuda';
+  const sphericalOnCpu = showSpherical && isSphericalCpuFallback({
+    method: 'spherical', backend: sphericalBackend, runtime: runtimeInfo,
+  });
 
   const selectedPixels = useMemo(() => {
     if (!nRows || !nCols) return 0;
@@ -3632,7 +3650,10 @@ export default function IndexingPage({ isActive }) {
       )}
 
       {/* Batch Indexing Dialog */}
-      <BatchIndexingDialog open={showBatchDialog} onClose={() => setShowBatchDialog(false)} />
+      {/* The dialog has no engine control of its own: a batch must run on
+          the engine the page is set to, or the choice on screen is a lie. */}
+      <BatchIndexingDialog open={showBatchDialog} onClose={() => setShowBatchDialog(false)}
+        sphericalParams={sphericalParams()} />
 
       {/* Refine Orientations Dialog */}
       <RefineDialog open={showRefineDialog} onClose={() => setShowRefineDialog(false)} onLog={log} />

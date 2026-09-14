@@ -10,7 +10,9 @@
     "shortcutsTooltip": "Keyboard shortcuts (?)"
   },
   "disconnected": {
-    "message": "Backend not connected — start the server with"
+    "starting": "Backend is starting… {{seconds}} s. The first start after an installation or an update loads the scientific libraries and can take a minute or two.",
+    "lost": "Connection to the backend lost — reconnecting…",
+    "message": "Backend not connected — it did not answer within 3 minutes. Close Orienta completely and start it again; if this repeats, use Settings → Report a problem (the report contains logs/backend-console.log with the reason)."
   },
   "crash": {
     "title": "This module crashed"

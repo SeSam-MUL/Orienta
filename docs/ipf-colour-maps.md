@@ -1,29 +1,29 @@
 # IPF Colour Maps in Orienta — the Complete Picture
 
-**Audience:** developers + scientific users. This document records everything
-Orienta does to make IPF (inverse pole figure) orientation maps correct and
-readable for low-symmetry phases, why each piece exists, what it changes
-(data vs. display), where the code lives, and the evidence behind each claim.
+**Date:** 2026-07-12 · **Branch:** `golive/unified-phase-identity`
+**Audience:** developers + scientific users. This document records *everything*
+that was built to make IPF (inverse pole figure) orientation maps correct and
+readable, why each piece exists, what it changes (data vs. display), where the
+code lives, and the measured evidence behind every claim.
 
 ---
 
 ## 1. Why this document exists
 
-On a real multi-phase aluminium dataset (Al matrix + Al7FeCu2 + an
-alpha-AlFeMnSi cubic approximant, point group m-3) the IPF-Z map looked like
-colour noise: one physical grain rendered as a salt-and-pepper mix of distant
-hues. Fixing this took **five independent mechanisms**, because the visible
-artefact had several *unrelated* causes — some in the **data** (stored
-orientations really were wrong) and some purely in the **display**
-(orientations correct, colours misleading).
+On the Scan1 dataset (Al matrix + Al7FeCu2 + alpha-AlFeMnSi approximant) the
+IPF-Z map of the central region looked like colour noise: one physical grain
+rendered as a salt-and-pepper mix of distant hues. Fixing this took **five
+independent mechanisms**, because the visible artefact had several *unrelated*
+causes — some in the **data** (stored orientations really were wrong) and some
+purely in the **display** (orientations correct, colours misleading).
 
 The single most important lesson, encoded in everything below:
 
 > **When a map "looks wrong", first separate data from display.** Export the
 > orientations (`.ang`) and measure neighbour disorientations offline *before*
-> touching any algorithm. On the reference dataset this proved the
-> orientations were smooth (all neighbour pairs < 5° under m-3) while the map
-> still looked broken — pointing squarely at the colour key, not the indexing.
+> touching any algorithm. On Scan1 this proved the orientations were smooth
+> (all neighbour pairs < 5° under m-3) while the map still looked broken —
+> pointing squarely at the colour key, not the indexing.
 
 ---
 
@@ -39,14 +39,14 @@ The single most important lesson, encoded in everything below:
  [DATA] map-wide variant unification          pseudo-symmetry classes unified
         │                                     per grain, render-NCC verified
         ▼
- [DATA] manual grain flip (optional)          user-driven per-grain correction
+ [DATA] manual grain flip v2 (optional)       user-driven per-grain correction
         │                                     in the Pattern-Match dialog
         ▼
  stored CrystalMap orientations  ◄════ everything below NEVER touches these
         │
         ▼
- [DISPLAY] IPF colouring                      standard colour key, or
-        │                                     grain-consistent v2 (toggle)
+ [DISPLAY] IPF colouring                      compute_ipf_colors (standard)
+        │                                     or grain-consistent v2 (toggle)
         ▼
  [DISPLAY] per-phase filter                   one IPF map per phase + matching
         │                                     colour key (community standard)
@@ -54,14 +54,14 @@ The single most important lesson, encoded in everything below:
  layered canvas / PNG export
 ```
 
-| # | Mechanism | Level | Trigger | Code |
-|---|-----------|-------|---------|------|
-| 1 | Hough substitution for unreliable masters | data | automatic in pipeline | `indexing_controller.py`; `spherical_unreliable()` in `backend/spherical_gpu/pseudosym.py` |
-| 2 | Map-wide variant unification | data | automatic + "Unify variants" button | `backend/spherical_gpu/pipeline/variant_unification.py` |
-| 3 | Render-verified small-grain adoption (stage 2.5) | data | part of unification | same file, `unify_map` |
-| 4 | Manual grain flip | data | user, Pattern-Match dialog | `grain_snap_floodfill()` in `pseudosym.py`; `backend/api/routes/indexing.py` |
-| 5 | Grain-consistent IPF colouring (v2) | display | "Stabilize colors per grain" toggle | `compute_ipf_colors_grain_consistent()` in `tools/phase_map_generator.py` |
-| 6 | Per-phase IPF view + matching key | display | "Phase:" dropdown on IPF layers | `phase_filter` in `backend/api/routes/phase_map.py` |
+| # | Mechanism | Level | Trigger | Code | Commit(s) |
+|---|-----------|-------|---------|------|-----------|
+| 1 | Hough substitution for unreliable masters | data | automatic in pipeline | `indexing_controller.py`, `spherical_unreliable()` in `backend/spherical_gpu/pseudosym.py` | `2d7b950`→`50fe330` |
+| 2 | Map-wide variant unification | data | automatic + "Unify variants" button | `backend/spherical_gpu/pipeline/variant_unification.py` | `905aa5a`→`5a5de77` |
+| 3 | Render-verified small-grain adoption (stage 2.5) | data | part of unification | same file, `unify_map` | `e5167b9` |
+| 4 | Manual grain flip v2 | data | user, Pattern-Match dialog | `grain_snap_floodfill()` in `pseudosym.py`; `backend/api/routes/indexing.py` | `7f47db8`→`c006a8f` |
+| 5 | Grain-consistent IPF colouring v2 | display | "Stabilize colors per grain" toggle | `compute_ipf_colors_grain_consistent()` in `tools/phase_map_generator.py` | `4094fc1` (v1), `2692b1d` (v2) |
+| 6 | Per-phase IPF view + matching key | display | "Phase:" dropdown on IPF layers | `phase_filter` in `backend/api/routes/phase_map.py` | `3033392` |
 
 ---
 
@@ -104,14 +104,13 @@ a Kikuchi pattern is (nearly) invariant under the **full holohedry**, but the
 For any phase whose master has `z_rot == 2` (covers cubic m-3 / 23 / -43m and
 orthorhombic mmm / 222 / mm2), the pipeline replaces the spherical orientations
 with **Hough orientations** outright (per-pixel fallback to the spherical
-result only where Hough fails: `nmatch < 4` or `fit > 3°`). Rationale,
-measured on a real 7050-alloy file: Hough renders NCC 0.69 vs. spherical
-~90° off at 0.19, and indexes the whole 5304-px map in 4.4 s. The render-NCC
-peak is very sharp (~2° FWHM), so no cheap refinement can rescue a
-wrong-basin spherical seed.
+result only where Hough fails: `nmatch < 4` or `fit > 3°`). Rationale: measured
+on the real 7050 file, Hough renders NCC 0.69 vs. spherical ~90° off at 0.19,
+and does the whole 5304-px map in 4.4 s. The render-NCC peak is very sharp
+(~2° FWHM), so no cheap refinement can rescue a wrong-basin spherical seed.
 
-The map records this: `metadata["orientation_source"] = "hough"`, and the UI
-shows an "orientation from Hough" badge.
+The map records this: `metadata["orientation_source"]` = `hough`, and the UI
+shows the "⬡ Orientierung aus Hough" badge.
 
 ### 3.3 Map-wide variant unification
 
@@ -139,28 +138,28 @@ large maps):
    *Ambiguity is best-vs-second margin* (< 0.01 → grain flagged ambiguous and
    left untouched, reported with centroid so the user can inspect).
 5. **Stage 2.5 — render-verified small-grain adoption.** Generic catcher for
-   *any systematic wrong basin that is NOT in the coset*: on the reference
-   dataset, 20 small blobs sat ALL at an identical 71.9° (m-3) misorientation
-   to the matrix — a second Hough band-coincidence basin, invisible to coset
-   machinery (20 blobs sharing one exact misorientation are never real
-   grains). A small grain (≤ 128 px) adjacent to a ≥ 3×-bigger donor is
-   *tentatively* mapped onto the donor via the rigid correction
-   C = mean(G)·mean(g)⁻¹ (left-multiplied) and **adopted only if the
-   render-NCC margin is clear**. Real small grains render worse under
-   adoption and stay bit-identical.
+   *any systematic wrong basin that is NOT in the coset* (on Scan1: 20 small
+   blobs ALL at identical 71.9° (m-3) to the matrix — a second Hough
+   band-coincidence basin, invisible to coset machinery — 20 blobs sharing one
+   exact misorientation are never real grains). A small grain (≤ 128 px)
+   adjacent to a ≥ 3×-bigger donor is *tentatively* mapped onto the donor via
+   the rigid correction C = mean(G)·mean(g)⁻¹ (left-multiplied) and **adopted
+   only if the render-NCC margin is clear**. Real small grains render worse
+   under adoption and stay bit-identical.
 6. **Stage 3 — tiny-orphan rescue** (≤ 2 px islands joined to the surrounding
    grain, render-verified).
 
 Runs automatically after indexing for affected phases and on demand via the
-**"Unify variants (whole map)"** button (Phase Maps → Pseudo-Symmetry box).
-The report lands in `metadata["variant_unification"]`.
+**"Unify variants (whole map)"** button (Phase Maps → Pseudo-Symmetry box,
+`POST /api/phasemap/../pseudosym/unify`). Report lands in
+`metadata["variant_unification"]`.
 
-**Evidence:** on a second reference dataset the true variant renders NCC 0.50
-vs. the flipped variant 0.09 (margin 0.41 — the decision is not marginal).
-After unification + adoption the exported `.ang` of the affected region had
-**every** neighbour pair < 5° disorientation under m-3 — data provably smooth.
+**Evidence:** SampleB E2E — true variant renders 0.50 vs. flipped 0.09
+(margin 0.41, decision is not marginal). Scan1 central region: after
+unification + adoption, the exported 840-px `.ang` had **every** neighbour
+pair < 5° disorientation under m-3 — data provably smooth.
 
-### 3.4 Manual grain flip (universal, any pseudo-symmetry)
+### 3.4 Manual grain flip v2 (universal, any pseudo-symmetry)
 
 For cases the automatics cannot know about, the Pattern-Match dialog (both on
 the Indexing page and in Phase Maps) has a **variant gallery**: all candidate
@@ -169,7 +168,7 @@ coset, Hough) rendered against the experimental pattern and ranked by
 render-NCC; the user picks; **"Apply to grain"** flood-fills the connected
 same-phase grain and *snaps each pixel individually* to the chosen variant's
 branch (`grain_snap_floodfill`): per pixel it applies the coset operator
-(LEFT multiplication h·q — crystal-frame symmetry acts from the left in the
+(LEFT multiplication h·q — crystal-frame symmetry acts from the left in
 Bunge/orix convention) that best matches the target, with parent-operator
 tie-breaking and a 15° anti-drift cap, so **intra-grain gradients and
 variant-split grains are handled correctly** (a rigid rotation of the whole
@@ -183,11 +182,11 @@ actually improved).
 
 ### 4.1 The IPF colour-key discontinuity — the residual "speckle" that was NOT data
 
-After unification, the reference map still showed green jitter in IPF-Z. The
-exported orientations were **provably smooth** — so the remaining artefact had
-to be the colouring itself:
+After unification, Scan1 still showed green jitter in IPF-Z. The exported
+orientations were **provably smooth** — so the remaining artefact had to be the
+colouring itself:
 
-The standard TSL colour key (orix `IPFColorKeyTSL`) reduces each pixel's
+The standard TSL colour key (`orix IPFColorKeyTSL`) reduces each pixel's
 sample direction into the **fundamental sector** of the phase's Laue group and
 colours it by in-sector polar coordinates. For high symmetry (m-3m) the sector
 is small and the key is effectively continuous. For **low-symmetry Laue groups
@@ -195,7 +194,7 @@ is small and the key is effectively continuous. For **low-symmetry Laue groups
 two crystallographically equivalent directions that fall on either side of the
 boundary get **maximally different colours**.
 
-**Measured on the real dataset** (814-px region, IPF-Z):
+**Measured on real Scan1 data** (central 814-px region, IPF-Z):
 - a neighbour pair with only **1.29° misorientation** jumped blue↔green with
   RGB distance **1.34** (out of a max of √3 ≈ 1.73);
 - **6.7%** of all sub-3° neighbour pairs jumped > 0.3 RGB;
@@ -209,21 +208,22 @@ fundamentally cannot have a colour key that is both unique and continuous;
 for all others (including m-3) continuous keys exist. MTEX's documentation
 carries the same "colour jumps" warning for its default keys. So the m-3
 speckle is an artefact of the *standard key*, and fixing the display is
-legitimate — the alternative (a globally smooth key) would change ALL
-colours; Orienta chose a minimal, opt-in repair instead.
+legitimate — the alternative (a globally smooth key à la MTEX `colorJumps`
+handling) would change ALL colours; we chose a minimal, opt-in repair instead.
 
 ### 4.2 v1 — grain-mean stabilisation (superseded)
 
-First iteration: colour every pixel by its **grain-mean** orientation. Kills
-the speckle but **flattens real intra-grain gradients** (deformation colour
-ramps disappear — measured correlation of colour distance vs. misorientation
-≈ 0). Replaced by v2 under the same toggle.
+Commit `4094fc1`: colour every pixel by its **grain-mean** orientation.
+Kills the speckle but **flattens real intra-grain gradients** (deformation
+colour ramps disappear — measured correlation of colour distance vs.
+misorientation ≈ 0). Kept in history; replaced by v2 under the same toggle.
 
 ### 4.3 v2 — grain-consistent branch colouring (current)
 
-`compute_ipf_colors_grain_consistent()` in `tools/phase_map_generator.py`.
-Principle: **colour every pixel by ITS OWN direction, but route all pixels of
-a grain through the SAME side of the key discontinuity**:
+Commit `2692b1d`, `compute_ipf_colors_grain_consistent()` in
+`tools/phase_map_generator.py`. Principle: **colour every pixel by ITS OWN
+direction, but route all pixels of a grain through the SAME side of the key
+discontinuity**:
 
 1. Segment grains modulo the supergroup (same machinery as unification, 5°).
 2. Reduce the grain-**mean** direction into the fundamental sector
@@ -241,29 +241,33 @@ a grain through the SAME side of the key discontinuity**:
    such grains are rare and genuinely bent). For directions already in-sector
    the result is **bit-identical** to the standard key.
 
-**Validation (real data, 812-px grain):** speckle pairs (< 3° misorientation,
-> 0.3 RGB jump) **159 → 0**; intra-grain colour distance vs.
+**Scan1 validation (real data, central region):** speckle pairs (< 3°
+misorientation, > 0.3 RGB jump) **159 → 0**; intra-grain colour distance vs.
 misorientation-to-grain-mean correlation **0.889** (v1: ~0 — flattened);
-**729 distinct colours** in the grain (v1: 1). Toggle OFF stays byte-identical
-to the untouched standard path (regression-tested in the development suite).
+**729 distinct colours** in the 812-px grain (v1: 1). Toggle OFF stays
+byte-identical to the untouched standard path (regression-tested).
 
-**Scientific integrity.** Is grain-consistent colouring "lying"? No: the IPF
-colour of an orientation is a *class function* — all symmetry-equivalent
-directions are equally "the" direction; the standard key also picks one
-representative (the in-sector one), v2 merely picks a *grain-consistent*
-representative instead of a per-pixel one. No orientation is altered, no
-gradient is invented or removed; the choice is exactly as arbitrary as the
-standard key's, only consistent. It is opt-in (default OFF), display-only,
-and labelled as such in the tooltip. For publications, state: "IPF colours
-use grain-consistent branch selection to avoid the m-3 colour-key
-discontinuity (cf. Nolze & Hielscher 2016)."
+**"Aber lügen wir dann nicht?" — scientific integrity.** No: the IPF colour of
+an orientation is a *class function* — all symmetry-equivalent directions are
+equally "the" direction; the standard key also picks one representative (the
+in-sector one), v2 merely picks a *grain-consistent* representative instead of
+a per-pixel one. No orientation is altered, no gradient is invented or
+removed; the choice is exactly as arbitrary as the standard key's, only
+consistent. It is opt-in (default OFF), display-only, and labelled as such in
+the tooltip. For publications, state: "IPF colours use grain-consistent
+branch selection to avoid the m-3 colour-key discontinuity (cf. Nolze &
+Hielscher 2016)."
+
+Tests: `tests/test_grain_stabilized_ipf.py` (speckle-kill near the real
+Scan1 boundary orientation, gradient preservation corr > 0.8, grain-boundary
+contrast kept, > 10° fallback ≡ standard, toggle-off byte-identity).
 
 ### 4.4 Per-phase IPF view + matching colour key (community standard)
 
-Mixing several phases in one IPF map with identical RGB codes is ambiguous —
-**each phase has its own colour key (own fundamental sector)**, so the same
-RGB means different directions in different phases. Community practice is one
-IPF map per phase.
+Commit `3033392`. Mixing several phases in one IPF map with identical RGB
+codes is ambiguous — **each phase has its own colour key (own fundamental
+sector)**, so the same RGB means different directions in different phases.
+Community practice is one IPF map per phase.
 
 - `GET /api/phasemap/layer?...&phase_filter=<pid>`: on `ipf-x/y/z` layers,
   every phase except `<pid>` becomes transparent. Implemented as an
@@ -271,10 +275,11 @@ IPF map per phase.
   untouched, so it composes identically with the standard and the
   grain-stabilized path (`-1` = all phases, legacy behaviour, byte-identical).
 - `GET /api/phasemap/ipf-key?...&phase_filter=<pid>`: the colour key (a
-  collapsible vertical panel BESIDE the map — it never overlays the data)
-  shows **only that phase's triangle** — key and map always agree.
+  collapsible vertical panel BESIDE the map since 2026-07-13 — it never
+  overlays the data) shows **only that phase's triangle** — key and map
+  always agree.
 - UI: **"Phase:" dropdown** on every IPF layer (next to the stabilize
-  checkbox), options from the same phase stats the legend uses; hidden for
+  checkbox), options from the same `phaseStats` the legend uses; hidden for
   single-phase results. Typical use: add one IPF-Z layer per phase, filter
   each to a different phase, stack over a grey BC layer — or filter one layer
   and step through phases.
@@ -282,12 +287,15 @@ IPF map per phase.
   phase-filtered stack exports exactly the community-standard single-phase
   IPF figure.
 
+Tests: `tests/test_phase_map_layer_endpoint.py` (alpha-only contract, v2
+composition, endpoint param incl. PNG-decode, key grouping, key endpoint).
+
 ### 4.5 Related display fix: bbox-aware map clicks
 
-Not colour-related but part of the same debugging arc: the layered canvas
-auto-zooms to the non-transparent content bbox while the pointer math assumed
-the full grid → clicks on visually correct pixels hit the wrong data ("Pixel
-not indexed"). `pointerToRowCol` / `rowColToContainerPx`
+Not colour-related but part of the same debugging arc (`c9bf961`): the layered
+canvas auto-zooms to the non-transparent content bbox while the pointer math
+assumed the full grid → clicks on visually correct pixels hit the wrong data
+("Pixel not indexed"). `pointerToRowCol` / `rowColToContainerPx`
 (`frontend/src/components/EDS/mapCoords.js`) now compose **both** letterboxes
 (container→canvas and canvas→bbox); EDS pages are byte-identical (optional
 4th parameter).
@@ -310,17 +318,39 @@ Low-symmetry phase (m-3 approximant etc.) looks speckled in IPF:
 5. Multi-phase map → **IPF layer → "Phase:" dropdown**, one phase per layer /
    per export.
 
-Note: colour toggles need no re-indexing — they re-render display layers only.
+Notes: the backend has **no auto-reload** — after pulling these changes,
+restart the backend (indexing results are in-memory and are lost on restart).
+Colour toggles need no re-indexing, they re-render layers only.
 
-## 6. Known limits
+---
 
-- Chemically/structurally degenerate phases can win pixels of the wrong phase
-  (e.g. a cubic approximant claiming matrix pixels). This is a *phase*-level
-  problem, out of scope for the orientation work above — addressed by the
-  render-verified **Phase Verification** tool (Phase Maps → Advanced tools):
-  a read-only "Check phases" margin layer plus grain-based "Reassign" with
-  Hough-anchored candidates, a 0.05 margin hysteresis and one-level undo.
-  v1 limitation: the check runs synchronously (no progress/cancel yet) and
-  can take minutes on large multi-phase maps.
+## 6. Evidence log
+
+| Claim | Evidence | Where |
+|---|---|---|
+| Orientations smooth after unification | 840-px `.ang` export, all 4-neighbour pairs < 5° under m-3 | scratchpad `live_result.ang`, session 2026-07-09 |
+| Key discontinuity, not data | 1.29° pair → RGB jump 1.34; 6.7% of sub-3° pairs > 0.3; IPF-X/Y clean | `tasks/_probe_ipf_key_internals.py` |
+| v2 kills speckle, keeps gradients | 159→0 speckle pairs; corr 0.889; 729 colours in 812-px grain | `tasks/_validate_ipf_v2_scan1.py`, `tasks/_scan1_ipfz_{standard,v2}.png` |
+| Variant decision is not marginal | SampleB render-NCC true 0.50 vs flip 0.09 (margin 0.41) | `tests/test_spherical_gpu/test_variant_unification.py` (real-data E2E) |
+| Second Hough basin is systematic | 20 Scan1 blobs ALL at 71.9° (m-3) to matrix | session diagnosis 2026-07-09; adoption test suite |
+| Hough beats hough-free for mmm | render-NCC 0.69, 5304 px in 4.4 s; spherical ~90° off at 0.19; ~2° FWHM peak | `tasks/golive/optd-hough-free-lowsym-investigation-2026-06-30.md` |
+| Full-map health (25,230 px) | Al 96.1% smooth/111 grains; Al7FeCu2 99.4%/1 crystal; alpha 90.4%/5125-px main grain | full-map `.ang` export, session 2026-07-11 |
+
+## 7. Known limits / open items
+
+- **Phase misassignment (alpha steals Al):** chemically degenerate phases can
+  win pixels of the wrong phase; on Scan1 the bottom-left region is Al but
+  stored as alpha (render-NCC: Al 0.221 vs stored alpha 0.169 at a disputed
+  pixel). **Addressed 2026-07-12 by the render-verified Phase Verification
+  tool** (Phase Maps → Advanced tools): read-only "Check phases" margin layer
+  + grain-based "Reassign" with Hough-anchored candidates, margin hysteresis
+  0.05 and undo (spec:
+  `docs/superpowers/specs/2026-07-12-render-verified-phase-reassignment-design.md`).
+  v1 limitation: synchronous, no progress/cancel — v2 (async + budget) planned.
+- Compare-phases underestimates `z_rot==2` phases (it re-runs spherical
+  per phase instead of using the stored/Hough-anchored orientation) — use the
+  stored R for those; the Phase Verification tool already uses Hough-anchored
+  candidates for exactly this reason.
 - `-43m` / `4mm` / `mm2` variants are pattern-identical (Laue-degenerate) —
   no method can or needs to resolve them.
+- MagnifierLens is not bbox-aware (pre-existing, cosmetic).

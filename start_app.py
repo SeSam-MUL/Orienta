@@ -31,16 +31,35 @@ FRONTEND_PORT = 5173
 NPM = "npm.cmd" if sys.platform == "win32" else "npm"
 
 
-def wait_for_server(port, timeout=15):
-    """Wait for a server to respond on the given port."""
+# How long the backend may take to answer /api/health. The first start of a
+# fresh installation imports the whole scientific stack cold (torch, kikuchipy,
+# numba compiles its kernels) and was measured well past the old 15 s limit —
+# the launcher then printed "Backend failed to start!" and killed a backend
+# that was still loading. Found by tasks/install_smoke/fresh_install.ps1.
+BACKEND_START_TIMEOUT_S = 180
+
+
+def wait_for_server(port, timeout=BACKEND_START_TIMEOUT_S, progress=print):
+    """Wait for a server to respond on the given port.
+
+    Prints a reassurance every 10 s so a slow first start does not look like
+    a hang.
+    """
     import urllib.request
+    url = f"http://127.0.0.1:{port}/api/health" if port == BACKEND_PORT else f"http://127.0.0.1:{port}"
     start = time.time()
+    last_note = start
     while time.time() - start < timeout:
         try:
-            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health" if port == BACKEND_PORT else f"http://127.0.0.1:{port}")
+            urllib.request.urlopen(url, timeout=2)
             return True
         except Exception:
             time.sleep(0.5)
+        now = time.time()
+        if progress is not None and now - last_note >= 10:
+            last_note = now
+            progress(f"  ... still starting ({int(now - start)} s). The first start of a fresh "
+                     f"installation loads the scientific stack and can take a minute or two.")
     return False
 
 
@@ -152,7 +171,9 @@ def main():
     _tee_backend_output(backend_proc, backend_log)
 
     if not wait_for_server(BACKEND_PORT):
-        print("ERROR: Backend failed to start!")
+        print(f"ERROR: Backend did not answer within {BACKEND_START_TIMEOUT_S} s.")
+        print("       See logs/backend-console.log for the reason (a missing package,")
+        print("       a port already in use, or an import error).")
         backend_proc.kill()
         sys.exit(1)
     print(f"  Backend ready at http://127.0.0.1:{BACKEND_PORT}")

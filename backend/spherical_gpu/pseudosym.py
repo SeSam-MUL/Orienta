@@ -150,6 +150,75 @@ def pseudosym_holohedry(point_group: str):
     return _SYSTEM_HOLOHEDRY.get(point_group)
 
 
+#: Cubic approximants of icosahedral quasicrystals (the 1/1 approximants
+#: alpha-Al(Fe,Mn)Si Pm-3, Al-Cu-Fe Im-3, ...) keep a pseudo-ICOSAHEDRAL symmetry
+#: on top of the cubic holohedry: their Kikuchi bands nearly map onto themselves
+#: under the 72 deg / 144 deg rotations about the six pseudo-five-fold axes
+#: <0 1 tau> of the cubic cell. Band-geometry indexing (Hough) therefore has a
+#: second basin at 71.9 deg — measured on crop1 of the ICAA20 alloy: ONE left
+#: operator, 144 deg about a (0, 1, tau) axis, maps the Hough answer onto the
+#: EMSphInx / dictionary answer within 0.46 deg on 99 % of a 688-px blob
+#: (2026-09-09). These point groups get the icosahedral coset classes as extra
+#: variant candidates; the render check decides, so a non-approximant m-3 phase
+#: only pays a few renders.
+_APPROXIMANT_POINT_GROUPS = ("m-3", "23")
+
+
+def _rot_quat(axis, deg: float) -> np.ndarray:
+    axis = np.asarray(axis, dtype=np.float64); axis = axis / np.linalg.norm(axis)
+    a = np.radians(float(deg)) / 2.0
+    return np.array([np.cos(a), *(np.sin(a) * axis)], dtype=np.float64)
+
+
+@lru_cache(maxsize=None)
+def _icosahedral_ops_cached() -> tuple:
+    tau = (1.0 + 5.0 ** 0.5) / 2.0
+    gens = [_rot_quat([1.0, 1.0, 1.0], 120.0),        # 3-fold shared with the cube
+            _rot_quat([0.0, 1.0, tau], 72.0),         # pseudo-5-fold of the cubic setting
+            _rot_quat([1.0, 0.0, 0.0], 180.0)]        # 2-fold along a cube axis
+    ops = [np.array([1.0, 0.0, 0.0, 0.0])]
+
+    def _known(q):
+        return any(abs(float(np.dot(q, o))) > 1.0 - 1e-9 for o in ops)
+
+    frontier = list(ops)
+    while frontier:
+        nxt = []
+        for q in frontier:
+            for g in gens:
+                for prod in (_qmul(g[None, :], q[None, :])[0], _qmul(q[None, :], g[None, :])[0]):
+                    prod = prod / np.linalg.norm(prod)
+                    if not _known(prod):
+                        ops.append(prod); nxt.append(prod)
+        frontier = nxt
+        if len(ops) > 200:                            # a wrong generator set would explode; fail loud
+            raise RuntimeError("icosahedral closure did not terminate at 60 elements")
+    return tuple(tuple(float(x) for x in o) for o in ops)
+
+
+def icosahedral_ops() -> np.ndarray:
+    """The 60 proper rotations of the icosahedral group I in the CUBIC setting of
+    a 1/1 approximant (2-folds along the cube axes, 3-folds along <111>,
+    5-folds along <0 1 tau>), as unit quaternions (w, x, y, z)."""
+    return np.asarray(_icosahedral_ops_cached(), dtype=np.float64)
+
+
+def approximant_pseudo_class_reps(point_group: str) -> np.ndarray:
+    """Icosahedral pseudo-variant class representatives for a cubic approximant
+    point group (m-3 / 23): the left cosets of the true proper group in the
+    icosahedral group, deduplicated under the true point group (identity first,
+    K = 5 for m-3). Any other point group returns just the identity."""
+    ident = np.array([[1.0, 0.0, 0.0, 0.0]])
+    if point_group not in _APPROXIMANT_POINT_GROUPS:
+        return ident
+    reps = [ident[0]]
+    for h in icosahedral_ops():
+        d = same_orientation_angle_deg(np.asarray(reps), h, point_group)
+        if float(np.min(d)) > 1.0:
+            reps.append(np.asarray(h, dtype=np.float64))
+    return np.asarray(reps, dtype=np.float64)
+
+
 def pseudosym_variant_quats(q, point_group: str, min_sep_deg: float = 3.0,
                             max_variants: int = 24) -> np.ndarray:
     """All distinct pseudo-symmetric variant orientations of `q` for `point_group`,
@@ -180,6 +249,9 @@ def pseudosym_variant_quats(q, point_group: str, min_sep_deg: float = 3.0,
     cands = np.vstack([q[None, :],
                        _qmul(H, q[None, :]),        # h · q  (sample frame)
                        _qmul(q[None, :], H)])       # q · h  (crystal frame)
+    if point_group in _APPROXIMANT_POINT_GROUPS:     # pseudo-icosahedral variants of a cubic approximant
+        I = icosahedral_ops()
+        cands = np.vstack([cands, _qmul(I, q[None, :]), _qmul(q[None, :], I)])
     kept = [q]
     for cq in cands[1:]:
         ang = same_orientation_angle_deg(np.asarray(kept), cq, point_group)

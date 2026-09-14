@@ -38,6 +38,7 @@ from ..pseudosym import (
     _qconj,
     _qmul,
     _sym_quats,
+    approximant_pseudo_class_reps,
     pseudosym_holohedry,
     same_orientation_angle_deg,
 )
@@ -109,17 +110,25 @@ def metric_supergroup_ops(lattice, *, tol_ratio: float = 0.02,
 
 def class_reps_for_phase(point_group: str, lattice=None) -> np.ndarray:
     """Variant class representatives for a phase: point-group holohedry coset
-    classes, EXTENDED by metric-supergroup classes when the lattice metric is
-    pseudo-cubic (dedup under the true group, identity first)."""
+    classes, EXTENDED by (a) the pseudo-ICOSAHEDRAL classes of a cubic
+    approximant (m-3 / 23 — Hough's 71.9 deg second basin, see
+    :func:`backend.spherical_gpu.pseudosym.approximant_pseudo_class_reps`) and
+    (b) metric-supergroup classes when the lattice metric is pseudo-cubic
+    (dedup under the true group, identity first). Every class is only a
+    CANDIDATE: the render-NCC verdict per grain decides, so a non-approximant
+    m-3 phase merely renders a few more candidates."""
     reps = proper_coset_class_reps(point_group)
-    extra = metric_supergroup_ops(lattice) if lattice is not None else None
-    if extra is None:
-        return reps
+    extras = [approximant_pseudo_class_reps(point_group)]
+    if lattice is not None:
+        m = metric_supergroup_ops(lattice)
+        if m is not None:
+            extras.append(m)
     out = [r for r in reps]
-    for h in extra:
-        d = same_orientation_angle_deg(np.asarray(out), h, point_group)
-        if float(np.min(d)) > 1.0:
-            out.append(np.asarray(h, dtype=np.float64))
+    for extra in extras:
+        for h in extra:
+            d = same_orientation_angle_deg(np.asarray(out), h, point_group)
+            if float(np.min(d)) > 1.0:
+                out.append(np.asarray(h, dtype=np.float64))
     return np.asarray(out, dtype=np.float64)
 
 
@@ -296,19 +305,63 @@ def plan_grain_units(pix_flat: np.ndarray, cls: np.ndarray, n_cols: int,
 # Snap + top-level unification
 # ---------------------------------------------------------------------------
 
+def nearest_representative(q_pixels: np.ndarray, q_target: np.ndarray,
+                           sym: np.ndarray) -> np.ndarray:
+    """For every pixel the crystal-symmetry-equivalent representative ``S·q``
+    (``S`` in ``sym``, LEFT action) nearest — as a plain quaternion, NOT
+    symmetry-reduced — to ``q_target``, sign-aligned to it.
+
+    Why (2026-09-09): an orientation is the orbit {S·q}; an indexer's export
+    stores an arbitrary member of it per pixel. Applying ONE operator ``C`` to
+    a grain is representative-independent only when ``C`` normalises the
+    group — true for the holohedry coset (T is normal in O), FALSE for the
+    icosahedral class reps of the cubic approximants (T = A4 is
+    self-normalising in I = A5): ``C·S·q`` and ``C·q`` then differ by
+    ``C S C⁻¹ ∉ T`` — another five-fold variant. Measured on the ICAA20 crop:
+    53 of the 61 speckle pixels left inside the corrected grain were exactly
+    that. So every operator is applied to the representative nearest to the
+    reference the decision was made against.
+    """
+    qp = np.atleast_2d(np.asarray(q_pixels, dtype=np.float64))
+    t = np.asarray(q_target, dtype=np.float64).reshape(4)
+    cands = _qmul(np.asarray(sym, dtype=np.float64)[None, :, :],
+                  qp[:, None, :])                                # (N, M, 4)
+    dots = cands @ t                                             # (N, M)
+    rows = np.arange(qp.shape[0])
+    best = np.argmax(np.abs(dots), axis=1)
+    out = cands[rows, best]
+    return out * np.where(dots[rows, best] < 0, -1.0, 1.0)[:, None]
+
+
 def snap_to_class(q_pixels: np.ndarray, cls: np.ndarray, target_k: int,
-                  class_reps: np.ndarray) -> np.ndarray:
+                  class_reps: np.ndarray, point_group: str | None = None,
+                  q_ref: np.ndarray | None = None) -> np.ndarray:
     """Move each pixel from its current class to `target_k` by the LEFT
     operator ``v_k · v_c⁻¹`` (crystal action) — each pixel keeps its own
-    measured deviation, so intra-grain texture is preserved."""
+    measured deviation, so intra-grain texture is preserved.
+
+    With ``point_group`` and ``q_ref`` (``unify_map`` always passes them) each
+    pixel of class ``c`` is first brought to the representative nearest to
+    ``v_c · q_ref`` — the orientation its label was decided against — so the
+    operator acts on a consistent member of the orbit; without them the raw
+    stored quaternion is used, which is only safe for operators inside the
+    holohedry (see :func:`nearest_representative`).
+    """
     qp = np.atleast_2d(np.asarray(q_pixels, dtype=np.float64)).copy()
+    sym = (_sym_quats(point_group)
+           if (point_group is not None and q_ref is not None) else None)
     for c in np.unique(cls):
         if int(c) == int(target_k):
             continue
         op = _qmul(class_reps[int(target_k)][None, :],
                    _qconj(class_reps[int(c)][None, :]))[0]
         m = cls == c
-        qp[m] = _qmul(op[None, :], qp[m])
+        src = qp[m]
+        if sym is not None:
+            anchor = _qmul(class_reps[int(c)][None, :],
+                           np.asarray(q_ref, dtype=np.float64)[None, :])[0]
+            src = nearest_representative(src, anchor, sym)
+        qp[m] = _qmul(op[None, :], src)
     n = np.linalg.norm(qp, axis=1, keepdims=True)
     return qp / np.maximum(n, 1e-12)
 
@@ -324,7 +377,12 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
               margin_ambiguous: float = 0.01,
               rescue_max_px: int = 2,
               min_grain_px: int = 3,
-              adopt_max_px: int = 128,
+              # No size cap on the render-verified adoption any more (was 128 px):
+              # on the ICAA20 crop Hough's second basin (71.7 deg) covered a
+              # 688-px blob inside a 2 935-px grain, and the cap left it wrong.
+              # The guards that matter stay: a donor grain at least 3x bigger,
+              # and adoption only on a CLEAR render-NCC margin (2026-09-09).
+              adopt_max_px: int = 10_000_000,
               progress=None):
     """Unify pseudo-variant speckle for ONE phase across the whole map.
 
@@ -385,7 +443,8 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
             scls = np.asarray([cls_of[int(f)] for f in sample], dtype=np.int64)
             medians = np.empty(K)
             for k in range(K):
-                cand = snap_to_class(q[sample], scls, k, class_reps)
+                cand = snap_to_class(q[sample], scls, k, class_reps,
+                                     point_group, q_ref)
                 s = np.asarray(score_fn(sample, cand), dtype=np.float64)
                 medians[k] = float(np.median(s)) if s.size else float("-inf")
             order = np.argsort(medians)[::-1]
@@ -432,7 +491,8 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
             # ALWAYS snap the unit onto its target class: even a kept coherent
             # domain may contain absorbed speckle islands of the other class —
             # snap_to_class is a no-op for pixels already in the target class.
-            new_q[upix] = snap_to_class(q[upix], ucls, target, class_reps)
+            new_q[upix] = snap_to_class(q[upix], ucls, target, class_reps,
+                                        point_group, q_ref)
             if int(np.count_nonzero(ucls != target)):
                 report["n_flipped_units"] += 1
             rr, cc = np.divmod(upix, n_cols)
@@ -489,11 +549,17 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
         G = max(donors, key=lambda d: contact[d])
         C = _qmul(_branch_mean(grain_pix[G])[None, :],
                   _qconj(_branch_mean(pix)[None, :]))[0]
+        # C was built from the branch means, i.e. from the representatives
+        # nearest to the grain's first pixel — apply it to exactly those
+        # (a raw stored quaternion may be another member of the orbit, and C
+        # does not normalise the group; see nearest_representative).
+        ref_g = new_q[pix[0]]
         ns = int(min(score_pixels_max, pix.size))
         step = max(1, pix.size // ns)
         sample = pix[::step][:ns]
         s_own = np.asarray(score_fn(sample, new_q[sample]), dtype=np.float64)
-        mapped = _qmul(C[None, :], new_q[sample])
+        mapped = _qmul(C[None, :],
+                       nearest_representative(new_q[sample], ref_g, holo_sym))
         s_map = np.asarray(score_fn(sample, mapped), dtype=np.float64)
         med_own = float(np.median(s_own)) if s_own.size else float("-inf")
         med_map = float(np.median(s_map)) if s_map.size else float("-inf")
@@ -502,7 +568,8 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
                  "class": -1, "centroid": [int(round(rr.mean())), int(round(cc.mean()))]}
         if np.isfinite(med_map) and (med_map - (med_own if np.isfinite(med_own)
                                                 else float("-inf"))) >= margin_clear:
-            allq = _qmul(C[None, :], new_q[pix])
+            allq = _qmul(C[None, :],
+                         nearest_representative(new_q[pix], ref_g, holo_sym))
             new_q[pix] = allq / np.maximum(
                 np.linalg.norm(allq, axis=1, keepdims=True), 1e-12)
             adopted_grains.add(g)
@@ -762,10 +829,142 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
     return score
 
 
+#: Stage 0 of :func:`unify_after_hough_resolve` (added 2026-09-09). The resolver
+#: substitutes the Hough band-geometry orientation for every pixel where Hough
+#: reports a fit — without rendering it. Rendering both candidates is the check
+#: the resolver was missing. Measured on the 131 x 51 crop of the ICAA20 talk
+#: (alpha, 3 668 px where the two disagree): Hough renders at 0.79, the raw
+#: spherical answer at 0.16 — so for cubic approximants the check confirms
+#: Hough; it is here for the phases and maps where it will not. The raw
+#: spherical orientation is restored only where it fits better by this margin
+#: (the hysteresis scale of ``margin_clear`` in :func:`unify_map`).
+ARBITRATION_MARGIN = 0.03
+#: Candidate pairs closer than this (deg, reduced by the phase's own point
+#: group) are the same answer up to the Hough/spherical frame residual.
+ARBITRATION_SAME_DEG = 3.0
+
+
+def arbitrate_resolver_by_render(full_q, raw_full_q, phase_full, n_rows: int,
+                                 n_cols: int, phase_id, point_group: str,
+                                 score_fn, *,
+                                 same_deg: float = ARBITRATION_SAME_DEG,
+                                 margin: float = ARBITRATION_MARGIN,
+                                 threshold_deg: float = 5.0,
+                                 score_pixels_max: int = 8,
+                                 min_grain_px: int = 3,
+                                 progress=None):
+    """Per GRAIN of ONE phase: keep the resolver's (Hough) orientation unless the
+    raw spherical candidate renders better by ``margin``.
+
+    Grains are the resolver map's segments modulo the supergroup (the same
+    segmentation :func:`unify_map` uses), so this is ONE aggregated render-NCC
+    verdict per grain from up to ``score_pixels_max`` pixels sampled among the
+    pixels where the two candidates actually differ — the module's
+    primum-non-nocere policy, and a few hundred renders instead of two per
+    pixel (the per-pixel form took three minutes on 3 672 alpha pixels). A grain
+    whose candidates agree within ``same_deg`` everywhere is not scored; a raw
+    candidate that scores non-finite never wins. Restoring is per pixel (each
+    pixel takes ITS OWN raw spherical orientation), so intra-grain texture
+    survives, and only on the pixels where the candidates differ.
+
+    ``full_q`` / ``raw_full_q``: (n_rows*n_cols, 4) quaternions on the full grid
+    (NaN where absent) — the resolver output and the raw spherical output.
+    ``score_fn(flat_indices, quats) -> scores`` as built by
+    :func:`build_render_score_fn` (injected, so this stays pure and testable).
+
+    Returns ``(new_full_q | None, report)`` — None when nothing was restored.
+    ``report``: ``n_grains``, ``n_grains_scored``, ``n_grains_restored``,
+    ``n_px_restored``, ``n_px_same``, ``median_score_hough``,
+    ``median_score_raw`` (medians of the per-grain medians), ``grains``.
+    """
+    n = int(n_rows) * int(n_cols)
+    q = np.asarray(full_q, dtype=np.float64).reshape(n, 4)
+    r = np.asarray(raw_full_q, dtype=np.float64).reshape(n, 4)
+    ph = np.asarray(phase_full).reshape(n)
+    report = {"n_grains": 0, "n_grains_scored": 0, "n_grains_restored": 0,
+              "n_px_restored": 0, "n_px_same": 0, "median_score_hough": None,
+              "median_score_raw": None, "grains": []}
+
+    def _emit(msg):
+        if progress:
+            try:
+                progress(msg)
+            except Exception:
+                pass
+
+    labels = segment_supergroup_grains(q, ph, n_rows, n_cols, phase_id,
+                                       point_group, threshold_deg)
+    grain_ids = [int(g) for g in np.unique(labels) if g >= 0]
+    report["n_grains"] = len(grain_ids)
+    if not grain_ids:
+        return None, report
+    S = _sym_quats(point_group)                                   # (M, 4)
+    new_q = q.copy()
+    med_h_all, med_r_all = [], []
+    for gi, g in enumerate(grain_ids):
+        pix = np.flatnonzero(labels == g)
+        pix = pix[np.isfinite(r[pix, 0])]
+        if pix.size < int(min_grain_px):
+            continue
+        # symmetry-reduced angle between the two candidates, pairwise per pixel
+        m = _qmul(q[pix], _qconj(r[pix]))                          # (k, 4)
+        w = np.abs(_qmul(S[None, :, :], m[:, None, :])[..., 0]).max(axis=1)
+        ang = np.degrees(2.0 * np.arccos(np.clip(w, 0.0, 1.0)))
+        differ = ang > float(same_deg)
+        if not differ.any():
+            report["n_px_same"] += int(pix.size)
+            continue
+        cand = pix[differ]
+        ns = int(min(int(score_pixels_max), cand.size))
+        step = max(1, cand.size // ns)
+        sample = cand[::step][:ns]
+        s_h = np.asarray(score_fn(sample, q[sample]), dtype=np.float64).reshape(-1)
+        s_r = np.asarray(score_fn(sample, r[sample]), dtype=np.float64).reshape(-1)
+        if s_h.shape[0] != sample.size or s_r.shape[0] != sample.size:
+            raise ValueError("score_fn must return one score per pixel")
+        fh, fr = np.isfinite(s_h), np.isfinite(s_r)
+        med_h = float(np.median(s_h[fh])) if fh.any() else float("-inf")
+        med_r = float(np.median(s_r[fr])) if fr.any() else float("-inf")
+        report["n_grains_scored"] += 1
+        if np.isfinite(med_h):
+            med_h_all.append(med_h)
+        if np.isfinite(med_r):
+            med_r_all.append(med_r)
+        rr, cc = np.divmod(pix, n_cols)
+        entry = {"pixels": int(pix.size), "n_differ": int(differ.sum()),
+                 "n_scored": int(sample.size),
+                 "centroid": [int(round(rr.mean())), int(round(cc.mean()))],
+                 "score_hough": (med_h if np.isfinite(med_h) else None),
+                 "score_raw": (med_r if np.isfinite(med_r) else None)}
+        if np.isfinite(med_r) and med_r >= med_h + float(margin):
+            new_q[cand] = r[cand]
+            report["n_grains_restored"] += 1
+            report["n_px_restored"] += int(cand.size)
+            entry["decision"] = "restored"
+        else:
+            entry["decision"] = "kept"
+        report["grains"].append(entry)
+        _emit(f"Pseudo-symmetry: render check grain {gi + 1}/{len(grain_ids)} "
+              f"({pix.size} px, {int(differ.sum())} differ): Hough "
+              f"{med_h:.3f} vs spherical {med_r:.3f} → {entry['decision']}")
+    report["median_score_hough"] = float(np.median(med_h_all)) if med_h_all else None
+    report["median_score_raw"] = float(np.median(med_r_all)) if med_r_all else None
+    _emit(f"Pseudo-symmetry: render check — {report['n_grains_scored']} grain(s) "
+          f"scored, spherical restored on {report['n_grains_restored']} grain(s) / "
+          f"{report['n_px_restored']} px; {report['n_px_same']} px had the same "
+          f"answer from both (median render-NCC Hough "
+          f"{float('nan') if report['median_score_hough'] is None else report['median_score_hough']:.3f}, "
+          f"spherical {float('nan') if report['median_score_raw'] is None else report['median_score_raw']:.3f}, "
+          f"margin {float(margin):g})")
+    if report["n_px_restored"] == 0:
+        return None, report
+    return new_q, report
+
+
 def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
                               masters_meta, det_params, selection_mask,
                               roi_mode: bool, resolved_phase_ids,
-                              progress=None):
+                              progress=None, raw_eulers=None):
     """Pipeline entry: run map-wide variant unification for every phase whose
     orientations were just substituted from (variant-blind) Hough.
 
@@ -773,6 +972,12 @@ def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
     order; `phase_id` (N,) 1-indexed. Returns ``(eulers_new | None, reports)``
     — None when nothing changed. Fail-safe per phase: an error leaves that
     phase's orientations as delivered by the resolver.
+
+    ``raw_eulers`` (N,3, same order) are the RAW spherical orientations. When
+    given, stage 0 (:func:`arbitrate_resolver_by_render`) renders both
+    candidates on every pixel where they disagree and keeps the spherical one
+    where it fits the measured pattern better; the unification then runs on the
+    arbitrated map. Its report sits under ``reports["arbitration"][phase_id]``.
     """
     from orix.quaternion import Rotation
 
@@ -805,6 +1010,13 @@ def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
     phase_full[flat_of_row] = np.asarray(phase_id).reshape(-1)
 
     pats = np.asarray(patterns)
+    raw_full_q = None
+    if raw_eulers is not None:
+        rq = np.asarray(Rotation.from_euler(np.asarray(raw_eulers)).data,
+                        dtype=np.float64).reshape(-1, 4)
+        if rq.shape[0] == N:
+            raw_full_q = np.full((n_rows * n_cols, 4), np.nan)
+            raw_full_q[flat_of_row] = rq
 
     def _get_pattern(flat):
         r = int(row_of_flat[flat])
@@ -819,6 +1031,15 @@ def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
             continue
         try:
             score_fn = build_render_score_fn(sht, det_params, _get_pattern)
+            if raw_full_q is not None:
+                # Stage 0: Hough anchor vs raw spherical, decided by rendering.
+                arb_q, arb_rep = arbitrate_resolver_by_render(
+                    full_q, raw_full_q, phase_full, n_rows, n_cols, pid, pg,
+                    score_fn, progress=progress)
+                reports.setdefault("arbitration", {})[pid] = arb_rep
+                if arb_q is not None:
+                    full_q = arb_q
+                    changed = True
             new_full, rep = unify_map(full_q, phase_full, n_rows, n_cols,
                                       pid, pg, score_fn, progress=progress)
         except Exception:
@@ -837,3 +1058,65 @@ def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
     eulers_new = np.asarray(
         Rotation(full_q[flat_of_row]).to_euler(), dtype=np.float64)
     return eulers_new, reports
+
+
+def classify_orientation_source(final_eulers, raw_eulers):
+    """Which indexer's orientations does a finished map actually carry?
+
+    Returns ``(source, n_hough, n_spherical)`` with ``source`` one of
+    ``"spherical"`` / ``"hough"`` / ``"mixed"`` -- the provenance label the
+    Pattern-Match badge shows, and the counts that go into its tooltip.
+
+    Why this is counted and not declared (2026-09-10)
+    -------------------------------------------------
+    ``indexing_controller`` used to set the label to ``"hough"`` the moment the
+    pseudo-symmetry resolver substituted anything.  That was true when the
+    substitution was unconditional and map-wide; it is not any more.  The
+    resolver only touches ``z_rot == 2`` phases, ``resolution.resolve_map``
+    hands pixels back to the sphere where Hough failed, and
+    :func:`arbitrate_resolver_by_render` renders the two answers against the
+    measured pattern and keeps the better one -- on the ICAA20 crop it returned
+    every one of the 676 disputed pixels to the sphere.  A map whose
+    orientations are the sphere's must not be labelled Hough's.
+
+    The comparison is on the ORIENTATION, not on the Euler numbers: pixels that
+    kept their spherical orientation still leave ``unify_after_hough_resolve``
+    through ``Rotation(...).to_euler()``, and Hough-failure fallbacks through
+    ``Rotation.from_euler(...)``, so their triples are no longer bit-identical
+    to the raw ones (and ``-q`` is the same rotation as ``q``).  Plain equality
+    would count exactly the pixels the resolver itself calls "kept spherical"
+    as Hough's.
+
+    Parameters
+    ----------
+    final_eulers, raw_eulers : (N, 3) Bunge-ZXZ radians
+        The map as it will be stored, and the raw spherical indexer output.
+    """
+    from orix.quaternion import Rotation
+
+    final = np.asarray(final_eulers, dtype=np.float64).reshape(-1, 3)
+    raw = np.asarray(raw_eulers, dtype=np.float64).reshape(-1, 3)
+    if final.shape[0] != raw.shape[0]:
+        raise ValueError(
+            f"final_eulers has {final.shape[0]} rows, raw_eulers has "
+            f"{raw.shape[0]} — they must describe the same pixels")
+    if final.shape[0] == 0:
+        return "spherical", 0, 0
+    q_final = np.asarray(Rotation.from_euler(final).data,
+                         dtype=np.float64).reshape(-1, 4)
+    q_raw = np.asarray(Rotation.from_euler(raw).data,
+                       dtype=np.float64).reshape(-1, 4)
+    # No symmetry reduction: a symmetry-equivalent REPRESENTATIVE would be a
+    # different number for the same orientation, and both arrays come out of
+    # the same pipeline, so "same rotation up to sign and round-off" is the
+    # question. 1e-6 on |q.q| is ~0.1 deg -- far below anything Hough moves.
+    same = np.abs(np.einsum("ij,ij->i", q_final, q_raw)) > 1.0 - 1e-6
+    n_spherical = int(np.count_nonzero(same))
+    n_hough = int(same.size) - n_spherical
+    if n_hough == 0:
+        source = "spherical"
+    elif n_spherical == 0:
+        source = "hough"
+    else:
+        source = "mixed"
+    return source, n_hough, n_spherical

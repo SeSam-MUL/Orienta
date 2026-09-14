@@ -49,24 +49,7 @@ except ImportError:
     _MP_AVAILABLE = False
 
 # --- CONFIGURATION ---
-# The Materials Project API key is per user and is NEVER stored in this source
-# file. It comes from the app's user config (Settings -> API keys), the same
-# place backend/api/services/crystal_hint_mp.py reads it from, with the
-# MP_API_KEY environment variable as a fallback for standalone runs.
-# Empty string = not configured; the Materials Project lookups below are then
-# skipped and the builder works offline from the local CIF files.
-def _load_mp_api_key() -> str:
-    try:
-        from backend.api.services import user_config_manager as _uc
-        key = _uc.get_api_key("materials_project")
-        if key:
-            return key
-    except Exception:
-        pass
-    return os.environ.get("MP_API_KEY", "")
-
-
-MP_API_KEY = _load_mp_api_key()
+MP_API_KEY = "Fd6So1NzJA4usfiT" # Ihr eingefügter API Schlüssel
 
 SCRIPT_DIR = Path(__file__).parent
 SEARCH_FOLDER = SCRIPT_DIR / 'Cif_Files'
@@ -182,9 +165,56 @@ def write_doi_to_cif(cif_path: Path, doi: str):
     except Exception as e:
         logging.error(f"    -> Could not write DOI to {cif_path.name}. Error: {e}")
         
+def _one_structure(structures, source):
+    """The shared multi-block guard, or a local equivalent if it is unreachable.
+
+    THIS FUNCTION WRITES THE SPREADSHEET EVERYTHING ELSE READS, so it is the
+    place where taking ``structures[0]`` does the most damage: a CIF whose data
+    blocks disagree gets one of its answers written into
+    ``crystal_database.xlsx``, and that row then wins over the CIF for the phase
+    library, the Crystal-Hint suggestions and the EDS phase map. sd_1816951.cif
+    (MgCu2, Cu 66.7 / Mg 33.3 by its own atom sites and by its .xtal) parses to
+    Mg4Cu and Mg2Cu, and Mg 80 / Cu 20 is what the shipped spreadsheet holds.
+
+    The builder is also runnable as a standalone script, where ``backend`` may
+    not be importable; the fallback is three lines and the import is tried first
+    so the two cannot drift in the case that matters.
+    """
+    one_structure = None
+    try:
+        import sys
+        root = str(Path(__file__).resolve().parents[2])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from backend.api.services.cif_phase_library import one_structure
+    except ImportError as exc:
+        # Only "there is no backend here" may fall through. An ImportError
+        # raised from INSIDE that module is a broken install, and swallowing it
+        # would silently put the builder back on the unguarded path — which is
+        # the state that wrote Mg 80 / Cu 20 into the spreadsheet.
+        if "cif_phase_library" not in str(exc) and "backend" not in str(exc):
+            raise
+        logging.warning(
+            f"    -> Shared CIF guard unavailable ({exc}); using the local copy.")
+    if one_structure is not None:
+        return one_structure(structures, source)
+
+    if not structures:
+        raise ValueError(f"no structure could be parsed from {source}")
+    formulas = {str(s.composition.reduced_formula) for s in structures}
+    if len(formulas) > 1:
+        raise ValueError(
+            f"{source} parses to {len(formulas)} different compositions "
+            f"({', '.join(sorted(formulas))}); refusing it rather than "
+            f"letting data-block order decide. Check the file.")
+    return structures[0]
+
+
 def parse_cif_file(cif_path: Path) -> dict:
     try:
-        structure = CifParser(str(cif_path)).get_structures(primitive=False)[0]
+        structure = _one_structure(
+            CifParser(str(cif_path)).get_structures(primitive=False),
+            cif_path.name)
         sga = SpacegroupAnalyzer(structure, symprec=1e-5)
         composition = structure.composition.reduced_formula
         spg_symbol, spg_number = sga.get_space_group_symbol(), sga.get_space_group_number()
@@ -208,6 +238,12 @@ def parse_cif_file(cif_path: Path) -> dict:
         parsed_data_for_fp = parsed_data.copy(); parsed_data_for_fp['Composition'] = composition
         parsed_data["Structure Fingerprint"] = _generate_fingerprint(parsed_data_for_fp)
         return parsed_data
+    except ValueError as exc:
+        # The multi-block guard above, and "no structure". Both mean the file
+        # gets no row -- which is the point, but a rebuild that silently drops
+        # a phase is how the bad row got here in the first place.
+        logging.warning(f"    -> Skipping {cif_path.name}: {exc}")
+        return None
     except Exception: return None
 
 def build_database(cif_folder=None, output_path=None, skip_online=False,

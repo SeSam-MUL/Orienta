@@ -128,7 +128,18 @@
     "elementTooltip": "{{el}}：实测 {{measured}} at%，该相期望 {{expected}} at%。相所需但像素缺失的元素会将其排除。",
     "onTheMap": "图上",
     "thisPixelAlone": "仅此像素 — 图按成分分组判断：",
-    "handSet": "手动设置"
+    "handSet": "手动设置",
+    "librarySkipped_one": "1 个 CIF 未读取",
+    "librarySkipped_other": "{{count}} 个 CIF 未读取",
+    "librarySuspect_one": "1 个相的成分存疑",
+    "librarySuspect_other": "{{count}} 个相的成分存疑",
+    "noMatch": {
+      "notEnriched": "{{phase}} 与该像素相符（{{score}}），但被否决：此处 {{element}} 为 {{measured}} at%，而全图背景为 {{background}} at%。需要 {{element}} 的相只有高于 {{required}} at% 才会被指派，因此占据全图大部分的相永远无法越过该门槛；相图采用同一规则，同样会把这些像素留作未指派。请在相图中手动指定该区域，或裁剪到该相占少数的区域（如果存在）。",
+      "belowMinScore": "库中最接近的相 {{phase}} 对该成分也只得 {{score}} 分（最低 {{min}}）。",
+      "noCandidate": "库中没有任何相仅由该像素显示的元素（{{elements}}）构成。",
+      "emptyLibrary": "没有可用的 CIF 相——请将 CIF 文件放入 Database/CIF_Library，或构建 CIF 数据库。",
+      "noChemistry": "该像素没有可供匹配的 EDS 成分。"
+    }
   },
   "swipe": {
     "labelA": "A:",
@@ -478,5 +489,14 @@
     "addRatioNumerator": "比值分子",
     "addRatioDenominator": "比值分母",
     "ratioPerElement": "{{element}} : …"
+  },
+  "quantNote": {
+    "headline_zero": "该成分的计算方式",
+    "headline_one": "该成分的计算方式 — 1 项注意",
+    "headline_other": "该成分的计算方式 — {{count}} 项注意",
+    "noZaf": "无标样 Cliff-Lorimer 法，k 因子由模型计算。未做 ZAF 基体校正 — 属半定量结果，不是标样定量分析。",
+    "calibratedOn": "探测器响应在 {{matrix}}、{{kv}} kV 下标定。",
+    "overlap": "{{window}} 窗口与 {{interferer}} 的发射峰重叠，因此在含该元素处读数偏高。",
+    "beamAssumed": "文件中没有加速电压 — 按 {{kv}} kV 假定。每个 k 因子的过电压都取决于它。"
   }
 }

@@ -30,6 +30,9 @@ from typing import Optional, Tuple
 import torch
 import torch.nn.functional as F
 
+from ._frame import (apply_frame_fix_zxz, decode_cells_to_zxz,
+                     invert_frame_fix_zxz)
+
 
 class RefinementMode(str, Enum):
     """Tier-2 refinement strategy selector.
@@ -331,21 +334,11 @@ def decode_cell_to_zxz(
 ) -> torch.Tensor:
     """Decode (a, b, c) (possibly fractional) to (phi1, Phi, phi2) ZXZ rad.
 
-    Same formula as `Tier1Indexer._decode_peak`.
+    Thin wrapper over ``._frame.decode_cells_to_zxz`` -- the single copy of
+    the decode, including the half-turn constant and the constant
+    crystal-frame correction applied on the way out.
     """
-    L = bandwidth
-    size = 2 * L - 1
-    off = L - 1
-    scale = 2.0 * math.pi / size
-    half_pi = math.pi / 2.0
-    two_pi = 2.0 * math.pi
-    size_f = float(size)
-    alpha  = ((a_f - off + size_f).fmod(size_f) + size_f).fmod(size_f) * scale
-    gamma_ = ((off  - c_f + size_f).fmod(size_f) + size_f).fmod(size_f) * scale
-    Phi    = b_f * scale
-    phi1   = (alpha + half_pi) % two_pi
-    phi2   = (gamma_ - half_pi) % two_pi
-    phi1   = (phi1 + 3.0 * half_pi) % two_pi
+    phi1, Phi, phi2 = decode_cells_to_zxz(a_f, b_f, c_f, bandwidth)
     return torch.stack([phi1, Phi, phi2], dim=-1)
 
 
@@ -409,6 +402,14 @@ def refine_index_result(
             flm_c128 = flm_c128.squeeze(0)
         gln_c128 = gln.to(device=target_device, dtype=torch.complex128)
         eu_f64 = eu_seed.to(device=target_device, dtype=torch.float64)
+        # newton_refine / cc_at_rotation work in the cc-VOLUME frame, while
+        # callers hand us a Tier-1 seed that has already been carried into the
+        # renderer frame by ``_frame.apply_frame_fix_zxz``. Undo it going in,
+        # re-apply it coming out; the Newton math itself is untouched.
+        _s0, _s1, _s2 = invert_frame_fix_zxz(
+            eu_f64[:, 0], eu_f64[:, 1], eu_f64[:, 2]
+        )
+        eu_f64 = torch.stack([_s0, _s1, _s2], dim=-1)
         B = eu_f64.shape[0]
         refined_eu = torch.empty((B, 3), dtype=torch.float32)
         refined_cc = torch.empty((B,), dtype=torch.float32)
@@ -418,6 +419,10 @@ def refine_index_result(
             )
             refined_eu[i] = eu_i.to(torch.float32)
             refined_cc[i] = cc_i.to(torch.float32)
+        _r0, _r1, _r2 = apply_frame_fix_zxz(
+            refined_eu[:, 0], refined_eu[:, 1], refined_eu[:, 2]
+        )
+        refined_eu = torch.stack([_r0, _r1, _r2], dim=-1)
         return refined_eu, refined_cc
 
     smoothed = smooth_nc_vol(nc_vol, sigma=smoothing_sigma)

@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { indexApi } from '../../services/api';
 import { colors as C } from '../../theme/tokens';
+import { orientationSourceIsSuspicious } from './orientationSource';
 
 /**
  * Universal manual pseudo-symmetry correction — SHARED panel mounted in both
@@ -55,7 +56,7 @@ export default function PseudoSymmetryPanel({ selectedPixel, matchData, onApplie
 
   if (!selectedPixel || matchData?.indexing_method !== 'spherical') return null;
 
-  const suspicious = matchData?.orientation_source === 'hough'
+  const suspicious = orientationSourceIsSuspicious(matchData?.orientation_source)
     || matchData?.r_quality === 'poor';
   // Compare-phases evidence (when the user has it on): if the top re-indexed
   // result is the pixel's OWN phase within <2° of the stored orientation,

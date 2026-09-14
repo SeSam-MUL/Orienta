@@ -41,11 +41,21 @@ References
 - EMSphInx ``include/modality/ebsd/detector.hpp``
 - ebsdtorch ``_math/sht_cc.py`` for the cross-correlation API contract.
 
-Decode formula (identity at (a=0, b=0, c=0)):
+Decode formula (scale = 2π / (2L−1)):
   dim -2 (b):  Φ     = b · scale
-  dim -3 (a):  α     = a · scale
-  dim -1 (c):  γ     = c · scale
+  dim -3 (a):  α     = a · scale − π
+  dim -1 (c):  γ     = π − c · scale
   ZYZ → ZXZ:  phi1  = α + π/2 + 3π/2,  phi2 = γ − π/2
+
+The half turn on α and γ is written in RADIANS. Until 2026-09-10 it was an
+integer BIN count (``size // 2`` here, ``L - 1`` in the refiner and the
+resolver), and since ``2L−1`` is odd that floor was half a bin short on both
+axes — a ~1.6 deg orientation error at L = 88 that scaled with the bin.
+
+The decode lives in ONE place now (``._frame.decode_cells_to_zxz``), which also
+carries the triple from the cc-volume frame into the renderer's / EMSphInx's
+crystal frame by a constant left C2<1 -1 0>; see that module for both
+measurements.
 """
 from __future__ import annotations
 
@@ -72,6 +82,7 @@ from .detector import DetectorGeometry
 from .preprocessing import gausbckg, circmask, nregions
 from .sht_io import SHTMasterFile
 from ._shared_tables import SharedSphericalTables
+from ._frame import decode_cells_to_zxz
 
 
 # Default indexing bandwidth — matches EMSphInx 'bw=68' default
@@ -729,20 +740,11 @@ class Tier1Indexer:
             b_sub = b_idx.to(torch.float64)
             c_sub = c_idx.to(torch.float64)
 
-        two_pi = 2.0 * math.pi
-        scale  = two_pi / size
-        a_f = a_sub.to(torch.float64)
-        b_f = b_sub.to(torch.float64)
-        c_f = c_sub.to(torch.float64)
-        half_pi = math.pi / 2.0
-        off = float(size // 2)
-        size_f = float(size)
-        alpha  = ((a_f - off + size_f).fmod(size_f) + size_f).fmod(size_f) * scale
-        gamma_ = ((off - c_f + size_f).fmod(size_f) + size_f).fmod(size_f) * scale
-        Phi    = b_f * scale
-        phi1   = (alpha + half_pi) % two_pi
-        phi2   = (gamma_ - half_pi) % two_pi
-        phi1   = (phi1 + 3.0 * half_pi) % two_pi
+        # One decode, one half-turn constant, in radians (see _frame.py).
+        phi1, Phi, phi2 = decode_cells_to_zxz(
+            a_sub.to(torch.float64), b_sub.to(torch.float64),
+            c_sub.to(torch.float64), self.bandwidth,
+        )
         eulers = torch.stack([phi1, Phi, phi2], dim=1).to(torch.float32)
         # A5: scores already computed by the fused max above; reuse instead
         # of doing a second full pass over nc_vol.
@@ -785,20 +787,11 @@ class Tier1Indexer:
             b_sub = b_idx.to(torch.float64)
             c_sub = c_idx.to(torch.float64)
 
-        two_pi = 2.0 * math.pi
-        scale  = two_pi / size
-        a_f = a_sub.to(torch.float64)
-        b_f = b_sub.to(torch.float64)
-        c_f = c_sub.to(torch.float64)
-        half_pi = math.pi / 2.0
-        off = float(size // 2)
-        size_f = float(size)
-        alpha  = ((a_f - off + size_f).fmod(size_f) + size_f).fmod(size_f) * scale
-        gamma_ = ((off - c_f + size_f).fmod(size_f) + size_f).fmod(size_f) * scale
-        Phi    = b_f * scale
-        phi1   = (alpha + half_pi) % two_pi
-        phi2   = (gamma_ - half_pi) % two_pi
-        phi1   = (phi1 + 3.0 * half_pi) % two_pi
+        # One decode, one half-turn constant, in radians (see _frame.py).
+        phi1, Phi, phi2 = decode_cells_to_zxz(
+            a_sub.to(torch.float64), b_sub.to(torch.float64),
+            c_sub.to(torch.float64), self.bandwidth,
+        )
         eulers = torch.stack([phi1, Phi, phi2], dim=1).to(torch.float32)
         return eulers, _scores_max
 

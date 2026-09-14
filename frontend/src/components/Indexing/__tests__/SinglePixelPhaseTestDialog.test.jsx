@@ -124,6 +124,39 @@ describe('SinglePixelPhaseTestDialog', () => {
         expect.objectContaining({ bg_remove: true })));
   });
 
+  it('Auto-Run defaults use_pixel_pc:false (stable PC → no per-pixel rebuild)', async () => {
+    indexApi.phaseTestStart.mockResolvedValue({ data: {
+      job_id: 'JPC', total: 2, experimental_png: 'E', row: 2, col: 3,
+    } });
+    indexApi.phaseTestProgress.mockResolvedValue({ data: {
+      status: 'running', done: 0, total: 2, current: 'Building…', error: null, result: null,
+    } });
+    render(<SinglePixelPhaseTestDialog open onClose={() => {}} />);
+    // The toggle renders and is OFF by default.
+    const label = await waitFor(() => screen.getByText('Exact per-pixel PC').closest('label'));
+    expect(label.querySelector('input[type="checkbox"]').checked).toBe(false);
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-Run/i }));
+    await waitFor(() =>
+      expect(indexApi.phaseTestStart).toHaveBeenCalledWith(
+        expect.objectContaining({ use_pixel_pc: false })));
+  });
+
+  it('checking "Exact per-pixel PC" sends use_pixel_pc:true', async () => {
+    indexApi.phaseTestStart.mockResolvedValue({ data: {
+      job_id: 'JPC2', total: 2, experimental_png: 'E', row: 2, col: 3,
+    } });
+    indexApi.phaseTestProgress.mockResolvedValue({ data: {
+      status: 'running', done: 0, total: 2, current: 'Building…', error: null, result: null,
+    } });
+    render(<SinglePixelPhaseTestDialog open onClose={() => {}} />);
+    const label = await waitFor(() => screen.getByText('Exact per-pixel PC').closest('label'));
+    fireEvent.click(label.querySelector('input[type="checkbox"]'));
+    fireEvent.click(await screen.findByRole('button', { name: /Auto-Run/i }));
+    await waitFor(() =>
+      expect(indexApi.phaseTestStart).toHaveBeenCalledWith(
+        expect.objectContaining({ use_pixel_pc: true })));
+  });
+
   it('unchecking "BG remove" re-fetches the raw preview and sends bg_remove: false', async () => {
     indexApi.phaseTestStart.mockResolvedValue({ data: {
       job_id: 'JBG2', total: 2, experimental_png: 'E', row: 2, col: 3,

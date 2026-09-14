@@ -4,7 +4,7 @@ References
 ----------
 - EMSphInx ``include/modality/ebsd/detector.hpp``
 - https://kikuchipy.org/en/stable/tutorials/pattern_center.html
-- ``kikuchipy.detectors.EBSDDetector`` (GPL-3.0; see NOTICE.md)
+- ``kikuchipy.detectors.EBSDDetector`` (MIT-licensed)
 
 PC convention notes
 -------------------

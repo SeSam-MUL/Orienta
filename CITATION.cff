@@ -26,7 +26,7 @@ authors:
     family-names: "Weißensteiner"
     orcid: "https://orcid.org/0000-0002-8917-5231"
     affiliation: "Montanuniversität Leoben"
-version: "0.2.6"
+version: "0.3.0"
 date-released: "2026-09-08"
 license: "GPL-3.0-or-later"
 repository-code: "https://github.com/SeSam-MUL/Orienta"

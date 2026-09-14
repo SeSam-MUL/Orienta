@@ -128,7 +128,18 @@
     "elementTooltip": "{{el}}: measured {{measured}} at%, this phase expects {{expected}} at%. An element the phase needs but the pixel lacks is what rules it out.",
     "onTheMap": "On the map",
     "thisPixelAlone": "This pixel alone — the map decides by composition group:",
-    "handSet": "set by hand"
+    "handSet": "set by hand",
+    "librarySkipped_one": "1 CIF not read",
+    "librarySkipped_other": "{{count}} CIFs not read",
+    "librarySuspect_one": "1 phase with a suspect composition",
+    "librarySuspect_other": "{{count}} phases with a suspect composition",
+    "noMatch": {
+      "notEnriched": "{{phase}} fits this pixel ({{score}}) but was rejected: {{element}} is {{measured}} at% here, against a map background of {{background}} at%. A phase needing {{element}} is only assigned above {{required}} at%, so a phase that makes up most of the map can never clear that bar — and the phase map applies the same rule, so it leaves those pixels unassigned too. Name the region by hand in the phase map, or crop to an area where the phase is a minority, if there is one.",
+      "belowMinScore": "The closest phase in the library, {{phase}}, only scores {{score}} against this chemistry (minimum {{min}}).",
+      "noCandidate": "No phase in the library is built only from the elements this pixel shows ({{elements}}).",
+      "emptyLibrary": "No CIF phases available — put CIF files in Database/CIF_Library or build the CIF database.",
+      "noChemistry": "This pixel carries no EDS chemistry to match."
+    }
   },
   "swipe": {
     "labelA": "A:",
@@ -478,5 +489,14 @@
     "addRatioNumerator": "Ratio numerator",
     "addRatioDenominator": "Ratio denominator",
     "ratioPerElement": "{{element}} : …"
+  },
+  "quantNote": {
+    "headline_zero": "How this composition was calculated",
+    "headline_one": "How this composition was calculated — 1 caveat",
+    "headline_other": "How this composition was calculated — {{count}} caveats",
+    "noZaf": "Standardless Cliff-Lorimer with modelled k-factors. No ZAF matrix correction — treat as semi-quantitative, not a standards-quality analysis.",
+    "calibratedOn": "Detector response calibrated on {{matrix}} at {{kv}} kV.",
+    "overlap": "The {{window}} window overlaps {{interferer}} emission, so it reads high wherever that element is present.",
+    "beamAssumed": "Beam voltage is not in the file — {{kv}} kV assumed. Every k-factor's overvoltage depends on it."
   }
 }

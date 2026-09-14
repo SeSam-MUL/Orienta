@@ -70,8 +70,16 @@ class ConnectionManager:
         self.active_connections.discard(websocket)
 
     async def broadcast(self, message: dict):
+        # Over a snapshot, not the live set: every send suspends, and that is
+        # where the /ws handler of a client that just went away gets its turn
+        # to call disconnect() — mutating the set being iterated.
+        #     RuntimeError: Set changed size during iteration
+        # The broadcast died at that point, so every connection after the
+        # departing one lost the message (progress, streamed log lines) in a
+        # window that was still open. Fired and forgotten, it surfaced only as
+        # "Task exception was never retrieved" in the log.
         dead = []
-        for connection in self.active_connections:
+        for connection in tuple(self.active_connections):
             try:
                 await connection.send_json(message)
             except Exception:
@@ -345,6 +353,12 @@ app.add_middleware(
 )
 app.add_middleware(HTTPTimingMiddleware)
 
+# Outermost (added last): refuse cross-site writes, foreign WebSocket origins
+# and DNS-rebound Host headers before anything else sees the request. See
+# backend/api/security.py and tests/test_api_origin_guard.py.
+from backend.api.security import LocalOriginGuard
+app.add_middleware(LocalOriginGuard)
+
 
 from fastapi import HTTPException as _FastAPIHTTPException
 from fastapi.exception_handlers import http_exception_handler as _default_http_handler
@@ -374,6 +388,54 @@ async def _log_http_exception(request: Request, exc: _StarletteHTTPException):
     return await _default_http_handler(request, exc)
 
 
+from fastapi.exceptions import RequestValidationError as _RequestValidationError
+from fastapi.responses import JSONResponse as _JSONResponse
+
+
+@app.exception_handler(_RequestValidationError)
+async def _readable_validation_error(request: Request,
+                                     exc: _RequestValidationError):
+    """A rejected request must say what is wrong IN WORDS.
+
+    FastAPI's default body is ``detail: [{type, loc, msg, input, ctx}, …]``.
+    Every error panel in this app reads ``err.response.data.detail`` and puts
+    it in a sentence, so a list of dicts arrives on screen as ``[object
+    Object]`` — a refusal the user cannot act on, for a request that was
+    refused for a perfectly nameable reason (e.g. "phase alpha carries no
+    file: give it a cif, an sht or a master .h5").
+
+    ``detail`` is therefore a string: one line per problem, each naming the
+    field it belongs to. A JSON-SAFE reduction of the structured list stays
+    under ``errors`` so anything that wants to inspect it still can — nothing
+    in this repo does (checked: no frontend reader, no test asserts the old
+    shape).
+
+    Only ``type``/``loc``/``msg`` are carried over. pydantic's own entries also
+    hold ``ctx`` (which contains the raw exception OBJECT) and ``input`` (the
+    offending value, e.g. a numpy array) — handing those to JSONResponse
+    raises inside the response and the client gets an EMPTY body, which is
+    worse than the list this handler exists to replace. Measured.
+    """
+    lines = []
+    safe = []
+    for err in exc.errors():
+        loc_parts = [str(p) for p in err.get("loc", ()) if p not in ("body",)]
+        # ASCII separator on purpose: this string is logged too, and a
+        # Windows console on cp1252 cannot encode an arrow.
+        loc = " > ".join(loc_parts)
+        msg = str(err.get("msg", "invalid value"))
+        # pydantic v2 prefixes custom ValueErrors with "Value error, ".
+        msg = msg[len("Value error, "):] if msg.startswith("Value error, ") else msg
+        lines.append(f"{loc}: {msg}" if loc else msg)
+        safe.append({"type": str(err.get("type", "")),
+                     "loc": loc_parts, "msg": msg})
+    detail = "; ".join(lines) or "The request body is not valid."
+    logger.warning("HTTP 422 on %s %s: %s",
+                   request.method, request.url.path, detail)
+    return _JSONResponse(status_code=422,
+                         content={"detail": detail, "errors": safe})
+
+
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
@@ -385,6 +447,42 @@ async def health_check():
     }
 
 
+def _shutdown_grace_s() -> float:
+    try:
+        return float(os.environ.get("KIKUCHIPY_SHUTDOWN_GRACE_SEC", "5"))
+    except ValueError:
+        return 5.0
+
+
+async def schedule_shutdown(manager, grace_s: float, exit_fn=os._exit) -> bool:
+    """Exit after `grace_s` — unless a WebSocket client is connected by then.
+
+    The page posts /api/shutdown from its `unload` handler so that closing
+    the window stops the backend. But `unload` also fires on a page RELOAD:
+    a Vite hot reload during development, F5 in the browser, and Electron's
+    own crash recovery (`mainWindow.reload()`) — which therefore killed the
+    very backend it was written to protect. Measured 2026-09-09: a merge that
+    touched App.jsx reloaded the page and the log read "Shutdown requested
+    via API — exiting" one second later.
+
+    A reloaded page opens its WebSocket within a second or two; a closed
+    window never does. So the exit waits, and a connected client cancels it.
+    Returns True when the process is going down (for tests: exit_fn is
+    injected).
+    """
+    await asyncio.sleep(grace_s)
+    if manager.active_connections:
+        logger.info("Shutdown cancelled — a client reconnected within %.1f s "
+                    "(page reload, not a close).", grace_s)
+        return False
+    logger.info("Shutdown: no client reconnected within %.1f s — exiting.", grace_s)
+    exit_fn(0)
+    return True
+
+
+_shutdown_task = None
+
+
 @app.post("/api/shutdown")
 async def shutdown():
     """Gracefully shut down the backend server.
@@ -393,18 +491,20 @@ async def shutdown():
     headless / browser mode this is a no-op so a page refresh, a stray
     request from a dying renderer, or a misbehaving extension can't drop
     a 12-hour batch in one POST.
+
+    The exit itself is deferred by KIKUCHIPY_SHUTDOWN_GRACE_SEC (default 5)
+    and cancelled if a client reconnects — see schedule_shutdown.
     """
+    global _shutdown_task
     if os.environ.get("KIKUCHIPY_WATCHDOG", "").strip().lower() != "1":
         logger.info("Shutdown requested but ignored (KIKUCHIPY_WATCHDOG != '1')")
         return {"status": "ignored", "reason": "watchdog disabled"}
-    logger.info("Shutdown requested via API — exiting.")
-
-    async def _delayed_exit():
-        await asyncio.sleep(0.5)
-        os._exit(0)
-
-    asyncio.create_task(_delayed_exit())
-    return {"status": "shutting_down"}
+    grace = _shutdown_grace_s()
+    if _shutdown_task is not None and not _shutdown_task.done():
+        return {"status": "shutting_down", "grace_s": grace}
+    logger.info("Shutdown requested via API — exiting in %.0f s unless a client reconnects.", grace)
+    _shutdown_task = asyncio.create_task(schedule_shutdown(ws_manager, grace))
+    return {"status": "shutting_down", "grace_s": grace}
 
 
 @app.websocket("/ws")

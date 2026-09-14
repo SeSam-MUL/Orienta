@@ -160,14 +160,43 @@ def choose_k_by_bic(X: np.ndarray, k_range: Tuple[int, int] = (2, 12)) -> int:
 #: Two cluster means closer than this, in at% on their largest single-element
 #: difference, are the same chemistry as far as this data can tell.
 #:
-#: Calibrated on SampleB, where the minimum pairwise gap falls
-#: 14.16 (k=2) / 13.58 (k=4) / 7.16 (k=6) / 4.55 (k=7) / 1.37 (k=8) / 0.99 (k=12).
-#: Any threshold from 1.5 to 4.0 selects k=7 — a plateau, not a cliff. The
-#: value also has to sit above the measurement error: the same module docstring
-#: records the aluminium matrix reading 2.80 at% Fe where equilibrium solubility
-#: is ~0.05 at%, so differences of a few tenths of an at% are not evidence of a
-#: different chemistry.
-DISTINCT_AT_PCT = 2.0
+#: THIS NUMBER IS IN AT% AND THEREFORE TIED TO THE QUANTIFICATION SCALE.
+#: It was 2.0 until 2026-09-12, calibrated when the standardless Cliff-Lorimer
+#: k-factors were flat and read the heavy elements about 3x too low
+#: (tasks/eds-quantification-wrong-2026-09-10.md). Correcting them spread
+#: Fe/Mn/Cu/Zn out by roughly that factor, the whole gap ladder moved up with
+#: them, and 2.0 stopped being the value that picks the right k: on SampleB it
+#: went k=7 -> 10, Fe-particle retention 95.6 -> 60.2 %, coherence 0.955 ->
+#: 0.858, correlation with band contrast -0.737 -> -0.487. At IDENTICAL k the
+#: corrected chemistry was as good or better (k=7: -0.748), so nothing was
+#: wrong with the data -- only with this threshold.
+#:
+#: Re-measured 2026-09-12 on the corrected scale
+#: (tasks/eds_quant_audit/07_distinct_gap_recalibration.py). Minimum pairwise
+#: gap on SampleB:
+#:   k=5 13.30 / k=6 8.12 / k=7 8.60 / k=8 2.26 / k=10 2.03 / k=12 1.97
+#: The cliff between k=7 (8.60) and k=8 (2.26) is where the real chemistries
+#: run out, so any threshold in 3.0..8.0 selects k=7 there -- a plateau, as
+#: before. A second scan (the 268x201 Aztec reference, four phases) has no
+#: cliff at all, its ladder decays smoothly, so it constrains the value from
+#: above: at 4.75 it drops from k=12 to k=9.
+#:
+#: The window that reproduces the pre-2026-09-12 k on BOTH scans is 2.5..4.5,
+#: with a hard floor at 2.26 (SampleB's k=8 gap -- below it k jumps and the
+#: map collapses). 3.5 sits 1.55x above that floor and 1.29x below the Aztec
+#: transition, and near the BOTTOM of SampleB's 3.0..8.0 plateau, which keeps
+#: the "over-segmentation is the safer error" policy documented in
+#: choose_k_by_distinctness: merging two regions is one click, recovering a
+#: region that was never separated is not.
+#:
+#: The value also has to sit above the measurement error: on the corrected
+#: scale the aluminium matrix of SampleB reads 1.81 at% Fe against an
+#: equilibrium solubility near 0.05 at%, so differences of a few tenths of an
+#: at% are still not evidence of a different chemistry.
+#:
+#: If the quantification scale ever moves again, re-run script 07 -- do not
+#: nudge this by hand.
+DISTINCT_AT_PCT = 3.5
 
 
 def _cluster_means(X: np.ndarray, labels: np.ndarray, k: int) -> np.ndarray:
@@ -316,6 +345,7 @@ def _run_for_k(
     matrix_element: Optional[str] = None,
     background: Optional[Dict[str, float]] = None,
     rule_set=None,
+    unmeasured=None,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch]]:
     """One full cluster-and-match pass at a fixed ``k``."""
     from sklearn.cluster import KMeans
@@ -323,7 +353,7 @@ def _run_for_k(
     km = KMeans(n_clusters=k, n_init=10, random_state=0).fit(X)
     return _match_labels(km.labels_.astype(np.int32), k, at_pct_per_element,
                          n_rows, n_cols, candidates, group_of, min_score,
-                         matrix_element, background, rule_set)
+                         matrix_element, background, rule_set, unmeasured=unmeasured)
 
 
 def _match_labels(
@@ -339,6 +369,7 @@ def _match_labels(
     background: Optional[Dict[str, float]] = None,
     rule_set=None,
     fixed_phase: Optional[Dict[int, int]] = None,
+    unmeasured=None,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch]]:
     """Name each already-grouped region against the library.
 
@@ -376,9 +407,16 @@ def _match_labels(
             # background comes from the WHOLE map, never from `one`: a
             # single value is its own median, so the enrichment gate would
             # compare the cluster mean against itself and veto everything.
+            # `unmeasured`: an element whose window could not be priced is
+            # missing from `one`, and the scorer would read that as a measured
+            # ZERO and veto every phase containing it. Cluster mode is the
+            # DEFAULT, so without this the route's own warning -- "phases
+            # containing it are still offered and are judged on the elements
+            # that were measured" -- is false exactly where most users are.
             (idx, float(score_phase_ratio(
                 one, entry.composition, matrix_element=matrix_element,
-                no_data_score=0.0, background=background)[0]))
+                no_data_score=0.0, background=background,
+                unmeasured=unmeasured)[0]))
             for idx, entry in enumerate(candidates)
         ]
 
@@ -454,6 +492,7 @@ def cluster_and_match(
     element_weights: Optional[Dict[str, float]] = None,
     region_defs=None,
     cluster_remainder: bool = True,
+    unmeasured=None,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch], int]:
     """Cluster the composition, match each cluster, paint its pixels.
 
@@ -507,7 +546,7 @@ def cluster_and_match(
     def run(kk):
         return _run_for_k(X, at_pct_per_element, n_rows, n_cols, candidates,
                           group_of, kk, min_score, matrix_element,
-                          background, rule_set)
+                          background, rule_set, unmeasured=unmeasured)
 
     if region_defs:
         return _manual_and_match(
@@ -516,7 +555,8 @@ def cluster_and_match(
             # X_phys is what keeps `min_gap` meaning at% when weights are in
             # play. Omitting it made the manual path reintroduce the very
             # coupling the automatic path was fixed for.
-            background, rule_set, cluster_remainder, X_phys)
+            background, rule_set, cluster_remainder, X_phys,
+            unmeasured=unmeasured)
 
     if k:
         k_used = max(1, min(int(k), n_px))
@@ -555,6 +595,7 @@ def _manual_and_match(
     rule_set,
     cluster_remainder: bool,
     X_phys: Optional[np.ndarray] = None,
+    unmeasured=None,
 ) -> Tuple[np.ndarray, np.ndarray, List[ClusterMatch], int]:
     """Hand-declared regions first, automatic grouping for whatever is left.
 
@@ -629,5 +670,5 @@ def _manual_and_match(
     phase_grid, cluster_grid, matches = _match_labels(
         compact, k_used, at_pct_per_element, n_rows, n_cols, candidates,
         group_of, min_score, matrix_element, background, rule_set,
-        fixed_phase=fixed)
+        fixed_phase=fixed, unmeasured=unmeasured)
     return phase_grid, cluster_grid, matches, k_used

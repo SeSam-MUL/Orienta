@@ -29,7 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { colors, spacing, CollapsibleGroup, Select } from '../../theme/components';
 import { PRESETS } from './presets';
 import { MAX_LAYERS } from './layerStackReducer';
-import { findLayerDef } from './layerSources';
+import { findLayerDef, layerLabel } from './layerSources';
 import AddLayerPicker from './AddLayerPicker';
 import useDataStore from '../../stores/useDataStore';
 import useResultStore from '../../stores/useResultStore';
@@ -80,10 +80,11 @@ function LayerRow({
     : t('phasemap:layers.gateDiagHint');
   const gateSuffix = isGatedRef ? t('phasemap:layers.gateRefSuffix') : t('phasemap:layers.gateDiagSuffix');
 
-  // The legend matters for layers whose colours encode a meaning the user
-  // cannot infer (the assignment-source provenance map), so it rides along in
-  // the row tooltip — behind an error, which is the more urgent message.
-  const label = layer.label;
+  // Catalog layers may declare a translated name and a legend. The legend
+  // matters for layers whose colours encode a meaning the user cannot infer
+  // (the assignment-source provenance map), so it rides along in the row
+  // tooltip — behind an error, which is the more urgent message.
+  const label = layerLabel(def, t, layer.label);
   const legend = def?.tipKey ? t(def.tipKey) : null;
 
   const baseTitle = error
@@ -272,7 +273,7 @@ export default function LayerStackPanel({
   // its own type so the picker can show what it currently is. Types already in
   // the stack stay out — two layers with one id would share a bitmap slot.
   const typeOptionsFor = (layer) => {
-    const own = { value: layer.id, label: layer.label };
+    const own = { value: layer.id, label: layerLabel(findLayerDef(layer.id), t, layer.label) };
     const others = availableToAdd.filter((o) => o.value && o.value !== layer.id);
     return [own, ...others];
   };

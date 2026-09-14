@@ -249,6 +249,16 @@ def load_ebsd_safe(
     if is_edax_up_file(file_path):
         return _load_edax_up(file_path, use_lazy, verbose)
 
+    # EDAX scans acquired on a hexagonal grid cannot be handed to either
+    # loader as they are: kikuchipy refuses HexGrid outright, and the
+    # unified_loader trips over the padding EDAX writes to keep its point
+    # arrays rectangular ("46648 patterns but grid is 397x118"). We resample
+    # them onto a square grid first — nearest neighbour, exactly the way OIM
+    # Analysis does it, verified against a square file OIM itself produced.
+    from edax_hex import is_edax_hex_file, load_edax_hex
+    if is_edax_hex_file(file_path):
+        return load_edax_hex(file_path, lazy=use_lazy, verbose=verbose)
+
     # Strategy 1: Try kikuchipy's native loader (fast path).
     # Wrapped in a context manager that monkey-patches kikuchipy's broken
     # Oxford H5OINA reader for the duration of this call. See

@@ -9,6 +9,116 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## v0.3.0 — 2026-09-14
+
+**If you have indexed anything with an earlier version, read the first section.**
+A decoding error that had been in every spherical run since the module was written
+is fixed, and orientations change because of it.
+
+### Every spherical orientation was about 1.6° wrong, on every phase
+
+The step that turns the correlation volume into Bunge Euler angles carried two
+defects, neither of them in the correlation itself.
+
+- A **constant crystal-frame operator**, a half turn about ⟨1 -1 0⟩. That operator
+  is a symmetry of every phase the indexer had ever been checked against, so on
+  cubic m-3m and tetragonal 4/mmm masters it was invisible. On m-3 it is not, and
+  that is where it surfaced: α-Al(Fe,Mn)Si came out 88.7° from the reference.
+- A **half-bin origin error**. The α and γ axes carry a half-turn offset that was
+  written as a whole number of bins, but the grid has an odd number of them. Every
+  α was 1.03° too large and every γ 1.03° too small, at every bandwidth.
+
+Measured against EMSphInx on the same patterns and the same master: the raw
+spherical answer went from 88.67° to **0.145°** median disorientation, and from
+0 % to **99.89 %** of pixels within 5°. Aluminium and Al₇Cu₂Fe were **not**
+unaffected: 1.101° and 1.992° → **0.119°** and **0.117°**. The forward render of
+the raw answer scores 0.810 against EMSphInx's 0.806, so for the first time the
+unrefined result matches the reference it is measured against.
+
+**What this means for you.** Saved `.h5` results, exported `.ang`/`.ctf` files and
+any figure made from them are wrong by roughly this amount on every phase. Re-index
+rather than re-interpret. Confidence indices are unaffected, which is exactly why
+this was hard to see: the number that is supposed to tell you something is wrong
+did not move.
+
+### Silicon read correctly, iron read three times too low
+
+The EDS quantification had an element-wise error. The k-factor table carried no
+overvoltage term, and for iron on a 20 kV beam that is not a detail: iron read
+**4.4 at% where Aztec reads 14.0** on the same data. Three further defects in the
+same area:
+
+- A window that names its line could skip the overvoltage gate.
+- Two windows of the same element collapsed into one, silently.
+- One unusable window cost the whole scan its composition instead of being dropped.
+
+Everything downstream moves with this: the chemistry prior, the phase suggestions,
+the EDS phase map.
+
+### "Not measured" is no longer read as "not there"
+
+The chemistry prior treated an element nobody could quantify as an element that is
+absent, which vetoed exactly the phases that element identifies. It now goes off
+when a window cannot be priced, and says so rather than failing quietly. The prior
+also reads the composition of the **structure that was simulated**, not the one in
+the file name; on α-(Al,Mn)Si the two differ by up to 4.8 at%, and the phase went
+from 10 % to 89 % correctly assigned.
+
+### New: particles the pattern cannot see
+
+Silicon and aluminium are both face-centred cubic. Their Kikuchi patterns are
+degenerate, and measured on real data the correlation prefers aluminium on **every**
+pixel, even at 93 at% silicon. The chemistry decides instead, but the EDS
+interaction volume is 2 to 3 µm, so a particle smaller than that reads as a dilute
+mixture and stays below the decision threshold.
+
+A post-pass now settles those pixels by **orientation continuity**: an enriched blob
+whose orientation does not continue the surrounding matrix is its own crystal, and a
+rim pixel that does continue the matrix goes back to it. It runs only when the EDS
+prior is on; with the prior off the run is bit-identical to before.
+
+Measured on a 301 × 402 map: 2408 pixels moved to silicon, 159 back to aluminium,
+and **63 blobs that had no silicon pixel at all** became particles. 97 % of the
+moved pixels are orientation-coherent with a silicon neighbour.
+
+### The installation no longer trusts whoever is calling
+
+The backend treated every caller as the user. A POST carrying only query parameters
+is a CORS "simple request" and needs no preflight, WebSockets have no CORS at all,
+and DNS rebinding makes a foreign page same-origin. Measured before the fix: a page
+on another origin could reach the endpoint that unregisters a WSL distribution, and
+the log socket accepted foreign origins and streamed the root logger.
+
+There is now an origin and host guard on every writing route and every socket
+upgrade. Local callers are unaffected: they send no `Origin` header.
+
+Three defects in the install wizard are fixed with it. The worst wrote **the sudo
+password itself** into `/etc/fstab` and the OpenCL vendor files, because a shell
+helper piped the password into stdin and thereby replaced the stdin that
+`echo <path> | sudo tee <file>` was relying on. That is the origin of the "ICD files
+contained 1234" report from February: 1234 was the password.
+
+### What we checked and did not change
+
+A Hough run was 4.2° from the spherical result on every phase, which looked like a
+convention difference between the methods. It was **ours**: the stored run had been
+made with the camera elevation left at zero. Re-run with the scan's own 4.31° it
+lands at 0.25° / 0.04° / 0.63°, and the phase map is 98.5 % identical. No fix was
+needed; a guard test now pins that the elevation reaches PyEBSDIndex. Worth carrying
+home: without it every Hough orientation is rigidly wrong by exactly that angle
+while the confidence index does not move at all, so only a forward render sees it.
+
+### Notes
+
+- The crystal database is not part of this repository and is not shipped with it.
+  `tasks/symmetrise_p1_cifs_2026-09-13.py` repairs library CIFs that were stored
+  without their symmetry operators; on one phase that moved the share of pixels
+  within 5° of the spherical answer from 87 % to 97 %.
+- Tests that need binary reference data which the repository does not carry are not
+  part of the shipped suite.
+
+---
+
 ## v0.2.6 — 2026-09-08
 
 Nothing in the app behaves differently. This release is about what the project

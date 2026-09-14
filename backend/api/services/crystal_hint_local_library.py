@@ -178,9 +178,20 @@ def _parse_cif(cif_path: Path) -> dict:
         except (AttributeError, TypeError):
             # legacy fallback
             structures = parser.get_structures(primitive=False)
-        if not structures:
-            return {"error": "no structure parsed"}
-        s = structures[0]
+        # One guard for every place that reads a CIF; see
+        # cif_phase_library.one_structure. Taking structures[0] lets the ORDER
+        # of a CIF's data blocks decide a phase's composition, and on
+        # sd_1816951.cif (MgCu2) the two answers are Mg4Cu and Mg2Cu, neither
+        # of them the compound. Crystal Hint would have suggested it with an
+        # inverted Mg:Cu.
+        from backend.api.services.cif_phase_library import (
+            AmbiguousCifError, one_structure,
+        )
+        try:
+            s = one_structure(structures, cif_path.name)
+        except AmbiguousCifError as exc:
+            logger.warning("%s", exc)
+            return {"error": str(exc)}
         try:
             sg_info = s.get_space_group_info()
             sg_symbol, sg_number = sg_info

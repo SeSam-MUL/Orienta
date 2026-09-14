@@ -119,3 +119,25 @@ describe('TileGrid', () => {
     expect(bcTile.style.border).toMatch(/#f00|red/);
   });
 });
+
+describe('a tile whose layer could not be fetched', () => {
+  it('shows the backend reason instead of an empty picture', () => {
+    // /api/eds/map refuses at% for a window the quantification could not
+    // price, and the detail names the element and why. That string is the
+    // only thing on screen for that element, so it has to be ON the tile —
+    // an empty tile reads as "this element is absent", which is a claim
+    // about the sample.
+    const reason = "EDS quantification: no K line data for element 'Xx'.";
+    const { container } = render(
+      <CursorSyncProvider>
+        <TileGrid
+          layers={[{ id: 'eds-Xx Kα1', kind: 'eds-element', element: 'Xx Kα1', label: 'Xx Kα1', visible: true, opacity: 1, blend: 'normal' }]}
+          bitmaps={new Map()}
+          errors={new Map([['eds-Xx Kα1', reason]])}
+          shape={[10, 10]}
+        />
+      </CursorSyncProvider>
+    );
+    expect(container.textContent).toContain(reason);
+  });
+});

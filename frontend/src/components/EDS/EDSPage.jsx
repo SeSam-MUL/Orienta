@@ -16,6 +16,8 @@ import {
   colors, alpha, spacing,
   Button, NumberInput, GroupBox, Label,
 } from '../../theme/components';
+import QuantificationNote from './QuantificationNote';
+import QuantTable, { quantRowsFromResponse } from './quantTable';
 import useDataStore from '../../stores/useDataStore';
 import useResultStore from '../../stores/useResultStore';
 import { CursorSyncProvider, useCursorSync } from './CursorSyncContext';
@@ -30,6 +32,8 @@ import CropWarningChip, { cropWarningFor } from '../common/CropWarningChip';
 import HoverProbeOverlay from './HoverProbeOverlay';
 import ThresholdHistogram from './ThresholdHistogram';
 import LinescanProfilePlot from './LinescanProfilePlot';
+import SuggestNoMatch from './SuggestNoMatch';
+import SuggestLibrarySkipped from './SuggestLibrarySkipped';
 import { useActiveDatasetKey } from './hooks/useActiveDatasetKey';
 import { useDefaultLayers } from './hooks/useDefaultLayers';
 import { useEdsLayerStack } from './hooks/useEdsLayerStack';
@@ -37,6 +41,7 @@ import { allMapsLayersFor } from './edsLayerSources';
 import { useHoverProbe } from './hooks/useHoverProbe';
 import { useLinescan } from './hooks/useLinescan';
 import { useSuggestPhases } from './hooks/useSuggestPhases';
+import { useRegionAverage } from './hooks/useRegionAverage';
 import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from './hooks/useZoomViews';
 
 // The phase map's id in the page's shared zoom controller. A constant rather
@@ -153,50 +158,6 @@ function ModeToggle({ value, onChange }) {
         </button>
       ))}
     </div>
-  );
-}
-
-function QuantTable({ data }) {
-  const { t } = useTranslation('eds');
-  if (!data || data.length === 0) return null;
-  const th = { padding: '5px 8px', textAlign: 'left', color: colors.textSecondary, fontWeight: 600, fontSize: '9pt', borderBottom: `1px solid ${colors.border}`, whiteSpace: 'nowrap' };
-  const td = (i) => ({ padding: '4px 8px', fontSize: '9pt', borderBottom: `1px solid ${alpha(colors.border, 13)}`, background: i % 2 === 0 ? 'transparent' : alpha(colors.border, 20) });
-  return (
-    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-      <thead><tr>{[t('table.element'), t('table.counts'), t('table.wtPct'), t('table.atPct')].map((h) => <th key={h} style={th}>{h}</th>)}</tr></thead>
-      <tbody>
-        {data.map((row, i) => (
-          <tr key={row.element || i} className="table-row-hover">
-            <td style={{ ...td(i), color: colors.cyan, fontWeight: 600 }}>{row.element}</td>
-            <td style={td(i)}>{typeof row.counts === 'number' ? Math.round(row.counts).toLocaleString('en-US') : row.counts ?? t('table.empty')}</td>
-            <td style={td(i)}>{typeof row.wt_pct === 'number' ? row.wt_pct.toFixed(2) : row.wt_pct ?? t('table.empty')}</td>
-            <td style={td(i)}>{typeof row.at_pct === 'number' ? row.at_pct.toFixed(2) : row.at_pct ?? t('table.empty')}</td>
-          </tr>
-        ))}
-      </tbody>
-      {(() => {
-        const atSum = data.reduce((s, r) => s + (typeof r.at_pct === 'number' ? r.at_pct : 0), 0);
-        const wtSum = data.reduce((s, r) => s + (typeof r.wt_pct === 'number' ? r.wt_pct : 0), 0);
-        if (atSum === 0 && wtSum === 0) return null;
-        const ok = Math.abs(atSum - 100) < 1;
-        return (
-          <tfoot>
-            <tr>
-              <td style={{ ...th, fontWeight: 700 }} title={t('table.sumTooltip')}>{'Σ'}</td>
-              <td style={th}></td>
-              <td style={{ ...th, fontWeight: 600 }}>{wtSum.toFixed(1)}%</td>
-              <td style={{
-                ...th, fontWeight: 700, color: ok ? colors.green : colors.orange,
-                background: ok ? `${colors.green}11` : `${colors.orange}11`,
-                borderRadius: 3,
-              }}>
-                {ok ? '✓ ' : '⚠ '}{atSum.toFixed(1)}%
-              </td>
-            </tr>
-          </tfoot>
-        );
-      })()}
-    </table>
   );
 }
 
@@ -431,18 +392,25 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   const [pixelRow, setPixelRow] = useState(0);
   const [pixelCol, setPixelCol] = useState(0);
   const [quantData, setQuantData] = useState(null);
+  // The quantification's own account of itself for the PIXEL table — the
+  // region panel has shown it since 86ff3c09, the pixel table did not, and it
+  // is the panel where a dropped window now shows up as an empty cell.
+  const [quantProv, setQuantProv] = useState(null);
   const [quantLoading, setQuantLoading] = useState(false);
   const [quantError, setQuantError] = useState(null);
   const [quantCopied, setQuantCopied] = useState(false);
 
-  // Region Average state (lifted).
-  const [regionRowStart, setRegionRowStart] = useState(0);
-  const [regionRowEnd, setRegionRowEnd] = useState(0);
-  const [regionColStart, setRegionColStart] = useState(0);
-  const [regionColEnd, setRegionColEnd] = useState(0);
-  const [regionData, setRegionData] = useState(null);
-  const [regionLoading, setRegionLoading] = useState(false);
-  const [regionError, setRegionError] = useState(null);
+  // Region Average state (lifted into its own hook, like the linescan and the
+  // phase suggestion — see useRegionAverage for why the rectangle has to
+  // travel as an argument).
+  const {
+    rowStart: regionRowStart, setRowStart: setRegionRowStart,
+    rowEnd: regionRowEnd, setRowEnd: setRegionRowEnd,
+    colStart: regionColStart, setColStart: setRegionColStart,
+    colEnd: regionColEnd, setColEnd: setRegionColEnd,
+    data: regionData, loading: regionLoading, error: regionError,
+    quantify: handleRegionQuantify, onRegionSelected,
+  } = useRegionAverage(displayMode, t);
   const [regionCopied, setRegionCopied] = useState(false);
 
   // Phase Suggestion state (lifted). The suggestion is per-pixel, so the hook
@@ -457,6 +425,8 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     mapPhase: suggestMapPhase,
     librarySource: suggestLibrarySource,
     librarySize: suggestLibrarySize,
+    cifNoMatch: suggestNoMatch,
+    librarySkipped: suggestLibrarySkipped,
     loading: suggestLoading,
     error: suggestError,
     run: suggestRun,
@@ -508,16 +478,19 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   const handleQuantify = useCallback(async (rowOverride = null, colOverride = null) => {
     const row = rowOverride != null ? rowOverride : Number(pixelRow);
     const col = colOverride != null ? colOverride : Number(pixelCol);
-    setQuantLoading(true); setQuantError(null); setQuantData(null);
+    setQuantLoading(true); setQuantError(null); setQuantData(null); setQuantProv(null);
     try {
       const res = await edsApi.quantifyPixel(row, col, displayMode);
-      const raw = res.data?.data || res.data?.elements || {};
-      const rows = Array.isArray(raw)
-        ? raw
-        : Object.entries(raw).map(([el, vals]) => ({ element: el, counts: vals.counts ?? 0, wt_pct: vals.wt_pct ?? 0, at_pct: vals.at_pct ?? 0 }));
-      setQuantData(rows);
+      // quantRowsFromResponse keeps a null null. The backend sends null for
+      // a window it could not price (eds_utils._resolve_k_factors), and the
+      // `?? 0` that used to stand here turned "we could not measure this"
+      // into a measured zero — the one reading the backend change exists to
+      // prevent. The table renders null as t('table.empty').
+      setQuantData(quantRowsFromResponse(res.data));
+      setQuantProv(res.data?.quantification || null);
     } catch (err) {
       setQuantError(err.response?.data?.detail || err.message || t('quantify.error'));
+      setQuantProv(null);
     } finally { setQuantLoading(false); }
   }, [pixelRow, pixelCol, displayMode, t]);
 
@@ -530,33 +503,6 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     handleQuantify(row, col);
     suggestFollowPixel(row, col);
   }, [handleQuantify, suggestFollowPixel]);
-
-  // handleRegionQuantify (lifted).
-  const handleRegionQuantify = useCallback(async () => {
-    setRegionLoading(true); setRegionError(null); setRegionData(null);
-    try {
-      const res = await edsApi.regionQuantify(
-        Number(regionRowStart), Number(regionRowEnd),
-        Number(regionColStart), Number(regionColEnd),
-        displayMode,
-      );
-      setRegionData(res.data);
-    } catch (err) {
-      setRegionError(err.response?.data?.detail || err.message || t('regionAvg.error'));
-    } finally { setRegionLoading(false); }
-  }, [regionRowStart, regionRowEnd, regionColStart, regionColEnd, displayMode, t]);
-
-  // Shift+drag ROI → auto-populate Region-Average fields and fire compute.
-  const onRegionSelected = useCallback(({ rowStart, rowEnd, colStart, colEnd }) => {
-    setRegionRowStart(rowStart);
-    setRegionRowEnd(rowEnd);
-    setRegionColStart(colStart);
-    setRegionColEnd(colEnd);
-    // Fire on the next tick so the state updates have a chance to land.
-    // handleRegionQuantify reads from state, so calling it synchronously here
-    // would race against the setState batch.
-    setTimeout(() => { handleRegionQuantify(); }, 0);
-  }, [handleRegionQuantify]);
 
   // handleSuggestPhases (lifted) — explicit "Suggest Phases" press.
   const handleSuggestPhases = useCallback(
@@ -1420,6 +1366,11 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                 {quantData && (
                   <div style={{ overflowX: 'auto', marginTop: 4, animation: 'fadeSlideIn 0.2s ease-out' }}>
                     <QuantTable data={quantData} />
+                    {/* Same note as the region panel: standardless, no ZAF —
+                        and the place where a window that could not be priced
+                        is NAMED, since the table can only show an empty
+                        cell. */}
+                    <QuantificationNote provenance={quantProv} />
                     <button
                       onClick={() => {
                         const header = 'Element\tCounts\tWt.%\tAt.%';
@@ -1485,6 +1436,10 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                 {regionData && (
                   <div style={{ animation: 'fadeSlideIn 0.2s ease-out' }}>
                     <RegionQuantTable data={regionData} />
+                    {/* What the backend always knew and never said: these
+                        numbers are standardless and uncorrected for matrix
+                        absorption. See QuantificationNote. */}
+                    <QuantificationNote provenance={regionData.quantification} />
                     <button
                       onClick={() => {
                         const header = 'Element\tCounts (mean±σ)\tWt.% (mean±σ)\tAt.% (mean±σ)';
@@ -1554,6 +1509,9 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                       {suggestLibrarySource === 'cif' ? t('suggest.sourceCif') : t('suggest.sourceDefault')}
                       {suggestLibrarySize != null && ` (${suggestLibrarySize})`}
                     </span>}
+                    {/* Files the library could not read sit next to its size:
+                        "23 phases" reads as the whole folder otherwise. */}
+                    <SuggestLibrarySkipped skipped={suggestLibrarySkipped} />
                   </div>
                 )}
                 {/* The row/col boxes can be typed into without clicking the map,
@@ -1597,7 +1555,10 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                 {suggestedPhases && (
                   <div style={{ marginTop: 6, animation: 'fadeSlideIn 0.2s ease-out' }}>
                     {suggestedPhases.length === 0 ? (
-                      <Label secondary small>{t('suggest.none')}</Label>
+                      <>
+                        <Label secondary small>{t('suggest.none')}</Label>
+                        <SuggestNoMatch reason={suggestNoMatch} />
+                      </>
                     ) : suggestedPhases.map((phase, i) => {
                       const isCif = !!phase.cif_filename;
                       // CIF entries: filename as primary line, formula as secondary,

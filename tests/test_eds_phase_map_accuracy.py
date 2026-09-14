@@ -26,6 +26,33 @@ pytestmark = pytest.mark.skipif(
     reason="SampleB test data or crystal_database.xlsx not available",
 )
 
+#: Nominal Fe of alpha-Al(Fe,Mn)Si, the phase the SampleB particle is.
+#: Used as the *particle* threshold below. It is an anchor taken from the
+#: phase, not from the data, which is the point: the earlier threshold of
+#: 4.0 at% was a third of this because the quantification under-read Fe by
+#: ~0.46x (see tasks/eds-quantification-wrong-2026-09-10.md, fixed
+#: 2026-09-12). With that fixed, 4.0 at% no longer selects the particle -- it
+#: selects the particle plus the interaction-volume halo around it, 6941 px
+#: instead of 3401. Pixels in that halo are a genuine particle/matrix mixture
+#: and correctly do NOT get an Fe intermetallic.
+ALPHA_NOMINAL_FE_AT_PCT = 11.6
+
+#: Cluster mode picks its own k from choose_k_by_distinctness, whose
+#: DISTINCT_AT_PCT is an ABSOLUTE at% gap and was therefore tied to the old,
+#: 3x-too-low quantification. Correcting the k-factors spread Fe/Mn/Cu/Zn out
+#: by roughly that factor, so more splits cleared the old 2 at% bar and k went
+#: 7 -> 10 on SampleB, cutting the Fe region into pieces that no longer match
+#: an Fe-bearing phase (kept 95.6 -> 60.2 %, r(BC) -0.737 -> -0.487, coherence
+#: 0.955 -> 0.858). At identical k the corrected chemistry was as good or
+#: better (k=7: -0.748 vs -0.737), so it was the threshold, not the data.
+#:
+#: Re-measured and set to 3.5 on 2026-09-12
+#: (tasks/eds_quant_audit/07_distinct_gap_recalibration.py). The three tests
+#: below were xfail(strict) between the k-factor fix and that recalibration;
+#: they pass again, and on the corrected scale they pass BETTER than they did
+#: before any of this: coherence 0.980 against 0.955, r(BC) -0.748 against
+#: -0.737, particle retention 95.6 % either way.
+
 
 @pytest.fixture(scope="module")
 def sampleb():
@@ -106,10 +133,8 @@ def test_no_silicon_particle_gets_an_iron_phase(classified):
 def test_the_real_particle_survives_the_veto(classified):
     """No veto may eat the particle it is meant to protect.
 
-    Ground truth is the connected Fe-rich region (Fe > 4 at%, 3401 px on
-    SampleB). It measures a mean 5.33 at% Fe against the 11.6 at% its phase
-    nominally requires — a 0.46x standardless Cliff-Lorimer under-read — so any
-    threshold near 0.46 silently deletes it.
+    Ground truth is the Fe-rich region: pixels whose measured Fe reaches the
+    nominal Fe of the phase they are (3830 px on SampleB, mean 15.4 at%).
 
     Written when the veto was the relative one (`rel_req`, where 0.30 kept
     99.4 % of the particle and 0.40 only 71.5 %; the first calibration was
@@ -118,10 +143,16 @@ def test_the_real_particle_survives_the_veto(classified):
     and enrichment-based — but the assertion is the point, not the mechanism:
     whatever vetoes, the particle has to survive it. It would have caught the
     old calibration and it guards the new gates just the same.
+
+    The threshold moved from 4.0 at% to the phase's nominal Fe on 2026-09-12,
+    when the quantification stopped under-reading Fe by ~0.46x; see
+    ALPHA_NOMINAL_FE_AT_PCT. The region is the same object either way — the
+    old and new top-3401 Fe pixels overlap by 96.6 % — and the per-pixel path
+    holds 100.0 % of it (it held 99.0 % before the fix).
     """
     at, grid, _score, cands, _amb = classified
     fe = np.asarray(at["Fe"], dtype=float)
-    particle = fe > 4.0
+    particle = fe > ALPHA_NOMINAL_FE_AT_PCT
     assert particle.sum() > 2000, "expected a substantial Fe-rich particle"
     fe_phases = [i for i, e in enumerate(cands)
                  if e.composition.get("Fe", 0.0) >= 5.0]
@@ -187,7 +218,7 @@ def test_cluster_mode_silicon_particles_are_silicon(clustered):
 def test_cluster_mode_keeps_the_real_particle(clustered):
     at, grid, _cg, _m, _k, cands = clustered
     fe = np.asarray(at["Fe"], dtype=float)
-    particle = fe > 4.0
+    particle = fe > ALPHA_NOMINAL_FE_AT_PCT
     fe_phases = [i for i, e in enumerate(cands)
                  if e.composition.get("Fe", 0.0) >= 5.0]
     kept = np.isin(grid, fe_phases)[particle].mean()

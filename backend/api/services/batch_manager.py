@@ -156,30 +156,37 @@ def _register_signal_calibration(signal, file_path: str):
         calibration_store.register(dataset_name, signal)
 
 
-def _get_pixel_size(signal, detector) -> float:
-    """Get detector pixel size in microns, preferring the original signal's detector."""
-    # The original signal's detector preserves px_size from the H5 file
-    if signal is not None:
-        orig_det = getattr(signal, 'detector', None)
-        if orig_det is not None and hasattr(orig_det, 'px_size') and orig_det.px_size > 1.0:
-            return float(orig_det.px_size)
-    # CalibrationStore-built detector may have default px_size=1.0
-    if detector is not None and hasattr(detector, 'px_size') and detector.px_size > 1.0:
-        return float(detector.px_size)
-    return 55.0  # safe default
+#: The spherical engines a batch request may ask for. Re-exported from
+#: indexing_controller rather than restated: the interactive route, the
+#: per-phase dispatcher and this one all have to agree on what the names are,
+#: and two lists of two strings are exactly the kind of thing that drifts.
+from indexing_controller import SPHERICAL_BACKENDS as _SPHERICAL_BACKENDS
 
 
 def _get_detector_for_file(file_path: str, signal=None):
-    """Get the best available detector for a file."""
+    """Get the best available detector for a file. Never returns None."""
     from backend.api.services.calibration_store import calibration_store
     dataset_name = Path(file_path).stem
     detector = calibration_store.get_detector(dataset_name)
     if detector is None and signal is not None:
         detector = getattr(signal, "detector", None)
     if detector is None:
+        # Last resort: a detector nobody measured. PC (0.5, 0.5, 0.5), sample
+        # tilt 70, camera elevation 0 — kikuchipy's defaults, not this scan's
+        # geometry. Indexing against it produces confident-looking orientations
+        # that are simply wrong, so say so once, loudly, here at the only place
+        # that can know it happened. (Callers cannot: this function never hands
+        # back None, so a `detector is None` guard downstream is unreachable.)
         from kikuchipy.detectors import EBSDDetector
         sig_shape = signal.axes_manager.signal_shape[::-1] if signal else (60, 60)
         detector = EBSDDetector(shape=sig_shape)
+        logger.warning(
+            "No calibration for %r and the signal carries no detector — "
+            "falling back to a FABRICATED geometry (PC 0.5/0.5/0.5, sample tilt "
+            "%.1f deg, camera elevation %.1f deg). Orientations from this run "
+            "are not trustworthy; set the PC in PC Refinement first.",
+            dataset_name, float(detector.sample_tilt), float(detector.tilt),
+        )
     return detector
 
 
@@ -235,6 +242,16 @@ def run_single_indexing_job(
         sph_refine    = bool(config_opts.get("spherical_refine", True))
         sph_normed    = bool(config_opts.get("spherical_normed", True))
         sph_circmask  = int(config_opts.get("spherical_circmask", -1))
+        # The engine choice belongs on the config, like everything else the
+        # request sets, so that ONE field decides it — the same rule the
+        # interactive route follows (IndexingStartRequest.backend ->
+        # config.backend -> dispatch). The default stays "emsphinx", matching
+        # IndexingConfig and IndexingStartRequest: the GPU path needs CUDA, and
+        # repairing a selector must not also change what a batch that asks for
+        # nothing does.
+        # Not str(): a JSON null would become the string "None" and the
+        # rejection below would read like a typo the caller never made.
+        sph_backend   = config_opts.get("backend", "emsphinx")
         config = IndexingConfig(
             method=IndexingMethod.SPHERICAL,
             sht_file=phase_path,
@@ -244,73 +261,76 @@ def run_single_indexing_job(
             nregions=sph_nregions,
             circmask=sph_circmask,
             gausbckg=sph_gausbckg,
+            backend=sph_backend,
         )
         logger.info(
             "Spherical config: gausbckg=%s, bandwidth=%d, nregions=%d, refine=%s",
             sph_gausbckg, sph_bandwidth, sph_nregions, sph_refine,
         )
-        # Build det_params matching what generate_emsphinx_nml expects.
-        # Parity with backend/api/routes/indexing.py:425–479 is critical —
-        # batch used to miss the EMSphinx detector-width auto-scale, which
-        # meant spherical emitted indexed results with nonsense orientations
-        # whenever the header pixel_size * pat_width landed outside
-        # EMSphinx's accepted [5, 90] mm window.
-        pc_arr = detector.pc.flatten()[:3] if detector is not None else [0.5, 0.5, 0.5]
-        det_params = {
-            "pc_x": float(pc_arr[0]),
-            "pc_y": float(pc_arr[1]),
-            "pc_z": float(pc_arr[2]),
-            "n_rows": grid_shape[0],
-            "n_cols": grid_shape[1],
-            "pat_width": int(detector.shape[1]) if detector is not None else 640,
-            "pat_height": int(detector.shape[0]) if detector is not None else 480,
-            "pixel_size": _get_pixel_size(signal, detector),
-            "tilt": float(getattr(detector, 'tilt', 10.0)) if detector is not None else 10.0,
-            "binning": int(getattr(detector, 'binning', 1)) if detector is not None else 1,
-            "step_x": 0.1,
-            "step_y": 0.1,
-            "vendor": "Bruker",
-        }
-        # Try to get step sizes from signal
-        if signal is not None:
-            try:
-                step_sizes = [a.scale for a in signal.axes_manager.navigation_axes]
-                if step_sizes:
-                    det_params["step_x"] = float(step_sizes[0])
-                if len(step_sizes) > 1:
-                    det_params["step_y"] = float(step_sizes[1])
-            except Exception:
-                pass
-
-        # EMSphinx auto-scale (same safeguard as single-file indexing):
-        # detector width outside [5, 90] mm produces garbage orientations.
-        det_width_mm = det_params["pixel_size"] * det_params["pat_width"] / 1000.0
-        if det_width_mm < 5.0 or det_width_mm > 90.0:
-            old_px = det_params["pixel_size"]
-            det_params["pixel_size"] = (15.0 * 1000.0) / max(1, det_params["pat_width"])
-            logger.warning(
-                "Batch spherical: detector width %.1f mm out of [5, 90] "
-                "range (pixel_size=%.1f µm × %d px). Using pixel_size=%.1f µm "
-                "so EMSphinx accepts the geometry.",
-                det_width_mm, old_px, det_params["pat_width"], det_params["pixel_size"],
+        # The detector dict comes from the SAME derivation the interactive
+        # route uses — `build_spherical_det_params` — not from a second copy.
+        # The copy that used to stand here carried a comment saying parity was
+        # critical and had drifted anyway; the divergence that mattered was a
+        # missing `sample_tilt` key. `DetectorGeometry.from_params` reads
+        # `params.get("sample_tilt")`, so its absence became None and
+        # `Tier1Indexer` fell back to `master.primary_tilt_deg` — the master
+        # pattern's Monte-Carlo tilt, usually 70 deg (read off Al and Ni; not
+        # checked across the whole library) — not the tilt the scan was taken
+        # at. On LoGainNi (75.7 deg) that is a fixed 5.7 deg rotation, silent
+        # because 70 is a legal tilt. Same defect as 2026-05-22, which was only
+        # ever fixed on the interactive side.
+        #
+        # It was LATENT, never live: the selector below always chose EMSphInx
+        # (see the comment there), and the EMSphInx path has no sample-tilt
+        # field in its NML and never reads the key. The 5.7 deg is what the
+        # batch would have begun paying the moment the selector was repaired
+        # (measured 4.998 deg median on a 100 px LoGainNi ROI, L=88).
+        #
+        # Sharing the derivation also brings the map-mean PC (the batch read
+        # pixel (0,0) off a per-pixel PC map), the vendor detection that can
+        # answer "edax" (the batch probe could only answer "oxford"), and the
+        # EMSphinx [5, 90] mm detector-width guard.
+        #
+        # `pixel_size` resolves differently than the batch's old
+        # `_get_pixel_size` (70 vs 55 um on SampleB) and that does not move the
+        # geometry: `convert_pc_to_emsoft` returns xpc/ypc in detector pixels
+        # and L proportional to the pixel size, so L/pixel_size is invariant
+        # (108.267 either way, measured 2026-09-12). The number only feeds the
+        # width guard.
+        #
+        # Imported inside the function: `routes.indexing` is heavy and imports
+        # this module's siblings, and the batch already does its imports lazily.
+        # The shared derivation reads the signal's axes (scan shape, step sizes),
+        # so unlike the old inline dict it cannot work without one. Say which
+        # argument is missing rather than let it fall over inside a route module
+        # with an AttributeError on `signal.axes_manager`.
+        if signal is None:
+            raise ValueError(
+                "Spherical indexing needs the loaded EBSD signal to read the scan "
+                "geometry (shape and step sizes); run_single_indexing_job was "
+                f"called with signal=None for {Path(file_path).name!r}"
             )
-        # Detect source vendor for HDF5 compatibility
-        try:
-            import h5py
-            with h5py.File(file_path, 'r') as f:
-                for scan_key in ['1', '2', '3']:
-                    if f"{scan_key}/EBSD/Data" in f:
-                        det_params["source_vendor"] = "oxford"
-                        break
-        except Exception:
-            pass
-        # Phase 5: dispatch on backend selector. The v1 batch manager
-        # builds its own IndexingConfig from config_opts; carry the
-        # backend choice through the same way (defaults to "emsphinx"
-        # for legacy compatibility).
-        backend_choice = getattr(config, "backend", config_opts.get("backend", "emsphinx"))
+        from backend.api.routes.indexing import build_spherical_det_params
+
+        det_params = build_spherical_det_params(signal, detector, file_path)
+        # One field decides, read the same way as backend/api/routes/indexing.py.
+        # It used to read `getattr(config, "backend", config_opts.get(...))`,
+        # and `backend` is a dataclass field with a default, so it is always
+        # present and the three-argument getattr never reached its fallback:
+        # the request's choice was dead code and every batch spherical job went
+        # to EMSphInx. That is why the missing `sample_tilt` above never bit —
+        # the EMSphInx path does not read it.
+        # job_config is free-form JSON straight off the request, so a typo
+        # ("gpu", "spherical-gpu", "emsphnix") would otherwise run the OTHER
+        # engine without a word and the user would read the difference as
+        # data. The check is indexing_controller.resolve_spherical_backend --
+        # the same one the interactive route and the per-phase dispatcher use,
+        # so a value one of them refuses cannot be accepted by another. A
+        # missing key still defaults to "emsphinx" (see the config build
+        # above); a JSON null still reports as "null/missing".
+        from indexing_controller import resolve_spherical_backend
+        backend_choice = resolve_spherical_backend(config)
         if backend_choice == "spherical_gpu":
-            config.backend = "spherical_gpu"
             result = spherical_gpu_index_patterns(
                 h5_path=file_path,
                 config=config,
@@ -362,12 +382,9 @@ def run_single_indexing_job(
             phase.name = original_stem
         phase_list = PhaseList([phase])
 
-        if detector is None:
-            raise ValueError(
-                "Hough indexing requires a detector; _get_detector_for_file "
-                "returned None for this file — set PC/detector in PC Refinement first"
-            )
-
+        # No `detector is None` guard: _get_detector_for_file never returns
+        # None — it builds a default EBSDDetector and warns that the geometry
+        # is fabricated. See its docstring.
         result = hough_index_patterns(
             signal=signal,
             phase_list=phase_list,

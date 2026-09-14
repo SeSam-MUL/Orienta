@@ -559,6 +559,8 @@ async def get_minimap():
     Priority:
     1. Band Contrast (single dataset read from /N/EBSD/Data/Band Contrast)
     2. First electron image
+    2.5. Computed FFT image quality (small scans <=20000 px only; source
+         "image_quality") when no native BC and no electron image exist
     3. Downsampled mean of sampled patterns (capped at 256 samples)
     """
     if not is_open():
@@ -586,10 +588,21 @@ async def get_minimap():
                 "shape": list(data.shape),
             }
 
+    # Priority 2.5: computed FFT image quality (only for small scans — loading
+    # the whole file is heavy; large files already have BC or electron images).
+    total = n_rows * n_cols
+    if total <= 20000:
+        from backend.api.services.pattern_quality import image_quality_from_file
+        iq = image_quality_from_file(get_current_path(), n_rows, n_cols)
+        if iq is not None and iq.size == total:
+            iq2d = np.asarray(iq, dtype=float).reshape(n_rows, n_cols)
+            mn, mx = float(iq2d.min()), float(iq2d.max())
+            iq_u8 = ((iq2d - mn) / (mx - mn) * 255).astype(np.uint8) if mx > mn else np.zeros((n_rows, n_cols), np.uint8)
+            return {"image": array_to_base64_raw(iq_u8), "source": "image_quality", "shape": [n_rows, n_cols]}
+
     # Priority 3 (fallback): sampled mean intensity, capped at 256 samples
     # for responsiveness on files without BC and without electron images
     # (synthetic data, older files).
-    total = n_rows * n_cols
     target_samples = min(total, 256)
     step = max(1, int(np.ceil((total / target_samples) ** 0.5)))
     minimap = np.zeros((n_rows, n_cols), dtype=np.float32)

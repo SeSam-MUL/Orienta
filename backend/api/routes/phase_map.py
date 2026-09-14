@@ -1261,6 +1261,59 @@ def _compute_layer_rgba(
         rgba[..., 3] = np.where(np.isfinite(arr), 255, 0).astype(np.uint8)
         return rgba
 
+    # Provenance of the grain-based phase assignment — which pixels the
+    # automation DECIDED, and which it refused to judge. Not which pixels
+    # changed: on a rim repair the step re-asserts the grain's existing phase
+    # and only the rim moves, so code 1 covers the whole grain while far fewer
+    # pixels differ (measured on a real run: 64 marked, 28 changed). The
+    # honest count of changes is the route's own n_pixels_changed. Data comes
+    # from POST /api/indexing/grain-phase-assign, which writes
+    # metadata["assignment_source"] with the codes in that route's
+    # ASSIGNMENT_SOURCE dict (0 kept, 1 assigned by the grain step,
+    # 2 grain left alone because the chemistry could not decide).
+    #
+    # Numbers read off this layer end up in reports, so every disagreement
+    # between the array and the map is refused rather than rendered: a
+    # provenance map that points at the wrong pixels, or quietly turns an
+    # unknown code into "unchanged", is worse than no provenance map.
+    if kind == "assignment_source":
+        result = get_last_indexing_result()
+        if result is None:
+            raise HTTPException(status_code=404,
+                                detail={"error": "no active indexing result"})
+        src = (getattr(result, "metadata", None) or {}).get("assignment_source")
+        if src is None:
+            raise HTTPException(
+                status_code=400,
+                detail="This result has no assignment provenance — it was not "
+                       "produced by the grain-based phase assignment.")
+        n_rows, n_cols = result.original_shape
+        arr = np.asarray(src)
+        # NOT reshape(): the assignment step builds this array on the same
+        # (n_rows, n_cols) grid as the map, so a different shape means the two
+        # do not belong together. Reshaping a transposed array succeeds and
+        # scrambles every pixel — on a square map it is even invisible.
+        if arr.shape != (int(n_rows), int(n_cols)):
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Assignment provenance has shape {tuple(arr.shape)}, "
+                        f"but this result's map is ({int(n_rows)}, {int(n_cols)}). "
+                        "Refusing to reshape it — a provenance array that does "
+                        "not already match the map cannot say which pixel was "
+                        "touched."))
+        unknown = sorted({int(v) for v in np.unique(arr)} - {0, 1, 2})
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=(f"Assignment provenance holds unknown code(s) {unknown}. "
+                        "The contract is 0 = kept, 1 = assigned by the grain "
+                        "step, 2 = left alone because the chemistry could not "
+                        "decide."))
+        rgba = np.zeros((int(n_rows), int(n_cols), 4), dtype=np.uint8)
+        rgba[arr == 1] = (139, 233, 253, 255)   # cyan   — grain-assigned
+        rgba[arr == 2] = (255, 184, 108, 255)   # orange — left alone
+        return rgba                             # code 0 stays alpha=0
+
     valid_kinds = {"phase", "ipf-x", "ipf-y", "ipf-z", "bc", "ci", "uncertainty",
                    "ci-threshold", "grain-boundaries"}
     if kind not in valid_kinds and not kind.startswith("ci_"):

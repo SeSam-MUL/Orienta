@@ -53,3 +53,22 @@ export function formatRoughDuration(seconds) {
   const hours = minutes / 60;
   return hours < 10 ? `${hours.toFixed(1)} h` : `${Math.round(hours)} h`;
 }
+
+/**
+ * Does this spherical run land on the torch CPU fallback?
+ *
+ * One rule for both callers — the Indexing page and the Batch wizard — because
+ * the Batch wizard defaults to the GPU engine and would otherwise run a whole
+ * folder on the CPU with no notice and no confirmation. EMSphInx is a separate
+ * CPU program and is never "the fallback", so only `spherical_gpu` counts.
+ *
+ * `runtime` is the /api/indexing/gpu-status payload; null means "not asked
+ * yet", and an unknown answer must not raise a false alarm, so it returns
+ * false.
+ */
+export function isSphericalCpuFallback({ method, backend, runtime }) {
+  return method === 'spherical'
+    && backend === 'spherical_gpu'
+    && runtime != null
+    && runtime.device !== 'cuda';
+}

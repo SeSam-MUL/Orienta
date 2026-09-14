@@ -139,6 +139,23 @@ def read_native_band_contrast(
     return None
 
 
+def remap_hex_channel(source_file: str, values: np.ndarray) -> Optional[np.ndarray]:
+    """Resample a per-point channel of an EDAX hex scan onto the square grid.
+
+    Returns ``None`` for anything that is not a hexagonally sampled EDAX
+    file, so square files keep their existing path untouched.
+    """
+    try:
+        import edax_hex
+
+        if not edax_hex.is_edax_hex_file(source_file):
+            return None
+        return edax_hex.remap_point_values(source_file, values)
+    except Exception:
+        logger.debug("hex remap failed for %s", source_file, exc_info=True)
+        return None
+
+
 def read_native_image_quality(
     source_file: Optional[str],
     n_rows: Optional[int] = None,
@@ -170,6 +187,15 @@ def read_native_image_quality(
                 except Exception:
                     continue
                 if iq.ndim == 1:
+                    # A hex scan stores one entry per padded grid slot, so
+                    # nRows*nColumns matches and the plain reshape below would
+                    # succeed — with the hex layout, silently disagreeing with
+                    # the square map the loader produced. Remap first.
+                    square = remap_hex_channel(source_file, iq)
+                    if square is not None:
+                        return _cut_to_active_crop(
+                            square.astype(np.float64), source_file,
+                            n_rows, n_cols)
                     r = c = None
                     try:
                         hdr = grp["EBSD/Header"]
@@ -207,6 +233,30 @@ def _prop_bc(xmap, n_rows, n_cols) -> Optional[np.ndarray]:
 def compute_image_quality(signal) -> np.ndarray:
     """kikuchipy FFT image quality (0..1). Heavy (FFT per pattern)."""
     return np.asarray(signal.get_image_quality(), dtype=np.float64)
+
+
+def image_quality_from_file(source_file, n_rows=None, n_cols=None):
+    """Best-effort FFT image quality (0..1) computed by LOADING the patterns
+    from ``source_file`` via the app's safe loader. Returns a 2D array
+    (n_rows,n_cols) when the shape is known and matches, else a 1D/native-shaped
+    array, or ``None`` on ANY failure.
+
+    HEAVY: loads the whole signal + runs an FFT per pattern. This is an opt-in
+    SLOW path (export column / minimap last-resort), never a hot path. Callers
+    must treat None as 'not available' and fall back honestly (zeros / sampled).
+    """
+    if not source_file:
+        return None
+    try:
+        from safe_loader import load_ebsd_safe
+        sig = load_ebsd_safe(source_file, verbose=False)
+        iq = np.asarray(compute_image_quality(sig), dtype=np.float64)
+        if n_rows and n_cols and iq.size == n_rows * n_cols:
+            iq = iq.reshape(n_rows, n_cols)
+        return iq
+    except Exception:
+        logger.debug("image_quality_from_file failed for %s", source_file, exc_info=True)
+        return None
 
 
 def get_quality_map(

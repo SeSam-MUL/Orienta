@@ -16,7 +16,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 import RegionInspector, {
-  enrichmentBarPct, enrichmentKind,
+  enrichmentBarPct, enrichmentKind, enrichmentThresholds, ENRICHED_AT_FALLBACK,
 } from './RegionInspector';
 
 const DETAIL = {
@@ -66,14 +66,38 @@ describe('enrichmentBarPct', () => {
 });
 
 describe('enrichmentKind', () => {
-  it('uses the same 1.3x the classifier gates on', () => {
-    expect(enrichmentKind(1.3)).toBe('enriched');
-    expect(enrichmentKind(1.29)).toBe('flat');
+  // The threshold is the BACKEND's _ENRICHMENT, sent on the region detail as
+  // `enrichment_factor`. A literal here is how the panel and the classifier
+  // drifted apart once already: the constant was re-measured 1.30 -> 1.15 on
+  // 2026-09-12 and the copy on this side stayed behind, so an element
+  // enriched 1.2x was painted "flat" while the classifier counted it present.
+  it('gates on the factor the backend sent, whatever it currently is', () => {
+    const sent = { enrichment_factor: 1.15 };
+    const th = enrichmentThresholds(sent);
+    expect(th.enriched).toBe(1.15);
+    expect(enrichmentKind(1.15, th)).toBe('enriched');
+    expect(enrichmentKind(1.14, th)).toBe('flat');
+
+    // ... and it follows a different one without touching this file
+    const moved = enrichmentThresholds({ enrichment_factor: 1.3 });
+    expect(enrichmentKind(1.2, moved)).toBe('flat');
+    expect(enrichmentKind(1.2, th)).toBe('enriched');
+  });
+
+  it('falls back only when the response carries no factor', () => {
+    for (const detail of [null, {}, { enrichment_factor: 'x' },
+      { enrichment_factor: 0.9 }]) {
+      expect(enrichmentThresholds(detail).enriched)
+        .toBe(ENRICHED_AT_FALLBACK);
+    }
   });
 
   it('calls the reciprocal depleted', () => {
-    expect(enrichmentKind(0.5)).toBe('depleted');
-    expect(enrichmentKind(0.9)).toBe('flat');
+    const th = enrichmentThresholds({ enrichment_factor: 1.15 });
+    expect(th.depleted).toBeCloseTo(1 / 1.15, 2);      // 0.87
+    expect(enrichmentKind(0.5, th)).toBe('depleted');
+    // just inside the band, so it must NOT be called depleted
+    expect(enrichmentKind(0.9, th)).toBe('flat');
   });
 
   it('does not guess when there is no background to compare against', () => {

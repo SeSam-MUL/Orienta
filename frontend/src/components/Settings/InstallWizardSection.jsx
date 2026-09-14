@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { installApi } from '../../services/api';
+import { installOutcome } from './installOutcome';
 import {
   colors, alpha, spacing,
   Button, Input, GroupBox, Label,
@@ -238,9 +239,10 @@ function Step1Wsl({ wslStatus, loading, onRefresh }) {
     setInstalling(true);
     setInstallMsg(null);
     try {
-      await installApi.installWsl(selectedDistro, isCorrupted, isCorrupted ? distroName : '');
-      setInstallMsg({ ok: true, text: t('settings:install.step1.installStarted') });
-      setTimeout(onRefresh, 5000);
+      const res = await installApi.installWsl(selectedDistro, isCorrupted, isCorrupted ? distroName : '');
+      const outcome = installOutcome(res?.data, t);
+      setInstallMsg({ ok: outcome.ok, text: outcome.text });
+      if (outcome.refresh) setTimeout(onRefresh, 5000);
     } catch (err) {
       setInstallMsg({ ok: false, text: err?.response?.data?.detail ?? t('settings:install.step1.installFailed') });
     } finally {
@@ -353,6 +355,9 @@ function Step2User({ wslStatus, onRefresh }) {
   const isCorrupted = wslStatus?.corrupted === true;
   const hasUser = wslStatus?.has_user === true;
   const existingUser = wslStatus?.username ?? '';
+  // Every step addresses the distro the wizard reported — otherwise the user
+  // is created in the default distro and the password checked in another.
+  const distroName = wslStatus?.distro ?? '';
 
   const stepAvailable = isInstalled && !isCorrupted;
   const needsUser = stepAvailable && !hasUser;
@@ -382,7 +387,7 @@ function Step2User({ wslStatus, onRefresh }) {
     setCreating(true);
     setCreateMsg(null);
     try {
-      await installApi.createUser(username, password);
+      await installApi.createUser(username, password, distroName);
       setCreateMsg({ ok: true, text: t('settings:install.step2.userCreated') });
       setUsername('');
       setPassword('');
@@ -399,7 +404,7 @@ function Step2User({ wslStatus, onRefresh }) {
     setResetting(true);
     setResetMsg(null);
     try {
-      await installApi.resetPassword(existingUser, resetPw);
+      await installApi.resetPassword(existingUser, resetPw, distroName);
       setResetMsg({ ok: true, text: t('settings:install.step2.passwordReset') });
       setResetPw('');
       setResetConfirm('');
@@ -590,9 +595,11 @@ function Step3Emsoft({ wslStatus }) {
     setFinalStatus(null);
     finalStatusRef.current = null;
 
-    // Validate password first
+    // Validate password first — against the distro the wizard reported, so a
+    // machine with several distros checks (and later installs into) the same one.
+    const distroName = wslStatus?.distro ?? '';
     try {
-      await installApi.validatePassword(password);
+      await installApi.validatePassword(password, distroName);
     } catch (err) {
       setFinalStatus({ ok: false, text: err?.response?.data?.detail ?? t('settings:install.step3.passwordValidationFailed') });
       setInstalling(false);
@@ -608,7 +615,7 @@ function Step3Emsoft({ wslStatus }) {
     wsRef.current = ws;
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ password }));
+      ws.send(JSON.stringify({ password, distro: distroName }));
     };
 
     ws.onmessage = (event) => {

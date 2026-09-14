@@ -87,9 +87,12 @@ def _load_cif(p: Path):
             else parser.get_structures
         )
         structs = get(primitive=False)
-    if not structs:
-        raise ValueError(f"no structure could be parsed from CIF {p.name!r}")
-    return structs[0]
+    # One guard for every place that reads a CIF; see
+    # cif_phase_library.one_structure. It raises ValueError both for "no
+    # structure" and for "the blocks disagree", which is the contract this
+    # function already had -- the caller just gets a message that says which.
+    from backend.api.services.cif_phase_library import one_structure
+    return one_structure(structs, f"CIF {p.name!r}")
 
 
 def _load_xtal(p: Path):

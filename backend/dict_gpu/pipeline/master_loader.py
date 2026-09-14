@@ -39,6 +39,10 @@ class MasterPayload:
     dict_patterns: np.ndarray | None
     dict_rotations: object | None
     phase: object | None = None
+    #: Set instead of ``dict_patterns`` when the entries were left on disk (see
+    #: :func:`open_streamed_dict`). The indexer reads blocks from it; nothing
+    #: else in the payload changes.
+    dict_source: object | None = None
 
 
 def _try_load_as_master(path: Path):
@@ -166,6 +170,123 @@ def _try_load_dict_via_kikuchipy(path: Path):
             phase = None
 
     return patterns, rotations, phase
+
+
+def _close_lazy(signal) -> None:
+    """Release the file handle a lazily loaded signal holds, if it has one.
+
+    ``open_streamed_dict`` loads a dictionary lazily for its metadata only —
+    rotations and phase — but the signal's dask array keeps a read-only handle
+    on the file. Left to the garbage collector that handle outlives the call,
+    and on Windows it locks the file: a test that writes to the dictionary
+    after a failed run raised ``WinError 32`` until this was added.
+    """
+    close_file = getattr(signal, "close_file", None)
+    if callable(close_file):
+        try:
+            close_file()
+            return
+        except Exception:
+            pass
+    # hyperspy versions without close_file: reach the h5py File through the
+    # dask graph and shut it, rather than hoping the collector gets to it.
+    try:
+        import h5py
+        data = getattr(signal, "data", None)
+        for value in getattr(getattr(data, "dask", None), "values", lambda: [])():
+            for item in (value if isinstance(value, tuple) else (value,)):
+                if isinstance(item, h5py.Dataset):
+                    item.file.close()
+                    return
+    except Exception:
+        pass
+
+
+def open_streamed_dict(path: str | Path) -> Optional[MasterPayload]:
+    """Open a pre-generated dictionary without reading its patterns.
+
+    Returns a payload whose ``dict_source`` yields blocks straight from the
+    file, or ``None`` when the file is not a dictionary the indexer can stream
+    (a master pattern, a cache with no locatable patterns dataset, a file with
+    several candidates). The caller then falls back to
+    :func:`load_master_or_dict`, which reads the whole thing.
+
+    Only the metadata is loaded here — rotations, phase, shapes — which is what
+    makes this worth doing: the user's largest dictionary is 24 GB, and this
+    path never puts a byte of it in host RAM either.
+    """
+    from backend.dict_gpu.pipeline.dict_source import (
+        H5DictSource, find_pattern_dataset,
+    )
+
+    p = Path(path)
+    if not p.is_file():
+        return None
+    dataset_key = find_pattern_dataset(p)
+    if dataset_key is None:
+        return None
+
+    try:
+        import kikuchipy as kp
+    except ImportError:
+        return None
+    try:
+        sig = kp.load(str(p), lazy=True)
+    except Exception:
+        return None
+    # A master pattern still has to be projected; it is not a dictionary.
+    if hasattr(sig, "projection") or not hasattr(sig, "data"):
+        _close_lazy(sig)
+        return None
+    xmap = getattr(sig, "xmap", None)
+    rotations = getattr(xmap, "rotations", None) if xmap is not None else None
+    if rotations is None:
+        _close_lazy(sig)
+        return None
+
+    phase = None
+    try:
+        phases = xmap.phases_in_data
+        ids = list(phases.ids)
+        if len(ids) >= 1:
+            phase = phases[ids[0]]
+    except Exception:
+        try:
+            ids = list(xmap.phases.ids)
+            if len(ids) >= 1:
+                phase = xmap.phases[ids[0]]
+        except Exception:
+            phase = None
+
+    # Detach the rotations from the file and let the lazy signal's handle go.
+    # The signal was only ever wanted for its metadata — its dask array holds
+    # a second, read-only handle on the same file, and leaving that to the
+    # garbage collector keeps the file locked on Windows against being
+    # regenerated. Measured: without this, writing to the file after a failed
+    # run raises WinError 32.
+    from orix.quaternion import Rotation
+    rotations = Rotation(np.asarray(rotations.data, dtype=np.float64))
+    _close_lazy(sig)
+    del sig, xmap
+
+    try:
+        source = H5DictSource(p, dataset_key)
+    except Exception:
+        return None
+    if rotations.size != source.n_entries:
+        # Rotations and patterns must line up entry for entry, or every
+        # orientation this run reports is the wrong one.
+        source.close()
+        return None
+
+    return MasterPayload(
+        kind="dict_cache",
+        master=None,
+        dict_patterns=None,
+        dict_rotations=rotations,
+        phase=phase,
+        dict_source=source,
+    )
 
 
 def load_master_or_dict(path: str | Path) -> MasterPayload:

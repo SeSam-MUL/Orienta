@@ -28,10 +28,33 @@ import numpy as np
 from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
 
 # Mirrors chemistry_fit's constants so the two cannot drift apart silently.
-# See crystal_hint_phase_fit.py:575-620 for their calibration history.
+# Read their calibration history there -- it is the authoritative copy, and
+# tests/test_eds_scorer_constants.py pins the two together.
+#
+# 2026-09-12: _ABSENT 0.012 -> 0.020 and _PRESENT_SIG 0.05 -> 0.02, because
+# both are ABSOLUTE At.% floors and the k-factors were corrected that day.
+# Swept on this module's own consumer as well as on the prior's:
+# tasks/eds_prior_audit/10_phase_map_constants.py runs the five numbers
+# tests/test_eds_phase_map_accuracy.py asserts on, over the pair, and the
+# phase map does not move ON SampleB -- Fe-bad 0.611 %, particle 95.43 %,
+# Si 100 %, matrix 100 %, cluster coherence 0.960, r(BC) -0.748, identical
+# to three decimals at every pair tried.
+#
+# THAT IS ONE FILE. On the 7050 Cu-bearing scan
+# (Test_data/batch_test/... Arbeitsbereich 1) the per-pixel classifier moves
+# 392 of 5304 pixels, 7.4 %, and the median best score falls 0.921 -> 0.875
+# (tasks/eds_prior_audit/18_mgcu2_and_7050.py). There is no reference on that
+# file, so that is an UNASSESSED behaviour change, not a measured gain: the
+# direction is mixed (Al7FeCu2 -> Al and Al -> Al7FeCu2 both appear) and the
+# falling score is expected, since a lower unexplained floor charges every
+# phase for more elements. The map is gated by the ENRICHMENT rule
+# below, which asks the same question relative to the map's own
+# background; these absolute floors are the scalar scorer's only gate and
+# so decide the indexing prior alone (there: alpha's per-pixel top-1 rate
+# 43.84 -> 89.37 %).
 _MAJOR_REQ = 0.05
-_ABSENT = 0.012
-_PRESENT_SIG = 0.05
+_ABSENT = 0.020
+_PRESENT_SIG = 0.02
 
 # Default relative requirement for a defining element: a phase is vetoed
 # where a defining element is measured below this fraction of its nominal
@@ -125,6 +148,7 @@ def score_phase_vectorised(
     phase_at_pct: Dict[str, float],
     rel_req: float = 0.0,
     no_data_score: float = 1.0,
+    unmeasured=None,
 ) -> np.ndarray:
     """Score one phase against every pixel. Returns float32 in [0, 1].
 
@@ -149,14 +173,27 @@ def score_phase_vectorised(
     n_px = len(next(iter(at_pct_per_element.values())))
 
     # Clean the phase side exactly as chemistry_fit._clean does.
+    # An element whose window could not be priced is UNMEASURED, not zero.
+    # Dropping it from both sides (and renormalising the phase over what is
+    # left) is what stops the gates below from ruling out precisely the
+    # phases that element identifies. See chemistry_fit's `unmeasured`.
+    blind = frozenset(unmeasured or ())
     q_raw = {el: max(0.0, float(v)) for el, v in (phase_at_pct or {}).items()
-             if el not in _CHEM_IGNORE and v is not None}
+             if el not in _CHEM_IGNORE and el not in blind and v is not None}
     q_tot = sum(q_raw.values())
     if q_tot <= 1e-9:
-        return np.ones(n_px, dtype=np.float32)  # fail-soft, as chemistry_fit
+        # Nothing left to compare against -- an empty phase composition, or
+        # one whose every element is unmeasured. That is the SAME state as a
+        # pixel with no chemistry, so it gets the same answer the caller
+        # asked for: 1.0 keeps the prior's multiplier neutral, and a
+        # classifier passing 0.0 gets something `min_score` can filter. A
+        # flat 1.0 here is not neutral in an argmax, it is a win.
+        return np.full(n_px, float(no_data_score), dtype=np.float32)
     q = {el: v / q_tot for el, v in q_raw.items()}
 
-    els, p, total = _renormalise(at_pct_per_element)
+    els, p, total = _renormalise(
+        {el: v for el, v in at_pct_per_element.items() if el not in blind}
+        if blind else at_pct_per_element)
     if not els:
         return np.ones(n_px, dtype=np.float32)
     p_of = {el: p[i] for i, el in enumerate(els)}
@@ -249,25 +286,50 @@ _PRESENCE_FLOOR = _ABSENT
 #   SampleB  Fe 2.7x   Si 4.4x
 #   7050_R   Cu 8.4x   Mg 4.0x
 #
-# Calibrated on SampleB 2026-08-20. Columns: share of pixels holding an
-# Fe-phase with <25 % of its required Fe, and share of the ground-truth
-# particle (Fe > 4 at%) still assigned an Fe-bearing phase:
+# This is a RATIO, so it looks scale-free -- but it is not quite. The
+# standardless k-factors are element-wise, and every pixel is renormalised to
+# 100 %, so a particle/background ratio moves when they change. It did:
+# correcting them on 2026-09-12 took SampleB's particle-over-background Fe
+# from 186.1 to 173.1 and moved this whole sweep down by about 0.12.
 #
-#   enrich   Fe-bad   particle
-#   1.20     1.74 %    98.8 %
-#   1.25     0.76 %    98.9 %
-#   1.30     0.27 %    99.0 %   <-- chosen, middle of the plateau
-#   1.35     0.13 %    99.1 %
-#   1.40     0.11 %    99.3 %
-#   1.45     0.06 %    95.4 %   plateau ends
-#   1.50     0.04 %    88.9 %
-#   1.55     0.00 %    81.6 %   the particle is being eaten
+# Calibrated on SampleB 2026-08-20, RE-MEASURED 2026-09-12 on the corrected
+# at% scale (tasks/eds_quant_audit/08_enrichment_sweep.py). Columns: share of
+# pixels holding an Fe-phase with <25 % of its required Fe, and share of the
+# ground-truth Fe particle still assigned an Fe-bearing phase.
 #
-# 1.30 sits in the middle of the safe band rather than at the best single
-# value: 1.40 scores marginally better and is 0.05 from a cliff that costs
-# 18 points of particle retention. The predecessor constant was placed at
-# exactly such an edge and had to be corrected.
-_ENRICHMENT = 1.3
+# The ground truth is now the phase's nominal Fe (11.6 at%), not the old
+# 4 at% literal: on the corrected scale 4 at% no longer selects the particle
+# but the particle plus its interaction-volume halo (6941 px against 3830).
+#
+#   enrich   Fe-bad   particle          2026-08-20 (old scale, Fe > 4 at%)
+#   1.00     0.05 %   100.0 %
+#   1.05     0.00 %   100.0 %   band starts
+#   1.15     0.00 %   100.0 %   <-- chosen, middle of the band
+#   1.20     0.00 %   100.0 %           1.20   1.74 %   98.8 %
+#   1.25     0.00 %   100.0 %           1.25   0.76 %   98.9 %
+#   1.30     0.00 %   100.0 %   band ends   1.30   0.27 %   99.0 %  <-- was
+#   1.325    0.00 %    98.6 %           1.35   0.13 %   99.1 %
+#   1.35     0.00 %    95.4 %           1.40   0.11 %   99.3 %
+#   1.40     0.00 %    86.9 %           1.45   0.06 %   95.4 %  band ended
+#   1.45     0.00 %    79.9 %           1.50   0.04 %   88.9 %
+#   1.55     0.00 %    65.8 %           1.55   0.00 %   81.6 %
+#
+# Two things changed. The Fe-bad column is now 0.00 % everywhere above 1.00 --
+# the corrected chemistry alone removes the mis-assignment this constant was
+# introduced to fight. And the safe band moved from 1.20..1.45 to 1.05..1.30,
+# which put the old 1.30 exactly on the cliff the comment below warns about:
+# at 1.35 it already costs 4.6 points of particle retention and at 1.40, 13.
+#
+# 1.15 sits in the middle of the safe band rather than at the best single
+# value -- the same relative position inside the band that 1.30 held in the
+# old one. The predecessor constant was placed at exactly such an edge and had
+# to be corrected; 1.30 had drifted onto one again without moving.
+#
+# Bias is deliberately low rather than high: at 1.00 the cost is 0.05 % of
+# pixels mis-assigned, at 1.40 it is 13 points of a real particle eaten.
+#
+# If the quantification scale moves again, re-run script 08.
+_ENRICHMENT = 1.15
 
 
 def background_levels(
@@ -314,6 +376,7 @@ def score_phase_ratio(
     matrix_element: Optional[str] = None,
     no_data_score: float = 1.0,
     background: Optional[Dict[str, float]] = None,
+    unmeasured=None,
 ) -> np.ndarray:
     """Score one phase against every pixel using non-matrix element ratios.
 
@@ -336,14 +399,23 @@ def score_phase_ratio(
         return np.zeros(0, dtype=np.float32)
     n_px = len(next(iter(at_pct_per_element.values())))
 
+    # An element whose window could not be priced is UNMEASURED, not zero.
+    # Dropping it from both sides (and renormalising the phase over what is
+    # left) is what stops the gates below from ruling out precisely the
+    # phases that element identifies. See chemistry_fit's `unmeasured`.
+    blind = frozenset(unmeasured or ())
     q_raw = {el: max(0.0, float(v)) for el, v in (phase_at_pct or {}).items()
-             if el not in _CHEM_IGNORE and v is not None}
+             if el not in _CHEM_IGNORE and el not in blind and v is not None}
     q_tot = sum(q_raw.values())
     if q_tot <= 1e-9:
-        return np.ones(n_px, dtype=np.float32)
+        # See score_phase_vectorised: neutral for the prior, filterable for
+        # a classifier, never a free win.
+        return np.full(n_px, float(no_data_score), dtype=np.float32)
     q = {el: v / q_tot for el, v in q_raw.items()}
 
-    els, p, total = _renormalise(at_pct_per_element)
+    els, p, total = _renormalise(
+        {el: v for el, v in at_pct_per_element.items() if el not in blind}
+        if blind else at_pct_per_element)
     if not els:
         return np.ones(n_px, dtype=np.float32)
     p_of = {el: p[i] for i, el in enumerate(els)}
@@ -370,6 +442,26 @@ def score_phase_ratio(
     # Such callers must pass the map-level background explicitly; when they
     # do not, the enrichment gate is skipped rather than applied to
     # nonsense. The absolute presence gate still applies.
+    #
+    # REFUTED, 2026-09-12 -- do not retry without a new argument. The obvious
+    # repair for the 2026-08-25 Mg2Si report (a phase refused on every pixel
+    # of a map made of it, characterised in
+    # tests/test_eds_suggest_no_match_reason.py) is 'a bar the map's own
+    # MAXIMUM cannot reach is not a bar, so stand the gate down'. It separates
+    # the Mg2Si map from both real datasets cleanly
+    # (tasks/eds_prior_audit/15_vacuous_gate.py: 0 pixels clear either bar
+    # there, 18 575 to 25 031 clear every bar here) -- and it is still wrong,
+    # because 'this map has no contrast in that element' covers TWO opposite
+    # situations. The other one is
+    # test_enrichment_gate_rejects_background_level_signal below: an aluminium
+    # matrix carrying a flat Mg 8 / Cu 2 at% of solute has no contrast either,
+    # its Mg:Cu ratio is exactly MgCu's, and with the gate stood down it reads
+    # as MgCu at 0.999 on every pixel -- the precise failure this gate exists
+    # to prevent. Telling the two apart needs to compare the map's BULK
+    # composition with the phase, and that does not separate them either:
+    # Mg2Si against its map scores 0.967 and alpha-Al(Fe,Mn)Si against
+    # SampleB's bulk scores 0.938, so any threshold that admits the first
+    # admits the second.
     if background is None:
         background = (background_levels(at_pct_per_element)
                       if n_px > 1 else {})

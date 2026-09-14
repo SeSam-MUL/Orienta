@@ -16,16 +16,9 @@ indexing coverage. **To use them:** open *Crystal Database → Load Files* (or c
 them into your `Database/CIF_Library/`), then generate the `.xtal` / master / SHT
 as needed for Hough / Dictionary / Spherical indexing.
 
-## EBSD datasets — `patterns/` (downloaded separately)
-The example EBSD measurements are large (~800 MB total), so they are **not** in
-the source repository. Download them and place the files in
-`sample_data/patterns/` (see [`patterns/README.md`](patterns/README.md)):
-
-- **GitHub:** the latest **Release** of this repository → *Assets*.
-- **Zenodo:** the archived release, DOI
-  [10.5281/zenodo.21021937](https://doi.org/10.5281/zenodo.21021937)
-  (concept DOI — always resolves to the newest version)
-  (`sample_data/patterns/` inside the archive).
+## EBSD datasets — `patterns/` (Zenodo archive only)
+The example EBSD measurements are large, so they are included in the **Zenodo
+archive**, not in the source-code repository:
 
 | File | Sample | Notes |
 |------|--------|-------|

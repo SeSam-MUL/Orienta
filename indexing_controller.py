@@ -524,6 +524,47 @@ class IndexingCancelled(Exception):
     pass
 
 
+#: The spherical backends there are. One tuple, so a value the batch route
+#: refuses cannot still be accepted by a dispatcher further in.
+SPHERICAL_BACKENDS = ("emsphinx", "spherical_gpu")
+
+
+_BACKEND_UNSET = object()
+
+
+def resolve_spherical_backend(config, default: str = "emsphinx") -> str:
+    """The spherical backend named by *config*, or raise.
+
+    Every dispatch site wrote ``if backend == "spherical_gpu": ... else:
+    EMSphInx``, so a typo, a stale preset or a newer frontend value silently
+    selected the WSL CPU path -- a run that takes hours instead of minutes,
+    with nothing in the log saying the choice was discarded. A selector with
+    exactly two legal values should say when it got a third.
+
+    ABSENT and EMPTY are different things, and the distinction is the whole
+    reason this is a sentinel and not ``or default``. No ``backend`` attribute
+    at all means the caller never had an opinion -- older configs, test
+    doubles -- and takes the default. A ``backend`` that IS there but is
+    ``None`` or ``""`` is something a caller SENT: batch job_config is
+    free-form JSON off the request, and a JSON ``null`` reaching the engine
+    dispatch is a bug in whatever produced it, not a request for EMSphInx.
+    It is reported as "null/missing" because that is how it reads on the wire.
+    """
+    choice = getattr(config, "backend", _BACKEND_UNSET)
+    if choice is _BACKEND_UNSET:
+        choice = default
+    if choice not in SPHERICAL_BACKENDS:
+        given = "null/missing" if choice is None else repr(choice)
+        raise ValueError(
+            f"Unknown spherical backend {given}. Valid values are "
+            f"{', '.join(repr(b) for b in SPHERICAL_BACKENDS)}. (A backend "
+            f"that is not recognised used to fall through to EMSphInx on the "
+            f"CPU, which is far slower and was never what the caller asked "
+            f"for.)"
+        )
+    return choice
+
+
 # Backward-compatible alias used by the new Dict-GPU / Spherical-GPU
 # cancel paths. Pointing it at the existing class means the route's
 # ``except IndexingCancelled`` block catches every cancel uniformly.
@@ -898,6 +939,39 @@ def _best_match_only(xmap):
     )
 
 
+def _recover_dict_source_path(sig) -> Optional[str]:
+    """Best-effort path of the .h5 a dictionary signal was loaded from.
+
+    kikuchipy records it in ``tmp_parameters`` but strips the extension, and
+    dictionary filenames like ``..._2.0deg`` contain a dot that would break
+    ``Path.with_suffix``, so the extension is appended as a plain string.
+    Same recovery the GPU path does inline (backend/dict_gpu/pipeline/
+    indexer.py) — the point is that BOTH paths leave a usable ``dict_path``
+    behind, so the pattern-match dialog can read one pattern from disk instead
+    of the run having to keep the whole multi-GB signal alive.
+
+    Returns None for a dictionary that was never on disk (e.g. one just
+    projected from a master), which is the honest answer: there is no file to
+    read it back from.
+    """
+    try:
+        tp = getattr(sig, "tmp_parameters", None)
+        if tp is None:
+            return None
+        folder = getattr(tp, "folder", "")
+        filename = getattr(tp, "filename", "")
+        if not filename:
+            return None
+        base = Path(folder or ".") / filename
+        for ext in ("", ".h5", ".hdf5"):
+            cand = Path(str(base) + ext)
+            if cand.is_file():
+                return str(cand.resolve())
+    except Exception:  # pragma: no cover — best effort only
+        logger.debug("could not recover dictionary source path", exc_info=True)
+    return None
+
+
 def dictionary_index_patterns(
     signal,
     dictionary,
@@ -937,6 +1011,12 @@ def dictionary_index_patterns(
     # User may have cancelled in the gap between submit and worker pickup —
     # fail fast before we touch the GPU.
     _check_cancel()
+
+    # Capture the source file NOW: further down a raw master gets projected
+    # into a dictionary and `dictionary` is rebound to a signal that was never
+    # on disk. This is the path the pattern-match dialog reads a single
+    # pattern from when nobody is holding the signal any more.
+    _dict_source_path = _recover_dict_source_path(dictionary)
 
     # Dictionary indexing needs far better patterns than Hough or spherical:
     # it correlates whole patterns pixel-by-pixel, so it cannot recover bands
@@ -1116,6 +1196,16 @@ def dictionary_index_patterns(
         _check_cancel()
         dictionary = _dictionary_signal_from_master(
             dictionary, det_for_dict, config.angular_step_deg, progress=_progress)
+        # The path captured above names the MASTER file we were handed, and
+        # what we have now is a dictionary projected from it in memory, which
+        # was never on disk. Leaving the master path under 'dict_path' would
+        # tell the pattern-match dialog to read a master's Lambert hemispheres
+        # as if they were detector patterns -- the dialog guards against that
+        # for a held OBJECT (tools/pattern_comparison checks for
+        # EBSDMasterPattern) but it cannot see the type behind a path, and a
+        # caller that drops the object in favour of the path would hand it
+        # exactly that. There is no file for this dictionary; say so.
+        _dict_source_path = None
         _check_cancel()
 
     old_stdout = sys.stdout
@@ -1213,6 +1303,14 @@ def dictionary_index_patterns(
         metadata={
             'dictionary': dictionary,   # retained for pattern comparison viewer
             'signal': signal,           # experimental signal for pixel lookup
+            # Where that dictionary came from. The GPU path has always left
+            # this behind; the CPU path left only the object, so a caller that
+            # wants to let go of the multi-GB signal (a multi-phase run holding
+            # one result per phase) had nothing to fall back on, and the
+            # multi-phase pattern-match dialog — which reads `dict_path` —
+            # never got a source at all. None when the dictionary was never on
+            # disk, e.g. projected from a master in this run.
+            'dict_path': _dict_source_path,
             'metric': config.metric,
             'keep_n': config.keep_n,
         },
@@ -2439,6 +2537,10 @@ def spherical_gpu_index_patterns(
     _orientation_source = "spherical"
     _orientation_source_reason = ""
     _resolved_phase_ids = set()
+    # Kept for the provenance count at the end of this block: the orientations
+    # as the spherical indexer produced them, before resolver / unification /
+    # arbitration had a say.
+    _raw_spherical_eulers = result.euler_xyz.numpy().astype(np.float64)
     if _sp_patterns_for_resolve is not None:
         try:
             from backend.spherical_gpu.pipeline.resolution import resolve_eulers_multiphase
@@ -2507,7 +2609,8 @@ def spherical_gpu_index_patterns(
                 eulers, result.phase_id.numpy().reshape(-1),
                 _sp_patterns_for_resolve, files, masters_meta,
                 detector_params, selection_mask, roi_mode,
-                _resolved_phase_ids, progress=lambda m: _progress(m, 0.95))
+                _resolved_phase_ids, progress=lambda m: _progress(m, 0.95),
+                raw_eulers=result.euler_xyz.numpy().astype(np.float64))
             if _eul_u is not None:
                 eulers = _eul_u
                 _tot_flip = sum(r.get("n_flipped_units", 0)
@@ -2524,9 +2627,45 @@ def spherical_gpu_index_patterns(
                     " Variant speckle was unified per grain (supergroup "
                     "segmentation + aggregated render-NCC; coherent twin "
                     "domains only flipped on a clear margin).")
+                _arb = (_vu_reports or {}).get("arbitration") or {}
+                _n_cmp = sum(int(a.get("n_compared", 0) or 0)
+                             for a in _arb.values() if isinstance(a, dict))
+                _n_rest = sum(int(a.get("n_restored", 0) or 0)
+                              for a in _arb.values() if isinstance(a, dict))
+                if _n_cmp:
+                    _orientation_source_reason += (
+                        f" Where Hough and the raw spherical answer disagreed "
+                        f"({_n_cmp} px) both were rendered against the measured "
+                        f"pattern; the spherical orientation was kept on "
+                        f"{_n_rest} px where it fit better.")
         except Exception:
             logger.warning("Variant unification failed; keeping resolver "
                            "orientations", exc_info=True)
+
+    # --- Provenance: count what the map KEPT, don't announce what was tried --
+    # Labelling the map "hough" the moment the resolver substituted was true
+    # when the substitution was unconditional. It is not any more: the resolver
+    # only touches z_rot==2 phases, resolve_map hands Hough-failure pixels back
+    # to the sphere, and since the render arbitration (5bbc2df5 / e605d0f8) plus
+    # the decode fix (a4b7710c) the arbiter returns disputed pixels to the raw
+    # spherical answer wherever it renders better -- on the ICAA20 crop that was
+    # all 676 of them. The badge then claimed Hough over a map that is the
+    # sphere's. Fail-safe: any problem here leaves the label as it was.
+    if _orientation_source != "spherical":
+        try:
+            from backend.spherical_gpu.pipeline.variant_unification import (
+                classify_orientation_source,
+            )
+            _orientation_source, _n_hough_px, _n_sph_px = (
+                classify_orientation_source(eulers, _raw_spherical_eulers))
+            _orientation_source_reason += (
+                f" Counted over the finished map: {_n_hough_px} px carry the "
+                f"Hough-derived orientation, {_n_sph_px} px kept the spherical "
+                f"one.")
+        except Exception:
+            logger.warning("Orientation-source counting failed; keeping the "
+                           "declared source %r", _orientation_source,
+                           exc_info=True)
 
     _progress("Spherical-GPU: building CrystalMap...", 0.97)
 
@@ -2662,6 +2801,10 @@ def spherical_gpu_index_patterns(
         phase_list=phase_list,
         prop=prop,
     )
+    # 1-based on purpose (see the PhaseList above). Declared so the phase-name
+    # and per-phase-SHT mapping never has to infer it — which it could not do
+    # when a phase won no pixels and orix pruned the ids.
+    declare_phase_id_base(xmap, 1)
     if selection_mask is None:
         selection_mask = np.ones((n_rows, n_cols), dtype=bool)
     if roi_mode and (n_rows == 0 or n_cols == 0):
@@ -3851,6 +3994,11 @@ def run_single_phase_method(
         # this, multi-phase spherical runs always fell back to EMSphInx CPU
         # because idx_config.backend defaulted to "emsphinx" regardless of
         # what the user picked.
+        # Carried through, not decided here: this copies the field from the
+        # ComparisonConfig onto the IndexingConfig. The dispatch below runs it
+        # past resolve_spherical_backend, and only for SPHERICAL -- validating
+        # here would reject a junk value on a Hough or Dictionary run that
+        # never reads it.
         backend=getattr(config, "backend", "emsphinx"),
         sht_file=phase_config.sht_path,
         row_start=config.row_start,
@@ -3882,7 +4030,7 @@ def run_single_phase_method(
         # Phase 5: dispatch on backend selector. Default is "emsphinx" (the
         # WSL CPU path) to preserve existing behaviour; "spherical_gpu" runs
         # the in-process PyTorch backend.
-        backend_choice = getattr(idx_config, "backend", "emsphinx")
+        backend_choice = resolve_spherical_backend(idx_config)
         if backend_choice == "spherical_gpu":
             result = spherical_gpu_index_patterns(
                 h5_path=h5_path,
@@ -4014,6 +4162,54 @@ def compute_comparison_maps(
 
     comparison.consensus_map = consensus.reshape(n_rows, n_cols)
     return comparison
+
+
+#: Where a producer records whether its phase ids start at 0 or at 1.
+#: Set on the CrystalMap object itself rather than in result metadata: the
+#: map is what travels, and several callers build the IndexingResult around
+#: it afterwards.
+PHASE_ID_BASE_ATTR = "_orienta_phase_id_base"
+
+
+def declare_phase_id_base(xmap, base: int):
+    """Record which convention the phase ids of ``xmap`` follow.
+
+    The two producers in this file disagree on purpose:
+    ``spherical_gpu_index_patterns`` builds ``PhaseList(ids=1..N)`` to match
+    EMSphInx's .ang header, and :func:`build_consensus_xmap` writes orix-native
+    ``0..N-1``. Everything downstream that maps a phase id back to the FILE it
+    came from — the phase names, the per-phase SHT map that drives the forward
+    render — then had to work the convention out from the ids it could see, and
+    orix DROPS a phase that won no pixels, so the surviving ids can fit both
+    windows and the answer was a tiebreak on names, then a guess.
+
+    A producer knows without guessing. It says so here; the consumers ask
+    (:func:`declared_phase_id_base`) before they reason. The attribute is
+    in-process only — it is not written to disk and not needed there, because
+    the export translates ids through ``xmap_phase_write_table``.
+
+    Returns ``xmap`` so it can wrap a constructor call.
+    """
+    try:
+        setattr(xmap, PHASE_ID_BASE_ATTR, int(base))
+    except Exception:  # pragma: no cover — an exotic map type must not kill a run
+        logger.debug("could not declare the phase id base", exc_info=True)
+    return xmap
+
+
+def declared_phase_id_base(xmap):
+    """The base a producer declared, or ``None`` when nobody said.
+
+    ``None`` is the honest answer for a map this module did not build (a
+    re-imported result, a test double), and the callers still have their
+    id-window and name-based reasoning for that case.
+    """
+    base = getattr(xmap, PHASE_ID_BASE_ATTR, None)
+    try:
+        base = int(base)
+    except (TypeError, ValueError):
+        return None
+    return base if base in (0, 1) else None
 
 
 def build_consensus_xmap(comparison: ComparisonResult):
@@ -4171,7 +4367,10 @@ def build_consensus_xmap(comparison: ComparisonResult):
         f"build_consensus_xmap: {n_assigned}/{n_total} pixels assigned to "
         f"{len(best_per_phase)} phases"
     )
-    return consensus_xmap
+    # phase_idx is the POSITION in comparison.phases and PhaseList's default
+    # ids are 0..N-1, so this map is 0-based. Say so rather than leave the
+    # consumers to infer it from ids orix may have pruned.
+    return declare_phase_id_base(consensus_xmap, 0)
 
 
 # --- Internal helpers ---

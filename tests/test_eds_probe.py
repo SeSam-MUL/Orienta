@@ -124,3 +124,54 @@ def test_probe_phase_when_present(mock_session, monkeypatch):
     r = client.post('/api/eds/probe', json={'row': 1, 'col': 2})
     assert r.status_code == 200
     assert r.json()['phase'] == {'id': 1, 'name': 'Al-rich (β)'}
+
+
+def _probe_with_windows(monkeypatch, windows):
+    """Probe a 4x3 scan whose windows the test chooses (counts at pixel 5)."""
+    monkeypatch.setattr('backend.api.routes.eds.is_open', lambda: True)
+    ext = MagicMock()
+    ext.get_grid_dimensions.return_value = (4, 3)
+    ext.get_available_elements.return_value = list(windows)
+
+    def fake_map(name):
+        arr = np.zeros(12, dtype=np.float32)
+        arr[5] = float(windows[name])
+        return arr
+
+    ext.get_element_map.side_effect = fake_map
+    monkeypatch.setattr('backend.api.routes.eds.get_extractor', lambda: ext)
+    monkeypatch.setattr('backend.api.routes.eds._probe_phase_at_safe',
+                        lambda r, c: None)
+    return client.post('/api/eds/probe',
+                       json={'row': 1, 'col': 2, 'display_mode': 'at_pct'})
+
+
+def test_probe_survives_one_unusable_window(monkeypatch):
+    """One window the physics cannot price must not cost the whole tooltip.
+
+    The probe is multi-layer: BC and phase do not go through EDS physics at
+    all, and they used to disappear with the 400 this raised over one stray
+    label. Since 2026-09-12 the skip is per window (eds_utils
+    ._resolve_k_factors), so Al is quantified and only the stray one reports
+    no composition.
+    """
+    r = _probe_with_windows(monkeypatch, {'Al Kα1': 1000.0, 'Xx Kα1': 50.0})
+    assert r.status_code == 200, r.text
+    els = r.json()['elements']
+    assert els['Al']['at_pct'] == pytest.approx(100.0)
+    assert els['Xx']['counts'] == pytest.approx(50.0)
+    assert els['Xx']['wt_pct'] is None and els['Xx']['at_pct'] is None
+
+
+def test_probe_degrades_to_counts_when_nothing_is_quantifiable(monkeypatch):
+    """Even with NO usable window the other layers must still answer.
+
+    Counts are a real measurement and are returned; wt%/at% are omitted
+    rather than fabricated as 0.0.
+    """
+    r = _probe_with_windows(monkeypatch, {'Xx Kα1': 50.0})
+    assert r.status_code == 200, r.text
+    els = r.json()['elements']
+    assert els['Xx Kα1']['counts'] == pytest.approx(50.0)
+    assert els['Xx Kα1']['wt_pct'] is None
+    assert 'bc' in r.json() and 'phase' in r.json()

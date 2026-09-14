@@ -114,7 +114,25 @@ def parse_cif_text(cif_text: str) -> tuple[Optional[CifMetadata], list[str]]:
             structures = parser.get_structures(primitive=False)
         if not structures:
             return None, ["pymatgen returned no structures from CIF"]
-        s = structures[0]
+        # The multi-block guard, as a WARNING rather than a refusal — the one
+        # place where that is the right call. This function already hands a
+        # `warnings` list to the download dialog, and the user is standing in
+        # front of a file they chose: telling them "this CIF gives two answers
+        # and I am showing you one of them" lets them pick a different source,
+        # while refusing the download would just look broken. Every reader
+        # DOWNSTREAM refuses it (cif_phase_library.one_structure), so a file
+        # saved past this warning will not silently become a phase with a
+        # composition decided by data-block order.
+        from backend.api.services.cif_phase_library import (
+            AmbiguousCifError, one_structure,
+        )
+        try:
+            s = one_structure(structures, "this CIF")
+        except AmbiguousCifError as exc:
+            warnings.append(
+                f"{exc} Shown below is the first of them; the phase library "
+                f"will not accept this file.")
+            s = structures[0]
         try:
             sg_symbol, sg_number = s.get_space_group_info()
         except Exception as exc:

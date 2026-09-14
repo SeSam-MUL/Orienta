@@ -32,20 +32,42 @@ export function enrichmentBarPct(factor) {
 /**
  * How far from the map's own background counts as "concentrated here".
  *
+ * THE BACKEND OWNS THIS NUMBER. It is `_ENRICHMENT` in
+ * `backend/api/services/chemistry_score.py` — the same threshold the
+ * classifier gates presence on and the seed-clause builder uses — and it
+ * arrives as `enrichment_factor` on the region detail this panel already
+ * reads. It is a CALIBRATED value and it moves: it was re-measured from 1.30
+ * to 1.15 on 2026-09-12, and the copy that used to live on this line did not
+ * move with it, so for a while an element enriched 1.2x was painted "flat"
+ * here while the classifier counted it as present.
+ *
+ * The constant below is only the fallback for a response that predates the
+ * field. Prefer `enrichmentThresholds(detail)`.
+ *
  * The depletion side is the RECIPROCAL, so a factor and its inverse are
- * judged alike: 1.3x more is as notable as 1.3x less. Exported because the
+ * judged alike: 1.15x more is as notable as 1.15x less. Exported because the
  * legend has to state the same numbers the colours use — it said 0.8 while
  * the code used 0.77, and a legend that disagrees with what it explains is
  * worse than no legend.
  */
-export const ENRICHED_AT = 1.3;
-export const DEPLETED_AT = Number((1 / ENRICHED_AT).toFixed(2));   // 0.77
+export const ENRICHED_AT_FALLBACK = 1.15;
+
+/** The pair the colours and the legend both use, for one region detail. */
+export function enrichmentThresholds(detail) {
+  const sent = detail?.enrichment_factor;
+  const enriched = (typeof sent === 'number' && Number.isFinite(sent) && sent > 1)
+    ? sent
+    : ENRICHED_AT_FALLBACK;
+  return { enriched, depleted: Number((1 / enriched).toFixed(2)) };
+}
 
 /** Enriched, depleted, or neither — for colouring, not for judging. */
-export function enrichmentKind(factor) {
+export function enrichmentKind(factor, thresholds) {
+  const { enriched, depleted } = thresholds
+    || enrichmentThresholds(null);
   if (factor == null || !Number.isFinite(factor)) return 'unknown';
-  if (factor >= ENRICHED_AT) return 'enriched';
-  if (factor <= DEPLETED_AT) return 'depleted';
+  if (factor >= enriched) return 'enriched';
+  if (factor <= depleted) return 'depleted';
   return 'flat';
 }
 
@@ -73,6 +95,9 @@ export default function RegionInspector({
   onDefineFromRegion,
 }) {
   const { t } = useTranslation('eds');
+  // The backend owns the enrichment threshold and sends it with the
+  // detail; see enrichmentThresholds. Never a literal here.
+  const thresholds = enrichmentThresholds(detail);
 
   if (error) {
     return <div style={{ fontSize: '8.5pt', color: C.red }}>{error}</div>;
@@ -143,7 +168,7 @@ export default function RegionInspector({
             </thead>
             <tbody>
               {els.map((e) => {
-                const kind = enrichmentKind(e.enrichment);
+                const kind = enrichmentKind(e.enrichment, thresholds);
                 const colour = kind === 'enriched' ? C.green
                   : kind === 'depleted' ? C.purple : C.textSecondary;
                 return (

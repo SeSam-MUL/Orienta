@@ -128,7 +128,18 @@
     "elementTooltip": "{{el}}: 実測 {{measured}} at%、この相の期待値 {{expected}} at%。相が必要とする元素がピクセルに欠けている場合、その相は除外されます。",
     "onTheMap": "マップ上",
     "thisPixelAlone": "このピクセル単独 — マップは組成グループで判断します:",
-    "handSet": "手動設定"
+    "handSet": "手動設定",
+    "librarySkipped_one": "CIF 1 件を読み込めず",
+    "librarySkipped_other": "CIF {{count}} 件を読み込めず",
+    "librarySuspect_one": "組成が疑わしい相 1 件",
+    "librarySuspect_other": "組成が疑わしい相 {{count}} 件",
+    "noMatch": {
+      "notEnriched": "{{phase}} はこのピクセルに適合します（{{score}}）が、除外されました。ここでの {{element}} は {{measured}} at% で、マップの背景値は {{background}} at% です。{{element}} を必要とする相は {{required}} at% を超えないと割り当てられないため、マップの大半を占める相はこの基準を決して満たせません。相マップも同じ規則を適用するので、そこでも未割り当てのままになります。相マップでその領域を手動で指定するか、その相が少数派となる領域があればそこに切り出してください。",
+      "belowMinScore": "ライブラリで最も近い相 {{phase}} でも、この組成に対するスコアは {{score}} にとどまります（最小 {{min}}）。",
+      "noCandidate": "このピクセルが示す元素（{{elements}}）だけで構成される相は、ライブラリにありません。",
+      "emptyLibrary": "利用できる CIF 相がありません。CIF ファイルを Database/CIF_Library に置くか、CIF データベースを構築してください。",
+      "noChemistry": "このピクセルには照合できる EDS 組成がありません。"
+    }
   },
   "swipe": {
     "labelA": "A:",
@@ -478,5 +489,14 @@
     "addRatioNumerator": "比の分子",
     "addRatioDenominator": "比の分母",
     "ratioPerElement": "{{element}} : …"
+  },
+  "quantNote": {
+    "headline_zero": "この組成の算出方法",
+    "headline_one": "この組成の算出方法 — 注意点 1 件",
+    "headline_other": "この組成の算出方法 — 注意点 {{count}} 件",
+    "noZaf": "標準試料を用いない Cliff-Lorimer 法（k 係数はモデル計算）。ZAF マトリックス補正なし — 半定量値であり、標準試料による定量分析ではありません。",
+    "calibratedOn": "検出器応答は {{matrix}}・{{kv}} kV で校正されています。",
+    "overlap": "{{window}} のウィンドウは {{interferer}} の発光と重なるため、その元素があるところでは高めに読みます。",
+    "beamAssumed": "加速電圧がファイルに記録されていません — {{kv}} kV と仮定しました。すべての k 係数の過電圧がこの値に依存します。"
   }
 }

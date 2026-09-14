@@ -6,6 +6,7 @@ into a single function that returns an IndexingResult layout-compatible
 with the existing CPU path.
 """
 from __future__ import annotations
+import functools
 import logging
 from pathlib import Path
 from typing import Optional, Union
@@ -18,9 +19,22 @@ from backend.dict_gpu.runtime import detect_gpu, vram_budget_bytes
 from backend.dict_gpu._pcadi.pca import GpuPCA
 from backend.dict_gpu._pcadi.knn import gemm_topk_ncc
 from backend.dict_gpu._pcadi.master_to_dict import gpu_master_to_dict
-from backend.dict_gpu.pipeline.master_loader import load_master_or_dict, MasterPayload
+from backend.dict_gpu.pipeline.master_loader import (
+    load_master_or_dict,
+    open_streamed_dict,
+    MasterPayload,
+)
 from backend.dict_gpu.pipeline.grid import sample_orientations
-from backend.dict_gpu.pipeline.tiling import compute_tile_size, iter_tiles
+from backend.dict_gpu.pipeline.tiling import (
+    compute_tile_size,
+    compute_stream_tile_size,
+    iter_tiles,
+    resident_peak_bytes,
+    should_stream,
+    stream_bytes_per_entry,
+    MIN_STREAM_TILE,
+)
+from backend.dict_gpu.pipeline.dict_source import ArrayDictSource, DictSource
 from backend.dict_gpu.pipeline.output import build_crystal_map
 
 
@@ -36,6 +50,100 @@ logger = logging.getLogger(__name__)
 def _normalise_rows(X: torch.Tensor) -> torch.Tensor:
     X = X - X.mean(dim=1, keepdim=True)
     return X / X.norm(dim=1, keepdim=True).clamp_min(1e-8)
+
+
+def _normalise_rows_(X: torch.Tensor) -> torch.Tensor:
+    """:func:`_normalise_rows` without the two full-size temporaries.
+
+    Same arithmetic in the same order, so the result is bit-identical — the
+    difference is that the streamed tile is centred and scaled in the buffer it
+    arrived in instead of being copied twice. At a 128x156 detector that is
+    160 KB per entry not allocated, which is the difference between a tile of
+    19,000 entries and a tile of 8,000.
+
+    Only ever called on a tile this module just created; never on a caller's
+    tensor.
+    """
+    X -= X.mean(dim=1, keepdim=True)
+    X /= X.norm(dim=1, keepdim=True).clamp_min(1e-8)
+    return X
+
+
+def _assert_finite_tile(tile: torch.Tensor, start: int, n_dict: int,
+                        *, stage: str = "source") -> None:
+    """Fail loud on NaN/Inf before the arithmetic hides where it came from.
+
+    The resident path checks the whole dictionary twice — once as loaded and
+    once after normalisation — and streaming does the same per tile, which
+    covers exactly the same entries and can say which ones.
+
+    Checked through the row sums rather than ``torch.isfinite(tile).all()``,
+    which is the same verdict for far less memory: NaN and Inf both survive a
+    sum, and a row of 19,968 fp32 intensities cannot overflow into one. The
+    elementwise form was measured at 1008 B per entry of transient workspace —
+    nearly twice the tile itself, on the exact code path that exists because
+    memory is tight. The row sums cost 4.
+    """
+    row_sums = tile.sum(dim=1)
+    if torch.isfinite(row_sums).all():
+        return
+    bad = ~torch.isfinite(row_sums)
+    n_bad = int(bad.sum().item())
+    first = start + int(torch.argmax(bad.int()).item())
+    where = (f"entries [{start}, {start + tile.shape[0]}) of {n_dict}; "
+             f"first at index {first}")
+    if stage == "source":
+        raise ValueError(
+            f"Dictionary contains {n_bad} non-finite patterns in {where}. "
+            "Likely cause: a corrupted dictionary file or a master pattern "
+            "that projects all-zero patterns at certain orientations. "
+            "Regenerate the dictionary, or skip the bad orientations upstream."
+        )
+    raise ValueError(
+        f"Dictionary normalisation produced non-finite values in {where}. "
+        "The entries were finite as read, so mean-subtract + L2 normalisation "
+        "surfaced something structurally wrong in the source data "
+        "(the norm is clamped, so it cannot produce this on its own). "
+        "Regenerate the dictionary."
+    )
+
+
+def _iter_streamed_tiles(
+    source: DictSource,
+    tile: int,
+    device,
+    *,
+    pattern_dim: int,
+    keep_cols: Optional[torch.Tensor],
+    cancel_check=None,
+):
+    """Yield ``(slice, normalised tile on device)``, one tile resident at a time.
+
+    The previous tile's storage is released as soon as the consumer moves on,
+    so the loop's high-water mark is one tile — not the dictionary.
+    """
+    n_dict = source.n_entries
+    for sl in iter_tiles(n_dict, tile):
+        if cancel_check is not None and cancel_check():
+            from indexing_controller import CancelledIndexingError
+            raise CancelledIndexingError(
+                "Dictionary-GPU indexing cancelled by user")
+        block = source.read_block(sl.start, sl.stop)
+        t = torch.from_numpy(block).to(device, non_blocking=True)
+        t = t.reshape(t.shape[0], pattern_dim)
+        if keep_cols is not None:
+            t = t[:, keep_cols]
+        t = t.contiguous()
+        _assert_finite_tile(t, sl.start, n_dict)
+        t = _normalise_rows_(t)
+        _assert_finite_tile(t, sl.start, n_dict, stage="normalised")
+        yield sl, t
+        # Drop OUR reference the moment the consumer hands control back. A
+        # suspended generator keeps its locals alive, so without this the
+        # previous tile is still held while the next block lands on the card —
+        # measured as two tiles resident at every hand-over, i.e. double the
+        # peak the tile size promises.
+        t = None
 
 
 def _is_master_pattern(obj) -> bool:
@@ -78,11 +186,12 @@ def _rotations_from_ebsd_signal(sig):
     )
 
 
-def run_dictionary_index(
+def _run_dictionary_index(
     experimental_signal,
     master_pattern_or_path,
     detector,
     *,
+    _opened_sources: Optional[list] = None,
     angular_step_deg: float = 1.5,
     metric: str = "ncc",
     keep_n: int = 1,
@@ -105,6 +214,16 @@ def run_dictionary_index(
     pca_components: int = 1024,
     use_quantization: Union[str, bool] = "auto",
     vram_budget_gb: Optional[float] = None,
+    # Stream the dictionary past the GPU one tile at a time instead of
+    # uploading all of it. "auto" streams exactly when the resident path would
+    # not fit the VRAM budget (see tiling.should_stream), which keeps every
+    # dictionary that used to fit on the path it was validated on. True forces
+    # streaming; False forbids it and fails loud if the dictionary cannot fit.
+    stream_dictionary: Union[str, bool] = "auto",
+    # Entries per streamed tile. None = sized from the free VRAM. Present so a
+    # test can force an awkward split (a tile that does not divide the
+    # dictionary) and so a user with a busy card can pin it.
+    stream_tile_entries: Optional[int] = None,
     progress_callback=None,
     cancel_check=None,
 ):
@@ -143,6 +262,10 @@ def run_dictionary_index(
             "gpu_dictionary_index_patterns called but no CUDA device available."
         )
     device = torch.device("cuda")
+    # The high-water mark is a per-process statistic, so it has to be reset for
+    # "how much did THIS run need" to mean anything — otherwise a big earlier
+    # run makes every later one look like it paged to system memory.
+    torch.cuda.reset_peak_memory_stats()
     # Snapshot the PRE-UPLOAD VRAM budget. The "PCA for memory pressure"
     # decision below compares this against the dict size — calling
     # vram_budget_bytes() after the dict is already on the GPU would
@@ -162,7 +285,18 @@ def run_dictionary_index(
     dict_source_path: str | None = None
     if isinstance(master_pattern_or_path, (str, Path)):
         dict_source_path = str(Path(master_pattern_or_path).resolve())
-        payload = load_master_or_dict(master_pattern_or_path)
+        # Try to open it without reading the patterns first. A 24 GB
+        # dictionary handed over as a path has no business passing through
+        # host RAM on its way to a card that will only ever hold a tile of it.
+        payload = (open_streamed_dict(master_pattern_or_path)
+                   or load_master_or_dict(master_pattern_or_path))
+        if getattr(payload, "kind", None) == "master":
+            # It was a MASTER, not a dictionary. `dict_path` means "read
+            # dictionary entry i out of this file"; pointed at a master there
+            # are no entries to read, and the pattern-match dialog would
+            # index into the wrong thing instead of saying the dictionary is
+            # not in memory. GPU twin of the CPU fix in the multi-phase loop.
+            dict_source_path = None
     elif _is_master_pattern(master_pattern_or_path):
         payload = MasterPayload(
             kind="master",
@@ -242,17 +376,26 @@ def run_dictionary_index(
         _p(f"Dict-GPU: legacy dict cache supplied with {rotations.size} rotations")
     _phase_done("2. sample/load orientations")
 
-    # ---- 3. Generate (or upload) dictionary ----------------------------------
+    # ---- 3. Generate the dictionary, or open it as a stream source -----------
+    # A master still has to be projected, and that happens on the device, so a
+    # generated dictionary is resident by construction. A pre-generated one is
+    # only *opened* here: its shape is all we need to size the run, and the
+    # entries themselves are fetched per tile below.
+    dict_source: Optional[DictSource] = None
+    dict_data = None
     if payload.kind == "master":
         dict_data = gpu_master_to_dict(
             payload.master, rotations, detector, energy=20.0, device=device
         )
+        n_dict = dict_data.shape[0]
+        pat_h, pat_w = dict_data.shape[-2:]
     else:
-        dict_data = torch.from_numpy(payload.dict_patterns).to(device).float()
-        if dict_data.ndim == 4 and dict_data.shape[0] == 1:
-            dict_data = dict_data.squeeze(0)
-    n_dict = dict_data.shape[0]
-    pat_h, pat_w = dict_data.shape[-2:]
+        dict_source = (payload.dict_source
+                       if getattr(payload, "dict_source", None) is not None
+                       else ArrayDictSource(payload.dict_patterns))
+        if _opened_sources is not None:
+            _opened_sources.append(dict_source)
+        n_dict, pat_h, pat_w = dict_source.shape
     pattern_dim = pat_h * pat_w
 
     # Circular detector mask (kikuchipy convention: True = EXCLUDE). Applied by
@@ -283,7 +426,12 @@ def run_dictionary_index(
     # gets attributed to the next phase.
     if torch.cuda.is_available():
         torch.cuda.synchronize()
-    _p(f"Dict-GPU: dictionary tensor {tuple(dict_data.shape)} on {device}")
+    if dict_data is not None:
+        _p(f"Dict-GPU: dictionary tensor {tuple(dict_data.shape)} on {device}")
+    else:
+        _p(f"Dict-GPU: dictionary {n_dict:,} x {pat_h}x{pat_w} "
+           f"({n_dict * pattern_dim * 4 / 1e9:.2f} GB fp32) from "
+           f"{dict_source.origin}")
     _phase_done("3. dictionary tensor -> GPU")
 
     # ---- 4. VRAM budget + auto choices ---------------------------------------
@@ -313,11 +461,44 @@ def run_dictionary_index(
         if es_data is not None and es_data.ndim >= 4:
             n_exp_est = int(es_data.shape[0] * es_data.shape[1])
 
+    # Resident or streamed? One rule, and it only ever looks at whether the
+    # whole-dictionary path would fit. A generated dictionary is already on the
+    # device and has nowhere to stream from, so it is resident by definition.
+    can_stream = dict_source is not None
+    if stream_dictionary is True:
+        if not can_stream:
+            raise GpuDictError(
+                "stream_dictionary=True but this dictionary was generated on "
+                "the device from a master pattern, so there is nothing to "
+                "stream it from. Pass a pre-generated dictionary file."
+            )
+        stream_effective = True
+    elif stream_dictionary is False:
+        stream_effective = False
+    else:  # "auto"
+        stream_effective = can_stream and should_stream(
+            n_dict, pattern_dim, feat_dim, decision_budget)
+    if stream_effective:
+        _p(f"Dict-GPU: streaming the dictionary — the resident path would "
+           f"peak near {resident_peak_bytes(n_dict, pattern_dim, feat_dim) / 1e9:.1f} GB "
+           f"for a {fp32_bytes / 1e9:.1f} GB dictionary, budget is "
+           f"{decision_budget / 1e9:.1f} GB")
+    elif can_stream and stream_dictionary is False and \
+            should_stream(n_dict, pattern_dim, feat_dim, decision_budget):
+        _p("Dict-GPU: streaming was disabled by the caller, but the resident "
+           f"path is expected to need "
+           f"{resident_peak_bytes(n_dict, pattern_dim, feat_dim) / 1e9:.1f} GB "
+           f"of a {decision_budget / 1e9:.1f} GB budget — expect an OOM or a "
+           "crawl through system memory.")
+
     # PCA decision (two independent triggers; either alone enables PCA):
     #
     # 1. Memory pressure — fp32 dictionary doesn't fit in the VRAM budget
     #    that was available BEFORE we uploaded it. PCA shrinks the
-    #    matching footprint from d -> k floats per pattern.
+    #    matching footprint from d -> k floats per pattern. Streaming solves
+    #    the same problem without approximating anything, so when the
+    #    dictionary is streamed this trigger is off and the score the user
+    #    reads stays an exact NCC.
     #
     # 2. Speed payoff — matching cost is O(n_exp * n_dict * d) without PCA
     #    vs O(n_exp * n_dict * k) with PCA, but the SVD fit pays a fixed
@@ -338,7 +519,7 @@ def run_dictionary_index(
     # 75.4 s with k=1024 — no win to pay for, and the truncated run reports a
     # score that is not comparable to the full one (see pca_components).
     PCA_PAYOFF_MIN_PATTERNS = float("inf")
-    need_pca_for_memory = fp32_bytes > decision_budget
+    need_pca_for_memory = fp32_bytes > decision_budget and not stream_effective
     worth_pca_for_speed = n_exp_est >= PCA_PAYOFF_MIN_PATTERNS
 
     if use_pca is True:
@@ -370,57 +551,84 @@ def run_dictionary_index(
         logger.info("Dict-GPU: quantisation skipped in MVP; FP16 GEMM will handle it")
         use_quant_effective = False
 
+    if use_pca_effective and stream_effective:
+        raise GpuDictError(
+            "PCA was requested together with a streamed dictionary. The PCA "
+            "basis is fitted on the whole normalised dictionary at once, and "
+            "the dictionary is being streamed precisely because it does not "
+            f"fit ({fp32_bytes / 1e9:.1f} GB against a "
+            f"{decision_budget / 1e9:.1f} GB budget). Fitting it on a sample "
+            "instead would report scores from a basis nobody asked for. Run "
+            "with use_pca=False — streaming needs no approximation — or on a "
+            "dictionary that fits."
+        )
+
     # ---- 5. Normalise dictionary (and optionally PCA) ------------------------
-    dict_flat = dict_data.reshape(n_dict, pattern_dim)
-    if keep_cols is not None:
-        dict_flat = dict_flat[:, keep_cols]
-    dict_flat = dict_flat.contiguous()
-    # Fail loud on NaN/Inf in the source dictionary BEFORE the SVD step
-    # below — torch.linalg.svd surfaces NaN as a generic CUSOLVER error
-    # ("CUSOLVER_STATUS_INVALID_VALUE") with no hint about the real cause.
-    # NaN typically comes from a corrupted dictionary file (some entries
-    # were never written), or — much more commonly — patterns that were
-    # all-zero before _normalise_rows. _normalise_rows clamps the norm so
-    # it can't produce NaN itself; if we see NaN here, the upstream data
-    # is bad and the user needs to know which patterns.
-    if not torch.isfinite(dict_flat).all():
-        n_bad = int((~torch.isfinite(dict_flat)).any(dim=1).sum().item())
-        raise ValueError(
-            f"Dictionary contains {n_bad} non-finite patterns out of "
-            f"{n_dict}. Likely cause: a corrupted dictionary file or a "
-            "master pattern that projects all-zero patterns at certain "
-            "orientations. Regenerate the dictionary, or skip the bad "
-            "orientations upstream."
-        )
-    dict_norm = _normalise_rows(dict_flat)
-    if not torch.isfinite(dict_norm).all():
-        # Post-normalise NaN means the mean-subtraction surfaced a degenerate
-        # row (constant pattern → mean = pattern → result is all-zero, then
-        # norm is clamped to 1e-8 and the row is essentially noise but still
-        # finite). If we still see NaN here, something is structurally
-        # broken in the source data.
-        raise ValueError(
-            "Dictionary normalisation produced non-finite values after "
-            "mean-subtract + L2 normalisation. This indicates patterns "
-            "with NaN/Inf intensities in the source dictionary. "
-            "Regenerate the dictionary."
-        )
-    if torch.cuda.is_available():
-        torch.cuda.synchronize()
-    _phase_done("5a. dictionary normalisation + finite check")
-    pca = None
-    if use_pca_effective:
-        k = min(pca_components, n_dict, feat_dim)
-        pca = GpuPCA(n_components=k).fit(dict_norm)
-        dict_proj = pca.transform(dict_norm)
-        # PCA breaks unit-norm; renormalise so NCC interpretation holds
-        dict_proj = _normalise_rows(dict_proj)
+    # Streamed runs normalise each tile as it lands (see _iter_streamed_tiles),
+    # so none of this is reached: there is no whole dictionary to normalise.
+    dict_flat = dict_norm = dict_proj = None
+    if stream_effective:
+        _phase_done("5a. dictionary normalisation + finite check")
+        pca = None
+    else:
+        if dict_data is None:
+            # Resident path with a pre-generated dictionary: this is the one
+            # upload, the thing streaming exists to avoid.
+            dict_data = torch.from_numpy(
+                dict_source.read_block(0, n_dict)).to(device).float()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            _p(f"Dict-GPU: dictionary tensor {tuple(dict_data.shape)} on {device}")
+        dict_flat = dict_data.reshape(n_dict, pattern_dim)
+        if keep_cols is not None:
+            dict_flat = dict_flat[:, keep_cols]
+        dict_flat = dict_flat.contiguous()
+        # Fail loud on NaN/Inf in the source dictionary BEFORE the SVD step
+        # below — torch.linalg.svd surfaces NaN as a generic CUSOLVER error
+        # ("CUSOLVER_STATUS_INVALID_VALUE") with no hint about the real cause.
+        # NaN typically comes from a corrupted dictionary file (some entries
+        # were never written), or — much more commonly — patterns that were
+        # all-zero before _normalise_rows. _normalise_rows clamps the norm so
+        # it can't produce NaN itself; if we see NaN here, the upstream data
+        # is bad and the user needs to know which patterns.
+        if not torch.isfinite(dict_flat).all():
+            n_bad = int((~torch.isfinite(dict_flat)).any(dim=1).sum().item())
+            raise ValueError(
+                f"Dictionary contains {n_bad} non-finite patterns out of "
+                f"{n_dict}. Likely cause: a corrupted dictionary file or a "
+                "master pattern that projects all-zero patterns at certain "
+                "orientations. Regenerate the dictionary, or skip the bad "
+                "orientations upstream."
+            )
+        dict_norm = _normalise_rows(dict_flat)
+        if not torch.isfinite(dict_norm).all():
+            # Post-normalise NaN means the mean-subtraction surfaced a degenerate
+            # row (constant pattern → mean = pattern → result is all-zero, then
+            # norm is clamped to 1e-8 and the row is essentially noise but still
+            # finite). If we still see NaN here, something is structurally
+            # broken in the source data.
+            raise ValueError(
+                "Dictionary normalisation produced non-finite values after "
+                "mean-subtract + L2 normalisation. This indicates patterns "
+                "with NaN/Inf intensities in the source dictionary. "
+                "Regenerate the dictionary."
+            )
         if torch.cuda.is_available():
             torch.cuda.synchronize()
-        _p(f"Dict-GPU: PCA reduced dictionary {feat_dim} -> {k}")
-        _phase_done("5b. PCA fit + transform")
-    else:
-        dict_proj = dict_norm
+        _phase_done("5a. dictionary normalisation + finite check")
+        pca = None
+        if use_pca_effective:
+            k = min(pca_components, n_dict, feat_dim)
+            pca = GpuPCA(n_components=k).fit(dict_norm)
+            dict_proj = pca.transform(dict_norm)
+            # PCA breaks unit-norm; renormalise so NCC interpretation holds
+            dict_proj = _normalise_rows(dict_proj)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            _p(f"Dict-GPU: PCA reduced dictionary {feat_dim} -> {k}")
+            _phase_done("5b. PCA fit + transform")
+        else:
+            dict_proj = dict_norm
 
     # ---- 6. Prepare experimental patterns ------------------------------------
     exp_arr = np.asarray(experimental_signal.data, dtype=np.float32)
@@ -464,9 +672,78 @@ def run_dictionary_index(
     _phase_done("6. experimental patterns -> GPU + normalise + PCA-project")
 
     # ---- 7. Tiled top-k NCC --------------------------------------------------
-    feature_dim = dict_proj.shape[1]
+    # Both modes feed the same merge loop below; they differ only in where a
+    # tile comes from. Resident: a view on the dictionary that is already on
+    # the card. Streamed: a block read from the host array or the file,
+    # normalised on arrival and dropped when the next one lands.
     dtype_bytes = 4  # FP32; FP16 lives only inside the autocast region of gemm_topk_ncc
-    tile = compute_tile_size(n_dict, feature_dim, dtype_bytes, budget)
+    if stream_effective:
+        feature_dim = feat_dim
+        # Measured HERE and not at step 4, for the same reason the resident
+        # branch re-measures below: step 6 has just put the experimental
+        # patterns on the card, and both exp_t and exp_norm stay there until
+        # the end of the run. At a full 28,086-pixel map with a 128x156
+        # detector that is 2 x 2.24 = 4.49 GB, which
+        # ``compute_stream_tile_size`` does not model — it counts per-entry
+        # costs only. Sized from the step-4 budget, the tile would spend that
+        # memory twice and survive only on the 2 GB reserve inside
+        # ``vram_budget_bytes``, with no re-tiling fallback if it did not.
+        stream_budget = (int(vram_budget_gb * 1e9) if vram_budget_gb is not None
+                         else vram_budget_bytes())
+        if stream_tile_entries is not None:
+            tile = int(stream_tile_entries)
+            if tile <= 0:
+                raise GpuDictError(
+                    f"stream_tile_entries must be > 0, got {stream_tile_entries}")
+            tile = min(tile, n_dict)
+        else:
+            tile = compute_stream_tile_size(
+                n_dict, pattern_dim, feat_dim, n_sel, stream_budget,
+                chunk_entries=getattr(dict_source, "chunk_entries", 1),
+            )
+        if tile <= 0:
+            # Not even a minimal tile plus the experimental buffers fit. Say
+            # so with the numbers instead of letting CUDA report the single
+            # allocation that happened to be last. Both numbers are taken at
+            # the moment of failure: the free VRAM now (the experimental
+            # patterns are already on the card), and what the smallest tile
+            # this loop would bother with actually costs — the same arithmetic
+            # the tile size was refused by, not a budget divided by a count.
+            free_gb = torch.cuda.mem_get_info()[0] / 1e9
+            min_tile_bytes = MIN_STREAM_TILE * stream_bytes_per_entry(
+                pattern_dim, feat_dim, n_sel)
+            raise GpuDictError(
+                f"Dictionary indexing does not fit on this card even one tile "
+                f"at a time. Dictionary {fp32_bytes / 1e9:.2f} GB "
+                f"({n_dict:,} entries x {feat_dim} px), "
+                f"{n_sel:,} experimental patterns need "
+                f"{n_sel * feat_dim * 4 / 1e9:.2f} GB on their own, free VRAM "
+                f"{free_gb:.2f} GB, budget {stream_budget / 1e9:.2f} GB, smallest "
+                f"usable tile {MIN_STREAM_TILE} entries "
+                f"({min_tile_bytes / (1 << 20):.1f} MiB). "
+                f"Index a smaller region, close what else is using the GPU, or "
+                f"regenerate the dictionary at a coarser angular step."
+            )
+        _n_tiles_est = max(1, -(-n_dict // tile))
+        _p(f"Dict-GPU: streaming {n_dict:,} entries in {_n_tiles_est} tiles of "
+           f"{tile:,} ({tile * pattern_dim * 4 / 1e9:.2f} GB per tile, "
+           f"{stream_budget / 1e9:.2f} GB budget after the experimental upload)")
+        tile_iter = _iter_streamed_tiles(
+            dict_source, tile, device, pattern_dim=pattern_dim,
+            keep_cols=keep_cols, cancel_check=cancel_check,
+        )
+    else:
+        feature_dim = dict_proj.shape[1]
+        # Measured HERE and not at step 4, because in this mode the dictionary
+        # is already on the card: what is left for a matching slab is the free
+        # VRAM AFTER the upload, which is what this call reports and what the
+        # code did before the upload moved. Sizing the slab from the pre-upload
+        # budget would hand gemm_topk_ncc a slab whose score matrix does not
+        # fit — 14 GB at a full 28,086-pixel map.
+        resident_budget = (int(vram_budget_gb * 1e9) if vram_budget_gb is not None
+                           else vram_budget_bytes())
+        tile = compute_tile_size(n_dict, feature_dim, dtype_bytes, resident_budget)
+        tile_iter = ((sl, dict_proj[sl]) for sl in iter_tiles(n_dict, tile))
 
     # Aggregate global top-k across tiles.
     # Pre-declare all per-iteration variables to None so the post-loop
@@ -483,9 +760,15 @@ def run_dictionary_index(
     _match_t0 = time.perf_counter()
     _n_tiles = max(1, -(-n_dict // tile))   # ceil
     _last_report = _match_t0
-    for _tile_i, sl in enumerate(iter_tiles(n_dict, tile), start=1):
+    # Counted by hand rather than with enumerate(): enumerate caches the
+    # (index, item) tuple it last produced, and that reference keeps the
+    # previous tile alive while the generator builds the next one. Measured on
+    # the 8 GB Al dictionary, 20,000-entry tiles: peak 3.36 GB with enumerate
+    # against 1.79 GB without, on tiles of 1.6 GB — exactly one tile's worth.
+    _tile_i = 0
+    for sl, tile_dict in tile_iter:
+        _tile_i += 1
         _check_cancel()
-        tile_dict = dict_proj[sl]
         # Tile may be smaller than keep_n on the very last slab; clamp k.
         k_tile = min(keep_n, tile_dict.shape[0])
         s_tile, i_tile = gemm_topk_ncc(exp_proj, tile_dict, k=k_tile, use_fp16=True)
@@ -503,6 +786,11 @@ def run_dictionary_index(
         merged_idx = torch.cat([best_indices, i_tile], dim=1)
         best_scores, top_pos = torch.topk(merged_scores, k=keep_n, dim=1)
         best_indices = merged_idx.gather(1, top_pos)
+        # Let go of this tile BEFORE the generator fetches the next one. A
+        # streamed tile is a real allocation, not a view, and the loop variable
+        # would otherwise still hold it while the next block lands — two tiles
+        # resident at the hand-over, i.e. twice the peak the tile size promises.
+        tile_dict = s_tile = i_tile = merged_scores = merged_idx = top_pos = None
         _now = time.perf_counter()
         if _now - _last_report >= 1.0 and _tile_i < _n_tiles:
             _last_report = _now
@@ -516,6 +804,21 @@ def run_dictionary_index(
        f"· {n_sel / max(_match_dt, 1e-9):,.0f} pat/s (GPU, {n_dict:,} entries)"
        if _match_dt >= 1e-3 else
        f"Dictionary: {n_sel:,} patterns in {_match_dt * 1e3:.1f} ms (GPU)")
+    # Did the run actually stay on the card? On Windows the NVIDIA driver
+    # silently spills to system memory instead of failing, and the only sign is
+    # a run that crawls — the user's 8 GB dictionary "worked" that way. We
+    # cannot switch the fallback off from here, but we can say when the
+    # high-water mark got close enough to the card that it must have been used.
+    if torch.cuda.is_available():
+        _peak_gb = torch.cuda.max_memory_allocated() / 1e9
+        _total_gb = gpu.vram_total_gb
+        if _total_gb > 0 and _peak_gb > 0.95 * _total_gb:
+            _p(f"⚠ Dict-GPU: peak allocation {_peak_gb:.2f} GB against "
+               f"{_total_gb:.2f} GB of VRAM — the driver was almost certainly "
+               f"paging to system memory, which is why this was slow.")
+        else:
+            logger.info("Dict-GPU [vram]: peak allocation %.2f GB of %.2f GB",
+                        _peak_gb, _total_gb)
     _phase_done("7. tiled top-k NCC matching")
 
     # In the PCA subspace the score is the cosine between the PROJECTIONS: the
@@ -624,6 +927,12 @@ def run_dictionary_index(
         free_b, total_b = torch.cuda.mem_get_info()
         vram_before_cleanup = free_b / 1e9
 
+    # A streamed run holds the file open until here; the host array it may
+    # wrap instead belongs to the caller and is left alone.
+    if dict_source is not None:
+        dict_source.close()
+        tile_iter = None
+
     # Release tile-loop view holders FIRST (they pin dict_proj's storage).
     del tile_dict, s_tile, i_tile, merged_scores, merged_idx, top_pos
     del s_pad, i_pad
@@ -679,6 +988,12 @@ def run_dictionary_index(
             "use_pca": use_pca_effective,
             "pca_components": pca_components_count,
             "use_quantization": use_quant_effective,
+            # Was the dictionary streamed past the card, and in what size
+            # tiles? Worth recording: it is the difference between a score
+            # searched at full dimension and one searched in a PCA subspace,
+            # and between a run that fitted and one that paged.
+            "streamed": bool(stream_effective),
+            "stream_tile_entries": int(tile) if stream_effective else None,
             "n_dictionary": n_dict,
             "angular_step_deg": angular_step_deg,
             "metric": metric,
@@ -689,3 +1004,34 @@ def run_dictionary_index(
             "dict_path": dict_source_path,
         },
     )
+
+
+@functools.wraps(_run_dictionary_index)
+def run_dictionary_index(*args, **kwargs):
+    # Public entry point; owns nothing but the cleanup.
+    #
+    # A streamed run holds an HDF5 handle open for the length of the match. The
+    # run closes it on the way out, but a raise in the middle of a seven-tile
+    # match would leave it to the garbage collector — and on a failing run that
+    # means "whenever the traceback holding the frame is released", which this
+    # project has already measured to be much later than it looks (task F: the
+    # dictionary tensors were held by a traceback). On Windows an open handle
+    # also keeps the file locked against regenerating it.
+    #
+    # So the source registers itself the moment it is opened and this closes
+    # whatever was opened, whichever way the run ends. Closing twice is a
+    # no-op, so the explicit close inside stays where it is — it still runs
+    # before the result is built, on the successful path.
+    #
+    # functools.wraps is load-bearing, not decoration: inspect.signature and
+    # inspect.getsource both follow __wrapped__, and several tests in this
+    # project read this function's source and signature.
+    opened: list = []
+    try:
+        return _run_dictionary_index(*args, _opened_sources=opened, **kwargs)
+    finally:
+        for src in opened:
+            try:
+                src.close()
+            except Exception:  # pragma: no cover — defensive
+                logger.debug("could not close dictionary source", exc_info=True)

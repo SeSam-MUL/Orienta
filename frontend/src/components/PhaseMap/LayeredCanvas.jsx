@@ -26,6 +26,7 @@ import { BLEND_MAP } from './layerSources';
 import { buildMaskCanvas } from './maskCanvas';
 import { bboxContentRect } from '../EDS/mapCoords';
 import { roiDefiningLayers } from './roiFrame';
+import { computeAlphaBbox } from './alphaBbox';
 import { IDENTITY_VIEW, isZoomed, viewToTransform } from '../EDS/zoomView';
 import { zoomRectPct } from '../EBSDViewer/zoomOverlay';
 import { scalebarGeometry } from './scalebarGeometry';
@@ -71,44 +72,6 @@ function markerStyle(row, col, nativeSize, contentBbox, zoomView) {
   // the edge of the map.
   if (z.left < 0 || z.top < 0 || z.left > 100 || z.top > 100) return null;
   return { left: `${z.left}%`, top: `${z.top}%` };
-}
-
-// Compute the bounding box of non-transparent pixels in the canvas.
-// Returns null when the canvas is entirely transparent or full. Used to
-// pan-centre the indexed region inside the canvas frame so a small ROI
-// doesn't stick in one corner.
-function computeAlphaBbox(ctx, w, h) {
-  if (w <= 0 || h <= 0) return null;
-  let imgData;
-  try {
-    imgData = ctx.getImageData(0, 0, w, h);
-  } catch {
-    return null;
-  }
-  const d = imgData.data;
-  let minX = w, minY = h, maxX = -1, maxY = -1;
-  // Scan rows first to find vertical extent (cheap early-exit on rows that
-  // are entirely transparent).
-  for (let y = 0; y < h; y++) {
-    const rowOff = y * w * 4;
-    let rowHasContent = false;
-    for (let x = 0; x < w; x++) {
-      if (d[rowOff + x * 4 + 3] > 0) {
-        rowHasContent = true;
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-      }
-    }
-    if (rowHasContent) {
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-    }
-  }
-  if (maxX < 0) return null;
-  const bbox = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
-  // If the bbox covers (essentially) the whole canvas, no centring needed.
-  if (bbox.w >= w - 1 && bbox.h >= h - 1) return null;
-  return bbox;
 }
 
 // Full 9-position map. The old logic only matched startsWith('upper') and

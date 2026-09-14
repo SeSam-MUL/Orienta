@@ -25,7 +25,14 @@ from backend.api.services.chemistry_score import (
 from backend.api.services.crystal_hint_phase_fit import chemistry_fit
 
 AL7FECU2 = {"Al": 70.0, "Fe": 10.0, "Cu": 20.0}
-MGCU = {"Mg": 80.0, "Cu": 20.0}
+#: A synthetic phase with Mg:Cu = 4, used throughout as "a two-element
+#: non-matrix phase whose ratio the fixtures below reproduce exactly".
+#: It was called MG4CU, which was wrong twice over: MgCu2 is COPPER-rich
+#: (Cu 66.7 / Mg 33.3), and the Mg 80 / Cu 20 it carries is the value the
+#: CIF library misparses for that phase (see
+#: tests/test_cif_library_multi_structure.py). The numbers are fine as a
+#: fixture; the name was a claim about a real compound that is not true.
+MG4CU = {"Mg": 80.0, "Cu": 20.0}
 AL = {"Al": 100.0}
 
 
@@ -63,7 +70,7 @@ def test_a_diluted_particle_still_matches_on_its_ratio():
     # must sit below the diluted pixel (Mg 0.08, Cu 0.02) or the enrichment
     # gate correctly rejects it before the ratio is ever consulted.
     bg = {"Al": 0.95, "Mg": 0.010, "Cu": 0.004}
-    s = score_phase_ratio(maps, MGCU, matrix_element="Al", background=bg)
+    s = score_phase_ratio(maps, MG4CU, matrix_element="Al", background=bg)
     assert s[0] > 0.8, "the undiluted particle must match"
     assert s[1] > 0.8, f"the diluted particle must match too, got {s[1]:.3f}"
 
@@ -71,7 +78,7 @@ def test_a_diluted_particle_still_matches_on_its_ratio():
 def test_absolute_composition_alone_would_have_lost_the_diluted_one():
     """Guards the premise: this is why ratios were introduced at all."""
     weak = {"Al": 90.0, "Mg": 8.0, "Cu": 2.0}
-    assert chemistry_fit(weak, MGCU) < 0.3
+    assert chemistry_fit(weak, MG4CU) < 0.3
 
 
 # --- the enrichment gate ----------------------------------------------------
@@ -92,7 +99,7 @@ def test_enrichment_gate_rejects_background_level_signal():
         "Cu": rng.normal(2.0, 0.05, n),    # flat: nothing is enriched
     }
     bg = background_levels(maps)
-    s = score_phase_ratio(maps, MGCU, matrix_element="Al", background=bg)
+    s = score_phase_ratio(maps, MG4CU, matrix_element="Al", background=bg)
     assert s.max() <= 0.05, "flat background must not read as a phase"
 
 
@@ -106,7 +113,7 @@ def test_enrichment_gate_passes_a_real_local_enrichment():
     maps["Cu"][:5] = 6.0          # a small, strongly enriched population
     maps["Mg"][:5] = 24.0
     bg = background_levels(maps)
-    s = score_phase_ratio(maps, MGCU, matrix_element="Al", background=bg)
+    s = score_phase_ratio(maps, MG4CU, matrix_element="Al", background=bg)
     assert s[:5].min() > 0.5, "the enriched population must match"
     assert s[5:].max() <= 0.05, "the background must not"
 
@@ -126,7 +133,7 @@ def test_single_sample_caller_skips_the_gate_instead_of_vetoing_everything():
     supplying a background must not have every phase vetoed by comparing
     a value against 1.3x itself."""
     one = {"Al": np.array([20.0]), "Mg": np.array([64.0]), "Cu": np.array([16.0])}
-    s = score_phase_ratio(one, MGCU, matrix_element="Al")
+    s = score_phase_ratio(one, MG4CU, matrix_element="Al")
     assert s[0] > 0.8
 
 
@@ -149,7 +156,7 @@ def test_dilution_does_not_rescue_a_wrong_ratio():
     # Low enough that BOTH pixels clear the enrichment gate, so the ratio
     # is what decides between them — which is the point of the test.
     bg = {"Al": 0.95, "Mg": 0.010, "Cu": 0.004}
-    s = score_phase_ratio(maps, MGCU, matrix_element="Al", background=bg)
+    s = score_phase_ratio(maps, MG4CU, matrix_element="Al", background=bg)
     assert s[0] > s[1] + 0.3, f"got {s[0]:.3f} vs {s[1]:.3f}"
 
 
@@ -157,3 +164,42 @@ def test_unmeasured_pixel_still_scores_zero_for_classifiers():
     maps = {"Al": np.array([0.0, 90.0]), "Cu": np.array([0.0, 10.0])}
     s = score_phase_ratio(maps, AL, matrix_element="Al", no_data_score=0.0)
     assert s[0] == 0.0
+
+
+# --- the repair that was tried and refuted ---------------------------------
+
+def test_the_gate_may_not_stand_down_just_because_a_map_is_flat():
+    """Regression for a fix that was built, measured, and taken back out.
+
+    The 2026-08-25 report (phase suggestion refuses Mg2Si on every pixel of a
+    map made of Mg2Si) has an obvious repair: a bar the map's own MAXIMUM
+    cannot reach is not evidence about any pixel, so stand the gate down. It
+    separates that map from both real datasets cleanly — 0 pixels clear either
+    bar there, 18 575 to 25 031 clear every bar on the reference scan and the
+    Al/Si file (tasks/eds_prior_audit/15_vacuous_gate.py).
+
+    It is still wrong, because "this map has no contrast in that element"
+    covers two opposite situations. This is the other one, stated as its own
+    test rather than left implicit in
+    `test_enrichment_gate_rejects_background_level_signal` above: an aluminium
+    matrix with a flat Mg 8 / Cu 2 at% of solute has no contrast either, and
+    with the gate stood down it reads as a Mg-Cu phase on every pixel. See the
+    REFUTED note in chemistry_score.score_phase_ratio before trying again.
+    """
+    n = 200
+    maps = {
+        "Al": np.full(n, 90.0),
+        "Mg": np.full(n, 8.0),
+        "Cu": np.full(n, 2.0),      # perfectly flat: the map's max IS its median
+    }
+    bg = background_levels(maps)
+    total = maps["Al"] + maps["Mg"] + maps["Cu"]
+    from backend.api.services.chemistry_score import _ENRICHMENT
+    for el in ("Mg", "Cu"):
+        assert float((maps[el] / total).max()) < _ENRICHMENT * bg[el], (
+            f"{el} now clears its own bar — this fixture no longer poses the "
+            f"situation the refuted rule could not tell apart")
+    s = score_phase_ratio(maps, MG4CU, matrix_element="Al", background=bg)
+    assert s.max() <= 0.05, (
+        "a flat solute level reads as a phase — the enrichment gate stood "
+        "down on a map that has nothing in it")

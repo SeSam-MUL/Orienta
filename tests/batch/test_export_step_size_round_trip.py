@@ -294,6 +294,66 @@ def test_ang_no_native_bc_header_note(cubic_checkpoint, tmp_path):
     assert iqs == {0.0}, f"ANG IQ column must be all zeros with no native BC; got {iqs}"
 
 
+def test_ctf_computed_iq_when_no_native_bc(cubic_checkpoint, tmp_path, monkeypatch):
+    """With no native Band Contrast but a computed FFT image quality
+    available, the CTF BC column holds the rescaled IQ (non-zero, not a
+    CI surrogate) and the Prj note says it's a computed FFT image quality."""
+    source, cw = cubic_checkpoint
+    out = tmp_path / "out"
+    out.mkdir()
+    # Known IQ map for the 3×4 grid — distinct values so any reordering
+    # or zeroing is visible. Max=12 → rescaled 0..255.
+    fake_iq = np.arange(1, 13, dtype=np.float64).reshape(3, 4)
+    import backend.api.services.pattern_quality as pq
+    monkeypatch.setattr(pq, "image_quality_from_file", lambda *a, **k: fake_iq)
+
+    ang, ctf = export_ang_ctf(
+        cw.checkpoint_path, str(out),
+        write_ang=False, write_ctf=True,
+        source_h5_path=None,  # no native BC → computed-IQ branch
+    )
+    assert ctf is not None
+    lines = Path(ctf).read_text(encoding="utf-8").splitlines()
+    prj_line = next(ln for ln in lines if ln.startswith("Prj\t"))
+    assert "computed FFT image quality" in prj_line, prj_line
+    data_start = next(
+        i for i, ln in enumerate(lines)
+        if ln.startswith("Phase\tX\tY\tBands")
+    ) + 1
+    rows = [ln.split("\t") for ln in lines[data_start:] if ln.strip()]
+    assert len(rows) == 12
+    bcs = [int(r[9]) for r in rows]
+    expected = list(np.clip(np.arange(1, 13) / 12.0 * 255.0, 0, 255).astype(int))
+    assert bcs == expected, f"BC column not the rescaled IQ: {bcs} != {expected}"
+    assert any(b > 0 for b in bcs)
+
+
+def test_ang_computed_iq_when_no_native_bc(cubic_checkpoint, tmp_path, monkeypatch):
+    """With no native Band Contrast but a computed FFT image quality
+    available, the ANG IQ column is non-zero and the header note says
+    it's a computed FFT image quality (not a confidence surrogate)."""
+    source, cw = cubic_checkpoint
+    out = tmp_path / "out"
+    out.mkdir()
+    fake_iq = np.arange(1, 13, dtype=np.float64).reshape(3, 4)
+    import backend.api.services.pattern_quality as pq
+    monkeypatch.setattr(pq, "image_quality_from_file", lambda *a, **k: fake_iq)
+
+    ang, _ = export_ang_ctf(
+        cw.checkpoint_path, str(out),
+        write_ang=True, write_ctf=False,
+        source_h5_path=None,  # no native BC → computed-IQ branch
+    )
+    assert ang is not None
+    text = Path(ang).read_text(encoding="utf-8")
+    assert "computed FFT image quality" in text, text[:600]
+    lines = text.splitlines()
+    data_rows = [ln.split() for ln in lines if ln and not ln.startswith("#")]
+    assert data_rows, "ANG has no data rows"
+    iqs = {float(r[5]) for r in data_rows}
+    assert iqs != {0.0}, f"ANG IQ column must be non-zero when IQ computed; got {iqs}"
+
+
 def test_ctf_uses_caller_supplied_tilt(cubic_checkpoint, tmp_path):
     """Caller passes a calibrated tilt of 71.5° — the .ctf header must
     show that value, not the 70° from the h5oina acquisition header."""
