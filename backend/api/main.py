@@ -545,6 +545,7 @@ from backend.api.routes import forward_diagnostics as forward_diagnostics_routes
 from backend.api.routes import crystal_hint
 from backend.api.routes import reference_frame as reference_frame_routes
 from backend.api.routes import pole_figure as pole_figure_routes
+from backend.api.routes import citations
 
 app.include_router(h5_viewer.router, prefix="/api/h5", tags=["HDF5 Viewer"])
 app.include_router(ebsd_viewer.router, prefix="/api/ebsd", tags=["EBSD Viewer"])
@@ -573,6 +574,7 @@ app.include_router(crystal_hint.router, prefix="/api/crystal-hint", tags=["Cryst
 app.include_router(reference_frame_routes.router)
 # pole_figure.router self-prefixes "/api" (route lives at /api/pole-figure).
 app.include_router(pole_figure_routes.router)
+app.include_router(citations.router, prefix="/api/citations", tags=["Citations"])
 
 # Serve built React frontend in production mode
 FRONTEND_DIST = Path(PROJECT_ROOT) / "frontend" / "dist"
