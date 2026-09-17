@@ -7,9 +7,10 @@ it alone rather than trying to fix the drawer.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
 
@@ -117,3 +118,38 @@ def get_steps(result) -> List[dict]:
         return []
     steps = prov.get("steps")
     return steps if isinstance(steps, list) else []
+
+
+def merge_provenance(target, sources: Iterable[Any]) -> None:
+    """Union the recorded steps of ``sources`` onto ``target``.
+
+    For the sites where a multi-phase run builds a *fresh* result from
+    several per-phase sub-results (the "compare phases" merge and the
+    per-phase-EDS-routing merge): each sub-result already recorded its own
+    steps via :func:`record_step` while it was built, and those steps would
+    otherwise be silently lost the moment the merge constructs a brand-new
+    ``metadata`` dict for the combined result.
+
+    ``sources`` is an iterable of result-like objects — anything
+    :func:`get_steps` accepts (an object whose ``.metadata`` is a dict with
+    a ``provenance.steps`` list). A source that carries no trail at all
+    (``None``, a plain object, a result nothing was ever recorded on)
+    contributes nothing and does not raise.
+
+    Deduplicates by the JSON-serialised ``(key, params)`` pair, not by key
+    alone: two phases indexed with genuinely different parameters (a
+    different bandwidth, a different dictionary size) are two distinct
+    facts and both are kept. First-seen order is preserved, including
+    steps already on ``target`` before this call.
+    """
+    prov = ensure_provenance(target)
+    seen = {json.dumps(step, sort_keys=True) for step in prov["steps"]}
+    for source in sources:
+        for step in get_steps(source):
+            fingerprint = json.dumps(step, sort_keys=True)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            prov["steps"].append(
+                {"key": step["key"], "params": dict(step.get("params") or {})}
+            )

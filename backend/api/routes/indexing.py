@@ -3769,6 +3769,15 @@ async def start_indexing(req: IndexingStartRequest):
                             'eds_n_adjusted': comparison.n_eds_adjusted,
                         },
                     )
+                    # This builds a brand-new IndexingResult from per-phase
+                    # sub-results — each already recorded its own citation
+                    # steps (indexing.hough/dictionary/spherical, ...) on its
+                    # own IndexingResult, which is otherwise dropped here.
+                    from backend.api.services.citations.provenance import (
+                        merge_provenance,
+                    )
+                    merge_provenance(
+                        result, (r.indexing_result for r in all_results))
 
             # ============================================================
             # SINGLE-PHASE PATH: original logic (unchanged)
@@ -3873,6 +3882,16 @@ async def start_indexing(req: IndexingStartRequest):
                         confidence_scores=best_pmr.indexing_result.confidence_scores,
                         metadata={"eds_n_adjusted": comparison.n_eds_adjusted},
                     )
+                    # Per-phase Hough split: each phase's own
+                    # hough_index_patterns call already recorded
+                    # "indexing.hough" on its own sub-result; carry it onto
+                    # the merged one or the citation list would show no
+                    # indexing step at all for this (common, EDS-prior) run.
+                    from backend.api.services.citations.provenance import (
+                        merge_provenance,
+                    )
+                    merge_provenance(
+                        result, (r.indexing_result for r in per_phase_results))
                 else:
                     from orix.crystal_map import Phase, PhaseList
                     from ebsd_utils import sanitize_cif

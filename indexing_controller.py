@@ -2623,6 +2623,12 @@ def spherical_gpu_index_patterns(
     eulers = (_resolved_eulers if _resolved_eulers is not None
               else result.euler_xyz.numpy().astype(np.float64))
     _vu_reports = None
+    # Citation flag: set only when the render arbitration actually unified
+    # a variant (>= 2 candidate classes existed and got adjudicated) — a
+    # phase with only one variant class is a no-op, not an arbitration, and
+    # must not be cited as one (see the "single variant class" skip inside
+    # unify_map/unify_after_hough_resolve).
+    _pseudosym_variants_unified = False
     if _resolved_phase_ids and _sp_patterns_for_resolve is not None:
         try:
             from backend.spherical_gpu.pipeline.variant_unification import (
@@ -2638,6 +2644,7 @@ def spherical_gpu_index_patterns(
                 raw_eulers=result.euler_xyz.numpy().astype(np.float64))
             if _eul_u is not None:
                 eulers = _eul_u
+                _pseudosym_variants_unified = True
                 _tot_flip = sum(r.get("n_flipped_units", 0)
                                 for r in _vu_reports.values() if isinstance(r, dict))
                 _tot_amb = sum(r.get("n_ambiguous", 0)
@@ -2869,6 +2876,11 @@ def spherical_gpu_index_patterns(
         "orienta_version": get_version_info().get("version"),
         "bandwidth": int(config.bandwidth),
     })
+    if _pseudosym_variants_unified:
+        # No params: the sentence template has no slots to fill, and the
+        # fact that render-based arbitration ran against the phase's
+        # candidate classes is the whole citable fact.
+        record_step(indexing_result, "pseudosym.resolver")
     return indexing_result
 
 
@@ -4665,10 +4677,13 @@ def run_per_phase_indexing(
         },
     }
 
-    return IndexingResult(
+    merged_result = IndexingResult(
         xmap=merged_xmap,
         selection_mask=union_mask,
         original_shape=(n_rows, n_cols),
         method=method,
         metadata=metadata,
     )
+    from backend.api.services.citations.provenance import merge_provenance
+    merge_provenance(merged_result, (pmr.indexing_result for pmr in per_phase_results))
+    return merged_result
