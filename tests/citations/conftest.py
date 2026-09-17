@@ -4,8 +4,56 @@ These run the smallest genuine real job available rather than mocking the
 pipeline under test — see tests/test_hough_camera_tilt.py, which runs the
 same real-ROI Hough job and is the pattern followed here.
 """
+import uuid
+
 import numpy as np
 import pytest
+
+from backend.api.routes import indexing as indexing_routes
+from backend.api.services.citations.provenance import PROVENANCE_SCHEMA
+
+
+class _StubResult:
+    """Enough of an IndexingResult for the citation endpoint."""
+
+    def __init__(self, steps):
+        self.metadata = {
+            "provenance": {"schema": PROVENANCE_SCHEMA, "steps": steps}
+        }
+
+
+@pytest.fixture
+def register_result():
+    """Put a result in the registry and take it out again afterwards."""
+    created = []
+
+    def _register(steps):
+        rid = f"test_{uuid.uuid4().hex[:8]}"
+        indexing_routes._result_registry[rid] = _StubResult(steps)
+        created.append(rid)
+        return rid
+
+    yield _register
+    for rid in created:
+        indexing_routes._result_registry.pop(rid, None)
+
+
+@pytest.fixture
+def stored_result_id(register_result):
+    return register_result([
+        {"key": "preprocessing.background", "params": {"background": "dynamic"}},
+        {"key": "indexing.hough", "params": {"orienta_version": "0.3.0"}},
+    ])
+
+
+@pytest.fixture
+def stored_result_id_no_steps(register_result):
+    return register_result([])
+
+
+@pytest.fixture
+def stored_result_id_undeclared(register_result):
+    return register_result([{"key": "some.addon.step", "params": {}}])
 
 
 @pytest.fixture
