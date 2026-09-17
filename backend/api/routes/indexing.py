@@ -9650,6 +9650,13 @@ async def export_indexing_result(req: ExportRequest):
                     _write_scan_provenance,
                 )
                 _write_scan_provenance(idx, _stored_scan_provenance(active))
+                from backend.api.services.result_exporter import (
+                    _write_citations,
+                )
+                from backend.api.services.citations.provenance import (
+                    get_steps,
+                )
+                _write_citations(idx, get_steps(active))
 
                 # Export-frame conversion (see orientation_frame): write Euler
                 # in the source vendor's stored frame so MTEX/Aztec read it
@@ -9944,6 +9951,13 @@ async def export_indexing_result(req: ExportRequest):
                     _write_scan_provenance,
                 )
                 _write_scan_provenance(idx, _stored_scan_provenance(active))
+                from backend.api.services.result_exporter import (
+                    _write_citations,
+                )
+                from backend.api.services.citations.provenance import (
+                    get_steps,
+                )
+                _write_citations(idx, get_steps(active))
                 idx.attrs["format_version"] = _LIGHT_FMT_VERSION
 
                 # step_size_um resolved above (before the file was opened).
@@ -10654,6 +10668,13 @@ async def start_batch_indexing(req: BatchRequest):
                             idx_grp.attrs["method"] = result.method.value
                             idx_grp.attrs["n_indexed"] = n_indexed
                             idx_grp.attrs["original_shape"] = list(result.original_shape)
+                            from backend.api.services.result_exporter import (
+                                _write_citations,
+                            )
+                            from backend.api.services.citations.provenance import (
+                                get_steps,
+                            )
+                            _write_citations(idx_grp, get_steps(result))
                             if hasattr(result.xmap, "rotations"):
                                 euler = result.xmap.rotations.to_euler(degrees=False)
                                 idx_grp.create_dataset("euler_angles", data=np.array(euler))
