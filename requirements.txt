@@ -37,6 +37,7 @@ Pillow
 pandas
 dask[array]  # lazy EBSD arrays + dask.callbacks progress hook in backend/api/routes/ebsd_viewer.py
 openpyxl
+PyYAML  # CITATION.cff parsing (backend/api/services/citations/self_entry.py)
 scikit-learn>=1.0
 xlsxwriter
 beautifulsoup4
