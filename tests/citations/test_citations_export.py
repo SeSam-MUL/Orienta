@@ -341,3 +341,115 @@ def test_batch_auto_export_writes_citations(h5oina_path, al_cif_path, tmp_path):
         assert any(s["key"] == "indexing.hough" for s in steps), steps
     finally:
         _wipe()
+
+
+# ---------------------------------------------------------------------------
+# I4: a bibliography failure costs `entries`, never the export
+# ---------------------------------------------------------------------------
+
+def test_a_broken_bibliography_does_not_fail_the_export(monkeypatch, tmp_path,
+                                                        caplog):
+    """load_library() reads library.json AND parses CITATION.cff, and raises
+    if either is missing or malformed. Unguarded that turned "Save result"
+    into a failed export, and lost a long batch run's auto-export, over a
+    bookkeeping file."""
+    import logging
+
+    import backend.api.services.citations.render as render_mod
+
+    def _boom(*_a, **_k):
+        raise FileNotFoundError("CITATION.cff not found")
+
+    monkeypatch.setattr(render_mod, "load_library", _boom)
+
+    steps = [{"key": "indexing.hough", "params": {"orienta_version": "0.3.0"}}]
+    path = tmp_path / "broken_lib.h5"
+    with caplog.at_level(
+        logging.ERROR, logger="backend.api.services.result_exporter"
+    ):
+        with h5py.File(path, "w") as f:
+            _write_citations(f.create_group("Indexing"), steps)
+
+    with h5py.File(path, "r") as f:
+        grp = f["Indexing/Citations"]
+        assert json.loads(grp.attrs["steps"]) == steps    # the trail survives
+        assert "entries" not in grp.attrs                 # only the cache is gone
+    assert any("citation library" in rec.message for rec in caplog.records)
+    assert any(rec.exc_info for rec in caplog.records), (
+        "logger.exception, not logger.error: the traceback is the whole "
+        "point of a swallowed failure"
+    )
+
+
+# ---------------------------------------------------------------------------
+# The reader side: legacy files, and files that cannot be trusted
+# ---------------------------------------------------------------------------
+
+def _write_raw_steps_attr(path, payload):
+    """A file whose /Indexing/Citations/steps is `payload` verbatim."""
+    with h5py.File(path, "w") as f:
+        grp = f.create_group("Indexing").create_group("Citations")
+        grp.attrs["schema"] = 1
+        grp.attrs["steps"] = json.dumps(payload)
+
+
+def test_a_legacy_file_without_a_citations_group_reads_as_empty(tmp_path):
+    """The backward-compatibility guarantee. Every .h5 exported before this
+    feature has /Indexing and no /Indexing/Citations; the writer side is
+    pinned by test_none_writes_nothing, the reader side was not."""
+    from backend.api.routes.indexing import _read_citations
+
+    path = tmp_path / "legacy.h5"
+    with h5py.File(path, "w") as f:
+        idx = f.create_group("Indexing")
+        idx.attrs["method"] = "hough"
+        idx.create_dataset("phase_id", data=np.zeros((2, 2), dtype=np.int32))
+
+    assert _read_citations(path) == []
+
+
+def test_a_file_with_no_indexing_group_at_all_reads_as_empty(tmp_path):
+    from backend.api.routes.indexing import _read_citations
+
+    path = tmp_path / "not_ours.h5"
+    with h5py.File(path, "w") as f:
+        f.create_dataset("something", data=[1, 2, 3])
+
+    assert _read_citations(path) == []
+
+
+@pytest.mark.parametrize("payload", [
+    ["indexing.hough", "eds.chemistry_prior"],   # valid JSON, list of strings
+    {"key": "indexing.hough"},                   # a dict, not a list
+    [None, 7, "x"],
+    "indexing.hough",
+])
+def test_a_malformed_trail_is_dropped_not_raised_on(tmp_path, payload):
+    """Trust boundary: the file comes from another institution. A list of
+    strings parses fine and then makes render_methods raise AttributeError
+    (str.get) -> HTTP 500 from a file."""
+    from backend.api.routes.indexing import _read_citations
+    from backend.api.services.citations.render import render_methods
+
+    path = tmp_path / "hostile.h5"
+    _write_raw_steps_attr(path, payload)
+
+    steps = _read_citations(path)
+    assert steps == []
+    render_methods(steps)          # must not raise
+
+
+def test_a_partly_malformed_trail_keeps_its_good_entries(tmp_path):
+    from backend.api.routes.indexing import _read_citations
+
+    path = tmp_path / "mixed.h5"
+    _write_raw_steps_attr(path, [
+        {"key": "indexing.hough", "params": {"orienta_version": "0.3.0"}},
+        "indexing.dictionary",
+        {"no_key": 1},
+        {"key": "pseudosym.resolver", "params": "not a dict"},
+    ])
+
+    steps = _read_citations(path)
+    assert [s["key"] for s in steps] == ["indexing.hough", "pseudosym.resolver"]
+    assert steps[1]["params"] == {}

@@ -298,6 +298,14 @@ def _write_citations(group, steps: Optional[List[dict]]) -> None:
     Stored as two JSON attributes rather than a dataset tree: the payload is
     a few kB, and JSON keeps the nested params intact where h5 attributes
     would flatten them.
+
+    A bibliography that cannot be loaded costs ``entries`` and nothing else.
+    ``load_library()`` reads library.json AND parses CITATION.cff, and it
+    raises if either is missing or malformed; unguarded, that turned "Save
+    result" into a failed export and lost a long batch run's auto-export over
+    a bookkeeping file. ``steps`` is what ``indexing._read_citations`` reads
+    back — with it the importing side rebuilds the bibliography from ITS own
+    library — so the trail survives and only the cached copy is missing.
     """
     if not steps:
         return
@@ -306,7 +314,22 @@ def _write_citations(group, steps: Optional[List[dict]]) -> None:
     from backend.api.services.citations.render import load_library
     from backend.api.services.citations.steps import get_step
 
-    library = load_library()
+    library = None
+    try:
+        library = load_library()
+    except Exception:
+        logger.exception(
+            "Could not load the citation library while exporting; writing "
+            "/Indexing/Citations without the cached bibliography. The step "
+            "trail is written and is what a re-import reads."
+        )
+
+    grp = group.create_group("Citations")
+    grp.attrs["schema"] = 1
+    grp.attrs["steps"] = _json.dumps(steps, ensure_ascii=False)
+    if library is None:
+        return
+
     ordered: List[str] = ["orienta", "kikuchipy", "orix"]
     for entry in steps:
         step = get_step(entry.get("key", ""))
@@ -316,9 +339,6 @@ def _write_citations(group, steps: Optional[List[dict]]) -> None:
             if cid not in ordered:
                 ordered.append(cid)
 
-    grp = group.create_group("Citations")
-    grp.attrs["schema"] = 1
-    grp.attrs["steps"] = _json.dumps(steps, ensure_ascii=False)
     grp.attrs["entries"] = _json.dumps(
         [library[cid] for cid in ordered if cid in library],
         ensure_ascii=False,

@@ -44,6 +44,14 @@ be cited in any publication that uses these features:
 
 These academic attributions are in addition to the source-license obligations above.
 
+> **Machine-readable form.** The same attributions are kept as CSL-JSON in
+> [`backend/api/services/citations/library.json`](backend/api/services/citations/library.json),
+> mapped to the pipeline steps that use them in
+> [`backend/api/services/citations/steps.py`](backend/api/services/citations/steps.py).
+> That is what the app's "Citations for this result" panel and the `/Citations`
+> group of an exported `.h5` are rendered from; this file stays the
+> human-readable licence document.
+
 ## Key runtime dependencies
 
 Except for the two bundled JavaScript files noted below, these are required

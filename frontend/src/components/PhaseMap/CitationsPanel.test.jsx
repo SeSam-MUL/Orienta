@@ -4,7 +4,7 @@
 // it would violate the "no new third-party dependency" constraint, so this
 // uses `fireEvent.click` from the already-present @testing-library/react —
 // same observable behaviour (a click on the Copy button), no new package.
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import '@testing-library/jest-dom/vitest';
 import CitationsPanel from './CitationsPanel';
@@ -61,6 +61,37 @@ describe('CitationsPanel', () => {
     await waitFor(() =>
       expect(screen.getByText(/bandwidth 88/)).toBeInTheDocument());
     expect(screen.queryByText(/Hough\/Radon/)).not.toBeInTheDocument();
+  });
+
+  it('drops A\'s response when it settles AFTER the panel has moved to B', async () => {
+    // The race the stale-response guard exists for, which the test above
+    // does NOT exercise: it awaits A fully before rerendering, so A's
+    // `.then` has already run and would pass with the guard removed.
+    // Here A is held open with a manually-deferred promise, B arrives and
+    // renders, and only THEN is A allowed to settle — the only ordering in
+    // which `resultIdRef.current !== startedId` is true inside the handler.
+    let resolveA;
+    const deferredA = new Promise((resolve) => { resolveA = resolve; });
+    citationsApi.forResult.mockImplementation((id) => (
+      id === 'a'
+        ? deferredA
+        : Promise.resolve({ data: { ...payload, methods: 'B: bandwidth 88.' } })
+    ));
+
+    const { rerender } = render(<CitationsPanel resultId="a" />);
+    await waitFor(() => expect(citationsApi.forResult).toHaveBeenCalledWith('a'));
+
+    rerender(<CitationsPanel resultId="b" />);
+    await waitFor(() =>
+      expect(screen.getByText(/B: bandwidth 88/)).toBeInTheDocument());
+
+    await act(async () => {
+      resolveA({ data: { ...payload, methods: 'A: STALE, must not appear.' } });
+      await deferredA;
+    });
+
+    expect(screen.queryByText(/STALE/)).not.toBeInTheDocument();
+    expect(screen.getByText(/B: bandwidth 88/)).toBeInTheDocument();
   });
 
   it('copies the active format to the clipboard', async () => {
