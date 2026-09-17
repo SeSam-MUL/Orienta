@@ -1,0 +1,378 @@
+{
+  "diffsims": {
+    "DOI": "10.5281/zenodo.15580609",
+    "author": [
+      {
+        "literal": "Duncan Johnstone"
+      },
+      {
+        "literal": "Phillip Crout"
+      },
+      {
+        "literal": "Håkon Wiik Ånes"
+      },
+      {
+        "literal": "Carter Francis"
+      },
+      {
+        "literal": "Eric Prestat"
+      },
+      {
+        "literal": "Rob Tovey"
+      },
+      {
+        "literal": "Simon Høgås"
+      },
+      {
+        "literal": "Ben Martineau"
+      },
+      {
+        "literal": "Joonatan Laulainen"
+      },
+      {
+        "literal": "Niels Cautaerts"
+      },
+      {
+        "literal": "Viljar Johan Femoen"
+      },
+      {
+        "literal": "Isabel Wood"
+      },
+      {
+        "literal": "Sean Collins"
+      },
+      {
+        "literal": "Stef Smeets"
+      },
+      {
+        "literal": "Alex Borrelli"
+      },
+      {
+        "literal": "Tiarnan Doherty"
+      },
+      {
+        "literal": "Jedrzej Morzy"
+      },
+      {
+        "literal": "Endre Jacobsen"
+      },
+      {
+        "literal": "Tina Bergh"
+      },
+      {
+        "literal": "Tomas Ostasevicius"
+      },
+      {
+        "literal": "Eirik Opheim"
+      }
+    ],
+    "id": "diffsims",
+    "issued": {
+      "date-parts": [
+        [
+          2025,
+          6,
+          3
+        ]
+      ]
+    },
+    "publisher": "Zenodo",
+    "title": "diffsims",
+    "type": "software",
+    "version": "v0.7.0"
+  },
+  "emsoft": {
+    "DOI": "10.1017/S1431927613001840",
+    "author": [
+      {
+        "family": "Callahan",
+        "given": "Patrick G."
+      },
+      {
+        "family": "De Graef",
+        "given": "Marc"
+      }
+    ],
+    "container-title": "Microscopy and Microanalysis",
+    "id": "emsoft",
+    "issued": {
+      "date-parts": [
+        [
+          2013
+        ]
+      ]
+    },
+    "page": "1255-1265",
+    "title": "Dynamical Electron Backscatter Diffraction Patterns. Part I: Pattern Simulations",
+    "type": "article-journal",
+    "volume": "19"
+  },
+  "hyperspy": {
+    "DOI": "10.5281/zenodo.18379337",
+    "author": [
+      {
+        "literal": "Francisco de la Peña"
+      },
+      {
+        "literal": "Eric Prestat"
+      },
+      {
+        "literal": "Jonas Lähnemann"
+      },
+      {
+        "literal": "Vidar Tonaas Fauske"
+      },
+      {
+        "literal": "Pierre Burdet"
+      },
+      {
+        "literal": "Petras Jokubauskas"
+      },
+      {
+        "literal": "Tom Furnival"
+      },
+      {
+        "literal": "Carter Francis"
+      },
+      {
+        "literal": "Magnus Nord"
+      },
+      {
+        "literal": "Tomas Ostasevicius"
+      },
+      {
+        "literal": "Katherine E. MacArthur"
+      },
+      {
+        "literal": "Duncan N. Johnstone"
+      },
+      {
+        "literal": "Mike Sarahan"
+      },
+      {
+        "literal": "Thomas Aarholt"
+      },
+      {
+        "literal": "Joshua Taillon"
+      },
+      {
+        "literal": "pquinn-dls"
+      },
+      {
+        "literal": "Vadim Migunov"
+      },
+      {
+        "literal": "Alberto Eljarrat"
+      },
+      {
+        "literal": "Jan Caron"
+      },
+      {
+        "literal": "T. Nemoto"
+      },
+      {
+        "literal": "Timothy Poon"
+      },
+      {
+        "literal": "sivborg"
+      },
+      {
+        "literal": "actions-user"
+      },
+      {
+        "literal": "Nicolas Tappy"
+      },
+      {
+        "literal": "Niels Cautaerts"
+      },
+      {
+        "literal": "Suhas Somnath"
+      },
+      {
+        "literal": "Tom Slater"
+      },
+      {
+        "literal": "Michael Walls"
+      },
+      {
+        "literal": "pietsjoh"
+      }
+    ],
+    "id": "hyperspy",
+    "issued": {
+      "date-parts": [
+        [
+          2026,
+          1,
+          26
+        ]
+      ]
+    },
+    "publisher": "Zenodo",
+    "title": "hyperspy",
+    "type": "software",
+    "version": "v2.4.0"
+  },
+  "kikuchipy": {
+    "DOI": "10.48550/arXiv.2605.25722",
+    "URL": "https://arxiv.org/abs/2605.25722",
+    "author": [
+      {
+        "family": "Ånes",
+        "given": "Håkon W."
+      },
+      {
+        "family": "Crout",
+        "given": "Phillip"
+      },
+      {
+        "family": "Lervik",
+        "given": "Lars Andreas"
+      },
+      {
+        "family": "Natlandsmyr",
+        "given": "Ole"
+      },
+      {
+        "family": "Bergh",
+        "given": "Tina"
+      },
+      {
+        "family": "Hjelen",
+        "given": "Jarle"
+      },
+      {
+        "family": "van Helvoort",
+        "given": "Antonius T. J."
+      },
+      {
+        "family": "Marthinsen",
+        "given": "Knut"
+      }
+    ],
+    "container-title": "arXiv preprint arXiv:2605.25722",
+    "id": "kikuchipy",
+    "issued": {
+      "date-parts": [
+        [
+          2026
+        ]
+      ]
+    },
+    "title": "kikuchipy: an open-source toolbox for analysis of EBSD patterns",
+    "type": "article"
+  },
+  "lenthe2019": {
+    "DOI": "10.1016/j.ultramic.2019.112841",
+    "author": [
+      {
+        "family": "Lenthe",
+        "given": "W. C."
+      },
+      {
+        "family": "Singh",
+        "given": "S."
+      },
+      {
+        "family": "De Graef",
+        "given": "M."
+      }
+    ],
+    "container-title": "Ultramicroscopy",
+    "id": "lenthe2019",
+    "issued": {
+      "date-parts": [
+        [
+          2019
+        ]
+      ]
+    },
+    "page": "112841",
+    "title": "A spherical harmonic transform approach to the indexing of electron back-scattered diffraction patterns",
+    "type": "article-journal",
+    "volume": "207"
+  },
+  "orienta-eds-prior": {
+    "id": "orienta-eds-prior",
+    "issued": {
+      "date-parts": [
+        [
+          2026,
+          7,
+          31
+        ]
+      ]
+    },
+    "publisher": "Orienta project (unpublished methods note)",
+    "title": "EDS-Guided Phase Disambiguation at Indexing — Methods",
+    "type": "report"
+  },
+  "orix": {
+    "DOI": "10.1107/S1600576720011103",
+    "author": [
+      {
+        "family": "Johnstone",
+        "given": "Duncan N."
+      },
+      {
+        "family": "Martineau",
+        "given": "Ben H."
+      },
+      {
+        "family": "Crout",
+        "given": "Phillip"
+      },
+      {
+        "family": "Midgley",
+        "given": "Paul A."
+      },
+      {
+        "family": "Eggeman",
+        "given": "Alexander S."
+      }
+    ],
+    "container-title": "Journal of Applied Crystallography",
+    "id": "orix",
+    "issued": {
+      "date-parts": [
+        [
+          2020
+        ]
+      ]
+    },
+    "page": "1293-1298",
+    "title": "Density-based clustering of crystal (mis)orientations and the orix Python library",
+    "type": "article-journal",
+    "volume": "53"
+  },
+  "pyebsdindex": {
+    "DOI": "10.1107/S1600576723010221",
+    "author": [
+      {
+        "family": "Rowenhorst",
+        "given": "David J."
+      },
+      {
+        "family": "Callahan",
+        "given": "Patrick G."
+      },
+      {
+        "family": "Ånes",
+        "given": "Håkon W."
+      }
+    ],
+    "container-title": "Journal of Applied Crystallography",
+    "id": "pyebsdindex",
+    "issued": {
+      "date-parts": [
+        [
+          2024
+        ]
+      ]
+    },
+    "page": "3-19",
+    "title": "Fast Radon transforms for high-precision EBSD orientation determination using PyEBSDIndex",
+    "type": "article-journal",
+    "volume": "57"
+  }
+}

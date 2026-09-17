@@ -1,0 +1,24 @@
+{
+  "fixture-software": {
+    "id": "fixture-software",
+    "type": "software",
+    "title": "Fixture Tool",
+    "author": [{"family": "Doe", "given": "Jane"}],
+    "issued": {"date-parts": [[2020]]},
+    "version": "1.2.3",
+    "DOI": "10.0000/fixture.software",
+    "publisher": "Zenodo"
+  },
+  "fixture-article": {
+    "id": "fixture-article",
+    "type": "article-journal",
+    "title": "A Fixture Method",
+    "author": [{"family": "Roe", "given": "Richard"},
+               {"family": "Poe", "given": "Paula"}],
+    "issued": {"date-parts": [[2019]]},
+    "container-title": "Journal of Fixtures",
+    "volume": "207",
+    "page": "112841",
+    "DOI": "10.0000/fixture.article"
+  }
+}
