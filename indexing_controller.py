@@ -3390,7 +3390,15 @@ def _spherical_index_patterns_impl(
     )
     from backend.api.services.citations.provenance import record_step
     from backend.api.services.app_version import get_version_info
-    record_step(result, "indexing.spherical", {
+    # NOT "indexing.spherical": that key's sentence claims an independent GPU
+    # reimplementation of Lenthe et al. in Orienta, and this function did no
+    # such thing — it shelled out to the authors' own IndexEBSD binary in WSL
+    # (see this function's docstring). Claiming the implementation here would
+    # both overstate Orienta's contribution and deny EMSphInx credit for the
+    # numbers, in text destined for a manuscript. This is also the DEFAULT
+    # spherical backend (resolve_spherical_backend), so it is the sentence
+    # most spherical runs get.
+    record_step(result, "indexing.spherical_emsphinx", {
         "orienta_version": get_version_info().get("version"),
         "bandwidth": config.bandwidth,
     })

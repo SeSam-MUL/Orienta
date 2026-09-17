@@ -9,8 +9,38 @@ from backend.api.services.citations.steps import (
 )
 
 
-def test_registry_is_not_empty():
-    assert len(STEP_REGISTRY) >= 5
+#: Every key the shipped registry declares. Pinned EXACTLY, not with a ``>=``
+#: floor: the registry is the add-on contract's public surface, and a step
+#: that silently VANISHES (a refactor drops a StepCitation, a run stops being
+#: citable) is the failure a floor cannot see. Update this set deliberately,
+#: in the same commit that adds or removes a step.
+EXPECTED_KEYS = {
+    "indexing.hough",
+    "indexing.dictionary",
+    "indexing.spherical",
+    "indexing.spherical_emsphinx",
+    "eds.chemistry_prior",
+    "eds.particle_rescue",
+    "pseudosym.resolver",
+    "preprocessing.background",
+    "refinement.orientation",
+}
+
+
+def test_registry_holds_exactly_the_declared_steps():
+    assert set(STEP_REGISTRY) == EXPECTED_KEYS
+    assert len(STEP_REGISTRY) == 9
+
+
+def test_the_emsphinx_step_does_not_claim_an_orienta_reimplementation():
+    """C2. The EMSphInx path shells out to the authors' own binary; its
+    sentence must credit EMSphInx, not claim Orienta implemented it."""
+    emsphinx = STEP_REGISTRY["indexing.spherical_emsphinx"].sentence
+    assert "EMSphInx" in emsphinx
+    assert "reimplementation" not in emsphinx.lower()
+    # ...and the Orienta-GPU key must keep saying it IS one, so the two
+    # sentences stay distinguishable.
+    assert "reimplementation" in STEP_REGISTRY["indexing.spherical"].sentence
 
 
 def test_every_declared_citation_id_exists_in_the_library():

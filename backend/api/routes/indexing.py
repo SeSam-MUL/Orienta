@@ -1443,6 +1443,55 @@ def _method_phase_paths(req) -> list:
     return list(req.cif_paths or [])
 
 
+def _eds_prior_is_on(req) -> bool:
+    """Was the EDS chemistry prior CONFIGURED on for this run?
+
+    The same question ``_apply_particle_rescue`` asks, deliberately the same
+    expression: a prior that was on and happened to flip no winner is a prior
+    that ran, and recording it only when it changed something would make
+    "absent" mean two different things (off, and on-but-no-effect) in a trail
+    whose whole contract is that absence means off. It also let a run cite the
+    particle rescue — which gates on configuration — while omitting the prior
+    that drove it.
+    """
+    strengths = req.eds_phase_strengths or {}
+    paths = _method_phase_paths(req)
+    return any(float(strengths.get(p, 0.0)) > 0.0 for p in paths)
+
+
+def _eds_strengths_by_phase_name(req) -> dict:
+    """``eds_phase_strengths`` re-keyed from file path to phase name.
+
+    The wire format is keyed by the phase FILE PATH — the frontend builds it
+    that way (``Indexing/edsPriorParams.js``) and every server-side reader
+    looks it up that way — which is right for a lookup and wrong for anything
+    a person reads. Recorded verbatim, it printed the operator's absolute
+    local path into the methods paragraph and into every exported ``.h5``:
+    a username and a directory layout, leaked into a manuscript.
+
+    The names are the ones ``_inject_phase_names`` puts on the xmap (via the
+    shared ``_derived_phase_names``), so the sentence names the same phases
+    the map does. ``Path(p).stem`` is the floor when phase metadata cannot
+    say. A phase of this run that carries no strength is recorded as 0.0 —
+    the same default the prior itself applies — so the sentence lists the
+    run's phases, not the request dict's keys, which may be keyed to another
+    method's files.
+    """
+    strengths = req.eds_phase_strengths or {}
+    paths = _method_phase_paths(req) or list(strengths.keys())
+    names = _derived_phase_names(paths)
+    out: dict = {}
+    for i, p in enumerate(paths):
+        name = str(names[i]) if i < len(names) and names[i] else Path(p).stem
+        # Two phase files can derive the same name (same formula, different
+        # structure model). Suffix rather than let one silently overwrite the
+        # other's strength.
+        if name in out:
+            name = f"{name} ({i + 1})"
+        out[name] = float(strengths.get(p, 0.0))
+    return out
+
+
 def _phase_point_group_and_name(xmap, pid: int, path: str) -> tuple:
     """(point-group name, display name) of run phase ``pid`` built from ``path``.
 
@@ -4023,9 +4072,15 @@ async def start_indexing(req: IndexingStartRequest):
             _eds_n = int((result.metadata or {}).get("eds_n_adjusted", 0)) if getattr(result, "metadata", None) else 0
             if _eds_n:
                 _progress(f"EDS chemistry prior: adjusted {_eds_n} pixels")
+            # Recorded on CONFIGURATION, not on effect: see _eds_prior_is_on.
+            # n_adjusted: 0 is the honest number for a prior that ran and
+            # changed no winner, and the sentence already carries the count.
+            if _eds_prior_is_on(req):
                 from backend.api.services.citations.provenance import record_step
                 record_step(result, "eds.chemistry_prior", {
-                    "strength_by_phase": req.eds_phase_strengths,
+                    # Phase NAMES, never the absolute file paths the request
+                    # is keyed by — this string reaches a manuscript.
+                    "strength_by_phase": _eds_strengths_by_phase_name(req),
                     "n_adjusted": _eds_n,
                 })
 
@@ -9451,7 +9506,17 @@ def _read_scan_provenance(h5_path) -> dict:
 
 
 def _read_citations(h5_path) -> list:
-    """Read back the citation trail an export wrote. Absent → empty."""
+    """Read back the citation trail an export wrote. Absent → empty.
+
+    This is a TRUST BOUNDARY: the file comes from another machine, often
+    another institution, and its ``steps`` attribute is attacker- or
+    corruption-controlled JSON. Valid JSON is not a valid trail — a list of
+    strings parses fine and then makes ``render_methods`` raise
+    ``AttributeError`` (``str.get``) on the next citation request, i.e. an
+    HTTP 500 from a file. Keep only the elements that are actually shaped
+    like a step: a dict with a string ``key``. Everything else is dropped
+    with a log line rather than trusted or raised on.
+    """
     import json as _json
 
     import h5py
@@ -9461,10 +9526,30 @@ def _read_citations(h5_path) -> list:
             grp = f.get("Indexing/Citations")
             if grp is None:
                 return []
-            return _json.loads(grp.attrs["steps"])
+            raw = _json.loads(grp.attrs["steps"])
     except Exception:
         logger.debug("no citation trail in %s", h5_path, exc_info=True)
         return []
+
+    if not isinstance(raw, list):
+        logger.warning(
+            "citation trail in %s is a %s, not a list of steps — ignored.",
+            h5_path, type(raw).__name__)
+        return []
+    steps = []
+    for item in raw:
+        if isinstance(item, dict) and isinstance(item.get("key"), str):
+            params = item.get("params")
+            steps.append({
+                "key": item["key"],
+                "params": params if isinstance(params, dict) else {},
+            })
+    if len(steps) != len(raw):
+        logger.warning(
+            "citation trail in %s: dropped %d malformed entr%s.",
+            h5_path, len(raw) - len(steps),
+            "y" if len(raw) - len(steps) == 1 else "ies")
+    return steps
 
 
 @router.post("/export")

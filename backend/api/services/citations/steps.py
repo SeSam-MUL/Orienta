@@ -16,6 +16,35 @@ patterns are rendered from. It is not a citation for the matching algorithm
 itself, so ``indexing.spherical`` (which uses the same master patterns but a
 different, Lenthe-et-al. matching method) keeps ``emsoft`` too — one entry, two
 correct and distinct roles.
+
+Note on the two spherical keys. Orienta can reach a spherical-harmonic result
+two ways, and they are different facts about who did the work.
+``indexing.spherical`` is Orienta's own GPU implementation
+(``backend/spherical_gpu/``, recorded from ``indexing_controller``'s
+``spherical_gpu_index_patterns``). ``indexing.spherical_emsphinx`` is the
+DEFAULT backend (see ``resolve_spherical_backend``): Orienta shells out to the
+authors' own ``IndexEBSD`` binary in WSL, so the numbers are EMSphInx's and the
+sentence must say so rather than claim an implementation Orienta did not do for
+that run. Both cite ``emsoft``, in the same role as ``indexing.dictionary``
+does: the ``.sht`` master patterns both consume are simulated by EMsoft's
+``EMEBSDmasterSHT`` — a citation for the simulated references, not for the
+matching method.
+
+Which keys are WIRED (i.e. some code path calls ``record_step`` with them):
+``indexing.hough``, ``indexing.dictionary``, ``indexing.spherical``,
+``indexing.spherical_emsphinx``, ``eds.chemistry_prior``,
+``eds.particle_rescue``, ``pseudosym.resolver`` and
+``refinement.orientation``.
+
+``preprocessing.background`` is DECLARED BUT DELIBERATELY NEVER RECORDED.
+Background removal happens in the EBSD viewer, in place on the loaded signal,
+before and independently of any indexing run; no result object exists at that
+moment to record it on, and reconstructing it afterwards would be a guess. The
+declaration is kept because the recorded-but-undeclared path is the honest
+failure mode (see ``record_step``) and because the fixtures and the ``.h5``
+round-trip exercise it — but an add-on author reading this registry as the
+public contract must not read it as "the app records this". It does not. If a
+future preprocessing step wants a citation, it has to record it itself.
 """
 from __future__ import annotations
 
@@ -61,6 +90,16 @@ _STEPS = (
             "indexing at bandwidth {bandwidth}, an independent GPU "
             "reimplementation of the method of Lenthe et al. (2019) in "
             "Orienta {orienta_version}."
+        ),
+    ),
+    StepCitation(
+        key="indexing.spherical_emsphinx",
+        label="Spherical-harmonic indexing (EMSphInx)",
+        citation_ids=("lenthe2019", "orienta", "emsoft", "orix"),
+        sentence=(
+            "Orientations were determined by spherical-harmonic-transform "
+            "indexing at bandwidth {bandwidth} using EMSphInx "
+            "(Lenthe et al., 2019), invoked by Orienta {orienta_version}."
         ),
     ),
     StepCitation(
