@@ -151,12 +151,27 @@ class _Missing:
     handed only the value and the format spec, never the field name — so if
     "which key was missing" is going to reach the output, the value has to
     remember it.
+
+    ``__str__``/``__repr__`` return the same bracketed phrase as
+    ``format_field`` does for this sentinel. ``string.Formatter.convert_field``
+    runs *before* ``format_field`` and calls ``str()``/``repr()`` directly for
+    a ``{x!s}``/``{x!r}`` conversion, which would otherwise bypass the
+    sentinel check in ``format_field`` entirely and print
+    ``<...Missing object at 0x...>`` — defining these here means the honesty
+    guarantee holds for every syntax form that can reach a value, not just
+    the plain ``{x}`` one a template happens to use today.
     """
 
     __slots__ = ("key",)
 
     def __init__(self, key: str) -> None:
         self.key = key
+
+    def __str__(self) -> str:
+        return f"[{self.key} not recorded]"
+
+    def __repr__(self) -> str:
+        return self.__str__()
 
 
 class _MethodsFormatter(string.Formatter):
@@ -189,8 +204,9 @@ class _MethodsFormatter(string.Formatter):
         if isinstance(value, _Missing):
             # The spec is ignored on purpose: "[key not recorded]" is not a
             # float or a date, and applying ":.2f" to it is the crash this
-            # class exists to prevent.
-            return f"[{value.key} not recorded]"
+            # class exists to prevent. str(value) is _Missing.__str__, the
+            # same phrase a !s/!r conversion would already have produced.
+            return str(value)
         if isinstance(value, dict):
             return self._render_dict(value)
         if isinstance(value, (list, tuple)):
@@ -205,11 +221,19 @@ class _MethodsFormatter(string.Formatter):
         return super().format_field(value, format_spec)
 
     def _render_scalar(self, value) -> str:
-        """A scalar as it reads inside a list, or as a dict-value fallback."""
+        """A scalar as it reads inside a list, or as a dict-value fallback.
+
+        Deliberately no type-based heuristic (e.g. "a float in [0, 1] must be
+        a fraction, so show it as a percentage") — a formatter cannot know
+        whether a given dict's floats are fractions, radians, or counts, and
+        guessing wrong would silently misstate a number in text destined for
+        a manuscript. A float renders the same bare way everywhere: here,
+        at the top level, and inside a list.
+        """
         if isinstance(value, bool):
             return "yes" if value else "no"
         if value is None:
-            return "not recorded"
+            return "[value not recorded]"
         if isinstance(value, float):
             return self._trim_float(value)
         if isinstance(value, dict):
@@ -219,21 +243,19 @@ class _MethodsFormatter(string.Formatter):
         return str(value)
 
     def _render_dict(self, value: dict) -> str:
-        """``{"Al": 0.0, "Si": 0.75}`` -> ``"Al 0%, Si 75%"``.
+        """``{"Al": 0.0, "Si": 0.75}`` -> ``"Al 0, Si 0.75"``.
 
-        Every dict param recorded today (``strength_by_phase``) holds a
-        fraction in [0, 1] per key. A percentage reads as prose ("Si 75%");
-        the bare fraction ("Si 0.75") reads as a leftover number that was
-        supposed to be finished. A value outside [0, 1] (nothing today) falls
-        back to a trimmed float instead of being multiplied by 100, so a
-        future non-fractional dict param does not get silently mangled.
+        Bare numbers, not percentages: 0-1 is the scale the API itself uses
+        for e.g. ``strength_by_phase``, and "%" would be this formatter's
+        own invention rather than something the data says. A missing/None
+        entry is named in the same bracketed form as a missing top-level
+        param (``"[key not recorded]"``), not a second, unbracketed phrasing
+        for the same condition.
         """
         parts = []
         for k, v in value.items():
             if v is None:
-                parts.append(f"{k} not recorded")
-            elif isinstance(v, float) and 0.0 <= v <= 1.0:
-                parts.append(f"{k} {self._as_percentage(v)}")
+                parts.append(f"[{k} not recorded]")
             else:
                 parts.append(f"{k} {self._render_scalar(v)}")
         return ", ".join(parts)
@@ -252,11 +274,6 @@ class _MethodsFormatter(string.Formatter):
         """Trimmed, not repr: no trailing ``.0``, capped at 3 decimals."""
         text = f"{value:.3f}".rstrip("0").rstrip(".")
         return text or "0"
-
-    @staticmethod
-    def _as_percentage(value: float) -> str:
-        text = f"{value * 100:.1f}".rstrip("0").rstrip(".")
-        return f"{text or '0'}%"
 
 
 _METHODS_FORMATTER = _MethodsFormatter()

@@ -82,9 +82,22 @@ def test_dict_param_renders_as_prose_not_python_repr():
     assert "}" not in out
     assert "'" not in out
     assert ":" not in out
-    assert "Al 0%" in out
-    assert "Si 75%" in out
     assert "12 pixels" in out
+
+
+def test_dict_value_renders_as_bare_float_not_percentage():
+    """Round 2, finding 1: no [0,1]-implies-percentage heuristic.
+
+    0.0/0.75 are the API's own scale -- "%" would be this formatter
+    inventing a unit the data never claimed. Pinned against the real
+    strength_by_phase shape so the heuristic cannot creep back in.
+    """
+    out = render_methods([
+        {"key": "eds.chemistry_prior",
+         "params": {"strength_by_phase": {"Al": 0.0, "Si": 0.75}, "n_adjusted": 12}},
+    ])
+    assert "Al 0, Si 0.75" in out
+    assert "%" not in out
 
 
 def test_missing_key_with_format_spec_names_it_and_does_not_raise(temp_step):
@@ -94,6 +107,22 @@ def test_missing_key_with_format_spec_names_it_and_does_not_raise(temp_step):
     out = render_methods([{"key": "test.format_spec_missing", "params": {}}])
     assert "[missing_val not recorded]" in out
     assert ".1f" not in out
+
+
+def test_missing_key_with_str_conversion_is_named_not_a_repr(temp_step):
+    """Round 2, finding 2: {x!s} calls str() before format_field ever runs."""
+    temp_step("test.conversion_s", "Value: {missing_val!s} recorded.")
+    out = render_methods([{"key": "test.conversion_s", "params": {}}])
+    assert "[missing_val not recorded]" in out
+    assert "_Missing object at" not in out
+
+
+def test_missing_key_with_repr_conversion_is_named_not_a_repr(temp_step):
+    """Round 2, finding 2: {x!r} calls repr() before format_field ever runs."""
+    temp_step("test.conversion_r", "Value: {missing_val!r} recorded.")
+    out = render_methods([{"key": "test.conversion_r", "params": {}}])
+    assert "[missing_val not recorded]" in out
+    assert "_Missing object at" not in out
 
 
 def test_float_is_trimmed_not_full_precision(temp_step):
@@ -155,3 +184,21 @@ def test_none_value_is_named_not_printed_as_none(temp_step):
     ])
     assert "None" not in out
     assert "[threshold not recorded]" in out
+
+
+def test_none_dict_value_uses_the_same_bracketed_form_as_top_level(temp_step):
+    """Round 2, finding 3: one absence phrasing, not two.
+
+    A missing/None top-level value already reads "[key not recorded]" (via
+    _Missing). A None *inside* a dict must read identically, not the
+    unbracketed "key not recorded" it used to.
+    """
+    temp_step("test.dict_with_none", "Composition: {comp}.")
+    out = render_methods([
+        {"key": "test.dict_with_none", "params": {"comp": {"Al": 0.5, "Si": None}}},
+    ])
+    assert "[Si not recorded]" in out
+    assert "Al 0.5" in out
+    # Bracketed and unbracketed "Si not recorded" have the same substring
+    # count only if every occurrence is the bracketed form.
+    assert out.count("Si not recorded") == out.count("[Si not recorded]")
