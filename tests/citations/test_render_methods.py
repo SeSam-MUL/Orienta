@@ -202,3 +202,50 @@ def test_none_dict_value_uses_the_same_bracketed_form_as_top_level(temp_step):
     # Bracketed and unbracketed "Si not recorded" have the same substring
     # count only if every occurrence is the bracketed form.
     assert out.count("Si not recorded") == out.count("[Si not recorded]")
+
+
+# ---------------------------------------------------------------------------
+# I2: one sentence per step, even when a step is on the trail twice
+# ---------------------------------------------------------------------------
+
+def test_a_repeated_step_prints_once():
+    """POST /pseudosym/unify and refine_orientations mutate an ALREADY
+    STORED result and append a step that may already be there with different
+    params — merge_provenance's (key, params) fingerprint cannot dedupe that,
+    and pseudosym.resolver's sentence has no slots, so it printed verbatim
+    twice."""
+    steps = [
+        {"key": "pseudosym.resolver", "params": {}},
+        {"key": "pseudosym.resolver", "params": {"n_changed": 61}},
+    ]
+    out = render_methods(steps)
+    assert out.count("Pseudo-symmetric orientation variants") == 1
+
+
+def test_the_last_occurrence_supplies_the_params():
+    """The later append is the more complete statement of the same step."""
+    out = render_methods([
+        {"key": "refinement.orientation", "params": {}},
+        {"key": "refinement.orientation", "params": {"n_refined": 2048}},
+    ])
+    assert "2048 pixels" in out
+    assert "not recorded" not in out
+
+
+def test_first_seen_order_survives_the_dedupe():
+    out = render_methods([
+        {"key": "indexing.hough", "params": {"orienta_version": "0.3.0"}},
+        {"key": "refinement.orientation", "params": {"n_refined": 1}},
+        {"key": "indexing.hough", "params": {"orienta_version": "0.3.1"}},
+    ])
+    assert out.index("Hough") < out.index("refined")
+    assert "Orienta 0.3.1" in out       # last params win
+    assert "Orienta 0.3.0" not in out
+
+
+def test_a_repeated_undeclared_step_also_prints_once():
+    out = render_methods([
+        {"key": "some.addon.step", "params": {}},
+        {"key": "some.addon.step", "params": {"x": 1}},
+    ])
+    assert out.count("some.addon.step") == 1

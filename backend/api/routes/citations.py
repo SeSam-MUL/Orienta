@@ -62,7 +62,14 @@ def citations_for_result(result_id: str):
     for entry in steps:
         step = get_step(entry.get("key", ""))
         if step is None:
-            undeclared.append(entry.get("key", ""))
+            # By key, once. A step appended twice to the same trail (the
+            # sites that mutate an already-stored result do that) listed its
+            # key twice here, and the panel keys its <li> on the key — a
+            # duplicate React key, and a list that reads like two different
+            # unknown steps ran. render_methods dedupes the same way.
+            key = entry.get("key", "")
+            if key not in undeclared:
+                undeclared.append(key)
             continue
         for cid in step.citation_ids:
             if cid in library and cid not in ordered:

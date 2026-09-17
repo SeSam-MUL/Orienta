@@ -96,3 +96,46 @@ def test_broken_library_degrades_instead_of_500(
         "Failed to load the citation library" in rec.message
         for rec in caplog.records
     )
+
+
+def test_a_repeated_undeclared_key_is_listed_once(register_result):
+    """I2. The panel keys its <li> on the key, so a duplicate here is also a
+    duplicate React key — and a list that reads like two unknown steps ran."""
+    rid = register_result([
+        {"key": "some.addon.step", "params": {}},
+        {"key": "some.addon.step", "params": {"x": 1}},
+    ])
+    body = client.get(f"/api/citations/result/{rid}").json()
+    assert body["undeclared"] == ["some.addon.step"]
+
+
+def test_the_orienta_methods_note_renders_with_an_author_and_a_locator(
+    register_result,
+):
+    """I1. This is the entry the whole feature exists to surface; it used to
+    render as a bare title and a year — no author (render_plain fell back to
+    `publisher`) and no DOI/URL, with `publisher` dropped by BibTeX because
+    @techreport has no such field."""
+    rid = register_result([
+        {"key": "eds.chemistry_prior",
+         "params": {"strength_by_phase": {"Si": 1.0}, "n_adjusted": 349}},
+    ])
+    body = client.get(f"/api/citations/result/{rid}").json()
+
+    block = next(
+        b for b in body["bibtex"].split("\n\n")
+        if b.startswith("@techreport{orienta-eds-prior,")
+    )
+    assert "author = {" in block
+    assert "Samberger, Sebastian" in block
+    assert "url = {" in block
+    assert "institution = {" in block     # not `publisher`, which styles drop
+    assert "publisher = {" not in block
+    assert "doi = {" not in block         # none exists; none is invented
+
+    line = next(
+        line for line in body["plain"].splitlines()
+        if "EDS-Guided Phase Disambiguation" in line
+    )
+    assert line.startswith("Samberger, S.")
+    assert "https://" in line

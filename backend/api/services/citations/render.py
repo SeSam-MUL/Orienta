@@ -100,8 +100,13 @@ def render_bibtex(entries: List[dict]) -> str:
             fields.append(("year", year))
         if entry.get("container-title"):
             fields.append(("journal", entry["container-title"]))
+        # @techreport has no `publisher` field — every standard BibTeX style
+        # silently DROPS it, so a report's only institutional attribution
+        # vanished from the rendered entry. `institution` is the field the
+        # type actually defines, and it is what CSL `publisher` means here.
+        publisher_field = "institution" if kind == "techreport" else "publisher"
         for csl, bib in (("volume", "volume"), ("page", "pages"),
-                         ("publisher", "publisher"), ("DOI", "doi"),
+                         ("publisher", publisher_field), ("DOI", "doi"),
                          ("URL", "url")):
             if entry.get(csl):
                 fields.append((bib, entry[csl]))
@@ -280,12 +285,36 @@ _METHODS_FORMATTER = _MethodsFormatter()
 
 
 def render_methods(steps: List[dict]) -> str:
-    """Join the sentence of each step that ran, in order, with real params."""
+    """Join the sentence of each step that ran, in order, with real params.
+
+    ONE sentence per step key, whatever the trail holds. ``merge_provenance``
+    dedupes by the ``(key, params)`` fingerprint, which is right for it — two
+    phases genuinely indexed at different bandwidths are two facts. But the
+    sites that MUTATE an already-stored result (``POST /pseudosym/unify``,
+    ``refine_orientations``) append a step that may already be on the trail
+    with *different* params, so no fingerprint matches and the paragraph
+    printed the same sentence twice — verbatim, for ``pseudosym.resolver``,
+    whose template has no slots to tell the two apart.
+
+    First-seen ORDER is kept (the order the pipeline ran), LAST params win:
+    a later append is the more complete statement of the same step, e.g. a
+    resolver re-run that now knows how many pixels it changed. The raw trail
+    is untouched — ``steps`` is still returned whole by the endpoint and
+    written whole to the ``.h5``; this is a rendering decision only.
+    """
     from .steps import get_step
 
-    sentences = []
+    order: List[str] = []
+    latest: Dict[str, dict] = {}
     for entry in steps:
         key = entry.get("key", "")
+        if key not in latest:
+            order.append(key)
+        latest[key] = entry
+
+    sentences = []
+    for key in order:
+        entry = latest[key]
         params = entry.get("params") or {}
         step = get_step(key)
         if step is None:

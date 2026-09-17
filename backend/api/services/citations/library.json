@@ -293,6 +293,25 @@
     "volume": "207"
   },
   "orienta-eds-prior": {
+    "URL": "https://github.com/SeSam-MUL/Orienta/blob/main/docs/paper/eds-chemistry-prior-methods.md",
+    "author": [
+      {
+        "family": "Samberger",
+        "given": "Sebastian"
+      },
+      {
+        "family": "Pogatscher",
+        "given": "Stefan"
+      },
+      {
+        "family": "Kobayashi",
+        "given": "Equo"
+      },
+      {
+        "family": "Weißensteiner",
+        "given": "Irmgard"
+      }
+    ],
     "id": "orienta-eds-prior",
     "issued": {
       "date-parts": [
