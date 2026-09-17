@@ -317,6 +317,13 @@ def _store_result(result, method_name: str) -> str:
             # provenance (the grain-reassign path deep-copies it along) keeps it.
             for _key, _value in _scan_provenance_fields().items():
                 result.metadata.setdefault(_key, _value)
+            # Every result passes through here, so this is the one place that
+            # can guarantee the subtree exists. A consumer should never have
+            # to handle its absence.
+            from backend.api.services.citations.provenance import (
+                ensure_provenance,
+            )
+            ensure_provenance(result)
     except Exception:
         # source_file is assigned above this, so in practice the only thing
         # that can land here is a failed read of the scan provenance.
