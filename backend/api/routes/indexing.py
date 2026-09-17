@@ -8821,6 +8821,14 @@ async def import_h5_result(req: ImportH5Request):
     # merely loaded, which is the failure the source_file tagging already had.
     result.metadata.update(_read_scan_provenance(p))
 
+    # Restore the citation trail the export wrote, so a re-imported result
+    # cites the same steps as the run that produced it.
+    from backend.api.services.citations.provenance import ensure_provenance
+
+    _steps = _read_citations(p)
+    if _steps:
+        ensure_provenance(result)["steps"] = _steps
+
     # Carry per-phase CI maps over from the xmap (loader stashes them) so
     # subsequent re-exports re-emit /Indexing/PerPhase/ unchanged.
     per_phase = getattr(xmap, "_per_phase_data", None)
@@ -9440,6 +9448,23 @@ def _read_scan_provenance(h5_path) -> dict:
                      h5_path, exc_info=True)
         return dict(NO_SCAN_OFFSET)
     return out
+
+
+def _read_citations(h5_path) -> list:
+    """Read back the citation trail an export wrote. Absent → empty."""
+    import json as _json
+
+    import h5py
+
+    try:
+        with h5py.File(h5_path, "r") as f:
+            grp = f.get("Indexing/Citations")
+            if grp is None:
+                return []
+            return _json.loads(grp.attrs["steps"])
+    except Exception:
+        logger.debug("no citation trail in %s", h5_path, exc_info=True)
+        return []
 
 
 @router.post("/export")

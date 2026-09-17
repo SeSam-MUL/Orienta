@@ -287,6 +287,44 @@ def _write_scan_provenance(group, scan_provenance: Optional[Dict]) -> None:
             group.attrs[key] = value
 
 
+def _write_citations(group, steps: Optional[List[dict]]) -> None:
+    """Stamp what to cite for this result.
+
+    Mirrors ``_write_scan_provenance`` deliberately: ``None`` — and an empty
+    list — writes nothing, so a file exported without citations is identical
+    to one exported before this existed. ``indexing._read_citations`` reads
+    it back on re-import.
+
+    Stored as two JSON attributes rather than a dataset tree: the payload is
+    a few kB, and JSON keeps the nested params intact where h5 attributes
+    would flatten them.
+    """
+    if not steps:
+        return
+    import json as _json
+
+    from backend.api.services.citations.render import load_library
+    from backend.api.services.citations.steps import get_step
+
+    library = load_library()
+    ordered: List[str] = ["orienta", "kikuchipy", "orix"]
+    for entry in steps:
+        step = get_step(entry.get("key", ""))
+        if step is None:
+            continue
+        for cid in step.citation_ids:
+            if cid not in ordered:
+                ordered.append(cid)
+
+    grp = group.create_group("Citations")
+    grp.attrs["schema"] = 1
+    grp.attrs["steps"] = _json.dumps(steps, ensure_ascii=False)
+    grp.attrs["entries"] = _json.dumps(
+        [library[cid] for cid in ordered if cid in library],
+        ensure_ascii=False,
+    )
+
+
 def export_result_h5(
     source_h5_path: str,
     checkpoint_path: str,
@@ -297,6 +335,7 @@ def export_result_h5(
     detector_shape: Optional[Tuple[int, int]] = None,
     step_size: Optional[float] = None,
     scan_provenance: Optional[Dict] = None,
+    citation_steps: Optional[List[Dict]] = None,
 ) -> str:
     """Create a rich H5 result file: original data + indexing results.
 
@@ -431,6 +470,7 @@ def export_result_h5(
         idx.attrs["step_size_um"] = float(step_size)
         idx.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(idx, scan_provenance)
+        _write_citations(idx, citation_steps)
 
         # --- Per-Phase Results ---
         per_phase = idx.create_group("PerPhase")
@@ -570,6 +610,7 @@ def export_result_h5(
         doc = f.create_group("Documentation")
         doc.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(doc, scan_provenance)
+        _write_citations(doc, citation_steps)
         doc.attrs["description"] = "EBSD indexing results + original experimental data"
         doc.create_dataset("README", data=README_TEXT)
 
@@ -1393,6 +1434,7 @@ def export_result_h5_light(
     include_eds: bool = True,
     step_size: Optional[float] = None,
     scan_provenance: Optional[Dict] = None,
+    citation_steps: Optional[List[Dict]] = None,
 ) -> str:
     """Create a lightweight H5 result file: indexing data only, no source copy.
 
@@ -1512,6 +1554,7 @@ def export_result_h5_light(
         idx.attrs["format"] = "light"
         idx.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(idx, scan_provenance)
+        _write_citations(idx, citation_steps)
         # Store the µm step size on /Indexing AND /Detector below so any
         # reader path finds it without guessing. The reader in
         # analysis.py uses this to scale CrystalMap.x/y from pixel units
@@ -1653,6 +1696,7 @@ def export_result_h5_light(
         doc = f.create_group("Documentation")
         doc.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(doc, scan_provenance)
+        _write_citations(doc, citation_steps)
         doc.attrs["format"] = "light"
         doc.attrs["description"] = (
             "Lightweight indexing result. Original pattern data is NOT included — "
