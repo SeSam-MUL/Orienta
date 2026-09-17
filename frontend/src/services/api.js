@@ -1606,4 +1606,10 @@ export const poleFigureApi = {
     api.get('/api/pole-figure', { params: { phase_id: phaseId, hkl, mode, subsample } }),
 };
 
+// What to cite for a given result: BibTeX, a methods paragraph, and a plain
+// reference list, derived from the pipeline steps the result actually ran.
+export const citationsApi = {
+  forResult: (resultId) => api.get(`/api/citations/result/${resultId}`),
+};
+
 export default api;

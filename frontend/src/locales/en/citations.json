@@ -1,0 +1,12 @@
+{
+  "title": "Citations for this result",
+  "loading": "Loading citation information…",
+  "tabs": { "bibtex": "BibTeX", "methods": "Methods paragraph", "plain": "Plain list" },
+  "copy": "Copy",
+  "copied": "Copied",
+  "error": "Could not load the citation list for this result.",
+  "englishOnly": "Output is English only — it goes into a manuscript.",
+  "scopeNote": "Covers what Orienta did. Anything you did afterwards in other software is not included.",
+  "undeclared_one": "{{count}} step ran with no citation declared:",
+  "undeclared_other": "{{count}} steps ran with no citation declared:"
+}

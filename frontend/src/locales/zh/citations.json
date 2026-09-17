@@ -1,0 +1,12 @@
+{
+  "title": "此结果的引用信息",
+  "loading": "正在加载引用信息…",
+  "tabs": { "bibtex": "BibTeX", "methods": "方法段落", "plain": "参考文献列表" },
+  "copy": "复制",
+  "copied": "已复制",
+  "error": "无法加载此结果的引用列表。",
+  "englishOnly": "输出仅为英文——用于写入论文手稿。",
+  "scopeNote": "仅涵盖 Orienta 执行的处理。之后在其他软件中进行的操作不包含在内。",
+  "undeclared_one": "有 {{count}} 个步骤运行时未声明引用：",
+  "undeclared_other": "有 {{count}} 个步骤运行时未声明引用："
+}

@@ -95,6 +95,7 @@ import RegionStatsPanel from './RegionStatsPanel';
 import ToolToolbar from './ToolToolbar';
 import PhaseLegend from './PhaseLegend';
 import PhaseAdjacencyPanel from './PhaseAdjacencyPanel';
+import CitationsPanel from './CitationsPanel';
 import useAnnotations from './annotations/useAnnotations';
 import AnnotationLayer from './annotations/AnnotationLayer';
 import AnnotationToolbar from './annotations/AnnotationToolbar';
@@ -4240,6 +4241,12 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           phase. Re-fetches whenever the active result changes. */}
       <PhaseLegend resultId={shownResultId ?? null} />
       <PhaseAdjacencyPanel resultId={shownResultId ?? null} />
+      {/* "Citations for this result" — what to cite in a manuscript, derived
+          from the pipeline steps the active result actually ran. Gated on
+          shownResultId (store ?? backend), NOT useResultStore.indexingResult:
+          a result adopted from a file never populates that store, and this
+          page has already shipped that exact gating bug three times. */}
+      <CitationsPanel resultId={shownResultId ?? null} />
       <AnnotationToolbar
         annotations={annotState.annotations}
         selectedId={selectedAnnotId}

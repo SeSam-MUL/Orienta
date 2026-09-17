@@ -1,0 +1,12 @@
+{
+  "title": "Zitate für dieses Ergebnis",
+  "loading": "Zitierinformationen werden geladen…",
+  "tabs": { "bibtex": "BibTeX", "methods": "Methodenabsatz", "plain": "Einfache Liste" },
+  "copy": "Kopieren",
+  "copied": "Kopiert",
+  "error": "Die Zitierliste für dieses Ergebnis konnte nicht geladen werden.",
+  "englishOnly": "Die Ausgabe ist nur auf Englisch — sie ist für ein Manuskript gedacht.",
+  "scopeNote": "Deckt ab, was Orienta getan hat. Was Sie danach in anderer Software gemacht haben, ist nicht enthalten.",
+  "undeclared_one": "{{count}} Schritt lief ohne hinterlegtes Zitat:",
+  "undeclared_other": "{{count}} Schritte liefen ohne hinterlegtes Zitat:"
+}
