@@ -8,6 +8,7 @@ rendering it needs this file.
 from __future__ import annotations
 
 import json
+import string
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -143,15 +144,122 @@ def render_plain(entries: List[dict]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-class _NamingDict(dict):
-    """format_map source that names what is missing instead of guessing it.
+class _Missing:
+    """Sentinel for a step param that was never recorded.
 
-    Honesty rule 2: a methods paragraph that silently prints a default value
-    describes a run that never happened.
+    Carries the key itself, because ``string.Formatter.format_field`` is
+    handed only the value and the format spec, never the field name — so if
+    "which key was missing" is going to reach the output, the value has to
+    remember it.
     """
 
-    def __missing__(self, key):  # noqa: D105
-        return f"[{key} not recorded]"
+    __slots__ = ("key",)
+
+    def __init__(self, key: str) -> None:
+        self.key = key
+
+
+class _MethodsFormatter(string.Formatter):
+    """Turns recorded step params into prose, not Python's repr/str.
+
+    Two defects, one formatter. (1) A missing param must be named even under
+    a format spec: ``"{ncc:.2f}".format_map(a_dict_with___missing__)`` still
+    raises ``ValueError`` — ``__missing__`` supplies a *value*, and
+    ``str.format`` then tries to apply the float spec to it. Missingness is
+    therefore decided in ``get_value`` and rendered in ``format_field``
+    *before* ``format_spec`` is ever consulted for that value. (2) A
+    composite value that IS present must still read as prose, not Python's
+    ``repr()`` — a dict here is exactly the shape ``provenance.steps`` uses
+    (and the ``.h5`` export and future add-ons will read), so it must stay
+    machine-readable at the point it is recorded; humanising it happens here,
+    at render time, once, for every call site.
+    """
+
+    def get_value(self, key, args, kwargs):
+        if key not in kwargs:
+            return _Missing(str(key))
+        value = kwargs[key]
+        # None is a recorded absence, not a recorded value — name it the
+        # same way a missing key is named, instead of printing "None".
+        if value is None:
+            return _Missing(str(key))
+        return value
+
+    def format_field(self, value, format_spec):
+        if isinstance(value, _Missing):
+            # The spec is ignored on purpose: "[key not recorded]" is not a
+            # float or a date, and applying ":.2f" to it is the crash this
+            # class exists to prevent.
+            return f"[{value.key} not recorded]"
+        if isinstance(value, dict):
+            return self._render_dict(value)
+        if isinstance(value, (list, tuple)):
+            return self._render_sequence(value)
+        if isinstance(value, bool):          # bool is a subclass of int
+            return "yes" if value else "no"
+        if isinstance(value, float) and not format_spec:
+            return self._trim_float(value)
+        # No spec-less dict/list/bool/float branch matched, or the template
+        # asked for an explicit spec on a plain value (e.g. "{n:.0f}") —
+        # standard str.format behaviour, unchanged.
+        return super().format_field(value, format_spec)
+
+    def _render_scalar(self, value) -> str:
+        """A scalar as it reads inside a list, or as a dict-value fallback."""
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        if value is None:
+            return "not recorded"
+        if isinstance(value, float):
+            return self._trim_float(value)
+        if isinstance(value, dict):
+            return self._render_dict(value)
+        if isinstance(value, (list, tuple)):
+            return self._render_sequence(value)
+        return str(value)
+
+    def _render_dict(self, value: dict) -> str:
+        """``{"Al": 0.0, "Si": 0.75}`` -> ``"Al 0%, Si 75%"``.
+
+        Every dict param recorded today (``strength_by_phase``) holds a
+        fraction in [0, 1] per key. A percentage reads as prose ("Si 75%");
+        the bare fraction ("Si 0.75") reads as a leftover number that was
+        supposed to be finished. A value outside [0, 1] (nothing today) falls
+        back to a trimmed float instead of being multiplied by 100, so a
+        future non-fractional dict param does not get silently mangled.
+        """
+        parts = []
+        for k, v in value.items():
+            if v is None:
+                parts.append(f"{k} not recorded")
+            elif isinstance(v, float) and 0.0 <= v <= 1.0:
+                parts.append(f"{k} {self._as_percentage(v)}")
+            else:
+                parts.append(f"{k} {self._render_scalar(v)}")
+        return ", ".join(parts)
+
+    def _render_sequence(self, value) -> str:
+        """``["Al", "Si", "Fe"]`` -> ``"Al, Si and Fe"``."""
+        parts = [self._render_scalar(v) for v in value]
+        if not parts:
+            return ""
+        if len(parts) == 1:
+            return parts[0]
+        return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+    @staticmethod
+    def _trim_float(value: float) -> str:
+        """Trimmed, not repr: no trailing ``.0``, capped at 3 decimals."""
+        text = f"{value:.3f}".rstrip("0").rstrip(".")
+        return text or "0"
+
+    @staticmethod
+    def _as_percentage(value: float) -> str:
+        text = f"{value * 100:.1f}".rstrip("0").rstrip(".")
+        return f"{text or '0'}%"
+
+
+_METHODS_FORMATTER = _MethodsFormatter()
 
 
 def render_methods(steps: List[dict]) -> str:
@@ -168,5 +276,5 @@ def render_methods(steps: List[dict]) -> str:
                 f"A step recorded as '{key}' ran; no citation declared for it."
             )
             continue
-        sentences.append(step.sentence.format_map(_NamingDict(params)))
+        sentences.append(_METHODS_FORMATTER.vformat(step.sentence, (), params))
     return " ".join(sentences)
