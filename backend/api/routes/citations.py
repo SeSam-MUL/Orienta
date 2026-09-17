@@ -31,11 +31,28 @@ def citations_for_result(result_id: str):
     if result is None:
         raise HTTPException(
             status_code=404,
-            detail=f"No result '{result_id}'. Load or re-run it first.",
+            detail=(
+                f"No result '{result_id}'. Results live in memory only: they "
+                "are evicted once 12 newer ones exist, and a backend restart "
+                "clears all of them. Load or re-run it first."
+            ),
         )
 
-    library = load_library()
     steps = get_steps(result)
+    warnings: List[str] = []
+    try:
+        library = load_library()
+    except Exception:
+        logger.exception(
+            "Failed to load the citation library (default library.json "
+            "merged with CITATION.cff); continuing without it."
+        )
+        library = {}
+        warnings.append(
+            "The bibliography could not be loaded, so BibTeX and the plain "
+            "reference list are unavailable. The methods description below "
+            "is unaffected."
+        )
 
     ordered: List[str] = []
     undeclared: List[str] = []
@@ -58,5 +75,6 @@ def citations_for_result(result_id: str):
         "plain": render_plain(entries),
         "steps": steps,
         "undeclared": undeclared,
+        "warnings": warnings,
         "app_version": get_version_info(),
     }

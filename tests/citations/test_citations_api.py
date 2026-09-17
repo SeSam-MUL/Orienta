@@ -55,3 +55,44 @@ def test_answer_depends_only_on_the_stored_result(stored_result_id):
     assert a["methods"] == b["methods"]
     assert a["bibtex"] == b["bibtex"]
     assert "dynamic" in a["methods"]      # the value the RUN recorded
+
+
+def test_unknown_result_id_explains_why(stored_result_id):
+    r = client.get("/api/citations/result/does-not-exist")
+    detail = r.json()["detail"]
+    assert "evict" in detail or "restart" in detail
+
+
+def test_normal_path_has_no_warnings(stored_result_id):
+    body = client.get(f"/api/citations/result/{stored_result_id}").json()
+    assert body["warnings"] == []
+
+
+def test_broken_library_degrades_instead_of_500(
+    stored_result_id, monkeypatch, caplog
+):
+    """load_library() can raise (missing/malformed CITATION.cff); the
+    endpoint must still answer with what does not depend on it."""
+    import logging
+
+    def _boom(*args, **kwargs):
+        raise FileNotFoundError("CITATION.cff")
+
+    monkeypatch.setattr(
+        "backend.api.routes.citations.load_library", _boom
+    )
+
+    with caplog.at_level(logging.ERROR, logger="backend.api.routes.citations"):
+        r = client.get(f"/api/citations/result/{stored_result_id}")
+
+    assert r.status_code == 200
+    body = r.json()
+    assert "dynamic" in body["methods"]   # methods come from steps.py, not the library
+    assert body["bibtex"] == ""
+    assert body["plain"] == ""
+    assert body["warnings"]
+    assert any("bibliography" in w for w in body["warnings"])
+    assert any(
+        "Failed to load the citation library" in rec.message
+        for rec in caplog.records
+    )
