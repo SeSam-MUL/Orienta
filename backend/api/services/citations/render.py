@@ -141,3 +141,32 @@ def render_plain(entries: List[dict]) -> str:
             bits.append(entry["URL"])
         lines.append(". ".join(b for b in bits if b))
     return "\n".join(lines) + ("\n" if lines else "")
+
+
+class _NamingDict(dict):
+    """format_map source that names what is missing instead of guessing it.
+
+    Honesty rule 2: a methods paragraph that silently prints a default value
+    describes a run that never happened.
+    """
+
+    def __missing__(self, key):  # noqa: D105
+        return f"[{key} not recorded]"
+
+
+def render_methods(steps: List[dict]) -> str:
+    """Join the sentence of each step that ran, in order, with real params."""
+    from .steps import get_step
+
+    sentences = []
+    for entry in steps:
+        key = entry.get("key", "")
+        params = entry.get("params") or {}
+        step = get_step(key)
+        if step is None:
+            sentences.append(
+                f"A step recorded as '{key}' ran; no citation declared for it."
+            )
+            continue
+        sentences.append(step.sentence.format_map(_NamingDict(params)))
+    return " ".join(sentences)
