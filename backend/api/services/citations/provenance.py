@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Dict, Iterable, List, Optional
 
 import numpy as np
@@ -76,6 +77,63 @@ def _jsonable(value: Any) -> Any:
     return repr(value)
 
 
+# A Windows drive letter ("C:\\", "e:/") anywhere in a string.
+_DRIVE_RE = re.compile(r"[A-Za-z]:[\\/]")
+
+
+def _path_like(text: str) -> bool:
+    """Does this string look like a local filesystem path?"""
+    return "/" in text or "\\" in text or bool(_DRIVE_RE.search(text))
+
+
+def _local_paths_in(value: Any, where: str = "") -> List[str]:
+    """Every path-looking string inside ``value``, keys included."""
+    found: List[str] = []
+    if isinstance(value, str):
+        if _path_like(value):
+            found.append(f"{where}={value!r}" if where else repr(value))
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            found.extend(_local_paths_in(str(k), f"{where}.key" if where else "key"))
+            found.extend(_local_paths_in(v, f"{where}.{k}" if where else str(k)))
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            found.extend(_local_paths_in(v, f"{where}[{i}]"))
+    return found
+
+
+def _reject_local_paths(key: str, params: Dict[str, Any]) -> None:
+    """Defence in depth: a recorded param must never be a local path.
+
+    The methods paragraph is written to be pasted into a manuscript, and the
+    whole trail is copied into every exported ``.h5``. A param keyed or
+    valued by an absolute path therefore publishes the operator's username
+    and directory layout — which is exactly what happened once, because the
+    EDS strength dict is keyed by phase FILE PATH on the wire and was
+    recorded verbatim (fixed at the recording site in routes/indexing.py by
+    re-keying to phase names).
+
+    This is the net BEHIND that fix, not a replacement for it: it cannot
+    know what the right name would have been, so it must not rewrite the
+    value — silently editing a recorded fact is the opposite of this
+    module's contract. It raises under :func:`_strict` (on under pytest) so
+    a future leak is a failing test, and only warns otherwise, so it can
+    never abort a user's hours-long indexing run over bookkeeping.
+    """
+    offenders = _local_paths_in(params)
+    if not offenders:
+        return
+    message = (
+        f"citation step '{key}' records what looks like a local filesystem "
+        f"path: {'; '.join(offenders[:5])}. Recorded params reach the methods "
+        "paragraph and every exported .h5 — record a phase/file NAME "
+        "(e.g. Path(p).stem or the name on the xmap), never a path."
+    )
+    if _strict():
+        raise ValueError(message)
+    logger.warning(message)
+
+
 def ensure_provenance(result) -> Dict[str, Any]:
     """Return the provenance subtree, creating it if a path forgot."""
     if getattr(result, "metadata", None) is None:
@@ -105,8 +163,12 @@ def record_step(result, key: str, params: Optional[dict] = None) -> None:
         if _strict():
             raise KeyError(message)
         logger.warning(message)
+    jsonable = _jsonable(params or {})
+    # After _jsonable, so it sees what will actually be written (a Path
+    # object stringifies to a path here, not before).
+    _reject_local_paths(key, jsonable)
     prov = ensure_provenance(result)
-    prov["steps"].append({"key": key, "params": _jsonable(params or {})})
+    prov["steps"].append({"key": key, "params": jsonable})
 
 
 def get_steps(result) -> List[dict]:

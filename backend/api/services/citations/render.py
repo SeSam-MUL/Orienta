@@ -287,40 +287,45 @@ _METHODS_FORMATTER = _MethodsFormatter()
 def render_methods(steps: List[dict]) -> str:
     """Join the sentence of each step that ran, in order, with real params.
 
-    ONE sentence per step key, whatever the trail holds. ``merge_provenance``
-    dedupes by the ``(key, params)`` fingerprint, which is right for it — two
-    phases genuinely indexed at different bandwidths are two facts. But the
-    sites that MUTATE an already-stored result (``POST /pseudosym/unify``,
-    ``refine_orientations``) append a step that may already be on the trail
-    with *different* params, so no fingerprint matches and the paragraph
-    printed the same sentence twice — verbatim, for ``pseudosym.resolver``,
-    whose template has no slots to tell the two apart.
+    Deduplicated on the RENDERED SENTENCE, in first-seen order. Neither the
+    key nor ``(key, params)`` is the right unit here, and both were tried:
 
-    First-seen ORDER is kept (the order the pipeline ran), LAST params win:
-    a later append is the more complete statement of the same step, e.g. a
-    resolver re-run that now knows how many pixels it changed. The raw trail
-    is untouched — ``steps`` is still returned whole by the endpoint and
-    written whole to the ``.h5``; this is a rendering decision only.
+    * By ``(key, params)`` — what ``merge_provenance`` uses — the paragraph
+      printed the same sentence twice. ``POST /pseudosym/unify`` and
+      ``refine_orientations`` MUTATE an already-stored result and append a
+      step that may already be on the trail with DIFFERENT params (``{}``
+      from the automatic resolver, ``{"n_changed": 36}`` from the manual
+      one), and ``pseudosym.resolver``'s template has no slots, so the two
+      fingerprints differ and the two sentences do not.
+    * By KEY it collapsed real information: a multi-phase Dictionary run
+      records one ``indexing.dictionary`` step PER PHASE, with genuinely
+      different ``dict_size`` and ``angular_step_deg`` — different point
+      groups sample different numbers of orientations. Keying on the step
+      name printed one phase's numbers for all of them, understating how
+      much dictionary the run actually used, in text meant for peer review.
+
+    The invariant that is actually true: **two entries that render the same
+    sentence state one fact; two that render differently state two.** The
+    raw trail is untouched — ``steps`` is still returned whole by the
+    endpoint and written whole to the ``.h5``; this is a rendering decision
+    only, and ``merge_provenance`` keeps its own, correct, fingerprint rule.
     """
     from .steps import get_step
 
-    order: List[str] = []
-    latest: Dict[str, dict] = {}
+    sentences: List[str] = []
+    seen = set()
     for entry in steps:
         key = entry.get("key", "")
-        if key not in latest:
-            order.append(key)
-        latest[key] = entry
-
-    sentences = []
-    for key in order:
-        entry = latest[key]
         params = entry.get("params") or {}
         step = get_step(key)
         if step is None:
-            sentences.append(
+            sentence = (
                 f"A step recorded as '{key}' ran; no citation declared for it."
             )
+        else:
+            sentence = _METHODS_FORMATTER.vformat(step.sentence, (), params)
+        if sentence in seen:
             continue
-        sentences.append(_METHODS_FORMATTER.vformat(step.sentence, (), params))
+        seen.add(sentence)
+        sentences.append(sentence)
     return " ".join(sentences)

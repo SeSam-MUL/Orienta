@@ -1444,18 +1444,48 @@ def _method_phase_paths(req) -> list:
 
 
 def _eds_prior_is_on(req) -> bool:
-    """Was the EDS chemistry prior CONFIGURED on for this run?
+    """Was the EDS chemistry prior configured on AND actually applied?
 
-    The same question ``_apply_particle_rescue`` asks, deliberately the same
-    expression: a prior that was on and happened to flip no winner is a prior
-    that ran, and recording it only when it changed something would make
-    "absent" mean two different things (off, and on-but-no-effect) in a trail
-    whose whole contract is that absence means off. It also let a run cite the
-    particle rescue — which gates on configuration — while omitting the prior
-    that drove it.
+    Both halves are load-bearing, and each was wrong on its own.
+
+    CONFIGURED, not "changed a pixel": a prior that was on and happened to
+    flip no winner is a prior that ran. Gating the record on ``n_adjusted``
+    made "absent" mean two different things — off, and on-but-no-effect — in
+    a trail whose whole contract is that absence means off, and let a run
+    cite the particle rescue (which gates on configuration) while omitting
+    the prior that drove it.
+
+    APPLIED, not "configured" alone: there are two combinations where the
+    pipeline documents, in its own words, that it ignores the setting, and
+    claiming the prior for them is a false statement of method in text bound
+    for a manuscript.
+
+    1. Multi-phase SPHERICAL on any backend but ``spherical_gpu``. The
+       branch at the multi-phase dispatch warns "EDS chemistry is only
+       applied on the Spherical GPU backend — this run ignores it" and logs
+       "running WITHOUT chemistry". Only the GPU fast path builds
+       ``sph_weights``.
+    2. A run with FEWER THAN TWO phases. The prior is a reweighting of a
+       phase *competition*; all three sites that apply it require more than
+       one phase (``n_phase_files > 1`` for Dictionary and Spherical-GPU,
+       ``len(req.cif_paths) > 1`` for the Hough split). With one phase no
+       weight matrix is ever built. ``_apply_particle_rescue`` refuses the
+       same case, for the same reason.
+
+    ``_apply_particle_rescue`` keeps its own configuration-only expression
+    rather than calling this: it needs the PER-PATH ``active`` dict for pair
+    selection, not a single boolean, and it already refuses case 2 itself.
+    It is not reachable in case 1 either — that branch produces no rescue
+    call with chemistry applied — so the two do not disagree in practice;
+    they are written separately because they answer different questions.
     """
     strengths = req.eds_phase_strengths or {}
     paths = _method_phase_paths(req)
+    if len(paths) < 2:
+        return False
+    if (str(getattr(req, "method", "")).lower() == "spherical"
+            and getattr(req, "backend", None) != "spherical_gpu"):
+        return False
     return any(float(strengths.get(p, 0.0)) > 0.0 for p in paths)
 
 

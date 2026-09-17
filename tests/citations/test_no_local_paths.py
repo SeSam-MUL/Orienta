@@ -140,6 +140,118 @@ def test_prior_on_is_decided_by_configuration_not_by_effect():
     assert _eds_prior_is_on(_req(cif_paths=list(WINDOWS_PATHS))) is False
 
 
+# ---------------------------------------------------------------------------
+# ...but "configured" alone claims the prior for runs that documentedly
+# ignore it. The rule is configured AND applied.
+# ---------------------------------------------------------------------------
+
+SHT_PATHS = [
+    r"C:\Users\sebas\Orienta\Database\SHT_Library\Al.sht",
+    r"C:\Users\sebas\Orienta\Database\SHT_Library\Si.sht",
+]
+
+
+def test_multi_phase_spherical_on_a_non_gpu_backend_does_not_claim_the_prior():
+    """The multi-phase dispatch warns, in these words, "EDS chemistry is only
+    applied on the Spherical GPU backend - this run ignores it", and logs
+    "running WITHOUT chemistry". Recording the prior for that run states a
+    method that was not used."""
+    req = _req("spherical", sht_paths=list(SHT_PATHS), backend="emsphinx",
+               eds_phase_strengths={SHT_PATHS[1]: 1.0})
+    assert _eds_prior_is_on(req) is False
+
+
+def test_the_same_run_on_spherical_gpu_does_claim_it():
+    """Same strengths, the backend that actually builds sph_weights."""
+    req = _req("spherical", sht_paths=list(SHT_PATHS), backend="spherical_gpu",
+               eds_phase_strengths={SHT_PATHS[1]: 1.0})
+    assert _eds_prior_is_on(req) is True
+
+
+def test_a_single_phase_run_does_not_claim_the_prior():
+    """The prior reweights a phase COMPETITION; all three sites that apply it
+    require more than one phase, so with one phase no weight matrix is ever
+    built. _apply_particle_rescue refuses the same case."""
+    one = _req(cif_paths=[WINDOWS_PATHS[0]],
+               eds_phase_strengths={WINDOWS_PATHS[0]: 1.0})
+    assert _eds_prior_is_on(one) is False
+
+
+def test_the_gpu_run_records_n_adjusted_zero_rather_than_nothing():
+    """The other half of the rule: on, applied, and it flipped no winner."""
+    req = _req("spherical", sht_paths=list(SHT_PATHS), backend="spherical_gpu",
+               eds_phase_strengths={SHT_PATHS[1]: 1.0})
+    assert _eds_prior_is_on(req) is True
+    sentence = render_methods([{
+        "key": "eds.chemistry_prior",
+        "params": {"strength_by_phase": _eds_strengths_by_phase_name(req),
+                   "n_adjusted": 0},
+    }])
+    assert "adjusting 0 pixels" in sentence
+    assert not path_like(sentence), sentence
+
+
+# ---------------------------------------------------------------------------
+# Defence in depth: record_step itself refuses a path-looking param
+# ---------------------------------------------------------------------------
+
+class _R:
+    """Minimal record_step target."""
+
+    metadata = None
+
+
+def test_record_step_rejects_a_path_valued_param_under_strict():
+    """Strict is on under pytest and off in production, so a future leak is
+    a failing test here and never an aborted run there."""
+    from backend.api.services.citations.provenance import record_step
+
+    with pytest.raises(ValueError, match="local filesystem path"):
+        record_step(_R(), "eds.chemistry_prior",
+                    {"strength_by_phase": {WINDOWS_PATHS[0]: 0.0}})
+
+
+def test_record_step_rejects_a_posix_path_in_a_plain_value_too():
+    from backend.api.services.citations.provenance import record_step
+
+    with pytest.raises(ValueError, match="local filesystem path"):
+        record_step(_R(), "indexing.hough", {"source": "/home/x/scan.h5"})
+
+
+def test_record_step_only_warns_when_strict_is_off(monkeypatch, caplog):
+    """A production run must never die of bookkeeping."""
+    import logging
+
+    from backend.api.services.citations.provenance import get_steps, record_step
+
+    monkeypatch.setenv("ORIENTA_CITATIONS_STRICT", "0")
+
+    r = _R()
+    with caplog.at_level(
+        logging.WARNING, logger="backend.api.services.citations.provenance"
+    ):
+        record_step(r, "indexing.hough", {"source": WINDOWS_PATHS[0]})
+
+    assert len(get_steps(r)) == 1
+    assert any("local filesystem path" in rec.message for rec in caplog.records)
+
+
+def test_the_params_the_app_actually_records_pass_the_guard():
+    """The guard must not fire on ordinary params - versions, counts, phase
+    names and formulas."""
+    from backend.api.services.citations.provenance import get_steps, record_step
+
+    r = _R()
+    record_step(r, "indexing.dictionary",
+                {"orienta_version": "0.3.0", "dict_size": 100347,
+                 "angular_step_deg": 2.0})
+    record_step(r, "eds.chemistry_prior",
+                {"strength_by_phase": {"Al": 0.0, "Al7Cu2Fe": 1.0,
+                                       "alpha-Al(Fe,Mn)Si": 1.0},
+                 "n_adjusted": 0})
+    assert len(get_steps(r)) == 2
+
+
 @pytest.mark.integration
 def test_a_real_run_records_no_path(indexed_result_hough):
     """End to end on a genuine Hough result: nothing it recorded is a path."""

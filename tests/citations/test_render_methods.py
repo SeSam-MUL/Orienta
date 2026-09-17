@@ -205,47 +205,91 @@ def test_none_dict_value_uses_the_same_bracketed_form_as_top_level(temp_step):
 
 
 # ---------------------------------------------------------------------------
-# I2: one sentence per step, even when a step is on the trail twice
+# I2: one sentence per FACT. Deduplicated on the rendered sentence, not on
+# the key and not on (key, params) -- both were tried and both were wrong.
 # ---------------------------------------------------------------------------
 
-def test_a_repeated_step_prints_once():
+def test_a_repeated_step_with_a_slot_free_sentence_prints_once():
     """POST /pseudosym/unify and refine_orientations mutate an ALREADY
-    STORED result and append a step that may already be there with different
-    params — merge_provenance's (key, params) fingerprint cannot dedupe that,
-    and pseudosym.resolver's sentence has no slots, so it printed verbatim
-    twice."""
-    steps = [
+    STORED result and append a step that may already be there with
+    DIFFERENT params -- so merge_provenance's (key, params) fingerprint
+    cannot dedupe them -- and pseudosym.resolver's template has no slots to
+    tell the two apart, so it printed verbatim twice."""
+    out = render_methods([
         {"key": "pseudosym.resolver", "params": {}},
         {"key": "pseudosym.resolver", "params": {"n_changed": 61}},
-    ]
-    out = render_methods(steps)
+    ])
     assert out.count("Pseudo-symmetric orientation variants") == 1
 
 
-def test_the_last_occurrence_supplies_the_params():
-    """The later append is the more complete statement of the same step."""
+def test_a_multi_phase_dictionary_run_keeps_every_phase():
+    """The regression a key-dedupe introduced. A multi-phase Dictionary run
+    records one indexing.dictionary step PER PHASE with genuinely different
+    dict_size (different point groups sample different numbers of
+    orientations). Collapsing them to one printed a single phase's numbers
+    for the whole run -- understating how much dictionary was used, in text
+    meant for peer review."""
     out = render_methods([
-        {"key": "refinement.orientation", "params": {}},
+        {"key": "indexing.dictionary",
+         "params": {"dict_size": 100347, "angular_step_deg": 2.0,
+                    "orienta_version": "0.3.0"}},
+        {"key": "indexing.dictionary",
+         "params": {"dict_size": 333891, "angular_step_deg": 2.0,
+                    "orienta_version": "0.3.0"}},
+    ])
+    assert "100347 simulated patterns" in out
+    assert "333891 simulated patterns" in out
+    assert out.count("Orientations were determined by dictionary indexing") == 2
+
+
+def test_two_identical_dictionary_entries_still_print_once():
+    """Same phase recorded twice (a merge that saw the same sub-result via
+    two routes) is one fact, not two."""
+    params = {"dict_size": 100347, "angular_step_deg": 2.0,
+              "orienta_version": "0.3.0"}
+    out = render_methods([
+        {"key": "indexing.dictionary", "params": dict(params)},
+        {"key": "indexing.dictionary", "params": dict(params)},
+    ])
+    assert out.count("Orientations were determined by dictionary indexing") == 1
+
+
+def test_differing_params_on_a_slotted_template_are_two_facts():
+    """The counterpart of the pseudosym case: when the template DOES have a
+    slot for what differs, the two entries say different things and both
+    must survive."""
+    out = render_methods([
+        {"key": "refinement.orientation", "params": {"n_refined": 512}},
         {"key": "refinement.orientation", "params": {"n_refined": 2048}},
     ])
+    assert "512 pixels" in out
     assert "2048 pixels" in out
-    assert "not recorded" not in out
 
 
 def test_first_seen_order_survives_the_dedupe():
     out = render_methods([
         {"key": "indexing.hough", "params": {"orienta_version": "0.3.0"}},
         {"key": "refinement.orientation", "params": {"n_refined": 1}},
-        {"key": "indexing.hough", "params": {"orienta_version": "0.3.1"}},
+        {"key": "indexing.hough", "params": {"orienta_version": "0.3.0"}},
     ])
     assert out.index("Hough") < out.index("refined")
-    assert "Orienta 0.3.1" in out       # last params win
-    assert "Orienta 0.3.0" not in out
+    assert out.count("Hough/Radon indexing") == 1
 
 
 def test_a_repeated_undeclared_step_also_prints_once():
+    """Its sentence names only the key, so differing params cannot make it
+    two facts."""
     out = render_methods([
         {"key": "some.addon.step", "params": {}},
         {"key": "some.addon.step", "params": {"x": 1}},
     ])
     assert out.count("some.addon.step") == 1
+
+
+def test_two_different_undeclared_steps_both_print():
+    out = render_methods([
+        {"key": "some.addon.step", "params": {}},
+        {"key": "other.addon.step", "params": {}},
+    ])
+    assert "some.addon.step" in out
+    assert "other.addon.step" in out
