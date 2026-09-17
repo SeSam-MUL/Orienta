@@ -67,9 +67,9 @@ def _authors(entry: dict) -> List[dict]:
 # the backslash replacement itself introduces, turning \textbackslash{} into
 # \textbackslash\{\}. translate never rescans its own output.
 _BIBTEX_ESCAPES = {
-    ord("\\"): "\textbackslash{}",
-    ord("{"): "\{",
-    ord("}"): "\}",
+    ord("\\"): "\\textbackslash{}",
+    ord("{"): "\\{",
+    ord("}"): "\\}",
 }
 
 

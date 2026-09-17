@@ -42,12 +42,24 @@ def test_bibtex_software_uses_misc_with_version(entries):
 
 def test_bibtex_escapes_braces_and_backslashes():
     entry = {"id": "x", "type": "article-journal",
-             "title": "A {weird} title with \ in it",
+             "title": "A {weird} title with \\ in it",
              "author": [{"family": "Doe", "given": "J."}],
              "issued": {"date-parts": [[2021]]}}
     out = render_bibtex([entry])
-    assert "\{weird\}" in out
-    assert "\textbackslash{}" in out
+    # Assert against literals built independently of render.py's own escape
+    # table, so a re-introduced typo there (e.g. "\textbackslash{}" written
+    # with a single backslash, which Python reads as TAB + "extbackslash{}")
+    # cannot make both sides agree on the same wrong value.
+    escaped_open_brace = chr(92) + "{"
+    escaped_close_brace = chr(92) + "}"
+    escaped_backslash = chr(92) + "textbackslash" + "{}"
+    assert len(escaped_backslash) == 16
+    assert escaped_open_brace + "weird" + escaped_close_brace in out
+    assert escaped_backslash in out
+    # No control characters (e.g. a stray TAB from a mistyped "\t...") in
+    # BibTeX that someone pastes into a paper.
+    assert "\t" not in out
+    assert not any(ord(c) < 32 and c != "\n" for c in out)
 
 
 def test_plain_is_one_line_per_entry(entries):
