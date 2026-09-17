@@ -11,24 +11,61 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 PROVENANCE_SCHEMA = 1
 
 _JSON_SCALARS = (str, int, float, bool, type(None))
 
+# A params dict ends up in an HDF5 attribute and must stay small. An array at
+# or below this many elements is inlined as a list; above it, only shape and
+# dtype are recorded. 32 comfortably covers the small fixed-size vectors that
+# actually belong in a citation trail (a 3-vector PC, a 4x4 detector matrix,
+# a handful of phase weights) while keeping a per-pixel map (hundreds of
+# thousands of elements) from being dumped whole.
+_MAX_INLINE_ARRAY_SIZE = 32
+
 
 def _strict() -> bool:
     """Raise on an undeclared key unless explicitly told not to.
 
-    Default strict: a key that no step declares is a bookkeeping bug, and the
-    place to find it is the test run, not a user's citation list.
+    An explicit ``ORIENTA_CITATIONS_STRICT`` wins in either direction: "0"
+    forces lenient even under pytest, anything else forces strict even in
+    production. With no override, strict only under pytest
+    (``PYTEST_CURRENT_TEST`` is set per-test by pytest itself) — so the test
+    suite still catches a mistyped key or a step added without a matching
+    ``STEP_REGISTRY`` entry immediately, but a production indexing run that
+    can take minutes to hours is never aborted by that same bookkeeping
+    mistake. In production the honest alternative is used instead: log a
+    warning and record the step anyway, visible in the citation list as
+    "ran, no citation declared" rather than silently dropped.
     """
-    return os.environ.get("ORIENTA_CITATIONS_STRICT", "1") != "0"
+    override = os.environ.get("ORIENTA_CITATIONS_STRICT")
+    if override is not None:
+        return override != "0"
+    return "PYTEST_CURRENT_TEST" in os.environ
 
 
 def _jsonable(value: Any) -> Any:
-    """Params must survive h5 and JSON. Stringify rather than drop."""
+    """Params must survive h5 and JSON. Stringify rather than drop.
+
+    numpy scalars and arrays are pervasive in this codebase's step params
+    (pixel counts, PC vectors, per-phase maps) and need explicit handling:
+    a bare ``repr()`` fallback would write ``"np.int64(5)"`` into a citation
+    trail, and eventually into a methods paragraph.
+    """
+    if isinstance(value, np.generic):
+        # np.float64 subclasses float and would pass the _JSON_SCALARS check
+        # below unchanged, but np.int64 and np.bool_ do not subclass their
+        # Python equivalents — handle all numpy scalars uniformly via .item()
+        # so every one becomes a real Python int/float/bool.
+        return value.item()
+    if isinstance(value, np.ndarray):
+        if value.size <= _MAX_INLINE_ARRAY_SIZE:
+            return _jsonable(value.tolist())
+        return f"ndarray shape={value.shape} dtype={value.dtype}"
     if isinstance(value, _JSON_SCALARS):
         return value
     if isinstance(value, dict):
