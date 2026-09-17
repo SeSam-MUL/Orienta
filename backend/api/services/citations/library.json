@@ -374,5 +374,32 @@
     "title": "Fast Radon transforms for high-precision EBSD orientation determination using PyEBSDIndex",
     "type": "article-journal",
     "volume": "57"
+  },
+  "singh-degraef-di": {
+    "DOI": "10.1088/0965-0393/24/8/085013",
+    "author": [
+      {
+        "family": "Singh",
+        "given": "S."
+      },
+      {
+        "family": "De Graef",
+        "given": "M."
+      }
+    ],
+    "container-title": "Modelling and Simulation in Materials Science and Engineering",
+    "id": "singh-degraef-di",
+    "issue": "8",
+    "issued": {
+      "date-parts": [
+        [
+          2016
+        ]
+      ]
+    },
+    "page": "085013",
+    "title": "Orientation sampling for dictionary-based diffraction pattern indexing methods",
+    "type": "article-journal",
+    "volume": "24"
   }
 }
