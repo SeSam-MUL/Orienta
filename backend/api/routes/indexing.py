@@ -1620,6 +1620,10 @@ def _apply_particle_rescue(result, req, selection_mask, progress=None):
             "old_phase_ids": [int(pid_rows[i]) for i in changed_rows],
         }
         result.metadata["eds_particle_rescue"] = report
+        from backend.api.services.citations.provenance import record_step
+        record_step(result, "eds.particle_rescue", {
+            "n_changed": len(report.get("changed_rows", [])),
+        })
         if progress is not None:
             parts = []
             for r in reports:
@@ -4000,6 +4004,11 @@ async def start_indexing(req: IndexingStartRequest):
             _eds_n = int((result.metadata or {}).get("eds_n_adjusted", 0)) if getattr(result, "metadata", None) else 0
             if _eds_n:
                 _progress(f"EDS chemistry prior: adjusted {_eds_n} pixels")
+                from backend.api.services.citations.provenance import record_step
+                record_step(result, "eds.chemistry_prior", {
+                    "strength_by_phase": req.eds_phase_strengths,
+                    "n_adjusted": _eds_n,
+                })
 
             # Particles the prior cannot see (pattern-degenerate pairs such
             # as Al/Si, EDS volume larger than the particle): decided by
@@ -5866,6 +5875,8 @@ async def unify_pseudosym_variants(req: UnifyVariantsRequest):
                 md.pop("phase_reassign_undo", None)
             xmap._rotations = _R(new_rows)
             n_changed = int(idxs.size)
+            from backend.api.services.citations.provenance import record_step
+            record_step(result, "pseudosym.resolver", {"n_changed": n_changed})
 
     summary = {
         "n_changed": n_changed,

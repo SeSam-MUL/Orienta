@@ -866,7 +866,7 @@ def hough_index_patterns(
     _progress("Hough: extracting confidence index (CI) scores...", 0.95)
     with timed_step("Hough: extract confidence"):
         confidence = _extract_confidence(index_data)
-    return IndexingResult(
+    result = IndexingResult(
         xmap=xmap,
         selection_mask=selection_mask,
         original_shape=(n_rows, n_cols),
@@ -874,6 +874,12 @@ def hough_index_patterns(
         confidence_scores=confidence,
         metadata={'band_data': band_data},
     )
+    from backend.api.services.citations.provenance import record_step
+    from backend.api.services.app_version import get_version_info
+    record_step(result, "indexing.hough", {
+        "orienta_version": get_version_info().get("version"),
+    })
+    return result
 
 
 def _dictionary_signal_from_master(master, detector, angular_step_deg, *,
@@ -1097,7 +1103,7 @@ def dictionary_index_patterns(
         if gpu.available:
             from backend.dict_gpu.api import gpu_dictionary_index_patterns
             try:
-                return gpu_dictionary_index_patterns(
+                result = gpu_dictionary_index_patterns(
                     experimental_signal=signal,
                     master_pattern_or_path=dictionary,
                     # Prefer the calibration-store detector (carries the REFINED PC after a
@@ -1120,6 +1126,14 @@ def dictionary_index_patterns(
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
                 )
+                from backend.api.services.citations.provenance import record_step
+                from backend.api.services.app_version import get_version_info
+                record_step(result, "indexing.dictionary", {
+                    "orienta_version": get_version_info().get("version"),
+                    "dict_size": result.metadata.get("n_dictionary"),
+                    "angular_step_deg": result.metadata.get("angular_step_deg"),
+                })
+                return result
             finally:
                 _release_cuda_cache()
         elif config.compute_mode == "gpu":
@@ -1294,7 +1308,7 @@ def dictionary_index_patterns(
     else:
         xmap = xmap_raw
 
-    return IndexingResult(
+    result = IndexingResult(
         xmap=xmap,
         selection_mask=selection_mask,
         original_shape=(n_rows, n_cols),
@@ -1315,6 +1329,14 @@ def dictionary_index_patterns(
             'keep_n': config.keep_n,
         },
     )
+    from backend.api.services.citations.provenance import record_step
+    from backend.api.services.app_version import get_version_info
+    record_step(result, "indexing.dictionary", {
+        "orienta_version": get_version_info().get("version"),
+        "dict_size": _n_entries,
+        "angular_step_deg": config.angular_step_deg,
+    })
+    return result
 
 
 def refine_orientations(
@@ -1439,6 +1461,9 @@ def refine_orientations(
     if refine_sig_mask is not None:
         refine_kwargs["signal_mask"] = refine_sig_mask
     refined_xmap = use_signal.refine_orientation(**refine_kwargs)
+
+    from backend.api.services.citations.provenance import record_step
+    record_step(result, "refinement.orientation", {"n_refined": n_pixels})
 
     _p("Refinement complete.")
     return refined_xmap
@@ -2812,7 +2837,7 @@ def spherical_gpu_index_patterns(
         # so downstream callers can still reconstruct the original frame.
         n_rows, n_cols = selection_mask.shape
     _progress(f"Spherical-GPU: done — {rate_total:,.0f} pat/s effective", 1.0)
-    return IndexingResult(
+    indexing_result = IndexingResult(
         xmap=xmap,
         selection_mask=selection_mask,
         original_shape=(n_rows, n_cols),
@@ -2838,6 +2863,13 @@ def spherical_gpu_index_patterns(
             "variant_unification": _vu_reports,
         },
     )
+    from backend.api.services.citations.provenance import record_step
+    from backend.api.services.app_version import get_version_info
+    record_step(indexing_result, "indexing.spherical", {
+        "orienta_version": get_version_info().get("version"),
+        "bandwidth": int(config.bandwidth),
+    })
+    return indexing_result
 
 
 def _sweep_stale_preproc_temps(temp_dir: Path) -> None:
@@ -3334,7 +3366,7 @@ def _spherical_index_patterns_impl(
     except Exception as e:
         logger.warning("SphericalIndexing WSL cleanup failed: %s", e)
 
-    return IndexingResult(
+    result = IndexingResult(
         xmap=xmap,
         selection_mask=selection_mask,
         original_shape=(n_rows, n_cols),
@@ -3344,6 +3376,13 @@ def _spherical_index_patterns_impl(
             'bandwidth': config.bandwidth,
         },
     )
+    from backend.api.services.citations.provenance import record_step
+    from backend.api.services.app_version import get_version_info
+    record_step(result, "indexing.spherical", {
+        "orienta_version": get_version_info().get("version"),
+        "bandwidth": config.bandwidth,
+    })
+    return result
 
 
 def merge_partial_result(
