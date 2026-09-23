@@ -56,5 +56,12 @@ Ai_Ml/
 └── pyproject.toml  # package metadata (installs as `ebsd_ai`)
 ```
 
-For the design and architecture of the planned ML-based indexing system, see
-[`Detailed_Plan_Ai_integration.md`](Detailed_Plan_Ai_integration.md).
+## What is reachable from the app
+
+Only the **phase classifier** is driven from the UI: the ML Hub page trains a
+model on an indexed dataset and predicts phases from patterns. The pattern
+denoiser and the embedding/FAISS retrieval code under `ebsd_ai/` exist as
+library code but have no API route and no UI yet, so they can only be used
+through the package directly. See
+[docs/user-guide/MLHub.md](../docs/user-guide/MLHub.md) for the user-facing
+description.
