@@ -195,6 +195,14 @@ def test_normal_file_grid_is_unchanged():
         ext = _extractor(WITH_PATTERNS)
         feats = ext.detect_available_features()
         assert feats["has_patterns"] is True
-        assert feats["grid_shape"] == (9, 12)   # from the EBSD header
+        # The grid must come from the EBSD header, so check it against that
+        # header rather than against a number from one acquisition: this test
+        # has to mean something on whatever file the reader points it at.
+        import h5py
+        with h5py.File(WITH_PATTERNS, "r") as f:
+            root = next(k for k in f if k != "Manufacturer" and "EBSD" in f[k])
+            hdr = f[f"{root}/EBSD/Header"]
+            expected = (int(hdr["Y Cells"][()]), int(hdr["X Cells"][()]))
+        assert feats["grid_shape"] == expected
     finally:
         close_file()

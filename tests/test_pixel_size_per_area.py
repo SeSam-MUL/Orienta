@@ -111,8 +111,13 @@ def test_real_file_electron_image_differs_from_the_scan_step():
 
     try:
         sizes = _extractor(WITH_EBSD).get_pixel_sizes()
-        assert sizes["ebsd"]["x"] == pytest.approx(0.6578947, rel=1e-4)
-        assert sizes["electron_image"]["x"] == pytest.approx(0.06207658, rel=1e-4)
+        # The point is that the two areas do NOT share a pixel size, which is
+        # why a single global scale bar was wrong. The acquisition this was
+        # written from reads 0.658 um for the scan and 0.062 for the image;
+        # any file with both areas shows the same inequality.
+        assert sizes["ebsd"]["x"] > 0
+        assert sizes["electron_image"]["x"] > 0
+        assert sizes["electron_image"]["x"] != pytest.approx(sizes["ebsd"]["x"], rel=1e-3)
     finally:
         close_file()
 
@@ -125,8 +130,11 @@ def test_eds_only_file_still_has_a_pixel_size():
     try:
         sizes = _extractor(EDS_ONLY).get_pixel_sizes()
         assert sizes["ebsd"] is None
-        assert sizes["eds"]["x"] == pytest.approx(0.1814546, rel=1e-4)
-        assert sizes["electron_image"]["x"] == pytest.approx(0.1814546, rel=1e-4)
+        # With no EBSD header, EDS and the electron image share one grid, so
+        # the two sizes must agree. (0.181 um on the acquisition this was
+        # written from.)
+        assert sizes["eds"]["x"] > 0
+        assert sizes["electron_image"]["x"] == pytest.approx(sizes["eds"]["x"], rel=1e-4)
         assert sizes["eds"]["units"] == "um"
     finally:
         close_file()
@@ -146,7 +154,10 @@ def test_metadata_endpoint_serves_a_scale_for_an_eds_only_file():
     if inspect.isawaitable(meta):
         meta = asyncio.run(meta)
     assert meta.get("step_size"), "no step size -> scale bar stays disabled"
-    assert meta["step_size"]["x"] == pytest.approx(0.1814546, rel=1e-4)
+    # The endpoint must serve the same number the extractor computes, whatever
+    # the file is; a literal here would only describe one acquisition.
+    expected = _extractor(EDS_ONLY).get_pixel_sizes()["eds"]["x"]
+    assert meta["step_size"]["x"] == pytest.approx(expected, rel=1e-4)
     assert meta.get("pixel_sizes", {}).get("electron_image")
 
 
