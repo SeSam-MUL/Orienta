@@ -247,7 +247,7 @@ misorientation-to-grain-mean correlation **0.889** (v1: ~0 — flattened);
 **729 distinct colours** in the 812-px grain (v1: 1). Toggle OFF stays
 byte-identical to the untouched standard path (regression-tested).
 
-**"Aber lügen wir dann nicht?" — scientific integrity.** No: the IPF colour of
+**Is this misrepresenting the data?** No: the IPF colour of
 an orientation is a *class function* — all symmetry-equivalent directions are
 equally "the" direction; the standard key also picks one representative (the
 in-sector one), v2 merely picks a *grain-consistent* representative instead of

@@ -41,6 +41,3 @@ Thumbs.db
 *.pth
 checkpoints/
 
-# Local automation state
-.ralph/
-.ralphrc

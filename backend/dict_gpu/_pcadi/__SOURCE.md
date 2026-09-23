@@ -3,7 +3,6 @@
 - **Commit:** 88f676e6f44812900b3c873692aa1a1c9e48b746
 - **License:** MIT (see verbatim text below)
 - **Imported on:** 2026-05-10
-- **Local clone:** `E:/pcadi-reference/`
 
 ## Extracted symbols
 

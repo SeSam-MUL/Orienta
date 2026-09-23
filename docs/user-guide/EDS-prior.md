@@ -1,8 +1,5 @@
 # The EDS chemistry prior at indexing
 
-*Written 2026-09-12. Goes into `docs/user-guide/EDS.md` once the working copy of
-that file is free; it is kept separate here because another session has it open.*
-
 ## What the switch does
 
 On the Indexing page, **Use EDS chemistry** multiplies each phase's pattern
