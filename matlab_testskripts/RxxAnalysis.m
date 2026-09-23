@@ -252,7 +252,7 @@ writematrix([histAreaWeighGKAM.Values(:)], docXls, 'Sheet', sheetGKAMHist, 'Rang
 
 %
 
-%% Für paper Flo
+%% Figures for publication
 % GBMiso=grains_smoothed.boundary('a','a');
 % 
 % RX_GBmapMiso=figure;

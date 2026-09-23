@@ -12,22 +12,23 @@ so the file could not be opened even though everything the EDS viewer needs
 those through h5_session and never touch the EBSD signal, so an EDS-only load
 is a legitimate mode — it just has to say plainly that there are no patterns.
 """
+import os
 from pathlib import Path
 
 import pytest
 
 from safe_loader import probe_ebsd_content
 
-EDS_ONLY = Path(
-    r"E:/Masterarbeit_Schlegl_2026_07/h5oina/"
-    r"Masterarbeit_Schlegl_2026_07 6m_EBSD_TEST Arbeitsbereich 12 "
-    r"Elementverteilungsdaten 25.h5oina"
-)
-WITH_PATTERNS = Path(
-    r"E:/Masterarbeit_Schlegl_2026_07/h5oina/"
-    r"Masterarbeit_Schlegl_2026_07 6m_EBSD_TEST Arbeitsbereich 6 "
-    r"Elementverteilungsdaten 21.h5oina"
-)
+# Machine-local Oxford acquisitions; they are not ours to redistribute, so the
+# tests that need them are opt-in. Point these at your own files to run them:
+#
+#   ORIENTA_TEST_EDS_ONLY_H5OINA   an H5OINA carrying EDS window integrals and
+#                                  electron images but NO /1/EBSD group at all
+#   ORIENTA_TEST_EDS_EBSD_H5OINA   an acquisition of the same kind WITH patterns
+#
+# Unset, both resolve to a path that is not a file, so the tests skip.
+EDS_ONLY = Path(os.environ.get("ORIENTA_TEST_EDS_ONLY_H5OINA", ""))
+WITH_PATTERNS = Path(os.environ.get("ORIENTA_TEST_EDS_EBSD_H5OINA", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +104,7 @@ def test_probe_finds_an_empty_pattern_dataset_as_no_patterns(tmp_path):
 # The real files
 # ---------------------------------------------------------------------------
 
-@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="user's EDS-only file not present")
+@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="set ORIENTA_TEST_EDS_ONLY_H5OINA to run")
 def test_real_eds_only_file_is_classified_correctly():
     info = probe_ebsd_content(EDS_ONLY)
     assert info["has_patterns"] is False
@@ -113,14 +114,14 @@ def test_real_eds_only_file_is_classified_correctly():
     assert "SE" in info["electron_images"] or "FSE" in info["electron_images"]
 
 
-@pytest.mark.skipif(not WITH_PATTERNS.is_file(), reason="reference file not present")
+@pytest.mark.skipif(not WITH_PATTERNS.is_file(), reason="set ORIENTA_TEST_EDS_EBSD_H5OINA to run")
 def test_real_file_with_patterns_is_not_treated_as_eds_only():
     info = probe_ebsd_content(WITH_PATTERNS)
     assert info["has_patterns"] is True
     assert info["eds_only"] is False
 
 
-@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="user's EDS-only file not present")
+@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="set ORIENTA_TEST_EDS_ONLY_H5OINA to run")
 def test_loading_the_eds_only_file_succeeds_and_says_there_are_no_patterns():
     from backend.api.routes.ebsd_viewer import _load_ebsd_blocking
 
@@ -148,7 +149,7 @@ def _extractor(path):
     return get_extractor()
 
 
-@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="user's EDS-only file not present")
+@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="set ORIENTA_TEST_EDS_ONLY_H5OINA to run")
 def test_extractor_serves_elements_and_images_without_an_ebsd_group():
     """_find_root_key required an EBSD group; without it the extractor
     reported no elements and no images, so the EDS page stayed empty."""
@@ -166,7 +167,7 @@ def test_extractor_serves_elements_and_images_without_an_ebsd_group():
         close_file()
 
 
-@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="user's EDS-only file not present")
+@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="set ORIENTA_TEST_EDS_ONLY_H5OINA to run")
 def test_element_maps_come_back_on_the_real_grid():
     """The grid used to fall back to 1x1 (EBSD header missing), so every map
     was a flat 1-D array that could not be displayed."""
@@ -185,7 +186,7 @@ def test_element_maps_come_back_on_the_real_grid():
         close_file()
 
 
-@pytest.mark.skipif(not WITH_PATTERNS.is_file(), reason="reference file not present")
+@pytest.mark.skipif(not WITH_PATTERNS.is_file(), reason="set ORIENTA_TEST_EDS_EBSD_H5OINA to run")
 def test_normal_file_grid_is_unchanged():
     """The EDS grid fall-back must only fire when there is no EBSD header."""
     from backend.api.services.h5_session import close_file

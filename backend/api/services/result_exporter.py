@@ -266,7 +266,7 @@ Auto-Assignment (/Indexing/Assignment/):
   - confidence_index: CI of the winning phase
   - uncertainty: CI_best - CI_second_best (low = ambiguous)
 
-Software: Orienta — https://github.com/your-repo
+Software: Orienta — https://github.com/SeSam-MUL/Orienta
 Libraries: kikuchipy, orix, diffsims, EMSphInx
 """
 

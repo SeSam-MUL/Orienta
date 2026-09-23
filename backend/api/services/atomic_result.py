@@ -3,10 +3,9 @@
 Measured, not assumed (2026-08-27): a Python process killed while writing an
 HDF5 file leaves a file that **opens cleanly**, carries its ``format_version``
 attribute, and contains only the datasets flushed so far — indistinguishable
-from a finished export. A reviewer of the out-of-memory report made this the
-condition for how urgent that bug is: *"vernachlässigbar — vorausgesetzt, der
-Absturz hinterlässt keine halbfertige Ergebnisdatei, die später als gültig
-durchgeht. Falls doch, rutscht er sofort nach oben."* It did.
+from a finished export. The out-of-memory report had been ranked negligible on
+exactly one condition: that a crash leaves behind no half-written result file
+that later passes as valid. It does, so that ranking did not hold.
 
 The fix is the usual one and it is definitive: build the file under a
 neighbouring ``.part`` name and move it onto the final name only after the

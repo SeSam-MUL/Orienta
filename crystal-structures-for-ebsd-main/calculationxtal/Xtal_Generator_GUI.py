@@ -492,7 +492,6 @@ class EMsoftXtalGenerator(QWidget):
         progress.setValue(len(parsed_paths))
         self.statusBar.showMessage(f"Batch save complete.", 5000)
         
-    # In Ihrer EMsoftXtalGenerator-Klasse in Xtal_Generator_GUI.py:
 
     def _write_xtal_file(self, cif_path, out_xtal):
     # Diese Funktion verwendet jetzt für Batch-Prozesse ausschließlich gecachte Daten,
@@ -537,7 +536,7 @@ class EMsoftXtalGenerator(QWidget):
             print(f"FEHLER: Unvollständige oder fehlerhafte Cache-Daten für {cif_path.name}. Schlüssel {e} fehlt. Speichern abgebrochen.")
             return
 
-        # 2) HDF5-Datei schreiben (dieser Teil bleibt gleich)
+        # 2) Write the HDF5 file
         with h5py.File(str(out_xtal), "w") as f:
             cd = f.create_group("CrystalData")
 

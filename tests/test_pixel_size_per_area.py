@@ -13,20 +13,21 @@ image was wrong by that factor — silently, in a figure meant for publication.
 EDS-only acquisitions have no EBSD header at all, so the pixel size has to come
 from the EDS / Electron Image headers there.
 """
+import os
 from pathlib import Path
 
 import pytest
 
-EDS_ONLY = Path(
-    r"E:/Masterarbeit_Schlegl_2026_07/h5oina/"
-    r"Masterarbeit_Schlegl_2026_07 6m_EBSD_TEST Arbeitsbereich 12 "
-    r"Elementverteilungsdaten 25.h5oina"
-)
-WITH_EBSD = Path(
-    r"E:/Masterarbeit_Schlegl_2026_07/h5oina/"
-    r"Masterarbeit_Schlegl_2026_07 6m_EBSD_TEST Arbeitsbereich 6 "
-    r"Elementverteilungsdaten 21.h5oina"
-)
+# Machine-local Oxford acquisitions; they are not ours to redistribute, so the
+# tests that need them are opt-in. Point these at your own files to run them:
+#
+#   ORIENTA_TEST_EDS_ONLY_H5OINA   an H5OINA carrying EDS window integrals and
+#                                  electron images but NO /1/EBSD group at all
+#   ORIENTA_TEST_EDS_EBSD_H5OINA   an acquisition of the same kind WITH patterns
+#
+# Unset, both resolve to a path that is not a file, so the tests skip.
+EDS_ONLY = Path(os.environ.get("ORIENTA_TEST_EDS_ONLY_H5OINA", ""))
+WITH_EBSD = Path(os.environ.get("ORIENTA_TEST_EDS_EBSD_H5OINA", ""))
 
 
 def _extractor(path):
@@ -104,7 +105,7 @@ def test_falls_back_to_bounding_box_when_no_step(tmp_path):
     assert sizes["eds"]["source"] == "bounding_box"
 
 
-@pytest.mark.skipif(not WITH_EBSD.is_file(), reason="reference file not present")
+@pytest.mark.skipif(not WITH_EBSD.is_file(), reason="set ORIENTA_TEST_EDS_EBSD_H5OINA to run")
 def test_real_file_electron_image_differs_from_the_scan_step():
     from backend.api.services.h5_session import close_file
 
@@ -116,7 +117,7 @@ def test_real_file_electron_image_differs_from_the_scan_step():
         close_file()
 
 
-@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="user's EDS-only file not present")
+@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="set ORIENTA_TEST_EDS_ONLY_H5OINA to run")
 def test_eds_only_file_still_has_a_pixel_size():
     """No EBSD header here — the scale bar has to come from EDS / Electron Image."""
     from backend.api.services.h5_session import close_file
@@ -131,7 +132,7 @@ def test_eds_only_file_still_has_a_pixel_size():
         close_file()
 
 
-@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="user's EDS-only file not present")
+@pytest.mark.skipif(not EDS_ONLY.is_file(), reason="set ORIENTA_TEST_EDS_ONLY_H5OINA to run")
 def test_metadata_endpoint_serves_a_scale_for_an_eds_only_file():
     """The export dialog greys the scale bar out when step_size is null."""
     from backend.api.routes.ebsd_viewer import _load_ebsd_blocking, get_metadata
