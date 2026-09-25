@@ -92,5 +92,48 @@ directly by `frontend/index.html`, dashboard background only):
 - **EMsoft** / **EMSphInx** — used via WSL for Monte-Carlo / master-pattern
   simulation and spherical indexing. Installed and licensed separately by the user.
 
+## MATLAB reference scripts (`matlab_testskripts/`)
+
+These scripts are reference material, not part of the running application: they
+document the EBSD post-processing workflow that the Python module in `analysis/`
+was ported from. Two third-party attributions apply to them.
+
+**freezeColors (bundled).** `matlab_testskripts/freezeColors.m` (v2.3) is a
+third-party MATLAB utility by John Iversen, not written by this project. Its own
+header carries the author's grant, and the condition attached to it:
+
+> Free for all uses, but please retain the following:
+>   Original Author:
+>   John Iversen, 2005-10
+>   john_iversen@post.harvard.edu
+
+That block must stay in the file. The upstream project
+(<https://github.com/jiversen/freezeColors>) added a formal MIT licence in 2024,
+after this revision; its text is in `licenses/freezeColors-License.txt` for
+reference. Under either reading the terms are permissive, require attribution
+only, and are compatible with the GNU GPL.
+
+**MTEX (referenced, not redistributed).** The scripts call functions of the MTEX
+toolbox (for example `EBSD`, `calcGrains`, `calcDensity`, `crystalSymmetry`,
+`orientation`, `grain2d`, `degree`). **No MTEX source code is included in, or
+redistributed with, this repository.** MTEX is a separate work that the user
+installs independently, and the scripts cannot run without it. MTEX is free
+software distributed under the GNU General Public License, version 2; see the
+`COPYING.txt` that MTEX itself ships for the licence text it carries.
+
+- Project website: <https://mtex-toolbox.github.io/>
+- Source repository: <https://github.com/mtex-toolbox/mtex>
+
+MTEX asks users to cite whichever paper best fits the application and keeps the
+list at <https://mtex-toolbox.github.io/publications>. The foundational ones:
+
+> F. Bachmann, R. Hielscher, H. Schaeben: *Texture Analysis with MTEX - Free and
+> Open Source Software Toolbox.* Solid State Phenomena **160** (2010), 63-68.
+> DOI: 10.4028/www.scientific.net/SSP.160.63
+
+> R. Hielscher, H. Schaeben: *A novel pole figure inversion method: specification
+> of the MTEX algorithm.* Journal of Applied Crystallography **41**(6) (2008),
+> 1024-1037. DOI: 10.1107/S0021889808030112
+
 If you redistribute this software, retain this NOTICE file and the LICENSE file,
 and preserve all copyright and license headers in the vendored source.
