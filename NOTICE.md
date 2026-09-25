@@ -109,8 +109,8 @@ header carries the author's grant, and the condition attached to it:
 
 That block must stay in the file. The upstream project
 (<https://github.com/jiversen/freezeColors>) added a formal MIT licence in 2024,
-after this revision; its text is in `licenses/freezeColors-License.txt` for
-reference. Under either reading the terms are permissive, require attribution
+after this revision; its text is in `licenses/freezeColors-Upstream-MIT.txt`,
+named so that nobody reads it as the grant our copy shipped under. Under either reading the terms are permissive, require attribution
 only, and are compatible with the GNU GPL.
 
 **MTEX (referenced, not redistributed).** The scripts call functions of the MTEX
@@ -119,7 +119,10 @@ toolbox (for example `EBSD`, `calcGrains`, `calcDensity`, `crystalSymmetry`,
 redistributed with, this repository.** MTEX is a separate work that the user
 installs independently, and the scripts cannot run without it. MTEX is free
 software distributed under the GNU General Public License, version 2; see the
-`COPYING.txt` that MTEX itself ships for the licence text it carries.
+`COPYING.txt` that MTEX itself ships for the licence text it carries. Because no
+MTEX code is distributed here, and the scripts cannot run until the user installs
+MTEX themselves, no combined work arises and no licence-compatibility question
+arises with it.
 
 - Project website: <https://mtex-toolbox.github.io/>
 - Source repository: <https://github.com/mtex-toolbox/mtex>
