@@ -49,7 +49,59 @@ except ImportError:
     _MP_AVAILABLE = False
 
 # --- CONFIGURATION ---
-MP_API_KEY = "Fd6So1NzJA4usfiT" # Ihr eingefügter API Schlüssel
+_MP_KEY_WARNED = False
+
+
+def mp_api_key() -> str:
+    """The Materials Project API key, or "" when none is configured.
+
+    Never a literal in this file: a key committed here ships in every release
+    and in the public repository. Two sources, in order:
+
+      1. the ``MP_API_KEY`` environment variable — for running this script on
+         its own, outside the app;
+      2. the app's own settings (Settings -> API keys), the same store the
+         Crystal Hint uses (``user_config_manager.get_api_key``).
+
+    The app is imported lazily and optionally: this script also runs stand-alone
+    from its own folder, where the backend is not importable.
+    """
+    key = (os.environ.get("MP_API_KEY") or "").strip()
+    if key:
+        return key
+    try:
+        from backend.api.services import user_config_manager as _uc
+    except (ImportError, ModuleNotFoundError):
+        return ""           # stand-alone run: the app is simply not there
+    return (_uc.get_api_key("materials_project") or "").strip()
+
+
+def reset_mp_key_warning() -> None:
+    """Let the next build warn again. The backend is long-lived and calls
+    ``build_database`` per request; a process-global flag would mean only the
+    FIRST build of a session says why the DOIs are missing."""
+    global _MP_KEY_WARNED
+    _MP_KEY_WARNED = False
+
+
+def _mp_key_or_warn() -> str:
+    """The key, plus one clear log line per build when it is missing.
+
+    The Materials Project is one of two DOI sources here (COD is the other), so
+    a missing key must not stop a database build - but it must not pass
+    unmentioned either, or the DOIs are simply absent and nobody knows why.
+    """
+    global _MP_KEY_WARNED
+    key = mp_api_key()
+    if not key and not _MP_KEY_WARNED:
+        _MP_KEY_WARNED = True
+        # Plain hyphen: an em dash arrives as a replacement character on a
+        # Windows console (cp1252), which is how this line first appeared.
+        logging.warning(
+            "No Materials Project API key configured - DOI lookups will use "
+            "COD only. Set it under Settings -> API keys in the app, or in the "
+            "MP_API_KEY environment variable when running this script alone.")
+    return key
 
 SCRIPT_DIR = Path(__file__).parent
 SEARCH_FOLDER = SCRIPT_DIR / 'Cif_Files'
@@ -103,9 +155,10 @@ def find_reference_online(row: pd.Series) -> str:
     
     # --- Step 1: Precise search using Materials Project ID from filename ---
     mp_id = _extract_mp_id(filename)
-    if mp_id and _MP_AVAILABLE and MP_API_KEY and MP_API_KEY != "IHREN_API_SCHLÜSSEL_HIER_EINFÜGEN":
+    _mp_key = _mp_key_or_warn() if _MP_AVAILABLE else ""
+    if mp_id and _mp_key:
         try:
-            with MPRester(MP_API_KEY) as mpr:
+            with MPRester(_mp_key) as mpr:
                 # Get all default data for this specific material ID
                 data = mpr.get_data(mp_id)
                 if data and data[0].get('doi'):
@@ -137,9 +190,9 @@ def find_reference_online(row: pd.Series) -> str:
         except Exception: pass
     
     # --- Step 3: Broad search on Materials Project by formula (Fallback) ---
-    if _MP_AVAILABLE and MP_API_KEY and MP_API_KEY != "IHREN_API_SCHLÜSSEL_HIER_EINFÜGEN":
+    if _mp_key:
         try:
-            with MPRester(MP_API_KEY) as mpr:
+            with MPRester(_mp_key) as mpr:
                 results = mpr.get_data(formula) # Get all default data
                 if results:
                     for res in results:
