@@ -9,6 +9,44 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## Unreleased
+
+### The Materials Project API key was readable in this repository
+
+The v0.2.6 entry below announced that the key had stopped being a literal in
+`cif_database_builder.py`. That was true when it was written. The v0.3.0 release
+port then copied the file from the development tree, which still carried the
+literal, and put it back without anyone noticing.
+
+**Anyone who cloned, downloaded or browsed this repository between those two
+releases could read that key. Treat it as compromised.** It is out of the source
+again: the key comes from **Settings → API keys** or from the `MP_API_KEY`
+environment variable, and when none is set the database builder simply works
+offline from your local CIF files.
+
+So that this cannot happen a third time, a test now fails if any
+credential-shaped literal appears in any tracked file, and a second test pins
+that the builder passes only the resolved key to the API.
+
+### Two further corrections the same port had undone
+
+- A comment in `backend/spherical_gpu/pipeline/detector.py` called kikuchipy
+  MIT-licensed again. kikuchipy is GPL-3.0-or-later, which is what `NOTICE.md`
+  has said all along.
+- `sample_data/README.md` describes the Zenodo archive but had lost its DOI, so
+  the page that tells you the example datasets exist did not say where. The DOI
+  is back.
+
+### Third-party attribution in the MATLAB reference scripts
+
+`matlab_testskripts/` is reference material, not part of the running
+application, and it was shipped without attribution: `freezeColors.m` is
+another author's work, and the scripts call MTEX throughout. Both are now
+credited, and two comments that named people who are not authors of this
+project have been removed.
+
+---
+
 ## v0.3.0 — 2026-09-14
 
 **If you have indexed anything with an earlier version, read the first section.**
@@ -95,8 +133,9 @@ upgrade. Local callers are unaffected: they send no `Origin` header.
 Three defects in the install wizard are fixed with it. The worst wrote **the sudo
 password itself** into `/etc/fstab` and the OpenCL vendor files, because a shell
 helper piped the password into stdin and thereby replaced the stdin that
-`echo <path> | sudo tee <file>` was relying on. That is the origin of the "ICD files
-contained 1234" report from February: 1234 was the password.
+`echo <path> | sudo tee <file>` was relying on. That is the origin of the February
+report that the ICD files held a stray value instead of a library path: the value
+was the password.
 
 ### What we checked and did not change
 
@@ -165,9 +204,13 @@ download reports its version as "unknown".
   redistributed, and vanta.js — whose minified bundle carries no copyright text
   at all — has the notice MIT requires beside it.
 - Three more locations with derived code were undeclared, and one comment called
-  kikuchipy MIT-licensed when it is GPL-3.0.
+  kikuchipy MIT-licensed when it is GPL-3.0. (That comment came back with the
+  v0.3.0 port and is corrected again; see *Unreleased*.)
 
 ### The Materials Project key no longer lives in the source
+
+> **Correction.** The v0.3.0 release port put the literal back. It is out
+> again; see *Unreleased* at the top of this file.
 
 It was a literal in `cif_database_builder.py`. It now comes from your own
 settings, the same place the rest of the app already read it from, with the
