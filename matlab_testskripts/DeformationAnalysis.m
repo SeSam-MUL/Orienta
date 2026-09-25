@@ -157,7 +157,7 @@ writecell(num2cell(KAMhist_smoothed_Edges(:)), docFile, 'Sheet', sheetKAMHist, '
 writematrix([KAMhist_smoothed_Counts(:)], docFile, 'Sheet', sheetKAMHist, 'Range', sprintf("%s5", colLet));
 
 
-% für Belinda
+% Optional KAM range breakdown (0-0.5, 0.5-1, ... degrees), kept commented out.
 %             kam_smoothed=kam_smoothed(~isnan(kam_smoothed));
 %
 %             range0_05=kam_smoothed(kam_smoothed<0.5*degree);

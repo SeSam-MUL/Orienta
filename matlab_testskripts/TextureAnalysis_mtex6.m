@@ -56,7 +56,7 @@ oriR=ebsd_smoothedFill(ph).orientations;
 
 % odfCombined = 0.5* odf_grainKernel +0.5*odf_kernelMod
 
-% Paper GHADIR 1.5 Mn
+% ODF kernel halfwidth in use; the alternatives above are kept for reference.
 odfCombined=calcDensity(oriR, 'halfwidth', 5*degree)
 % odfCombined = odf_kernelMod
 
