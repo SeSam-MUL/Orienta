@@ -18,7 +18,10 @@ as needed for Hough / Dictionary / Spherical indexing.
 
 ## EBSD datasets — `patterns/` (Zenodo archive only)
 The example EBSD measurements are large, so they are included in the **Zenodo
-archive**, not in the source-code repository:
+archive**, not in the source-code repository
+([10.5281/zenodo.21021937](https://doi.org/10.5281/zenodo.21021937) — the archive
+lineage that carries the example datasets; they live in `sample_data/patterns/`
+inside the archive):
 
 | File | Sample | Notes |
 |------|--------|-------|
