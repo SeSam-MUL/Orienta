@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import mimetypes
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, Set
 from contextlib import asynccontextmanager
 
@@ -748,25 +748,60 @@ app.include_router(citations.router, prefix="/api/citations", tags=["Citations"]
 app.include_router(addons.router, prefix="/api/addons", tags=["Add-ons"])
 app.include_router(phase_collections.router, prefix="/api/phase-collections", tags=["Phase Collections"])
 
-# Serve built React frontend in production mode
 FRONTEND_DIST = Path(PROJECT_ROOT) / "frontend" / "dist"
-if FRONTEND_DIST.exists():
-    # Custom static-files class that adds no-cache headers to `index.html`
-    # so the browser always fetches the latest entrypoint. Hashed assets
-    # (vendor-XXXX.js, main-YYYY.css) keep their normal long-cache headers
-    # because their filenames change on every build — those CAN be cached
-    # safely. Without this, the browser holds onto the old index.html
-    # which references the old hashed bundles, and the user never sees
-    # frontend updates without a manual hard-reload.
-    class _NoCacheIndexStaticFiles(StaticFiles):
-        async def get_response(self, path: str, scope):
-            response = await super().get_response(path, scope)
-            if path in ("", "/", "index.html"):
-                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-                response.headers["Pragma"] = "no-cache"
-                response.headers["Expires"] = "0"
-            return response
 
+
+def _serves_entrypoint(path: str) -> bool:
+    """Does this request return `index.html`?
+
+    `path` is what StaticFiles computed, NOT the URL. Measured against the real
+    `get_path()`: `GET /` becomes `"."`, `GET /index.html` becomes
+    `"index.html"`, and a nested asset comes back with the platform's own
+    separator, which is why the name is compared after normalising it. The
+    first spelling is the one Electron loads and the one the earlier list
+    `("", "/", "index.html")` did not contain -- so the root went out with no
+    `Cache-Control` at all, only an ETag and a Last-Modified.
+
+    That is not a missing optimisation, it is a stale app: with no
+    `Cache-Control`, Chromium applies its freshness HEURISTIC (a tenth of the
+    document's age) and does not even ask. On 2026-09-27, after the runtime
+    update, a machine served its user the 0.4.4 `index.html` and its hashed
+    chunks out of the renderer's cache while About -- which goes through
+    `/api` -- correctly read v0.4.6 from the updated backend: the new version
+    number beside a missing feature, and a hard reload as the only way out.
+
+    Compared on the NAME rather than a list of spellings, because the question
+    is which file goes out, and a fourth spelling would otherwise cost another
+    silent morning.
+    """
+    if path in ("", ".", "./", "/"):
+        return True
+    return PurePosixPath(path.replace("\\", "/")).name == "index.html"
+
+
+class _NoCacheIndexStaticFiles(StaticFiles):
+    """Static files that refuse to let the entrypoint be cached.
+
+    Defined at module level, not inside the `if FRONTEND_DIST.exists()` below:
+    a class that only exists in a tree with a built frontend can only be tested
+    in a tree with a built frontend, and that is neither a worktree nor a fresh
+    clone. The guard for this defect would have skipped everywhere it mattered.
+    """
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        # The hashed assets keep their normal caching: their names change with
+        # their content, so a cached one can only be reached by an index that
+        # names it -- and the index is now uncacheable.
+        if _serves_entrypoint(path):
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+            response.headers["Expires"] = "0"
+        return response
+
+
+# Serve built React frontend in production mode.
+if FRONTEND_DIST.exists():
     # Mount the entire dist folder as a catch-all static mount.
     # html=True serves index.html for directory requests (SPA fallback).
     # This must be last since mount() is checked after explicit routes.

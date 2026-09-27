@@ -630,6 +630,174 @@ function startWaitingPageClock(window) {
   return () => clearInterval(timer);
 }
 
+/**
+ * Say on the waiting page that the program files are being replaced.
+ *
+ * The same four elements the clock writes, so the page needs no markup of its
+ * own: this step lasts seconds, and a second layout for it would be a second
+ * thing to keep translated.
+ */
+function paintUpdatingPage(window, lang) {
+  if (!window || window.isDestroyed()) return;
+  const text = {
+    title: t(lang, 'startingTitle'),
+    body: t(lang, 'updatingBody'),
+    hint: t(lang, 'updatingHint'),
+  };
+  window.webContents
+    .executeJavaScript(
+      `(() => { const s = ${JSON.stringify(text)};
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        set('title', s.title); set('body', s.body); set('hint', s.hint);
+      })()`,
+    )
+    .catch(() => { /* the page may not be loaded yet; the log has it either way */ });
+}
+
+/**
+ * Bring `runtime/` up to the version THIS shell carries, before uvicorn imports
+ * it.
+ *
+ * Installing a newer .exe over an existing installation replaced the shell and
+ * left the program files alone, because the only thing that ever unpacked them
+ * was the first-install wizard. The result was measured on 2026-09-27: a 0.4.6
+ * shell running a 0.4.4 runtime, About reporting 0.4.4, and not one of the fixes
+ * in between present. See `bundled_update.js` for why the parking route is taken
+ * rather than a second unpacker.
+ *
+ * Returns `{ok}` — and `ok: false` means DO NOT start the backend: the tree is
+ * part one release and part the other, and uvicorn importing that is the one
+ * outcome worse than not starting.
+ */
+async function applyBundledUpdate(python) {
+  const bundledUpdate = require('./bundled_update');
+  const lang = shellLocale();
+  let home;
+  try {
+    home = orientaHome();
+  } catch (err) {
+    logShellLine(`Runtime update: skipped, no home directory (${err.message})`);
+    return { ok: true };
+  }
+
+  const bundled = bundledUpdate.bundledPackage(process.resourcesPath);
+  const installed = bundledUpdate.installedTag(home);
+  const parked = bundledUpdate.alreadyParked(home);
+  const decision = bundledUpdate.updateDecision({ bundled, installed, parked });
+  logShellLine(`Runtime update: ${decision.action} — ${decision.reason}`);
+  if (decision.action === 'none') return { ok: true };
+
+  if (decision.action === 'park') {
+    try {
+      const record = bundledUpdate.parkBundled({ home, bundled });
+      logShellLine(`Runtime update: parked ${record.file} (${record.tag}) for the updater`);
+    } catch (err) {
+      // Nothing has been touched: the old runtime is whole and will start. Say
+      // so loudly rather than let the user believe they are on the new version.
+      logShellLine(`Runtime update: could not park the package (${err.message})`);
+      await showUpdateProblem(t(lang, 'updateSkippedBody'), lang);
+      return { ok: true };
+    }
+  }
+
+  paintUpdatingPage(mainWindow, lang);
+  const applier = path.join(__dirname, 'apply_update.py');
+  const verdictFile = path.join(home, 'setup-tmp', 'apply-result.json');
+  try {
+    fs.mkdirSync(path.dirname(verdictFile), { recursive: true });
+  } catch { /* the applier's own failure will say so */ }
+
+  const exitCode = await new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(python, [applier, '--home', home, '--result-json', verdictFile],
+        { windowsHide: true });
+    } catch (err) {
+      logShellLine(`Runtime update: could not run the updater (${err.message})`);
+      resolve(-1);
+      return;
+    }
+    const note = (buf) => String(buf).split(/\r?\n/).forEach((line) => {
+      if (line.trim()) logShellLine(`  updater: ${line.trim()}`);
+    });
+    if (child.stdout) child.stdout.on('data', note);
+    if (child.stderr) child.stderr.on('data', note);
+    child.on('error', (err) => {
+      logShellLine(`Runtime update: the updater did not start (${err.message})`);
+      resolve(-1);
+    });
+    child.on('close', (code) => resolve(code === null ? -1 : code));
+  });
+
+  const verdict = bundledUpdate.readVerdict({ file: verdictFile, exitCode });
+  if (verdict.applied) {
+    logShellLine(`Runtime update: applied ${verdict.tag || '(no tag)'}`);
+    await clearRendererCache();
+    return { ok: true };
+  }
+  if (verdict.dirty) {
+    logShellLine(`Runtime update: INCOMPLETE — ${verdict.error || 'no reason given'}; `
+      + 'not starting the backend');
+    await showUpdateProblem(t(lang, 'updateFailedBody'), lang, t(lang, 'updateFailedTitle'));
+    return { ok: false };
+  }
+  if (verdict.error) {
+    logShellLine(`Runtime update: not applied — ${verdict.error}`);
+    await showUpdateProblem(t(lang, 'updateSkippedBody'), lang);
+    return { ok: true };
+  }
+  logShellLine('Runtime update: nothing to apply');
+  return { ok: true };
+}
+
+/**
+ * Throw away the renderer's HTTP cache, because the program files just changed.
+ *
+ * The backend now sends `no-store` for the entrypoint, and that is the real
+ * fix -- but it only governs responses fetched AFTER it shipped. A copy that a
+ * previous version wrote into this cache is already there, with an ETag, a
+ * Last-Modified and no `Cache-Control` at all, and Chromium's freshness
+ * heuristic will serve it without asking. So the very upgrade this function
+ * exists for is the one case the header cannot reach.
+ *
+ * Measured on 2026-09-27: after the runtime went from v0.4.4 to v0.4.6, About
+ * read v0.4.6 from the new backend over `/api` while the window rendered the
+ * 0.4.4 `index.html` and its hashed chunks from this cache -- a new version
+ * number beside a missing feature. `Ctrl+Shift+R` fixed it, which is not
+ * something a user should have to know.
+ *
+ * Only after an update, never on an ordinary start: a cold start already costs
+ * 30-40 s, and re-fetching several megabytes of chunks every time would buy
+ * nothing.
+ */
+async function clearRendererCache() {
+  try {
+    const { session } = require('electron');
+    await session.defaultSession.clearCache();
+    logShellLine('Runtime update: cleared the renderer cache, so the new frontend is fetched');
+  } catch (err) {
+    // Not fatal, and not silent: the header fix covers everything from here
+    // on, so the worst case is one stale first paint that a reload clears.
+    logShellLine(`Runtime update: could not clear the renderer cache (${err.message})`);
+  }
+}
+
+/** One dialog, so a failure to update is never only a line in a log file. */
+async function showUpdateProblem(message, lang, title) {
+  try {
+    await dialog.showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
+      type: 'warning',
+      title: title || t(lang, 'updateFailedTitle'),
+      message: title || t(lang, 'updateFailedTitle'),
+      detail: message,
+      buttons: ['OK'],
+      noLink: true,
+    });
+  } catch (err) {
+    logShellLine(`Runtime update: could not show the message (${err.message})`);
+  }
+}
+
 function loadSetupPlaceholder(window, decision) {
   const wizard = path.join(__dirname, 'setup', 'index.html');
   try {
@@ -1628,6 +1796,20 @@ app.whenReady().then(async () => {
     logShellLine(`Startup plan: ${JSON.stringify(plan)}`);
 
     if (!plan.spawn && !plan.thenLoad) return;   // the wizard is on screen
+
+    // BEFORE the backend, never after: uvicorn imports `runtime/`, so replacing
+    // those files under a running process is not an option, and starting first
+    // would serve the old version for the whole session. Only when we are about
+    // to spawn against an installed runtime — a checkout updates itself with
+    // git, and the wizard unpacks its own package.
+    if (plan.spawn && !isDev) {
+      const update = await applyBundledUpdate(plan.python);
+      if (!update.ok) {
+        if (stopWaitingClock) stopWaitingClock();
+        app.quit();
+        return;
+      }
+    }
 
     if (plan.spawn) startBackend(plan.python, plan.root);
 

@@ -27,6 +27,17 @@ const STRINGS = {
       + 'libraries and can take a minute or two.',
     elapsed: '{{seconds}} s',
 
+    updatingBody: 'Updating the program files…',
+    updatingHint: 'This runs once after an update and takes a few seconds. Your '
+      + 'crystal library and your settings are not touched.',
+    updateFailedTitle: 'Orienta could not finish updating',
+    updateFailedBody: 'The program files were left part-way between two versions, so '
+      + 'Orienta has not started the analysis engine. Start Orienta again and it will '
+      + 'finish the update. Your data and crystal library are not touched.',
+    updateSkippedBody: 'Orienta could not update its program files and has started the '
+      + 'previous version instead, so this window may not show the newest changes. '
+      + 'Reinstalling Orienta repairs it; your data and crystal library are not touched.',
+
     notSetUpTitle: 'Orienta is not set up yet',
     needsRepairTitle: 'Orienta needs repairing',
     setupMissing: 'Orienta could not open the setup assistant: part of this '
@@ -66,6 +77,19 @@ const STRINGS = {
     startingHint: 'Der erste Start nach einer Installation oder einem Update lädt die '
       + 'wissenschaftlichen Bibliotheken und kann ein bis zwei Minuten dauern.',
     elapsed: '{{seconds}} s',
+
+    updatingBody: 'Die Programmdateien werden aktualisiert…',
+    updatingHint: 'Das läuft einmal nach einem Update und dauert wenige Sekunden. '
+      + 'Ihre Kristallbibliothek und Ihre Einstellungen werden nicht angefasst.',
+    updateFailedTitle: 'Orienta konnte das Update nicht abschließen',
+    updateFailedBody: 'Die Programmdateien stehen zwischen zwei Versionen, deshalb hat '
+      + 'Orienta die Auswertung nicht gestartet. Starten Sie Orienta erneut, dann wird '
+      + 'das Update beendet. Ihre Daten und Ihre Kristallbibliothek werden nicht '
+      + 'angefasst.',
+    updateSkippedBody: 'Orienta konnte seine Programmdateien nicht aktualisieren und hat '
+      + 'die vorherige Fassung gestartet; dieses Fenster zeigt also möglicherweise '
+      + 'nicht die neuesten Änderungen. Eine Neuinstallation behebt das; Ihre Daten '
+      + 'und Ihre Kristallbibliothek werden nicht angefasst.',
 
     notSetUpTitle: 'Orienta ist noch nicht eingerichtet',
     needsRepairTitle: 'Orienta muss repariert werden',
@@ -107,6 +131,17 @@ const STRINGS = {
       + '1〜2 分かかることがあります。',
     elapsed: '{{seconds}} 秒',
 
+    updatingBody: 'プログラムファイルを更新しています…',
+    updatingHint: '更新後に一度だけ実行され、数秒で終わります。'
+      + '結晶ライブラリと設定はそのままです。',
+    updateFailedTitle: 'Orienta の更新を完了できませんでした',
+    updateFailedBody: 'プログラムファイルが 2 つのバージョンの途中にあるため、'
+      + '解析エンジンを起動していません。Orienta をもう一度起動すると更新が完了します。'
+      + 'データと結晶ライブラリはそのままです。',
+    updateSkippedBody: 'プログラムファイルを更新できず、以前のバージョンを起動しました。'
+      + 'この画面には最新の変更が反映されていない可能性があります。'
+      + '再インストールで修復します。データと結晶ライブラリはそのままです。',
+
     notSetUpTitle: 'Orienta はまだセットアップされていません',
     needsRepairTitle: 'Orienta の修復が必要です',
     setupMissing: 'セットアップアシスタントを開けませんでした。このインストールの一部が'
@@ -145,6 +180,15 @@ const STRINGS = {
     startingBody: '正在加载分析引擎…',
     startingHint: '安装或更新后的首次启动需要加载科学计算库，可能需要一到两分钟。',
     elapsed: '{{seconds}} 秒',
+
+    updatingBody: '正在更新程序文件…',
+    updatingHint: '更新后只运行一次，需要几秒钟。晶体库和设置不会被改动。',
+    updateFailedTitle: 'Orienta 无法完成更新',
+    updateFailedBody: '程序文件停在两个版本之间，因此 Orienta 没有启动分析引擎。'
+      + '请再次启动 Orienta，它会完成更新。您的数据和晶体库不会被改动。',
+    updateSkippedBody: 'Orienta 无法更新程序文件，已启动之前的版本，'
+      + '所以此窗口可能不显示最新的改动。重新安装可以修复；'
+      + '您的数据和晶体库不会被改动。',
 
     notSetUpTitle: 'Orienta 尚未完成安装',
     needsRepairTitle: 'Orienta 需要修复',
