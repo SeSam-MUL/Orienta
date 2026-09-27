@@ -277,6 +277,15 @@ def test_sd_1816951_is_offered_with_the_reason_it_could_not_be_fully_read():
     need the structure refuse it. Offering it silently would be the bad outcome;
     so is hiding it.
     """
+    # The guard belongs FIRST: every assertion below reads the real library, so
+    # on a machine without it this failed at "the library's only Mg-Cu phase must
+    # not be the only one missing" -- an alarming message for a file that is
+    # simply not there. Found by running the published subset as a fresh clone,
+    # where `Database/` does not exist by design.
+    cif = PROJECT_ROOT / "Database" / "CIF_Library" / "sd_1816951.cif"
+    if not cif.is_file():
+        pytest.skip("sd_1816951.cif is not on this machine")
+
     matches = search(elements=["Mg", "Cu"], strict_chemistry=True)
     hits = [m for m in matches if "1816951" in m.entry.key]
     assert hits, "the library's only Mg-Cu phase must not be the only one missing"
@@ -288,9 +297,6 @@ def test_sd_1816951_is_offered_with_the_reason_it_could_not_be_fully_read():
     assert not [m for m in search(elements=["Al"], strict_chemistry=True)
                 if "1816951" in m.entry.key]
 
-    cif = PROJECT_ROOT / "Database" / "CIF_Library" / "sd_1816951.cif"
-    if not cif.is_file():
-        pytest.skip("sd_1816951.cif is not on this machine")
     from backend.api.services.crystal_hint_local_library import _parse_cif
     reason = _parse_cif(cif).get("error", "")
     assert "Mg2Cu" in reason and "Mg4Cu" in reason, reason
