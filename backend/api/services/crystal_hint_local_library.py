@@ -19,7 +19,10 @@ import numpy as np
 
 # Composition display matches the Crystal Database (reduced_formula + subscripts).
 # _PHASE_NICKNAMES is kept imported for the legacy _prettify_formula + its test.
-from phase_metadata import format_formula_subscripts, _PHASE_NICKNAMES
+from display_names import display_stem
+from phase_metadata import (
+    format_formula_subscripts, extract_metadata_from_cif, _PHASE_NICKNAMES,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -215,7 +218,21 @@ def _parse_cif(cif_path: Path) -> dict:
             sg_symbol, sg_number = ("", None)
         return {
             "formula": s.composition.reduced_formula,
-            "elements": tuple(sorted(s.composition.as_dict().keys())),
+            # `.composition.elements`, NOT `.as_dict().keys()`: the keys keep the
+            # oxidation state, so an ICSD CIF writing `_atom_site_type_symbol` as
+            # `Al0+` gave `('Al0+','Fe0+','Mn0+','Si0+')`. Every chemistry
+            # intersection against real symbols was then empty and
+            # `search(strict_chemistry)` DROPPED the phase -- measured on four
+            # library files including alpha-AlFeMnSi_ICSD-52623, whose chemistry
+            # is exactly right.
+            #
+            # This asks pymatgen for the elements instead of cleaning its keys
+            # with our own normaliser. A review pointed it out and it is plainly
+            # better: `Element.symbol` cannot carry a charge by construction, so
+            # there is no string rule to get wrong, and nothing here can reach
+            # the mixed-site branch of `clean_element_symbol` (which reads a
+            # FORMULA backwards -- see its docstring).
+            "elements": tuple(sorted({el.symbol for el in s.composition.elements})),
             "space_group": str(sg_symbol),
             "space_group_number": sg_number,
             "a_A": s.lattice.a,
@@ -253,6 +270,11 @@ def _parse_xtal(xtal_path: Path) -> dict:
                 except Exception:
                     pass
             return {
+                # `Element.from_Z(z).symbol`, so these are canonical by
+                # construction -- atomic numbers cannot carry a charge. Running a
+                # normaliser over them would be decorative: a review showed the
+                # call could be deleted without any test noticing, because no
+                # input can tell the two apart.
                 "elements": tuple(sorted(elements_set)),
                 "space_group_number": sg_number,
                 "a_A": a_A,
@@ -263,6 +285,55 @@ def _parse_xtal(xtal_path: Path) -> dict:
     except Exception as exc:
         logger.warning("XTAL parse failed for %s: %s", xtal_path, exc)
         return {"error": str(exc)}
+
+
+def _readable_without_structure(cif: Path) -> dict:
+    """The fields a CIF still yields when pymatgen refuses its structure.
+
+    `phase_metadata.extract_metadata_from_cif` is a regex reader over the
+    `_sm_*`/symmetry/cell tags and does not go through pymatgen, so it answers
+    for files the structure path rejects. Returns kwargs for `LocalEntry`; empty
+    on any failure, because this is a best-effort rescue and must never be the
+    reason an entry is missing altogether.
+    """
+    try:
+        meta = extract_metadata_from_cif(cif)
+    except Exception:
+        logger.debug("metadata rescue failed for %s", cif.name, exc_info=True)
+        return {}
+    out: dict = {}
+    # NO `elements` HERE, deliberately. The label and the atom table disagree on
+    # two shipped files -- `beta-AlFeSi.cif` says `Al4 Fe Si` and has no Si site,
+    # `sd_1401510.cif` labels itself `Mn0.5Fe0.5Al5Si0.68` with only Al and
+    # Fe/Mn sites -- so deriving chemistry from the label would CLAIM Si the file
+    # does not contain. A review measured the cost of doing it: forcing the
+    # rescue on those two, `search(['Al','Fe','Mn'], strict)` went from
+    # `['beta-AlFeSi','sd_1401510']` to `[]` -- the rescue would make the phases
+    # it exists to save disappear for their own chemistry. Elements come from the
+    # `.xtal` pass (atomic numbers, and the one file that needs this has one), or
+    # not at all.
+    #
+    # `formula` is still taken, for DISPLAY, but never the filename:
+    # `extract_metadata_from_cif` ends its chain at `display_stem(cif_path)`, and
+    # `meta.source` is "cif" either way, so the only way to tell is to compare.
+    # It matters because `crystal_hint_phase_fit.phase_nominal_at_pct` parses
+    # this field for the EDS multiplier -- a filename there is a composition
+    # invented out of a name.
+    if meta.formula and meta.formula != display_stem(cif):
+        display = format_formula_subscripts(meta.formula)
+        out.update(formula=meta.formula, display_formula=display,
+                   display_label=display)
+    if meta.space_group:
+        out["space_group"] = meta.space_group
+    if meta.space_group_number:
+        out["space_group_number"] = meta.space_group_number
+        out["crystal_system"] = _system_from_sg_number(meta.space_group_number)
+    for src, dst in (("lattice_a", "lattice_a_A"), ("lattice_b", "lattice_b_A"),
+                     ("lattice_c", "lattice_c_A")):
+        v = getattr(meta, src, None)
+        if v:
+            out[dst] = v
+    return out
 
 
 def build_index() -> dict[str, LocalEntry]:
@@ -277,7 +348,17 @@ def build_index() -> dict[str, LocalEntry]:
             key = cif.stem
             info = _parse_cif(cif)
             if "error" in info:
-                entries[key] = LocalEntry(key=key, cif_path=cif, parse_error=info["error"])
+                # The STRUCTURE path refused (e.g. AmbiguousCifError: the blocks
+                # give two compositions). That does not mean the file says
+                # nothing -- the `_sm_*`/symmetry reader is independent of
+                # pymatgen and usually reads fine. Keep what IS readable, and
+                # keep `parse_error` so the entry can say what is missing.
+                # Measured on sd_1816951 (MgCu2): formula, space group, IT number
+                # and lattice all come back; only the composition is ambiguous.
+                entries[key] = LocalEntry(
+                    key=key, cif_path=cif, parse_error=info["error"],
+                    **_readable_without_structure(cif),
+                )
                 continue
             sg_name = info["space_group"]
             sg_num = info["space_group_number"]
@@ -460,7 +541,14 @@ def search(
             matching_systems.add(crystal_system)
 
     for entry in get_index().values():
-        if entry.parse_error:
+        # A `parse_error` used to drop the entry outright. Measured cost of that:
+        # `search(['Mg','Cu'], strict_chemistry=True)` returned ZERO results,
+        # because MgCu2 (sd_1816951) is the library's only Mg-Cu phase and its
+        # CIF gives pymatgen two compositions. The phase that IS the answer was
+        # the only one missing. It carries elements (from its .xtal), an IT
+        # number and a .sht -- enough to be a candidate. So skip only an entry
+        # with nothing to match ON, and let the rest through carrying the reason.
+        if entry.parse_error and not entry.elements and not entry.space_group_number:
             continue
 
         # Crystal system filter
@@ -550,7 +638,22 @@ def search(
             else:  # soft: ×0.3..×1.0, never zero
                 chem_multiplier = 0.3 + 0.7 * chem_fit
 
-        # Final score: plausibility × system × lattice × sym × d × chem
+        # A half-read phase must never OUTRANK a fully-read one. Three of the
+        # five multipliers above are free passes when their input is missing --
+        # no lattice means the lattice filter and `dspacing_fit` both skip
+        # (`1.0` twice), `crystal_system == "unknown"` makes `symmetry_fit`
+        # return 1.0, and a formula that parses to no element makes
+        # `chemistry_fit` return its neutral 1.0 and become un-droppable under
+        # `eds_weighting="filter"`. So an entry that knows nothing pays nothing,
+        # while every real competitor pays something. A review built the case:
+        # a parse-error entry with no cell and no label scored 1.0000 on an Al-Cu
+        # pixel and came FIRST, ahead of Al2Cu (0.6724) and Al (0.6421).
+        #
+        # The penalty is a cap, not a guess at a fit: it says "ranked below
+        # anything fully read", which is the only honest claim available for a
+        # phase whose own file could not be parsed. It still beats absence --
+        # being offered last with a reason is the point of offering it at all.
+        unreadable_penalty = 0.5 if entry.parse_error else 1.0
         score = (
             plausibility
             * (1.0 if system_match else 0.5)
@@ -558,6 +661,7 @@ def search(
             * sym_multiplier
             * d_multiplier
             * chem_multiplier
+            * unreadable_penalty
         )
 
         matches.append(

@@ -30,9 +30,14 @@
  */
 import { useEffect, useState } from 'react';
 import { getAppVersion } from '../services/api';
+import { FIRST_DELAY_MS, MAX_DELAY_MS, nextDelay } from '../services/retryBackoff';
 
-export const FIRST_DELAY_MS = 1000;
-export const MAX_DELAY_MS = 60000;
+// Re-exported because this hook's tests name them, and because it is still
+// the place a reader looks first. The schedule itself now lives in
+// services/retryBackoff.js, shared with the Indexing phase list, which had
+// the same defect in a worse form: a failed fetch there did not just fail to
+// answer, it emptied the list and reported "No phases found".
+export { FIRST_DELAY_MS, MAX_DELAY_MS };
 
 export default function useAppVersion() {
   const [info, setInfo] = useState(null);
@@ -53,7 +58,7 @@ export default function useAppVersion() {
           if (cancelled) return;
           setFailed(true);
           timer = setTimeout(attempt, delay);
-          delay = Math.min(delay * 2, MAX_DELAY_MS);
+          delay = nextDelay(delay);
         });
     };
     attempt();

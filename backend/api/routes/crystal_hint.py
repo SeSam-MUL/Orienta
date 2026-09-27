@@ -123,6 +123,13 @@ class CandidateOut(BaseModel):
     # same space group + lattice (within 2%), so EBSD can't distinguish
     # them. Empty for a unique structure. UI shows "also matches: …".
     degenerate_with: list[str] = []
+    # Set when the phase's own file could not be fully read (e.g. its CIF gives
+    # pymatgen two different compositions). The candidate is still offered --
+    # dropping it made `search(['Mg','Cu'])` return nothing at all, because the
+    # only Mg-Cu phase in the library is exactly this case -- but the UI must say
+    # so rather than present a half-read phase as a characterised one. Null when
+    # the file read cleanly.
+    structure_unreadable: Optional[str] = None
 
 
 class IndexedPhaseOut(BaseModel):
@@ -224,6 +231,7 @@ def _local_match_to_out(m: LocalMatch, preset_key: Optional[str]) -> CandidateOu
         symmetry_fit=m.symmetry_fit,
         dspacing_fit=m.dspacing_fit,
         chemistry_fit=m.chemistry_fit,
+        structure_unreadable=m.entry.parse_error or None,
     )
 
 

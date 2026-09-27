@@ -34,6 +34,14 @@ export default function CollectionPicker({ onManage }) {
   const rootRef = useRef(null);
 
   const data = useCollectionStore((s) => s.data);
+  // The store has tracked this since it was written and nobody read it. Its
+  // initial `data` is an empty-but-valid shape and only `collapsed` is
+  // persisted, so on EVERY start there is a window where the menu is empty
+  // and says so by saying nothing -- indistinguishable from "you have no
+  // collections".
+  const loading = useCollectionStore((s) => s.loading);
+  const loadFailed = useCollectionStore((s) => s.loadFailed);
+  const reload = useCollectionStore((s) => s.load);
   const load = useCollectionStore((s) => s.load);
   const setActive = useCollectionStore((s) => s.setActive);
   const setHidden = useCollectionStore((s) => s.setHidden);
@@ -258,6 +266,33 @@ export default function CollectionPicker({ onManage }) {
           >
             {t('picker.allPhases', { count: totalCount })}
           </div>
+
+          {/* Only while nothing has arrived yet: a background refresh with
+              collections already on screen must not flash this. */}
+          {/* Nothing arrived and the attempt failed: say so and offer the
+              retry, rather than presenting an empty menu as a fact. */}
+          {!loading && loadFailed && collections.length === 0 && (
+            <div style={{
+              padding: '6px 12px', fontSize: '8.5pt', color: colors.yellow,
+              display: 'flex', alignItems: 'center', gap: 8,
+            }}>
+              <span>{t('picker.loadFailed')}</span>
+              <button onClick={() => reload()} style={{
+                marginLeft: 'auto', padding: '1px 7px', fontSize: '8pt',
+                background: colors.border, border: 'none', borderRadius: 3,
+                color: colors.text, cursor: 'pointer',
+              }}>{t('picker.retry')}</button>
+            </div>
+          )}
+
+          {loading && collections.length === 0 && (
+            <div style={{
+              padding: '6px 12px', fontSize: '8.5pt', color: colors.textSecondary,
+              fontStyle: 'italic',
+            }}>
+              {t('picker.loading')}
+            </div>
+          )}
 
           {workingSet.length > 0 && (
             <div style={{ marginTop: 4, paddingTop: 4, borderTop: `1px solid ${colors.border}` }}>

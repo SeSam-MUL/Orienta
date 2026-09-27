@@ -41,6 +41,10 @@ function fileTypeTag(fileType, t) {
 
 export default function PhaseDropdown({
   discoveredFiles = [],
+  // 'idle' | 'loading' | 'loaded' | 'error'. The default keeps every other
+  // caller and test on the old behaviour: say what the list says.
+  loadState = 'loaded',
+  onRetry = null,
   groups = [],
   selectedPaths = [],
   onTogglePath,
@@ -228,9 +232,59 @@ export default function PhaseDropdown({
           </div>
         )}
 
+        {/* A failed refresh keeps the old list on screen -- by design. But
+            then the empty-state block below never renders, so the failure was
+            invisible and Start went grey with no reason given. This banner is
+            the one place that says it while there is still something to see.
+            It must sit OUTSIDE the empty-state block: an earlier version was
+            nested inside it and therefore only ever rendered when there was
+            nothing to warn about. */}
+        {loadState === 'error' && visibleFiles.length > 0 && (
+          <div style={{
+            padding: '6px 10px', fontSize: '9pt', color: C.yellow,
+            borderBottom: `1px solid ${C.border}`,
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span>{t('phaseDropdown.staleWarning')}</span>
+            {onRetry && (
+              <button onClick={onRetry} style={{
+                marginLeft: 'auto', padding: '2px 8px', fontSize: '8.5pt',
+                background: C.border, border: 'none', borderRadius: 3,
+                color: C.text, cursor: 'pointer',
+              }}>{t('phaseDropdown.retry')}</button>
+            )}
+          </div>
+        )}
+
+        {/* "No phases found" is a claim about the library, so it is only
+            made when the library actually answered. While the request is out
+            or has failed, say that instead -- the user's next move differs
+            completely (wait / retry vs. put files in the library). */}
         {visibleFiles.length === 0 && (
           <div style={{ padding: '12px 10px', color: C.textSecondary, fontSize: '10pt', textAlign: 'center' }}>
-            {search ? t('phaseDropdown.noMatch') : t('phaseDropdown.noPhases')}
+        {/* State first, search second: "No matches" is also a claim
+                about data we do not have yet. */}
+            {loadState === 'loading' || loadState === 'idle'
+              ? t('phaseDropdown.loading')
+              : loadState === 'error'
+                ? (
+                  <>
+                    <div style={{ color: C.yellow }}>{t('phaseDropdown.unreachable')}</div>
+                    {onRetry && (
+                      <button
+                        onClick={onRetry}
+                        style={{
+                          marginTop: 8, padding: '4px 12px', fontSize: '9pt',
+                          background: C.border, border: 'none', borderRadius: 4,
+                          color: C.text, cursor: 'pointer',
+                        }}
+                      >
+                        {t('phaseDropdown.retry')}
+                      </button>
+                    )}
+                  </>
+                )
+                : search ? t('phaseDropdown.noMatch') : t('phaseDropdown.noPhases')}
           </div>
         )}
       </div>

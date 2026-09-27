@@ -269,6 +269,21 @@ def resolve(name: str = Query(...),
             missing.append({"key": m.key, "reason": "not_in_library"})
             continue
         if method == "hough":
+            # Hough computes its reflectors FROM THIS CIF, so a file whose
+            # structure could not be read uniquely must not be handed over.
+            # Measured on sd_1816951 (MgCu2), whose blocks give pymatgen two
+            # compositions: `orix Phase.from_cif(sanitize_cif(...))` is diffpy,
+            # not pymatgen, and it SUCCEEDS -- returning 40 sites,
+            # {'Mg': 32, 'Cu': 8} = Mg4Cu, while the .xtal EMsoft simulated the
+            # master from says Cu 16c + Mg 8b = MgCu2. That is the inverted
+            # stoichiometry `cif_phase_library.one_structure` was written to
+            # refuse, and the structure factors would be computed from it in
+            # silence. `parse_error` is the only thing that knows, so it has to
+            # be consulted here rather than only displayed.
+            if e.parse_error:
+                missing.append({"key": m.key, "reason": "structure_unreadable",
+                                "detail": e.parse_error})
+                continue
             path, why = e.cif_path, "no_cif"
         elif method == "spherical":
             path, why = e.sht_path, "no_sht"

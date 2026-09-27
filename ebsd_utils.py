@@ -25,40 +25,15 @@ logger = logging.getLogger(__name__)
 # the DOMINANT element (highest fraction) at full occupancy — the same ordered
 # approximation EMsoft/.xtal uses; neighbours in Z (Al/Si, Fe/Mn) scatter almost
 # identically so the Kikuchi band geometry is unaffected.
-_KNOWN_ELEMENTS = frozenset(
-    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni "
-    "Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I "
-    "Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt "
-    "Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu".split()
+# The normaliser itself now lives in `phase_metadata` (light: no diffsims, no
+# kikuchipy), because a second consumer needs it -- `crystal_hint_local_library`
+# had the SAME root cause on pymatgen's composition keys. These names are kept as
+# aliases: `indexing_controller` and `tests/test_reflector_element_labels.py`
+# import them from here.
+from phase_metadata import (  # noqa: E402
+    KNOWN_ELEMENTS as _KNOWN_ELEMENTS,
+    clean_element_symbol as _clean_element_label,
 )
-_OXIDATION_SUFFIX_RE = re.compile(r'\s*[0-9]*[+-]$')
-_MIX_TERM_RE = re.compile(r'([0-9]*\.?[0-9]+)?\s*([A-Za-z][a-zA-Z]?)')
-
-
-def _clean_element_label(raw):
-    """Map a messy CIF type_symbol to a single clean element symbol.
-
-    Handles oxidation suffixes (``Fe0+``->``Fe``), case (``al``->``Al``) and
-    mixed-occupancy sites (``0.884Al + 0.116Si``->``Al``, dominant element).
-    Returns the input unchanged if nothing resolves, so behaviour is never
-    worse than before.
-    """
-    e = str(raw).strip()
-    s = _OXIDATION_SUFFIX_RE.sub('', e).strip()
-    if s in _KNOWN_ELEMENTS:
-        return s
-    if s.capitalize() in _KNOWN_ELEMENTS:
-        return s.capitalize()
-    # Mixed / shared site -> dominant element by fraction.
-    best, best_frac = None, -1.0
-    for frac, el in _MIX_TERM_RE.findall(e):
-        el = _OXIDATION_SUFFIX_RE.sub('', el).strip().capitalize()
-        if el not in _KNOWN_ELEMENTS:
-            continue
-        f = float(frac) if frac else 1.0
-        if f > best_frac:
-            best_frac, best = f, el
-    return best if best is not None else e
 
 
 def _normalize_element_labels(phase):

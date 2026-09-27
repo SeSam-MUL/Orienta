@@ -2,6 +2,9 @@
   "picker": {
     "label": "Collection",
     "allPhases": "All phases ({{count}})",
+    "loading": "Loading collections…",
+    "loadFailed": "Could not reach the phase library",
+    "retry": "Try again",
     "workingSet": "Working set",
     "manage": "Manage collections…",
     "hiddenNotice_one": "{{count}} collection hidden — show it",

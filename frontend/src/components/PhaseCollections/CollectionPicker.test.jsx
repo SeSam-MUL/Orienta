@@ -12,6 +12,7 @@ vi.mock('../../services/api', () => ({
 
 import { collectionsApi } from '../../services/api';
 import CollectionPicker from './CollectionPicker';
+import useCollectionStore from '../../stores/useCollectionStore';
 
 const BODY = {
   collections: [
@@ -68,6 +69,64 @@ describe('CollectionPicker', () => {
     await waitFor(() => expect(collectionsApi.putState).toHaveBeenCalledWith(
       expect.objectContaining({ active: 'Intermetallics in Al' }),
     ));
+  });
+
+  // The store's initial `data` is an empty-but-VALID shape and only
+  // `collapsed` is persisted, so on every single start there is a window in
+  // which the menu is empty and says so by saying nothing. Sebastian read
+  // exactly that as the app having lost his collections: "beim starten der
+  // app laden die phasen nicht sofort ... das kann zu missverstaendnissen
+  // fuehren". The store has tracked `loading` all along; nobody read it.
+  it('says it is loading rather than showing an empty menu', async () => {
+    // The store is module-level and the tests above have already filled it.
+    // This test is about the FIRST start, so put it back to what a fresh app
+    // holds -- and note that the guard being tested is exactly
+    // `loading && collections.length === 0`: a background refresh with
+    // collections already on screen must NOT flash a loading line.
+    useCollectionStore.setState({
+      data: { collections: [], unassigned: [], problems: [], state: {} },
+      loading: false,
+    });
+    let release;
+    collectionsApi.list.mockReturnValueOnce(new Promise((res) => { release = res; }));
+    render(<CollectionPicker />);
+    fireEvent.click(await screen.findByTestId('collection-picker-button'));
+    expect(screen.getByText('Loading collections…')).toBeInTheDocument();
+    expect(screen.queryByText(/Intermetallics in Al/)).not.toBeInTheDocument();
+
+    release({ data: BODY });
+    await waitFor(() => expect(screen.getByText(/Intermetallics in Al/)).toBeInTheDocument());
+    expect(screen.queryByText('Loading collections…')).not.toBeInTheDocument();
+  });
+
+  // The other half of `loading && collections.length === 0`, which the test
+  // above only claimed in a comment: a background refresh with collections
+  // already on screen must NOT flash a loading line.
+  it('does not flash "loading" while a refresh runs over a full menu', async () => {
+    useCollectionStore.setState({ data: BODY, loading: true, loadFailed: false });
+    render(<CollectionPicker />);
+    fireEvent.click(await screen.findByTestId('collection-picker-button'));
+    expect(screen.getByText(/Intermetallics in Al/)).toBeInTheDocument();
+    expect(screen.queryByText('Loading collections…')).not.toBeInTheDocument();
+  });
+
+  // First start with the backend down: "keep what is on screen" keeps the
+  // empty default, so without this the menu presents "all phases (0)" as a
+  // fact -- the same sentence this whole change was written against.
+  it('says the library was unreachable instead of showing an empty menu', async () => {
+    // The mount effect calls load(), so the rejection has to come from the
+    // API mock -- setting loadFailed by hand would be overwritten a tick later
+    // by the beforeEach mock resolving with BODY.
+    collectionsApi.list.mockRejectedValueOnce(new Error('backend down'));
+    useCollectionStore.setState({
+      data: { collections: [], unassigned: [], problems: [], state: {} },
+      loading: false, loadFailed: false,
+    });
+    render(<CollectionPicker />);
+    await waitFor(() => expect(useCollectionStore.getState().loadFailed).toBe(true));
+    fireEvent.click(await screen.findByTestId('collection-picker-button'));
+    expect(screen.getByText('Could not reach the phase library')).toBeInTheDocument();
+    expect(screen.getByText('Try again')).toBeInTheDocument();
   });
 
   it('a failed load leaves the picker on "all phases" rather than empty', async () => {

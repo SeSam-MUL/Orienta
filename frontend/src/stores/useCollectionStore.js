@@ -55,6 +55,12 @@ const useCollectionStore = create(
     (set, get) => ({
       data: { collections: [], unassigned: [], problems: [], state: {} },
       loading: false,
+      // Whether the LAST attempt failed. The catch below keeps `data` so a
+      // failed refresh never empties a picker -- but on the FIRST start with
+      // the backend down, "keep what is on screen" keeps the empty default,
+      // and the menu then presents "all phases (0)" as a fact. This flag lets
+      // the picker say what actually happened.
+      loadFailed: false,
       collapsed: {},            // { [name]: true }
 
       /**
@@ -77,12 +83,12 @@ const useCollectionStore = create(
         try {
           const res = await collectionsApi.list();
           set((s) => (deepEqual(s.data, res.data)
-            ? { loading: false }
-            : { data: res.data, loading: false }));
+            ? { loading: false, loadFailed: false }
+            : { data: res.data, loading: false, loadFailed: false }));
         } catch {
           // Keep whatever is on screen; a failed refresh must not empty the
           // pickers and thereby widen every run to the whole library.
-          set({ loading: false });
+          set({ loading: false, loadFailed: true });
         }
       },
 

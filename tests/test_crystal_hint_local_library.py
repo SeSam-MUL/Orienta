@@ -247,28 +247,46 @@ def test_search_ranks_correctly():
         assert matches[0].score >= matches[1].score
 
 
-def test_sd_1816951_is_offered_to_nobody_because_it_cannot_be_read():
-    """Was: "sd_1816951 is actually Mg4Cu ... an Mg-Cu sample SHOULD match it."
+def test_sd_1816951_is_offered_with_the_reason_it_could_not_be_fully_read():
+    """A DECISION REVERSED on 2026-09-27, so the reasoning on both sides stays.
 
-    It is not Mg4Cu. The file is MgCu2, a cubic Laves phase: its own atom-site
-    table says Cu 16c + Mg 8b, i.e. Cu 66.7 / Mg 33.3, and sd_1816951.xtal —
-    what EMsoft simulated the master from — says the same. pymatgen returns TWO
-    structures for it, Mg4Cu (40 sites) and Mg2Cu (24), because the Fd-3m origin
-    choice is mis-expanded; the old test asserted that Crystal Hint offers one
-    of them, so it pinned the misparse in place.
+    The file is MgCu2, a cubic Laves phase: its own atom-site table says Cu 16c
+    + Mg 8b (Cu 66.7 / Mg 33.3), and sd_1816951.xtal — what EMsoft simulated the
+    master from — says the same. pymatgen returns TWO structures, Mg4Cu (40
+    sites) and Mg2Cu (24), because the Fd-3m origin choice is mis-expanded, and
+    since 2026-09-12 `cif_phase_library.one_structure` refuses such a file rather
+    than letting block order decide a composition. That much is unchanged.
 
-    Since 2026-09-12 every CIF reader goes through
-    ``cif_phase_library.one_structure``, which refuses a file whose blocks
-    disagree rather than letting block order decide a composition. There is no
-    correct structure to be had from this file through pymatgen, so the phase is
-    unavailable — a real capability loss, and the honest one. What must NOT
-    happen is that it is silently unavailable: the reader says why, and
-    ``load_cif_phase_library_with_skips`` reports it as a skipped file.
+    WHAT THIS TEST USED TO ASSERT was that Crystal Hint therefore offers the
+    phase to nobody — "a real capability loss, and the honest one". The measured
+    cost of that turned out to be higher than the reasoning allowed for:
+
+        search(['Mg','Cu'], strict_chemistry=True)   ->  0 results
+
+    MgCu2 is the library's ONLY Mg-Cu phase, so the phase that *is* the answer
+    was the only one missing, and the user saw an empty result rather than a
+    caveat. Meanwhile the entry already carried everything Crystal Hint actually
+    ranks on — elements (from the .xtal, which reads fine), space group, IT
+    number, lattice and formula from the `_sm_*` tags, plus a simulated .sht.
+
+    The distinction the old reasoning missed is WHICH consumer needs the
+    structure. Candidate suggestion needs chemistry, symmetry and cell: all
+    readable. Hough reflectors computed FROM THIS CIF need the site expansion:
+    not readable. So the phase is offered and carries `parse_error` through to
+    `CandidateOut.structure_unreadable`, which is what lets a consumer that does
+    need the structure refuse it. Offering it silently would be the bad outcome;
+    so is hiding it.
     """
-    for elements in (["Al"], ["Mg", "Cu"]):
-        matches = search(elements=elements, strict_chemistry=True)
-        assert not [m for m in matches if "1816951" in m.entry.key], (
-            f"{elements} was offered a phase whose composition cannot be read")
+    matches = search(elements=["Mg", "Cu"], strict_chemistry=True)
+    hits = [m for m in matches if "1816951" in m.entry.key]
+    assert hits, "the library's only Mg-Cu phase must not be the only one missing"
+    assert hits[0].entry.parse_error, (
+        "offered WITHOUT the caveat is worse than not offered at all")
+
+    # An Al-only sample must still not be offered an Mg-Cu phase: being visible
+    # is not the same as being unfiltered.
+    assert not [m for m in search(elements=["Al"], strict_chemistry=True)
+                if "1816951" in m.entry.key]
 
     cif = PROJECT_ROOT / "Database" / "CIF_Library" / "sd_1816951.cif"
     if not cif.is_file():

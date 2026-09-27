@@ -26,6 +26,10 @@ const IGNORED_PATH_PARTS = [
   // the history the report is filed to explain — and the report carries the
   // version fetched by that same hook, so the two arrive together.
   '/api/system/version',
+  // Same reason, same schedule: the Indexing phase list now retries
+  // until the backend answers. Measured on a backend that stays down:
+  // 15 requests in 10 minutes, 65 in 60 -- and the ring holds 60.
+  '/api/indexing/files',
   '/progress',
   '/status',
 ];

@@ -5,11 +5,14 @@ selection display in the indexing GUI.
 """
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 # Every name in here is derived from a path a caller handed in, and lands on
 # the xmap, in the methods paragraph and in the exported .h5. Path.stem would
@@ -45,9 +48,93 @@ class PhaseMetadata:
 
 _ELEMENT_RE = re.compile(r'([A-Z][a-z]?)')
 
+#: The periodic table as :func:`clean_element_symbol` needs it -- every element,
+#: because it must recognise whatever a CIF's ``_atom_site_type_symbol`` names.
+#:
+#: DELIBERATELY NOT SHARED with :func:`extract_elements`, although it looks like
+#: the same list and a first version did share it. ``extract_elements`` runs a
+#: bare ``[A-Z][a-z]?`` regex over strings that are often NOT formulas -- an .sht
+#: stem with no linked CIF becomes its own ``formula``, so
+#: ``NiAl_Pm-3m`` and ``Al2Cu_Pa-3`` get parsed. With ``Pm`` and ``Pa`` in the
+#: set, the SPACE GROUP turns into promethium and protactinium, and the phase's
+#: element group changes with it (measured: ``Al-C-Cu-Fe-I-S-Si`` ->
+#: ``Al-C-Cu-Fe-I-Pm-S-Si``, and ``SomePhase_Pmma`` -> "Reine Elemente"). A
+#: library entry of exactly that shape existed here until June. So the formula
+#: parser keeps its narrower set, and the widening is confined to the one
+#: function that is handed a single site symbol.
+KNOWN_ELEMENTS = frozenset(
+    "H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni "
+    "Cu Zn Ga Ge As Se Br Kr Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I "
+    "Xe Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu Hf Ta W Re Os Ir Pt "
+    "Au Hg Tl Pb Bi Po At Rn Fr Ra Ac Th Pa U Np Pu".split()
+)
+
+_OXIDATION_SUFFIX_RE = re.compile(r'\s*[0-9]*[+-]$')
+_MIX_TERM_RE = re.compile(r'([0-9]*\.?[0-9]+)?\s*([A-Za-z][a-zA-Z]?)')
+
+
+def clean_element_symbol(raw) -> str:
+    """Map ONE messy CIF ``_atom_site_type_symbol`` to one clean element symbol.
+
+    NOT A FORMULA PARSER, and the difference bites: ``_MIX_TERM_RE`` expects the
+    coefficient BEFORE the symbol, because that is how a shared CIF site is
+    written (``0.884Al + 0.116Si``). A chemical formula puts it after, so the
+    subscript is credited to the following element and "dominant" inverts --
+    ``clean_element_symbol('Al2Cu')`` returns ``'Cu'``, confidently and wrongly.
+    Use :func:`extract_elements` for a formula. An earlier version of this
+    docstring invited the confusion by saying "anything that intersects element
+    sets goes through here"; it does not.
+
+    A CIF type symbol should be a bare element, but ICSD and SpringerMaterials
+    exports deviate in two ways:
+
+      1. an oxidation-state suffix: ``Fe0+``, ``Al3+``, ``O2-``
+      2. a shared (mixed-occupancy) site: ``0.884Al + 0.116Si``
+
+    For a mixed site the DOMINANT element is returned at full occupancy -- the
+    same ordered approximation EMsoft/.xtal makes; neighbours in Z (Al/Si, Fe/Mn)
+    scatter almost identically, so the Kikuchi band geometry is unaffected.
+    Returns the input unchanged when nothing resolves, so behaviour is never
+    worse than before.
+
+    THIS LIVES HERE, not in ``ebsd_utils``, because two unrelated consumers need
+    it and ``ebsd_utils`` imports diffsims and kikuchipy -- far too heavy for the
+    library index to pull in. ``ebsd_utils._clean_element_label`` is an alias.
+    The two consumers, both of which had the same root cause:
+
+    * the diffsims reflector path -- a charged symbol makes diffsims return ZERO
+      scattering, so the reflector list comes back empty and Hough indexing gets
+      no bands (found and fixed there first);
+    * ``crystal_hint_local_library`` -- pymatgen's composition keys carry the
+      charge, so ``LocalEntry.elements`` held ``{'Al0+','Fe0+',…}`` and every
+      chemistry intersection against real symbols was empty.
+    """
+    if raw is None:
+        return ""          # `str(None)` -> "None" -> capitalize() -> neon.
+    e = str(raw).strip()
+    s = _OXIDATION_SUFFIX_RE.sub('', e).strip()
+    if s in KNOWN_ELEMENTS:
+        return s
+    if s.capitalize() in KNOWN_ELEMENTS:
+        return s.capitalize()
+    # Mixed / shared site -> dominant element by fraction.
+    best, best_frac = None, -1.0
+    for frac, el in _MIX_TERM_RE.findall(e):
+        el = _OXIDATION_SUFFIX_RE.sub('', el).strip().capitalize()
+        if el not in KNOWN_ELEMENTS:
+            continue
+        f = float(frac) if frac else 1.0
+        if f > best_frac:
+            best_frac, best = f, el
+    return best if best is not None else e
+
 
 def extract_elements(formula: str) -> list[str]:
-    """Extract unique element symbols from a chemical formula, sorted alphabetically."""
+    """Extract unique element symbols from a chemical formula, sorted alphabetically.
+
+    Keeps its own narrower element set on purpose -- see :data:`KNOWN_ELEMENTS`
+    for why sharing the full table turns a space group into an element here.
+    """
     if not formula:
         return []
     elements = sorted(set(_ELEMENT_RE.findall(formula)))
@@ -77,19 +164,167 @@ def compute_element_group(elements: list[str]) -> str:
 # CIF parsing
 # ---------------------------------------------------------------------------
 
-def _parse_cif_field(text: str, tag: str) -> str:
-    """Extract first non-empty value for a CIF tag.
+# SpringerMaterials splits one crystal across several named ``data_`` blocks: the
+# identity (``sm_global``: Pearson symbol, phase labels, prototype) and the SAME
+# cell in three settings. Two library files add a fifth, ``-powder_pattern``, so
+# this list is known NOT to enumerate everything SM emits -- an unlisted kind
+# falls to role "" and is only ever compared with other role-"" blocks. The block
+# name is what makes "several values" readable rather than ambiguous.
+_CELL_SETTING_MARKERS = ("standardized_unitcell", "published_cell",
+                         "niggli_reduced_cell")
+
+# Anything stated before the first ``data_`` header. Not a block, so it does not
+# compete with one: a malformed preamble tag used to be returned by first-match,
+# and bucketing it apart keeps that true instead of turning it into a
+# contradiction against the first real block.
+_PREAMBLE = "(before the first data_ header)"
+
+
+def _cif_block_role(block_name: str) -> str:
+    """Which cell setting a ``data_`` block declares itself to be, or "".
+
+    "" means the block does not say -- ``sm_global``, a single-block CIF, or any
+    file from another source. Two such blocks ARE competing answers.
+
+    A trailing comment is stripped first: CIF allows ``data_foo  # note``, and
+    leaving the comment on the name makes a block that plainly declares its
+    setting fall to "" and get compared against blocks it does not belong with.
+    """
+    low = block_name.split("#", 1)[0].strip().lower()
+    for marker in _CELL_SETTING_MARKERS:
+        if low.endswith(marker):
+            return marker
+    return ""
+
+
+def _iter_cif_blocks(text: str):
+    """(block name, block text) for each ``data_`` block, file order.
+
+    ``DATA_`` and ``Data_`` are legal: CIF reserved words are case-insensitive.
+    Splitting case-sensitively left such a file as ONE block, which collapsed its
+    three cell settings into one bucket and blanked the lattice parameters -- the
+    exact damage this guard exists to avoid, reached from the other side and
+    silent apart from a log line.
+
+    Text before the first header is yielded under :data:`_PREAMBLE`. A file with
+    no header at all is therefore all preamble: one bucket, still compared, which
+    is the foreign-CIF case this guard is for.
+    """
+    parts = re.split(r"^data_", text, flags=re.MULTILINE | re.IGNORECASE)
+    if parts[0].strip():
+        yield _PREAMBLE, parts[0]
+    for part in parts[1:]:
+        name, _, body = part.partition("\n")
+        yield name.strip(), body
+
+
+def _parse_cif_field(text: str, tag: str, source: str = "") -> str:
+    """The one value a CIF states for `tag`, or "" when it does not state one.
 
     Handles tab-delimited (SpringerMaterials), space-delimited (Materials
-    Project), and single-quoted (IUCr) formats.  Returns first non-empty
-    match across multi-data-block files.
+    Project), and single-quoted (IUCr) formats, and skips the CIF null `?`.
+
+    WHY THIS IS BLOCK-AWARE rather than a plain first-match. **18** of the 39
+    shipped CIFs (2026-09-27) declare more than one ``data_`` block: the 15
+    SpringerMaterials files carrying the ``_sm_*`` fields the phase library
+    displays, plus ``beta-AlFeSi``, ``Fe3_Al2_Si3`` and ``Fe3Al2Si4`` (IUCr/COD,
+    two blocks, no ``_sm_*``). Those last three matter more than the count: both
+    their blocks fall to role "", so they are the only real files this comparison
+    actually judges. Measured: no reader tag appears in more than one of their
+    blocks. First-match-wins is only safe while the blocks agree, and nothing
+    checked that.
+
+    Measured, and it corrected the guard's first design: the blocks do NOT
+    disagree, they describe the same crystal in three cell settings and SAY SO in
+    their names. ``Al.cif`` states a = 4.049 (standardized), 4.049(1) (published,
+    same number with its standard uncertainty) and 2.8631 (Niggli-reduced --
+    4.049/sqrt(2), the fcc primitive cell). Verified the same way for Si, Ni,
+    sd_0302719, sd_1401510, sd_1816951 and sd_1962794. A guard that compared
+    across settings called all of that a contradiction and would have blanked the
+    lattice parameters of 14 files: a regression dressed as a safety check.
+
+    So values are only compared WITHIN a declared setting. First match still
+    wins, which is the ``standardized_unitcell`` value -- the cell that agrees
+    with the reported Pearson symbol (cF4 for Al's 4.049, not its 2.8631
+    primitive edge).
+
+    A CONTRADICTION RETURNS "" AND WARNS, rather than picking one or refusing
+    the file. Three-way choice, and the reasoning matters because
+    ``cif_phase_library.one_structure`` makes the opposite call for structures:
+
+    * picking the first silently is the bug -- a confident wrong answer, which
+      is the one outcome this codebase consistently refuses;
+    * raising would remove the phase from every list that shows it;
+    * "" is what this function already returns for an absent tag and for ``?``,
+      and every caller handles it -- the formula and space-group readers fall
+      through to their next candidate tag, ``_strip_cif_su`` turns it into
+      ``None``. "We do not know" is a value this code already speaks.
+
+    THESE ARE NOT ONLY DISPLAY FIELDS, so "" is not free. A review traced three
+    sites where a blank is worse than a wrong-but-present value, and they are the
+    reason the comparison is kept as narrow as it is:
+
+    * ``formula`` is an IDENTITY string. ``routes/indexing._derived_phase_names``
+      puts it on the xmap, and ``_formulas_match`` in :func:`find_linked_cif` uses
+      it to decide which CIF a master links to -- which is where
+      ``eds_indexing_prior`` then reads a composition. A blanked
+      ``_sm_phase_labels`` does not leave the field empty, it falls through to
+      ``_chemical_formula_sum`` and silently changes the identity's SHAPE.
+    * ``resolve_sht_name_fields`` -> ``build_sht_filename`` writes a FILENAME to
+      disk (``gpu_sim_runner``, ``scripts/migrate_sht_names.py``), from formula
+      and Pearson.
+    * blanking ``lattice_a/b/c`` switches the degeneracy warning OFF:
+      ``frontend/.../phaseDegeneracy.js`` needs all three, and without them
+      ``classifyPair`` can return ``'none'``. A guard whose job is to warn about
+      indistinguishable phases going quiet is the one call site where a
+      wrong-but-present number beats "".
+
+    None of that fires on today's library -- a field-by-field comparison of
+    :func:`extract_metadata_from_cif` against the pre-guard reader over all 45
+    CIFs in the tree found 0 differences across all 19 fields and 0 warnings.
+
+    DELIBERATELY NOT FLAGGED: ``Si.cif`` gives the space group as ``Fd-3m`` in
+    the standardized block and ``Fd-3m O1`` in the published one -- the origin
+    choice. Different settings, so this does not fire, and it should not: the
+    origin choice is decided where a .xtal is written, not by blanking a display
+    field. It is recorded here because the field looks like a contradiction and
+    is not.
+
+    `source` appears only in the warning, so the log names the file and the tag
+    rather than leaving someone to grep the library for a contradiction.
     """
     pattern = rf"^{re.escape(tag)}\s+(.+)$"
-    for match in re.finditer(pattern, text, re.MULTILINE):
-        raw = match.group(1).strip().strip("'").strip()
-        if raw and raw != "?":
-            return raw
-    return ""
+    first = ""
+    by_setting: dict[str, list[str]] = {}
+    for block_name, block in _iter_cif_blocks(text):
+        # The preamble gets its own bucket: it is not a block, so it must not
+        # contradict one -- but a header-less file is ALL preamble, so values
+        # inside it are still compared with each other.
+        setting = (_PREAMBLE if block_name == _PREAMBLE
+                   else _cif_block_role(block_name))
+        for match in re.finditer(pattern, block, re.MULTILINE):
+            raw = match.group(1).strip().strip("'").strip()
+            if not raw or raw == "?":
+                continue
+            if not first:
+                first = raw
+            values = by_setting.setdefault(setting, [])
+            if raw not in values:
+                values.append(raw)
+    if not first:
+        return ""
+    for setting, values in by_setting.items():
+        if len(values) > 1:
+            logger.warning(
+                "CIF %s states %d different values for %s within %s: %s — "
+                "reporting it as unknown rather than guessing which data_ block "
+                "is meant. Fix the file, or read the block you want explicitly.",
+                source or "<unnamed>", len(values), tag,
+                f"one cell setting ({setting})" if setting
+                else "blocks that do not declare a cell setting", values,
+            )
+            return ""
+    return first
 
 
 # A few well-known phase nicknames keyed by (normalized space group, sorted
@@ -177,28 +412,29 @@ def _build_display_label(meta: PhaseMetadata) -> str:
 def extract_metadata_from_cif(cif_path: Path) -> PhaseMetadata:
     """Extract metadata from a CIF file."""
     text = cif_path.read_text(encoding="utf-8", errors="replace")
+    _src = cif_path.name  # named in the contradiction warning, nothing else
 
     # Formula fallback chain
-    formula = _parse_cif_field(text, "_sm_phase_labels")
+    formula = _parse_cif_field(text, "_sm_phase_labels", source=_src)
     if not formula:
-        raw = _parse_cif_field(text, "_chemical_formula_structural")
+        raw = _parse_cif_field(text, "_chemical_formula_structural", source=_src)
         formula = raw.replace("_", "") if raw else ""
     if not formula:
-        raw = _parse_cif_field(text, "_chemical_formula_sum")
+        raw = _parse_cif_field(text, "_chemical_formula_sum", source=_src)
         formula = raw.replace(" ", "") if raw else ""
     if not formula:
-        raw = _parse_cif_field(text, "_chemical_formula_iupac")
+        raw = _parse_cif_field(text, "_chemical_formula_iupac", source=_src)
         formula = raw.replace(" ", "") if raw else ""
     if not formula:
         formula = display_stem(cif_path)
 
     # Space group with fallback
-    space_group = _parse_cif_field(text, "_symmetry_space_group_name_H-M")
+    space_group = _parse_cif_field(text, "_symmetry_space_group_name_H-M", source=_src)
     if not space_group:
-        space_group = _parse_cif_field(text, "_space_group_name_H-M_alt")
+        space_group = _parse_cif_field(text, "_space_group_name_H-M_alt", source=_src)
 
-    pearson = _parse_cif_field(text, "_sm_pearson_symbol")
-    prototype = _parse_cif_field(text, "_sm_phase_prototype")
+    pearson = _parse_cif_field(text, "_sm_pearson_symbol", source=_src)
+    prototype = _parse_cif_field(text, "_sm_phase_prototype", source=_src)
 
     phase_name = ""
     if prototype and prototype != formula:
@@ -206,15 +442,15 @@ def extract_metadata_from_cif(cif_path: Path) -> PhaseMetadata:
 
     # Lattice parameters (degeneracy detector). CIF tags carry optional
     # standard-uncertainty suffixes like "12.643(2)" — _strip_cif_su drops them.
-    lattice_a = _strip_cif_su(_parse_cif_field(text, "_cell_length_a"))
-    lattice_b = _strip_cif_su(_parse_cif_field(text, "_cell_length_b"))
-    lattice_c = _strip_cif_su(_parse_cif_field(text, "_cell_length_c"))
-    lattice_alpha = _strip_cif_su(_parse_cif_field(text, "_cell_angle_alpha"))
-    lattice_beta = _strip_cif_su(_parse_cif_field(text, "_cell_angle_beta"))
-    lattice_gamma = _strip_cif_su(_parse_cif_field(text, "_cell_angle_gamma"))
+    lattice_a = _strip_cif_su(_parse_cif_field(text, "_cell_length_a", source=_src))
+    lattice_b = _strip_cif_su(_parse_cif_field(text, "_cell_length_b", source=_src))
+    lattice_c = _strip_cif_su(_parse_cif_field(text, "_cell_length_c", source=_src))
+    lattice_alpha = _strip_cif_su(_parse_cif_field(text, "_cell_angle_alpha", source=_src))
+    lattice_beta = _strip_cif_su(_parse_cif_field(text, "_cell_angle_beta", source=_src))
+    lattice_gamma = _strip_cif_su(_parse_cif_field(text, "_cell_angle_gamma", source=_src))
 
-    sg_number_raw = (_parse_cif_field(text, "_symmetry_Int_Tables_number")
-                     or _parse_cif_field(text, "_space_group_IT_number"))
+    sg_number_raw = (_parse_cif_field(text, "_symmetry_Int_Tables_number", source=_src)
+                     or _parse_cif_field(text, "_space_group_IT_number", source=_src))
     space_group_number = None
     if sg_number_raw:
         try:
@@ -784,7 +1020,8 @@ def resolve_sht_name_fields(
         # The _chemical_formula_sum is often cleaner/more complete than the
         # structural label — try it before dropping to bare elements.
         text = cif.read_text(encoding="utf-8", errors="replace")
-        sum_cand = _parse_cif_field(text, "_chemical_formula_sum").replace(" ", "")
+        sum_cand = _parse_cif_field(text, "_chemical_formula_sum",
+                                    source=cif.name).replace(" ", "")
         if _is_filename_safe_formula(sum_cand):
             return sum_cand, pearson
 

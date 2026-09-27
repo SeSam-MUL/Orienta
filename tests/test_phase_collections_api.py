@@ -24,11 +24,20 @@ from backend.api.services import phase_collections as pc   # noqa: E402
 
 
 class _Entry:
-    def __init__(self, key, sht=None, cif=None):
+    """A stand-in for `LocalEntry`. It has to carry every field the routes read.
+
+    `parse_error` was added on 2026-09-27: `resolve(method="hough")` consults it
+    to refuse a CIF whose structure could not be read uniquely, and this stub
+    raised `AttributeError` instead. A stub that lags the real dataclass turns a
+    route change into a test failure that looks like a route bug.
+    """
+
+    def __init__(self, key, sht=None, cif=None, parse_error=None):
         self.key, self.formula, self.space_group = key, key, ""
         self.display_label = key
         self.cif_path, self.xtal_path, self.sht_path = cif, None, sht
         self.elements = ()
+        self.parse_error = parse_error
 
 
 @pytest.fixture(autouse=True)

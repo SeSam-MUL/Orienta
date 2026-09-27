@@ -2,6 +2,9 @@
   "picker": {
     "label": "Sammlung",
     "allPhases": "Alle Phasen ({{count}})",
+    "loading": "Sammlungen werden geladen…",
+    "loadFailed": "Phasenbibliothek nicht erreichbar",
+    "retry": "Erneut versuchen",
     "workingSet": "Arbeitsauswahl",
     "manage": "Sammlungen verwalten…",
     "hiddenNotice_one": "{{count}} Sammlung ausgeblendet — einblenden",

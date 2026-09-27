@@ -24,6 +24,7 @@ import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phase
 import useCollectionStore from '../../stores/useCollectionStore';
 import { activeKeySet, activeKeySignature } from '../PhaseCollections/collectionFilter';
 import { planCollectionAdoption, formatMissingLogMessage, resolveAllowedPaths } from '../PhaseCollections/collectionAdopt';
+import { createPhaseDiscovery, phaseListBlocksRun } from './phaseDiscovery';
 import { estimateCpuSphericalSeconds, estimateGpuSphericalSeconds, formatRoughDuration, hasNoCudaDevice, isSphericalCpuFallback } from './cpuEstimate';
 import NavigationCanvas from './NavigationCanvas';
 import EdsOverlayPanel from './EdsOverlayPanel';
@@ -1557,8 +1558,25 @@ export default function IndexingPage({ isActive }) {
 
   // --- Required files ---
   const [discoveredFiles, setDiscoveredFiles] = useState([]);
+  // Whether the LIST ITSELF arrived, independently of what it currently
+  // holds. Before this, a failed discovery call ran `setDiscoveredFiles([])`
+  // in its catch and the dropdown then said "No phases found" -- a statement
+  // about the library, made at the one moment the program had not managed to
+  // ask it. Same shape as the About box reporting "no git information" while
+  // the version endpoint was answering. `SinglePixelPhaseTestDialog` already
+  // carries this state for the same reason, and its comment records what it
+  // cost there: an unloaded list read as "nothing selected" and ran the whole
+  // library.
+  const [discoverState, setDiscoverState] = useState('idle'); // idle|loading|loaded|error
+  const discoveryRef = useRef(null);
   const [fileInput, setFileInput]       = useState('');    // typed / selected path
   const [phaseFiles, setPhaseFiles]     = useState([]);    // list of added phase files
+  // The discovery helper is built once, so it must not close over the first
+  // render's `phaseFiles` -- that decides whether a freshly discovered list
+  // seeds the input field, and a stale empty array would re-seed it over a
+  // selection the user already made.
+  const phaseFilesRef = useRef(phaseFiles);
+  phaseFilesRef.current = phaseFiles;
   const [fileStatus, setFileStatus]     = useState(t('phases.noFileLoaded'));
   const [fileStatusColor, setFileStatusColor] = useState(C.red);
   const [canPreview, setCanPreview]     = useState(false);
@@ -2105,27 +2123,59 @@ export default function IndexingPage({ isActive }) {
     return 'exists';
   };
 
-  async function discoverFilesForMethod(m) {
-    try {
-      // Parse current PC from display string like "PC: (0.503, 0.327, 0.846)"
-      let pc = null;
-      if (pcValues) {
-        const pcMatch = pcValues.match(/PC:\s*\(([\d.]+),\s*([\d.]+),\s*([\d.]+)\)/);
-        if (pcMatch) pc = [parseFloat(pcMatch[1]), parseFloat(pcMatch[2]), parseFloat(pcMatch[3])];
-      }
-      const r = await indexApi.discoverFiles(m, '', pc);
-      const files = r.data?.files || [];
-      const groups = r.data?.groups || [];
-      setDiscoveredFiles(files);
-      setDiscoveredGroups(groups);
-      if (files.length > 0 && phaseFiles.length === 0) {
-        setFileInput(files[0].path || files[0].name || '');
-      }
-    } catch {
-      setDiscoveredFiles([]);
-      setDiscoveredGroups([]);
-    }
+  // The PC must be read at CALL time. It cannot be read from `pcValues`
+  // directly here: the factory below is built once, so it would keep the
+  // first render's closure -- and at that moment `pcValues` is still the
+  // placeholder `t('pcPhase.notLoaded')` (set at :1494, only ever replaced by
+  // the async `pcApi.detectorInfo()` chain). A review measured the
+  // consequence: `current_pc` would be null on every discovery call for the
+  // life of the window, which empties `pc_delta_percent` in the reply and
+  // collapses the Dictionary auto-pick at `handleTogglePath` onto
+  // `resolution_deg` alone -- a dictionary simulated at a distant PC could
+  // then be chosen over the one matching this detector. Same hazard as
+  // `phaseFiles` above, same remedy.
+  const pcValuesRef = useRef(pcValues);
+  pcValuesRef.current = pcValues;
+  function currentPc() {
+    const v = pcValuesRef.current;
+    if (!v) return null;
+    const m = v.match(/PC:\s*\(([\d.]+),\s*([\d.]+),\s*([\d.]+)\)/);
+    return m ? [parseFloat(m[1]), parseFloat(m[2]), parseFloat(m[3])] : null;
   }
+
+  if (discoveryRef.current === null) {
+    discoveryRef.current = createPhaseDiscovery({
+      discover: async (m) => {
+        const r = await indexApi.discoverFiles(m, '', currentPc());
+        return { files: r.data?.files || [], groups: r.data?.groups || [] };
+      },
+      onLoaded: (files, groups) => {
+        setDiscoveredFiles(files);
+        setDiscoveredGroups(groups);
+        // `&& !fileInput` is new and deliberate. The old inline closure saw
+        // the PRE-clear `phaseFiles` on the method-change path, so it skipped
+        // seeding there; the ref sees the cleared `[]` and would seed. Without
+        // this guard, switching method right after picking a phase writes the
+        // library's first file into `fileInput`, which `effectivePhasePaths`
+        // treats as THE phase when `phaseFiles` is empty -- a run would index
+        // something the user never chose.
+        if (files.length > 0 && phaseFilesRef.current.length === 0 && !fileInput) {
+          setFileInput(files[0].path || files[0].name || '');
+        }
+      },
+      onState: setDiscoverState,
+    });
+  }
+
+  function discoverFilesForMethod(m) {
+    return discoveryRef.current.run(m);
+  }
+
+  const retryDiscover = useCallback(() => discoveryRef.current.retry(method),
+    [method]);
+
+  // Nothing may keep asking after this page is gone.
+  useEffect(() => () => discoveryRef.current?.dispose(), []);
 
   function handleTogglePath(file) {
     if (!file) {
@@ -2810,7 +2860,15 @@ export default function IndexingPage({ isActive }) {
   const showEmbedding  = method === 'embedding';
   // A blocking EDS pre-flight holds Start back only while the prior is actually
   // being sent; turning the EDS switch off releases it.
-  const canStart       = dataLoaded && !running && !edsPreflightBlocked;
+  // Start waits for the phase list -- but only while there is nothing else to
+  // run. A review found the first version removed the manual escape hatch: if
+  // `/api/indexing/files/{method}` keeps failing, a user who browsed to a CIF
+  // by hand could no longer start at all, and the button gave no reason. The
+  // danger the gate exists for is an EMPTY selection read as "no restriction";
+  // an explicit selection is not that case.
+  const phaseListBlocked = phaseListBlocksRun(discoverState)
+    && effectivePhasePaths.length === 0;
+  const canStart       = dataLoaded && !running && !edsPreflightBlocked && !phaseListBlocked;
 
   // --- Spherical without a CUDA GPU -----------------------------------------
   // The PyTorch spherical backend falls back to the CPU (same results, ~10-25x
@@ -3460,6 +3518,7 @@ export default function IndexingPage({ isActive }) {
           title={
             running ? t('actions.indexingInProgress')
               : edsPreflightBlocked ? t('edsPrior.startBlockedTip')
+              : phaseListBlocked ? t('phaseDropdown.startBlockedTip')
               : t('actions.startIndexingTip')
           }
         >
@@ -3861,6 +3920,8 @@ export default function IndexingPage({ isActive }) {
       >
         <PhaseDropdown
           discoveredFiles={discoveredFiles}
+          loadState={discoverState}
+          onRetry={retryDiscover}
           groups={discoveredGroups}
           onTogglePath={handleTogglePath}
           onSetAll={handleSetAllPaths}

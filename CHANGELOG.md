@@ -472,9 +472,8 @@ upgrade. Local callers are unaffected: they send no `Origin` header.
 Three defects in the install wizard are fixed with it. The worst wrote **the sudo
 password itself** into `/etc/fstab` and the OpenCL vendor files, because a shell
 helper piped the password into stdin and thereby replaced the stdin that
-`echo <path> | sudo tee <file>` was relying on. That is the origin of the February
-report that the ICD files held a stray value instead of a library path: the value
-was the password.
+`echo <path> | sudo tee <file>` was relying on. That is the origin of the February report that the ICD files
+held a stray number instead of a library path: what they held was the password.
 
 ### What we checked and did not change
 

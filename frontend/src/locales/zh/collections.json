@@ -2,6 +2,9 @@
   "picker": {
     "label": "合集",
     "allPhases": "所有相 ({{count}})",
+    "loading": "正在加载合集…",
+    "loadFailed": "无法连接相库",
+    "retry": "重试",
     "workingSet": "工作集",
     "manage": "管理合集…",
     "hiddenNotice_one": "已隐藏 {{count}} 个合集 — 显示",
