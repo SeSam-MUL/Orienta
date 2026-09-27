@@ -1,0 +1,13 @@
+api_version = 0
+name = "importable"
+display_name = "Importable test add-on"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+[[analyses]]
+key = "addon.importable"
+label = "Importable"
+python_name = "discovery_probe_module:analyse"
+sentence = "This add-on ran a discovery probe."
+citations = ["orienta"]

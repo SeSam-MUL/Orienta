@@ -1,0 +1,34 @@
+api_version = 0
+name = "twomaps"
+display_name = "Two analyses, one output key"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+# Two analyses that both emit an output called "m", with the same shape and the
+# same dtype and different numbers. That is the silent case: with the analysis
+# key out of the map store's key, the second run replaces the first and the
+# first's URL serves the second's values under the first's label, and nothing
+# about the response looks wrong.
+[[analyses]]
+key = "addon.first"
+label = "First"
+python_name = "two_maps_addon_module:first"
+sentence = "The first analysis ran."
+citations = ["orienta"]
+
+[[analyses]]
+key = "addon.second"
+label = "Second"
+python_name = "two_maps_addon_module:second"
+sentence = "The second analysis ran."
+citations = ["orienta"]
+
+# More maps than the store's cap is set to in the test, so a run can be shown
+# not to evict its own output while it is still serialising it.
+[[analyses]]
+key = "addon.many"
+label = "Many maps"
+python_name = "two_maps_addon_module:many"
+sentence = "An analysis returning several maps ran."
+citations = ["orienta"]

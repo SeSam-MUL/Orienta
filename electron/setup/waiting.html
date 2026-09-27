@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';" />
+  <title>Orienta</title>
+  <!--
+    Shown while the backend starts.
+
+    In a packaged install the React interface is served BY the backend, so there
+    is nothing to show for the 30-40 seconds a cold start of the scientific
+    Python stack takes. Loading the backend URL immediately left Chromium's
+    ERR_CONNECTION_REFUSED page on screen with nothing to reload it, so every
+    launch of an installed Orienta looked broken.
+
+    The text and the `lang` attribute are filled in by the main process
+    (executeJavaScript after did-finish-load), because this page must speak the
+    same four languages as the rest of the app and a file:// page cannot read
+    the renderer's language choice. The counter matters: an unchanging spinner
+    for three minutes is indistinguishable from a hang, and the app's own
+    backend banner already counts seconds for exactly this reason.
+
+    No script of its own and no network: default-src 'none'.
+  -->
+  <style>
+    :root { color-scheme: dark; }
+    html, body {
+      height: 100%; margin: 0;
+      background: #282a36; color: #f8f8f2;
+      font-family: "Segoe UI", system-ui, sans-serif;
+    }
+    main {
+      height: 100%;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 1.1rem; text-align: center; padding: 2rem;
+    }
+    h1 { font-size: 1.5rem; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+    #body { margin: 0; color: #bd93f9; font-size: 1rem; }
+    #elapsed {
+      margin: 0; color: #6272a4; font-size: 0.9rem;
+      font-variant-numeric: tabular-nums; min-height: 1.2em;
+    }
+    #hint { margin: 0; color: #6272a4; font-size: 0.85rem; max-width: 34rem; line-height: 1.5; }
+    .spinner {
+      width: 2.5rem; height: 2.5rem;
+      border: 3px solid #44475a; border-top-color: #bd93f9;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .spinner { animation: none; border-top-color: #44475a; }
+    }
+  </style>
+</head>
+<body>
+  <!-- role="status" + aria-live so a screen reader announces the counter as it
+       changes; without it the page is announced once and never again, and a
+       page that never changes cannot tell anyone whether anything is
+       happening. -->
+  <main role="status" aria-live="polite">
+    <div class="spinner" role="presentation"></div>
+    <h1 id="title">Orienta is starting</h1>
+    <p id="body">Loading the analysis engine…</p>
+    <p id="elapsed"></p>
+    <p id="hint">
+      The first start after installing or updating loads the scientific
+      libraries and can take a minute or two.
+    </p>
+  </main>
+</body>
+</html>

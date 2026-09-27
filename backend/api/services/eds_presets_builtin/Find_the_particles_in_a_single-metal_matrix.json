@@ -1,0 +1,32 @@
+{
+  "author": "Orienta",
+  "authored_elements": [],
+  "authored_step_um": null,
+  "builtin": true,
+  "content_hash": "a6853b22f4d028c4",
+  "created": "2026-08-27T00:00:00+00:00",
+  "material_class": "Single-metal matrix",
+  "matrix_element": "",
+  "name": "Find the particles in a single-metal matrix",
+  "notes": "Groups the map into chemically distinct areas and names them from your CIF library.\n\nGOOD FOR: precipitates and inclusions a few micrometres across in a single-metal matrix - steel, copper, nickel, aluminium.\nNOT FOR: layered samples or heavily mixed microstructures, where \"matrix plus particles\" is the wrong picture to start from.\n\nThis is a sensible starting point you can then correct. It is not the correct answer.\n\nNO MATRIX ELEMENT IS PINNED, so the matrix is inferred from each scan (the element above ~40 at%). That is the convenient choice and the fragile one: enrichment is measured against the matrix, and getting it wrong inverts the measure. On your own material, save a copy with your matrix element pinned - the compatibility check can then refuse a scan it does not fit instead of quietly measuring against the wrong baseline.\n\nSMOOTHING is 2.5 um, a physical width, so it means the same analysis at any step size. Measured on the SampleB test scan (0.5 um step): a 5 px box, 7 distinct areas, coherence 0.933. Features thinner than the box are absorbed - lower it for finer particles, raise it for noisier maps.\n\nCANDIDATE PHASES are whatever your CIF library holds; this preset pins no list, so it is convenient and not reproducible. Pin the list in your own copy.",
+  "phase_list_pinned": false,
+  "schema": 1,
+  "settings": {
+    "cluster_remainder": true,
+    "element_weights": null,
+    "min_score": 0.3,
+    "mode": "cluster",
+    "n_clusters": null,
+    "phase_keys": null,
+    "region_defs": null,
+    "rules": null,
+    "scale": null,
+    "scale_um": 2.5,
+    "tolerance": 15.0
+  },
+  "tags": [
+    "starter",
+    "particles"
+  ],
+  "version": 1
+}

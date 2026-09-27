@@ -1,0 +1,13 @@
+api_version = 0
+name = "exiting_import"
+display_name = "Exits while being imported"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+[[analyses]]
+key = "addon.exits_on_import"
+label = "Exits on import"
+python_name = "exiting_import_module:analyse"
+sentence = "This add-on never ran, because importing it exited."
+citations = ["orienta"]

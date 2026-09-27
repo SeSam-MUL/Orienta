@@ -1,0 +1,28 @@
+api_version = 0
+name = "folder-addon"
+display_name = "Grain shape statistics"
+version = "1.2.0"
+requires_orienta = ">=0.4,<0.6"
+authors = ["Jane Doe <jane@example.org>"]
+doi = "10.5281/zenodo.1234567"
+
+[[analyses]]
+key = "addon.folder_one"
+label = "Grain shape statistics"
+python_name = "grain_shape_stats.run:analyse"
+sentence = "Grain shape statistics were computed with {method} on {n_grains} grains."
+citations = ["doi:10.5281/zenodo.1234567"]
+
+[analyses.params_schema]
+type = "object"
+
+[analyses.params_schema.properties.method]
+type = "string"
+title = "Method"
+enum = ["crofton", "feret"]
+default = "crofton"
+
+[analyses.params_schema.properties.report_dir]
+type = "string"
+format = "path"
+title = "Where to write the report"

@@ -1,0 +1,13 @@
+api_version = 0
+name = "nanbound"
+display_name = "NaN colour bound"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+[[analyses]]
+key = "addon.nan_bound"
+label = "NaN bound"
+python_name = "nan_bound_addon_module:analyse"
+sentence = "A map with a non-finite colour bound was produced."
+citations = ["orienta"]

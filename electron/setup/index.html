@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!--
+  The setup wizard.
+
+  This page is the first thing a new user ever sees, and it runs BEFORE the
+  application exists: no React, no bundler, no node_modules. Everything it
+  needs is here or next to it, which is also why it survives an installation
+  that has gone wrong -- the page that explains a broken install must not
+  depend on the install.
+
+  Content-Security-Policy: no remote anything. The wizard downloads gigabytes
+  over the network, and none of it is allowed to become script on this page.
+-->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:;">
+<title>Orienta</title>
+<link rel="stylesheet" href="setup.css">
+</head>
+<body>
+<main>
+  <header>
+    <div class="titlebar">
+      <h1 id="title">Orienta</h1>
+      <!-- The system language is only a guess: a German-speaking user on an
+           English Windows, or a shared lab machine, has no other way to change
+           it. The app's own language switch is no help here, because this page
+           runs before the app exists. -->
+      <label class="lang">
+        <span class="visually-hidden" id="langLabel"></span>
+        <select id="langSelect">
+          <option value="en">English</option>
+          <option value="de">Deutsch</option>
+          <option value="ja">日本語</option>
+          <option value="zh">中文</option>
+        </select>
+      </label>
+    </div>
+    <p id="intro" class="muted"></p>
+  </header>
+
+  <!-- 1. what did we find, and what should we install? -->
+  <section id="choose" hidden>
+    <div class="facts">
+      <h2 id="factsTitle"></h2>
+      <dl id="factsList"></dl>
+    </div>
+
+    <!-- Which version, named before the click rather than discovered after.
+         An installer that silently decides for you is also an installer that
+         cannot be pointed at an older release when a new one breaks something
+         mid-project. -->
+    <p class="version muted">
+      <span id="versionLabel"></span>
+      <strong id="versionValue"></strong>
+      <button type="button" id="pickVersionBtn" class="linklike"></button>
+    </p>
+    <p id="versionRow" hidden>
+      <label>
+        <span id="versionPickLabel" class="muted small"></span>
+        <select id="versionSelect"></select>
+      </label>
+    </p>
+
+    <p class="version muted">
+      <span id="homeLabel"></span>
+      <strong id="homeValue"></strong>
+      <button type="button" id="pickHomeBtn" class="linklike"></button>
+    </p>
+    <p id="homeNote" class="muted small" hidden></p>
+
+    <h2 id="chooseTitle"></h2>
+    <!-- Shown INSTEAD of the radio group where the machine cannot have the
+         other option at all: a Mac has no NVIDIA card to enable, so offering a
+         greyed-out choice next to a pre-selected one is decision theatre. -->
+    <p id="singleOption" class="muted" hidden></p>
+    <div class="options" id="optionGroup" role="radiogroup" aria-labelledby="chooseTitle">
+      <label class="option" id="optGpuLabel">
+        <input type="radio" name="mode" value="gpu" id="optGpu">
+        <span class="option-body">
+          <span class="option-title" id="optGpuTitle"></span>
+          <span class="option-detail muted" id="optGpuDetail"></span>
+          <span class="option-block" id="optGpuBlock" hidden></span>
+        </span>
+      </label>
+      <label class="option" id="optCpuLabel">
+        <input type="radio" name="mode" value="cpu" id="optCpu">
+        <span class="option-body">
+          <span class="option-title" id="optCpuTitle"></span>
+          <span class="option-detail muted" id="optCpuDetail"></span>
+          <span class="option-block" id="optCpuBlock" hidden></span>
+        </span>
+      </label>
+    </div>
+
+    <div class="actions">
+      <button id="installBtn" class="primary"></button>
+    </div>
+  </section>
+
+  <!-- 2. installing -->
+  <section id="working" hidden>
+    <!-- The STEP list is the live region, not the detail line: the detail is
+         rewritten on every pip line and every 64 KB download chunk, which a
+         polite live region queues into twenty minutes of unbroken speech. -->
+    <ol id="stepList" class="steps" aria-live="polite" aria-atomic="true"></ol>
+    <div class="progress" id="progress" role="progressbar"
+         aria-valuemin="0" aria-valuemax="100"><div id="bar" class="bar"></div></div>
+    <p id="workingDetail" class="muted" aria-live="off"></p>
+    <p id="workingHint" class="muted small"></p>
+    <div class="actions">
+      <button id="cancelBtn"></button>
+    </div>
+  </section>
+
+  <!-- 3. it did not work -->
+  <section id="failed" role="alert" hidden>
+    <h2 id="failedTitle"></h2>
+    <p id="failedMessage"></p>
+    <!-- Separate from the message: this is the installer's own English detail,
+         for pasting into a report, and it must not run together with the
+         sentence the user acts on. -->
+    <p id="failedDetail" class="detail muted small" hidden></p>
+    <p id="releasesLine" class="muted small" hidden>
+      <span id="releasesLabel"></span>
+      <a id="releasesLink" class="url" href="#"></a>
+    </p>
+    <!-- tabindex, because a scrollable region with no focusable content
+         cannot be scrolled from the keyboard at all. -->
+    <pre id="failedLog" class="log" tabindex="0" hidden></pre>
+    <p id="failedLogHint" class="muted small" hidden></p>
+    <div class="actions">
+      <button id="retryBtn" class="primary"></button>
+      <button id="fallbackBtn" hidden></button>
+      <button id="openLogBtn"></button>
+      <button id="pickPackageBtn" hidden></button>
+      <button id="closeBtn" hidden></button>
+    </div>
+  </section>
+
+  <!-- 4. done -->
+  <section id="done" hidden>
+    <h2 id="doneTitle"></h2>
+    <p id="doneBody"></p>
+    <div class="actions">
+      <button id="startBtn" class="primary"></button>
+    </div>
+  </section>
+</main>
+<script src="setup.js"></script>
+</body>
+</html>

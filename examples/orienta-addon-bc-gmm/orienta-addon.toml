@@ -1,0 +1,40 @@
+api_version = 0
+name = "bc-gmm"
+display_name = "Band contrast mixture model"
+version = "0.1.0"
+# Deliberately empty. A source checkout carries no release tag, so any floor
+# would refuse to run on one -- see the README.
+requires_orienta = ""
+authors = ["Orienta project"]
+# No DOI of its own: this add-on ships inside Orienta. It cites Orienta.
+doi = ""
+
+[[analyses]]
+key = "addon.bc_gmm"
+label = "Band contrast mixture model"
+python_name = "orienta_addon_bc_gmm.analysis:analyse"
+# Both slots are satisfiable: {n_components} is a declared parameter and
+# {n_px} is a scalar output key. It says "scan pixels" and not "indexed
+# pixels" because the analysis never looks at a phase id -- it counts the
+# pixels that carry a finite pattern-quality value, which is a different set.
+sentence = "The pattern-quality distribution of {n_px} scan pixels was decomposed into {n_components} Gaussian components."
+citations = ["orienta"]
+
+[analyses.params_schema]
+type = "object"
+
+[analyses.params_schema.properties.n_components]
+type = "integer"
+title = "Number of components"
+description = "How many Gaussian populations to fit. The core version fixes this at 3 (deformed, recovered, recrystallised); here it is the parameter its own docstring asks for."
+minimum = 1
+maximum = 6
+default = 3
+
+[analyses.params_schema.properties.bin_width]
+type = "number"
+title = "Histogram bin width"
+description = "In the units of the pattern-quality map: 10 suits native band contrast (0-255). Use 0 to choose the width from the data by the Freedman-Diaconis rule, which is what a computed 0-1 quality map needs."
+minimum = 0
+maximum = 50
+default = 10.0

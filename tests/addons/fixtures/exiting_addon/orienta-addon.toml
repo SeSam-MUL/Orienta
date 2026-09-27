@@ -1,0 +1,20 @@
+api_version = 0
+name = "exiting"
+display_name = "Exits instead of failing"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+[[analyses]]
+key = "addon.exits"
+label = "Calls sys.exit"
+python_name = "exiting_addon_module:analyse"
+sentence = "This add-on exited instead of failing."
+citations = ["orienta"]
+
+[[analyses]]
+key = "addon.argparses"
+label = "Lets argparse exit"
+python_name = "argparse_addon_module:analyse"
+sentence = "This add-on let argparse exit instead of failing."
+citations = ["orienta"]

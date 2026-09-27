@@ -1,0 +1,55 @@
+micromamba — BSD 3-Clause License
+=================================
+
+On macOS the Orienta installer downloads the micromamba binary (mamba-org,
+https://github.com/mamba-org/mamba; releases at
+https://github.com/mamba-org/micromamba-releases, version and SHA-256 pinned in
+electron/platform.js) onto the user's machine, runs it to build the Python
+environment from conda-forge, and keeps it in Orienta's runtime folder. Orienta
+does not redistribute micromamba. Its license is reproduced below because the
+binary remains installed as part of Orienta's runtime.
+
+Copyright 2019 QuantStack and the Mamba contributors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+   may be used to endorse or promote products derived from this software
+   without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+---
+
+Statically linked components of the micromamba binary
+------------------------------------------------------
+
+The released binary is extracted from the conda-forge build of micromamba
+(the release asset is the bare executable). The conda-forge recipe declares
+the combined license "BSD-3-Clause AND MIT AND OpenSSL" and ships, in the
+conda package's `info/licenses/`, the license texts of these linked libraries:
+CLI11, libcurl, c-ares, fmt, krb5, libarchive, libev, LZ4, libnghttp2,
+OpenSSL, libsolv, nlohmann-json, reproc, spdlog, tl-expected, zlib and zstd.
+Further static host dependencies of that build (simdjson, yaml-cpp, libpsl,
+libssh2, xz, libmsgpack-c) are not in that list; their texts stay with their
+own upstreams. The recipe is at
+https://github.com/conda-forge/micromamba-feedstock, the package on the
+conda-forge channel; that is where a user who passes the binary on will find
+the texts. Orienta neither modifies nor redistributes the binary.

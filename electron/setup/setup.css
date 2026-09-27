@@ -1,0 +1,172 @@
+/*
+ * The wizard's styling, in its own file because the page's CSP refuses inline
+ * styles: a page that downloads gigabytes should not also be the page where
+ * `style-src 'unsafe-inline'` is switched on.
+ *
+ * The palette is the application's own (Dracula), so the setup does not look
+ * like a different program from the one it installs.
+ */
+
+:root {
+  color-scheme: dark;
+  --bg: #282a36;
+  --surface: #343746;
+  --line: #44475a;
+  --text: #f8f8f2;
+  --muted: #9aa3c0;      /* raised from #6272a4: 3.0:1 is not readable body text */
+  --accent: #bd93f9;
+  --ok: #50fa7b;
+  --warn: #ffb86c;
+  --bad: #ff5555;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.5rem 3rem;
+}
+
+.titlebar { display: flex; align-items: baseline; justify-content: space-between;
+            gap: 1rem; }
+.lang select {
+  font: inherit; font-size: .9rem; padding: .25rem .5rem; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+}
+.lang select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Present for a screen reader, absent for everyone else: the four language
+   names label the control perfectly well on sight, and a visible "Language:"
+   in the wrong language helps nobody. */
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+h1 { font-size: 1.5rem; margin: 0 0 .35rem; }
+h2 { font-size: 1.05rem; margin: 1.6rem 0 .6rem; font-weight: 600; }
+p  { margin: .4rem 0; }
+
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+
+/* --- what we found ----------------------------------------------------- */
+
+.facts { background: var(--surface); border: 1px solid var(--line);
+         border-radius: 8px; padding: .25rem 1rem 1rem; }
+.facts h2 { margin-top: 1rem; }
+
+dl { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; }
+
+/* --- the choice -------------------------------------------------------- */
+
+.options { display: flex; flex-direction: column; gap: .75rem; }
+
+.option {
+  display: flex; gap: .75rem; align-items: flex-start;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 8px; padding: .9rem 1rem; cursor: pointer;
+}
+.option:hover { border-color: var(--accent); }
+.option:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.option input { margin-top: .35rem; accent-color: var(--accent); }
+/* Disabled is a STATE, not a removal: the option stays visible and says why,
+   because "there is a faster version but your disk is too small" is the
+   information, and hiding the row hides the reason. */
+/* The opacity goes on the title and the size, NOT on the reason: at 55 % the
+   warn colour lands at about 3.2:1, under the readable floor — and the reason
+   is the whole point of leaving the row on screen. */
+.option.disabled { cursor: not-allowed; }
+.option.disabled .option-title,
+.option.disabled .option-detail { opacity: .55; }
+.option.disabled:hover { border-color: var(--line); }
+
+.option-body { display: flex; flex-direction: column; }
+.option-title { font-weight: 600; }
+.option-block { color: var(--warn); font-size: .85rem; margin-top: .2rem; }
+.detail { white-space: pre-wrap; }
+a.url { color: #8be9fd; word-break: break-all; }
+#failedLog:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+section:focus { outline: none; }   /* focused only to move the caret there */
+
+.version { margin: .9rem 0 0; }
+.version strong { color: var(--text); }
+.linklike {
+  background: none; border: none; padding: 0 0 0 .6rem; color: #8be9fd;
+  font: inherit; font-size: .9rem; text-decoration: underline; cursor: pointer;
+}
+.linklike:hover { color: var(--accent); }
+#versionRow select {
+  font: inherit; font-size: .9rem; margin-left: .5rem; padding: .25rem .5rem;
+  border-radius: 6px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--text);
+}
+
+.badge {
+  display: inline-block; margin-left: .5rem; padding: 0 .45rem;
+  border-radius: 999px; background: var(--accent); color: #21222c;
+  font-size: .72rem; font-weight: 700; vertical-align: .1em;
+}
+
+/* --- progress ---------------------------------------------------------- */
+
+.steps { list-style: none; margin: 1rem 0; padding: 0;
+         display: flex; flex-direction: column; gap: .3rem; }
+.steps li { display: flex; gap: .6rem; align-items: baseline; color: var(--muted); }
+.steps li .mark { width: 1.1rem; text-align: center; flex: none; }
+.steps li.active { color: var(--text); font-weight: 600; }
+.steps li.done .mark { color: var(--ok); }
+.steps li.failed { color: var(--bad); }
+
+.progress { height: 6px; background: var(--line); border-radius: 999px;
+            overflow: hidden; margin: 1rem 0 .6rem; }
+.bar { height: 100%; width: 0; background: var(--accent);
+       transition: width .25s linear; }
+/* No measurable total: a bar that sits still for twenty minutes reads as a
+   hang, so it paces instead of pretending to know. */
+.bar.indeterminate {
+  width: 35%; background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: sweep 1.6s ease-in-out infinite;
+}
+@keyframes sweep { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .bar { transition: none; }
+  .bar.indeterminate { animation: none; width: 100%; opacity: .35; }
+}
+
+/* --- the log ----------------------------------------------------------- */
+
+.log {
+  background: #21222c; border: 1px solid var(--line); border-radius: 6px;
+  padding: .75rem; max-height: 11rem; overflow: auto;
+  font-family: ui-monospace, Consolas, monospace; font-size: .78rem;
+  color: var(--muted); white-space: pre-wrap; word-break: break-word;
+}
+
+/* --- buttons ----------------------------------------------------------- */
+
+.actions { display: flex; gap: .6rem; margin-top: 1.5rem; flex-wrap: wrap; }
+
+button {
+  font: inherit; padding: .55rem 1.2rem; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--text);
+  cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #21222c;
+                 font-weight: 600; }

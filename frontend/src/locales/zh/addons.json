@@ -1,0 +1,82 @@
+{
+  "reason": {
+    "addon_not_found": "未安装此插件",
+    "addon_name_conflict": "两处安装使用了相同的名称",
+    "analysis_key_conflict": "两个插件声明了同一项分析",
+    "addon_incompatible": "此插件需要其他版本的 Orienta",
+    "addon_not_enabled": "此插件已关闭",
+    "addon_import_failed": "无法加载此插件",
+    "addon_failed": "分析失败",
+    "result_not_found": "该标定结果已不存在",
+    "result_unusable": "无法分析该结果",
+    "map_not_stored": "该图已不在内存中",
+    "trust_store_unwritable": "无法保存你的选择",
+    "job_not_found": "该运行已不存在",
+    "job_unfinished": "该运行仍在进行"
+  },
+  "failure": {
+    "unknownTitle": "请求被拒绝。",
+    "noDetail": "服务器没有给出进一步说明。"
+  },
+  "page": {
+    "title": "插件",
+    "subtitle": "来自其他课题组的分析。它们以你的权限在本进程中运行。"
+  },
+  "list": {
+    "rescan": "重新搜索",
+    "emptyTitle": "未找到插件",
+    "emptySearched": "已搜索的文件夹：",
+    "emptyHint": "把含有 orienta-addon.toml 的插件文件夹放入其中一个，然后重新搜索。",
+    "loadFailed": "无法加载插件列表。",
+    "thirdParty": "第三方插件。并非 Orienta 编写，其结果由作者负责。",
+    "version": "版本",
+    "authors": "作者",
+    "source": "安装位置",
+    "noDoi": "未声明 DOI",
+    "enable": "启用",
+    "disable": "停用",
+    "enabled": "已启用",
+    "rejected": "此清单已被拒绝",
+    "conflict": "冲突",
+    "incompatible": "与此版本的 Orienta 不兼容",
+    "disabledByRuntime": "失败 {{count}}/{{limit}} 次后由 Orienta 停用",
+    "failureCount": "失败 {{count}}/{{limit}} 次",
+    "restartHint": "对已安装插件的修改需重启后生效。",
+    "analyses": "分析",
+    "loading": "正在查找插件…",
+    "searchedUnknown": "此后端未说明搜索了哪些文件夹。请重启后端，或重新搜索。",
+    "changedSinceConsent": "自你允许以来此插件已发生变化（当时允许的是版本 {{version}}、DOI {{doi}}）。启用时会再次询问。"
+  },
+  "consent": {
+    "title": "启用 {{name}}？",
+    "body": "此插件以你的权限在 Orienta 内运行。它可以读取你已加载的数据，并写入你有权写入的文件。只有在信任其作者时才启用。",
+    "accept": "启用",
+    "cancel": "取消"
+  },
+  "run": {
+    "start": "运行",
+    "close": "关闭",
+    "into": "写入标定结果 {{id}}",
+    "noResult": "没有可供运行的标定结果。请先标定一个数据集 —— 插件的数值及其引用会写入结果中。",
+    "unsupported": "此版本无法显示这些参数：{{names}}，因此不提供运行 —— 否则会对你未见过的设置使用插件自带的默认值。",
+    "gone": "该分析已不在已安装的清单中。请重新搜索后再打开。",
+    "addonOff": "此插件已关闭，无法启动运行。",
+    "running": "正在运行…",
+    "reloadWarning": "刷新页面会失去对本次运行的追踪 —— 它在后端继续，但此页面无法再找到它。",
+    "ignored": "插件已不再声明这些参数，本次运行已将其丢弃：{{names}}。",
+    "alreadyRunning": "该分析已在运行；在它结束之前无法启动第二次运行。",
+    "contextHeading": "本次运行拿到的信息",
+    "contextStep": "步长：{{value}} µm",
+    "contextStepMissing": "步长：该结果中没有 — 插件报告的任何长度都以像素为单位。",
+    "contextQuality": "花样质量：{{value}}",
+    "contextQualityMissing": "花样质量：该结果中没有 — 需要它的分析会自己说明。"
+  },
+  "outputs": {
+    "copy": "复制",
+    "save": "另存为 CSV",
+    "maps": "图",
+    "emptyTable": "没有数据行。",
+    "capped": "显示 {{total}} 行中的 {{shown}} 行。复制和保存包含全部行。",
+    "showAsLayer": "作为图层显示"
+  }
+}

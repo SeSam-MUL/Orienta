@@ -1,0 +1,13 @@
+api_version = 0
+name = "exploding"
+display_name = "Exploding test add-on"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+[[analyses]]
+key = "addon.explodes"
+label = "Explodes"
+python_name = "exploding_addon_module:analyse"
+sentence = "This add-on never ran, because importing it raised."
+citations = ["orienta"]

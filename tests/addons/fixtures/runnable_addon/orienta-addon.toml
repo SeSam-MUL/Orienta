@@ -1,0 +1,37 @@
+api_version = 0
+name = "runnable"
+display_name = "Runnable test add-on"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = "10.5281/zenodo.7777777"
+
+[[analyses]]
+key = "addon.mean_quality"
+label = "Mean quality"
+python_name = "runnable_addon_module:analyse"
+sentence = "Mean pattern quality was computed over {n_px} pixels at scale {scale}."
+citations = ["doi:10.5281/zenodo.7777777"]
+
+[analyses.params_schema]
+type = "object"
+
+[analyses.params_schema.properties.scale]
+type = "number"
+title = "Scale factor"
+default = 1.0
+
+[analyses.params_schema.properties.fail]
+type = "boolean"
+title = "Fail on purpose (test hook)"
+default = false
+
+[analyses.params_schema.properties.report_dir]
+type = "string"
+format = "path"
+title = "Where to write a report (declared, never recorded)"
+# A DEFAULT on a path parameter, deliberately. The runner merges
+# declared defaults into the recorded params; if it ever stopped
+# excluding format = "path" while doing so, this value would reach
+# the provenance trail and _reject_local_paths would raise under
+# pytest, turning every test that runs this fixture red at once.
+default = "reports/latest"

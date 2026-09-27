@@ -1,0 +1,13 @@
+api_version = 0
+name = "collide_b"
+display_name = "Collides B"
+version = "0.1.0"
+authors = ["B <b@example.org>"]
+doi = ""
+
+[[analyses]]
+key = "addon.collide_b"
+label = "Collide B"
+python_name = "collided_module:analyse"
+sentence = "Add-on B ran."
+citations = ["orienta"]

@@ -1,0 +1,32 @@
+{
+  "author": "Orienta",
+  "authored_elements": [],
+  "authored_step_um": null,
+  "builtin": true,
+  "content_hash": "e9ee3b30805b5503",
+  "created": "2026-08-27T00:00:00+00:00",
+  "material_class": "Single-metal matrix",
+  "matrix_element": "",
+  "name": "Large features only (heavy smoothing)",
+  "notes": "Heavy smoothing: groups the map into a few large, chemically distinct areas.\n\nGOOD FOR: coarse second-phase fields, segregation bands, eutectic regions - anything several micrometres across that you want as one clean area rather than as speckle.\nNOT FOR: fine precipitates. Anything thinner than about 5 um is averaged into its surroundings and will not appear at all. If you cannot find a particle you know is there, this preset is the reason - use one of the 2.5 um starters instead.\n\nThis is a sensible starting point you can then correct. It is not the correct answer.\n\nSMOOTHING is 5 um, a physical width, so it means the same analysis at any step size. Measured on the SampleB test scan (0.5 um step) that is a 10 px box: 50 connected pieces with a median size of 28 px, against 74 pieces with a median of 3 px at 2.5 um. Coherence 0.908.\n\nCANDIDATE PHASES are whatever your CIF library holds; this preset pins no list, so it is convenient and not reproducible. Pin the list in your own copy.",
+  "phase_list_pinned": false,
+  "schema": 1,
+  "settings": {
+    "cluster_remainder": true,
+    "element_weights": null,
+    "min_score": 0.3,
+    "mode": "cluster",
+    "n_clusters": null,
+    "phase_keys": null,
+    "region_defs": null,
+    "rules": null,
+    "scale": null,
+    "scale_um": 5.0,
+    "tolerance": 15.0
+  },
+  "tags": [
+    "starter",
+    "coarse"
+  ],
+  "version": 1
+}

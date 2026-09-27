@@ -1,0 +1,13 @@
+api_version = 0
+name = "shadows"
+display_name = "Shadows an Orienta package"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+[[analyses]]
+key = "addon.shadows"
+label = "Shadows"
+python_name = "analysis:analyse"
+sentence = "This add-on never ran."
+citations = ["orienta"]

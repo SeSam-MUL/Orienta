@@ -1,0 +1,82 @@
+{
+  "reason": {
+    "addon_not_found": "This add-on is not installed",
+    "addon_name_conflict": "Two installations share this name",
+    "analysis_key_conflict": "Two add-ons claim the same analysis",
+    "addon_incompatible": "This add-on needs a different version of Orienta",
+    "addon_not_enabled": "This add-on is switched off",
+    "addon_import_failed": "This add-on could not be loaded",
+    "addon_failed": "The analysis failed",
+    "result_not_found": "That indexing result is gone",
+    "result_unusable": "This result cannot be analysed",
+    "map_not_stored": "That map is no longer in memory",
+    "trust_store_unwritable": "Your decision could not be saved",
+    "job_not_found": "This run is no longer known",
+    "job_unfinished": "This run is still going"
+  },
+  "failure": {
+    "unknownTitle": "The request was refused.",
+    "noDetail": "The server gave no further explanation."
+  },
+  "page": {
+    "title": "Add-ons",
+    "subtitle": "Analyses contributed by other groups. They run in this process, with your permissions."
+  },
+  "list": {
+    "rescan": "Rescan",
+    "emptyTitle": "No add-ons found",
+    "emptySearched": "Folders searched:",
+    "emptyHint": "Put an add-on folder — one containing orienta-addon.toml — into one of these, then rescan.",
+    "loadFailed": "The add-on list could not be loaded.",
+    "thirdParty": "Third-party add-on. Orienta did not write it and does not vouch for its results.",
+    "version": "Version",
+    "authors": "Authors",
+    "source": "Installed at",
+    "noDoi": "No DOI declared",
+    "enable": "Enable",
+    "disable": "Disable",
+    "enabled": "Enabled",
+    "rejected": "This manifest was rejected",
+    "conflict": "Conflict",
+    "incompatible": "Not compatible with this Orienta",
+    "disabledByRuntime": "Switched off by Orienta after {{count}} of {{limit}} failures",
+    "failureCount": "{{count}} of {{limit}} failures",
+    "restartHint": "Changes to an installed add-on take effect after a restart.",
+    "analyses": "Analyses",
+    "loading": "Looking for add-ons…",
+    "searchedUnknown": "This backend did not say which folders it searched. Restart it, or rescan.",
+    "changedSinceConsent": "This add-on has changed since you allowed it (you allowed version {{version}}, DOI {{doi}}). Enabling it will ask again."
+  },
+  "consent": {
+    "title": "Enable {{name}}?",
+    "body": "This add-on runs inside Orienta with your permissions. It can read the data you have loaded and write files you can write. Enable it only if you trust who wrote it.",
+    "accept": "Enable",
+    "cancel": "Cancel"
+  },
+  "run": {
+    "start": "Run",
+    "close": "Close",
+    "into": "Writes into indexing result {{id}}",
+    "noResult": "No indexing result to run against. Index a dataset first — the add-on's numbers and its citation are written into a result.",
+    "unsupported": "This build cannot show these parameters: {{names}}, so the run is not offered — it would use the add-on's own defaults for settings you were never shown.",
+    "gone": "This analysis is no longer in the installed manifest. Rescan and open it again.",
+    "addonOff": "This add-on is switched off, so the run cannot be started.",
+    "running": "Running…",
+    "reloadWarning": "Reloading the page loses track of this run — it keeps going in the backend, but this page cannot find it again.",
+    "ignored": "The run discarded these parameters, which the add-on no longer declares: {{names}}.",
+    "alreadyRunning": "This analysis is already running; a second run cannot be started until it finishes.",
+    "contextHeading": "What this run was given",
+    "contextStep": "Step size: {{value}} µm",
+    "contextStepMissing": "Step size: not in this result — anything the add-on reports as a length is in pixels.",
+    "contextQuality": "Pattern quality: {{value}}",
+    "contextQualityMissing": "Pattern quality: none in this result — an analysis that needs it will say so."
+  },
+  "outputs": {
+    "copy": "Copy",
+    "save": "Save as CSV",
+    "maps": "Maps",
+    "emptyTable": "No rows.",
+    "capped": "Showing {{shown}} of {{total}} rows. Copy and Save carry all of them.",
+    "showAsLayer": "Show as layer"
+  }
+}

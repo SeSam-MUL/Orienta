@@ -1,0 +1,40 @@
+{
+  "author": "Orienta",
+  "authored_elements": [],
+  "authored_step_um": null,
+  "builtin": true,
+  "content_hash": "5b9b095417096bcb",
+  "created": "2026-08-27T00:00:00+00:00",
+  "material_class": "Aluminium alloys",
+  "matrix_element": "Al",
+  "name": "Find the particles in an aluminium matrix",
+  "notes": "Groups the map into chemically distinct areas and names them from your CIF library.\n\nGOOD FOR: precipitates and inclusions a few micrometres across in an aluminium matrix.\nNOT FOR: layered samples, heavily mixed microstructures, or any scan whose dominant element is not aluminium - this preset pins Al as the matrix element and will refuse those rather than measure enrichment against the wrong baseline.\n\nThis is a sensible starting point you can then correct. It is not the correct answer: expect to merge two areas that are really one particle, and to split one that is really two.\n\nSMOOTHING is stated as 2.5 um - a physical width, not a pixel count - so it means the same analysis at any step size. Measured on the SampleB test scan (0.5 um step, 90x120 px, 8 elements) that is a 5 px box: 7 distinct areas, 0.933 of neighbouring pixel pairs in the same area, 74 connected pieces. Features thinner than the box are absorbed, so if your particles are around 2 um or smaller, lower it - 1.5 um on the same scan gave 227 pieces: more detail, and more confetti.\n\nCANDIDATE PHASES are whatever your CIF library holds. This preset does not pin a list, because it cannot know yours - which makes it convenient and NOT reproducible: add a CIF next month and it quietly does something different. Once you know which phases you care about, save your own copy with the list pinned.",
+  "phase_list_pinned": false,
+  "schema": 1,
+  "settings": {
+    "cluster_remainder": true,
+    "element_weights": null,
+    "min_score": 0.3,
+    "mode": "cluster",
+    "n_clusters": null,
+    "phase_keys": null,
+    "region_defs": null,
+    "rules": {
+      "matrix_elements": [
+        "Al"
+      ],
+      "name": "",
+      "phase_keys": null,
+      "rules": []
+    },
+    "scale": null,
+    "scale_um": 2.5,
+    "tolerance": 15.0
+  },
+  "tags": [
+    "starter",
+    "particles",
+    "aluminium"
+  ],
+  "version": 1
+}

@@ -1,0 +1,82 @@
+{
+  "reason": {
+    "addon_not_found": "このアドオンはインストールされていません",
+    "addon_name_conflict": "同じ名前のインストールが2つあります",
+    "analysis_key_conflict": "2つのアドオンが同じ解析を宣言しています",
+    "addon_incompatible": "このアドオンは別のバージョンの Orienta を必要とします",
+    "addon_not_enabled": "このアドオンは無効になっています",
+    "addon_import_failed": "このアドオンを読み込めませんでした",
+    "addon_failed": "解析に失敗しました",
+    "result_not_found": "その指数付け結果はもう残っていません",
+    "result_unusable": "この結果は解析できません",
+    "map_not_stored": "そのマップはメモリに残っていません",
+    "trust_store_unwritable": "設定を保存できませんでした",
+    "job_not_found": "この実行はもう記録にありません",
+    "job_unfinished": "この実行はまだ続いています"
+  },
+  "failure": {
+    "unknownTitle": "リクエストは拒否されました。",
+    "noDetail": "サーバーからの詳しい説明はありません。"
+  },
+  "page": {
+    "title": "アドオン",
+    "subtitle": "他のグループが提供する解析です。あなたの権限で、このプロセス内で動きます。"
+  },
+  "list": {
+    "rescan": "再検索",
+    "emptyTitle": "アドオンが見つかりません",
+    "emptySearched": "検索したフォルダー:",
+    "emptyHint": "orienta-addon.toml を含むアドオンのフォルダーをいずれかに置き、再検索してください。",
+    "loadFailed": "アドオンの一覧を読み込めませんでした。",
+    "thirdParty": "第三者のアドオンです。Orienta が作成したものではなく、結果を保証しません。",
+    "version": "バージョン",
+    "authors": "作者",
+    "source": "インストール先",
+    "noDoi": "DOI の記載がありません",
+    "enable": "有効にする",
+    "disable": "無効にする",
+    "enabled": "有効",
+    "rejected": "このマニフェストは拒否されました",
+    "conflict": "衝突",
+    "incompatible": "この Orienta とは互換性がありません",
+    "disabledByRuntime": "{{limit}} 回中 {{count}} 回失敗したため Orienta が無効にしました",
+    "failureCount": "{{limit}} 回中 {{count}} 回失敗",
+    "restartHint": "インストール済みアドオンの変更は再起動後に反映されます。",
+    "analyses": "解析",
+    "loading": "アドオンを探しています…",
+    "searchedUnknown": "このバックエンドは検索したフォルダーを返しませんでした。再起動するか、再検索してください。",
+    "changedSinceConsent": "許可したときからこのアドオンは変わっています（許可したのはバージョン {{version}}、DOI {{doi}}）。有効にする際は改めて確認します。"
+  },
+  "consent": {
+    "title": "{{name}} を有効にしますか？",
+    "body": "このアドオンはあなたの権限で Orienta の中で動きます。読み込んだデータを読み取り、あなたが書き込めるファイルを書き込めます。作者を信頼できる場合にのみ有効にしてください。",
+    "accept": "有効にする",
+    "cancel": "キャンセル"
+  },
+  "run": {
+    "start": "実行",
+    "close": "閉じる",
+    "into": "指数付け結果 {{id}} に書き込みます",
+    "noResult": "対象となる指数付け結果がありません。まずデータセットを指数付けしてください — アドオンの数値と引用は結果に書き込まれます。",
+    "unsupported": "このビルドでは次のパラメーターを表示できません: {{names}}。そのため実行は提供されません — 表示されなかった設定にアドオンの既定値が使われてしまいます。",
+    "gone": "この解析はインストール済みのマニフェストにもうありません。再検索してから開き直してください。",
+    "addonOff": "このアドオンは無効になっているため、実行できません。",
+    "running": "実行中…",
+    "reloadWarning": "ページを再読み込みするとこの実行を追えなくなります — バックエンドでは続きますが、このページからは見つけられません。",
+    "ignored": "アドオンがもう宣言していないため、実行は次のパラメーターを破棄しました: {{names}}。",
+    "alreadyRunning": "この解析はすでに実行中です。終わるまで次の実行は開始できません。",
+    "contextHeading": "この実行に渡された情報",
+    "contextStep": "ステップサイズ: {{value}} µm",
+    "contextStepMissing": "ステップサイズ: この結果には入っていません。アドオンが報告する長さはピクセル単位です。",
+    "contextQuality": "パターン品質: {{value}}",
+    "contextQualityMissing": "パターン品質: この結果にはありません。これを必要とする解析はその旨を伝えます。"
+  },
+  "outputs": {
+    "copy": "コピー",
+    "save": "CSV として保存",
+    "maps": "マップ",
+    "emptyTable": "行がありません。",
+    "capped": "{{total}} 行のうち {{shown}} 行を表示しています。コピーと保存にはすべての行が含まれます。",
+    "showAsLayer": "レイヤーとして表示"
+  }
+}

@@ -1,0 +1,18 @@
+api_version = 0
+name = "future"
+display_name = "Needs a future Orienta"
+version = "0.1.0"
+requires_orienta = ">=99"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+# never_imported_module deliberately does not exist. The version gate must
+# refuse this add-on BEFORE anything is imported, so this file is the test:
+# if the gate ever stops firing first, the answer is an import error naming
+# never_imported_module instead of a 409, and it says so loudly.
+[[analyses]]
+key = "addon.future"
+label = "Future"
+python_name = "never_imported_module:analyse"
+sentence = "This analysis never ran; it needs a newer Orienta."
+citations = ["orienta"]

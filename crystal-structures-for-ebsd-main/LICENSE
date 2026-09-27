@@ -1,0 +1,10 @@
+This directory (the CIF -> .xtal converter, the Debye-Waller reference table
+and the EMsoft automation module) is part of Orienta and is licensed under the
+GNU General Public License v3.0 or later, like the rest of the repository.
+See ../LICENSE for the license text and ../NOTICE.md for third-party material,
+including the Feather icons in calculationxtal/icons/ (MIT,
+../licenses/Feather-License.txt) and the source of the values in
+calculationxtal/DWF.xlsx (Peng et al., Acta Cryst. A52, 456, 1996; see
+calculationxtal/DWF_SOURCES.md).
+
+Copyright (c) 2026 the Orienta authors.

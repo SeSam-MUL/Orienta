@@ -1,0 +1,82 @@
+{
+  "reason": {
+    "addon_not_found": "Dieses Add-on ist nicht installiert",
+    "addon_name_conflict": "Zwei Installationen tragen denselben Namen",
+    "analysis_key_conflict": "Zwei Add-ons beanspruchen dieselbe Analyse",
+    "addon_incompatible": "Dieses Add-on braucht eine andere Orienta-Version",
+    "addon_not_enabled": "Dieses Add-on ist ausgeschaltet",
+    "addon_import_failed": "Dieses Add-on ließ sich nicht laden",
+    "addon_failed": "Die Analyse ist fehlgeschlagen",
+    "result_not_found": "Dieses Indizierungsergebnis gibt es nicht mehr",
+    "result_unusable": "Dieses Ergebnis lässt sich nicht auswerten",
+    "map_not_stored": "Diese Karte liegt nicht mehr im Speicher",
+    "trust_store_unwritable": "Ihre Entscheidung konnte nicht gespeichert werden",
+    "job_not_found": "Dieser Lauf ist nicht mehr bekannt",
+    "job_unfinished": "Dieser Lauf läuft noch"
+  },
+  "failure": {
+    "unknownTitle": "Die Anfrage wurde abgelehnt.",
+    "noDetail": "Der Server hat keine nähere Erklärung geliefert."
+  },
+  "page": {
+    "title": "Add-ons",
+    "subtitle": "Auswertungen aus anderen Gruppen. Sie laufen in diesem Prozess, mit Ihren Rechten."
+  },
+  "list": {
+    "rescan": "Neu suchen",
+    "emptyTitle": "Keine Add-ons gefunden",
+    "emptySearched": "Durchsuchte Ordner:",
+    "emptyHint": "Legen Sie einen Add-on-Ordner — einen mit orienta-addon.toml — in einen davon und suchen Sie erneut.",
+    "loadFailed": "Die Add-on-Liste konnte nicht geladen werden.",
+    "thirdParty": "Add-on von Dritten. Orienta hat es nicht geschrieben und steht nicht für seine Ergebnisse ein.",
+    "version": "Version",
+    "authors": "Autoren",
+    "source": "Installiert in",
+    "noDoi": "Kein DOI angegeben",
+    "enable": "Einschalten",
+    "disable": "Ausschalten",
+    "enabled": "Eingeschaltet",
+    "rejected": "Dieses Manifest wurde abgelehnt",
+    "conflict": "Konflikt",
+    "incompatible": "Nicht mit diesem Orienta verträglich",
+    "disabledByRuntime": "Von Orienta abgeschaltet nach {{count}} von {{limit}} Fehlschlägen",
+    "failureCount": "{{count}} von {{limit}} Fehlschlägen",
+    "restartHint": "Änderungen an einem installierten Add-on wirken erst nach einem Neustart.",
+    "analyses": "Auswertungen",
+    "loading": "Add-ons werden gesucht…",
+    "searchedUnknown": "Dieses Backend hat nicht gesagt, welche Ordner es durchsucht hat. Bitte das Backend neu starten oder erneut suchen.",
+    "changedSinceConsent": "Dieses Add-on hat sich geändert, seit es erlaubt wurde (erlaubt war Version {{version}}, DOI {{doi}}). Beim Einschalten wird erneut gefragt."
+  },
+  "consent": {
+    "title": "{{name}} einschalten?",
+    "body": "Dieses Add-on läuft in Orienta mit Ihren Rechten. Es kann die geladenen Daten lesen und Dateien schreiben, die Sie schreiben dürfen. Schalten Sie es nur ein, wenn Sie dem Autor vertrauen.",
+    "accept": "Einschalten",
+    "cancel": "Abbrechen"
+  },
+  "run": {
+    "start": "Ausführen",
+    "close": "Schließen",
+    "into": "Schreibt in Indizierungsergebnis {{id}}",
+    "noResult": "Kein Indizierungsergebnis, auf das der Lauf gehen könnte. Indizieren Sie zuerst einen Datensatz — die Zahlen des Add-ons und sein Zitat werden in ein Ergebnis geschrieben.",
+    "unsupported": "Diese Version kann diese Parameter nicht anzeigen: {{names}}, deshalb wird der Lauf nicht angeboten — er würde die Voreinstellungen des Add-ons für Einstellungen verwenden, die nie angezeigt wurden.",
+    "gone": "Diese Auswertung steht nicht mehr im installierten Manifest. Bitte erneut suchen und die Auswertung neu öffnen.",
+    "addonOff": "Dieses Add-on ist ausgeschaltet, der Lauf kann nicht gestartet werden.",
+    "running": "Läuft…",
+    "reloadWarning": "Ein Neuladen der Seite verliert diesen Lauf aus den Augen — er läuft im Backend weiter, diese Seite findet ihn aber nicht wieder.",
+    "ignored": "Der Lauf hat diese Parameter verworfen, weil das Add-on sie nicht mehr deklariert: {{names}}.",
+    "alreadyRunning": "Diese Auswertung läuft bereits; ein zweiter Lauf kann erst danach gestartet werden.",
+    "contextHeading": "Womit dieser Lauf gerechnet hat",
+    "contextStep": "Schrittweite: {{value}} µm",
+    "contextStepMissing": "Schrittweite: steht nicht in diesem Ergebnis — jede Länge, die das Add-on nennt, ist in Pixeln.",
+    "contextQuality": "Musterqualität: {{value}}",
+    "contextQualityMissing": "Musterqualität: in diesem Ergebnis nicht vorhanden — eine Auswertung, die sie braucht, sagt das."
+  },
+  "outputs": {
+    "copy": "Kopieren",
+    "save": "Als CSV speichern",
+    "maps": "Karten",
+    "emptyTable": "Keine Zeilen.",
+    "capped": "Es werden {{shown}} von {{total}} Zeilen angezeigt. Kopieren und Speichern enthalten alle.",
+    "showAsLayer": "Als Ebene anzeigen"
+  }
+}

@@ -1,0 +1,13 @@
+api_version = 0
+name = "isolated"
+display_name = "Isolated import test add-on"
+version = "0.1.0"
+authors = ["Test <t@example.org>"]
+doi = ""
+
+[[analyses]]
+key = "addon.isolated"
+label = "Isolated"
+python_name = "isolated_addon_module:analyse"
+sentence = "This add-on proved a folder install is importable."
+citations = ["orienta"]

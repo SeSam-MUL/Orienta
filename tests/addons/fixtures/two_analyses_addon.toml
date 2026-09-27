@@ -1,0 +1,28 @@
+# An add-on that declares TWO analyses.
+#
+# valid_addon.toml declares one, which makes "one step per analysis" untestable
+# against it: an implementation that only ever registered analyses[:1] keeps
+# that assertion green. Discovery never scans this directory (every test in
+# test_discovery.py names an explicit sub-folder), so a second manifest here is
+# inert for every other suite.
+api_version = 0
+name = "two-analyses"
+display_name = "Two analyses"
+version = "0.1.0"
+requires_orienta = ">=0.4,<0.6"
+authors = ["Jane Doe <jane@example.org>"]
+doi = "10.5281/zenodo.7654321"
+
+[[analyses]]
+key = "addon.first_analysis"
+label = "First analysis"
+python_name = "two_analyses.run:first"
+sentence = "The first analysis ran with {method}."
+citations = ["doi:10.5281/zenodo.1111111"]
+
+[[analyses]]
+key = "addon.second_analysis"
+label = "Second analysis"
+python_name = "two_analyses.run:second"
+sentence = "The second analysis ran on {n_grains} grains."
+citations = ["doi:10.5281/zenodo.2222222"]
