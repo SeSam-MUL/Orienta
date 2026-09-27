@@ -1,9 +1,18 @@
 """Assemble the provenance + parameters document for one .sht (File Info panel).
 
-Sidecar-first; falls back to recovering from the .sht binary + .xtal
-(useReference) + linked CIF. Nothing is invented — unknown fields are null.
+Three sources, each used for what it can actually know:
+
+* the **sidecar** ``<name>.sht.provenance.json`` -- which files this master was
+  made from, its literature reference and the simulation parameters. Cheap.
+* the **.sht binary** -- crystallography, and the parameters when no sidecar
+  exists. 300-600 KB, read on demand.
+* **this machine's filesystem** -- whether those files are here. Never the
+  sidecar: see :func:`_file_entry`.
+
+Nothing is invented — unknown fields are null.
 """
 from __future__ import annotations
+import glob as _glob
 import json
 from pathlib import Path
 
@@ -69,6 +78,58 @@ def write_provenance_sidecar(sht_path, *, xtal_path, cif_dir, params) -> Path:
     return out
 
 
+def _resolve_in_library(name: str, search_dir) -> Path | None:
+    """Find `name` in THIS machine's library, or None.
+
+    A sidecar records an ABSOLUTE path, and that path belongs to whichever
+    machine ran the simulation. Measured over the shipped library: 25 of the
+    recorded paths name the `E:` drive and do not resolve on a `C:` checkout,
+    while every recorded FILE NAME does resolve locally. So the name is the
+    portable part and the path is not, which is why resolution goes through the
+    name.
+
+    `glob.escape` because library names really do contain glob metacharacters
+    (`Al (Al) [cF4] {20kV}` for masters, and a CIF may be `Mn2(AlSi)5_…`); an
+    unescaped `[cF4]` is a character class and would match nothing.
+    """
+    if not name:
+        return None
+    base = Path(search_dir)
+    direct = base / name
+    if direct.is_file():
+        return direct
+    try:
+        for cand in base.rglob(_glob.escape(name)):
+            if cand.is_file():
+                return cand
+    except OSError:
+        pass
+    return None
+
+
+def _file_entry(name: str, search_dir, recorded_path: str | None = None) -> dict:
+    """One `source_xtal`/`source_cif` block, with `found` measured HERE.
+
+    `found` is never copied from a sidecar. The sidecar is provenance -- which
+    file this master was made from -- and a claim about a filesystem is not
+    provenance: it was true on the machine that wrote it, at that moment. The
+    consumer treats `found` as "you can open this" (the File Info panel prints
+    the name only when `found` is true), so an unverified flag is a promise the
+    app cannot keep.
+
+    `path` is the LOCAL path when the file is here, and None when it is not.
+    A recorded path that could not be resolved is kept under `recorded_path`
+    so the difference stays visible instead of being silently dropped.
+    """
+    local = _resolve_in_library(name, search_dir)
+    entry: dict = {"name": name or None,
+                   "path": str(local) if local else None,
+                   "found": local is not None}
+    if local is None and recorded_path:
+        entry["recorded_path"] = recorded_path
+    return entry
+
+
 def _engine_from_software_version(sw) -> str:
     """Map a .sht FileHeader ``software`` field to the producing engine.
 
@@ -86,35 +147,68 @@ def _engine_from_software_version(sw) -> str:
 
 
 def build_sht_info(sht_path: Path, *, xtal_dir: Path, cif_dir: Path) -> dict:
+    """The File Info document for one .sht.
+
+    Was sidecar-OR-binary; is now sidecar-AND-binary, with existence measured
+    locally. Three defects that produced, all measured on the shipped library
+    (2026-09-27):
+
+    * ``found`` and ``path`` were copied out of the sidecar unverified, so the
+      panel promised files using a flag from another machine and a path on a
+      drive this one does not have (25 of the recorded paths). It happened to
+      be right about presence today; a synthetic sidecar naming two files that
+      exist nowhere still came back ``found: true``.
+    * ``crystallography`` was read from the sidecar, which never carries it, so
+      it was ``{}`` for exactly the 13 of 29 masters that HAVE a sidecar while
+      the 16 without got it from the binary. The split was an artefact of which
+      source answered, not of the files.
+    * a malformed sidecar fell through to "recovery" and lost its parameters
+      as well, although the two are independent.
+
+    The binary read is the one cost this adds: 300-600 KB per call, on a route
+    that serves one selected file. Anything that wants many at once should ask
+    for what it needs rather than calling this per card.
+    """
     sht_path = Path(sht_path)
+    sidecar_doc: dict = {}
     sidecar = sht_path.with_suffix(".sht.provenance.json")
     if sidecar.exists():
         try:
-            doc = json.loads(sidecar.read_text(encoding="utf-8"))
-            params = doc.get("parameters", {})
-            return {
-                "filename": sht_path.name,
-                "provenance": {
-                    "source_xtal": doc.get("source_xtal"),
-                    "source_cif": doc.get("source_cif"),
-                    "reference": doc.get("reference", ""),
-                    "engine": params.get("engine") or doc.get("engine") or "unknown",
-                    "origin": "sidecar",
-                },
-                "crystallography": doc.get("crystallography", {}),
-                "parameters": {**params, "source": "sidecar"},
-            }
+            loaded = json.loads(sidecar.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                sidecar_doc = loaded
         except Exception:
-            pass  # fall through to recovery
+            sidecar_doc = {}  # unreadable: recover, but do not pretend
+
+    def _recorded(key: str) -> tuple[str, str | None]:
+        """(name, recorded_path) the sidecar states for `key`, if any."""
+        v = sidecar_doc.get(key)
+        if isinstance(v, dict):
+            return (str(v.get("name") or ""), v.get("path"))
+        return ("", None)
+
+    # The .xtal/CIF NAMES come from the sidecar when it has them (it knows what
+    # the simulation actually read, including names no convention would guess --
+    # `α-(AlMnSi).xtal` is not derivable from its material folder). Existence is
+    # then measured here, never taken from the sidecar.
+    x_name, x_recorded = _recorded("source_xtal")
+    c_name, c_recorded = _recorded("source_cif")
 
     stem = _stem_from_sht(sht_path)
-    xtal = Path(xtal_dir) / f"{stem}.xtal"
-    cif = find_linked_cif(sht_path, Path(cif_dir))
-    reference = ""
-    if xtal.exists():
+    if not x_name:
+        x_name = f"{stem}.xtal"
+    if not c_name:
+        linked = find_linked_cif(sht_path, Path(cif_dir))
+        c_name = linked.name if linked else ""
+
+    xtal_entry = _file_entry(x_name, xtal_dir, x_recorded)
+    cif_entry = _file_entry(c_name, cif_dir, c_recorded)
+
+    reference = str(sidecar_doc.get("reference") or "").strip()
+    if not reference and xtal_entry["found"]:
         # Controller decision #1: the provenance "reference" is the .xtal's
         # useReference DOI/citation, NOT the (empty) phase_name from the xtal.
-        reference = read_xtal_reference(xtal)
+        reference = read_xtal_reference(Path(xtal_entry["path"]))
 
     crys, params = {}, {"source": "unknown"}
     engine = "unknown"
@@ -146,15 +240,24 @@ def build_sht_info(sht_path: Path, *, xtal_dir: Path, cif_dir: Path) -> dict:
     except Exception:
         pass  # honest unknown
 
+    # Parameters: the sidecar when it has them (it records what the run was
+    # ASKED for), the binary otherwise (what the file ended up carrying).
+    side_params = sidecar_doc.get("parameters")
+    if isinstance(side_params, dict) and side_params:
+        params = {**side_params, "source": "sidecar"}
+        engine = side_params.get("engine") or sidecar_doc.get("engine") or engine
+
     return {
         "filename": sht_path.name,
         "provenance": {
-            "source_xtal": {"name": xtal.name, "path": str(xtal), "found": xtal.exists()},
-            "source_cif": {"name": cif.name if cif else None,
-                           "path": str(cif) if cif else None, "found": cif is not None},
+            "source_xtal": xtal_entry,
+            "source_cif": cif_entry,
             "reference": reference,
             "engine": engine,
-            "origin": "recovered",
+            # What the PROVENANCE came from. Existence is always local and
+            # crystallography always the binary, so this no longer implies
+            # which source answered for those.
+            "origin": "sidecar" if sidecar_doc else "recovered",
         },
         "crystallography": crys,
         "parameters": params,
