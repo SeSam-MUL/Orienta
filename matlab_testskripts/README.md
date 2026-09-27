@@ -4,6 +4,7 @@
 **License:** GNU General Public License, version 2 or (at your option) any later
 version — see [LICENSE](LICENSE) in this folder. `freezeColors.m` is the one
 exception; see below.
+**Used with the author's permission**, confirmed 2026-09-26.
 
 ## What these scripts are
 

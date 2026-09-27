@@ -2222,7 +2222,9 @@ function ControlsPanel({
 // ---------------------------------------------------------------------------
 /** A value no translation can equal, so a missing key is detectable.
  *  i18next here has returnEmptyString:false, which makes '' unusable. */
-const I18N_MISS = ' miss';
+// The ESCAPE, not a raw NUL byte: the byte makes git treat this file as
+// binary, so it gets no readable diff at all. Same value either way.
+const I18N_MISS = '\u0000miss';
 
 /**
  * The reliability warning after a PC refine, in the reader's language.

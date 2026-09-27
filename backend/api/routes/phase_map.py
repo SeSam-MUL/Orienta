@@ -48,6 +48,35 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def _require_xmap(result, dataset):
+    """The crystal map of whichever source is loaded, or the coded 400.
+
+    Four routes used to write::
+
+        if result is None and dataset is None:
+            raise problem(400, "noResultOrDataset", ...)
+        xmap = result.xmap if result is not None else dataset.xmap
+
+    which guards "nothing is loaded" but not "something is loaded that has no
+    usable crystal map". A result object without ``.xmap`` then reached the
+    second line and the route answered **500** with the raw exception text in
+    ``detail`` -- ``'types.SimpleNamespace' object has no attribute 'xmap'`` --
+    where the frontend expects the ``noResultOrDataset`` code and its
+    translation. A 500 also has no code header at all, so the UI falls back to
+    English prose.
+
+    Same answer for both cases: there is nothing to draw, and the caller should
+    load data. Measured 2026-09-27 on /phasemap/phase-legend, /render and
+    /phase-stats: 500 before, coded 400 after.
+    """
+    for source in (result, dataset):
+        xmap = getattr(source, "xmap", None)
+        if xmap is not None:
+            return xmap
+    raise problem(400, "noResultOrDataset",
+                  "No indexing result or analysis dataset available. Load data first.")
+
+
 def _active_r_user():
     """Resolve R_user for the active file, or None on any failure (fail-soft for render).
 
@@ -652,7 +681,17 @@ def _render_to_figure(
     n_rows = n_cols = 0
     mask = None
 
-    if _last_result is not None:
+    # getattr, not attribute access: the dataset branch below has always checked
+    # for 'xmap' and this one did not, so a result object without one answered
+    # 500 with the raw AttributeError in `detail` instead of the coded 400.
+    #
+    # This makes the precedence "the first source that HAS a usable crystal
+    # map", not "the result if one is loaded": a result present but without an
+    # xmap now falls through and renders the analysis dataset instead of
+    # erroring. That is deliberate and matches what /phase-legend and
+    # /phase-stats report through `_require_xmap`, so the picture and the
+    # legend beside it cannot come from different sources.
+    if getattr(_last_result, "xmap", None) is not None:
         xmap = _last_result.xmap
         n_rows, n_cols = _last_result.original_shape
         mask = _last_result.selection_mask
@@ -1322,10 +1361,12 @@ def _compute_layer_rgba(
 
     result = get_last_indexing_result()
     dataset = get_analysis_dataset()
-    if result is None and dataset is None:
-        raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
+    # _require_xmap answers the coded 400 for both "nothing loaded" and
+    # "loaded, but no usable crystal map"; the second used to be a 500 with the
+    # raw AttributeError in `detail`.
+    _require_xmap(result, dataset)
 
-    if result is not None:
+    if getattr(result, "xmap", None) is not None:
         xmap = result.xmap
         n_rows, n_cols = result.original_shape
         mask = result.selection_mask
@@ -2083,11 +2124,7 @@ async def get_ipf_key(direction: str = "Z", phase_filter: int = -1,
 
         result = get_last_indexing_result()
         dataset = get_analysis_dataset()
-        if result is None and dataset is None:
-            raise problem(400, "noResultOrDataset",
-                          "No indexing result or analysis dataset available. Load data first.")
-
-        xmap = result.xmap if result is not None else dataset.xmap
+        xmap = _require_xmap(result, dataset)
 
         rot = getattr(xmap, "rotations", None)
         rot_data = getattr(rot, "data", None) if rot is not None else None
@@ -2190,9 +2227,14 @@ async def get_available_maps():
     # showing the menu item would let the user select a mode that errors
     # out instead of just hiding gracefully.
     has_bc = False
-    src = result.xmap if result is not None else (
-        getattr(dataset, "xmap", None) if dataset is not None else None
-    )
+    # `is not None`, not `or`: a CrystalMap defines neither __bool__ nor
+    # __len__ today, so `or` happens to behave identically -- but the day
+    # anything falsy can sit in .xmap, `or` would silently take the BC probe
+    # from the dataset while the map is rendered from the result. That is the
+    # source-mixing this function's docstring above forbids.
+    src = getattr(result, "xmap", None)
+    if src is None and dataset is not None:
+        src = getattr(dataset, "xmap", None)
     if src is not None and hasattr(src, "prop") and "bc" in src.prop:
         has_bc = True
     if has_bc:
@@ -2325,7 +2367,8 @@ async def apply_cleanup(req: ApplyCleanupRequest):
             ),
         )
 
-    xmap = active.xmap
+    # Result-only by design (no analysis-dataset fallback), hence the None.
+    xmap = _require_xmap(active, None)
     n_rows, n_cols = active.original_shape
     n_total = n_rows * n_cols
 
@@ -2518,9 +2561,7 @@ async def get_phase_legend(color_overrides: str = ""):
 
         result = get_last_indexing_result()
         dataset = get_analysis_dataset()
-        if result is None and dataset is None:
-            raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
-        xmap = result.xmap if result is not None else dataset.xmap
+        xmap = _require_xmap(result, dataset)
 
         color_map = build_phase_color_map(xmap, overrides_dict)
 
@@ -2603,9 +2644,7 @@ async def get_phase_stats(color_overrides: str = "", include_empty: bool = False
 
         result = get_last_indexing_result()
         dataset = get_analysis_dataset()
-        if result is None and dataset is None:
-            raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
-        xmap = result.xmap if result is not None else dataset.xmap
+        xmap = _require_xmap(result, dataset)
 
         # Use the SAME colour assignment as the rendered map.
         color_map = build_phase_color_map(xmap, overrides_dict)
@@ -2723,9 +2762,7 @@ async def get_phase_adjacency():
 
         result = get_last_indexing_result()
         dataset = get_analysis_dataset()
-        if result is None and dataset is None:
-            raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
-        xmap = result.xmap if result is not None else dataset.xmap
+        xmap = _require_xmap(result, dataset)
 
         # Phase grid (n_rows, n_cols). Sentinel -1 marks not-indexed.
         # For SPARSE / region-cropped results, ``xmap.phase_id`` only
@@ -2908,14 +2945,21 @@ def _get_scalar_array_2d(name: str) -> "Optional['np.ndarray']":
         if result is None and dataset is None:
             return None
 
-        if result is not None:
+        # getattr, not attribute access: a result without a crystal map used to
+        # raise here and be swallowed by the except below, so the helper
+        # returned None for EVERY scalar even when the analysis dataset could
+        # have served kam/gos. Same precedence as _render_to_figure: the first
+        # source that has a usable map.
+        if getattr(result, "xmap", None) is not None:
             xmap = result.xmap
             n_rows, n_cols = result.original_shape
             mask = result.selection_mask
-        else:
+        elif dataset is not None:
             xmap = dataset.xmap
             n_rows, n_cols = dataset.shape
             mask = None
+        else:
+            return None
 
         def _reshape_to_grid(flat) -> "Optional[np.ndarray]":
             """Place a 1-D xmap-property array into a (n_rows, n_cols) grid."""
@@ -3052,6 +3096,8 @@ async def phasemap_probe(req: PhaseMapProbeRequest):
     result = get_last_indexing_result()
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available.")
+    # Result-only by design (no analysis-dataset fallback), hence the None.
+    xmap = _require_xmap(result, None)
 
     n_rows, n_cols = result.original_shape
     if not (0 <= req.row < n_rows and 0 <= req.col < n_cols):
@@ -3061,7 +3107,7 @@ async def phasemap_probe(req: PhaseMapProbeRequest):
         )
 
     # Phase --------------------------------------------------------------
-    phase_info = _phase_probe_from_xmap(result.xmap, req.row, req.col)
+    phase_info = _phase_probe_from_xmap(xmap, req.row, req.col)
 
     # Scalars ------------------------------------------------------------
     scalar_names: List[str] = ["ci", "bc", "kam", "gos", "uncertainty"]
@@ -3135,6 +3181,8 @@ async def phasemap_region_stats(req: PhaseMapRegionStatsRequest):
     result = get_last_indexing_result()
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available.")
+    # Result-only by design (no analysis-dataset fallback), hence the None.
+    xmap = _require_xmap(result, None)
 
     n_rows, n_cols = result.original_shape
 
@@ -3151,7 +3199,6 @@ async def phasemap_region_stats(req: PhaseMapRegionStatsRequest):
         )
 
     # Phase histogram -----------------------------------------------------
-    xmap = result.xmap
     raw_ids = np.asarray(xmap.phase_id)
     if raw_ids.size == n_rows * n_cols:
         pid_2d = raw_ids.reshape(n_rows, n_cols).astype(np.int32)

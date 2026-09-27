@@ -29,8 +29,9 @@ const STRINGS = {
 
     notSetUpTitle: 'Orienta is not set up yet',
     needsRepairTitle: 'Orienta needs repairing',
-    setupMissing: 'The setup assistant is not part of this build yet. Reinstall Orienta '
-      + 'from the releases page, or follow INSTALL.md in the project.',
+    setupMissing: 'Orienta could not open the setup assistant: part of this '
+      + 'installation is missing. Reinstall Orienta from the releases page, or '
+      + 'follow INSTALL.md in the project.',
     logLocation: 'Details are written to: {{path}}',
     downloadHere: 'Download Orienta here:',
     reinstallHint: 'Reinstall Orienta; your data and crystal library are not touched.',
@@ -68,8 +69,9 @@ const STRINGS = {
 
     notSetUpTitle: 'Orienta ist noch nicht eingerichtet',
     needsRepairTitle: 'Orienta muss repariert werden',
-    setupMissing: 'Der Einrichtungsassistent ist in dieser Version noch nicht enthalten. '
-      + 'Installieren Sie Orienta über die Releases-Seite neu, oder folgen Sie INSTALL.md.',
+    setupMissing: 'Orienta konnte den Einrichtungsassistenten nicht öffnen: ein Teil '
+      + 'dieser Installation fehlt. Installieren Sie Orienta über die Releases-Seite neu, '
+      + 'oder folgen Sie INSTALL.md.',
     logLocation: 'Einzelheiten stehen in: {{path}}',
     downloadHere: 'Orienta hier herunterladen:',
     reinstallHint: 'Installieren Sie Orienta neu; Ihre Daten und Ihre Kristallbibliothek bleiben unberührt.',
@@ -107,8 +109,9 @@ const STRINGS = {
 
     notSetUpTitle: 'Orienta はまだセットアップされていません',
     needsRepairTitle: 'Orienta の修復が必要です',
-    setupMissing: 'このビルドにはセットアップアシスタントがまだ含まれていません。'
-      + 'リリースページから Orienta を再インストールするか、INSTALL.md に従ってください。',
+    setupMissing: 'セットアップアシスタントを開けませんでした。このインストールの一部が'
+      + '見つかりません。リリースページから Orienta を再インストールするか、'
+      + 'INSTALL.md に従ってください。',
     logLocation: '詳細は次の場所に記録されています: {{path}}',
     downloadHere: 'Orienta はこちらからダウンロードできます:',
     reinstallHint: 'Orienta を再インストールしてください。データと結晶ライブラリはそのまま残ります。',
@@ -145,8 +148,8 @@ const STRINGS = {
 
     notSetUpTitle: 'Orienta 尚未完成安装',
     needsRepairTitle: 'Orienta 需要修复',
-    setupMissing: '此版本尚未包含安装向导。请从发布页面重新安装 Orienta，'
-      + '或按照 INSTALL.md 操作。',
+    setupMissing: '无法打开安装向导：此安装的一部分文件缺失。'
+      + '请从发布页面重新安装 Orienta，或按照 INSTALL.md 操作。',
     logLocation: '详细信息记录在：{{path}}',
     downloadHere: '在此下载 Orienta：',
     reinstallHint: '请重新安装 Orienta；您的数据和晶体库不会受到影响。',

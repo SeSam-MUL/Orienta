@@ -775,6 +775,10 @@ class SimulationController:
         try:
             _progress("Preparing simulation environment...")
 
+            # Before anything touches self.config: without it every step below
+            # either skips silently or raises AttributeError further on.
+            self._require_config()
+
             # --- Convert Windows path to WSL path ---
             wsl_xtal_path = self._to_wsl_path(str(xtal_file))
             _progress(f"WSL path: {wsl_xtal_path}")
@@ -989,6 +993,34 @@ class SimulationController:
             return sync.extract_material_from_xtal(xtal_path)
         except Exception:
             return "Default"
+
+    def _require_config(self) -> None:
+        """Refuse to run without a config, at the point where it is first used.
+
+        ``_load_config`` sets ``self.config = None`` when the .ini is missing or
+        unreadable, and this method exists so that a caller who reaches the
+        worker cannot walk into ``self.config.has_section(...)`` and die with
+        ``AttributeError: 'NoneType' object has no attribute 'has_section'``
+        several steps past the point where the real problem was known.
+        ``_apply_params_to_config`` would make that worse by returning silently,
+        so the parameters are not applied either.
+
+        UNREACHABLE TODAY, deliberately kept. ``start_simulation`` already
+        refuses on the same condition (search "No configuration loaded"), it is
+        the only place that starts this worker, and nothing after ``__init__``
+        can set ``self.config`` back to ``None``. So this guard costs one
+        comparison and protects a future second entry point; it is not a fix for
+        an observed failure. Its wording matches the earlier guard on purpose --
+        one condition should not have two different remedies.
+        """
+        if self.config is not None:
+            return
+        raise RuntimeError(
+            "No configuration loaded. Please check:\n"
+            "1. emsphinx_config.ini exists (or .template for auto-copy)\n"
+            f"2. Expected path: {self.config_path}\n"
+            "3. Open Simulation Settings to configure paths."
+        )
 
     def _apply_params_to_config(self, params: SimulationParameters):
         """Write simulation parameters into the config object."""

@@ -289,7 +289,7 @@ describe('filenames', () => {
   });
 
   it('replaces control characters', () => {
-    expect(sanitiseFilename('a bc')).toBe('a_b_c');
+    expect(sanitiseFilename('a\u0000b\u001fc')).toBe('a_b_c');
   });
 
   it('trims leading/trailing dots and whitespace', () => {

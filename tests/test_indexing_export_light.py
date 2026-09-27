@@ -38,6 +38,37 @@ from indexing_controller import IndexingMethod, IndexingResult
 # Fixture: a minimal single-phase IndexingResult injected into the registry
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def restore_indexing_registry():
+    """Undo what a test that drives the REAL import route leaves behind.
+
+    autouse, because FOUR tests in this file post to /api/indexing/import-h5 and
+    three of them succeed -- so opting in per test would have to be remembered
+    every time another one is added. Measured: two of them were still leaking
+    after the first fix went on only one.
+
+    The route registers a result and makes it active. Nothing undid that, so
+    every later test needing "nothing loaded" saw a loaded result: alone
+    tests/test_problem_code_header is 11 green, after this file 7 red, because
+    the phase-map routes answered 200 where the coded 400 was expected.
+
+    Restores the CONTENTS and not the object. Other modules hold a reference to
+    the same dict, so swapping in a copy makes the route write to the original
+    while the test inspects the copy -- which fails the test it was meant to
+    protect (measured).
+    """
+    from backend.api.routes import indexing as imod
+
+    saved = dict(imod._result_registry)
+    saved_active = imod._active_result_id
+    try:
+        yield
+    finally:
+        imod._result_registry.clear()
+        imod._result_registry.update(saved)
+        imod._active_result_id = saved_active
+
+
 @pytest.fixture
 def active_single_phase_result(monkeypatch):
     """Wire a 4×3 single-phase synthetic result into the indexing registry.

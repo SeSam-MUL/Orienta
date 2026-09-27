@@ -567,9 +567,10 @@ function waitForBackend(retries = BACKEND_START_RETRIES) {
  * The page shown when there is nothing installed yet, or when what is installed
  * cannot be used.
  *
- * Task 12 of the installer plan replaces this with the real wizard at
- * `electron/setup/index.html`; until that file exists, say so honestly rather
- * than leaving a blank window or pointing at a backend that is not running.
+ * It loads the real wizard, `electron/setup/index.html`, which ships in the
+ * package. The static page below is only for the case where that file is
+ * missing or unreadable — a damaged installation — where saying so honestly
+ * beats a blank window or pointing at a backend that is not running.
  * The React interface cannot serve either purpose — it talks exclusively to a
  * backend that does not exist in these states.
  */
@@ -646,10 +647,10 @@ function loadSetupPlaceholder(window, decision) {
     ? t(lang, 'needsRepairTitle')
     : t(lang, 'notSetUpTitle');
   const detail = decision.message || t(lang, 'setupMissing');
-  // The dead end needs a way out, and until the wizard ships the only honest
-  // one is the releases page. Rendered as the URL ITSELF rather than as "click
-  // here": a screenshot of this page then carries the address, which is how a
-  // tester will actually report it.
+  // The dead end needs a way out, and when the wizard's own files are missing
+  // the only honest one is the releases page. Rendered as the URL ITSELF rather
+  // than as "click here": a screenshot of this page then carries the address,
+  // which is how a tester will actually report it.
   const releases = releasesPageUrl();
   let logLine = '';
   try {
@@ -657,8 +658,8 @@ function loadSetupPlaceholder(window, decision) {
   } catch { /* an unusable ORIENTA_HOME must not blank the page */ }
 
   // A dead end with a next step is survivable; a dead end without one is not.
-  // Until Task 12 ships the wizard, the only honest next step is the releases
-  // page, and the person needs to be able to reach it from this screen.
+  // With the wizard's own files missing, the only honest next step is the
+  // releases page, and the person needs to reach it from this screen.
   const body = `<!DOCTYPE html><html lang="${esc(shellLanguage(lang))}"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
 <title>Orienta</title><style>
