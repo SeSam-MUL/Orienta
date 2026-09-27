@@ -54,8 +54,8 @@ def leaks(value) -> list:
 def test_the_leak_detector_actually_bites():
     """The guard below is only worth having if it fails on the old shape."""
     old = {"strength_by_phase": {
-        r"C:\Users\sebas\Kikuchipy_GUI\Database\CIF_Library\Al.cif": 0.0,
-        "C:/Users/sebas/Kikuchipy_GUI/Database/CIF_Library/Si.cif": 1.0,
+        r"C:\Users\example\Orienta\Database\CIF_Library\Al.cif": 0.0,
+        "C:/Users/example/Orienta/Database/CIF_Library/Si.cif": 1.0,
     }}
     assert len(leaks(old)) == 2
 
@@ -70,8 +70,8 @@ def _req(method="hough", **kw):
 
 
 WINDOWS_PATHS = [
-    r"C:\Users\sebas\Kikuchipy_GUI - Kopie - Kopie\Database\CIF_Library\Al.cif",
-    r"C:\Users\sebas\Kikuchipy_GUI - Kopie - Kopie\Database\CIF_Library\Si.cif",
+    r"C:\Users\example\Orienta\Database\CIF_Library\Al.cif",
+    r"C:\Users\example\Orienta\Database\CIF_Library\Si.cif",
 ]
 
 
@@ -146,8 +146,8 @@ def test_prior_on_is_decided_by_configuration_not_by_effect():
 # ---------------------------------------------------------------------------
 
 SHT_PATHS = [
-    r"C:\Users\sebas\Orienta\Database\SHT_Library\Al.sht",
-    r"C:\Users\sebas\Orienta\Database\SHT_Library\Si.sht",
+    r"C:\Users\example\Orienta\Database\SHT_Library\Al.sht",
+    r"C:\Users\example\Orienta\Database\SHT_Library\Si.sht",
 ]
 
 
