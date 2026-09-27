@@ -33,6 +33,136 @@ shared. The only difference is the command you use to launch the app (Step 4).
 
 ---
 
+## The ready-made packages (the short way)
+
+All three come from the same [releases page][releases] and behave the same way
+once running: on first start Orienta sets up a private Python for itself,
+installs the tested packages, and asks where its own files may live. Your
+measurement files stay where they are.
+
+Each download has a `.sha256` file beside it. Comparing them is one command and
+is worth it — these are large downloads, and a truncated one fails later, in a
+way that looks like a bug.
+
+[releases]: https://github.com/SeSam-MUL/Orienta/releases
+
+### macOS — `Orienta-<version>-arm64.dmg`
+
+**Apple Silicon only** (M1 and newer), macOS 14 or newer. Intel Macs are not
+supported: PyTorch stopped publishing builds for them, and Orienta says so at
+startup rather than failing later. Allow about **7 GB** free — while the
+environment is built, the package cache and the finished environment are on
+disk at the same time.
+
+```bash
+shasum -a 256 Orienta-<version>-arm64.dmg     # compare with the .sha256
+```
+
+Open the disk image and drag Orienta onto the Applications shortcut beside it.
+
+**The first start needs a right-click.** Orienta is signed, but not with a paid
+Apple certificate — there is no Apple developer account behind this project —
+so macOS does not recognise the developer. A double-click only says the app
+"cannot be opened" and offers no way forward. Instead:
+
+- right-click (or Control-click) **Orienta** in Applications → **Open**, then
+  **Open** again in the dialog; or
+- System Settings → **Privacy & Security**, scroll to the bottom, where
+  "Orienta was blocked" appears with an **Open Anyway** button.
+
+After that once, it starts normally.
+
+On macOS the environment is built with conda-forge packages rather than pip.
+That is not a preference: the pip wheels of torch, scikit-learn and faiss each
+carry their own OpenMP runtime, and the second one to start computing aborts
+the process with `OMP: Error #15`. Orienta ships a lock file that resolves to
+exactly one.
+
+**Uninstalling** is dragging `Orienta.app` to the Trash. Your data folder
+(`~/Library/Application Support/Orienta` unless you moved it) stays on
+purpose — the crystal library lives there. Delete it by hand when you want it
+gone.
+
+**Simulating master patterns** uses the Orienta Engine on a Mac. EMsoft is
+reached through WSL, which exists only on Windows, so that engine is greyed out
+with a note; the built-in one needs neither EMsoft nor a graphics card.
+
+### Linux — `Orienta-<version>.AppImage`
+
+x86-64. Built and checked on Ubuntu 24.04; other distributions are untested
+rather than unsupported. Allow about **2.5 GB** free, or **9 GB** for the
+graphics-card version.
+
+```bash
+sha256sum Orienta-<version>.AppImage          # compare with the .sha256
+chmod +x Orienta-<version>.AppImage
+./Orienta-<version>.AppImage
+```
+
+**The `chmod` is not optional.** Without it a double-click in the file manager
+does nothing at all — no window, no message. That is how AppImages behave, and
+it is the most common place to get stuck.
+
+If the start fails with `libfuse.so.2` or "AppImages require FUSE to run", your
+system has FUSE 3 but not the version AppImage needs. You do not have to
+install anything:
+
+```bash
+./Orienta-<version>.AppImage --appimage-extract-and-run
+```
+
+**Uninstalling** is deleting the `.AppImage` file. The data folder
+(`~/.local/share/Orienta` unless you moved it) stays on purpose, for the same
+reason as on macOS.
+
+### Windows — `Orienta Setup <version>.exe`
+
+Download it and run it. Everything else is set up on first start: a private Python for Orienta, all
+packages, and the GPU versions of them when the machine has a suitable NVIDIA
+card. Allow about 8 GB of free space and, depending on your connection,
+10 to 30 minutes.
+
+**Windows will warn you.** The installer is not signed with a paid
+certificate, so a blue "Windows protected your PC" window appears. Click
+**More info**, then **Run anyway**. To check the file first, compare its
+checksum with the one on the release page:
+
+```powershell
+certutil -hashfile "Orienta Setup <version>.exe" SHA256
+```
+
+The setup asks for your language, where Orienta may keep its own files (this
+can be another drive; your measurement files stay where they are), whether to
+use the graphics card, and whether to put a shortcut on the desktop.
+
+**Uninstalling** runs through Windows (Settings → Apps → Orienta). Orienta then
+asks two questions of its own: whether to remove the downloaded Python and
+program files (preselected **Yes**), and, only then, whether to delete your
+crystal library (preselected **No**).
+
+The installer needs the internet for Python and the packages. If GitHub itself
+is unreachable, it falls back to the copy of the program inside the installer,
+or to a package file placed next to it; a fully offline machine is not covered
+yet.
+
+> **Quick reference (experienced users):**
+> ```bash
+> # Miniforge recommended; on Anaconda/Miniconda the --override-channels
+> # keeps Python out of Anaconda's licensed repository (see Step 0)
+> conda create -n ebsd python=3.11 --override-channels -c conda-forge
+> conda activate ebsd
+> conda install --override-channels -c conda-forge "blas=*=openblas"
+> pip install -r requirements.txt
+> # macOS: replace the four lines above with
+> #   conda env create -f environment-macos.yml && conda activate ebsd
+> # (pip on a Mac ends in "OMP: Error #15", see "macOS (Apple Silicon)")
+> cd frontend && npm install && npm run build && cd ..
+> python start_app.py        # browser version
+> # or: python start_desktop.py   # desktop version
+> ```
+
+---
+
 ## Step 0 — Prerequisites
 
 Install these before you begin. The first two are **required**; the last two are
@@ -157,16 +287,116 @@ conda activate ebsd
 > After `conda activate ebsd`, your prompt should show `(ebsd)`. Run the rest of
 > the Python commands in this guide **while this environment is active**.
 
-### 2a — Install an optimized BLAS (important!)
+### 2a — Install an optimized BLAS (Windows and Linux only)
 
 ```bash
-conda install -c conda-forge "blas=*=openblas"
+conda install --override-channels -c conda-forge "blas=*=openblas"
 ```
 
 **Why this matters:** BLAS is the math library NumPy uses for linear algebra,
 which is at the heart of nearly every EBSD calculation. If NumPy ends up using
 the slow *reference* BLAS, computations can be on the order of **~1000× slower**.
 Installing OpenBLAS first ensures the whole stack is fast.
+
+**On macOS, skip this step.** See *macOS (Apple Silicon)* below.
+
+### If you already have Anaconda or Miniconda
+
+You do not have to uninstall anything. Point conda at conda-forge instead of
+Anaconda's licensed repository, either for this environment only or globally.
+
+**For the `ebsd` environment only** (run after `conda activate ebsd`):
+
+```bash
+conda config --env --remove channels defaults
+conda config --env --add channels conda-forge
+conda config --env --set channel_priority strict
+```
+
+**For every environment on the machine:**
+
+```bash
+conda config --remove channels defaults
+conda config --add channels conda-forge
+conda config --set channel_priority strict
+```
+
+`conda config --remove channels defaults` prints an error when `defaults` is
+not in the list; that is harmless.
+
+**Check what an existing environment already contains.** Packages installed
+before the change stay where they are, with their origin recorded:
+
+```bash
+conda list --show-channel-urls | findstr /C:"pkgs/main"       # Windows
+conda list --show-channel-urls | grep -E "pkgs/main|defaults"  # macOS / Linux
+```
+
+If that prints anything, those packages came from the licensed repository. The
+clean fix is to rebuild the environment:
+
+```bash
+conda deactivate
+conda env remove -n ebsd
+conda create -n ebsd python=3.11 --override-channels -c conda-forge
+```
+
+> `channel_priority: strict` makes conda prefer conda-forge but leaves
+> `defaults` in the search list as a fallback. Only removing `defaults` (or
+> `--override-channels`) takes it out entirely; set both.
+
+### macOS (Apple Silicon)
+
+Orienta runs on a Mac without an NVIDIA GPU; every GPU step falls back to the
+CPU. **On macOS, replace Steps 2 to 2b with one command** that builds the whole
+environment from conda-forge (macOS 14 or newer, Apple Silicon):
+
+```bash
+# the terminal must be native arm64, not Rosetta — this must print arm64:
+python3 -c "import platform; print(platform.machine())"
+
+conda env create -f environment-macos.yml
+conda activate ebsd
+```
+
+If you already have an `ebsd` environment from an earlier attempt (for example
+one that ended in the error below), `conda env create` stops with
+"prefix already exists". Remove the old one first, from outside it:
+
+```bash
+conda deactivate
+conda env remove -n ebsd
+conda env create -f environment-macos.yml
+```
+
+**Why not `pip install -r requirements.txt`:** it ends in a crash, typically
+about 30 seconds after start:
+
+```
+OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib already initialized.
+```
+
+On macOS the pip wheels of PyTorch, scikit-learn and faiss-cpu each bundle their
+own OpenMP runtime (`libomp.dylib`), and conda-forge's OpenBLAS and numba use a
+further one from the environment. Orienta uses PyTorch on the CPU and
+scikit-learn's KMeans for the EDS phase map, so two runtimes start in one
+process and the second one aborts it. In `environment-macos.yml` every package
+comes from conda-forge and links the same single runtime (`llvm-openmp`), and
+NumPy uses Apple's Accelerate. **Do not pip-install torch, scikit-learn,
+faiss-cpu or numba into this environment afterwards**; that brings a second
+copy back.
+
+To check an environment, list the runtimes that are real files (not links). The
+answer must be exactly one, `$CONDA_PREFIX/lib/libomp.dylib`; the
+`libiomp5.dylib` next to it is a link to the same file:
+
+```bash
+find "$CONDA_PREFIX" -type f \( -name "libomp*.dylib" -o -name "libiomp*.dylib" \)
+```
+
+Do **not** set `KMP_DUPLICATE_LIB_OK=TRUE`. It silences the check, but the two
+runtimes then run side by side, and the documented outcome is crashes or wrong
+results.
 
 ### 2b — Install the Python packages
 

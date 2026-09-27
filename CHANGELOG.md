@@ -9,7 +9,331 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
-## Unreleased
+## v0.4.6 — 2026-09-27
+
+You can install Orienta now — on Windows, on a Mac and on Linux. Add-ons have
+a place in the interface. Every result can say what to cite, EDS data can
+leave the program per particle, spherical indexing got more accurate on
+several phase types, and anyone who installed from source since March has
+been computing on the processor without being told.
+
+*Numbered 0.4.6 rather than 0.5.0 because the testers already run 0.4.5 and this
+repository was on 0.3.0; by the rule above this would be a 0.x.0.*
+
+**If you cloned, downloaded or browsed this repository between v0.2.6 and
+v0.3.0, read "The Materials Project API key was readable in this repository"
+below — that key must be treated as compromised.**
+
+**Read the next section before you trust an old result on silicon, MgCu₂ or
+Al₃Fe₂Si.**
+
+### Three crystal structures in the library were wrong, and so was everything
+built from them
+
+A structure read from a CIF was expanded with the wrong set of symmetry
+operations. For the 24 space groups that have two possible origins, the
+library Orienta uses publishes its operators for the first origin while
+structure databases publish coordinates for the second — so those structures
+came out with **twice the atoms they should have**. Silicon arrived as 16
+atoms in the unit cell instead of 8, and its density as 4.659 g/cm³ against a
+literature value of 2.329.
+
+That is not cosmetic. The atom basis sets the electron density for the Monte
+Carlo step and the crystal potential for the master pattern, so a master built
+from such a structure is wrong throughout, not slightly off.
+
+**Reading is fixed.** A CIF is now expanded on the correct orbit, `.xtal`
+files carry and honour their origin setting, the 3-D structure view and the
+master writer use it, and a file whose setting cannot be verified says so when
+it is read.
+
+**Three files in the library were not repaired by that fix**, because their
+error was written into them at conversion time rather than made when reading
+them: `Si.xtal`, `Al3Fe2Si_mp-1190708_symmetrized.xtal` and
+`sd_1816951.xtal` (MgCu₂). Everything computed from them carries it — their
+master patterns, their Monte-Carlo caches, and the Si dictionary. **If you
+indexed against any of those three phases, treat the result as unverified.**
+The other 32 structures in the library are in single-origin space groups and
+are unaffected.
+
+**All three have now been rebuilt.** The converter was fixed first, because
+rebuilding with it would have written a different wrong thing: it used to take
+the origin from an unrelated quantity, and the choice now comes from what a CIF
+says about its own atoms — its operators, the multiplicity of its sites, its
+formula — with a refusal instead of a guess when those contradict each other or
+say nothing. Then all three were regenerated from their CIFs, Monte-Carlo step
+and master pattern included: silicon 16 → **8 atoms**, density 4.658 →
+**2.329 g/cm³**; MgCu₂ Mg32Cu8 → **Mg8Cu16**, 6.145 → **5.787 g/cm³**; and
+β-AlFeSi from the silicon-bearing CIF it should have used. An audit across the
+whole library afterwards found **34 files and no remaining deviation**. The
+superseded files were moved aside rather than deleted, into
+`Database/_superseded-2026-09-26/`. The affected files are listed one by one in
+`tasks/orbit-multiplicity/affected-artefacts.md`.
+
+**So if you indexed silicon or MgCu₂ with Dictionary or Spherical indexing in an
+earlier version, index those maps again.** On silicon the new master is a
+different answer, not a nudge: at the silicon pixels of a real scan it renders
+at 0.714 where the old one managed 0.574 and aluminium 0.646 — so the old
+master lost to aluminium on pixels that are silicon. Which phase won on that
+particular scan moved only slightly (113 → 116 pixels), because the chemistry
+prior was already carrying the decision there; the pattern now agrees with it
+instead of contradicting it.
+
+This also corrects something we wrote on 14 September: master patterns **are**
+affected. The note then said they were not.
+
+### Add-ons
+
+- **Another group's analysis can now run inside Orienta.** An add-on is a
+  folder with a `orienta-addon.toml` next to its Python: it declares what it
+  computes, which settings it takes and what it should be cited as. Orienta
+  builds the settings form from that declaration, runs the analysis against an
+  indexing result you choose, and shows what came back — numbers with their
+  units, tables you can copy or save as CSV, and maps you can put straight onto
+  the Phase Maps page as a layer, with their own value scale.
+- **What it computed is written into the result, and so is its citation.** The
+  methods paragraph under **Phase Maps → Citations** gains the add-on's own
+  sentence with your settings in it, and its work joins the bibliography —
+  the same panel and the same exported `.h5` as Orienta's own steps. Run it
+  again with different settings and everything follows: the numbers, the layer
+  and the sentence all describe the run you are looking at, not the one before.
+- **Add-ons live in `~/.orienta/addons`** (on Windows,
+  `C:\Users\<you>\.orienta\addons`). Orienta creates that folder at startup and
+  names it on the Add-ons page when it is empty, so there is nothing to look
+  up. Drop a folder in, press **Rescan**, and it appears — with the path it was
+  found at.
+- **Nothing runs until you say so.** The first time you enable an add-on,
+  Orienta shows you who wrote it, which version, which DOI and where it sits on
+  disk, and states plainly that it will run in this process with your
+  permissions. It asks again if the add-on under that name has changed since
+  you allowed it. An add-on that fails three times is switched off, and the
+  list says whether that was you or Orienta.
+- **A worked example ships with the program**, in `examples/orienta-addon-bc-gmm`:
+  Orienta's own band-contrast mixture model, rebuilt as an add-on. The
+  documented way to write one is to copy it and change it; its README lists the
+  rules a manifest has to follow, and `CHANGELOG-ADDON-API.md` records what
+  this first version of the interface cannot do yet.
+
+### Installing Orienta
+
+- **There is a Windows installer.** One `.exe`, no Python, no git, no command
+  line. On first start it sets up a private Python for Orienta, all packages,
+  and — if the machine has a suitable NVIDIA card — the GPU versions of them.
+  (EMsoft and WSL stay a separate step inside the program, as before.)
+- **The first screen asks for your language** (English, German, Japanese,
+  Chinese), and the application then starts in it.
+- **You choose where Orienta puts its own files** — the private Python, the
+  program files and the crystal library, together 2.5 to 8 GB. That can be a
+  different drive from the one the shortcut goes on. Your measurement files stay
+  wherever you keep them; Orienta only reads them.
+- **A first install works even when GitHub cannot be reached:** the installer
+  carries a copy of the program inside itself, and it also accepts a package
+  file placed next to it. It still needs the internet for Python itself and for
+  the packages, so a completely offline machine is not covered yet.
+- **Updates come from GitHub.** Orienta replaces its own program files and
+  **never writes to or deletes your crystal library** — that is enforced in
+  the update code, against nine ways of spelling the path.
+- **A desktop shortcut is offered, not forced** — a checkbox on the last page.
+- **Uninstalling asks about your data, in two steps.** First: also remove the
+  downloaded Python and program files (2.5–8 GB)? That one is preselected
+  **Yes**. Only if you say yes does it ask the second: also delete your crystal
+  library? That one is preselected **No**. Files you put into the folder
+  yourself are left alone.
+- **Windows will warn you** that the publisher is unverified, because the
+  installer is not signed. The release page shows the two clicks that get past
+  it ("More info" → "Run anyway") and publishes the SHA-256 checksum of the
+  file, so you can check you got what we built.
+
+### Citing your results
+
+- **Every result can now say what to cite.** A "Citations for this result"
+  panel on the Phase Maps page gives you a BibTeX file, a ready methods
+  paragraph and a plain reference list — for the method you actually ran, not a
+  generic list.
+- **The citations travel with the file.** They are written into the exported
+  result and read back when it is imported, together with the steps that
+  changed the numbers. Orienta's own entry comes from its citation file, so it
+  stays correct across versions.
+
+### EDS
+
+- **Your EDS analysis can leave the program.** Per particle: equivalent
+  circular diameter, largest and smallest Feret diameter with its angle,
+  perimeter, circularity, solidity, whether the particle touches the edge, and
+  the composition twice — over all its pixels and over an eroded core, which
+  tells you how much the surrounding matrix diluted the reading.
+- **Settings you use again and again can be saved as presets**, and every
+  export carries the settings it was made with, checked by the server rather
+  than taken on trust.
+- **A plausibility report** compares the measured composition of each region
+  with the nominal composition of the phase it was matched to, and says plainly
+  when they disagree by more than a factor of two. It changes no assignment.
+
+### Phase collections
+
+Phases can now be filed into named collections — "Intermetallics in Al",
+"Cemented carbides" — with one level of sub-collections and a working set that
+cuts across them. Pick a collection next to the EDS colours at the top, and the
+Phase Tester, Indexing and the EDS phase map offer only its phases; "show all
+phases" is always one click away. Collections are plain JSON files in
+`Database/Collections/`, so they travel with your library and can be mailed to a
+colleague.
+
+Nothing is deleted and no file is touched: a collection only points at phases in
+your library, and "remove from collection" and "delete the file" are separate
+verbs.
+
+### Indexing
+
+- **Spherical indexing is now used directly for phases where Orienta used to
+  fall back to Hough.** Cubic m-3/23 phases (such as α-Al(Fe,Mn)Si) and
+  orthorhombic mmm phases (such as the S-phase Al₂CuMg) were re-indexed with
+  Hough first, a detour that came from a decoding error fixed in v0.3.0.
+  Measured against known orientations: 0.17° median for the m-3 α-phase and
+  0.26° for the S-phase, all within 2°. A SampleB run also loses about
+  24 seconds of re-indexing.
+  - **-43m phases keep the old detour** (for example Mg17Al12): there the
+    sphere alone is right only 58 % of the time, the rest is 90° off. The
+    "Orientation from Hough" note on those results is intended.
+  - **Orientations change slightly against v0.3.0** on the affected phases:
+    same phases everywhere, median change 0.0°, but 42 of 6712 α pixels and 33
+    of 595 S-phase pixels move by more than 3°.
+- **Master patterns that Orienta's own GPU simulation wrote carried a wrong
+  symmetry number for 15 space groups** — among them Pm-3m (221), P-43m (215),
+  P432 (207), P23 (195), P4/mmm (123) and P6/mmm (191), so B2 and many
+  intermetallics. The value is also used to decide which harmonics are stored,
+  so such a file is not merely mislabelled. Files in the shipped library and
+  anything simulated through EMsoft are unaffected. If you built such a master
+  in Orienta, build it again and re-index the maps that used it.
+- **"Index Pattern" on the Pattern Centre page no longer breaks indexing for
+  the rest of the session.** A safety cap on the Hough index could get stuck,
+  and every later attempt then answered with an error until the program was
+  restarted. It showed up most often right after a fresh installation.
+- **The Pattern Centre preview shows the phase you loaded.** With several
+  simulated phases in the library it used to take the first file it found, so
+  calibrating on nickel could show an aluminium simulation next to your pattern
+  and report a good pattern centre as a bad one.
+- **Importing crystal files takes several at once** in one dialog, on the
+  Crystal Database page.
+
+### If you installed from source
+
+- **`requirements.txt` handed every new user a processor-only PyTorch.** Since
+  March, a fresh install from source got a version without CUDA support, and
+  nothing said so, because the other GPU library kept working. Measured on this
+  machine: 0.71 instead of 11.2 trillion operations per second, a factor of 16.
+  The requirements now pin the GPU version, and the installer does this for you.
+- **Package versions are capped** (kikuchipy below 0.12, orix below 0.15,
+  pyebsdindex below 0.3.10). The newer versions were measured against real
+  data: orientations, dictionary indexing and phase assignment come out the
+  same, but on Oxford files the newer kikuchipy reports the camera binning
+  correctly for the first time, and Orienta's own detector geometry then counts
+  it twice and puts the detector eight times too far away. That is our error,
+  not theirs, and it will be corrected as a unit fix rather than days before a
+  release. Newer pyebsdindex also measured 1.4× slower on Hough indexing.
+
+### Larger files
+
+- **Large Oxford files can load slowly on environments with a newer
+  kikuchipy.** Orienta's workaround for a camera-setting bug no longer applied
+  there, and loading silently fell back to the slow path — for a 27 GB file
+  that meant ten minutes and 16 GB of memory instead of seconds. Fresh
+  installations of this version get the older kikuchipy and were never affected; if
+  you keep your own environment, this fix restores fast loading.
+
+### macOS and Linux
+
+- **There is a `.dmg` for Apple Silicon and an `.AppImage` for 64-bit Linux.**
+  Both bring their own Python and set themselves up on first start, exactly as
+  the Windows installer does. Your measurement files stay where they are.
+- **The first start is different on each, and neither is obvious.** On a Mac a
+  double-click only says the app cannot be opened and offers no way forward:
+  use right-click → **Open**, then **Open** again. Orienta is signed, but not
+  with a paid Apple certificate — there is no Apple developer account behind
+  this project. On Linux the AppImage needs `chmod +x` first; without it a
+  double-click does nothing at all, with no message.
+- **What is not on offer there:** EMsoft simulations, which Orienta reaches
+  through WSL, a Windows feature; and graphics-card acceleration, which needs
+  an NVIDIA card. Orienta Engine, the built-in simulator, runs on all three
+  systems and needs neither. The settings page says so instead of showing red
+  errors for things those machines cannot have.
+- **Both have now been started by a person.** On Arch Linux with an NVIDIA
+  card: the window came up, a phase test over 32 phases ran, and a simulation
+  completed. On a MacBook Pro (M5 Pro, macOS 26): setup in under a minute, a
+  file loaded in about 4 seconds, Hough over 441 patterns in about 2, and a
+  master pattern for aluminium computed in 228 seconds on the processor.
+
+### Four faults that only showed up on another machine
+
+Building for a second and third system found these. Each of them was in the
+Windows program too, and none of them was visible there.
+
+- **Orienta could eat its own memory until the system killed it.** A log
+  message that could not be delivered produced a warning, which was itself
+  logged, which produced another warning. On a machine with plenty of memory
+  this looked like "the application is getting slow" and ended with the
+  process disappearing. Measured on the Linux runner: 931 MB to 7.8 GB, then
+  gone, with 280 752 of 842 567 log lines being that one warning.
+- **A phase name taken from a file path could contain the whole path**,
+  including your user name, on a Mac or under Linux — and from there it could
+  reach an exported methods paragraph. On Windows the same code returned just
+  the name.
+- **Closing the application could leave the backend running on a Mac.** The
+  last-resort cleanup asked the system who owned the port, which macOS answers
+  only for an administrator, so it quietly gave up; the next start then
+  attached itself to the old process.
+- **The setup could advise a Mac user to update an NVIDIA driver**, because
+  the function deciding what to recommend asked which system it was running
+  on instead of which system it had been asked about.
+
+Underneath, from the preparation:
+
+- **The likely cause of the crash a Mac user reported is addressed.** On a Mac
+  several packages each brought their own parallel-computing library, and the
+  second one to start aborted Orienta about 30 seconds after launch ("OMP:
+  Error #15"). There is now one environment file that builds the whole stack
+  from a single source with one such library, plus a macOS section in
+  `INSTALL.md`. **We could not try it on a Mac** — we have none — so please
+  report back.
+- **Hough indexing on a Mac uses the same processor-based band detector as a
+  Windows installation**, instead of Apple's discontinued OpenCL.
+- **Updating inside the app uses conda on a Mac**, so the update cannot
+  reintroduce the second library, and says what to do when conda is missing.
+
+### Smaller things you may notice
+
+- The program's window frame was updated to a current version; two save buttons
+  on the Analysis page had lost their suggested folder and have it back.
+- An installed copy knows its own version and can update itself; before it read
+  "unknown" and refused.
+- A half-finished installation now opens the setup assistant instead of a blank
+  browser error page, and says "Orienta" during the 30 to 40 seconds a cold
+  start takes.
+- When something goes wrong at startup, the page shows where to get a working
+  version, and links open in your browser instead of stranding the app.
+
+### What the tester rounds changed
+
+- **"Check for updates" no longer tells an installed copy that it cannot
+  update itself.** It asks, names the new version, links it, and says that
+  your data folder, your settings and the installed environment stay where
+  they are. It takes effect from this version on: a copy of 0.4.5 or older
+  still shows the old sentence.
+- **The built-in simulator has one name.** It is called Orienta Engine
+  everywhere a person reads it, instead of a different phrase on each page.
+- **The interface speaks one language at a time.** The status bar, the layer
+  names, the EDS pre-check, the warnings and the loading screen follow the
+  language you chose, and the German text uses *Sie* throughout.
+- **Every "export PNG" button goes through the export dialog**, so a picture
+  saved from any page can carry a scale bar and be enlarged past the
+  measurement grid. Before, some of them wrote the raw measurement resolution
+  — a 21 × 21 pixel file, with no scale — which is unusable in a report.
+- **The window is no longer closed out from under a long job.** The watchdog
+  that shuts the backend down when the interface disappears now trusts a
+  declared window owner, instead of guessing from a connection count that a
+  half-closed browser tab kept above zero.
+- **The database browser stops flickering** while it polls, and a machine
+  without a graphics card sees processor labels rather than GPU ones.
 
 ### The Materials Project API key was readable in this repository
 
@@ -44,6 +368,14 @@ application, and it was shipped without attribution: `freezeColors.m` is
 another author's work, and the scripts call MTEX throughout. Both are now
 credited, and two comments that named people who are not authors of this
 project have been removed.
+
+### Licences and attribution
+
+- **NOTICE.md names micromamba**, which the macOS package downloads and runs,
+  and its licence text ships in `licenses/`.
+- The public repository was audited against the private tree; what it should
+  never have carried is out of it, and a guard keeps those files from being
+  ported again.
 
 ---
 

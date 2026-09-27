@@ -12,7 +12,7 @@ produce phase maps, grain/texture analyses, and publication figures.
 Built on the [kikuchipy](https://kikuchipy.org/), [orix](https://orix.readthedocs.io/)
 and [diffsims](https://diffsims.readthedocs.io/) scientific stack.
 
-> **Status: beta (v0.2.5).** Everything listed under *Features* is reachable in the
+> **Status: beta (v0.4.6).** Everything listed under *Features* is reachable in the
 > app, but some of it is newer than its test coverage, and a few pieces are less
 > complete than their name suggests. Read
 > [Known limitations](#known-limitations--to-be-done) before you rely on a result.
@@ -45,6 +45,18 @@ Scientific layer      kikuchipy, orix, diffsims, numpy/scipy, PyTorch (GPU)
   regardless (several GB); see [Known limitations](#known-limitations--to-be-done).
 
 ## Install
+
+**The short way: take a ready-made package** from the
+[Releases page](https://github.com/SeSam-MUL/Orienta/releases) — `Orienta Setup <version>.exe`
+for Windows, `Orienta-<version>-arm64.dmg` for an Apple-Silicon Mac,
+`Orienta-<version>.AppImage` for x86-64 Linux. Each brings its own Python and sets
+itself up on first start; nothing below is needed. Compare the `.sha256` beside the
+file before you install. Neither package is signed with a paid certificate, so
+Windows and macOS will both ask once whether you really mean it —
+[INSTALL.md](INSTALL.md) shows what those dialogs look like.
+
+**The long way — from source** — is what the rest of this section describes, and it
+is the only route on a machine where you want to change the code.
 
 > **New here?** Follow the full beginner walkthrough in **[INSTALL.md](INSTALL.md)** —
 > it covers prerequisites (with download links), the Python environment, building
