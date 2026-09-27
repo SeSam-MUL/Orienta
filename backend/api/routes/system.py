@@ -38,24 +38,35 @@ def gpu_status() -> dict:
     }
 
 
-def _repo_web_url() -> str | None:
-    """Browser URL of the project's git remote, or None.
+def _repo_web_url() -> str:
+    """Browser URL of the project, for the "Open a GitHub issue" button.
 
-    Read from the checkout rather than hardcoded, so a fork or a moved
-    repository does not send people to the wrong issue tracker.
+    The git remote WINS when there is one, so a fork or a moved repository
+    still sends people to its own issue tracker — that was the original reason
+    to read this from the checkout. What it lacked was a fallback, and the
+    fallback is the normal case: this answered ``None`` in **every** build.
+    The development tree has no remote (measured: ``git remote get-url origin``
+    → "No such remote 'origin'") and an installed copy has no git at all, so
+    nobody has ever seen the button.
+
+    The canonical URL comes from :func:`github_releases.repo_page_url`, which
+    already owns the repository's identity for the update check, rather than a
+    second hardcoded string. Never returns None: a missing remote is not a
+    reason to withhold the project's own address.
     """
-    from backend.api.services import updater
+    from backend.api.services import github_releases, updater
 
     url = updater._git_out("remote", "get-url", "origin")
-    if not url:
-        return None
-    url = url.strip()
-    if url.startswith("git@"):                      # git@host:owner/repo.git
-        host, _, path = url[4:].partition(":")
-        url = f"https://{host}/{path}"
-    if url.endswith(".git"):
-        url = url[:-4]
-    return url if url.startswith("http") else None
+    if url:
+        url = url.strip()
+        if url.startswith("git@"):                  # git@host:owner/repo.git
+            host, _, path = url[4:].partition(":")
+            url = f"https://{host}/{path}"
+        if url.endswith(".git"):
+            url = url[:-4]
+        if url.startswith("http"):
+            return url
+    return github_releases.repo_page_url()
 
 
 @router.get("/version", summary="App version identity (git commit based)")

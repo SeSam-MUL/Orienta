@@ -259,6 +259,8 @@
       "sourceCode": "Source code",
       "authoritative": "The English LICENSE file distributed with the source code is authoritative.",
       "versionLabel": "Version",
+      "versionLoading": "checking…",
+      "versionBackendUnreachable": "the backend is not answering yet — retrying",
       "versionUnknown": "unknown (no git information found)",
       "exportDiagnostics": "Export diagnostics report",
       "exportDiagnosticsBusy": "Exporting…",

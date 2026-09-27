@@ -15,7 +15,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors } from '../../theme/tokens';
-import { exportDiagnostics, getAppVersion } from '../../services/api';
+import { exportDiagnostics } from '../../services/api';
+import useAppVersion from '../../hooks/useAppVersion';
 import { getLastFingerprint } from '../../services/errorReporter';
 import { formatBreadcrumbs } from '../../services/breadcrumbs';
 import { downloadBlob } from './imageExport';
@@ -26,20 +27,26 @@ export default function ProblemReportDialog({ onClose, screenshot = null }) {
   const [description, setDescription] = useState('');
   const [includeShot, setIncludeShot] = useState(Boolean(screenshot));
   const [state, setState] = useState('idle'); // idle | busy | done | failed
-  const [versionInfo, setVersionInfo] = useState(null);
   const textareaRef = useRef(null);
   const fingerprint = getLastFingerprint();
+  // Kept asking until the backend answers: an empty catch here meant a report
+  // filed right after an update carried no version, and `canOpenIssue` below
+  // stayed false so the user could not open an issue either.
+  const { info: versionInfo } = useAppVersion();
 
+  // Focus ONCE, on open. It used to sit in the Escape effect below, which
+  // re-runs whenever the parent hands down a new onClose identity — and since
+  // useAppVersion can now answer late, a version arriving while the dialog is
+  // open would yank the caret back into the textarea from whatever the user
+  // had tabbed to.
   useEffect(() => {
     textareaRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
     document.addEventListener('keydown', onKey);
-    let alive = true;
-    getAppVersion()
-      .then((v) => { if (alive) setVersionInfo(v); })
-      .catch(() => {});
     return () => {
-      alive = false;
       document.removeEventListener('keydown', onKey);
     };
   }, [onClose]);

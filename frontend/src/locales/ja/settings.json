@@ -259,6 +259,8 @@
       "sourceCode": "ソースコード",
       "authoritative": "正文はソースコードに同梱の英語版 LICENSE ファイルです。",
       "versionLabel": "バージョン",
+      "versionLoading": "取得中…",
+      "versionBackendUnreachable": "バックエンドがまだ応答していません — 再試行中",
       "versionUnknown": "不明（Git 情報が見つかりません）",
       "exportDiagnostics": "診断レポートをエクスポート",
       "exportDiagnosticsBusy": "エクスポート中…",

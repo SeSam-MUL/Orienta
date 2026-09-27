@@ -71,6 +71,18 @@ describe('breadcrumbs', () => {
     expect(getBreadcrumbs()).toHaveLength(1);
   });
 
+  // useAppVersion keeps asking until the backend answers, so on a down backend
+  // this path IS a poll — measured 15 requests in 10 minutes from one mount,
+  // and the ring holds 60. Left in, the trail attached to a bug report filed
+  // right after an update would be nothing but this one line, sixty times,
+  // with the actual fault pushed out.
+  it('ignores the version retry, which is a poll whenever it matters', () => {
+    for (let i = 0; i < 70; i += 1) {
+      addHttpBreadcrumb({ url: '/api/system/version', status: undefined });
+    }
+    expect(getBreadcrumbs()).toHaveLength(0);
+  });
+
   it('formats with relative times, newest last', () => {
     const now = 10_000;
     addBreadcrumb('nav', 'first');

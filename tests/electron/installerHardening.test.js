@@ -536,7 +536,7 @@ describe('the runtime that came in the box', () => {
 
     // `scripts/build_release.py` is not part of the public repository, so the
     // two assertions about its staging step can only run in the development
-    // tree. Skipping beats deleting: there the guard still bites.
+    // tree. Skipping beats deleting: in that tree the guard still bites.
     const builderPath = path.resolve(import.meta.dirname, '..', '..', 'scripts', 'build_release.py');
     if (!fs.existsSync(builderPath)) return;
     const builder = fs.readFileSync(builderPath, 'utf8');

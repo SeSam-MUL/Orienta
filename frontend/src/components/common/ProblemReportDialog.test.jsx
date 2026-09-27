@@ -150,6 +150,33 @@ describe('ProblemReportDialog', () => {
     expect(getByText(/Nothing is sent automatically/)).toBeTruthy();
   });
 
+  // The About defect has a worse twin here. The version was fetched once on
+  // mount and a failure went into an EMPTY catch, so a report filed right
+  // after an update — the moment a bug report is most likely — carried no
+  // version, and `canOpenIssue`, gated on `versionInfo?.repo_url`, stayed
+  // false: the user could not open a GitHub issue at all. The shared hook
+  // keeps asking, so both recover on their own.
+  it('recovers the version after a failed fetch, so the issue button comes back', async () => {
+    vi.useFakeTimers();
+    try {
+      mockVersion
+        .mockRejectedValueOnce(new Error('backend not up yet'))
+        .mockResolvedValueOnce({
+          version: 'v0.4.6',
+          repo_url: 'https://github.com/SeSam-MUL/Orienta',
+        });
+      const { getByText } = render(<ProblemReportDialog onClose={() => {}} />);
+      expect(mockVersion).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockVersion).toHaveBeenCalledTimes(2);
+      fireEvent.click(getByText('Create report'));
+      await vi.waitFor(() => expect(getByText(/Report saved/)).toBeTruthy());
+      expect(getByText('Open a GitHub issue')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('closes on Escape and on Cancel', () => {
     const onClose = vi.fn();
     const { getByText } = render(<ProblemReportDialog onClose={onClose} />);

@@ -113,9 +113,17 @@ export async function getGpuStatus() {
   return r.data;
 }
 
-/** App version identity (git commit based): {app, version, release, branch, ...}. */
+/**
+ * App version identity (git commit based): {app, version, release, branch, ...}.
+ *
+ * Short timeout for the same reason as healthCheck above, and it matters more
+ * since useAppVersion retries: a backend hung with the socket open would park
+ * the caller for the instance's five minutes and the retry would never get its
+ * turn. A refused connection — the case this is really for, the first start
+ * after an update — rejects at once either way.
+ */
 export async function getAppVersion() {
-  const r = await api.get('/api/system/version');
+  const r = await api.get('/api/system/version', { timeout: 8000 });
   return r.data;
 }
 

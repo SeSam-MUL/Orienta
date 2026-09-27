@@ -259,6 +259,8 @@
     "sourceCode": "Quellcode",
     "authoritative": "Maßgeblich ist die englische LICENSE-Datei, die mit dem Quellcode verteilt wird.",
     "versionLabel": "Version",
+    "versionLoading": "wird ermittelt…",
+    "versionBackendUnreachable": "das Backend antwortet noch nicht — wird erneut versucht",
     "versionUnknown": "unbekannt (keine Git-Information gefunden)",
     "exportDiagnostics": "Diagnosebericht exportieren",
     "exportDiagnosticsBusy": "Exportiere…",

@@ -101,6 +101,22 @@ def releases_page_url() -> str:
     return f"{DEFAULT_WEB_ROOT}/{repo_slug()}/releases"
 
 
+def repo_page_url() -> str:
+    """The project's page in a BROWSER — the issue tracker's parent.
+
+    Here rather than in the route that needs it, because this module already
+    owns the repository's identity (`repo_slug`, honouring
+    ``ORIENTA_UPDATE_REPO``) and already builds one browser URL from it. A
+    second copy of the slug is how the update check and the issue link would
+    end up pointing at different repositories.
+
+    `tests/test_repo_url_fallback.py` pins this against `CITATION.cff`'s
+    `repository-code`, which is the other place the project states its own
+    address, so the two cannot drift.
+    """
+    return f"{DEFAULT_WEB_ROOT}/{repo_slug()}"
+
+
 def runtime_asset_names(tag: str) -> tuple[str, str]:
     """(package, checksum) for a tag. The single Python source of these names.
 

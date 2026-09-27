@@ -5,19 +5,37 @@
  * commit based) and the diagnostics-bundle export for bug reports.
  */
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, spacing, GroupBox, Label } from '../../theme/components';
-import { getAppVersion } from '../../services/api';
 import DiagnosticsExportButton from '../common/DiagnosticsExportButton';
 import UpdateDialog from '../common/UpdateDialog';
 import useUpdateCheck, { isCheckEnabled, setCheckEnabled } from '../../hooks/useUpdateCheck';
+import useAppVersion from '../../hooks/useAppVersion';
 
 const LICENSE_URL = 'https://www.gnu.org/licenses/gpl-3.0.html';
 const REPO_URL = 'https://github.com/SeSam-MUL/Orienta';
 
-function versionText(info, t) {
-  if (!info || !info.version || info.version === 'unknown') {
+/**
+ * `null` means "the backend has not answered yet", which is NOT the same as
+ * "the backend has no version". Sebastian hit the difference after installing
+ * build 3: the first start following a runtime update is exactly the moment
+ * the backend is not up yet, the single fetch on mount failed, and the line
+ * then read "unknown (no git information found)" forever — while
+ * `GET /api/system/version` was answering `v0.4.6` the whole time.
+ */
+/** True only when the backend answered with a version it actually knows. */
+function hasVersion(info) {
+  return Boolean(info && info.version && info.version !== 'unknown');
+}
+
+function versionText(info, unreachable, t) {
+  if (info === null) {
+    return unreachable
+      ? t('settings:about.versionBackendUnreachable')
+      : t('settings:about.versionLoading');
+  }
+  if (!info.version || info.version === 'unknown') {
     return t('settings:about.versionUnknown');
   }
   return info.branch ? `${info.version} · ${info.branch}` : info.version;
@@ -25,7 +43,7 @@ function versionText(info, t) {
 
 export default function AboutSection() {
   const { t } = useTranslation('settings');
-  const [versionInfo, setVersionInfo] = useState(null);
+  const { info: versionInfo, unreachable } = useAppVersion();
   const [autoCheck, setAutoCheck] = useState(isCheckEnabled);
   // idle | busy | uptodate | <reason>. A manual check must SAY why it found
   // nothing — on start-up we stay silent, but here the user asked.
@@ -62,13 +80,6 @@ export default function AboutSection() {
     ? ''
     : (CHECK_MESSAGES[checkState] || t('settings:update.checkIncomplete', { reason: checkState }));
 
-  useEffect(() => {
-    let mounted = true;
-    getAppVersion()
-      .then((info) => { if (mounted) setVersionInfo(info); })
-      .catch(() => { if (mounted) setVersionInfo(null); });
-    return () => { mounted = false; };
-  }, []);
 
   return (
     <GroupBox title={t('settings:about.title')}>
@@ -81,7 +92,12 @@ export default function AboutSection() {
       }}>
         <div>
           {t('settings:about.versionLabel')}{': '}
-          <span style={{ fontFamily: 'monospace' }}>{versionText(versionInfo, t)}</span>
+          {/* Monospace is for the identity itself; the waiting and error lines
+              are prose, and read badly in it — worst in ja/zh, where the
+              monospace fallback is uneven. */}
+          <span style={hasVersion(versionInfo) ? { fontFamily: 'monospace' } : undefined}>
+            {versionText(versionInfo, unreachable, t)}
+          </span>
         </div>
         <div>{t('settings:about.copyright')}</div>
         <div>{t('settings:about.licenseLine')}</div>

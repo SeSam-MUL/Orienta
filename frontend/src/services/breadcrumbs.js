@@ -20,6 +20,12 @@ const MAX_CRUMBS = 60;
 const IGNORED_PATH_PARTS = [
   '/api/health',
   '/api/system/frontend-error',
+  // useAppVersion retries until the backend answers, so a backend that stays
+  // down turns this into a poll: measured 15 requests in 10 minutes from one
+  // mount, and 60 of them fill the ring completely. That would erase exactly
+  // the history the report is filed to explain — and the report carries the
+  // version fetched by that same hook, so the two arrive together.
+  '/api/system/version',
   '/progress',
   '/status',
 ];

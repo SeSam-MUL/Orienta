@@ -73,12 +73,85 @@ describe('AboutSection', () => {
     });
   });
 
-  it('falls back to "unknown" when the version fetch fails', async () => {
-    mockGetAppVersion.mockRejectedValueOnce(new Error('backend down'));
+  // This test used to make the FETCH fail and expect "unknown". That encoded
+  // the defect Sebastian hit after installing build 3: the first start after a
+  // runtime update is exactly when the backend is not up yet, the one fetch on
+  // mount failed, and the line read "unknown (no git information found)"
+  // forever while the endpoint was answering v0.4.6 the whole time. "Unknown"
+  // is now reserved for what it says: the backend answered, and it does not
+  // know its own version.
+  it('says "unknown" when the backend answers and really does not know', async () => {
+    mockGetAppVersion.mockResolvedValueOnce({ app: 'Orienta', version: 'unknown' });
     const { getByText } = render(<AboutSection />);
     await waitFor(() => {
       expect(getByText(/unknown \(no git information found\)/)).toBeTruthy();
     });
+  });
+
+  it('does not say "unknown" while the backend has not answered yet', async () => {
+    let release;
+    mockGetAppVersion.mockImplementationOnce(
+      () => new Promise((_, reject) => { release = reject; }),
+    );
+    const { getByText, queryByText } = render(<AboutSection />);
+    expect(getByText(/checking…/)).toBeTruthy();
+    expect(queryByText(/unknown \(no git information found\)/)).toBeNull();
+    release(new Error('backend down'));
+  });
+
+  // "Could not ask" and "asked, no git information" are different facts and
+  // must read differently. Sebastian saw the second sentence while the first
+  // was true, so the line accused git of something the backend had already
+  // answered. This also keeps the string itself honest: without a test the
+  // branch renders a bare i18n key and nobody notices.
+  it('says the backend is not answering, not that git is missing', async () => {
+    mockGetAppVersion.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+    const { getByText, queryByText } = render(<AboutSection />);
+    await waitFor(() => {
+      expect(getByText(/the backend is not answering yet/)).toBeTruthy();
+    });
+    expect(queryByText(/no git information found/)).toBeNull();
+  });
+
+  // The defect itself, at the wire: a failed fetch must be retried, and the
+  // line must catch up on its own once the backend comes up. Without the
+  // retry the second call never happens and the text stays on "checking…".
+  it('retries a failed fetch and shows the version once the backend is up', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetAppVersion
+        .mockRejectedValueOnce(new Error('backend down'))
+        .mockResolvedValueOnce({ app: 'Orienta', version: 'v0.4.6', source: 'version-file' });
+      const { getByText } = render(<AboutSection />);
+      expect(mockGetAppVersion).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockGetAppVersion).toHaveBeenCalledTimes(2);
+      // Drain the resolved promise on the fake clock. `vi.waitFor` here would
+      // spend its own 1000 ms budget racing the hook's 1000 ms retry — a
+      // review measured 9-14 ms of margin, which is a flake on a slower box.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getByText(/v0\.4\.6/)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off instead of hammering a backend that stays down', async () => {
+    vi.useFakeTimers();
+    try {
+      mockGetAppVersion.mockRejectedValue(new Error('backend down'));
+      render(<AboutSection />);
+      expect(mockGetAppVersion).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1000);   // 1 s
+      expect(mockGetAppVersion).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1000);   // next wait is 2 s, not 1 s
+      expect(mockGetAppVersion).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(mockGetAppVersion).toHaveBeenCalledTimes(3);
+    } finally {
+      mockGetAppVersion.mockReset();
+      vi.useRealTimers();
+    }
   });
 
   it('offers the problem report and opens its dialog', async () => {
