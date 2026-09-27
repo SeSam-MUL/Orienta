@@ -827,7 +827,7 @@ def thumbnail_pair(result, row: int, col: int, size: int = 64) -> dict:
     if pat_h_int != pat_w_int:
         raise ValueError(
             f"thumbnail_pair currently requires square detectors "
-            f"(got {pat_h_int}x{pat_w_int}). Non-square support is planned for Phase B."
+            f"(got {pat_h_int}x{pat_w_int}). Non-square detectors are not supported yet."
         )
     scale = size / pat_h_int
     xpc_t = float(xpc) * scale

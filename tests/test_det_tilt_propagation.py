@@ -11,7 +11,7 @@ its detector dict with ``'tilt': 10.0`` as the default before overwriting it
 from the detector, and Oxford systems commonly ship a non-zero elevation.
 
 How much that costs follows from how sharp the render-NCC peak is. Measured on
-the 7050 dataset (CLAUDE.md, 2026-06-30): 0.69 at the correct orientation,
+the 7050 dataset (2026-06-30): 0.69 at the correct orientation,
 0.56 at 1 deg off, 0.32 at 2 deg, 0.06 at 3 deg. A 10 deg error in the
 elevation therefore puts the simulated pattern off the peak entirely, which
 drags the diagnostic maps toward "everything is anomalous" and starves the

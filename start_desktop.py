@@ -37,6 +37,37 @@ BACKEND_PORT = int(os.environ.get("KIKUCHIPY_BACKEND_PORT", "8000"))
 IS_WINDOWS = sys.platform == "win32"
 
 
+def _port_owner_via_lsof(port: int, run=None):
+    """(pid, create_time) from lsof, for platforms that refuse psutil the scan.
+
+    Only a fallback: where `psutil.net_connections` works it is used, because
+    it needs no subprocess and no parsing. macOS is the platform that refuses
+    it without root.
+
+    `-t` prints bare pids, `-sTCP:LISTEN` keeps it to listeners, `-nP` skips
+    name and port lookups that can hang on a machine with no DNS.
+    """
+    runner = run or subprocess.run
+    try:
+        completed = runner(
+            ["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        import psutil
+    except ImportError:
+        return None
+    for line in (completed.stdout or "").split():
+        try:
+            pid = int(line)
+            return (pid, psutil.Process(pid).create_time())
+        except (ValueError, psutil.Error):
+            continue
+    return None
+
+
 def _port_owner(port: int):
     """(pid, create_time) of the process listening on `port`, or None.
 
@@ -51,6 +82,20 @@ def _port_owner(port: int):
     try:
         conns = psutil.net_connections(kind="tcp")
     except (psutil.AccessDenied, RuntimeError, OSError):
+        # macOS refuses this to an ordinary user: psutil.net_connections needs
+        # root there, raises AccessDenied, and this returned None -- so
+        # `_kill_backend_if_ours` could never identify anything and the
+        # launcher's last-resort cleanup was dead on every Mac. Measured on
+        # the runner (36000286001): four tests in
+        # tests/test_start_desktop_cleanup.py fail with "None is not None" on
+        # macOS and all seven pass on Linux.
+        #
+        # lsof ships with macOS and, without root, reports the caller's OWN
+        # processes -- which is exactly and only what this needs: the backend
+        # we started runs as the same user.
+        owner = _port_owner_via_lsof(port)
+        if owner is not None:
+            return owner
         return None
     for conn in conns:
         # Per connection, not per scan: one socket we may not inspect must not

@@ -10,6 +10,7 @@ Wraps IndexingController for:
 
 import asyncio
 import logging
+import numbers
 import threading
 import uuid
 from pathlib import Path
@@ -19,6 +20,7 @@ import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
+from display_names import display_stem as _stem
 from backend.api.services.image_utils import array_to_base64_png, array_to_base64_raw, colormap_array_to_base64
 from backend.api.services.calibration_store import calibration_store
 from backend.api.services import state_version
@@ -774,8 +776,12 @@ def _smart_phase_name_from_path(path: Path) -> str:
         Names with genuine parentheses like
         "alpha-(AlFeSi) (Fe23Al81Si15) [cI128] {20kV}" keep "alpha-(AlFeSi)".
       - Otherwise use the stem as-is.
+
+    The stem is taken separator-agnostically (``_stem``): callers hand this
+    paths out of the request and out of stored result files, and on a POSIX
+    backend a Windows path would put the whole thing into the phase name.
     """
-    stem = path.stem
+    stem = _stem(path)
     for sep in ("_master_", "_dict_"):
         if sep in stem:
             return stem.split(sep, 1)[0]
@@ -1241,6 +1247,78 @@ def _multi_phase_failure_error(
     return "\n".join(lines)
 
 
+def _describe_skipped_phases(skipped, phase_configs) -> str:
+    """The sentence a routed run owes the user when it lost a phase.
+
+    ``run_per_phase_indexing`` (the EDS phase-map routing path) is fail-soft by
+    design: it keeps the phases that worked and marks the dead phase's pixels
+    ``-1`` (unclassified), so the map is PARTIAL and not wrong — nothing is
+    handed to a neighbouring phase. That policy is deliberate and unchanged
+    here. What was missing was saying it.
+
+    It recorded ``n_phases_skipped`` and ``skipped`` in the result metadata and
+    **nothing read them**: zero readers in ``frontend/src``, two in
+    ``tests/test_per_phase_indexing.py``. The only trace the user could reach was
+    a ``logger.warning`` inside the controller, so a routed run that lost a phase
+    looked exactly like a run whose pixels merely failed to index. The sibling
+    path answers the same shape out loud (``_multi_phase_failure_error``, and the
+    EDS-prior knob a few hundred lines down: "A knob that does nothing is worse
+    than no knob. Say so.").
+
+    Returns ``""`` when nothing was skipped, so the caller's ``if`` reads as
+    "was there anything to report".
+
+    The phase INDEX is what the controller records, and it means nothing to the
+    person reading a log — ``phase_configs`` is the list those indices count in,
+    so the names come from there. An index that does not land in that list still
+    produces a line (``phase 7``) rather than vanishing: a report that suppresses
+    itself when its own bookkeeping disagrees is the failure this function
+    exists to prevent.
+
+    ``numbers.Integral`` and not ``bool``, deliberately: ``isinstance(True, int)``
+    is True in Python, so a ``bool`` index would confidently name phase 0 or 1 —
+    a WRONG name, which is worse than a missing one — and a ``numpy`` integer
+    (what any round-trip of this metadata through h5 or JSON hands back) would
+    fail a bare ``int`` check and degrade silently to the useless ``phase 1``.
+
+    This function RAISES on a malformed row, and that is the intended split: a
+    row that is not a dict means the producer and this reader disagree about the
+    shape, which is a contract violation and must be loud, not papered over with
+    a vaguer sentence. The call site carries the `try` that keeps a finished
+    indexing run from being lost to it — see there for why that matters.
+
+    Assumption, true of the only caller: every row is a FAILURE. The controller's
+    ``skipped`` also carries ``"empty mask"`` rows, for which "failed" and "pixels
+    left unclassified" would both be false — but the route filters empty masks out
+    before it builds ``ordered_masks``, so such a row cannot reach here today. A
+    second caller would need the cause tagged at the producer; it is not guessed
+    from the reason string here.
+    """
+    rows = list(skipped or [])
+    if not rows:
+        return ""
+    configs = list(phase_configs or [])
+    named = []
+    for row in rows:
+        idx = (row or {}).get("phase_index")
+        name = None
+        if (isinstance(idx, numbers.Integral) and not isinstance(idx, bool)
+                and 0 <= idx < len(configs)):
+            name = getattr(configs[idx], "name", None)
+        # One log entry per run, and a reason can be a whole traceback: the
+        # EMSphInx path appends a whole `traceback.format_exc()` to its message.
+        # The full text is in `logs/orienta.log` and the diagnostics zip either
+        # way; this line is for reading.
+        reason = str((row or {}).get("reason") or "unknown")
+        if len(reason) > 200:
+            reason = reason[:200] + "… (full text in logs/orienta.log)"
+        named.append(f"{name or f'phase {idx}'} ({reason})")
+    return (
+        f"WARNING: {len(rows)} of {len(configs)} phases failed and were skipped "
+        f"— their pixels are left UNCLASSIFIED in this map: " + "; ".join(named)
+    )
+
+
 #: Every knob :class:`IndexingParams` offers that ``IndexingConfig`` takes
 #: under the same name. Read off the source object rather than passed
 #: individually so a field added to one model reaches the indexer without a
@@ -1362,9 +1440,9 @@ def _build_phase_configs(req):
     for _i, p in enumerate(paths):
         try:
             meta = get_phase_metadata(Path(p), cif_library_dir=cif_dir)
-            name = meta.formula or Path(p).stem
+            name = meta.formula or _stem(p)
         except Exception:
-            name = Path(p).stem
+            name = _stem(p)
 
         pc = PhaseConfig(
             name=name,
@@ -1512,7 +1590,7 @@ def _eds_strengths_by_phase_name(req) -> dict:
     names = _derived_phase_names(paths)
     out: dict = {}
     for i, p in enumerate(paths):
-        name = str(names[i]) if i < len(names) and names[i] else Path(p).stem
+        name = str(names[i]) if i < len(names) and names[i] else _stem(p)
         # Two phase files can derive the same name (same formula, different
         # structure model). Suffix rather than let one silently overwrite the
         # other's strength.
@@ -1535,10 +1613,10 @@ def _phase_point_group_and_name(xmap, pid: int, path: str) -> tuple:
         pg = getattr(ph, "point_group", None)
         pg_name = getattr(pg, "name", None) if pg is not None else None
         if pg_name:
-            return str(pg_name), str(getattr(ph, "name", "") or _P(path).stem)
+            return str(pg_name), str(getattr(ph, "name", "") or _stem(path))
     except Exception:
         pass
-    name = _P(path).stem
+    name = _stem(path)
     suffix = _P(path).suffix.lower()
     try:
         if suffix == ".sht":
@@ -3488,8 +3566,8 @@ async def start_indexing(req: IndexingStartRequest):
                         from orix.crystal_map import Phase, PhaseList
                         sanitized = sanitize_cif(cif_path)
                         phase = Phase.from_cif(sanitized)
-                        if phase.name != Path(cif_path).stem:
-                            phase.name = Path(cif_path).stem
+                        if phase.name != _stem(cif_path):
+                            phase.name = _stem(cif_path)
                         pc.phase_list = PhaseList(phases=[phase])
                     except Exception as exc:
                         logger.warning(
@@ -3554,6 +3632,41 @@ async def start_indexing(req: IndexingStartRequest):
                 if result.metadata is None:
                     result.metadata = {}
                 result.metadata["selection_mode"] = "phase_map_routing"
+
+                # A phase that died must SAY so.
+                #
+                # `run_per_phase_indexing` is fail-soft on purpose: it keeps the
+                # phases that worked and marks the dead phase's pixels -1
+                # (unclassified), so the map is PARTIAL, not wrong — nothing is
+                # handed to a neighbouring phase. That policy stays. What was
+                # missing is the sentence.
+                #
+                # It wrote `n_phases_skipped` and `skipped` into the metadata and
+                # nothing read them: 0 readers in `frontend/src`, only two in
+                # `tests/test_per_phase_indexing.py`. The single trace was a
+                # `logger.warning` in the controller, which the user never sees.
+                # So a routed run that lost a phase looked like a run whose
+                # pixels simply did not index — the same class of quiet as the
+                # EDS-prior knob a few lines below, and the reason the main
+                # multi-phase route was made fail-loud instead (48315d39).
+                # Never raises. `_store_result` is ~570 lines below and the
+                # outer handler turns any exception here into status="failed"
+                # with the result discarded — so a cosmetic log line could throw
+                # away a finished run, on the spherical paths potentially hours
+                # of it. The shape is not hypothetical: the controller's own
+                # `skipped` is `List[Tuple[int, str]]` internally and ONE line
+                # converts it to dicts, so a change there would land as a tuple
+                # in `.get`. Same rule, same wording as `_apply_particle_rescue`.
+                try:
+                    _skip_msg = _describe_skipped_phases(
+                        (result.metadata or {}).get("skipped"), ordered_configs)
+                    if _skip_msg:
+                        _progress(_skip_msg, 0.96)
+                except Exception:  # noqa: BLE001 — a report must not lose a run
+                    logger.warning(
+                        "could not describe the skipped phases for this routed "
+                        "run; the result and its metadata are unaffected",
+                        exc_info=True)
 
             # ============================================================
             # MULTI-PHASE PATH: >1 file for Dictionary or Spherical
@@ -3982,7 +4095,7 @@ async def start_indexing(req: IndexingStartRequest):
                         _progress(f"Loading phase from {cif_path}...")
                         phase = Phase.from_cif(sanitize_cif(cif_path))
                         # Restore original name if sanitize_cif created a temp file
-                        original_stem = P(cif_path).stem
+                        original_stem = _stem(cif_path)
                         if phase.name != original_stem:
                             phase.name = original_stem
                         phases.append(phase)
@@ -6087,7 +6200,7 @@ def _hough_indexer_for(cif_path, det_params, n_bands: int = 12):
 
     phase = Phase.from_cif(sanitize_cif(str(cif_path)))
     try:
-        phase.name = p.stem
+        phase.name = _stem(p)
     except Exception:
         pass
     pl = PhaseList(phase)
@@ -6137,7 +6250,7 @@ def _describe_hough_failure(exc, cif_path) -> str:
     is the Radon step's GPU context and not the phase.
     """
     text = str(exc)
-    name = Path(cif_path).stem
+    name = _stem(cif_path)
     if "OUT_OF_HOST_MEMORY" not in text and not isinstance(exc, MemoryError):
         return f"Hough failed for {name}: {text}"
     sym = None
@@ -6908,7 +7021,7 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
             from orix.crystal_map import Phase, PhaseList
             ph = Phase.from_cif(sanitize_cif(str(cif)))
             try:
-                ph.name = Path(str(cif)).stem
+                ph.name = _stem(cif)
             except Exception:
                 pass
             ids, objs = [], []
@@ -7205,9 +7318,9 @@ def spherical_orientation_for_pattern(
 def _hough_euler_for_phase(exp_pattern, cif_path, det_params):
     """Hough orientation (radians, Bunge ZXZ) for ONE pattern + ONE phase's CIF.
 
-    The SHT-spherical (Tier1) correlation lands on a high-symmetry pole for
-    low-symmetry point groups (m-3, mmm — the intermetallic phases: z_rot=2),
-    so for those phases we take the orientation from Hough indexing instead,
+    Used for the phases `pseudosym.spherical_unreliable` names -- since
+    2026-09-22 only -43m (m-3 / mmm were here until the decode fix made the
+    spherical answer right for them); for those we take the orientation from Hough indexing instead,
     which is reliable on this app's data (root-caused 2026-06-27). The SHT
     forward render at THIS orientation then provides the phase-discrimination
     NCC. Returns a (3,) ndarray in radians, or None on any failure.
@@ -7220,7 +7333,7 @@ def _hough_euler_for_phase(exp_pattern, cif_path, det_params):
         from kikuchipy.signals import EBSD
         phase = Phase.from_cif(sanitize_cif(str(cif_path)))
         try:
-            phase.name = Path(cif_path).stem
+            phase.name = _stem(cif_path)
         except Exception:
             pass
         pl = PhaseList(phase)
@@ -7495,7 +7608,7 @@ def _compute_phase_compare_results(
         eu = eulers_i[0].detach().cpu().numpy().astype(float)  # (3,) radians
         ncc = float(scores_i.reshape(-1)[0].detach().cpu())
 
-        # Low-symmetry intermetallics (m-3 / mmm, z_rot=2): the SHT-spherical
+        # History (pre-2026-09-22; now only -43m, see below): low-symmetry intermetallics (m-3 / mmm, z_rot=2): the SHT-spherical
         # correlation lands on a high-symmetry pole (root-caused 2026-06-27 —
         # the CC volume is flat for these point groups). The orientation from
         # Hough is reliable for them, so override eu with the Hough solution and
@@ -7503,15 +7616,22 @@ def _compute_phase_compare_results(
         # key) is then meaningful. High-symmetry phases keep the spherical
         # orientation (it works for z_rot=4 / 2/m). Fail-soft: any Hough error
         # keeps the spherical eu.
+        # Since 2026-09-22 the same rule the map pipeline uses decides
+        # (pseudosym.spherical_unreliable): after the decode fix only -43m still
+        # needs Hough; m-3 / mmm keep the spherical answer. Asking `z_rot == 2`
+        # here on its own would badge a pixel "Hough" on a map that is the
+        # sphere's.
         orientation_source = "spherical"
+        _master = getattr(indexer, "master", None)
         try:
-            _zrot = int(getattr(getattr(indexer, "master", None), "z_rot", 4) or 4)
+            _zrot = int(getattr(_master, "z_rot", 4) or 4)
         except Exception:
             _zrot = 4
+        from backend.spherical_gpu.pseudosym import spherical_unreliable as _sph_unrel
         _cif_p = None
         if cif_paths_by_phase:
             _cif_p = cif_paths_by_phase.get(pid_raw, cif_paths_by_phase.get(pid))
-        if _zrot == 2 and _cif_p:
+        if _sph_unrel(_zrot, getattr(_master, "point_group", None)) and _cif_p:
             eu_h = _hough_euler_for_phase(pat, _cif_p, det_params)
             if eu_h is not None:
                 eu = eu_h
@@ -8965,7 +9085,7 @@ async def import_h5_result(req: ImportH5Request):
             signal = _get_active_signal()
             if signal is not None:
                 calibration_store.clear()
-                calibration_store.register(p.stem, signal)
+                calibration_store.register(_stem(p), signal)
         except Exception as e:
             logger.warning(
                 "import-h5: calibration_store register failed (%s) — detector PC "
@@ -9089,7 +9209,9 @@ async def list_methods():
             {
                 "id": "spherical",
                 "name": "Spherical Indexing (EMSphinx)",
-                "requires": "SHT file + WSL",
+                # WSL is how EMsoft is installed on Windows, not what the
+                # method needs: on Linux it is native, on macOS unavailable.
+                "requires": "SHT file + EMsoft",
                 "speed": "Fast",
             },
         ]
@@ -9115,7 +9237,7 @@ async def phase_check_phases(result_id: str | None = None):
     xmap = ctx["xmap"]
     out = []
     for pid, cif in sorted(ctx["cifs"].items()):
-        stem = Path(cif).stem
+        stem = _stem(cif)
         out.append({
             "phase_id": int(pid),
             "name": _phase_name_of(xmap, int(pid)),
@@ -9182,7 +9304,7 @@ async def hough_reflector_cost(cif_path: str, n_bands: int = 12):
         )
 
         phase = Phase.from_cif(sanitize_cif(str(path)))
-        phase.name = path.stem
+        phase.name = _stem(path)
         pl = PhaseList(phase)
         refl = prepare_reflectors(pl)
         n_full = len(refl.hkl) if not isinstance(refl, list) else len(refl[0].hkl)
@@ -10541,7 +10663,7 @@ async def start_batch_indexing(req: BatchRequest):
         _log(f"Starting batch job {job_id}: {len(req.datasets)} datasets")
 
         for i, ds_config in enumerate(req.datasets):
-            dataset_name = Path(ds_config.file_path).stem
+            dataset_name = _stem(ds_config.file_path)
             _batch_state["current_dataset"] = dataset_name
             _batch_state["completed"] = i
             _log(f"[{i+1}/{len(req.datasets)}] Loading {dataset_name}...")
@@ -10666,7 +10788,7 @@ async def start_batch_indexing(req: BatchRequest):
                     phases = []
                     for cif in ds_config.cif_paths:
                         p = Phase.from_cif(sanitize_cif(cif))
-                        p.name = Path(cif).stem
+                        p.name = _stem(cif)
                         phases.append(p)
                     phase_list = PhaseList(phases)
 

@@ -1,3 +1,7 @@
+% b2wcontrast.m - MATLAB/MTEX reference scripts of Orienta (see README.md in this folder)
+% Copyright (C) 2026 Dr. Irmgard Weissensteiner and Montanuniversitaet Leoben (ASCII spelling; see LICENSE)
+% SPDX-License-Identifier: GPL-2.0-or-later
+% This header was added for publication; the code below is as received.
 
 function b2wcontrast = b2wcontrast(varargin)
 % Returns my custom colormap

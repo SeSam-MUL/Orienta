@@ -30,7 +30,13 @@
       "notFound": "Nicht gefunden",
       "available": "Verfügbar",
       "notAvailable": "Nicht verfügbar",
-      "modeRecommended": "{{mode}} empfohlen"
+      "modeRecommended": "{{mode}} empfohlen",
+      "notSetUp": "Nicht eingerichtet"
+    },
+    "warnings": {
+      "gpuBlocksizeReduced": "Grafikkarte hat {{gb}} GB — Blockgröße {{blocksize}} für das GPU-Masterpattern (von 32 reduziert, damit es in den Speicher passt).",
+      "gpuBlocksizeMinimal": "Grafikkarte hat {{gb}} GB — kleinste Blockgröße {{blocksize}} für das GPU-Masterpattern. Bei komplexen Kristallen (mehr als 20 Atome) kann der Speicher trotzdem nicht reichen.",
+      "emsoftNotOffered": "EMsoft ist auf diesem Rechner nicht eingerichtet. Es ist optional — die Orienta Engine braucht kein EMsoft."
     }
   },
   "manualPaths": {
@@ -55,6 +61,8 @@
     "toggleTooltip": "Gemeinsamen Netzwerk-Datenbank-Modus (Server) aktivieren oder deaktivieren.",
     "databaseRootLabel": "Datenbank-Stammverzeichnis",
     "databaseRootPlaceholder": "Z:\\SharedDrive\\EBSD_Database",
+    "databaseRootPlaceholderMac": "/Volumes/Share/EBSD_Database",
+    "databaseRootPlaceholderLinux": "/mnt/share/EBSD_Database",
     "databaseRootTooltip": "Pfad zum gemeinsamen EBSD-Datenbank-Stammverzeichnis auf dem Netzlaufwerk.",
     "discovery": {
       "sht": "SHT-Datenbank",
@@ -184,7 +192,7 @@
       "userConfigured": "Benutzer: {{name}}",
       "noUser": "Kein Benutzer",
       "usernameLabel": "Benutzername",
-      "usernamePlaceholder": "dein WSL-Benutzername",
+      "usernamePlaceholder": "Ihr WSL-Benutzername",
       "usernameTooltip": "Namen für das neue WSL-Benutzerkonto (nicht root) eingeben.",
       "passwordLabel": "Passwort",
       "passwordPlaceholder": "Passwort",
@@ -206,7 +214,7 @@
       "newPasswordPlaceholder": "Neues Passwort",
       "resetButton": "Passwort zurücksetzen",
       "resetButtonTooltip": "Passwort des bestehenden WSL-Benutzers auf den eingegebenen Wert zurücksetzen.",
-      "resetting": "Setze zurück...",
+      "resetting": "Wird zurückgesetzt …",
       "passwordReset": "Passwort erfolgreich zurückgesetzt.",
       "resetFailed": "Passwort-Zurücksetzung fehlgeschlagen."
     },
@@ -230,34 +238,40 @@
     "direct": {
       "title": "Direkte Installation",
       "noWslNeeded": "Kein WSL nötig",
-      "infoMacos": "Unter macOS wird EMsoft direkt ohne WSL installiert. Klicke unten auf \"Run Install\", um die Installation zu starten.",
-      "infoLinux": "Unter Linux wird EMsoft direkt ohne WSL installiert. Klicke unten auf \"Run Install\", um die Installation zu starten.",
+      "infoMacos": "Unter macOS wird EMsoft direkt ohne WSL installiert. Klicken Sie unten auf \"Run Install\", um die Installation zu starten.",
+      "infoLinux": "Unter Linux wird EMsoft direkt ohne WSL installiert. Klicken Sie unten auf \"Run Install\", um die Installation zu starten.",
       "alreadyInstalled": "EMsoft-Binärdateien sind bereits installiert und im PATH verfügbar."
+    },
+    "notOffered": {
+      "title": "EMsoft (optional)",
+      "status": "Nicht eingerichtet",
+      "infoMacos": "Die Orienta Engine läuft auf diesem Mac und braucht kein EMsoft: Master-Muster, Monte-Carlo und SHT funktionieren ohne. EMsoft selbst wird hier noch nicht angeboten. Das Installationsskript hat zwar einen macOS-Zweig (über Homebrew), aber niemand hat ihn je ausgeführt — ein ungetesteter Bau eines großen Fortran-Projekts gehört nicht hinter einen Knopf.",
+      "infoLinux": "Die Orienta Engine läuft auf diesem Rechner und braucht kein EMsoft: Master-Muster, Monte-Carlo und SHT funktionieren ohne. EMsoft selbst wird hier noch nicht angeboten. Das Installationsskript hat zwar einen Linux-Zweig (über apt), aber niemand hat ihn je ausgeführt — ein ungetesteter Bau eines großen Fortran-Projekts gehört nicht hinter einen Knopf."
     }
   },
   "about": {
-      "title": "Über Orienta",
-      "copyright": "Orienta — EBSD-Pattern-Analyse · Copyright © 2026 die Orienta-Autoren",
-      "licenseLine": "Dieses Programm ist freie Software: Sie können es unter den Bedingungen der GNU General Public License, Version 3 oder (nach Ihrer Wahl) jeder späteren Version, weitergeben und/oder verändern.",
-      "noWarranty": "Dieses Programm wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt („as is“). Soweit gesetzlich zulässig, übernehmen die Autoren, Rechteinhaber und ihre Institutionen keine Haftung für Schäden aus der Nutzung — einschließlich Verlust oder Beschädigung von Daten oder fehlerhafter Ergebnisse.",
-      "dataNote": "Die gesamte Verarbeitung findet lokal auf diesem Rechner statt; Ihre Daten werden nie an die Autoren übertragen. Orienta öffnet Messdateien nur lesend und schreibt Ergebnisse in separate Dateien — halten Sie dennoch Sicherungskopien Ihrer Originaldaten und validieren Sie automatische Ergebnisse (Indizierung, Phasenidentifikation, Quantifizierung) unabhängig, bevor Sie sich darauf verlassen.",
-      "viewLicense": "Vollständiger Lizenztext (GPL-3.0)",
-      "sourceCode": "Quellcode",
-      "authoritative": "Maßgeblich ist die englische LICENSE-Datei, die mit dem Quellcode verteilt wird.",
-      "versionLabel": "Version",
-      "versionUnknown": "unbekannt (keine Git-Information gefunden)",
-      "exportDiagnostics": "Diagnosebericht exportieren",
-      "exportDiagnosticsBusy": "Exportiere…",
-      "exportDiagnosticsDone": "Diagnosebericht gespeichert",
-      "exportDiagnosticsFailed": "Export fehlgeschlagen — läuft das Backend?",
-      "exportDiagnosticsHint": "Der Diagnosebericht ist ein Zip mit App-Version, Umgebungsinformationen und Logdateien. Hängen Sie ihn an Fehlermeldungen an — er enthält keine Messdaten."
-    },
+    "title": "Über Orienta",
+    "copyright": "Orienta — EBSD-Pattern-Analyse · Copyright © 2026 die Orienta-Autoren",
+    "licenseLine": "Dieses Programm ist freie Software: Sie können es unter den Bedingungen der GNU General Public License, Version 3 oder (nach Ihrer Wahl) jeder späteren Version, weitergeben und/oder verändern. Das installierte Paket enthält außerdem PyQt5, das nur unter GPL Version 3 lizenziert ist; eine Kopie, die es enthält, darf unter Version 3 weitergegeben werden (siehe NOTICE.md).",
+    "noWarranty": "Dieses Programm wird OHNE JEDE GEWÄHRLEISTUNG bereitgestellt („as is“). Soweit gesetzlich zulässig, übernehmen die Autoren, Rechteinhaber und ihre Institutionen keine Haftung für Schäden aus der Nutzung — einschließlich Verlust oder Beschädigung von Daten oder fehlerhafter Ergebnisse.",
+    "dataNote": "Die gesamte Verarbeitung findet lokal auf diesem Rechner statt; Ihre Daten werden nie an die Autoren übertragen. Orienta öffnet Messdateien nur lesend und schreibt Ergebnisse in separate Dateien — halten Sie dennoch Sicherungskopien Ihrer Originaldaten und validieren Sie automatische Ergebnisse (Indizierung, Phasenidentifikation, Quantifizierung) unabhängig, bevor Sie sich darauf verlassen.",
+    "viewLicense": "Vollständiger Lizenztext (GPL-3.0)",
+    "sourceCode": "Quellcode",
+    "authoritative": "Maßgeblich ist die englische LICENSE-Datei, die mit dem Quellcode verteilt wird.",
+    "versionLabel": "Version",
+    "versionUnknown": "unbekannt (keine Git-Information gefunden)",
+    "exportDiagnostics": "Diagnosebericht exportieren",
+    "exportDiagnosticsBusy": "Exportiere…",
+    "exportDiagnosticsDone": "Diagnosebericht gespeichert",
+    "exportDiagnosticsFailed": "Export fehlgeschlagen — läuft das Backend?",
+    "exportDiagnosticsHint": "Der Diagnosebericht ist ein Zip mit App-Version, Umgebungsinformationen und Logdateien. Hängen Sie ihn an Fehlermeldungen an — er enthält keine Messdaten."
+  },
   "report": {
     "open": "Problem melden…",
     "title": "Problem melden",
-    "prompt": "Was hast du gemacht, und was hättest du stattdessen erwartet?",
+    "prompt": "Was haben Sie gemacht, und was hätten Sie stattdessen erwartet?",
     "placeholder": "z. B. SampleB geladen, Hough-Indizierung über die ganze Karte gestartet — bei 40 % blieb sie stehen und die Phasenkarte blieb leer. Erwartet hätte ich eine fertige Karte.",
-    "contents": "Der Bericht enthält: deine Beschreibung, was die App in den letzten Minuten gemacht hat, die App-Version, Umgebungs- und Paketversionen sowie die Logdateien. Er enthält KEINE Messdaten. Es wird nichts automatisch verschickt — du bekommst eine Datei zum Anhängen.",
+    "contents": "Der Bericht enthält: Ihre Beschreibung, was die App in den letzten Minuten gemacht hat, die App-Version, Umgebungs- und Paketversionen sowie die Logdateien. Er enthält KEINE Messdaten. Es wird nichts automatisch verschickt — Sie bekommen eine Datei zum Anhängen.",
     "includeScreenshot": "Bild des Fensters mitschicken (hilft sehr; bitte prüfen, dass nichts Vertrauliches darauf ist)",
     "errorId": "Fehlerkennung",
     "openIssue": "GitHub-Issue öffnen",
@@ -265,13 +279,17 @@
     "create": "Bericht erstellen",
     "cancel": "Abbrechen",
     "close": "Schließen",
-    "done": "Bericht gespeichert. Bitte hänge die Datei an deine Fehlermeldung an."
+    "done": "Bericht gespeichert. Bitte hängen Sie die Datei an Ihre Fehlermeldung an."
   },
   "update": {
     "title": "Update verfügbar",
     "versions": "Sie haben {{current}} · verfügbar: {{latest}}",
     "whatHappens": "Orienta lädt die neue Version, installiert geänderte Pakete, baut die Oberfläche neu und startet danach neu. Das kann einige Minuten dauern. Schlägt etwas fehl, bleibt Ihre jetzige Version erhalten.",
     "manualOnly": "Diese Installation kann sich nicht selbst aktualisieren.",
+    "installerOnly": "Diese Installation wird über das neue Installationsprogramm aktualisiert.",
+    "installerHow": "Sie wurde aus einem Paket eingerichtet — es gibt also nichts, was heruntergeladen und neu gebaut werden könnte. Laden Sie das Installationsprogramm der neuen Version herunter und führen Sie es aus; Ihr Datenordner, Ihre Einstellungen und die installierte Umgebung bleiben, wo sie sind.",
+    "rateLimited": "GitHub hat die Abfrage vorerst abgelehnt (zu viele Anfragen aus diesem Netz). Bitte in einigen Minuten erneut versuchen.",
+    "checkIncomplete": "Die Prüfung ist nicht durchgelaufen ({{reason}}).",
     "manualHow": "Sie wurde aus einem heruntergeladenen Archiv eingerichtet und nicht per git geklont — es gibt also keine Quelle zum Aktualisieren. Laden Sie die neue Version herunter und folgen Sie den Schritten in INSTALL.md, oder lassen Sie sich eine git-basierte Installation einrichten, um automatische Updates zu bekommen.",
     "install": "Update installieren",
     "later": "Später",
@@ -301,5 +319,38 @@
     "confirmPassword": "Neues WSL-Benutzerpasswort erneut eingeben, um die Übereinstimmung zu bestätigen.",
     "newPassword": "Neues Passwort für den bestehenden WSL-Benutzer eingeben.",
     "confirmNewPassword": "Neues Passwort erneut eingeben, um die Übereinstimmung zu bestätigen."
+  },
+  "removeData": {
+    "title": "Orienta-Daten entfernen",
+    "intro": "Das Programm zu löschen entfernt nicht, was es heruntergeladen hat. Hier werden Orientas eigene Dateien entfernt; was Sie selbst in den Ordner gelegt haben, bleibt liegen.",
+    "folder": "Ordner",
+    "button": "Daten entfernen…",
+    "askFiles": "Auch das heruntergeladene Python und die Programmdateien entfernen (2,5 bis 8 GB)? Ihre Kristallbibliothek bleibt erhalten, sofern Sie im nächsten Schritt nichts anderes wählen.",
+    "askLibrary": "Auch Ihre Kristallbibliothek LÖSCHEN? Darin liegen die Strukturen und Simulationen, die Sie gesammelt haben.",
+    "yes": "Ja, entfernen",
+    "no": "Abbrechen",
+    "yesLibrary": "Ja, Bibliothek löschen",
+    "keepLibrary": "Nein, Bibliothek behalten",
+    "busy": "Wird entfernt…",
+    "done": "Orientas Dateien wurden entfernt.",
+    "failed": "Es wurde nichts entfernt.",
+    "refused": {
+      "notOurs": "Dieser Ordner ist nicht erkennbar Orientas Ordner, es wurde nichts angefasst.",
+      "isRepo": "Das ist ein Quellcode-Ordner, kein Datenordner. Es wurde nichts angefasst.",
+      "isLink": "Dieser Ordner ist eine Verknüpfung. Verknüpfungen werden nie verfolgt; es wurde nichts angefasst.",
+      "isHome": "Das ist Ihr Benutzerordner. Es wurde nichts angefasst.",
+      "tooShallow": "Das ist ein Laufwerks-Stammverzeichnis. Es wurde nichts angefasst.",
+      "noFolder": "Es gibt keinen Datenordner zum Entfernen.",
+      "error": "Der Ordner konnte nicht gelesen werden.",
+      "notHere": "Das erledigt auf diesem System die Deinstallation.",
+      "backendRunning": "Orientas Backend läuft noch, es wurde nichts entfernt. Schließen Sie Orienta und versuchen Sie es erneut."
+    },
+    "partly": "Orientas Dateien wurden entfernt; die Kristallbibliothek blieb erhalten.",
+    "someLeft_one": "Ein Eintrag konnte nicht entfernt werden und liegt noch im Ordner.",
+    "someLeft_other": "{{count}} Einträge konnten nicht entfernt werden und liegen noch im Ordner.",
+    "libraryWasLink": "Ihre Kristallbibliothek war eine Verknüpfung. Die Verknüpfung wurde entfernt, die Dateien dahinter blieben unberührt.",
+    "keptList": "Behalten: {{list}}",
+    "keepsForeign_one": "Eine von Ihnen hinzugefügte Datei bleibt erhalten.",
+    "keepsForeign_other": "{{count}} von Ihnen hinzugefügte Dateien bleiben erhalten."
   }
 }

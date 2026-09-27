@@ -29,6 +29,9 @@ class SystemStatus:
     opencl_devices: list = field(default_factory=list)
     errors: list = field(default_factory=list)
     warnings: list = field(default_factory=list)
+    # The subset of `warnings` that carries a code + values, so the interface
+    # can say it in the user's language instead of showing English prose.
+    warning_items: list = field(default_factory=list)
 
     # Enriched OpenCL/EMsoft info from opencl_detector
     has_gpu: bool = False
@@ -175,6 +178,43 @@ def check_opencl():
     return len(devices) > 0, devices
 
 
+def _emsoft_is_unoffered() -> bool:
+    """Is this a platform where the app offers no way to install EMsoft?
+
+    Today that is macOS, and it is a deliberate state rather than an oversight.
+    `simulation/install_emsoft.sh` does carry a Darwin branch (Homebrew), but it
+    has never been run by anyone, and the settings wizard does not offer it --
+    so nothing a user can click here would change the answer.
+
+    Where the answer is yes, EMsoft's absence is reported ONCE, as a state. The
+    2026-09-25 Mac tester saw the opposite: a red "Fehler: EMsoft executables
+    not found. Install EMsoft in WSL." plus six warnings about EMMCOpenCL,
+    EMEBSDmasterSHT, EMSphInx, a config file and OpenCL-in-WSL -- seven
+    messages, all saying "EMsoft is not installed", one of them naming a
+    Windows feature that cannot exist on a Mac, on a machine where the app
+    works perfectly without any of it.
+
+    Linux joined macOS on 2026-09-25. The install endpoint does run the script
+    natively there -- but nobody has ever run it, and the wizard no longer
+    offers it, so the same sentence applies: nothing a user can click here
+    changes the answer. Windows is the one platform where the wizard really
+    installs EMsoft, and it keeps its error and its detail.
+    """
+    return sys.platform in ("darwin", "linux")
+
+
+def _opencl_missing_message() -> str:
+    """Why OpenCL matters here, without naming WSL off Windows.
+
+    OpenCL is needed by EMsoft's GPU Monte Carlo (EMMCOpenCL). On Windows that
+    runs inside WSL; on Linux it runs on the machine itself, and saying "in
+    WSL" there sends someone looking for a Windows feature.
+    """
+    if sys.platform == "win32":
+        return "OpenCL not available in WSL (needed for EMMCOpenCL GPU acceleration)"
+    return "OpenCL not available (needed for EMMCOpenCL GPU acceleration)"
+
+
 def check_system_status(manual_paths=None):
     """Run all checks and return a SystemStatus object.
 
@@ -236,7 +276,7 @@ def check_system_status(manual_paths=None):
     if not found:
         found, path = check_executable('EMMCOpenCL')
     status.emmc_path = path
-    if not found:
+    if not found and not _emsoft_is_unoffered():
         status.warnings.append("EMMCOpenCL not found")
 
     # 4. EMEBSDmasterSHT (try manual/discovered path first, then PATH)
@@ -246,12 +286,36 @@ def check_system_status(manual_paths=None):
     if not found_sht:
         found_sht, path_sht = check_executable('EMEBSDmasterSHT')
     status.emsht_path = path_sht
-    if not found_sht:
+    if not found_sht and not _emsoft_is_unoffered():
         status.warnings.append("EMEBSDmasterSHT not found")
 
     status.emsoft_available = bool(status.emmc_path and status.emsht_path)
     if not status.emsoft_available:
-        status.errors.append("EMsoft executables not found. Install EMsoft in WSL.")
+        if _emsoft_is_unoffered():
+            # Said once, as a state rather than a fault. The four warnings this
+            # replaces (EMMCOpenCL, EMEBSDmasterSHT, EMSphInx, the config file)
+            # are the same sentence four times: EMsoft is not installed.
+            #
+            # With a code, because the page translates a warning only when a
+            # warning_item matches it by message. The first version of this
+            # shipped prose alone, which put an English sentence two boxes
+            # above the install section the same commit had just localised
+            # into four languages.
+            # One wording for both platforms. "on this Mac" was fine while
+            # macOS was the only one; a second near-identical string is how
+            # two messages drift apart.
+            message = ("EMsoft is not set up on this computer. It is optional — "
+                       "Orienta's own simulation engine needs no EMsoft.")
+            status.warnings.append(message)
+            status.warning_items.append(
+                {"code": "emsoftNotOffered", "values": {}, "message": message})
+        elif sys.platform == "win32":
+            status.errors.append("EMsoft executables not found. Install EMsoft in WSL.")
+        else:
+            # Linux runs the install script directly; there is no WSL to install
+            # it into, and saying so sent a Linux user looking for a Windows
+            # feature.
+            status.errors.append("EMsoft executables not found.")
 
     # 5. EMSphInx (try manual/discovered path first, then PATH)
     found_sphinx, path_sphinx = False, ""
@@ -261,12 +325,12 @@ def check_system_status(manual_paths=None):
         found_sphinx, path_sphinx = check_executable('IndexEBSD')
     status.emsphinx_path = path_sphinx
     status.emsphinx_available = found_sphinx
-    if not found_sphinx:
+    if not found_sphinx and not _emsoft_is_unoffered():
         status.warnings.append("EMSphInx not found (optional for Spherical Indexing)")
 
     # 6. EMsoft config
     status.config_valid, status.config_data = check_emsoft_config()
-    if not status.config_valid:
+    if not status.config_valid and not _emsoft_is_unoffered():
         status.warnings.append("EMsoft config (~/.config/EMsoft/EMsoftConfig.json) missing or invalid")
 
     # 7. OpenCL — use enriched detector for GPU/CPU info and binary discovery
@@ -292,15 +356,25 @@ def check_system_status(manual_paths=None):
         status.recommended_mode = rec["mode"]
         status.recommended_settings = rec
 
-        if not status.opencl_available:
-            status.warnings.append("OpenCL not available in WSL (needed for EMMCOpenCL GPU acceleration)")
-        for w in rec.get("warnings", []):
-            status.warnings.append(w)
+        # `recommend_device` returns EARLY with its own "No OpenCL detected --
+        # CPU-only mode" when OpenCL is absent, so suppressing the message
+        # above and then copying rec's list said the same thing twice on a Mac.
+        # A review caught this; the first version of the test could not,
+        # because it stubbed recommend_device to return nothing.
+        gpu_notes_are_moot = _emsoft_is_unoffered() and not status.opencl_available
+
+        if not status.opencl_available and not _emsoft_is_unoffered():
+            status.warnings.append(_opencl_missing_message())
+        if not gpu_notes_are_moot:
+            for w in rec.get("warnings", []):
+                status.warnings.append(w)
+            for item in rec.get("warning_items", []):
+                status.warning_items.append(item)
 
     except Exception:
         # Fallback to old simple check if detector fails
         status.opencl_available, status.opencl_devices = check_opencl()
-        if not status.opencl_available:
-            status.warnings.append("OpenCL not available in WSL (needed for EMMCOpenCL GPU acceleration)")
+        if not status.opencl_available and not _emsoft_is_unoffered():
+            status.warnings.append(_opencl_missing_message())
 
     return status

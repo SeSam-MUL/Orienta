@@ -1,3 +1,7 @@
+% DeformationAnalysis.m - MATLAB/MTEX reference scripts of Orienta (see README.md in this folder)
+% Copyright (C) 2026 Dr. Irmgard Weissensteiner and Montanuniversitaet Leoben (ASCII spelling; see LICENSE)
+% SPDX-License-Identifier: GPL-2.0-or-later
+% This header was added for publication; the code below is as received.
 function [kam_smoothed] = DeformationAnalysis(mtex_path, datname,ebsd_smoothedFill, grains,loadAxis,ebsd1,  SFinv, rot, n , filename, geomRot, ebsd1plot, ph, foldername)
 
 %% GB-misorientation map
@@ -14,7 +18,9 @@ HAGB=GBMiso(GBMiso.misorientation.angle>15*degree);
 HAGBlength=sum(HAGB.segLength);
 GBlengthtot=sum(GBMiso.segLength);
 
-if strcmp(mtex_path, 'C:\Ori_Data\mtex-6.1.0')==1
+% MTEX 6.1 renamed unitCell's fields; set this to your own MTEX 6.1 path
+% to take the first branch, otherwise the second one is used.
+if strcmp(mtex_path, '<path to your MTEX 6.1 installation>')==1
     AreaEBSDAl=(2*ebsd_smoothedFill.unitCell.x(1))^2 * length(ebsd_smoothedFill(ph)); %
 else
     AreaEBSDAl=(2*ebsd_smoothedFill.unitCell(1))^2 * length(ebsd_smoothedFill(ph));

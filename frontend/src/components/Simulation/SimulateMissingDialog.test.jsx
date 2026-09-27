@@ -95,16 +95,16 @@ describe('SimulateMissingDialog', () => {
   // -------------------------------------------------------------------------
   // Two-way engine switch: single header pipeline badge, no per-phase column.
   // -------------------------------------------------------------------------
-  it('shows the "GPU pipeline" header badge by default (engine=ours)', () => {
+  it('shows the "Orienta Engine" header badge by default (engine=ours)', () => {
     setup({ engine: 'ours' });
-    expect(screen.getByText(/GPU pipeline/)).toBeInTheDocument();
+    expect(screen.getByText(/Orienta Engine/)).toBeInTheDocument();
     expect(screen.queryByText(/EMsoft pipeline/)).toBeNull();
   });
 
   it('shows the "EMsoft pipeline" header badge when engine=emsoft', () => {
     setup({ engine: 'emsoft' });
     expect(screen.getByText(/EMsoft pipeline/)).toBeInTheDocument();
-    expect(screen.queryByText(/GPU pipeline/)).toBeNull();
+    expect(screen.queryByText(/Orienta Engine/)).toBeNull();
   });
 
   it('never renders a per-phase engine column / pills', () => {

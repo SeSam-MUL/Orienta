@@ -29,6 +29,19 @@ function StatusDot({ color, label }) {
   );
 }
 
+/**
+ * The three states App.jsx puts on the wire, in the reader's language.
+ *
+ * The namespace is written out. Sidebar calls this with a `t` bound to `nav`
+ * (useTranslation(['nav', 'shell'])), and react-i18next binds to the FIRST
+ * namespace, so a bare 'sidebar.connected' resolved against nav, missed, and
+ * printed the key into the status strip in every language.
+ */
+export function backendStateLabel(t, status) {
+  const key = { connected: 'connected', disconnected: 'disconnected', checking: 'checking' }[status];
+  return key ? t(`shell:sidebar.${key}`) : status;
+}
+
 export default function StatusBar({ backendStatus, onNavigate }) {
   const { t } = useTranslation('shell');
   const { isFileOpen, filePath, gridShape, patternCount, detector, stepSize, edsElements } = useDataStore();
@@ -51,35 +64,44 @@ export default function StatusBar({ backendStatus, onNavigate }) {
     // EMsoft
     dots.push({
       color: sysStatus.emsoft_available ? colors.green : colors.red,
-      label: sysStatus.emsoft_available ? 'EMsoft: OK' : 'EMsoft: Not found',
+      label: sysStatus.emsoft_available ? t('shell:status.emsoftOk') : t('shell:status.emsoftMissing'),
     });
-    // WSL
+    // WSL — a Windows feature. On macOS and Linux the backend reports
+    // wsl_distro = "native-linux", and the status line used to show
+    // "WSL: native-linux" on a Mac, which names a thing that cannot exist
+    // there. Off Windows the dot is simply not shown.
     const wslOk = sysStatus.wsl_installed || sysStatus.wsl_available;
-    dots.push({
-      color: wslOk ? colors.green : colors.red,
-      label: wslOk ? (sysStatus.wsl_distro ? `WSL: ${sysStatus.wsl_distro}` : 'WSL: OK') : 'WSL: Not installed',
-    });
+    const onWindows = (sysStatus.platform_os || 'windows') === 'windows';
+    if (onWindows) {
+      dots.push({
+        color: wslOk ? colors.green : colors.red,
+        label: wslOk
+          ? (sysStatus.wsl_distro ? t('shell:status.wslDistro', { distro: sysStatus.wsl_distro }) : t('shell:status.wslOk'))
+          : t('shell:status.wslMissing'),
+      });
+    }
     // EMSphinx
     const sphinxOk = sysStatus.emsphinx_available || (sysStatus.emsoft_available && wslOk);
     dots.push({
       color: sphinxOk ? colors.green : colors.red,
-      label: sphinxOk ? 'EMSphinx: OK' : 'EMSphinx: Not found',
+      label: sphinxOk ? t('shell:status.sphinxOk') : t('shell:status.sphinxMissing'),
     });
     // GPU
     if (sysStatus.opencl_available && sysStatus.gpu_name) {
       const name = sysStatus.gpu_name.length > 20 ? sysStatus.gpu_name.slice(0, 18) + '\u2026' : sysStatus.gpu_name;
       dots.push({ color: colors.green, label: name });
     } else if (sysStatus.opencl_available) {
-      dots.push({ color: colors.yellow, label: 'GPU: OpenCL' });
+      dots.push({ color: colors.yellow, label: t('shell:status.gpuOpencl') });
     } else {
-      dots.push({ color: colors.yellow, label: 'No GPU' });
+      dots.push({ color: colors.yellow, label: t('shell:status.gpuNone') });
     }
   }
 
   // Backend dot
-  const backendDot = backendStatus === 'connected'
-    ? { color: colors.green, label: 'Backend: Connected' }
-    : { color: colors.red, label: 'Backend: Disconnected' };
+  const backendDot = {
+    color: backendStatus === 'connected' ? colors.green : colors.red,
+    label: t('shell:status.backend', { state: backendStateLabel(t, backendStatus) }),
+  };
 
   const Separator = () => (
     <span style={{ width: 1, height: 14, background: colors.border, flexShrink: 0, opacity: 0.5 }} />
@@ -141,12 +163,12 @@ export default function StatusBar({ backendStatus, onNavigate }) {
           {edsElements?.length > 0 && (
             <>
               <Separator />
-              <span title={edsElements.join(', ')}>EDS: {edsElements.length} elem</span>
+              <span title={edsElements.join(', ')}>{t('shell:status.edsElements', { count: edsElements.length })}</span>
             </>
           )}
         </>
       ) : (
-        <span style={{ fontStyle: 'italic', opacity: 0.6 }}>{'\u2014'} No file loaded</span>
+        <span style={{ fontStyle: 'italic', opacity: 0.6 }}>{'\u2014'} {t('shell:status.noFile')}</span>
       )}
 
       {/* Center: active tasks */}
@@ -155,7 +177,7 @@ export default function StatusBar({ backendStatus, onNavigate }) {
           <Separator />
           <span style={{ color: colors.orange, fontWeight: 500, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span style={{ animation: 'spin 2s linear infinite', display: 'inline-block' }}>{'\u27f3'}</span>
-            {activeTasks.length} task{activeTasks.length > 1 ? 's' : ''}
+            {t('shell:status.tasks', { count: activeTasks.length })}
           </span>
         </>
       )}

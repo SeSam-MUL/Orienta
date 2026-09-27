@@ -11,7 +11,7 @@ The 3-component GMM identifies three microstructural states:
 - Mid BC (component 2): Recovered grains
 - High BC (component 3): Recrystallized grains
 
-Reference: MATLAB EBSDanalysis_frame.m lines 260-332
+Reference: MATLAB EBSDanalysis_frame.m lines 264-336
          FEAT-12 gap analysis (BC histogram + GMM)
 """
 
@@ -49,7 +49,7 @@ class BCHistogramResult:
         bin_width: Width of each bin
         bc_values: Raw BC values used for histogram (for validation)
 
-    Reference: MATLAB EBSDanalysis_frame.m lines 260-273
+    Reference: MATLAB EBSDanalysis_frame.m lines 264-277
     """
     bin_edges: np.ndarray
     bin_centers: np.ndarray
@@ -83,7 +83,7 @@ class BCGMMResult:
         n_samples: Number of BC values used for fit
         converged: Whether GMM fit converged
 
-    Reference: MATLAB EBSDanalysis_frame.m lines 275-331
+    Reference: MATLAB EBSDanalysis_frame.m lines 279-335
     """
     weights: np.ndarray  # length 3
     means: np.ndarray    # length 3
@@ -116,7 +116,7 @@ def calculate_bc_histogram(
     Returns:
         BCHistogramResult with bin edges, centers, and probability-normalized counts
 
-    Reference: MATLAB EBSDanalysis_frame.m lines 260-273
+    Reference: MATLAB EBSDanalysis_frame.m lines 264-277
     """
     # Get BC values, remove NaN/Inf
     bc = dataset.bc
@@ -169,7 +169,7 @@ def fit_bc_gmm(
     Returns:
         BCGMMResult with component parameters, or None if fit fails
 
-    Reference: MATLAB EBSDanalysis_frame.m lines 275-331
+    Reference: MATLAB EBSDanalysis_frame.m lines 279-335
     """
     N_COMPONENTS = 3
     if not SKLEARN_AVAILABLE:

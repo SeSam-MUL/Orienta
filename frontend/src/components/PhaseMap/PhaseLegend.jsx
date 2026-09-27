@@ -1,3 +1,4 @@
+import { problemText } from '../../services/problemText';
 import React, { useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { phaseMapApi } from '../../services/api';
@@ -58,7 +59,7 @@ function PhaseLegend({ resultId }) {
       .catch((err) => {
         if (cancelled) return;
         setError(
-          err?.response?.data?.detail || err?.message || t('phasemap:phaseLegend.loadFailed'),
+          problemText(err, t, 'phasemap') || t('phasemap:phaseLegend.loadFailed'),
         );
         setPhases([]);
       })

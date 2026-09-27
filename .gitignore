@@ -57,6 +57,10 @@ data/
 # otherwise swallows backend/forward_sim/crystal/).
 !backend/forward_sim/crystal/
 !backend/forward_sim/crystal/**
+# Re-allow the ebsd_ai data subpackage SOURCE (the bare `data/` rule above
+# swallowed Ai_Ml/ebsd_ai/data/*.py, so a fresh clone could not import ebsd_ai).
+!Ai_Ml/ebsd_ai/data/
+!Ai_Ml/ebsd_ai/data/*.py
 # Re-allow our spherical-gpu test fixtures dir + the sha256 lock file.
 # The reference_oracle.h5 itself is per-machine, so it stays ignored
 # (caught by the *.h5 rule above and explicitly below).

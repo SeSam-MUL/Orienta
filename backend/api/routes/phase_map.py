@@ -42,6 +42,7 @@ from backend.api.services import state_version
 # level binding is consulted by _compute_layer_rgba and friends.
 from backend.api.routes.indexing import get_last_indexing_result  # noqa: F401
 from backend.api.routes.analysis import get_analysis_dataset  # noqa: F401
+from backend.api.problem import problem
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -660,10 +661,7 @@ def _render_to_figure(
         n_rows, n_cols = _analysis_dataset.shape
         mask = None
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="No indexing result or analysis dataset available. Load data first."
-        )
+        raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
 
     step_size = _get_step_size_from_signal(step_x)
 
@@ -1325,10 +1323,7 @@ def _compute_layer_rgba(
     result = get_last_indexing_result()
     dataset = get_analysis_dataset()
     if result is None and dataset is None:
-        raise HTTPException(
-            status_code=400,
-            detail="No indexing result or analysis dataset available. Load data first.",
-        )
+        raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
 
     if result is not None:
         xmap = result.xmap
@@ -2089,7 +2084,8 @@ async def get_ipf_key(direction: str = "Z", phase_filter: int = -1,
         result = get_last_indexing_result()
         dataset = get_analysis_dataset()
         if result is None and dataset is None:
-            raise HTTPException(status_code=400, detail="No indexing result or analysis dataset available.")
+            raise problem(400, "noResultOrDataset",
+                          "No indexing result or analysis dataset available. Load data first.")
 
         xmap = result.xmap if result is not None else dataset.xmap
 
@@ -2523,10 +2519,7 @@ async def get_phase_legend(color_overrides: str = ""):
         result = get_last_indexing_result()
         dataset = get_analysis_dataset()
         if result is None and dataset is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No indexing result or analysis dataset available. Load data first.",
-            )
+            raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
         xmap = result.xmap if result is not None else dataset.xmap
 
         color_map = build_phase_color_map(xmap, overrides_dict)
@@ -2611,10 +2604,7 @@ async def get_phase_stats(color_overrides: str = "", include_empty: bool = False
         result = get_last_indexing_result()
         dataset = get_analysis_dataset()
         if result is None and dataset is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No indexing result or analysis dataset available. Load data first.",
-            )
+            raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
         xmap = result.xmap if result is not None else dataset.xmap
 
         # Use the SAME colour assignment as the rendered map.
@@ -2734,10 +2724,7 @@ async def get_phase_adjacency():
         result = get_last_indexing_result()
         dataset = get_analysis_dataset()
         if result is None and dataset is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No indexing result or analysis dataset available. Load data first.",
-            )
+            raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
         xmap = result.xmap if result is not None else dataset.xmap
 
         # Phase grid (n_rows, n_cols). Sentinel -1 marks not-indexed.

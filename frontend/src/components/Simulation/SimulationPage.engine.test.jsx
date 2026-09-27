@@ -140,10 +140,10 @@ function getEngineButton(label) {
   const group = getEngineGroup();
   return Array.from(group.querySelectorAll('button')).find(b => b.textContent.includes(label));
 }
-/** The native-GPU engine toggle button (label is now "✨ GPU (native)"). */
+/** The Orienta Engine toggle button (label "✨ Orienta Engine"). */
 function getGpuButton() {
   const group = getEngineGroup();
-  return Array.from(group.querySelectorAll('button')).find(b => /GPU \(native\)/.test(b.textContent));
+  return Array.from(group.querySelectorAll('button')).find(b => /Orienta Engine/.test(b.textContent));
 }
 
 /** Wait until the capability probe has resolved and enabled the EMsoft toggle
@@ -165,7 +165,7 @@ describe('SimulationPage two-way engine toggle', () => {
     simApi.systemStatus.mockResolvedValue(SYS_DEFAULT);
   });
 
-  it('renders exactly two engine toggle buttons (GPU (native) + EMsoft, no Auto/GPU)', async () => {
+  it('renders exactly two engine toggle buttons (Orienta Engine + EMsoft, no Auto/GPU)', async () => {
     renderPage();
     const group = getEngineGroup();
     const buttons = Array.from(group.querySelectorAll('button'));
@@ -176,18 +176,18 @@ describe('SimulationPage two-way engine toggle', () => {
     expect(getEngineButton('Auto')).toBeUndefined();
   });
 
-  it('defaults to GPU (native) — h1 shows "GPU Simulation"', () => {
+  it('defaults to Orienta Engine — h1 shows "Orienta Engine"', () => {
     renderPage();
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('GPU Simulation');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Orienta Engine');
   });
 
-  it('GPU (native) toggle is pressed by default (aria-pressed=true)', () => {
+  it('Orienta Engine toggle is pressed by default (aria-pressed=true)', () => {
     renderPage();
     expect(getGpuButton().getAttribute('aria-pressed')).toBe('true');
     expect(getEngineButton('EMsoft').getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('surfaces the auto-selected hardware path on the GPU (native) button + h1', async () => {
+  it('surfaces the auto-selected hardware path on the Orienta Engine button + h1', async () => {
     renderPage();
     // Capability probe resolves with a GPU name.
     await waitFor(() => expect(getGpuButton().textContent).toMatch(/RTX 4070/));
@@ -211,7 +211,7 @@ describe('SimulationPage two-way engine toggle', () => {
       expect(em).toBeDisabled();
       expect(em.getAttribute('title')).toMatch(/Optional/i);
     });
-    // GPU (native) is always enabled + remains selected.
+    // Orienta Engine is always enabled + remains selected.
     expect(getGpuButton()).not.toBeDisabled();
     expect(getGpuButton().getAttribute('aria-pressed')).toBe('true');
   });
@@ -225,7 +225,7 @@ describe('SimulationPage two-way engine toggle', () => {
     await waitFor(() => expect(getEngineButton('EMsoft')).toBeDisabled());
     fireEvent.click(getEngineButton('EMsoft'));
     expect(getGpuButton().getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('GPU Simulation');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Orienta Engine');
   });
 
   it('switching to EMsoft changes h1 + aria-pressed', async () => {
@@ -237,16 +237,16 @@ describe('SimulationPage two-way engine toggle', () => {
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('EMsoft Simulation');
   });
 
-  it('switching back to GPU (native) restores aria-pressed', async () => {
+  it('switching back to Orienta Engine restores aria-pressed', async () => {
     renderPage();
     await waitEmsoftEnabled();
     fireEvent.click(getEngineButton('EMsoft'));
     fireEvent.click(getGpuButton());
     expect(getGpuButton().getAttribute('aria-pressed')).toBe('true');
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('GPU Simulation');
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Orienta Engine');
   });
 
-  it('GPU (native) engine keeps batch buttons enabled, but disables Download NML', () => {
+  it('Orienta Engine keeps batch buttons enabled, but disables Download NML', () => {
     renderPage();
     // default engine=ours
     expect(screen.getByRole('button', { name: /Simulate All Missing/i })).not.toBeDisabled();
@@ -320,7 +320,7 @@ describe('SimulationPage two-way engine toggle', () => {
   // -------------------------------------------------------------------------
   // Batch routing (Simulate All Missing -> launchMissingBatch) — NO partition
   // -------------------------------------------------------------------------
-  it('launchMissingBatch routes ALL phases to batchStartGpu when engine=ours (GPU (native))', async () => {
+  it('launchMissingBatch routes ALL phases to batchStartGpu when engine=ours (Orienta Engine)', async () => {
     const { simApi } = await import('../../services/api');
     simApi.batchStart.mockClear();
     simApi.batchStartGpu.mockClear();
@@ -365,7 +365,7 @@ describe('SimulationPage two-way engine toggle', () => {
   // -------------------------------------------------------------------------
   // Batch routing (Batch Select... -> handleBatchSelect) — NO partition
   // -------------------------------------------------------------------------
-  it('handleBatchSelect routes to batchStartGpu when engine=ours (GPU (native))', async () => {
+  it('handleBatchSelect routes to batchStartGpu when engine=ours (Orienta Engine)', async () => {
     const { simApi } = await import('../../services/api');
     simApi.batchStart.mockClear();
     simApi.batchStartGpu.mockClear();
@@ -408,15 +408,15 @@ describe('SimulationPage two-way engine toggle', () => {
   });
 
   // -------------------------------------------------------------------------
-  // The EMsoft Compute-mode (OpenCL/OpenMP) card is dead UI under GPU (native) — hide
+  // The EMsoft Compute-mode (OpenCL/OpenMP) card is dead UI under Orienta Engine — hide
   // it there, keep it under EMsoft.
   // -------------------------------------------------------------------------
-  it('hides the EMsoft "Compute" card under engine=ours (GPU (native), default)', () => {
+  it('hides the EMsoft "Compute" card under engine=ours (Orienta Engine, default)', () => {
     renderPage();
     expect(screen.queryByText('Compute')).toBeNull();
   });
 
-  it('shows the EMsoft "Compute" card under engine=emsoft and hides it again on GPU (native)', async () => {
+  it('shows the EMsoft "Compute" card under engine=emsoft and hides it again on Orienta Engine', async () => {
     renderPage();
     await waitEmsoftEnabled();
     fireEvent.click(getEngineButton('EMsoft'));

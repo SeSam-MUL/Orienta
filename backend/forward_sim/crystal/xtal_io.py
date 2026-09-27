@@ -18,6 +18,7 @@ Confirmed layout (verified against the real Ni/Al oracle ``.h5`` files,
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -91,6 +92,10 @@ class CrystalStructure:
     atoms: list  # list[Atom]
     space_group: int
     crystal_system: int
+    #: ITA origin choice the fractional coordinates are written in (1 or 2).
+    #: Only 24 space groups have two; for the rest this is ignored. Defaults to
+    #: 1 so structures built in code keep their present behaviour.
+    space_group_setting: int = 1
 
     @property
     def is_centrosymmetric(self) -> bool:
@@ -230,6 +235,16 @@ def read_crystal_structure(path: str) -> CrystalStructure:
 
         space_group = _scalar_int(cd["SpaceGroupNumber"][()])
         crystal_system = _scalar_int(cd["CrystalSystem"][()])
+        # The origin choice (ITA setting 1 or 2). EMsoft's format records it and
+        # we used to drop it on the floor, which is how silicon ended up
+        # expanded onto the wrong Wyckoff site — see
+        # backend.forward_sim.crystal.origin_choice. Absent means choice 1,
+        # which is also what every file our own converter has written so far
+        # says, whether or not it is true.
+        if "SpaceGroupSetting" in cd:
+            space_group_setting = _scalar_int(cd["SpaceGroupSetting"][()])
+        else:
+            space_group_setting = 1
 
     atoms = [
         Atom(
@@ -245,9 +260,72 @@ def read_crystal_structure(path: str) -> CrystalStructure:
         for i in range(n_atoms)
     ]
 
-    return CrystalStructure(
+    structure = CrystalStructure(
         lattice=lattice,
         atoms=atoms,
         space_group=space_group,
         crystal_system=crystal_system,
+        space_group_setting=space_group_setting,
     )
+    # Once per read, naming the file — not inside the expansion, which runs per
+    # Lambert direction (~1e6 times at npx=500) and would fill the log.
+    #
+    # Unless the converter left a record that it decided the origin choice from
+    # the CIF's own evidence. Without that, this warning fires on every read of
+    # a two-origin file that declares choice 1 — including the ones we just
+    # rebuilt correctly, where its "almost certainly choice 2" is false.
+    if not origin_choice_is_recorded(path):
+        from .origin_choice import warn_if_setting_unverified
+
+        warn_if_setting_unverified(space_group, space_group_setting, source=str(path))
+    return structure
+
+
+def origin_choice_sidecar(xtal_path) -> Path:
+    """``<stem>.xtal.provenance.json`` — the same shape the .sht files use."""
+    p = Path(xtal_path)
+    return p.with_name(p.name + ".provenance.json")
+
+
+def origin_choice_is_recorded(xtal_path) -> bool:
+    """True when a converter recorded HOW this file's origin choice was decided.
+
+    A sidecar rather than a dataset inside the .xtal: EMsoft reads these files
+    too, and a format change we cannot test here is not worth a log line.
+    """
+    try:
+        import json  # noqa: PLC0415
+
+        doc = json.loads(origin_choice_sidecar(xtal_path).read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    origin = doc.get("origin") or {}
+    return bool(origin.get("evidence")) and origin.get("cif_origin_choice") in (1, 2)
+
+
+def write_origin_choice_sidecar(xtal_path, *, block, cif_origin_choice,
+                                shifted, evidence, cif_name="") -> Path | None:
+    """Record how the origin choice was decided, next to the .xtal it describes.
+
+    Best-effort by contract, like the .sht sidecar: a conversion must never fail
+    because a note could not be written.
+    """
+    try:
+        import json  # noqa: PLC0415
+        from datetime import datetime  # noqa: PLC0415
+
+        path = origin_choice_sidecar(xtal_path)
+        path.write_text(json.dumps({
+            "schema": 1,
+            "written": datetime.now().isoformat(timespec="seconds"),
+            "source_cif": cif_name,
+            "origin": {
+                "block": block,
+                "cif_origin_choice": cif_origin_choice,
+                "shifted_to_choice_1": bool(shifted),
+                "evidence": list(evidence),
+            },
+        }, indent=1), encoding="utf-8")
+        return path
+    except Exception:
+        return None

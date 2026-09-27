@@ -1,12 +1,17 @@
+# The harmonic unpacking (NumHarm / UnpackHarm) in this module is ported from
+# SHTfile, sht_file.in.hpp (https://github.com/EMsoft-org/SHTfile, BSD-3-Clause):
+#   Copyright (c) 2019, De Graef Group, Carnegie Mellon University.
+#   All rights reserved.  Author William C. Lenthe.
+# Full license text: licenses/SHTfile-License.txt; provenance: NOTICE.md.
 """Read EMsoft .sht binary master pattern files.
 
 Format reference: SHTfile spec (William C. Lenthe, 2019), pulled by EMSphInx
 via CMake FetchContent. The authoritative byte-level spec is in:
 ``https://github.com/EMsoft-org/SHTfile/blob/master/sht_file.in.hpp``
 
-This is a self-contained binary format — NOT HDF5. See
-``tasks/sht-format-research.md`` for the byte-level documentation, plus
-``tasks/_research_sht/sht_file.in.hpp`` for the C++ reference cached locally.
+This is a self-contained binary format — NOT HDF5. The upstream header at the
+URL above is the C++ reference; the layout summary below is what this reader
+implements.
 
 Layout summary (verified against ``Al (Al) [cF4] {20kV}.sht``)::
 

@@ -30,7 +30,13 @@
       "notFound": "未找到",
       "available": "可用",
       "notAvailable": "不可用",
-      "modeRecommended": "推荐 {{mode}}"
+      "modeRecommended": "推荐 {{mode}}",
+      "notSetUp": "未配置"
+    },
+    "warnings": {
+      "gpuBlocksizeReduced": "显卡显存为 {{gb}} GB — GPU 主图样使用块大小 {{blocksize}}（由 32 降低以适应显存）。",
+      "gpuBlocksizeMinimal": "显卡显存为 {{gb}} GB — GPU 主图样使用最小块大小 {{blocksize}}。原子数超过 20 的复杂晶体仍可能显存不足。",
+      "emsoftNotOffered": "这台计算机未配置 EMsoft。它是可选的 — Orienta Engine 不需要 EMsoft。"
     }
   },
   "manualPaths": {
@@ -55,6 +61,8 @@
     "toggleTooltip": "启用或禁用共享网络数据库（服务器）模式。",
     "databaseRootLabel": "数据库根目录",
     "databaseRootPlaceholder": "Z:\\SharedDrive\\EBSD_Database",
+    "databaseRootPlaceholderMac": "/Volumes/Share/EBSD_Database",
+    "databaseRootPlaceholderLinux": "/mnt/share/EBSD_Database",
     "databaseRootTooltip": "网络驱动器上共享 EBSD 数据库根目录的路径。",
     "discovery": {
       "sht": "SHT 数据库",
@@ -233,12 +241,18 @@
       "infoMacos": "在 macOS 上，EMsoft 无需 WSL 直接安装。点击下方的“Run Install”开始安装。",
       "infoLinux": "在 Linux 上，EMsoft 无需 WSL 直接安装。点击下方的“Run Install”开始安装。",
       "alreadyInstalled": "EMsoft 二进制文件已安装并在 PATH 中可用。"
+    },
+    "notOffered": {
+      "title": "EMsoft（可选）",
+      "status": "未配置",
+      "infoMacos": "Orienta Engine 可在这台 Mac 上运行，且不需要 EMsoft：主花样、蒙特卡洛和 SHT 都能在没有 EMsoft 的情况下完成。EMsoft 本身在这里尚未提供。安装脚本确实包含 macOS 分支（通过 Homebrew），但还没有人运行过它；一个大型 Fortran 项目的未经测试的构建，不应该由一个按钮来启动。",
+      "infoLinux": "Orienta Engine 可在这台计算机上运行，且不需要 EMsoft：主花样、蒙特卡洛和 SHT 都能在没有 EMsoft 的情况下完成。EMsoft 本身在这里尚未提供。安装脚本确实包含 Linux 分支（通过 apt），但还没有人运行过它；一个大型 Fortran 项目的未经测试的构建，不应该由一个按钮来启动。"
     }
   },
   "about": {
       "title": "关于 Orienta",
       "copyright": "Orienta — EBSD 花样分析 · Copyright © 2026 Orienta authors",
-      "licenseLine": "本程序是自由软件：您可以依据 GNU 通用公共许可证第 3 版（或您选择的任何更高版本）的条款再分发和/或修改它。",
+      "licenseLine": "本程序是自由软件：您可以依据 GNU 通用公共许可证第 3 版（或您选择的任何更高版本）的条款再分发和/或修改它。安装的软件包还包含 PyQt5，它仅按 GPL 第 3 版授权；包含它的副本可依据第 3 版再分发（见 NOTICE.md）。",
       "noWarranty": "本程序不提供任何担保（按“现状”提供）。在适用法律允许的最大范围内，作者、版权持有人及其所属机构对使用本软件造成的任何损害（包括数据丢失或损坏、结果不准确）概不负责。",
       "dataNote": "所有处理均在本机本地进行，您的数据绝不会传输给作者。Orienta 以只读方式打开测量文件，结果写入单独的文件——但仍请保留原始数据的备份，并在依赖自动结果（标定、物相识别、定量）之前进行独立验证。",
       "viewLicense": "完整许可证文本 (GPL-3.0)",
@@ -272,6 +286,10 @@
     "versions": "当前：{{current}} · 可用：{{latest}}",
     "whatHappens": "Orienta 将下载新版本、安装有变更的依赖包、重新构建界面，然后重启。这可能需要几分钟。如果失败，您当前的版本会保持不变。",
     "manualOnly": "此安装无法自动更新。",
+    "installerOnly": "此安装通过运行新的安装程序进行更新。",
+    "installerHow": "它是从安装包部署的，因此没有可拉取和重新构建的源。请下载新版本的安装程序并运行；您的数据文件夹、设置和已安装的环境都会保留在原处。",
+    "rateLimited": "GitHub 暂时拒绝了此次检查（来自该网络的请求过多）。请几分钟后重试。",
+    "checkIncomplete": "检查未能完成（{{reason}}）。",
     "manualHow": "它是通过下载的压缩包安装的，而非 git 克隆，因此没有可更新的来源。请下载新版本并按 INSTALL.md 的步骤操作，或改用基于 git 的安装以获得自动更新。",
     "install": "安装更新",
     "later": "稍后",
@@ -301,5 +319,38 @@
     "confirmPassword": "重新输入新的 WSL 用户密码以确认一致。",
     "newPassword": "为现有的 WSL 用户输入新密码。",
     "confirmNewPassword": "重新输入新密码以确认一致。"
-  }
+  },
+    "removeData": {
+      "title": "删除 Orienta 数据",
+      "intro": "删除应用程序并不会删除它下载的内容。这里删除 Orienta 自己的文件；您自己放入的文件会保留。",
+      "folder": "文件夹",
+      "button": "删除数据…",
+      "askFiles": "是否也删除下载的 Python 和程序文件（2.5 到 8 GB）？除非您在下一步另行选择，否则保留晶体库。",
+      "askLibrary": "是否也删除您的晶体库？其中包含您收集的结构和模拟。",
+      "yes": "是，删除",
+      "no": "取消",
+      "yesLibrary": "是，删除晶体库",
+      "keepLibrary": "否，保留晶体库",
+      "busy": "正在删除…",
+      "done": "已删除 Orienta 的文件。",
+      "failed": "未删除任何内容。",
+      "refused": {
+        "notOurs": "无法确认该文件夹属于 Orienta，未做任何更改。",
+        "isRepo": "这是源代码文件夹，不是数据文件夹。未做任何更改。",
+        "isLink": "该文件夹是链接。绝不跟随链接；未做任何更改。",
+        "isHome": "这是您的主目录。未做任何更改。",
+        "tooShallow": "这是驱动器根目录。未做任何更改。",
+        "noFolder": "没有可删除的数据文件夹。",
+        "error": "无法读取该文件夹。",
+        "notHere": "在本系统上由卸载程序处理。",
+        "backendRunning": "Orienta 的后端仍在运行，未删除任何内容。请先关闭 Orienta 再试。"
+      },
+      "partly": "已删除 Orienta 的文件；晶体库已保留。",
+      "someLeft_one": "有 1 项无法删除，仍在文件夹中。",
+      "someLeft_other": "有 {{count}} 项无法删除，仍在文件夹中。",
+      "libraryWasLink": "您的晶体库是一个链接。链接已删除，所指向的文件未被触动。",
+      "keptList": "已保留：{{list}}",
+      "keepsForeign_one": "将保留您添加的 1 个文件。",
+      "keepsForeign_other": "将保留您添加的 {{count}} 个文件。"
+    }
 }

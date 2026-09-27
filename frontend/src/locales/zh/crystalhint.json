@@ -202,7 +202,7 @@
     "inLibraryBadge": "库中已有",
     "viewCif": "查看 CIF #{{id}}",
     "savedToLibrary": "✓ 已保存到库",
-    "nextStep": "下一步: 在 Simulation 标签页生成 SHT (CIF → XTAL → MC → Master → SHT，经 WSL/EMsoft 约 30-60 分钟)。",
+    "nextStep": "下一步：在模拟选项卡中生成 SHT（CIF → XTAL → MC → Master → SHT，使用 EMsoft 约 30-60 分钟）。",
     "openInSimulation": "→ 在 Simulation 中打开",
     "openInSimulationTooltip": "用此 CIF 预填 Simulation 页面以生成其 SHT 主花样。",
     "downloadFailed": "✗ {{msg}}",

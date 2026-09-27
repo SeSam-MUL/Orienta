@@ -50,7 +50,7 @@ VALUE_PLACEHOLDER = re.compile(
 #: Names that end in KEY but mean a storage slot, an i18n string or a dict key.
 BENIGN_NAME = re.compile(
     r"(storage|i18n|label|tip|cache|splitter|panel|sort|theme|locale|column|"
-    r"prop|field|query|group|map)_?key", re.IGNORECASE)
+    r"prop|field|query|group|map|row|cell|node|tab)_?key", re.IGNORECASE)
 #: Binary and data formats — everything else that decodes as text is scanned.
 BINARY_SUFFIXES = {
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".gz",
@@ -87,8 +87,12 @@ def _tracked_text_files():
     for rel in out.splitlines():
         if not rel or rel.startswith("frontend/node_modules"):
             continue
-        # This file carries invented keys on purpose, to prove the guard bites.
-        if rel.endswith("tests/test_no_hardcoded_secrets.py"):
+        # These two carry invented keys on purpose, to prove a guard bites.
+        # test_port_guard.py gained them when the port guard grew its own
+        # credential rule after the 2026-09-25 audit; without this exemption
+        # the two guards report each other for ever.
+        if rel.endswith(("tests/test_no_hardcoded_secrets.py",
+                         "tests/test_port_guard.py")):
             continue
         p = REPO_ROOT / rel
         if p.suffix.lower() in BINARY_SUFFIXES or rel.endswith("package-lock.json"):

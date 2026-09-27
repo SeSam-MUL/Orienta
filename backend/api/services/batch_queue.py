@@ -5,6 +5,8 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+
+from display_names import display_stem
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -106,7 +108,7 @@ class BatchQueue:
                         (
                             batch_id,
                             fp,
-                            Path(fp).stem,
+                            display_stem(fp),
                             phase["name"],
                             phase["path"],
                             phase["method"],

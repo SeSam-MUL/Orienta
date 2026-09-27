@@ -106,52 +106,73 @@ def test_is_pseudosymmetric():
 
 
 # ----------------------------------------------------------------------
-# spherical_unreliable_pointgroup — the broader gate for the AUTO Hough
-# substitution (z_rot==2 masters: orthorhombic mmm + cubic approximants).
+# spherical_unreliable — the gate for the AUTO Hough substitution.
+#
+# Until 2026-09-22 it fired for every z_rot==2 master (m-3/23, -43m, mmm/222/mm2).
+# Measured after the decode fix (a4b7710c + 13dd72f4), raw spherical against the
+# truth on 48 synthetic patterns per master: m-3 0.17 deg / 100 % <= 2 deg,
+# mmm 0.26 / 100 %, but -43m 58 % with the rest exactly 90 deg off; on 81 real
+# S-phase patterns (7050) the sphere renders 0.711 vs Hough 0.703 and sits
+# 0.33 deg from it. So only -43m (and a z_rot==2 master of unknown class) still
+# takes Hough; see tasks/retire-hough/.
 # ----------------------------------------------------------------------
-def test_spherical_unreliable_pointgroup():
-    from backend.spherical_gpu.pseudosym import spherical_unreliable_pointgroup
-    # ALL z_rot==2 point groups the SHT loader can emit (it stores the crystal
-    # point group, not the Laue class) — the SHT-spherical SO(3) correlation can't
-    # form a sharp peak for any of them -> orientations come from Hough.
-    for pg in ("mmm", "222", "mm2",   # orthorhombic (mmm = S-phase Al2CuMg)
-               "m-3", "23", "-43m"):  # cubic z_rot=2 (-43m = Mg17Al12)
-        assert spherical_unreliable_pointgroup(pg) is True, pg
-    # symmetries the spherical correlation handles correctly (z_rot 1 / >=3)
+def test_zrot2_pointgroup_is_the_fact_not_the_gate():
+    from backend.spherical_gpu.pseudosym import zrot2_pointgroup
+    for pg in ("mmm", "222", "mm2", "m-3", "23", "-43m", " mmm "):
+        assert zrot2_pointgroup(pg) is True, pg
     for pg in ("m-3m", "432", "4/mmm", "6/mmm", "-6m2", "2/m", "-1", "3", "-3m"):
+        assert zrot2_pointgroup(pg) is False, pg
+
+
+def test_spherical_unreliable_pointgroup_is_only_minus43m_now():
+    from backend.spherical_gpu.pseudosym import spherical_unreliable_pointgroup
+    assert spherical_unreliable_pointgroup("-43m") is True
+    assert spherical_unreliable_pointgroup(" -43m ") is True
+    for pg in ("mmm", "222", "mm2", "m-3", "23",           # the decode fix covers these
+               "m-3m", "432", "4/mmm", "6/mmm", "2/m", "-1"):
         assert spherical_unreliable_pointgroup(pg) is False, pg
-    # point_group strings come from file metadata -> be whitespace tolerant
-    assert spherical_unreliable_pointgroup(" mmm ") is True
 
 
-def test_spherical_unreliable_prefers_zrot():
-    # The AUTHORITATIVE determinant is the master's z_rot (== 2), matching the
-    # per-pattern phase-test path; the name is only a fallback when z_rot is None.
+def test_spherical_unreliable_gates_on_zrot_then_on_the_class():
     from backend.spherical_gpu.pseudosym import spherical_unreliable
+    # not z_rot 2 -> never, whatever the name says
+    assert spherical_unreliable(z_rot=4, point_group="-43m") is False
+    assert spherical_unreliable(z_rot=1, point_group="m-3") is False
+    # z_rot 2: the class decides
+    assert spherical_unreliable(z_rot=2, point_group="m-3") is False
+    assert spherical_unreliable(z_rot=2, point_group="mmm") is False
+    assert spherical_unreliable(z_rot=2, point_group="-43m") is True
+    # z_rot 2 with no usable class -> keep the safety net (fail closed)
+    assert spherical_unreliable(z_rot=2, point_group=None) is True
     assert spherical_unreliable(z_rot=2, point_group="anything") is True
-    assert spherical_unreliable(z_rot=4, point_group="mmm") is False   # z_rot wins
-    assert spherical_unreliable(z_rot=1, point_group="m-3") is False   # z_rot wins
-    # fallback to the name set when z_rot is unavailable
-    assert spherical_unreliable(z_rot=None, point_group="mmm") is True
+    # z_rot unavailable: the name decides
     assert spherical_unreliable(z_rot=None, point_group="-43m") is True
+    assert spherical_unreliable(z_rot=None, point_group="mmm") is False
     assert spherical_unreliable(z_rot=None, point_group="m-3m") is False
-    # robust to a non-int z_rot (falls back to the name)
-    assert spherical_unreliable(z_rot="2", point_group="m-3m") is True
-    assert spherical_unreliable(z_rot="bad", point_group="mmm") is True
+    assert spherical_unreliable(z_rot="2", point_group="-43m") is True
+    assert spherical_unreliable(z_rot="bad", point_group="-43m") is True
 
 
-def test_spherical_unreliable_is_superset_of_pseudosymmetric():
-    # Every auto-pseudo-symmetric class (m-3, 23) is also spherical-unreliable;
-    # mmm/-43m are spherical-unreliable but NOT pseudo-symmetric: mmm is the true
-    # orthorhombic holohedry, and -43m has an empty pseudo-coset under the
-    # centrosymmetric holohedry — yet both are z_rot==2, so the correlation still
-    # can't peak and they must take Hough orientations.
+def test_the_switch_restores_the_old_gate(monkeypatch):
+    """ORIENTA_HOUGH_ANCHOR_ALL_ZROT2=1 puts every z_rot==2 class back on Hough —
+    the way back, and the A/B the change was measured with."""
     from backend.spherical_gpu.pseudosym import (
-        spherical_unreliable_pointgroup, is_pseudosymmetric)
+        spherical_unreliable, spherical_unreliable_pointgroup)
+    monkeypatch.setenv("ORIENTA_HOUGH_ANCHOR_ALL_ZROT2", "1")
+    for pg in ("m-3", "23", "mmm", "222", "mm2", "-43m"):
+        assert spherical_unreliable(z_rot=2, point_group=pg) is True, pg
+        assert spherical_unreliable_pointgroup(pg) is True, pg
+    assert spherical_unreliable(z_rot=4, point_group="m-3m") is False
+    monkeypatch.setenv("ORIENTA_HOUGH_ANCHOR_ALL_ZROT2", "0")
+    assert spherical_unreliable(z_rot=2, point_group="m-3") is False
+
+
+def test_pseudosymmetric_classes_are_no_longer_hough_anchored():
+    # is_pseudosymmetric (m-3, 23) still names the cubic approximants for the
+    # variant tools; it no longer implies the Hough substitution.
+    from backend.spherical_gpu.pseudosym import is_pseudosymmetric, spherical_unreliable
     for pg in ("m-3", "23"):
-        assert is_pseudosymmetric(pg) and spherical_unreliable_pointgroup(pg)
-    for pg in ("mmm", "-43m", "222", "mm2"):
-        assert spherical_unreliable_pointgroup(pg) and not is_pseudosymmetric(pg)
+        assert is_pseudosymmetric(pg) and not spherical_unreliable(z_rot=2, point_group=pg)
 
 
 # ----------------------------------------------------------------------

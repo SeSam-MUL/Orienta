@@ -96,7 +96,21 @@ def update_start(payload: dict = Body(...)) -> dict:
     tag = str(payload.get("tag") or "").strip()
     if not updater.parse_version(tag):
         raise HTTPException(status_code=400, detail=f"Not a release tag: {tag!r}")
-    if updater.install_kind() != "git":
+    kind = updater.install_kind()
+    if kind == "bundle":
+        # It CAN be updated — by running the new installer, which fetches the
+        # matching runtime package. Refusing with "cannot update itself" sent
+        # a tester nowhere; name the way that works.
+        from backend.api.services import github_releases
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This installation is updated by running the new installer. "
+                f"Download it from {github_releases.releases_page_url()} and "
+                "run it; your data and settings stay where they are."
+            ),
+        )
+    if kind != "git":
         raise HTTPException(
             status_code=400,
             detail="This installation cannot update itself (no git checkout).",

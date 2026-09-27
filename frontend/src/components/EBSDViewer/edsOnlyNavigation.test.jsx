@@ -14,10 +14,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// The page list is imported, not grepped. It lived inside App.jsx until
+// 2026-09-25; when it moved, a source scan for it stopped finding it and this
+// test began to fail for a reason that had nothing to do with navigation.
+import { SIDEBAR_PAGES } from '../shared/sidebarPages';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const src = readFileSync(resolve(here, 'EBSDViewer.jsx'), 'utf8');
-const app = readFileSync(resolve(here, '../../App.jsx'), 'utf8');
 
 describe('EDS-only files go straight to the EDS page', () => {
   it('navigates after a load', () => {
@@ -36,8 +39,9 @@ describe('EDS-only files go straight to the EDS page', () => {
 
   it("uses a page id the router actually knows", () => {
     // A previous bug shipped 'phase-map' where the router wanted 'phasemap',
-    // producing a blank screen. Pin the id against App.jsx.
-    expect(app).toMatch(/\bid:\s*'eds'/);
+    // producing a blank screen. Pin the id against the list the router reads.
+    const ids = SIDEBAR_PAGES.filter((p) => !p.sectionKey).map((p) => p.id);
+    expect(ids).toContain('eds');
   });
 
   it('lists onNavigate in the deps of every callback that navigates', () => {

@@ -999,6 +999,32 @@ export const dbApi = {
     api.post('/api/database/download', { files, overwrite }, { signal }),
 };
 
+// --- Phase collections ---
+// No path parameters: the name goes in the body, or in the query string for
+// the one read that needs it. A collection may be called "Al / Si", which no
+// path segment can carry, and a `{name}` route would shadow `/state`.
+export const collectionsApi = {
+  list: () => api.get('/api/phase-collections/'),
+  create: (body) => api.post('/api/phase-collections/', body),
+  update: (body) => api.put('/api/phase-collections/update', body),
+  rename: (name, newName) =>
+    api.patch('/api/phase-collections/rename', { name, new_name: newName }),
+  remove: (name) =>
+    api.delete('/api/phase-collections/', { data: { name } }),
+  addMembers: (name, keys, position = null) =>
+    api.post('/api/phase-collections/members', { name, keys, position }),
+  removeMembers: (name, keys) =>
+    api.delete('/api/phase-collections/members', { data: { name, keys } }),
+  putState: ({ active, hidden }) =>
+    api.put('/api/phase-collections/state',
+            { active: active ?? null, hidden: hidden ?? [] }),
+  resolve: (name, method) =>
+    api.get('/api/phase-collections/resolve', { params: { name, method } }),
+  suggest: () => api.post('/api/phase-collections/suggest'),
+  applySuggest: (accepted) =>
+    api.post('/api/phase-collections/suggest/apply', { accepted }),
+};
+
 // --- EDS ---
 /**
  * The weights that actually say something.

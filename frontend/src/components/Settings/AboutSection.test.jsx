@@ -10,10 +10,14 @@ const mockGetAppVersion = vi.fn(() => Promise.resolve({
   source: 'git',
 }));
 const mockExportDiagnostics = vi.fn(() => Promise.resolve(new Blob(['zip'])));
+const mockCheckForUpdate = vi.fn(() => Promise.resolve({
+  available: false, reason: 'up_to_date', install_kind: 'git',
+}));
 
 vi.mock('../../services/api', () => ({
   getAppVersion: (...a) => mockGetAppVersion(...a),
   exportDiagnostics: (...a) => mockExportDiagnostics(...a),
+  checkForUpdate: (...a) => mockCheckForUpdate(...a),
 }));
 
 const mockDownloadBlob = vi.fn();
@@ -99,5 +103,48 @@ describe('AboutSection', () => {
     });
     const [, filename] = mockDownloadBlob.mock.calls[0];
     expect(filename).toMatch(/^orienta-problem-report-\d{4}-\d{2}-\d{2}\.zip$/);
+  });
+});
+
+// A manual check must SAY something. The reason-to-message map used to render
+// nothing at all for a reason nobody had listed — the user pressed the button
+// and the line stayed empty, which reads as "everything is fine". An installed
+// copy now asks GitHub directly, so it can hear reasons a git checkout never
+// hears (rate limits above all: GitHub counts unauthenticated calls per IP, so
+// one busy university network is enough).
+describe('AboutSection — what a manual update check says', () => {
+  const clickCheck = async (result) => {
+    mockCheckForUpdate.mockResolvedValueOnce(result);
+    const view = render(<AboutSection />);
+    fireEvent.click(view.getByText('Check for updates'));
+    return view;
+  };
+
+  it('names a rate limit instead of claiming the app is current', async () => {
+    const { getByText, queryByText } = await clickCheck({
+      available: false, reason: 'rate_limited', install_kind: 'bundle',
+    });
+    await waitFor(() => {
+      expect(getByText(/too many requests from this network/)).toBeTruthy();
+    });
+    expect(queryByText('You have the latest version.')).toBeNull();
+  });
+
+  it('says the raw reason rather than nothing when it does not know one', async () => {
+    const { getByText } = await clickCheck({
+      available: false, reason: 'something_nobody_mapped', install_kind: 'bundle',
+    });
+    await waitFor(() => {
+      expect(getByText(/something_nobody_mapped/)).toBeTruthy();
+    });
+  });
+
+  it('still says "up to date" when that is the answer', async () => {
+    const { getByText } = await clickCheck({
+      available: false, reason: 'up_to_date', install_kind: 'bundle',
+    });
+    await waitFor(() => {
+      expect(getByText('You have the latest version.')).toBeTruthy();
+    });
   });
 });

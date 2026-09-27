@@ -23,8 +23,24 @@
     "downloadAllTooltip": "打开下载对话框：选择要从服务器拉取到本地缓存的类别（SHT、Master、CIF、XTAL……），并带进度条。",
     "uploadSelected": "上传到服务器（{{count}}）",
     "uploadSelectedTooltip": "将所选本地文件（任意类型 — SHT、MC h5、Master、CIF、XTAL）复制到服务器。除非您确认覆盖，否则内容不同的服务器副本将被保留。",
+    "manageCollectionsTooltip": "创建、重命名合集，并将相归档到合集中。详见“Phase Collections”指南。",
+    "moveToCollection_one": "将 {{count}} 个文件移动到合集…",
+    "moveToCollection_other": "将 {{count}} 个文件移动到合集…",
+    "moveToCollectionTooltip": "将所选的相移动到此合集。它们会离开之前所在的任何其他独占合集 — 移动到工作集则不会。",
+    "moveToCollectionNoneYet": "还没有合集 — 请先在“管理合集…”中创建一个。",
+    "moveToCollectionNotAPhase": "不是相 — 请归档 CIF（或 XTAL）；派生文件（SHT、master、MC、dictionary）会自动跟随。",
+    "movedToCollection_one": "已将 {{count}} 个相移动到“{{name}}”。",
+    "movedToCollection_other": "已将 {{count}} 个相移动到“{{name}}”。",
+    "moveToCollectionFailed": "移动到合集失败：{{error}}",
     "deleteSelected": "删除所选（{{count}}）",
     "deleteSelectedTooltip": "删除所选文件，并进行级联依赖解析"
+  },
+  "groups": {
+    "unassigned": "未归档",
+    "expandTooltip": "展开此合集。",
+    "collapseTooltip": "折叠此合集。",
+    "showTooltip": "在选择器中重新显示此合集。",
+    "hideTooltip": "在选择器中隐藏此合集（文件仍保留在此处）。"
   },
   "filter": {
     "searchPlaceholder": "搜索文件...",

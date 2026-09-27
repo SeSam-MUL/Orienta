@@ -1,3 +1,7 @@
+% EBSDanalysis_frame.m - MATLAB/MTEX reference scripts of Orienta (see README.md in this folder)
+% Copyright (C) 2026 Dr. Irmgard Weissensteiner and Montanuniversitaet Leoben (ASCII spelling; see LICENSE)
+% SPDX-License-Identifier: GPL-2.0-or-later
+% This header was added for publication; the code below is as received.
 %% setup mtex, clear varables and set mtexPath & directions
 
 clear
@@ -6,9 +10,9 @@ home
 
 %mtex path - CHANGE & add path for further scripts
 
-mtexpath="C:\Ori_Data\mtex-6.1.0";
+mtexpath="<path to your MTEX installation>";
 addpath(mtexpath);
-addpath('C:\Ori_Data\Matlab Skripte');
+addpath('<path to this scripts folder>');
 startup_mtex
 
 % Establish plotting convention - Aztec
@@ -22,7 +26,7 @@ h = Miller({1,0,0},{1,1,0},{1,1,1}, CS);
 
 % where are the files
 
-foldername=['C:\CDL_DePIct-Al\_Wissenschaft\Al Batteries\Al-Mn Al-Mg\h5oina' ...
+foldername=['<path to your .h5oina folder>' ...
     '\'];
 cd(foldername);
 
@@ -486,7 +490,7 @@ disp 'finished'
 
 %% extract dependencies
 % Define the function folder and name
-functionFolder = ['C:\Ori_Data\Matlab Skripte'];
+functionFolder = ['<path to this scripts folder>'];
 % functionName = 'EBSDanalysis_frame_2Phase.m';
 functionName = 'EBSDanalysis_frame.m';
 

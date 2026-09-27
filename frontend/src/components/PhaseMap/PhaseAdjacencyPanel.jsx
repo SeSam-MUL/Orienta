@@ -1,3 +1,4 @@
+import { problemText } from '../../services/problemText';
 import React, { useEffect, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { phaseMapApi } from '../../services/api';
@@ -42,7 +43,7 @@ function PhaseAdjacencyPanel({ resultId }) {
       .catch((err) => {
         if (cancelled) return;
         setError(
-          err?.response?.data?.detail || err?.message || t('phasemap:adjacency.loadFailed'),
+          problemText(err, t, 'phasemap') || t('phasemap:adjacency.loadFailed'),
         );
         setData(null);
       })

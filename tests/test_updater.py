@@ -67,7 +67,15 @@ def test_install_kind_zip_without_remote(monkeypatch, tmp_path):
 def test_install_kind_git(monkeypatch, tmp_path):
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(updater, "PROJECT_ROOT", tmp_path)
-    monkeypatch.setattr(updater, "_git_out", lambda *a, **k: "https://example/x.git")
+    # Answer per subcommand: install_kind now anchors on `rev-parse
+    # --show-toplevel` (because `git -C` searches upward, and because a worktree
+    # has a `.git` FILE), so a stub that returns a remote URL for every question
+    # would fail the anchoring check rather than exercise it.
+    monkeypatch.setattr(
+        updater, "_git_out",
+        lambda *a, **k: str(tmp_path) if a[:2] == ("rev-parse", "--show-toplevel")
+        else "https://example/x.git",
+    )
     assert updater.install_kind() == "git"
 
 
@@ -352,3 +360,170 @@ def test_start_update_refuses_a_second_run(monkeypatch):
     assert updater.start_update("v0.9.0") is True
     updater._progress["state"] = "running"
     assert updater.start_update("v0.9.0") is False
+
+
+# --------------------------------------------------------------------------
+# Python dependencies: pip everywhere except a conda env on macOS
+def _deps(tmp_path, platform, conda_env, environ, req=False, mac=False):
+    if conda_env:
+        (tmp_path / "conda-meta").mkdir()
+    return updater.python_dependency_command(
+        requirements_changed=req, macos_env_changed=mac, platform=platform,
+        prefix=str(tmp_path), environ=environ, executable="PY")
+
+
+def test_deps_pip_when_requirements_changed_on_windows(tmp_path):
+    cmd, refusal = _deps(tmp_path, "win32", True, {}, req=True)
+    assert cmd == ["PY", "-m", "pip", "install", "-r", "requirements.txt"]
+    assert refusal is None
+
+
+def test_deps_skipped_when_nothing_changed(tmp_path):
+    assert _deps(tmp_path, "darwin", True, {"CONDA_EXE": "c"}) == (None, None)
+    assert _deps(tmp_path / "x", "win32", False, {}, mac=True) == (None, None)
+
+
+def test_deps_macos_conda_never_uses_pip(tmp_path):
+    """pip into the macOS conda env brings back a second libomp -> OMP Error #15."""
+    cmd, refusal = _deps(tmp_path, "darwin", True, {"CONDA_EXE": "/c/conda"}, req=True)
+    assert refusal is None
+    assert cmd == ["/c/conda", "env", "update", "-p", str(tmp_path),
+                   "-f", "environment-macos.yml"]
+    assert "pip" not in cmd
+
+
+def test_deps_macos_conda_follows_the_environment_file(tmp_path):
+    cmd, _ = _deps(tmp_path, "darwin", True, {"CONDA_EXE": "c"}, mac=True)
+    assert cmd and cmd[1:3] == ["env", "update"]
+
+
+def test_deps_macos_conda_without_conda_refuses_instead_of_pip(tmp_path, monkeypatch):
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    (tmp_path / "conda-meta").mkdir()
+    cmd, refusal = updater.python_dependency_command(
+        requirements_changed=True, macos_env_changed=False, platform="darwin",
+        prefix=str(tmp_path), environ={}, executable="PY", target_tag="v0.5.0")
+    assert cmd is None
+    # the refusal rolls the code back, so it must name the TARGET version
+    assert "git checkout v0.5.0" in refusal
+    assert f"-p {tmp_path} -f environment-macos.yml" in refusal
+
+
+def test_deps_macos_finds_conda_next_to_the_env_without_conda_exe(tmp_path, monkeypatch):
+    """Finder/Dock launches have no CONDA_EXE; <base>/envs/ebsd -> <base>/bin/conda."""
+    import shutil
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    env = tmp_path / "envs" / "ebsd"
+    (env / "conda-meta").mkdir(parents=True)
+    (tmp_path / "bin").mkdir()
+    (tmp_path / "bin" / "conda").write_text("")
+    cmd, refusal = updater.python_dependency_command(
+        requirements_changed=True, macos_env_changed=False, platform="darwin",
+        prefix=str(env), environ={}, executable="PY")
+    assert refusal is None
+    assert cmd[0] == str(tmp_path / "bin" / "conda")
+    assert cmd[1:] == ["env", "update", "-p", str(env), "-f", "environment-macos.yml"]
+
+
+def test_deps_macos_venv_keeps_pip(tmp_path):
+    cmd, _ = _deps(tmp_path, "darwin", False, {}, req=True)
+    assert cmd[:3] == ["PY", "-m", "pip"]
+
+
+# --------------------------------------------------------------------------
+# an installed copy: dmg, AppImage, Setup.exe
+# --------------------------------------------------------------------------
+#
+# Until 2026-09-24 every packaged installation was answered with
+# `not_a_git_install` WITHOUT asking anybody, and the interface renders that
+# as "This installation cannot update itself." So a tester on a dmg was told
+# nothing existed while the release sat on the page -- and the module
+# docstring calls that sentence the one this work exists to delete.
+
+def _fake_bundle(monkeypatch, *, release=None, why="", current="v0.4.5"):
+    """A bundle install whose GitHub answer is ours to choose."""
+    from backend.api.services import github_releases
+
+    monkeypatch.setattr(updater, "install_kind", lambda: "bundle")
+    monkeypatch.setattr(
+        updater, "get_version_info",
+        lambda: {"version": current or "x", "release": current},
+    )
+    monkeypatch.setattr(github_releases, "latest_release",
+                        lambda *a, **k: (release, why))
+    monkeypatch.setattr(github_releases, "releases_page_url",
+                        lambda: "https://example.invalid/releases")
+
+
+def test_a_packaged_install_is_offered_the_new_installer(monkeypatch):
+    _fake_bundle(monkeypatch, current="v0.4.5",
+                 release={"tag_name": "v0.5.0", "body": "## 0.5.0\nnotes"})
+    r = updater.check_for_update(force=True)
+    assert r["available"] is True
+    assert r["install_kind"] == "bundle"
+    assert r["latest"] == "v0.5.0"
+    assert r["reason"] == "bundle_download"
+    # Where to get it, resolved by the backend so ORIENTA_RELEASES_URL works.
+    assert r["download_url"] == "https://example.invalid/releases"
+    # The notes of the version being OFFERED. The local CHANGELOG describes
+    # the OLD one, so `_changelog_for` would have shown the wrong release.
+    assert "0.5.0" in r["notes"]
+    # The regression this whole branch is about.
+    assert r["reason"] != "not_a_git_install"
+
+
+def test_a_packaged_install_that_is_current_says_so(monkeypatch):
+    _fake_bundle(monkeypatch, current="v0.5.0", release={"tag_name": "v0.5.0"})
+    r = updater.check_for_update(force=True)
+    assert r["available"] is False
+    assert r["reason"] == "up_to_date"
+
+
+def test_a_packaged_install_is_never_offered_a_downgrade(monkeypatch):
+    _fake_bundle(monkeypatch, current="v0.5.0", release={"tag_name": "v0.4.0"})
+    r = updater.check_for_update(force=True)
+    assert r["available"] is False
+    assert r["reason"] == "up_to_date"
+
+
+@pytest.mark.parametrize("why", ["rate_limited", "unreachable", "not_found"])
+def test_a_packaged_install_says_why_it_could_not_look(monkeypatch, why):
+    """"Could not ask" must never read as "nothing is available".
+
+    GitHub rate-limits unauthenticated callers per IP, so a shared university
+    network hits this without anything being wrong with the installation.
+    """
+    _fake_bundle(monkeypatch, release=None, why=why)
+    r = updater.check_for_update(force=True)
+    assert r["available"] is False
+    assert r["reason"] == why
+    assert r["reason"] != "up_to_date"
+
+
+def test_a_packaged_install_does_not_guess_at_an_odd_release_name(monkeypatch):
+    """A release called "nightly" is not a version. Answering "up to date"
+    would be a guess dressed as a fact."""
+    _fake_bundle(monkeypatch, current="v0.4.5", release={"tag_name": "nightly"})
+    r = updater.check_for_update(force=True)
+    assert r["available"] is False
+    assert r["reason"] == "no_release_tag"
+
+
+def test_a_packaged_install_without_a_readable_version_is_still_offered(monkeypatch):
+    """`install_kind` returns "bundle" for an unreadable or half-written
+    VERSION file on purpose -- that IS an installed copy, and an update can
+    repair it. It must still be offered the installer."""
+    _fake_bundle(monkeypatch, current=None, release={"tag_name": "v0.5.0"})
+    r = updater.check_for_update(force=True)
+    assert r["available"] is True
+    assert r["latest"] == "v0.5.0"
+
+
+def test_a_zip_install_is_still_told_it_cannot_update(monkeypatch):
+    """The bundle branch must not widen to swallow the zip case: an unpacked
+    archive has no installer to run."""
+    _fake_check(monkeypatch, kind="zip")
+    r = updater.check_for_update(force=True)
+    assert r["reason"] == "not_a_git_install"
+    assert "download_url" not in r

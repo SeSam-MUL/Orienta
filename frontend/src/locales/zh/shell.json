@@ -1,37 +1,16 @@
 {
-  "appTitle": "Orienta",
   "appSubtitle": "EBSD 花样分析",
-  "loadingModule": "正在加载模块…",
-  "toolbar": {
-    "edsColors": "EDS 颜色",
-    "reportProblem": "⚠ 报告问题",
-    "reportProblemTooltip": "描述问题并保存包含日志和版本的报告，可附在错误报告中。",
-    "edsColorsTooltip": "配置 EDS 叠加图的元素颜色",
-    "shortcutsTooltip": "键盘快捷键 (?)"
+  "appTitle": "Orienta",
+  "crash": {
+    "title": "此模块已崩溃"
   },
   "disconnected": {
     "starting": "后端正在启动… {{seconds}} 秒。安装或更新后的首次启动需要加载科学计算库，可能需要一到两分钟。",
     "lost": "与后端的连接已断开 — 正在重新连接…",
     "message": "后端未连接 — 3 分钟内没有响应。请完全关闭 Orienta 并重新启动；如果反复出现，请在 设置 → 报告问题 中生成报告（其中包含记录原因的 logs/backend-console.log）。"
   },
-  "crash": {
-    "title": "此模块已崩溃"
-  },
-  "sidebar": {
-    "expand": "展开侧边栏",
-    "collapse": "折叠侧边栏",
-    "dataLoaded": "数据已加载",
-    "themeTooltip": "主题：{{name}} — 点击切换",
-    "backendTooltip": "后端：{{status}}",
-    "connected": "已连接",
-    "language": "语言"
-  },
   "hdf5": {
     "title": "HDF5 查看器"
-  },
-  "shortcuts": {
-    "title": "键盘快捷键",
-    "closeHint": "按 {{k1}} 或 {{k2}} 关闭"
   },
   "hoverTips": {
     "errorTryAgain": "清除错误并尝试重新挂载此模块，无需重新加载应用",
@@ -48,5 +27,44 @@
     "copyLogs": "复制日志",
     "clearLogs": "清除日志",
     "closeDevPanel": "关闭 (Ctrl+Shift+D)"
+  },
+  "loadingModule": "正在加载模块…",
+  "shortcuts": {
+    "title": "键盘快捷键",
+    "closeHint": "按 {{k1}} 或 {{k2}} 关闭"
+  },
+  "sidebar": {
+    "backendTooltip": "后端：{{status}}",
+    "checking": "检查中…",
+    "collapse": "折叠侧边栏",
+    "connected": "已连接",
+    "dataLoaded": "数据已加载",
+    "disconnected": "未连接",
+    "expand": "展开侧边栏",
+    "language": "语言",
+    "themeTooltip": "主题：{{name}} — 点击切换"
+  },
+  "status": {
+    "backend": "后端：{{state}}",
+    "edsElements": "EDS: {{count}} 个元素",
+    "emsoftMissing": "EMsoft: 未找到",
+    "emsoftOk": "EMsoft: OK",
+    "gpuNone": "无 GPU",
+    "gpuOpencl": "GPU: OpenCL",
+    "noFile": "未加载文件",
+    "sphinxMissing": "EMSphinx: 未找到",
+    "sphinxOk": "EMSphinx: OK",
+    "tasks_one": "{{count}} 个任务",
+    "tasks_other": "{{count}} 个任务",
+    "wslDistro": "WSL: {{distro}}",
+    "wslMissing": "WSL: 未安装",
+    "wslOk": "WSL: OK"
+  },
+  "toolbar": {
+    "edsColors": "EDS 颜色",
+    "reportProblem": "⚠ 报告问题",
+    "reportProblemTooltip": "描述问题并保存包含日志和版本的报告，可附在错误报告中。",
+    "edsColorsTooltip": "配置 EDS 叠加图的元素颜色",
+    "shortcutsTooltip": "键盘快捷键 (?)"
   }
 }

@@ -11,7 +11,7 @@ Algorithms:
 
 Reference:
     MTEX: splineFilter, halfQuadraticFilter, medianFilter
-    matlab_testskripts/ImportAndModify_MTEX6.m lines 111-120
+    matlab_testskripts/ImportAndModify_MTEX6.m lines 115-124
 """
 
 import numpy as np

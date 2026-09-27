@@ -664,11 +664,14 @@ if [ "$IS_MACOS" = true ] && [ -f /usr/local/lib/libpocl.dylib ]; then
 else
   POCL_LIB="libpocl.so"
 fi
-# Verify pocl.icd contains a valid library path (not garbage like "1234")
+# Verify pocl.icd holds a library path and not some other value written over it
 if [ -f /etc/OpenCL/vendors/pocl.icd ]; then
   POCL_CONTENT=$(cat /etc/OpenCL/vendors/pocl.icd)
   if [[ "$POCL_CONTENT" != *"libpocl"* ]]; then
-    echo -n "REPAIRING pocl.icd (was: '$POCL_CONTENT')... "
+    # Report the shape, never the content: an ICD file broken by the old
+    # sudo-wrapper bug can hold the password itself, and every line printed
+    # here is logged to logs/orienta.log, which ships in the diagnostics zip.
+    echo -n "REPAIRING pocl.icd (held ${#POCL_CONTENT} chars, no 'libpocl')... "
     echo "$POCL_LIB" | sudo tee /etc/OpenCL/vendors/pocl.icd > /dev/null
   fi
 elif [ "$IS_MACOS" != true ]; then
@@ -688,7 +691,7 @@ if [ -n "$NV_LIB_PATH" ]; then
   if [ -f /etc/OpenCL/vendors/nvidia.icd ]; then
     NV_CONTENT=$(cat /etc/OpenCL/vendors/nvidia.icd)
     if [[ "$NV_CONTENT" != *"libnvidia-opencl"* ]]; then
-      echo -n "REPAIRING nvidia.icd (was: '$NV_CONTENT')... "
+      echo -n "REPAIRING nvidia.icd (held ${#NV_CONTENT} chars, no 'libnvidia-opencl')... "
       echo "$NV_LIB_PATH" | sudo tee /etc/OpenCL/vendors/nvidia.icd > /dev/null
     fi
   else

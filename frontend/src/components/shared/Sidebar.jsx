@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { backendStateLabel } from './StatusBar';
 import { colors, layout } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeProvider';
 import { Wordmark, BrandMark } from '../common/Brand';
@@ -12,14 +13,14 @@ import { setLanguage, LANGUAGES } from '../../i18n';
 import {
   LayoutDashboard, ScanLine, Atom, Crosshair, Gem, Cpu, HardDrive,
   Grid3x3, Map, BarChart3, Brain, Database, Settings,
-  Package, SlidersHorizontal, Zap,
+  Package, SlidersHorizontal, Zap, Puzzle,
 } from 'lucide-react';
 
 /** Map icon name strings from SIDEBAR_PAGES to Lucide components */
 const ICON_MAP = {
   LayoutDashboard, ScanLine, Atom, Crosshair, Gem, Cpu, HardDrive,
   Grid3x3, Map, BarChart3, Brain, Database, Settings,
-  Package, SlidersHorizontal, Zap,
+  Package, SlidersHorizontal, Zap, Puzzle,
 };
 
 const S = {
@@ -186,10 +187,10 @@ export default function Sidebar({
 
       {/* Status indicator area */}
       <div style={{ ...S.statusArea, justifyContent: collapsed ? 'center' : 'flex-start', padding: collapsed ? '6px 0' : '6px 16px' }}>
-        <span style={{ ...S.statusDot, background: statusColor }} title={`Backend: ${backendStatus}`} />
+        <span style={{ ...S.statusDot, background: statusColor }} title={t('shell:status.backend', { state: backendStateLabel(t, backendStatus) })} />
         {!collapsed && (
           <span style={S.statusLabel}>
-            Backend: {backendStatus}
+            {t('shell:status.backend', { state: backendStateLabel(t, backendStatus) })}
           </span>
         )}
       </div>
@@ -369,7 +370,7 @@ export default function Sidebar({
             {/* Status row */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '8pt' }}>
               <span style={{ ...S.statusDot, background: statusColor }} />
-              <span>{backendStatus === 'connected' ? 'Connected' : backendStatus}</span>
+              <span>{backendStateLabel(t, backendStatus)}</span>
             </div>
           </>
         )}

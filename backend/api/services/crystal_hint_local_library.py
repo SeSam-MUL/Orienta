@@ -28,6 +28,22 @@ CIF_DIR = PROJECT_ROOT / "Database" / "CIF_Library"
 XTAL_DIR = PROJECT_ROOT / "Database" / "XTAL_Library"
 SHT_DIR = PROJECT_ROOT / "Database" / "EBSD_SHT_Database"
 
+def _is_backup(path: Path) -> bool:
+    """True for a repair's leftover copy — it is not a phase.
+
+    On 2026-09-13 a session symmetrised three CIFs and kept the P1 originals
+    as ``<name>.P1-backup-<date>.cif``; the index offered all three in the
+    phase list, so a user could pick the un-symmetrised copy of a phase they
+    already had — the very file whose P1 symmetry makes a Hough reflector
+    library explode (2026-08-03).
+
+    ONE rule, defined in :mod:`cif_phase_library`, so the next backup naming
+    convention is added in one place. Imported inside the function because
+    this module is the light one of the two.
+    """
+    from backend.api.services.cif_phase_library import is_backup_file
+    return is_backup_file(path)
+
 
 # DOMAIN: Al-alloy EBSD only. Revisit if expanding the library to Fe/Ti/Ni
 # systems — (space_group, sorted_elements) is NOT a unique fingerprint in
@@ -256,6 +272,8 @@ def build_index() -> dict[str, LocalEntry]:
     # First pass: walk CIF files
     if CIF_DIR.exists():
         for cif in sorted(CIF_DIR.glob("*.cif")):
+            if _is_backup(cif):
+                continue
             key = cif.stem
             info = _parse_cif(cif)
             if "error" in info:
@@ -289,6 +307,8 @@ def build_index() -> dict[str, LocalEntry]:
     # Second pass: walk XTAL files. Match by stem, augment if CIF missing
     if XTAL_DIR.exists():
         for xtal in sorted(XTAL_DIR.glob("*.xtal")):
+            if _is_backup(xtal):
+                continue
             key = xtal.stem
             info = _parse_xtal(xtal)
             existing = entries.get(key)
@@ -328,7 +348,7 @@ def build_index() -> dict[str, LocalEntry]:
     if SHT_DIR.exists():
         sorted_keys = sorted(entries.keys(), key=lambda k: -len(k))
         for sht in sorted(SHT_DIR.rglob("*.sht")):
-            if sht.stem == "test":
+            if sht.stem == "test" or _is_backup(sht):
                 continue
             sht_stem = sht.stem
             matched = None

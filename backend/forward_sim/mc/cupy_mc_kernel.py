@@ -1,3 +1,8 @@
+# The LFSR113 random-number stream in the kernel below is ported from EMsoft,
+# Source/EMsoftLib/EMMC.cl (BSD-3-Clause):
+#   Copyright (c) 2013-2019, Marc De Graef Research Group/Carnegie Mellon University.
+#   All rights reserved.
+# Full license text: licenses/EMsoft-License.txt; provenance: NOTICE.md.
 """LEVER 1 — one-thread-per-electron CuPy RawKernel Monte Carlo.
 
 This module provides a ``cupy.RawKernel`` that runs each electron's FULL

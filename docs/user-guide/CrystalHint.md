@@ -123,7 +123,9 @@ Then choose one of three modes via the tabs:
   rather than dumping the whole database.
 - **Materials Project results need a configured API key.** Without one, the MP
   side returns nothing and only COD results are shown — this is silent and
-  expected.
+  expected. The key is free (create an account at <https://materialsproject.org/>)
+  and goes into **Settings → API keys**; see
+  [Settings](Settings.md#the-materials-project-key).
 - **Downloading a CIF does not simulate it.** After import you still need to
   convert it ([Crystal Database](CrystalDatabase.md)) and generate the master /
   SHT ([Simulation](Simulation.md)) before you can index against it.

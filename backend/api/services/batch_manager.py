@@ -9,6 +9,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from display_names import display_stem
+
 import numpy as np
 
 from backend.api.services.batch_queue import BatchQueue
@@ -22,7 +24,7 @@ logger = logging.getLogger(__name__)
 def _load_signal(file_path: str):
     """Load an EBSD signal from file. Returns the kikuchipy EBSD signal."""
     from safe_loader import load_ebsd_safe
-    logger.info("Loading signal: %s", Path(file_path).stem)
+    logger.info("Loading signal: %s", display_stem(file_path))
     return load_ebsd_safe(file_path)
 
 
@@ -151,7 +153,7 @@ def _apply_preprocessing(signal, config: Dict):
 def _register_signal_calibration(signal, file_path: str):
     """Register signal's detector/PC in CalibrationStore."""
     from backend.api.services.calibration_store import calibration_store
-    dataset_name = Path(file_path).stem
+    dataset_name = display_stem(file_path)
     if dataset_name not in calibration_store:
         calibration_store.register(dataset_name, signal)
 
@@ -166,7 +168,7 @@ from indexing_controller import SPHERICAL_BACKENDS as _SPHERICAL_BACKENDS
 def _get_detector_for_file(file_path: str, signal=None):
     """Get the best available detector for a file. Never returns None."""
     from backend.api.services.calibration_store import calibration_store
-    dataset_name = Path(file_path).stem
+    dataset_name = display_stem(file_path)
     detector = calibration_store.get_detector(dataset_name)
     if detector is None and signal is not None:
         detector = getattr(signal, "detector", None)
@@ -377,7 +379,7 @@ def run_single_indexing_job(
         )
 
         phase = _Phase.from_cif(sanitize_cif(phase_path))
-        original_stem = _P(phase_path).stem
+        original_stem = display_stem(phase_path)
         if phase.name != original_stem:
             phase.name = original_stem
         phase_list = PhaseList([phase])
@@ -571,7 +573,7 @@ class BatchManager:
             if file_path != current_file:
                 # Unload previous signal
                 if current_signal is not None:
-                    logger.info("Unloading previous signal: %s", Path(current_file).stem)
+                    logger.info("Unloading previous signal: %s", display_stem(current_file))
                     del current_signal
                     current_signal = None
                     gc.collect()
@@ -607,16 +609,16 @@ class BatchManager:
                         if applied_preprocessing:
                             logger.info(
                                 "Preprocessing applied to %s: %s",
-                                Path(file_path).stem, applied_preprocessing,
+                                display_stem(file_path), applied_preprocessing,
                             )
                     elif preprocessing_config and first_method == "spherical":
                         logger.info(
                             "Preprocessing skipped for %s: spherical reads patterns "
-                            "directly from disk", Path(file_path).stem,
+                            "directly from disk", display_stem(file_path),
                         )
                         applied_preprocessing = {"_skipped": "spherical-bypass"}
 
-                    logger.info("Loaded: %s (grid: %s, method: %s)", Path(file_path).stem, grid_shape, first_method)
+                    logger.info("Loaded: %s (grid: %s, method: %s)", display_stem(file_path), grid_shape, first_method)
 
                 except Exception as e:
                     logger.exception("Failed to load %s", file_path)
@@ -660,7 +662,7 @@ class BatchManager:
             cw = checkpoints[file_path]
 
             if cw.phase_already_done(phase_name):
-                logger.info("Skipping %s x %s (already in checkpoint)", Path(file_path).stem, phase_name)
+                logger.info("Skipping %s x %s (already in checkpoint)", display_stem(file_path), phase_name)
                 # Mark status="skipped" (not "done"!) so the jobs table can
                 # visually distinguish checkpoint-resumed rows from ones
                 # indexed in this run. Cached CI values still surface so
@@ -687,7 +689,7 @@ class BatchManager:
             # --- Run indexing ---
             self.queue.update_job(job["id"], status="running")
             if progress_callback:
-                progress_callback(job, f"Indexing {Path(file_path).stem} x {phase_name}")
+                progress_callback(job, f"Indexing {display_stem(file_path)} x {phase_name}")
 
             try:
                 ci_map, orientation_map, metadata = run_single_indexing_job(
@@ -712,12 +714,12 @@ class BatchManager:
                 )
                 logger.info(
                     "Done: %s x %s — CI=%.3f, %.1fs",
-                    Path(file_path).stem, phase_name,
+                    display_stem(file_path), phase_name,
                     metadata["ci_mean"], metadata["duration_sec"],
                 )
 
             except Exception as e:
-                logger.exception("Failed: %s x %s", Path(file_path).stem, phase_name)
+                logger.exception("Failed: %s x %s", display_stem(file_path), phase_name)
                 self.queue.update_job(job["id"], status="failed", error_msg=str(e))
 
             self.guardian.force_cleanup()
@@ -749,7 +751,7 @@ class BatchManager:
                             uncertainty_threshold=unc_thr,
                             min_cluster_size=min_clst,
                         )
-                        logger.info("Cleanup applied to %s: %s", Path(file_path).stem, stats)
+                        logger.info("Cleanup applied to %s: %s", display_stem(file_path), stats)
                     except Exception as e:
                         logger.warning("Cleanup failed for %s: %s", file_path, e)
 
@@ -767,7 +769,7 @@ class BatchManager:
                     continue
                 try:
                     out = export_dir or str(Path(file_path).parent)
-                    pc_entry = calibration_store.get_entry(Path(file_path).stem)
+                    pc_entry = calibration_store.get_entry(display_stem(file_path))
                     pc_val = [float(v) for v in pc_entry.pc_single] if pc_entry else None
                     s_tilt = pc_entry.sample_tilt if pc_entry else 70.0
                     d_shape = pc_entry.detector_shape if pc_entry else None
@@ -787,7 +789,7 @@ class BatchManager:
                         # the original spectra alongside the indexing data.
                         include_eds=bool(batch_config.get("include_eds", True)),
                     )
-                    logger.info("Exported %s: %s", Path(file_path).stem, {k: v for k, v in results.items() if v})
+                    logger.info("Exported %s: %s", display_stem(file_path), {k: v for k, v in results.items() if v})
                 except Exception as e:
                     logger.warning("Export failed for %s: %s", file_path, e)
 

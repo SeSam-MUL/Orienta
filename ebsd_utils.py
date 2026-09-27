@@ -455,10 +455,20 @@ def _capped_triplet_library(max_rows):
     NEXT allocation fail — which is how a user got "Context failed:
     OUT_OF_HOST_MEMORY" out of an OpenCL call that had nothing to do with it.
 
-    The cap is installed on `tripletvote`'s own `np` reference rather than on
-    numpy itself, so nothing outside that module changes, and a lock keeps two
-    builds from swapping the shim out from under each other.
+    The cap lives on a COPY of `BandIndexer.build_trip_lib` whose globals see
+    the shim, installed on the class for the duration of the build; a lock keeps
+    two builds from swapping it out from under each other.
+
+    It must not be `tripletvote`'s own `np`. That was the first design, and
+    numba reads a jitted function's globals when it compiles: `_tripvote_numba`
+    compiles lazily on the first Hough index of a process with a cold cache, and
+    the PC page runs that index next to a preview that builds an indexer under
+    the cap. Numba met the shim ("Cannot determine Numba type of _CappedNumpy")
+    and every later index in that backend failed — on every fresh install, on
+    the first click. The module's `np` is numpy at every moment now.
     """
+    import types
+
     import pyebsdindex.tripletvote as _tv
 
     real_np = _tv.np
@@ -480,11 +490,21 @@ def _capped_triplet_library(max_rows):
             return real_np.zeros(shape, *args, **kwargs)
 
     with _INDEXER_BUILD_LOCK:
-        _tv.np = _CappedNumpy()
+        # Read the method only while holding the lock. Read before it, a second
+        # thread entering during the first one's build takes the first one's
+        # CAPPED copy for the original and puts that back on exit — the class
+        # then keeps a cap for the life of the backend.
+        original = _tv.BandIndexer.build_trip_lib
+        capped_globals = dict(original.__globals__)
+        capped_globals["np"] = _CappedNumpy()
+        capped = types.FunctionType(original.__code__, capped_globals, original.__name__,
+                                    original.__defaults__, original.__closure__)
+        capped.__kwdefaults__ = original.__kwdefaults__
+        _tv.BandIndexer.build_trip_lib = capped
         try:
             yield
         finally:
-            _tv.np = real_np
+            _tv.BandIndexer.build_trip_lib = original
 
 
 def _is_multiphase(ref_hkl):
@@ -616,6 +636,9 @@ def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma
     keep = _normalise_max_reflectors(limits, ref_hkl, n_full)
     budget = _triplet_library_budget_bytes()
     fixed_phases = _standard_setting_phase_list(phase_list)
+
+    from pyebsdindex_mode import force_cpu_band_detection
+    force_cpu_band_detection()
 
     try:
         with _capped_triplet_library(max(1, budget // _TRIPLET_ROW_BYTES)):

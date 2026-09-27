@@ -1,3 +1,9 @@
+# The two 230-entry space-group tables, the CRC-32C table and the harmonic
+# packing routines in this module are ported from SHTfile, sht_file.in.hpp
+# (https://github.com/EMsoft-org/SHTfile, BSD-3-Clause):
+#   Copyright (c) 2019, De Graef Group, Carnegie Mellon University.
+#   All rights reserved.  Author William C. Lenthe.
+# Full license text: licenses/SHTfile-License.txt; provenance: NOTICE.md.
 """SP3 (part 2) — serialise our GPU master into an EMSphInx ``.sht`` file.
 
 The output is a faithful EMSphInx **spherical-harmonics** master file (the binary
@@ -12,8 +18,8 @@ layout the reader (and the EMSphInx C++ ``sht::File::read``) expect.
 What the format is (verified against ``Database/EBSD_SHT_Database/Ni/...sht``)
 ----------------------------------------------------------------------------
 Self-contained little-endian binary (NOT HDF5).  Block order (the C++
-``sht::File::write`` order — :file:`tasks/_research_sht/sht_file.in.hpp` and the
-project reader :mod:`...sht_io`)::
+``sht::File::write`` order — ``sht_file.in.hpp`` at
+https://github.com/EMsoft-org/SHTfile and the project reader :mod:`...sht_io`)::
 
     FileHeader            40 bytes fixed + doi + notes (each 8-byte padded)
         magic '*sht', version (1,1), reserved(2), software(8), modality(1),
@@ -173,10 +179,15 @@ _AT_SYB = [
 ]
 
 # HarmonicsData::SpaceGroupRot — z rotational order per space group (1..230).
-# Verbatim port of the 230-entry table (sht_file.in.hpp:1838).
+# Port of the 230-entry table (sht_file.in.hpp:1838). The first port carried
+# one 2 too many in the orthorhombic block (231 entries), so every group from
+# 75 on read its predecessor's z_rot -- 15 groups wrong (Pm-3m 221, P-43m 215,
+# P23 195, P4/mmm 123, ...), and with them the harmonic packing. Fixed
+# 2026-09-22; tests/test_forward_sim/test_sht_writer.py derives every value
+# from the crystal classes.
 _SG_ROT = (
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2,
-    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+    2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
     2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
     2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
     4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2,
@@ -186,6 +197,8 @@ _SG_ROT = (
     6, 6, 3, 3, 3, 3, 6, 6, 6, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4,
     4, 4, 4, 4, 4, 4, 4, 2, 2, 2, 2, 2, 2, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
 )
+
+assert len(_SG_ROT) == 230, len(_SG_ROT)
 
 # HarmonicsData::SpaceGroupCmp — compression flag per space group (1..230).
 # Verbatim port of the 230-entry table (sht_file.in.hpp:1858).

@@ -1057,18 +1057,31 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
         _SMALL_PAT_PX = 100
         _PC_DRIFT_TOL = 0.05
         _warns = []
+        # Each warning travels as a stable code plus its numbers, so the page
+        # can say it in the reader's language; the English sentence stays as
+        # the fallback and as what goes into the log.
+        _warn_codes = []
         if _pat_min is not None and _pat_min < _SMALL_PAT_PX:
             _warns.append(
                 f"Small patterns ({_ph}×{_pw} px): the Hough/Radon band-fitting this "
                 f"PC refine relies on is unreliable below ~{_SMALL_PAT_PX} px, so the "
                 "refined PC can be noisy. Cross-check it against your vendor/.osc PC.")
+            _warn_codes.append({"code": "smallPatterns",
+                                "params": {"h": _ph, "w": _pw, "limit": _SMALL_PAT_PX}})
         _pc_dev = float(np.max(np.abs(np.asarray(mean_pc, dtype=float) - _ref_pc)))
         if _pc_dev > _PC_DRIFT_TOL:
+            _refined_txt = ", ".join(f"{float(v):.3f}" for v in mean_pc)
+            _start_txt = ", ".join(f"{float(v):.3f}" for v in _ref_pc)
             _warns.append(
                 f"Refined PC moved {_pc_dev:.3f} from the starting PC "
                 f"(refined {[round(float(v), 3) for v in mean_pc]} vs start "
                 f"{[round(float(v), 3) for v in _ref_pc]}). On low-quality / low-res "
                 "patterns this is usually refinement noise — verify before trusting it.")
+            _warn_codes.append({"code": "pcDrift",
+                                # Raw number, locale-formatted on the page.
+                                "params": {"deviation": round(_pc_dev, 3),
+                                           "refined": _refined_txt,
+                                           "start": _start_txt}})
         _pc_warning = "  ".join(_warns) if _warns else None
         if _pc_warning:
             logger.warning("[pc-optimize] %s", _pc_warning)
@@ -1109,6 +1122,7 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
                 "ci": ci,
                 "segments": segments,
                 "pc_warning": _pc_warning,
+                "pc_warning_codes": _warn_codes,
                 "pc_deviation": _pc_dev,
                 "pattern_size": [int(_ph), int(_pw)] if _ph is not None else None,
             }

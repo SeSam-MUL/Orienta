@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { citationsApi } from '../../services/api';
+import useAddonLayerRequests from '../../stores/useAddonLayerRequests';
 import {
   colors, alpha, CollapsibleGroup, Button,
 } from '../../theme/components';
@@ -29,6 +30,11 @@ const TABS = ['bibtex', 'methods', 'plain'];
 
 function CitationsPanel({ resultId }) {
   const { t } = useTranslation('citations');
+  // An add-on run writes its step into the SAME result, so `resultId` does not
+  // change and this panel would go on showing the methods paragraph of the
+  // run before it — with the add-on's sentence missing from the one place the
+  // feature exists to put it.
+  const citationTick = useAddonLayerRequests((s) => s.citationTick);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -72,7 +78,7 @@ function CitationsPanel({ resultId }) {
       .finally(() => {
         if (resultIdRef.current === startedId) setLoading(false);
       });
-  }, [resultId, t]);
+  }, [resultId, citationTick, t]);
 
   // Transient "Copied" label.
   useEffect(() => {

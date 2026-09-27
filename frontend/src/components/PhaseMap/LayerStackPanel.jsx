@@ -284,7 +284,13 @@ export default function LayerStackPanel({
   // Which mode button reads as selected. Taken from the stack itself only as
   // a fallback: once a mode holds more than one layer, "the stack is a single
   // layer called X" stops being true while the user is still inside mode X.
-  const activeQuickMode = activeMode ?? (layers.length === 1 ? layers[0].id : null);
+  // Without an `activeMode` (the EDS page, where the buttons toggle a layer
+  // on top of the stack) a button is lit when its layer is IN the stack.
+  // The old fallback lit it only for a single-layer stack, so on that page a
+  // lit button went dark the moment a second layer was added.
+  const isQuickModeActive = (id) => (
+    activeMode != null ? activeMode === id : layers.some((l) => l.id === id)
+  );
 
   return (
     <CollapsibleGroup title={t('phasemap:layers.title')} defaultCollapsed={false}>
@@ -296,7 +302,7 @@ export default function LayerStackPanel({
           gap: 3,
         }}>
           {QUICK_MODES.map((m) => {
-            const active = activeQuickMode === m.id;
+            const active = isQuickModeActive(m.id);
             return (
               <button
                 key={m.id}

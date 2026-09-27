@@ -190,3 +190,156 @@ def test_preflight_upper_bound_semantics(monkeypatch):
     assert p["max_area_pct"] == pytest.approx(5.0)
     assert p["is_upper_bound"] is True
     assert p["threshold_at_pct"] == PRESENT_AT_PCT
+
+
+# ---------------------------------------------------------------------------
+# Every entry carries a code the UI can translate on
+# ---------------------------------------------------------------------------
+
+def _detail_and_code_dicts(source: str):
+    """Every dict literal in `source` that sets a "detail", as {key: has_code}.
+
+    Parsed with ast, not regex. A first version of this guard counted quoted
+    occurrences of "detail" and "code" and could be walked past twice: a site
+    written with single quotes was invisible, and a "code" whose value sat on
+    the next line was counted but never collected. Both are things a
+    contributor writes without thinking.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    found = []  # (lineno, has_detail, has_code, code_values)
+
+    def keys_of(node):
+        return {k.value for k in node.keys
+                if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+
+    def code_values(node):
+        out = set()
+        for k, v in zip(node.keys, node.values):
+            if not (isinstance(k, ast.Constant) and k.value == "code"):
+                continue
+            out |= _constants(v)
+        return out
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            ks = keys_of(node)
+            if "detail" in ks:
+                found.append((node.lineno, True, "code" in ks, code_values(node)))
+        # entry["detail"] = ... / entry["code"] = ..., which the module also uses
+    return found
+
+
+def _constants(node):
+    """Every string constant a value expression can evaluate to."""
+    import ast
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return {node.value}
+    if isinstance(node, ast.IfExp):
+        return _constants(node.body) | _constants(node.orelse)
+    return set()
+
+
+def _subscript_assignments(source: str):
+    """``entry["detail"] = ...`` / ``entry["code"] = ...``, keyed by target name."""
+    import ast
+    from collections import defaultdict
+
+    tree = ast.parse(source)
+    per_target = defaultdict(lambda: {"detail": [], "code": set()})
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if (isinstance(tgt, ast.Subscript)
+                    and isinstance(tgt.value, ast.Name)
+                    and isinstance(tgt.slice, ast.Constant)):
+                name, key = tgt.value.id, tgt.slice.value
+                if key == "detail":
+                    per_target[name]["detail"].append(node.lineno)
+                elif key == "code":
+                    per_target[name]["code"] |= _constants(node.value)
+    return per_target
+
+
+def _source(name="backend/api/services/eds_preflight.py"):
+    from pathlib import Path
+    return (Path(__file__).resolve().parents[1] / name).read_text(encoding="utf-8")
+
+
+def test_every_detail_site_declares_a_code():
+    """The panel translates on `code`; a site without one shows English prose.
+
+    The M5 tester read "Element-Abdeckung: some phases cannot be judged
+    chemically" in a German interface. Prose from here reaches the screen, so
+    each place that writes a `detail` must also write a `code`.
+    """
+    src = _source()
+    missing = [ln for ln, _, has_code, _ in _detail_and_code_dicts(src) if not has_code]
+    assert not missing, (
+        f"dict literals at lines {missing} set a 'detail' with no 'code' — "
+        "that text reaches the user in English whatever language they chose"
+    )
+    subs = _subscript_assignments(src)
+    bad = {name: info["detail"] for name, info in subs.items()
+           if info["detail"] and not info["code"]}
+    assert not bad, f"assigned a detail with no code: {bad}"
+
+
+def test_the_codes_are_the_ones_the_frontend_knows():
+    """A code with no translation shows the English fallback, silently.
+
+    Checked against the English locale, which is the list of keys the other
+    three are held to by the locale parity suite.
+    """
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    src = _source()
+    codes = set()
+    for _, _, _, values in _detail_and_code_dicts(src):
+        codes |= values
+    for info in _subscript_assignments(src).values():
+        codes |= info["code"]
+
+    locale = json.loads(
+        (root / "frontend/src/locales/en/indexing.json").read_text(encoding="utf-8")
+    )
+    known = set(locale["edsPrior"]["details"])
+    # i18next plural keys: elementsFound_one/_other answer the code
+    # "elementsFound".
+    known |= {k.rsplit("_", 1)[0] for k in known if k.endswith(("_one", "_other"))}
+
+    # edsUnavailable deliberately has no key: it forwards the loader's own
+    # message, which is the information.
+    missing = codes - known - {"edsUnavailable"}
+    assert not missing, f"backend sends codes the UI cannot translate: {sorted(missing)}"
+
+
+def test_the_pc_refine_warning_codes_are_known_too():
+    """The same contract, for the other backend site this pattern reached."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    src = _source("backend/api/routes/pcrefinement.py")
+    codes = set()
+    for node_codes in _detail_and_code_dicts(src):
+        codes |= node_codes[3]
+    # the warnings there are built as dict literals inside a list append
+    import ast
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Dict):
+            for k, v in zip(node.keys, node.values):
+                if isinstance(k, ast.Constant) and k.value == "code":
+                    codes |= _constants(v)
+
+    locale = json.loads(
+        (root / "frontend/src/locales/en/pcrefinement.json").read_text(encoding="utf-8")
+    )
+    known = set(locale.get("warnings", {}))
+    missing = codes - known
+    assert not missing, f"pcrefinement sends codes the UI cannot translate: {sorted(missing)}"

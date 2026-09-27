@@ -18,6 +18,8 @@
 
 import { BLEND_MAP } from '../layerSources';
 import { formatScaleValue, scaleStops } from '../scaleFormat';
+import { buildMaskCanvas } from '../maskCanvas';
+import { applyThreshold, sourceBitmapFor } from '../../EDS/edsExportSources';
 
 const TYPE_DRAWERS = {
   legend:     drawLegend,
@@ -65,10 +67,33 @@ export async function composeMapCanvas({
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   for (const layer of layers) {
     if (!layer.visible) continue;
-    const bmp = bitmaps?.get?.(layer.id);
+    // A mask layer draws from the layer it masks, like LayeredCanvas does.
+    const bmp = bitmaps?.get ? sourceBitmapFor(layer, bitmaps) : null;
     if (!bmp) continue;
     ctx.globalAlpha = Math.max(0, Math.min(1, layer.opacity ?? 1));
     ctx.globalCompositeOperation = BLEND_MAP[layer.blend] || 'source-over';
+    if (layer.threshold) {
+      // A thresholded layer (a scalar map with a range, or a mask) is cut out
+      // on its own canvas first, so the alpha holes fall on THIS layer only.
+      // Applying the luma test to the composite would punch through every
+      // layer below, background included. Same rules as Tile / LayeredCanvas
+      // and the EDS composite; the toolbar's old exporter honoured them and
+      // this path did not.
+      const cut = document.createElement('canvas');
+      cut.width = mapW;
+      cut.height = mapH;
+      const cctx = cut.getContext('2d');
+      cctx.imageSmoothingEnabled = false;
+      if (layer.kind === 'mask') {
+        const m = buildMaskCanvas(bmp, layer.threshold);
+        cctx.drawImage(m, src.x, src.y, src.w, src.h, 0, 0, mapW, mapH);
+      } else {
+        cctx.drawImage(bmp, src.x, src.y, src.w, src.h, 0, 0, mapW, mapH);
+        applyThreshold(cctx, mapW, mapH, layer.threshold);
+      }
+      ctx.drawImage(cut, 0, 0);
+      continue;
+    }
     ctx.drawImage(bmp, src.x, src.y, src.w, src.h, 0, 0, mapW, mapH);
   }
   ctx.globalAlpha = 1;

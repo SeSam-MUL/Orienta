@@ -9,27 +9,27 @@
     "emptyPrompt": "Dateistamm eingeben und auf Laden klicken, um mit der Verfeinerung zu beginnen."
   },
   "hoverTips": {
-    "showUncertainty": "Pixel mit niedrigem CI (hohe Unsicherheit) auf der Karte ueberlagern"
+    "showUncertainty": "Pixel mit niedrigem CI (hohe Unsicherheit) auf der Karte überlagern"
   },
   "tooltips": {
     "fileStem": "Dateistamm des Datensatzes (z. B. sample_B) des Multiphasen-Indizierungs-Checkpoints zum Laden eingeben.",
-    "searchDir": "Optionaler Ordner zum Suchen der Checkpoint-Datei; leer lassen fuer den Standardort.",
-    "load": "Indizierungs-Checkpoint fuer den angegebenen Dateistamm laden und dessen Phasenkarte anzeigen.",
-    "clear": "Geladenen Datensatz entfernen und alle Aenderungen sowie Pixelauswahl zuruecksetzen.",
+    "searchDir": "Optionaler Ordner zum Suchen der Checkpoint-Datei; leer lassen für den Standardort.",
+    "load": "Indizierungs-Checkpoint für den angegebenen Dateistamm laden und dessen Phasenkarte anzeigen.",
+    "clear": "Geladenen Datensatz entfernen und alle Änderungen sowie Pixelauswahl zurücksetzen.",
     "uncertaintyOverlay": "Abdunkeln unsicherer Pixel mit niedrigem CI auf der Phasenkarte ein-/ausschalten.",
-    "phaseMapCanvas": "Pixel anklicken, um seine Phasenkandidaten und den Konfidenzindex (CI) zu pruefen.",
-    "assign": "Diese Phase dem ausgewaehlten Pixel manuell zuweisen und das automatische Ergebnis ueberschreiben.",
-    "modePixel": "Klickmodus: einzelne Pixel auf der Karte auswaehlen, um ihre Phase neu zuzuweisen.",
+    "phaseMapCanvas": "Pixel anklicken, um seine Phasenkandidaten und den Konfidenzindex (CI) zu prüfen.",
+    "assign": "Diese Phase dem ausgewählten Pixel manuell zuweisen und das automatische Ergebnis überschreiben.",
+    "modePixel": "Klickmodus: einzelne Pixel auf der Karte auswählen, um ihre Phase neu zuzuweisen.",
     "ciThreshold": "Konfidenzindex-Schwellenwert (CI) festlegen, unterhalb dessen Pixel als unsicher gelten.",
-    "export": "Verfeinerte Phasenkarte exportieren; oeffnet die Export-URL aus der Zusammenfassung."
+    "export": "Verfeinerte Phasenkarte exportieren; öffnet die Export-URL aus der Zusammenfassung."
   },
   "errors": {
     "loadFailed": "Laden fehlgeschlagen",
-    "overrideFailed": "Aenderung fehlgeschlagen"
+    "overrideFailed": "Änderung fehlgeschlagen"
   },
   "inspector": {
     "title": "Pixel-Inspektor",
-    "prompt": "Pixel auf der Karte anklicken, um seine Phasenkandidaten zu pruefen.",
+    "prompt": "Pixel auf der Karte anklicken, um seine Phasenkandidaten zu prüfen.",
     "pixelCoords": "Pixel ({{row}}, {{col}})",
     "noPhaseData": "Keine Phasendaten.",
     "phaseFallback": "Phase {{id}}",
@@ -39,18 +39,18 @@
   "stats": {
     "title": "Statistik",
     "totalPixels": "Pixel gesamt",
-    "overridden": "Geaendert",
+    "overridden": "Geändert",
     "avgCi": "Mittl. CI",
     "lowCi": "Niedriges CI (<0,1)"
   },
   "phaseMap": {
     "noData": "Keine Phasenkartendaten geladen.",
-    "ariaLabel": "Phasenkarte — anklicken, um Pixel zu pruefen"
+    "ariaLabel": "Phasenkarte — anklicken, um Pixel zu prüfen"
   },
   "tools": {
     "modePixel": "Pixel",
     "ciLessThan": "CI <",
-    "overrideCount_one": "{{count}} Aenderung",
-    "overrideCount_other": "{{count}} Aenderungen"
+    "overrideCount_one": "{{count}} Änderung",
+    "overrideCount_other": "{{count}} Änderungen"
   }
 }

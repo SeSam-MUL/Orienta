@@ -17,6 +17,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass, field
 from enum import Enum
@@ -243,10 +244,19 @@ def discover_files_for_method(
         except (OSError, PermissionError) as e:
             logger.warning(f"Error listing {base}: {e}")
             return found
+        # One rule for "this file is a repair's backup, not a phase", shared
+        # with the CIF library loader. Without it the Hough picker offered
+        # three `.P1-backup-2026-09-13.cif` files as indexable phases — the
+        # un-symmetrised copies, i.e. exactly the P1 cells that blow up a
+        # triplet library.
+        from backend.api.services.cif_phase_library import is_backup_file
+
         for f in entries:
             try:
                 if f.is_file() and f.suffix.lower() in extensions:
                     if name_filter and name_filter not in f.name.lower():
+                        continue
+                    if is_backup_file(f):
                         continue
                     found.append({"path": f, "filename": f.name, "material": "-"})
                 elif f.is_dir():
@@ -254,6 +264,8 @@ def discover_files_for_method(
                     for sub_f in f.iterdir():
                         if sub_f.is_file() and sub_f.suffix.lower() in extensions:
                             if name_filter and name_filter not in sub_f.name.lower():
+                                continue
+                            if is_backup_file(sub_f):
                                 continue
                             found.append({"path": sub_f, "filename": sub_f.name, "material": material})
             except (OSError, PermissionError) as e:
@@ -618,6 +630,41 @@ def indexing_rate_line(method: str, n_patterns: int, seconds: float,
             f"· {n / seconds:,.0f} pat/s{dev}")
 
 
+def _set_ray_temp_dir(env, platform=None, tmpdir_limit=32):
+    """Keep Ray's session directory short enough for its own sockets, on Linux.
+
+    Ray puts Unix domain sockets under its temp directory, and a socket path
+    cannot exceed ~104 bytes. Ray itself appends about sixty of those
+    (``session_<timestamp>_<pid>/sockets/plasma_store``), so a TMPDIR beyond
+    ~32 characters is already at risk: ray's own suffix is
+    ``ray/session_<26 chars>_<pid>/sockets/plasma_store``, 67 to 70 bytes of
+    the 107 the kernel allows. ray does say so
+    ("AF_UNIX path length cannot exceed 107 bytes"), but by then the run has
+    failed. Ray ignores TMPDIR on macOS (it
+    always uses /tmp) and does not use Unix sockets on Windows, so this only
+    applies to Linux, and only when TMPDIR is actually long.
+
+    Per user, because /tmp is shared: two people on one workstation must not
+    land in the same session directory.
+    """
+    import os as _os
+    plat = platform or sys.platform
+    if not plat.startswith("linux"):
+        return None
+    if env.get("RAY_TMPDIR"):
+        return env["RAY_TMPDIR"]
+    tmp = env.get("TMPDIR", "")
+    if len(tmp) <= tmpdir_limit:
+        return None
+    try:
+        uid = _os.getuid()
+    except AttributeError:  # pragma: no cover - not reachable on Linux
+        uid = "user"
+    chosen = f"/tmp/orienta-ray-{uid}"
+    env["RAY_TMPDIR"] = chosen
+    return chosen
+
+
 def _hough_use_ray(n_selected, pc_rows, ray_available, min_patterns=RAY_MIN_PATTERNS):
     """Decide whether to use PyEBSDIndex's Ray distributed Hough path.
 
@@ -797,6 +844,7 @@ def hough_index_patterns(
     if use_ray:
         import os, logging as _logging
         _logging.getLogger("ray.worker").setLevel(_logging.ERROR)
+        _set_ray_temp_dir(os.environ)
         ncpu = min(max(1, os.cpu_count() - 2), RAY_MAX_WORKERS)
         _progress(f"Hough: Ray parallel indexing ({ncpu} workers, {n_selected} patterns)...", 0.42)
         with timed_step(f"Hough: Ray indexing ({n_selected} patterns, {ncpu} workers)"):
@@ -928,6 +976,13 @@ def _best_match_only(xmap):
     ``simulation_indices``, both ``(n, keep_n)``, which this preserves).
 
     A map that already has one rotation per point is returned unchanged.
+
+    ``xmap.prop`` is a dict subclass holding the FULL-grid arrays and masking
+    them in ``__getitem__``. A run with a navigation mask (any region-selected
+    Dictionary run on the CPU path) therefore has to read the props by key:
+    copying ``.items()`` carried 28086 raw values into a 3720-point map, and
+    the next read of ``prop['scores']`` raised
+    "boolean index did not match indexed array along axis 0".
     """
     from orix.crystal_map import CrystalMap
 
@@ -940,7 +995,7 @@ def _best_match_only(xmap):
         x=xmap.x,
         y=xmap.y,
         phase_list=xmap.phases_in_data,
-        prop={k: v for k, v in xmap.prop.items()},
+        prop={k: xmap.prop[k] for k in xmap.prop},
         scan_unit=xmap.scan_unit,
     )
 
@@ -2534,6 +2589,10 @@ def spherical_gpu_index_patterns(
     )
 
     # --- Pseudo-symmetry / low-symmetry resolution (GPU already freed) --------
+    # 2026-09-22: which phases this touches is decided by
+    # pseudosym.spherical_unreliable -- since the decode fix only -43m (and a
+    # z_rot==2 master of unknown class); m-3 / mmm keep the raw spherical answer
+    # and nothing below runs for them. The history, kept for context:
     # The SHT SO(3) correlation can't index z_rot==2 masters (cubic approximants
     # m-3/23 with full cubic band geometry, cubic -43m, and orthorhombic
     # mmm/222/mm2): it lands on a WRONG basin (the green-vs-purple IPF +
@@ -2781,8 +2840,8 @@ def spherical_gpu_index_patterns(
             _lowsym_broken.append(str(m.get("formula") or pg))
     if _lowsym_broken:
         logger.warning(
-            "⚠ SPHERICAL INDEXING is UNRELIABLE for low-symmetry phase(s) %s "
-            "(point group mmm / m-3 / 23, z_rot=2): the SHT-spherical correlation "
+            "⚠ SPHERICAL INDEXING is UNRELIABLE for phase(s) %s "
+            "(z_rot=2 class the sphere cannot resolve, e.g. -43m): the SHT-spherical correlation "
             "mis-indexes them and the automatic Hough substitution did not run for "
             "this run (multi-phase, or streamed from disk). Use HOUGH indexing for "
             "these phases, or run them single-phase with in-memory patterns so the "
@@ -2790,11 +2849,18 @@ def spherical_gpu_index_patterns(
             _lowsym_broken,
         )
     # Build PhaseList with EXPLICIT 1-indexed ids to match the CPU/.ang
-    # convention. _attach_indexing_metadata in backend/api/routes/indexing.py
-    # keys sht_paths_by_phase with `i + 1` (1-indexed), so the Pattern Match
-    # dialog looks up SHTs by xmap.phase_id values 1, 2, ... — if the xmap
-    # uses 0-indexed phase_ids the lookup misses and the dialog can't
-    # render the best-match simulated pattern.
+    # convention, and DECLARE that below (`declare_phase_id_base`), because the
+    # Pattern Match dialog looks up SHTs by `xmap.phase_id` — if the keys of
+    # `sht_paths_by_phase` and those ids disagree the lookup misses and the
+    # dialog cannot render the best-match simulated pattern.
+    #
+    # This comment used to say that `_attach_indexing_metadata` keys that map
+    # with `i + 1`. It did, and that hard-coded 1 was the bug fixed on
+    # 2026-09-12 (`395a578a`): a result out of `build_consensus_xmap` is
+    # 0-based, so every phase got its predecessor's master and its forward-NCC
+    # map was worthless. The writer now ASKS the producer for the base instead
+    # of assuming one — which is why the declaration below matters and why
+    # nothing here should be read as "the writer adds one".
     phase_list = PhaseList(
         phases=phase_objs,
         ids=list(range(1, len(phase_objs) + 1)),

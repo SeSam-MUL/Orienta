@@ -8,7 +8,10 @@ that identity once per process:
        gives short hash, commit date and branch),
     2. manual parse of `.git/HEAD` + refs when the git binary is missing
        (hash + branch, no date),
-    3. "unknown" when there is no `.git` at all (e.g. a zip download).
+    3. the `VERSION` file a runtime package ships, for an installation made by
+       the setup — it has no `.git`, and without this it could never be told
+       apart from a newer or older release,
+    4. "unknown" when there is none of the above (e.g. a bare zip download).
 
 Used by `GET /api/system/version`, the About section, the log-file banner and
 the diagnostics export.
@@ -99,6 +102,63 @@ def _parse_describe(described: str) -> tuple[str | None, int | None]:
     return described, 0
 
 
+#: THE definition of "is this a release tag". `updater.parse_version` builds on
+#: this pattern rather than keeping its own, so the check cannot offer a tag the
+#: download step then refuses as unparseable.
+#:
+#: The suffix allows "-" so that real pre-release tags parse: v1.2.3-beta-1,
+#: v1.2.3-rc-2, v1.0.0+build-5. A stricter class silently dropped them from the
+#: available-release list — a failure with no message, because
+#: `_parse_ls_remote` discards whatever `parse_version` cannot read.
+_TAG_LINE_RE = re.compile(
+    r"^v?(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)(?:[-+.](?P<suffix>[\w.-]+))?$"
+)
+
+
+def read_version_state(root: Path) -> tuple[str, str | None]:
+    """(state, tag) for the VERSION file, distinguishing four different answers.
+
+        ("tag", "v0.4.0")   a release tag
+        ("absent", None)    there is no VERSION file
+        ("unreadable", None) it is there and we may not read it
+        ("junk", None)      it is there and is not a release tag
+
+    The distinction is the whole point. Callers that collapse "unreadable" into
+    "absent" conclude "this is not an installed copy" from a permission error or
+    a lock — and then tell a user who has a perfectly updatable installation
+    that it cannot update itself.
+
+    `utf-8-sig` because PowerShell writes a BOM by default, and `str.strip()`
+    does not remove one: a VERSION file regenerated on Windows would otherwise
+    parse as junk and take the installation out of the update channel.
+    """
+    path = root / "VERSION"
+    try:
+        text = path.read_text(encoding="utf-8-sig").strip()
+    except FileNotFoundError:
+        return "absent", None
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("%s exists but cannot be read: %s", path, exc)
+        return "unreadable", None
+    return ("tag", text) if _TAG_LINE_RE.match(text) else ("junk", None)
+
+
+def _read_version_file(root: Path) -> str | None:
+    """The release tag a runtime package was built from, or None.
+
+    One line, nothing else. An installation made by the setup has no `.git`, so
+    without this it reports "unknown" and the update check has nothing to compare
+    the newest release against — it can then never say "up to date" and never
+    say "there is a newer one" either.
+
+    Anything that is not a release tag is ignored rather than shown: a
+    half-written file must not become the version the update check compares
+    against. Use `read_version_state` where the REASON matters.
+    """
+    state, tag = read_version_state(root)
+    return tag if state == "tag" else None
+
+
 @lru_cache(maxsize=1)
 def get_version_info() -> dict:
     """Resolve the app's version identity. Cached for the process lifetime.
@@ -132,6 +192,15 @@ def get_version_info() -> dict:
         commit, branch = _read_git_files(PROJECT_ROOT)
         if commit:
             source = "git-files"
+        if not commit:
+            release = _read_version_file(PROJECT_ROOT)
+            if release:
+                # commits_since = 0 makes the FIRST arm of the version-string
+                # chain below match, so the display is "v0.4.0" and not
+                # "v0.4.0+None (None)". Do not add a new arm at the end of that
+                # chain: `elif release:` catches it first and it is unreachable.
+                commits_since = 0
+                source = "version-file"
 
     if release and commits_since == 0:
         version = release                                  # v0.2.0

@@ -9,12 +9,16 @@
  *   - Exposes addLayer / removeLayer / setOpacity / setBlend / setVisibility /
  *     reorder / applyPreset / clear methods.
  */
+import { problemText } from '../../../services/problemText';
+import { useTranslation } from 'react-i18next';
 import { useReducer, useRef, useCallback, useEffect, useState } from 'react';
 import { layerStackReducer, initialState } from '../layerStackReducer';
+import { parseAddonLayerId } from '../addonLayerDrain';
 import { findLayerDef } from '../layerSources';
 import { isCropWarning } from '../../common/CropWarningChip';
 import { applyPreset } from '../presets';
 import { phaseMapApi, ebsdApi, h5Api, analysisApi } from '../../../services/api';
+import { addonsApi } from '../../../services/addonsApi';
 
 const CACHE_SIZE = 16;
 
@@ -40,6 +44,13 @@ async function pngBase64ToBitmap(b64, { keyToAlpha = false } = {}) {
   if (keyToAlpha) bitmap = await blackToAlpha(bitmap);
   return bitmap;
 }
+
+// `parseAddonLayerId` used to live here. It moved to ../addonLayerDrain,
+// which is where the OTHER readers of an add-on layer id already are, so
+// that layerStackReducer can use it too: the reducer keeps an add-on layer
+// across a re-seed, and importing it from this hook would be a cycle (this
+// hook imports the reducer). Re-exported because it is part of this
+// module's published surface and its tests import it from here.
 
 /** Dispatch the right endpoint per layer source. Returns base64 PNG.
  *  Routes off `layer.source` (set by addLayer) and `layer.id`. Static catalog
@@ -79,6 +90,17 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
       // The backend already emits a transparent-background RGBA PNG
       // (NaN / non-indexed pixels → alpha 0), so no colour-keying needed.
       return { base64: res.data.image, keyToAlpha: false, scale: res.data.scale ?? null };
+    }
+    case 'addon': {
+      const p = parseAddonLayerId(layer.id);
+      if (!p) throw new Error(`Unsupported addon layer: ${layer.id}`);
+      const res = await addonsApi.mapImage(p.name, p.resultId, p.analysisKey,
+                                           p.key);
+      // Same shape the `result` case returns. The backend already paints a
+      // transparent background (non-finite pixels → alpha 0), so no colour
+      // keying, and `scale` carries the range and the unit the legend states.
+      return { base64: res.data.image, keyToAlpha: false,
+               scale: res.data.scale ?? null };
     }
     case 'analysis': {
       const res = await analysisApi.getMap(layer.id);
@@ -151,7 +173,9 @@ export function cleanupAffectsLayer(id) {
   );
 }
 
-export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverrides = null }) {
+export function useLayerStack({ cleanupParams, resetSignal, frameSig,
+                               colorOverrides = null, resultId = null,
+                               seedResultId = null }) {
   const [state, dispatch] = useReducer(layerStackReducer, initialState);
   const cacheRef = useRef(new Map());           // layerId → ImageBitmap
   // layerId → { min, max, unit, cmap, stops } for layers whose colours mean a
@@ -164,6 +188,12 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
   const cacheOrderRef = useRef([]);             // LRU order (most recent at end)
   const fetchingRef = useRef(new Set());        // layer ids currently in-flight
   const errorRef = useRef(new Map());           // layerId → error string
+  // The translator, in a ref: the fetch closure below is not re-created
+  // when the language changes, and a stale `t` would freeze the error
+  // text at the language the page was opened in.
+  const { t: tNow } = useTranslation('phasemap');
+  const tRef = useRef(tNow);
+  tRef.current = tNow;
   // Remember the last user-chosen "mode" (single quick-mode layer or
   // preset) so a result-change can re-apply it instead of forcing the
   // user back to Phase every time they click a different gallery entry.
@@ -255,6 +285,22 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
 
   const fetchLayer = useCallback(async (layer) => {
     if (fetchingRef.current.has(layer.id)) return;
+    // An add-on layer names its own result; every other layer in the stack is
+    // implicitly the ACTIVE one. Two results with the same shape therefore
+    // composite in silence — one result's add-on map over another result's
+    // phase map, with nothing on screen to see. So it does not draw, and it
+    // says which result it belongs to.
+    //
+    // In the hook and not in the page: a guard the hook's own tests cannot
+    // reach is a guard that passes them while being absent.
+    const bound = parseAddonLayerId(layer.id);
+    if (bound && resultId && bound.resultId !== resultId) {
+      errorRef.current.set(layer.id,
+        `This layer belongs to indexing result ${bound.resultId}, not to the `
+        + `one shown (${resultId}). Remove it, or show that result.`);
+      force();
+      return;
+    }
     if (cacheRef.current.has(layer.id)) { cacheTouch(layer.id); return; }
     fetchingRef.current.add(layer.id);
     const epoch = epochRef.current;  // snapshot; a flush mid-flight bumps this
@@ -284,12 +330,17 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
       else cropRef.current.delete(layer.id);
       errorRef.current.delete(layer.id);
     } catch (err) {
-      errorRef.current.set(layer.id, err?.response?.data?.detail ?? err.message ?? 'fetch failed');
+      // Translated here rather than at the display, because the error is
+      // stored as a string that several consumers only test for truth. A
+      // language change after the failure leaves this sentence in the old
+      // language until the layer is retried, which it is on any reload.
+      errorRef.current.set(layer.id,
+        problemText(err, tRef.current, 'phasemap') || 'fetch failed');
       force();
     } finally {
       fetchingRef.current.delete(layer.id);
     }
-  }, [cleanupParams, colorOverrides, cacheSet, cacheTouch]);
+  }, [cleanupParams, colorOverrides, cacheSet, cacheTouch, resultId]);
 
   // Colour overrides are a fetch input for the phase layer only. Track the
   // last-seen signature so a colour edit drops the stale cached phase bitmap
@@ -355,7 +406,19 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
       dispatch({ type: 'CLEAR' });
       return;
     }
-    // The parked stacks belong to the result they were built on.
+    // `seedResultId` is the result THIS seed is for, and it must change in
+    // the same render as `resetSignal` or the keep below is wrong.
+    //
+    // That is why it is a separate prop and not `resultId`. `resultId` is
+    // `indexingResult?.result_id ?? backendResultId`, and on a gallery click
+    // the second half lands only AFTER `activateResult` has been awaited --
+    // several hundred milliseconds later. Seeding with it would keep the
+    // PREVIOUS result's add-on layer, whose bitmap the cacheFlush above has
+    // just dropped, and refetch it over the new result's map; fetchLayer's
+    // wrong-result guard would not catch it either, because that compares
+    // against the same lagging prop. The gallery entry's `result_id` changes
+    // with the selection itself, which is what `resetSignal` is built from.
+        // The parked stacks belong to the result they were built on.
     modeStacksRef.current = new Map();
     const last = lastModeRef.current;
     if (last?.type === 'single') {
@@ -365,6 +428,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
       if (def) {
         dispatch({
           type: 'REPLACE_ALL',
+          keepAddonsFor: seedResultId,
           layers: [{
             id: last.id, label: def.label ?? last.id, source: def.source,
             opacity: 1.0, blend: 'normal', visible: true,
@@ -376,14 +440,16 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     }
     if (last?.type === 'preset') {
       try {
-        dispatch({ type: 'REPLACE_ALL', layers: applyPreset(last.name) });
+        dispatch({ type: 'REPLACE_ALL', keepAddonsFor: seedResultId,
+                   layers: applyPreset(last.name) });
         return;
       } catch { /* fall through to default */ }
     }
     // First result of the session, or last mode no longer valid: fall
     // back to the phase_default preset.
-    dispatch({ type: 'REPLACE_ALL', layers: applyPreset('phase_default') });
-  }, [resetSignal, cacheFlush]);
+    dispatch({ type: 'REPLACE_ALL', keepAddonsFor: seedResultId,
+               layers: applyPreset('phase_default') });
+  }, [resetSignal, seedResultId, cacheFlush]);
 
   // -------------------- public API --------------------
   /** Infer source + sensible defaults for dynamic-id layers (per-phase CI,
@@ -401,11 +467,27 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
       return { id, label: `SE: ${id.slice(3)}`, source: 'h5',
                defaultBlend: 'normal', defaultOpacity: 1.0 };
     }
+    const addon = parseAddonLayerId(id);
+    if (addon) {
+      // The label here is the OUTPUT KEY, which is the best an id can give.
+      // The author's declared label travels with the request and overrides
+      // it in addLayer — see the def override there.
+      return { id, label: addon.key, source: 'addon',
+               defaultBlend: 'normal', defaultOpacity: 0.8 };
+    }
     return null;
   }
 
-  const addLayer = useCallback((id) => {
-    const def = findLayerDef(id) ?? inferDynamicDef(id);
+  /**
+   * @param {string} id
+   * @param {object} [overrides] — fields the CALLER knows and the id cannot
+   *   carry. The add-on drain passes the author's declared label: built from
+   *   the id alone it would read `component_map`, and that string is what the
+   *   value-scale legend prints beside a figure in a paper.
+   */
+  const addLayer = useCallback((id, overrides) => {
+    const base = findLayerDef(id) ?? inferDynamicDef(id);
+    const def = base ? { ...base, ...(overrides || {}) } : base;
     if (!def) {
       console.warn('[useLayerStack] unknown layer id:', id);
       return;
@@ -547,3 +629,6 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverr
     cacheFlush,
   };
 }
+
+// Re-exported; the reason it no longer lives here is at the top of the file.
+export { parseAddonLayerId };

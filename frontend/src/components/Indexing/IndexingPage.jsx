@@ -17,10 +17,14 @@
  *           - Log output
  */
 
+import { formatTime } from '../../i18n/formatDateTime';
 import { useState, useEffect, useCallback, useRef, useReducer, useMemo, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
-import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phaseMapApi } from '../../services/api';
-import { estimateCpuSphericalSeconds, formatRoughDuration, isSphericalCpuFallback } from './cpuEstimate';
+import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phaseMapApi, collectionsApi } from '../../services/api';
+import useCollectionStore from '../../stores/useCollectionStore';
+import { activeKeySet, activeKeySignature } from '../PhaseCollections/collectionFilter';
+import { planCollectionAdoption, formatMissingLogMessage, resolveAllowedPaths } from '../PhaseCollections/collectionAdopt';
+import { estimateCpuSphericalSeconds, estimateGpuSphericalSeconds, formatRoughDuration, hasNoCudaDevice, isSphericalCpuFallback } from './cpuEstimate';
 import NavigationCanvas from './NavigationCanvas';
 import EdsOverlayPanel from './EdsOverlayPanel';
 import BatchIndexingDialog from './BatchIndexingDialog';
@@ -733,10 +737,9 @@ function PatternMatchesDialog({ open, onClose }) {
                 </div>
               )}
 
-              {/* Orientation provenance: low-symmetry phases (z_rot==2 —
-                  orthorhombic mmm and the cubic approximants m-3/23) get the
-                  orientation from Hough, because the spherical SO(3) correlation
-                  can't form a sharp peak for them. 'mixed' = the map kept both
+              {/* Orientation provenance: the phases pseudosym.spherical_unreliable
+                  names get the orientation from Hough -- since 2026-09-22 only
+                  -43m (m-3/23 and mmm were on Hough until the decode fix). 'mixed' = the map kept both
                   (other phases, Hough failures, and every pixel the render
                   arbitration handed back to the sphere). The per-map counts and
                   the exact reason are in orientation_source_reason (tooltip). */}
@@ -1394,12 +1397,59 @@ function inputSmall() {
 }
 
 
+/**
+ * Spherical/Dictionary allowed-paths follow effect, extracted for direct
+ * testing — mirrors `PhaseMapPanel.jsx`'s exported `usePhaseMap`, for the
+ * same reason: `IndexingPage` itself is never fully rendered in tests (it
+ * pulls in NavigationCanvas, the batch/dictionary dialogs, WebGL zoom, etc.),
+ * so the only way to prove this effect's DEPENDENCY ARRAY is right — not
+ * just that `resolveAllowedPaths` computes the right answer in isolation —
+ * is to mount the effect itself.
+ *
+ * Re-fetches whenever the active collection's NAME, the indexing METHOD, or
+ * the active collection's OWN MEMBERSHIP changes (`membersSignature`, a
+ * content fingerprint via `activeKeySignature` — the same helper the Phase
+ * Tester (`SinglePixelPhaseTestDialog.jsx`) and the EDS panel
+ * (`PhaseMapPanel.jsx`) already key their own follow-effects on).
+ *
+ * I2: this is the THIRD consumer of that fix. `App.jsx` keeps every page
+ * mounted with `display: none` rather than unmounting it, so a phase can be
+ * filed into the active collection from the database browser or the
+ * Collection Manager while this page sits hidden under a DIFFERENT method
+ * (e.g. Hough) — without `membersSignature` in the deps, switching back to
+ * Spherical or Dictionary kept serving the STALE `allowedPaths` from before
+ * the membership changed, silently offering less than the collection now
+ * contains. Hough is unaffected by this bug: it filters directly on
+ * `collectionKeys`, itself a plain `useMemo` over `collections` (always
+ * fresh, no separate fetch to go stale).
+ *
+ * Because all three are in the dependency array, a change during an
+ * in-flight request both cancels that request's effect on state (via
+ * `cancelled`) AND starts a fresh one for the new value — no live store read
+ * is needed in the `.then()` the way `SinglePixelPhaseTestDialog` needs one,
+ * because that dialog's fetch effect does NOT depend on the active
+ * collection and so never re-fires when it changes mid-flight.
+ * `resolveAllowedPaths` is the extracted, directly-tested async logic
+ * (`collectionAdopt.js`) — this hook is just the React glue around it.
+ */
+export function useAllowedPaths(activeName, method, collections) {
+  const membersSignature = activeKeySignature(collections, activeName);
+  const [allowedPaths, setAllowedPaths] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    resolveAllowedPaths(activeName, method, collectionsApi.resolve)
+      .then((result) => { if (!cancelled) setAllowedPaths(result); });
+    return () => { cancelled = true; };
+  }, [activeName, method, membersSignature]);
+  return allowedPaths;
+}
+
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
 export default function IndexingPage({ isActive }) {
-  const { t } = useTranslation(['indexing', 'common']);
+  const { t } = useTranslation(['indexing', 'common', 'collections']);
   const { setIndexingResult } = useResultStore();
   const filePath = useDataStore(s => s.filePath);
 
@@ -1515,6 +1565,71 @@ export default function IndexingPage({ isActive }) {
   const [dictSection, setDictSection]   = useState(false);
   const [dictFiles, setDictFiles]       = useState([]);
   const [selectedDictFile, setSelectedDictFile] = useState('');
+
+  // --- Phase collections: narrow the phase dropdown to the active collection ---
+  const collections = useCollectionStore((s) => s.data.collections);
+  const activeName = useCollectionStore((s) => s.data.state?.active || null);
+  // Keys of the active collection. Method-independent — Hough matches these
+  // against the CIF stem directly; Spherical/Dictionary ignore this and use
+  // `allowedPaths` below instead (see PhaseDropdown's `visibleFiles`).
+  const collectionKeys = useMemo(
+    () => activeKeySet(collections, activeName),
+    [collections, activeName],
+  );
+  // Spherical and Dictionary files are not named by the collection key (an
+  // .sht is `Formula (CIF_stem) [Pearson] {kV}.sht`; a master is matched by
+  // a fuzzy filename search on the backend) — so those two methods filter on
+  // the paths the server resolved for THIS method, not on `collectionKeys`.
+  // `useAllowedPaths` (below, exported for direct testing — I2) re-fetches
+  // whenever the collection, the method, OR THE ACTIVE COLLECTION'S OWN
+  // MEMBERSHIP changes.
+  const allowedPaths = useAllowedPaths(activeName, method, collections);
+  // "Show all phases" escapes the filter for THIS picker only, until the
+  // active collection itself changes — a local override, never written back
+  // to the server (the toolbar still names what the user actually chose).
+  const [overrideAll, setOverrideAll] = useState(false);
+  useEffect(() => { setOverrideAll(false); }, [activeName]);
+  const dropdownCollectionKeys = overrideAll ? null : collectionKeys;
+  const dropdownAllowedPaths = overrideAll ? null : allowedPaths;
+  // The toolbar can still name an active collection while THIS picker
+  // ignores it — the escape row above disappears entirely once overridden
+  // (its own `collectionKeys && onShowAll` guard, by design: it is a filter
+  // ESCAPE, not a status line), and with it went the only place that said
+  // so. `overriddenCollectionName` feeds a separate, persistent notice in
+  // `PhaseDropdown` for exactly this state, with a way back in.
+  const overriddenCollectionName = overrideAll ? activeName : null;
+  const [adoptingCollection, setAdoptingCollection] = useState(false);
+
+  // "Sammlung übernehmen" — fills phases/phaseFiles from the active
+  // collection for the current method in one click. `planCollectionAdoption`
+  // (collectionAdopt.js) owns the mapping/fallback/index-alignment logic and
+  // is unit-tested directly; this handler is just the React glue plus the
+  // network call and the status-line/log side effects.
+  const adoptCollection = async () => {
+    if (!activeName || adoptingCollection) return;
+    setAdoptingCollection(true);
+    try {
+      const { data } = await collectionsApi.resolve(activeName, method);
+      const plan = planCollectionAdoption(data, discoveredFiles);
+      setPhases(plan.files);
+      setPhaseFiles(plan.phaseFiles);
+      if (plan.files.length === 0) {
+        setPhaseInfo(t('pcPhase.notLoaded'));
+        setFileStatus(t('phases.noFileLoaded'));
+        setFileStatusColor(C.red);
+      } else {
+        setPhaseInfo(t('phases.phasesPrefix', { list: plan.files.map((f) => f.formula || f.filename).join(', ') }));
+        setFileStatus(t('phases.selectedCount', { count: plan.files.length }));
+        setFileStatusColor(C.green);
+      }
+      const missingMsg = formatMissingLogMessage(t, plan.missing);
+      if (missingMsg) log(missingMsg);
+    } catch (err) {
+      log(t('phases.adoptCollectionFailed', { error: err.response?.data?.detail || err.message }));
+    } finally {
+      setAdoptingCollection(false);
+    }
+  };
 
   // --- Hough params ---
   const [bands, setBands]               = useState(12);
@@ -2391,7 +2506,7 @@ export default function IndexingPage({ isActive }) {
     if (running) return;
 
     const params = buildParams();
-    log(t('messages.startingIndexing', { time: new Date().toLocaleTimeString(), method }));
+    log(t('messages.startingIndexing', { time: formatTime(), method }));
     setRunning(true);
     setStartTime(Date.now());
     setProgress(0);
@@ -2553,7 +2668,7 @@ export default function IndexingPage({ isActive }) {
       setPerPhaseStats(pps);
       if (ci !== undefined) {
         const elapsedStr = startTime ? ` — ${((Date.now() - startTime) / 1000).toFixed(1)}s` : '';
-        const ts = new Date().toLocaleTimeString();
+        const ts = formatTime();
         if (d?.multi_phase === true && pps.length > 0) {
           // Multi-phase summary: show best phase by CI
           const best = pps.reduce((a, b) => ((a.ci ?? 0) >= (b.ci ?? 0) ? a : b));
@@ -2706,6 +2821,11 @@ export default function IndexingPage({ isActive }) {
   const sphericalOnCpu = showSpherical && isSphericalCpuFallback({
     method: 'spherical', backend: sphericalBackend, runtime: runtimeInfo,
   });
+  // For the option LABEL, not the warning: it asks about the machine, not about
+  // what is currently selected. Keyed on sphericalOnCpu it would flip back to
+  // "GPU" as soon as the user picked EMSphInx, on the same hardware.
+  // One predicate for every "is there a GPU" label on every screen.
+  const noCudaHere = hasNoCudaDevice(runtimeInfo);
 
   const selectedPixels = useMemo(() => {
     if (!nRows || !nCols) return 0;
@@ -2721,6 +2841,9 @@ export default function IndexingPage({ isActive }) {
   const cpuEstimate = formatRoughDuration(
     estimateCpuSphericalSeconds(selectedPixels, bandwidth)
   );
+  // The comparison prints both numbers. Saying only the CPU figure "instead of
+  // a few minutes on a GPU" put the slower machine on the smaller number.
+  const gpuEstimate = formatRoughDuration(estimateGpuSphericalSeconds(selectedPixels));
 
   // Master to seed the "Generate Dictionary" dialog: the single file field, or
   // a master (.h5 that is not a pre-generated _dict_) already in the Selected
@@ -2948,6 +3071,26 @@ export default function IndexingPage({ isActive }) {
           )}
         </div>
 
+        {/* One-click fill from the active collection, for the method this
+            page is currently set to. Hidden entirely when no collection is
+            active — there is nothing to adopt. */}
+        {activeName && (
+          <button
+            onClick={adoptCollection}
+            disabled={adoptingCollection}
+            title={t('hoverTips.adoptCollection', { name: activeName })}
+            style={{
+              marginBottom: 6, width: '100%', padding: '5px 0',
+              background: 'transparent', border: `1px solid ${C.cyan}66`,
+              borderRadius: 4, color: C.cyan, fontSize: '9pt',
+              cursor: adoptingCollection ? 'default' : 'pointer',
+              opacity: adoptingCollection ? 0.6 : 1,
+            }}
+          >
+            {t('phases.adoptCollection', { name: activeName })}
+          </button>
+        )}
+
         <SelectedPhasesList
           phases={phases}
           method={method}
@@ -3131,7 +3274,16 @@ export default function IndexingPage({ isActive }) {
               style={{ ...selectStyle(), width: 200 }}
               title={t('spherical.backendTip')}
             >
-              <option value="spherical_gpu">{t('spherical.backendGpu')}</option>
+              {/* The label must not promise a GPU on a machine without one:
+                  an M5 tester on a Mac read "GPU (PyTorch, recommended)" and
+                  asked what was wrong with PyTorch. The DEFAULT stays this
+                  backend on purpose — the only other option is EMSphInx, which
+                  runs through WSL and therefore not on a Mac at all, so
+                  preselecting "CPU" there would choose something that cannot
+                  run. */}
+              <option value="spherical_gpu">
+                {noCudaHere ? t('spherical.backendGpuOnCpu') : t('spherical.backendGpu')}
+              </option>
               <option value="emsphinx">{t('spherical.backendEmsphinx')}</option>
             </select>
           </Row>
@@ -3144,7 +3296,7 @@ export default function IndexingPage({ isActive }) {
               }}>
                 {'⚠'}{' '}
                 {cpuEstimate
-                  ? t('spherical.cpuFallbackWithEstimate', { n: selectedPixels, estimate: cpuEstimate })
+                  ? t('spherical.cpuFallbackWithEstimate', { n: selectedPixels, estimate: cpuEstimate, gpuEstimate })
                   : t('spherical.cpuFallback')}
               </span>
             </Row>
@@ -3345,7 +3497,21 @@ export default function IndexingPage({ isActive }) {
         {/* Emergency: release GPU memory held by PyTorch's caching
             allocator. Useful when a previous run got stuck and free
             VRAM is near 0 — Spherical-GPU would otherwise run at
-            batch=1 / ~0 pat/s. Cheap when nothing is stuck. */}
+            batch=1 / ~0 pat/s. Cheap when nothing is stuck.
+
+            SHOWN ON EVERY MACHINE, and the label avoids the word GPU where
+            there is none. A review caught me hiding this control on CPU-only
+            boxes: I reasoned from the message it printed there ("no CUDA device
+            — nothing to do") without reading the endpoint, and the endpoint does
+            three things BEFORE it looks at CUDA (routes/indexing.py:4362) —
+            evicting the phase-compare backends and dropping the SHT renderer's
+            per-phase Lambert grids, which on a CPU-only box are several GB of
+            HOST memory, with the comment "done unconditionally so the references
+            die even on a CPU-only box". This is the only UI path to that
+            (services/api.js releaseGpu has one caller), and
+            docs/user-guide/PatternMatch.md tells people to use it when rendering
+            fails. The message was the bug; hiding the button made the message
+            true by amputation. */}
         <button
           onClick={async () => {
             setReleasingGpu(true);
@@ -3383,7 +3549,14 @@ export default function IndexingPage({ isActive }) {
                   + (d.render_phases_cleared ? t('messages.gpuReleasedPhases', { count: d.render_phases_cleared }) : '')
                   + residual);
               } else {
-                log(t('messages.gpuReleaseNoCuda'));
+                // Not "nothing to do": the endpoint evicted caches before it
+                // looked for a device. Say what went, so the control is worth
+                // pressing on the machines that need it most.
+                log(t('messages.cachesReleased', {
+                  backends: d.backends_evicted ?? 0,
+                  phases: d.render_phases_cleared ?? 0,
+                  tables: d.tables_cleared ?? 0,
+                }));
               }
             } catch (err) {
               log(t('messages.gpuReleaseFailed', { error: err?.message || err }));
@@ -3400,9 +3573,11 @@ export default function IndexingPage({ isActive }) {
             cursor: releasingGpu ? 'wait' : 'pointer',
             opacity: releasingGpu ? 0.6 : 1,
           }}
-          title={t('actions.releaseGpuTip')}
+          title={noCudaHere ? t('actions.releaseCachesTip') : t('actions.releaseGpuTip')}
         >
-          {releasingGpu ? t('actions.releasing') : t('actions.releaseGpu')}
+          {releasingGpu
+            ? t('actions.releasing')
+            : (noCudaHere ? t('actions.releaseCaches') : t('actions.releaseGpu'))}
         </button>
 
         <CheckOption
@@ -3619,7 +3794,7 @@ export default function IndexingPage({ isActive }) {
             </div>
             <div style={{ fontSize: '10pt', color: C.text, lineHeight: 1.55, marginBottom: 16 }}>
               {cpuEstimate
-                ? t('spherical.cpuConfirmBodyWithEstimate', { n: selectedPixels, estimate: cpuEstimate })
+                ? t('spherical.cpuConfirmBodyWithEstimate', { n: selectedPixels, estimate: cpuEstimate, gpuEstimate })
                 : t('spherical.cpuConfirmBody')}
             </div>
             <Row gap={8} style={{ justifyContent: 'flex-end' }}>
@@ -3693,6 +3868,11 @@ export default function IndexingPage({ isActive }) {
           method={method}
           open={true}
           onClose={() => setPhasePanelOpen(false)}
+          collectionKeys={dropdownCollectionKeys}
+          allowedPaths={dropdownAllowedPaths}
+          onShowAll={() => setOverrideAll(true)}
+          overriddenCollectionName={overriddenCollectionName}
+          onReapplyCollection={() => setOverrideAll(false)}
         />
       </FloatingPhasePanel>
 
@@ -3708,6 +3888,7 @@ export default function IndexingPage({ isActive }) {
         azimuthal={detectorGeom.azimuthal}
         energyKv={energy}
         resolutionDeg={resolution}
+        noCudaHere={noCudaHere}
         onSettingsUsed={({ energyKv, resolutionDeg }) => {
           if (Number.isFinite(energyKv) && energyKv > 0) setEnergy(energyKv);
           if (Number.isFinite(resolutionDeg) && resolutionDeg > 0) setResolution(resolutionDeg);

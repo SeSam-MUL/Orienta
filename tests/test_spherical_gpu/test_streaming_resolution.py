@@ -102,8 +102,8 @@ def test_read_by_indices_ignores_max_bytes(tmp_path):
 def test_materialize_reads_when_zrot2_phase_present(tmp_path):
     p = tmp_path / "oxford.h5oina"
     data = _make_h5(p, "1/EBSD/Data/Processed Patterns", n=6)
-    masters = [{"z_rot": 2, "point_group": "m-3", "formula": "AlMnFe"}]
-    phase_id = np.ones(6, dtype=int)  # all pixels -> phase id 1 (the m-3 phase)
+    masters = [{"z_rot": 2, "point_group": "-43m", "formula": "Mg17Al12"}]
+    phase_id = np.ones(6, dtype=int)  # all pixels -> phase id 1 (the -43m phase)
     out = _materialize_patterns_for_resolution(str(p), masters, phase_id)
     assert out is not None and np.array_equal(out, data)
 
@@ -123,7 +123,7 @@ def test_materialize_none_when_zrot2_phase_won_no_pixels(tmp_path):
     _make_h5(p, "1/EBSD/Data/Processed Patterns", n=6)
     # phase 1 = high-sym (won all pixels); phase 2 = m-3 (z_rot 2) but 0 pixels.
     masters = [{"z_rot": 4, "point_group": "m-3m"},
-               {"z_rot": 2, "point_group": "m-3"}]
+               {"z_rot": 2, "point_group": "-43m"}]
     phase_id = np.ones(6, dtype=int)   # only id 1 present
     out = _materialize_patterns_for_resolution(str(p), masters, phase_id)
     assert out is None
@@ -133,7 +133,7 @@ def test_materialize_multiphase_reads_when_one_zrot2_has_pixels(tmp_path):
     p = tmp_path / "oxford.h5oina"
     data = _make_h5(p, "1/EBSD/Data/Processed Patterns", n=6)
     masters = [{"z_rot": 4, "point_group": "m-3m"},
-               {"z_rot": 2, "point_group": "m-3"}]
+               {"z_rot": 2, "point_group": "-43m"}]
     phase_id = np.array([1, 1, 1, 2, 2, 2])  # phase 2 (m-3) won pixels 3..5
     out = _materialize_patterns_for_resolution(str(p), masters, phase_id)
     assert out is not None and np.array_equal(out, data)
@@ -142,7 +142,7 @@ def test_materialize_multiphase_reads_when_one_zrot2_has_pixels(tmp_path):
 def test_materialize_failsafe_on_bad_h5(tmp_path):
     """z_rot==2 phase present but the H5 read fails -> None (never raises, so a
     resolver problem can't break the indexing run)."""
-    masters = [{"z_rot": 2, "point_group": "m-3"}]
+    masters = [{"z_rot": 2, "point_group": "-43m"}]
     phase_id = np.ones(6, dtype=int)
     out = _materialize_patterns_for_resolution(
         str(tmp_path / "missing.h5oina"), masters, phase_id)
@@ -153,7 +153,7 @@ def test_materialize_too_large_returns_none(tmp_path, monkeypatch):
     import indexing_controller as IC
     p = tmp_path / "oxford.h5oina"
     _make_h5(p, "1/EBSD/Data/Processed Patterns", n=6)
-    masters = [{"z_rot": 2, "point_group": "m-3"}]
+    masters = [{"z_rot": 2, "point_group": "-43m"}]
     phase_id = np.ones(6, dtype=int)
     monkeypatch.setattr(IC, "_resolve_read_budget_bytes", lambda: 1)
     msgs = []
@@ -165,3 +165,14 @@ def test_materialize_too_large_returns_none(tmp_path, monkeypatch):
 
 def test_budget_is_positive():
     assert _resolve_read_budget_bytes() >= 1 * 1024 ** 3
+
+
+def test_materialize_skips_a_decode_fixed_zrot2_phase(tmp_path):
+    """Since 2026-09-22 an m-3 / mmm master keeps the raw spherical answer, so the
+    streaming path must not read the whole pattern stack just to hand it to a
+    resolver that will not run (a bad path must not even be opened)."""
+    for pg in ("m-3", "mmm"):
+        masters = [{"z_rot": 2, "point_group": pg}]
+        out = _materialize_patterns_for_resolution(
+            str(tmp_path / "does_not_exist.h5"), masters, np.ones(4, dtype=int))
+        assert out is None, pg

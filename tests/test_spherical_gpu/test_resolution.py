@@ -61,10 +61,10 @@ def test_resolve_eulers_skips_when_no_cif():
     assert info is None
 
 
-def test_resolve_eulers_invokes_resolver_for_mmm(monkeypatch):
-    """mmm (orthorhombic, z_rot==2) is now in the spherical-unreliable set, so the
-    wrapper MUST enter the Hough resolution path — not the high-symmetry
-    passthrough. The S-phase Al2CuMg is exactly this case."""
+def test_resolve_eulers_invokes_resolver_for_minus43m(monkeypatch):
+    """-43m (Mg17Al12, z_rot==2) is the class the raw sphere still gets wrong (90-deg
+    variant on 42 % of synthetic patterns, 2026-09-22), so the wrapper MUST enter
+    the Hough resolution path — not the passthrough."""
     import backend.spherical_gpu.pipeline.resolution as R
     from orix.quaternion import Rotation
     called = {}
@@ -79,9 +79,40 @@ def test_resolve_eulers_invokes_resolver_for_mmm(monkeypatch):
     raw = np.array([[0.1, 0.2, 0.3]], dtype=np.float64)
     out, info = R.resolve_eulers(
         patterns=np.zeros((1, 4, 4), dtype=np.float32), raw_eulers=raw,
-        cif_path="some.cif", det_params={}, point_group="mmm")
-    assert called.get("pg") == "mmm"
+        cif_path="some.cif", det_params={}, point_group="-43m")
+    assert called.get("pg") == "-43m"
     assert info is not None and info.get("method") == "hough"
+
+
+def test_resolve_eulers_leaves_decode_fixed_classes_raw(monkeypatch):
+    """m-3 (alpha) and mmm (S-phase) keep the raw spherical answer since the decode
+    fix: bit-identical passthrough, the resolver is never entered. With
+    ORIENTA_HOUGH_ANCHOR_ALL_ZROT2=1 the old substitution comes back."""
+    import backend.spherical_gpu.pipeline.resolution as R
+    from orix.quaternion import Rotation
+    called = []
+
+    def fake_resolve_map(patterns, cif_path, det_params, point_group,
+                         raw_eulers=None, progress=None):
+        called.append(point_group)
+        return {"resolved": np.asarray(Rotation.from_euler(raw_eulers).data),
+                "n_fallback": 0, "method": "hough"}
+
+    monkeypatch.setattr(R, "resolve_map", fake_resolve_map)
+    raw = np.array([[0.1, 0.2, 0.3]], dtype=np.float64)
+    for pg in ("m-3", "mmm"):
+        out, info = R.resolve_eulers(
+            patterns=np.zeros((1, 4, 4), dtype=np.float32), raw_eulers=raw,
+            cif_path="some.cif", det_params={}, point_group=pg, z_rot=2)
+        assert info is None and out is raw, pg
+    assert called == []
+    monkeypatch.setenv("ORIENTA_HOUGH_ANCHOR_ALL_ZROT2", "1")
+    for pg in ("m-3", "mmm"):
+        _, info = R.resolve_eulers(
+            patterns=np.zeros((1, 4, 4), dtype=np.float32), raw_eulers=raw,
+            cif_path="some.cif", det_params={}, point_group=pg, z_rot=2)
+        assert info is not None and info.get("method") == "hough", pg
+    assert called == ["m-3", "mmm"]
 
 
 def test_resolve_eulers_gates_on_zrot(monkeypatch):
@@ -148,16 +179,31 @@ def test_resolve_multiphase_only_z_rot2_pixels_change(monkeypatch):
     calls = []
     monkeypatch.setattr(R, "resolve_eulers", _fake_resolver(calls))
     raw = np.arange(18, dtype=np.float64).reshape(6, 3)
-    pid = np.array([1, 1, 1, 2, 2, 2])           # phase1=mmm(z2), phase2=m-3m(z4)
-    masters = [{"point_group": "mmm", "z_rot": 2, "formula": "S"},
+    pid = np.array([1, 1, 1, 2, 2, 2])           # phase1=-43m(z2), phase2=m-3m(z4)
+    masters = [{"point_group": "-43m", "z_rot": 2, "formula": "Mg17Al12"},
                {"point_group": "m-3m", "z_rot": 4, "formula": "Al"}]
     pats = np.zeros((6, 4, 4), dtype=np.float32)
-    out, info = R.resolve_eulers_multiphase(pats, raw, pid, masters, ["s.cif", "al.cif"], {})
+    out, info = R.resolve_eulers_multiphase(pats, raw, pid, masters, ["b.cif", "al.cif"], {})
     assert out is not None
-    assert np.array_equal(out[:3], raw[:3] + 1.0)   # mmm pixels resolved
+    assert np.array_equal(out[:3], raw[:3] + 1.0)   # -43m pixels resolved
     assert np.array_equal(out[3:], raw[3:])         # Al pixels untouched
     assert info["resolved_phase_ids"] == {1}
-    assert calls == [("mmm", 3)]                    # called once, on the 3 mmm pixels
+    assert calls == [("-43m", 3)]                   # called once, on the 3 -43m pixels
+
+
+def test_resolve_multiphase_alpha_and_sphase_are_not_touched(monkeypatch):
+    """The workshop map (Al + alpha m-3) and an S-phase map (mmm): nothing to
+    resolve any more, so the caller keeps the raw spherical orientations."""
+    import backend.spherical_gpu.pipeline.resolution as R
+    calls = []
+    monkeypatch.setattr(R, "resolve_eulers", _fake_resolver(calls))
+    raw = np.arange(18, dtype=np.float64).reshape(6, 3)
+    pid = np.array([1, 1, 2, 2, 3, 3])
+    masters = [{"point_group": "m-3m", "z_rot": 4}, {"point_group": "m-3", "z_rot": 2},
+               {"point_group": "mmm", "z_rot": 2}]
+    out, info = R.resolve_eulers_multiphase(
+        np.zeros((6, 4, 4), np.float32), raw, pid, masters, ["a.cif", "b.cif", "c.cif"], {})
+    assert out is None and calls == []
 
 
 def test_resolve_multiphase_skips_phase_with_no_pixels(monkeypatch):
@@ -204,9 +250,9 @@ def test_resolve_multiphase_single_phase_resolves_all(monkeypatch):
     raw = np.arange(18, dtype=np.float64).reshape(6, 3)
     out, info = R.resolve_eulers_multiphase(
         np.zeros((6, 4, 4), np.float32), raw, np.ones(6, dtype=int),
-        [{"point_group": "mmm", "z_rot": 2, "formula": "S"}], ["s.cif"], {})
+        [{"point_group": "-43m", "z_rot": 2, "formula": "Mg17Al12"}], ["b.cif"], {})
     assert np.array_equal(out, raw + 1.0)
-    assert info["resolved_phase_ids"] == {1} and calls == [("mmm", 6)]
+    assert info["resolved_phase_ids"] == {1} and calls == [("-43m", 6)]
 
 
 # ----------------------------------------------------------------------
@@ -390,10 +436,20 @@ _HAVE_MP = all(p.is_file() for p in (_7050, _SHT_MGCUAL2, _SHT_AL, _CIF_MGCUAL2)
 
 
 @pytest.mark.skipif(not _HAVE_MP, reason="7050 S-phase / MgCuAl2 / Al data not present")
-def test_resolve_multiphase_e2e_7050_fixes_only_sphase():
+@pytest.mark.parametrize("anchor_all", [False, True], ids=["default", "switch_on"])
+def test_resolve_multiphase_e2e_7050_fixes_only_sphase(anchor_all, monkeypatch):
     """Real 2-phase Spherical competition (MgCuAl2 z_rot=2 + Al z_rot=4) on the
-    7050 S-phase: resolve_eulers_multiphase must correct ONLY the S-phase pixels'
-    orientation to Hough (render-NCC ~0.2 -> ~0.69) and leave Al pixels untouched."""
+    7050 S-phase.
+
+    default: mmm is no longer Hough-anchored (the decode fix made the raw sphere
+    right on it), so nothing is resolved and the RAW S-phase answer must already
+    render well against the measured pattern.
+    switch_on (ORIENTA_HOUGH_ANCHOR_ALL_ZROT2=1, the old gate): the resolver still
+    corrects ONLY the S-phase pixels to Hough and leaves Al pixels untouched."""
+    if anchor_all:
+        monkeypatch.setenv("ORIENTA_HOUGH_ANCHOR_ALL_ZROT2", "1")
+    else:
+        monkeypatch.delenv("ORIENTA_HOUGH_ANCHOR_ALL_ZROT2", raising=False)
     import numpy as np
     import torch
     import kikuchipy as kp
@@ -468,6 +524,13 @@ def test_resolve_multiphase_e2e_7050_fixes_only_sphase():
     # The S-phase competition must actually win its grain (else the test data
     # changed); only then is the multi-phase resolution the thing under test.
     assert (pid[:4] == 1).all(), "S-phase grain pixels did not win the phase competition"
+    if not anchor_all:
+        assert out is None and info["resolved_phase_ids"] == set()
+        for k, (r, c) in enumerate(pix):
+            if pid[k] == 1:
+                assert rncc(pgS, raw_eul[k], dynbg(fr[k])) > 0.4, (
+                    f"raw spherical S-phase pixel {(r, c)} renders badly")
+        return
     assert out is not None and info["resolved_phase_ids"] == {1}
     for k, (r, c) in enumerate(pix):
         exp = dynbg(fr[k]); pgw = pgS if pid[k] == 1 else pgA

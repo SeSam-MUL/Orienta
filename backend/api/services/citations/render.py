@@ -29,6 +29,24 @@ _BIBTEX_TYPE = {
 }
 
 
+#: Library entries contributed at run time by add-ons, keyed by id.
+#:
+#: The same shape as ``steps.STEP_REGISTRY``: a process-level dict that
+#: ``load_library()`` merges. It exists because ``routes/citations.py`` and
+#: ``result_exporter._write_citations`` both filter ids with ``cid in
+#: library`` — an entry that is not in what ``load_library()`` returns cannot
+#: reach BibTeX, the plain list or an exported ``.h5``, however correctly it
+#: was built elsewhere. Nothing is written to library.json; the core
+#: bibliography stays the core's.
+ADDON_LIBRARY_ENTRIES: Dict[str, dict] = {}
+
+
+def register_library_entries(entries: Dict[str, dict]) -> None:
+    """Add entries an add-on asks to be cited with. Idempotent by id."""
+    for entry_id, entry in (entries or {}).items():
+        ADDON_LIBRARY_ENTRIES.setdefault(entry_id, entry)
+
+
 def load_library(path: Optional[Path] = None) -> Dict[str, dict]:
     """Load a CSL-JSON library, keyed by entry id.
 
@@ -49,6 +67,10 @@ def load_library(path: Optional[Path] = None) -> Dict[str, dict]:
 
         entry = orienta_entry_from_cff()
         library[entry["id"]] = entry
+        # Add-ons join here and only here: an explicit path (tests) must stay
+        # exactly what its file says — see test_render.py.
+        for entry_id, addon_entry in ADDON_LIBRARY_ENTRIES.items():
+            library.setdefault(entry_id, addon_entry)
     return library
 
 

@@ -13,7 +13,7 @@ Algorithm:
 4. Calculate per-grain properties (mean orientation, size, area, ECD, GOS)
 
 Reference: the MTEX-equivalence design notes §2.1, §2.2
-         matlab_testskripts/ImportAndModify_MTEX6.m lines 166-167, 260-261
+         matlab_testskripts/ImportAndModify_MTEX6.m lines 170-171, 264-265
 """
 
 from dataclasses import dataclass

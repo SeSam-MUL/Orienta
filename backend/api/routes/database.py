@@ -1113,11 +1113,8 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
         import h5py
         import numpy as np
         import pandas as pd
-        import spglib
         from datetime import date, datetime
 
-        from pymatgen.core.structure import Structure
-        from pymatgen.io.cif import CifParser
         from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
         # --- Constants (identical to PyQt5 Xtal_Generator_GUI.py) ---
@@ -1128,67 +1125,27 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
             'hexagonal': 4, 'trigonal': 5, 'monoclinic': 6, 'triclinic': 7,
         }
 
-        # --- Parse CIF (matching PyQt5 line 362-366) ---
-        parser = CifParser(str(cif_path))
-        structures = parser.parse_structures()
-        if not structures:
-            raise ValueError("Pymatgen could not parse any structure from the CIF file.")
-        structure: Structure = structures[0]
+        # --- Parse CIF, honouring the origin choice it was written in ---
+        # NOT ``CifParser(...).parse_structures()[0]`` any more. pymatgen ignores
+        # the origin-choice marker on the H-M symbol, so a database CIF in ITA
+        # origin choice 2 came back expanded with choice-1 operators, i.e. with
+        # its atoms on a different Wyckoff site: silicon at 4.658 g/cm3 instead
+        # of 2.329, and MgCu2 as Mg2Cu. See backend/forward_sim/crystal/cif_origin.
+        from backend.forward_sim.crystal.cif_origin import CifOriginError, structure_from_cif
 
-        # --- Disordered structure handling (matching PyQt5 lines 368-400) ---
-        if not structure.is_ordered:
-            try:
-                temp_struct = structure.get_primitive_structure(tolerance=0.25)
-                ordered_structure_for_spglib = temp_struct.get_sorted_structure()
-                if not ordered_structure_for_spglib.is_ordered:
-                    possible_orderings = temp_struct.get_orderings()
-                    if possible_orderings:
-                        ordered_structure_for_spglib = possible_orderings[0]
-                    else:
-                        raise ValueError("Could not derive an ordered structure using get_orderings().")
-            except Exception:
-                # Fallback: pick highest-occupancy species per site
-                species, coords_fallback = [], []
-                for site in structure:
-                    if site.is_ordered:
-                        species.append(site.specie)
-                    else:
-                        species.append(max(site.species, key=site.species.get))
-                    coords_fallback.append(site.frac_coords)
-                ordered_structure_for_spglib = Structure(structure.lattice, species, coords_fallback)
-        else:
-            ordered_structure_for_spglib = structure
-
-        # --- Build spglib input (matching PyQt5 lines 389-400) ---
-        if not hasattr(ordered_structure_for_spglib, 'atomic_numbers'):
-            if ordered_structure_for_spglib.is_ordered:
-                raise AttributeError(
-                    f"Ordered structure for spglib is missing 'atomic_numbers'. "
-                    f"Structure: {ordered_structure_for_spglib.formula}"
-                )
-            else:
-                atomic_numbers_list = []
-                for site_idx, site in enumerate(ordered_structure_for_spglib):
-                    if site.is_ordered:
-                        atomic_numbers_list.append(site.specie.number)
-                    elif site.species:
-                        atomic_numbers_list.append(site.species.elements[0].number)
-                    else:
-                        raise ValueError(f"Site {site_idx} in {cif_path.name} has no species information.")
-                sym_data_input = (
-                    ordered_structure_for_spglib.lattice.matrix,
-                    ordered_structure_for_spglib.frac_coords,
-                    atomic_numbers_list,
-                )
-        else:
-            sym_data_input = (
-                ordered_structure_for_spglib.lattice.matrix,
-                ordered_structure_for_spglib.frac_coords,
-                ordered_structure_for_spglib.atomic_numbers,
+        try:
+            structure, origin_report = structure_from_cif(cif_path)
+        except CifOriginError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Cannot convert {cif_path.name}: {exc}",
             )
+        logger.info("CIF -> xtal: %s", origin_report.summary())
 
-        sym_data = spglib.get_symmetry_dataset(sym_data_input, symprec=1e-5)
-
+        # (The disorder-ordering dance that used to sit here existed only to
+        # feed spglib, whose only consumer was the origin_shift heuristic that
+        # this commit's parent removed. _build_xtal_atomdata handles partial
+        # occupancies directly.)
         # --- Reference extraction (matching PyQt5 lines 404-419) ---
         raw_text = cif_path.read_text(encoding="utf8", errors="ignore")
         found_refs = []
@@ -1241,8 +1198,17 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
         csys = CRYSTAL_SYSTEMS.get(sga.get_crystal_system().lower(), 7)
         spg_number = sga.get_space_group_number()
 
-        origin_shift = sym_data.get('origin_shift', np.zeros(3))
-        spg_setting = 2 if np.linalg.norm(origin_shift) > 1e-6 else 1
+        # The coordinates written below come out of pymatgen's operator set,
+        # which is ITA origin choice 1 for all 24 groups that have two (measured
+        # against spglib) — ``structure_from_cif`` has already moved a choice-2
+        # cell there. So this field is 1 by construction, not by inspection.
+        #
+        # It used to be ``2 if norm(spglib origin_shift) > 1e-6 else 1``, which
+        # is a different quantity: the translation from the input cell to the
+        # standardised one. That stamped "choice 2" on cells in groups which
+        # have only one origin, and never on the two library files that really
+        # were choice 2 — both of which say plain 'Fd-3m' with no marker.
+        spg_setting = 1
 
         reps = sga.get_symmetrized_structure().equivalent_sites
         # Build AtomData preserving ALL co-occupying species on mixed sites
@@ -1302,6 +1268,19 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
                     dtype=h5py.special_dtype(vlen=bytes),
                 )
 
+        # Record HOW the origin choice was decided, so the reader does not have
+        # to warn about a file this converter got right. Best-effort.
+        from backend.forward_sim.crystal.xtal_io import write_origin_choice_sidecar
+
+        write_origin_choice_sidecar(
+            out_xtal,
+            block=origin_report.block_key,
+            cif_origin_choice=origin_report.cif_origin_choice,
+            shifted=origin_report.shifted,
+            evidence=origin_report.evidence,
+            cif_name=cif_path.name,
+        )
+
         return {
             "success": True,
             "name": out_xtal.name,
@@ -1312,6 +1291,12 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
             "lattice": {"a": a, "b": b, "c": c, "alpha": alpha, "beta": beta, "gamma": gamma},
             "reference": ref_str,
             "warnings": disorder_warnings,
+            "origin": {
+                "block": origin_report.block_key,
+                "cif_origin_choice": origin_report.cif_origin_choice,
+                "shifted_to_choice_1": origin_report.shifted,
+                "evidence": origin_report.evidence,
+            },
         }
     except HTTPException:
         raise

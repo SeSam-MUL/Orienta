@@ -19,7 +19,7 @@ and several export paths. It is also the launch point for the detached
 The page is **map-first**: results appear as a slim **tab strip** at the top
 (click a tab to activate a result; Rename / Delete / Save as… / Add file… /
 → Analysis sit next to the tabs), the toolbar above the canvas holds the view
-tools (Stack/Grid, Linescan, Lens, **Clean view**, Export PNG, **View pattern
+tools (Stack/Grid, Linescan, Lens, **Clean view**, Export image…, **View pattern
 matches**), and the map itself takes all remaining space. Compute-heavy tools
 (Forward Diagnostics, R+PC Refinement, Pseudo-Symmetry, Phase Verification)
 live in a collapsed **Advanced tools** group in the sidebar.

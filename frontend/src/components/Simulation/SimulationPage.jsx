@@ -1,3 +1,4 @@
+import { formatDateTime } from '../../i18n/formatDateTime';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { simApi } from '../../services/api';
@@ -278,9 +279,9 @@ function ServerModePanel() {
 // Configure Tab
 // ---------------------------------------------------------------------------
 function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours' }) {
-  // "Ours" routes to our self-contained GPU/CPU pipeline (startGpu / batchStartGpu /
+  // "Orienta Engine" routes to our self-contained GPU/CPU pipeline (startGpu / batchStartGpu /
   // run_gpu_simulation). "EMsoft" routes to the EMsoft WSL pipeline. There is no
-  // per-phase EMsoft-vs-ours auto-routing any more — the manual switch decides.
+  // per-phase EMsoft-vs-Orienta-Engine auto-routing any more — the manual switch decides.
   const { t } = useTranslation(['simulation', 'common']);
   const useOurs = engine !== 'emsoft';
   const [params, setParams]           = useState(DEFAULT_PARAMS);
@@ -437,7 +438,7 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
 
   // Fire one batch endpoint for a group of phases. Each item is
   // {stem, xtal_path, dmin}. Returns the job_count (0 if empty). The endpoint is
-  // chosen by the manual engine switch: "Ours" -> batchStartGpu (our pipeline),
+  // chosen by the manual engine switch: "Orienta Engine" -> batchStartGpu (our pipeline),
   // "EMsoft" -> batchStart. There is no per-phase partitioning any more.
   const fireBatchGroup = useCallback(async (phases) => {
     if (!phases || phases.length === 0) return 0;
@@ -457,7 +458,7 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
 
   // Launch the batch from the Simulate-All-Missing dialog. `selection` is the
   // included phases only: [{stem, xtal_path, dmin}] (disordered ones excluded).
-  // ALL selected phases route to the single chosen pipeline — no EMsoft-vs-ours
+  // ALL selected phases route to the single chosen pipeline — no EMsoft-vs-Orienta-Engine
   // partitioning (superseded by the manual engine switch + user decision).
   const launchMissingBatch = async (selection) => {
     setMissingDialog(null);
@@ -500,7 +501,7 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
     setStatusText(t('status.startingBatchForFiles', { count: selectedPaths.length }));
     // Each user-picked file becomes a phase {stem, xtal_path, dmin} using the
     // form dmin (the file picker has no per-phase recommendation). All route to
-    // the single chosen pipeline (no EMsoft-vs-ours partitioning).
+    // the single chosen pipeline (no EMsoft-vs-Orienta-Engine partitioning).
     const stemOf = (p) => p.split(/[\\/]/).pop().replace(/\.xtal$/i, '');
     const toPhase = (p) => ({ stem: stemOf(p), xtal_path: p, dmin: Number(params.dMin) });
     try {
@@ -546,7 +547,7 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
         esel:                 Number(params.esel),
         uniform:              params.uniform,
       };
-      // "Ours" routes to our self-contained GPU/CPU pipeline; "EMsoft" routes to
+      // "Orienta Engine" routes to our self-contained GPU/CPU pipeline; "EMsoft" routes to
       // the EMsoft WSL pipeline. The manual switch decides — no auto-routing.
       const resp = useOurs
         ? await simApi.startGpu(payload)
@@ -863,7 +864,7 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
           EMsoft-ONLY: the compute_mode (auto/gpu/cpu OpenCL↔OpenMP) toggle drives
           the EMsoft Fortran binaries' OpenCL device / OpenMP thread selection. Our
           forward runner ignores compute_mode entirely (it auto-picks GPU/CPU per
-          step), so this card is dead UI under the "Ours" engine — hide it there.
+          step), so this card is dead UI under the Orienta Engine — hide it there.
           NB: this is NOT the engine toggle (that lives in the header). */}
       {engine === 'emsoft' && (
       <GroupBox title={t('compute.groupTitle')}>
@@ -1542,7 +1543,7 @@ function HistoryTab({ history, onClear }) {
                 const crystalFile = entry.crystal || entry.crystal_file || '';
                 const fileName = crystalFile.split(/[\\/]/).pop() || entry.output_file || '—';
                 const material = entry.material || crystalFile.split(/[\\/]/).pop()?.replace(/\.xtal$/i, '') || '—';
-                const timeStr = entry.started_at ? new Date(entry.started_at).toLocaleString() : '—';
+                const timeStr = entry.started_at ? formatDateTime(entry.started_at) : '—';
                 return (
                   <tr
                     key={entry.id || entry.task_id || idx}
@@ -1588,7 +1589,7 @@ export default function SimulationPage({ isActive = false }) {
   // Two-way engine switch: 'ours' (default, self-contained GPU/CPU pipeline,
   // no WSL/EMsoft needed) | 'emsoft' (optional WSL+EMsoft pipeline).
   const [engine, setEngine]       = useState('ours');
-  // System capability — drives the "Ours" hardware-path label + whether the
+  // System capability — drives the "Orienta Engine" hardware-path label + whether the
   // EMsoft toggle option is selectable. {emsoft_available, has_gpu, gpu_name,
   // cpu_count, ...} from GET /api/simulation/system-status. null = not yet known.
   const [cap, setCap]             = useState(null);
@@ -1615,7 +1616,7 @@ export default function SimulationPage({ isActive = false }) {
     if (cap && !emsoftAvailable && engine === 'emsoft') setEngine('ours');
   }, [cap, emsoftAvailable, engine]);
 
-  // Auto-selected hardware path for the "Ours" pipeline (display only — the
+  // Auto-selected hardware path for the "Orienta Engine" pipeline (display only — the
   // backend resolves cupy-GPU -> numba/pytorch-CPU per step at run time).
   const oursHardwarePath = (() => {
     if (!cap) return null;
@@ -1795,7 +1796,7 @@ export default function SimulationPage({ isActive = false }) {
             </span>
           )}
           {/* Engine toggle — matches COMPUTE_MODE segmented button style.
-              Two-way: "Ours" (default, self-contained, always available) and
+              Two-way: "Orienta Engine" (default, self-contained, always available) and
               "EMsoft" (optional — disabled until WSL+EMsoft is detected). */}
           <div
             role="group"

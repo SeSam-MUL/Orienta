@@ -17,6 +17,10 @@ export function Button({
   children, onClick, disabled = false, variant = 'default',
   style: extra = {}, title, small = false, type = 'button',
   'aria-label': ariaLabel,
+  // React 19 passes `ref` to a function component as an ordinary prop, but a
+  // component that does not name it drops it silently — a caller focusing a
+  // button would get no error and no focus. Named, so it reaches the element.
+  ref,
 }) {
   const [hovered, setHovered] = useState(false);
 
@@ -78,6 +82,7 @@ export function Button({
 
   return (
     <button
+      ref={ref}
       type={type}
       style={{ ...base, ...variants[variant] }}
       onClick={disabled ? undefined : onClick}
@@ -164,6 +169,57 @@ export function NumberInput({
 // ---------------------------------------------------------------------------
 // Select — matches PyQt5 QComboBox
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Checkbox
+// ---------------------------------------------------------------------------
+// The one control this file was missing, and the add-on form needs it: a
+// JSON Schema `boolean` has no honest rendering as anything else. A Select of
+// yes/no would make the user read two words to answer one question, and a
+// toggle switch appears nowhere else in this app.
+//
+// `label` is OPTIONAL. With one, the text and the box share a <label>, so the
+// text is a click target and a screen reader announces them together. Without
+// one, the bare input is returned for a caller that already provides its own
+// label — the add-on form does, through FormRow — and the caller passes
+// `aria-label` through `...rest` so the control is still named.
+export function Checkbox({
+  label, checked = false, onChange, disabled = false,
+  style: extra = {}, ...rest
+}) {
+  const box = (
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      disabled={disabled}
+      style={{
+        width: 14,
+        height: 14,
+        margin: 0,
+        accentColor: colors.accent,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        ...extra,
+      }}
+      {...rest}
+    />
+  );
+  if (!label) return box;
+  return (
+    <label style={{
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: 6,
+      color: colors.text,
+      fontSize: '10pt',
+      opacity: disabled ? 0.45 : 1,
+      cursor: disabled ? 'not-allowed' : 'pointer',
+    }}>
+      {box}
+      <span>{label}</span>
+    </label>
+  );
+}
+
 export function Select({
   value, onChange, options = [], disabled = false, style: extra = {},
   title, 'aria-label': ariaLabel,

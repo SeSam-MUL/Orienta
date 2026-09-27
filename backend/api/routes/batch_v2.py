@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from backend.api.services.batch_manager import BatchManager
 from backend.api.services.calibration_store import calibration_store
+from display_names import display_stem
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -92,7 +93,7 @@ async def quick_load(req: QuickLoadRequest):
     if not fp.is_file():
         raise HTTPException(400, f"File not found: {req.file_path}")
 
-    dataset_name = fp.stem
+    dataset_name = display_stem(fp)
 
     try:
         from safe_loader import load_ebsd_safe
@@ -168,8 +169,10 @@ def _resolve_dataset_name(name: str) -> str:
     """
     if not name:
         return name
-    from pathlib import Path as _P
-    return _P(name).stem
+    # display_stem, not Path.stem: this key has to come out the same as the
+    # one CalibrationStore was registered under, on every platform. See
+    # display_names.py.
+    return display_stem(name)
 
 
 @router.post("/copy-pc")

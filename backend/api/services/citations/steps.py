@@ -59,6 +59,18 @@ class StepCitation:
     citation_ids: Tuple[str, ...]
     sentence: str                       # str.format template, named slots only
     no_citation_reason: Optional[str] = None
+    #: WHICH ADD-ON DECLARED THIS, or ``None`` for a step of Orienta's own.
+    #:
+    #: A declaration carries the citations and the methods sentence, so the
+    #: registry answers "who gets the credit for a run recorded under this
+    #: key?". Without an owner, "this key is already declared" and "this key
+    #: is already declared BY SOMEONE ELSE" are the same question, and only
+    #: the second decides whether a registration may proceed: re-registering
+    #: is how every run after an add-on's first arrives, while a SECOND
+    #: add-on on one key would lend the first author's DOI and sentence to
+    #: another author's numbers. ``citations_bridge`` reads this field and
+    #: refuses that case rather than keeping the first silently.
+    owner: Optional[str] = None
 
 
 _STEPS = (

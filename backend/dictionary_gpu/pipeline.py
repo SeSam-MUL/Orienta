@@ -97,7 +97,10 @@ def generate_dictionary_gpu(
     mp = kp.load(master_path, projection="lambert", hemisphere="both")
     phase: Phase = mp.phase
     point_group = phase.point_group
-    phase_name = str(phase.name) if phase.name else Path(master_path).stem
+    from display_names import display_stem
+    # master_path arrives in the request; Path.stem would keep a Windows path
+    # whole on a POSIX backend. See display_names.
+    phase_name = str(phase.name) if phase.name else display_stem(master_path)
 
     _emit(0.05, f"Sampling orientations @ {resolution_deg} deg")
     rotations = get_sample_fundamental(resolution=resolution_deg, point_group=point_group)

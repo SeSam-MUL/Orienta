@@ -127,3 +127,24 @@ describe('LayerStackPanel — assignment-source provenance row', () => {
       .toBe('Assignment Source: no assignment provenance');
   });
 });
+
+describe('LayerStackPanel — quick-mode highlight without an activeMode (EDS page)', () => {
+  // On the EDS page the buttons toggle a layer ON TOP of the stack and no
+  // `activeMode` is passed. The old fallback lit a button only when the stack
+  // held exactly one layer, so "BC" over an SE image showed as not active.
+  const lit = (btn) => /a0f|170,\s*0,\s*255/i.test(btn.style.background);
+
+  it('lights the button whose layer is in the stack, even with others present', () => {
+    render(<LayerStackPanel {...baseProps}
+      layers={[layer('electron-SE', 'SE Image'), layer('bc', 'BC')]} />);
+    expect(lit(screen.getByRole('button', { name: 'BC' }))).toBe(true);
+    expect(lit(screen.getByRole('button', { name: 'CI' }))).toBe(false);
+  });
+
+  it('an explicit activeMode still wins (PhaseMap page)', () => {
+    render(<LayerStackPanel {...baseProps} activeMode="ci"
+      layers={[layer('electron-SE', 'SE Image'), layer('bc', 'BC')]} />);
+    expect(lit(screen.getByRole('button', { name: 'CI' }))).toBe(true);
+    expect(lit(screen.getByRole('button', { name: 'BC' }))).toBe(false);
+  });
+});

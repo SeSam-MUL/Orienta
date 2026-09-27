@@ -1,9 +1,13 @@
 """Self-update from the project's git remote.
 
-Why git and not the GitHub API: the release repository is **private**, so an
-unauthenticated HTTP check returns 404 for every tester. `git fetch` works for
-anyone who cloned it, using the credentials they already needed to clone —
-so git is both the more capable and the more portable channel here.
+Why git for a CHECKOUT: `git fetch` works for anyone who cloned the repository,
+using the credentials they already needed to clone it, and it sees every tag
+rather than only what a release API chooses to call "latest".
+
+(The repository is public as of 2026-09-14, so the original reason given here —
+that an unauthenticated HTTP check would 404 — no longer holds. An installed
+copy made by the setup has no git at all and uses `github_releases` instead;
+see `install_kind`.)
 
 Policy (chosen by the maintainer):
 - update only to **tagged releases**, never to the tip of a branch, so a
@@ -28,7 +32,11 @@ import threading
 import time
 from pathlib import Path
 
-from backend.api.services.app_version import PROJECT_ROOT, get_version_info
+from backend.api.services.app_version import (
+    PROJECT_ROOT,
+    _TAG_LINE_RE,
+    get_version_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +90,57 @@ def _git_out(*args: str, timeout: int = 30) -> str | None:
 
 
 def install_kind() -> str:
-    """'git' when this install can update itself, else 'zip'."""
-    if not (PROJECT_ROOT / ".git").exists():
+    """How this installation can update itself.
+
+    'git'    -- a checkout with a remote: fetch + checkout, the original path
+    'bundle' -- installed by the setup: no .git, but a VERSION file naming the
+                release it was built from; updates by downloading a package
+    'zip'    -- neither; tell the user rather than offering a dead button
+
+    'absent' and 'cannot tell' are different answers here. Only an ABSENT
+    VERSION file makes this a zip; unreadable (an ACL, a lock) and unparseable
+    (a crashed update left it half written) both mean "this IS an installed
+    copy, and something is wrong with it", which the update path can repair.
+    Reporting 'zip' for those shows the user "this installation cannot update
+    itself" — the one sentence this work exists to delete — with no way back.
+
+    An earlier version guarded that with `Path.stat()`, which does not read the
+    file: an ACL or an exclusive lock passes the stat and fails on the open, so
+    the guard was a no-op for exactly its own scenario.
+    """
+    from backend.api.services.app_version import read_version_state
+
+    # Ask git, do not stat `.git`. A `git worktree`, a submodule and
+    # `clone --separate-git-dir` all give a `.git` FILE, so `.is_dir()` is False
+    # and a perfectly updatable checkout was being told it cannot update itself
+    # — and this project uses worktrees routinely.
+    #
+    # `--show-toplevel` anchors the answer: `git -C <dir>` SEARCHES UPWARD, so a
+    # bundle unpacked anywhere inside someone else's repository would otherwise
+    # be reported as a git install of THAT project.
+    toplevel = _git_out("rev-parse", "--show-toplevel")
+    if toplevel and Path(toplevel).resolve() == PROJECT_ROOT.resolve():
+        return "git" if _git_out("remote", "get-url", "origin") else "zip"
+
+    state, _tag = read_version_state(PROJECT_ROOT)
+    if state == "absent":
         return "zip"
-    return "git" if _git_out("remote", "get-url", "origin") else "zip"
+    if state == "tag":
+        return "bundle"
+    # "unreadable" (a lock, an ACL) or "junk" (a half-written file from a
+    # crashed update). Both mean "this IS an installed copy, and something is
+    # wrong with it" — which the update path can repair. Reporting "zip" would
+    # show the one sentence this work exists to delete, with no way back.
+    logger.warning("VERSION is present but %s; treating this as a bundle install", state)
+    return "bundle"
 
 
-_TAG_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+.](.*))?$")
+# ONE pattern, imported rather than respelled. Keeping a second copy here with
+# capture groups is how the two drifted: `(.*)` accepted "v1.2.3-" while the
+# other rejected it, and tightening this copy alone silently began rejecting
+# real pre-release tags like v1.2.3-rc-2 — which `_parse_ls_remote` then drops
+# from the available-release list with no message at all.
+_TAG_RE = _TAG_LINE_RE
 
 
 def parse_version(tag: str) -> tuple | None:
@@ -99,7 +151,8 @@ def parse_version(tag: str) -> tuple | None:
     m = _TAG_RE.match((tag or "").strip())
     if not m:
         return None
-    major, minor, patch, suffix = m.groups()
+    major, minor, patch = m.group("major"), m.group("minor"), m.group("patch")
+    suffix = m.group("suffix")
     # (…, 1, '') for a final release sorts above (…, 0, 'rc1') for a pre-release
     return (int(major), int(minor), int(patch), 0 if suffix else 1, suffix or "")
 
@@ -176,6 +229,60 @@ def _changelog_for(tag: str) -> str:
 # check
 # --------------------------------------------------------------------------
 
+def _fill_bundle_release(result: dict) -> None:
+    """What an installed copy — dmg, AppImage, Setup.exe — can be told.
+
+    It cannot pull and rebuild: there is no git and no Node. But it is not the
+    dead end the check used to report. Until now every packaged installation
+    got `not_a_git_install`, which the interface renders as "This installation
+    cannot update itself." — the one sentence the module docstring above says
+    this work exists to delete — and it got it WITHOUT asking anyone, so a
+    tester was told nothing was available while a release sat on the page.
+
+    `github_releases` was written for exactly this and, until now, called from
+    nowhere; the docstring's claim that a bundle "uses github_releases instead"
+    described an intention, not a code path.
+
+    Nothing here raises: `latest_release` answers with a reason instead
+    (`rate_limited`, `unreachable`, `not_found`), and the reason is what the
+    user sees, so "no newer version" is never confused with "could not look".
+    """
+    from backend.api.services import github_releases
+
+    result["download_url"] = github_releases.releases_page_url()
+
+    release, why = github_releases.latest_release()
+    if not release:
+        result["reason"] = why or "remote_unreachable"
+        return
+
+    latest = str(release.get("tag_name") or "").strip()
+    if not parse_version(latest):
+        # A release named something we do not recognise as a version is not a
+        # thing to offer; saying "up to date" would be a guess.
+        result["reason"] = "no_release_tag"
+        return
+
+    result["latest"] = latest
+    current_key = parse_version(result.get("current_release") or "")
+    if current_key is None:
+        result["available"] = True
+        result["reason"] = "no_local_release"
+    elif parse_version(latest) > current_key:
+        result["available"] = True
+        result["reason"] = "bundle_download"
+    else:
+        result["reason"] = "up_to_date"
+        return
+
+    # The notes of the version being OFFERED. `_changelog_for` reads the
+    # CHANGELOG of the copy on disk, which is the OLD one — for a bundle the
+    # only description of the new version is the release body.
+    body = str(release.get("body") or "").strip()
+    if body:
+        result["notes"] = body[:4000]
+
+
 def check_for_update(force: bool = False) -> dict:
     """Is a newer *released* version available? Never raises, never blocks long.
 
@@ -200,6 +307,11 @@ def check_for_update(force: bool = False) -> dict:
         "reason": "",
     }
 
+    if kind == "bundle":
+        _fill_bundle_release(result)
+        _check_cache.update(at=now, result=result)
+        return result
+
     if kind != "git":
         result["reason"] = "not_a_git_install"
         _check_cache.update(at=now, result=result)
@@ -219,12 +331,19 @@ def check_for_update(force: bool = False) -> dict:
 
     latest = tags[0]
     result["latest"] = latest
-    if current is None:
+    # `current` is whatever `git describe --tags` found, which is the nearest
+    # reachable tag of ANY shape — this project creates tags like
+    # "wip-uncommitted-2026-09-14". Comparing a tuple with None raises
+    # TypeError, which `routes/system.py` swallows into reason="check_failed":
+    # a dead update dialog with no explanation. Resolve the key once, and treat
+    # "not a release tag" exactly like "no tag at all".
+    current_key = parse_version(current) if current else None
+    if current_key is None:
         # Untagged checkout (a developer tree, or a clone predating tags):
         # offer the release but let the UI say the comparison is approximate.
         result["available"] = True
         result["reason"] = "no_local_release"
-    elif parse_version(latest) > parse_version(current):
+    elif parse_version(latest) > current_key:
         result["available"] = True
     else:
         result["reason"] = "up_to_date"
@@ -362,13 +481,15 @@ def perform_update(tag: str) -> dict:
     ):
         return rollback("Could not switch to the new version.")
 
-    if _changed_between(previous, target, "requirements.txt"):
-        import sys
-        if not _run_step(
-            "dependencies",
-            [sys.executable, "-m", "pip", "install", "-r", "requirements.txt"],
-            PROJECT_ROOT,
-        ):
+    deps_cmd, deps_refusal = python_dependency_command(
+        requirements_changed=_changed_between(previous, target, "requirements.txt"),
+        macos_env_changed=_changed_between(previous, target, "environment-macos.yml"),
+        target_tag=tag,
+    )
+    if deps_refusal:
+        return rollback(deps_refusal)
+    if deps_cmd:
+        if not _run_step("dependencies", deps_cmd, PROJECT_ROOT):
             return rollback("Installing the Python packages failed.")
     else:
         _log_line("Python packages unchanged — skipped.")
@@ -390,6 +511,71 @@ def perform_update(tag: str) -> dict:
     _set(state="done", step="done", installed=tag)
     _log_line(f"Updated to {tag}.")
     return get_progress()
+
+
+def _find_conda(prefix: str, environ) -> str | None:
+    """The conda executable that owns `prefix`.
+
+    CONDA_EXE is set only in an activated shell; an app started from the
+    Finder or the Dock has none, so look next to the environment too:
+    `<base>/envs/<name>` -> `<base>/bin/conda`, or the base env itself.
+    """
+    import shutil
+    if environ.get("CONDA_EXE"):
+        return environ["CONDA_EXE"]
+    p = Path(prefix)
+    for base in (p.parent.parent, p):
+        for rel in ("bin/conda", "condabin/conda"):
+            if (base / rel).is_file():
+                return str(base / rel)
+    return shutil.which("conda")
+
+
+def python_dependency_command(
+    requirements_changed: bool,
+    macos_env_changed: bool,
+    platform: str | None = None,
+    prefix: str | None = None,
+    environ: dict | None = None,
+    executable: str | None = None,
+    target_tag: str | None = None,
+) -> tuple[list[str] | None, str | None]:
+    """How an update brings the Python packages in line: ``(argv, None)`` to
+    run, ``(None, None)`` when nothing changed, ``(None, message)`` to refuse.
+
+    A conda environment on macOS is never touched with pip. There the pip
+    wheels of torch, scikit-learn and faiss-cpu each bundle their own OpenMP
+    runtime, and the second one to start aborts the backend with
+    "OMP: Error #15" — the environment is built from environment-macos.yml so
+    that exactly one runtime exists, and it is updated from that file too.
+    """
+    import os
+    import sys
+    platform = sys.platform if platform is None else platform
+    prefix = sys.prefix if prefix is None else prefix
+    environ = os.environ if environ is None else environ
+    executable = sys.executable if executable is None else executable
+
+    if platform == "darwin" and (Path(prefix) / "conda-meta").is_dir():
+        if not (requirements_changed or macos_env_changed):
+            return None, None
+        conda = _find_conda(prefix, environ)
+        if not conda:
+            # The refusal rolls the code back, so "run it in the install
+            # folder" would apply the OLD file; name the target explicitly.
+            return None, (
+                "The Python packages changed, and this macOS environment must "
+                "be updated with conda, not pip, but conda was not found. In "
+                "the Orienta folder run:  git checkout "
+                f"{target_tag or '<new version>'} && conda env update -p "
+                f"{prefix} -f environment-macos.yml  — then restart Orienta."
+            )
+        return [conda, "env", "update", "-p", prefix,
+                "-f", "environment-macos.yml"], None
+
+    if requirements_changed:
+        return [executable, "-m", "pip", "install", "-r", "requirements.txt"], None
+    return None, None
 
 
 def _fail(message: str) -> dict:

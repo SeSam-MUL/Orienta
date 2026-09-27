@@ -106,6 +106,10 @@ export default function GenerateDictionaryDialog({
   energyKv = FALLBACK_ENERGY,
   resolutionDeg = FALLBACK_RESOLUTION,
   datasetName = '',
+  // True when the runtime reports no CUDA device. Passed in rather than probed
+  // here: IndexingPage already knows, and a second source of truth for "is
+  // there a GPU" is how two screens end up claiming different things.
+  noCudaHere = false,
   // Lets the page remember what was actually used, so the kV-mismatch check
   // and the next dialog open follow the user instead of a fixed default.
   onSettingsUsed,
@@ -272,12 +276,19 @@ export default function GenerateDictionaryDialog({
             in-process PyTorch projection, CPU is kikuchipy's get_patterns
             (the routine that built every dictionary already in the library). */}
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <label style={{ color: colors.text }} title={t('hoverTips.genDictBackendGpu')}>
+          <label
+            style={{ color: colors.text }}
+            title={noCudaHere
+              ? t('hoverTips.genDictBackendGpuOnCpu')
+              : t('hoverTips.genDictBackendGpu')}
+          >
             <input
               type="radio" name="gen_dict_backend"
               checked={mode === 'gpu'} disabled={isRunning}
               onChange={() => setMode('gpu')}
-            /> {t('genDictDialog.backendGpu')}
+            /> {noCudaHere
+                  ? t('genDictDialog.backendGpuOnCpu')
+                  : t('genDictDialog.backendGpu')}
           </label>
           <label style={{ color: colors.text }} title={t('genDictDialog.backendCpuTip')}>
             <input

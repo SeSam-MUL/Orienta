@@ -29,6 +29,39 @@ const CPU_RATES = [
 /** Reference GPU rate (RTX 4070, L=88, refine=on) — for the "vs GPU" comparison. */
 export const GPU_REFERENCE_RATE = 600;
 
+/**
+ * Rough seconds for the same work on a reference CUDA GPU.
+ *
+ * Exists so the comparison can print BOTH numbers. The wording used to say
+ * "roughly 18 s ... instead of a few minutes on a GPU", which has it exactly
+ * backwards — the GPU is the fast one. An M5 tester read that sentence for a
+ * 441-pattern run and reported the logic as inverted (report point B5b). With
+ * both numbers computed from measured rates, one cannot end up larger than the
+ * other by accident.
+ */
+export function estimateGpuSphericalSeconds(nPatterns) {
+  const n = Number(nPatterns);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return n / GPU_REFERENCE_RATE;
+}
+
+/**
+ * Does this machine have no CUDA device?
+ *
+ * The question every "is there a GPU" label asks, in one place. It lived as
+ * the same expression in IndexingPage and BatchWorkflow, and a test pinned
+ * both copies — so the obvious cleanup would have failed two assertions.
+ *
+ * `null` means the probe has not answered: NOT no-CUDA, because a label that
+ * claims CPU before we know is worse than one that corrects itself. `unknown`
+ * is what /status reports when the CUDA probe throws mid-run — also not an
+ * answer.
+ */
+export function hasNoCudaDevice(runtime) {
+  const device = runtime && runtime.device;
+  return !!device && device !== 'cuda' && device !== 'unknown';
+}
+
 export function cpuPatternsPerSecond(bandwidth) {
   const bw = Number(bandwidth) || 88;
   return CPU_RATES.find(r => bw <= r.maxBandwidth).patternsPerSecond;

@@ -70,56 +70,90 @@ def is_pseudosymmetric(point_group: str) -> bool:
     return point_group in _PSEUDO_HOLOHEDRY
 
 
-# Point groups whose master pattern has z-rotational symmetry order 2 (`z_rot==2`),
-# for which the SHT-spherical SO(3) cross-correlation CANNOT form a sharp
-# orientation peak — it lands in a wrong basin (root-caused 2026-06-27/28 over 16
-# diagnostic harnesses; the true orientation is not even among the top cc bins).
-#
-# THE AUTHORITATIVE DETERMINANT IS THE MASTER'S `z_rot == 2` (use
-# :func:`spherical_unreliable`). This name set is only a FALLBACK for when the
-# z_rot value is unavailable. It must list every point group the SHT loader can
-# emit (`sht_io._build_sg_to_pg_table` stores the crystal point group, NOT the
-# Laue class) whose master is z_rot=2 — verified by reading every library .sht:
+# Point groups whose master pattern has z-rotational symmetry order 2 (`z_rot==2`).
+# This is a FACT about the master, not a verdict on the indexer. It must list every
+# point group the SHT loader can emit (`sht_io._build_sg_to_pg_table` stores the
+# crystal point group, NOT the Laue class) whose master is z_rot=2 — verified by
+# reading every library .sht:
 #   cubic        m-3, 23, -43m   (full m-3m band geometry, lower crystal symmetry)
-#   orthorhombic mmm, 222, mm2   (2-fold about c → z_rot=2)
-# Everything else is reliable: triclinic `-1` / monoclinic `2/m` are z_rot=1
-# (WORK); tetragonal `4/mmm`, trigonal `-3m`/`-6m2`, hexagonal `6/mmm` and
-# full-cubic `m-3m` / `432` are z_rot>=3 (WORK). For ALL z_rot=2 masters the
-# orientation is taken from Hough band-geometry indexing.
-# (`-43m` is z_rot=2 — e.g. Mg17Al12 — so it MUST be here, even though it is
-# excluded from `is_pseudosymmetric` for a separate reason: its coset under the
-# centrosymmetric holohedry is empty. The spherical correlation fails for it
-# regardless of coset emptiness.)
-_SPHERICAL_UNRELIABLE_PG: frozenset[str] = frozenset(
-    {"m-3", "23", "-43m", "mmm", "222", "mm2"})
+#   orthorhombic mmm, 222, mm2   (2-fold about c -> z_rot=2)
+_ZROT2_PG: frozenset[str] = frozenset({"m-3", "23", "-43m", "mmm", "222", "mm2"})
+
+# The z_rot==2 classes the RAW spherical answer indexes correctly since the decode
+# fix (a4b7710c: a constant C2<1 -1 0> between decode and renderer; 13dd72f4: a
+# half-bin origin). Until then every z_rot==2 master "landed in a wrong basin"
+# (root-caused 2026-06-27/28 as a flat cc volume) and was re-indexed by Hough.
+# That diagnosis was the decode error: the C2 lies in O and D4, so it was
+# invisible on m-3m / 4/mmm and a 90-deg basin on m-3 and mmm.
+#
+# Measured 2026-09-22 (tasks/retire-hough/), raw spherical, no resolver:
+#   synthetic, 48 random orientations per master, angle to the truth
+#     m-3  (alpha sd_0302719)     median 0.17 deg, 100 % <= 2 deg
+#     mmm  (S-phase MgCuAl2)      median 0.26 deg, 100 % <= 2 deg
+#     -43m (Mg17Al12)             median 0.32 deg,  58 % <= 2 deg, rest 90 deg off
+#   real, 81 S-phase patterns on 7050: render-NCC sphere 0.711 vs Hough 0.703,
+#     0.33 deg apart (June, pre-fix: 89.9 deg, 0.19 vs 0.69)
+#   real, crop1 alpha vs EMSphInx: raw 0.145 deg, the Hough-carried pipeline 0.292
+# 23 / 222 / mm2 share the decode and the Laue class of m-3 / mmm; no library
+# master of theirs was measured.
+#
+# -43m is NOT here: its patterns are near-identical under a 90-deg turn about
+# <100> (the Td -> Oh coset, a Friedel pair), which is a property of the pattern,
+# not of the decoder; there the Hough anchor + render arbitration stays.
+_DECODE_FIXED_ZROT2_PG: frozenset[str] = frozenset({"m-3", "23", "mmm", "222", "mm2"})
+
+# The way back and the A/B switch: "1" re-anchors EVERY z_rot==2 class on Hough,
+# exactly as before 2026-09-22.
+_ALL_ZROT2_ENV = "ORIENTA_HOUGH_ANCHOR_ALL_ZROT2"
+
+
+def _anchor_all_zrot2() -> bool:
+    import os
+    return os.environ.get(_ALL_ZROT2_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def zrot2_pointgroup(point_group) -> bool:
+    """True if a master of this point group is z_rot=2 (the fact, not a verdict).
+    Whitespace-tolerant because point-group strings arrive from file metadata."""
+    return str(point_group).strip() in _ZROT2_PG
 
 
 def spherical_unreliable_pointgroup(point_group) -> bool:
-    """Name-based fallback for :func:`spherical_unreliable` — True for the point
-    groups whose master is z_rot=2 (see :data:`_SPHERICAL_UNRELIABLE_PG`). Prefer
-    :func:`spherical_unreliable` with the master's actual ``z_rot`` when available.
-    Whitespace-tolerant because point-group strings arrive from file metadata."""
-    return str(point_group).strip() in _SPHERICAL_UNRELIABLE_PG
+    """Name-based fallback for :func:`spherical_unreliable` when ``z_rot`` is
+    unavailable: True for the z_rot=2 classes the raw spherical answer still gets
+    wrong (today only ``-43m``; every z_rot=2 class with the switch set)."""
+    pg = str(point_group).strip()
+    if pg not in _ZROT2_PG:
+        return False
+    return _anchor_all_zrot2() or pg not in _DECODE_FIXED_ZROT2_PG
 
 
 def spherical_unreliable(z_rot=None, point_group=None) -> bool:
-    """True if the SHT-spherical SO(3) correlation cannot index this master (its
-    z-rotational symmetry order is 2 → flat cc volume, wrong basin) and the
-    AUTOMATIC map-indexing path should take orientations from Hough instead.
+    """True if the AUTOMATIC map-indexing path should take this master's
+    orientations from Hough instead of the raw SHT-spherical answer.
 
-    Prefers the master's actual ``z_rot`` (the EXACT determinant, identical to the
-    per-pattern phase-test path in ``backend/api/routes/indexing.py`` which gates on
-    ``z_rot == 2``); falls back to the point-group name (:func:`
-    spherical_unreliable_pointgroup`) only when ``z_rot`` is unavailable. A SUPERSET
-    of :func:`is_pseudosymmetric` (which is narrowly the cubic approximants m-3/23):
-    it also covers orthorhombic ``mmm``/``222``/``mm2`` and cubic ``-43m`` — all
-    z_rot=2, all defeating the capped spherical correlation."""
+    Two questions, in order. Is the master z_rot=2? Its actual ``z_rot`` decides
+    (the name set only when ``z_rot`` is missing or unreadable). If it is, is its
+    class one the decode fix covers (``m-3``/``23``/``mmm``/``222``/``mm2``)? Then
+    no: the sphere indexes it and nothing is substituted. ``-43m``, and a z_rot=2
+    master whose class cannot be read, keep the Hough anchor — fail closed.
+    ``ORIENTA_HOUGH_ANCHOR_ALL_ZROT2=1`` restores the pre-2026-09-22 gate (every
+    z_rot=2 master on Hough). The per-pattern phase test in
+    ``backend/api/routes/indexing.py`` asks this same function.
+    """
+    zr = None
     if z_rot is not None:
         try:
-            return int(z_rot) == 2
+            zr = int(z_rot)
         except (TypeError, ValueError):
-            pass
-    return spherical_unreliable_pointgroup(point_group)
+            zr = None
+    is_z2 = (zr == 2) if zr is not None else zrot2_pointgroup(point_group)
+    if not is_z2:
+        return False
+    if _anchor_all_zrot2():
+        return True
+    pg = str(point_group).strip() if point_group is not None else ""
+    return pg not in _DECODE_FIXED_ZROT2_PG
 
 
 # Crystal-system holohedry used to generate pseudo-symmetric *variant candidates*

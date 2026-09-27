@@ -28,7 +28,7 @@
 import { buildMaskCanvas } from '../PhaseMap/maskCanvas';
 
 /** Luma weights used everywhere in this codebase for threshold masking. */
-function applyThreshold(ctx, w, h, threshold) {
+export function applyThreshold(ctx, w, h, threshold) {
   if (!threshold) return;
   const img = ctx.getImageData(0, 0, w, h);
   const { min, max } = threshold;

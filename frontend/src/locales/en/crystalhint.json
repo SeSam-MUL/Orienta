@@ -202,7 +202,7 @@
     "inLibraryBadge": "in library",
     "viewCif": "view CIF #{{id}}",
     "savedToLibrary": "✓ Saved to library",
-    "nextStep": "Next step: generate the SHT in the Simulation tab (CIF → XTAL → MC → Master → SHT, ~30-60 min via WSL/EMsoft).",
+    "nextStep": "Next step: generate the SHT in the Simulation tab (CIF → XTAL → MC → Master → SHT, ~30-60 min with EMsoft).",
     "openInSimulation": "→ Open in Simulation",
     "openInSimulationTooltip": "Pre-fill the Simulation page with this CIF to generate its SHT master.",
     "downloadFailed": "✗ {{msg}}",

@@ -143,10 +143,13 @@ Typical entry points:
 - **Indexing a subset is position-safe.** Region and chemistry-mask selections are
   written back into the full-scan grid at their original coordinates, so partial
   results overlay correctly on the whole map.
-- **Pseudo-symmetry.** For pseudo-symmetric cubic approximants the spherical
-  correlation can land on the wrong symmetry variant; the result then takes its
-  orientation from Hough where needed, and Pattern Match offers a manual
-  variant-flip tool (see [Pattern Match](PatternMatch.md)).
+- **Pseudo-symmetry.** Cubic approximants (point group m-3, e.g. alpha-AlFeMnSi) and
+  orthorhombic phases (mmm, e.g. the S phase) are indexed by the spherical method
+  directly — measured against EMSphInx and on real S-phase patterns (September 2026).
+  Only for point group -43m (e.g. Mg17Al12), whose patterns look almost the same after
+  a 90° turn, does the result take its orientation from Hough. Pattern Match offers
+  a manual variant-flip tool for any phase
+  (see [Pattern Match](PatternMatch.md)).
 - **Results live in memory.** Restarting the backend clears stored results; the app
   re-activates a saved result automatically when you reload the file it belongs to,
   but a fresh backend start requires re-indexing.
@@ -233,28 +236,54 @@ possible.
 ## EDS-guided phase assignment (e.g. Al vs Si)
 
 Some phases are almost identical crystallographically but clearly different
-chemically — the classic case being **fcc Al and diamond-cubic Si**, both cubic
+chemically, the classic case being **fcc Al and diamond-cubic Si**, both cubic
 with the same symmetry. Their Kikuchi patterns look nearly the same, so
 pattern-only indexing often labels Si particles as Al. When the loaded file has
-**EDS**, you can let the local chemistry break the tie.
+**EDS**, you can let the local chemistry decide.
 
-- Each selected phase gets an **"EDS influence" slider** (0–100 %). It only appears
-  when EDS is available for the active file.
-- **Default is 0 % for every phase**, which means *no change* — indexing is exactly
-  as it was. Turn a phase up (e.g. set **Si** to 50–75 %) to have its EDS chemistry
-  bias the phase choice **toward the chemically-consistent phase without overriding
-  a clear pattern match**. It acts strongest exactly where the pattern is ambiguous.
-- It works for **Spherical, Dictionary, and Hough** (a chemistry-active multi-CIF
-  Hough run indexes each phase separately, so it is slower — only enabled when a
-  strength is set).
-- The expected composition comes from each phase's **formula** automatically; you
-  do not need to enter anything.
-- After the run, the log reports **`EDS chemistry prior: adjusted N pixels`** — how
-  many pixels the chemistry moved off the pattern-only choice.
-- **No EDS, or all sliders at 0 ⇒ bit-identical** to standard indexing.
+- One switch, **Use EDS chemistry for phase assignment**, turns it on for
+  **every selected phase at once**. It appears only when the active file has EDS.
+- **Off is the default**, and an off run is bit-identical to indexing without
+  the feature: the field is not sent at all.
+- The expected composition comes from each phase's **formula** automatically.
+  You do not have to enter anything.
+- It works with **Spherical, Dictionary and Hough**. A chemistry-active
+  multi-phase Hough run indexes each phase separately, so it is slower. The
+  **EMSphInx** backend ignores the chemistry; that run stays pattern-only and
+  the page says so before you start.
+- After the run the log reports **`EDS chemistry prior: adjusted N pixels`**,
+  how many pixels the chemistry moved off the pattern-only choice.
 
-Practical tip: leave well-behaved phases at 0 and only raise the discriminating
-element (Si here). The chemistry is a **tie-breaker**, not an override — it
-resolves ambiguous pixels but cannot invent a phase whose pattern is absent.
+This is not a gentle tie-breaker. A phase the chemistry rules out keeps a
+weight of 0.05, a twentyfold penalty, so at ambiguous pixels the chemistry
+effectively decides. What it cannot do is invent a phase whose pattern is
+absent. **[The EDS chemistry prior](EDS-prior.md)** describes the weighting,
+what "expected composition" means, the orientation rescue for particles the
+pattern cannot see, and when to leave the switch off.
+
+### There is no per-phase strength, on purpose
+
+Until August 2026 each phase had its own 0 to 100 % slider. The weight is
+`w = (1 - s) + s * chemistry_fit`, so a phase left at 0 keeps weight exactly
+1.0 and is immune, while every phase you raise is penalised. Raising it on Al
+and Si alone was measured to inflate an unrelated third phase from 1.5 % to
+10 % of the map. Only two settings mean anything, off for everything and on
+for everything, and that is what the page offers. Older guidance telling you
+to raise one phase to 50 to 75 % predates that measurement.
+
+### The pre-flight check
+
+With the switch on, the page checks the dataset before it lets you start: that
+EDS is present, that the EDS and EBSD grids line up, that the signal is strong
+enough, and that the defining elements of the selected phases were measured at
+all. A failing check **blocks Start** until you fix it or switch the chemistry
+off.
+
+The same panel lists each phase with its defining elements and a **possible
+area**: an upper bound on how much of the map the chemistry cannot rule that
+phase out of. It is a bound, not a predicted area fraction, and for a
+single-element phase it is trivially weak, because traces of that element sit
+everywhere.
+
 Because EDS is spatially coarser than EBSD, compositions at particle edges are
-mixed; the soft weighting is designed to tolerate this.
+mixed. The soft weighting is designed to tolerate that.

@@ -685,7 +685,7 @@ def aztec_comparison():
             detail=f"Could not read Aztec Phase/Euler from {src_h5oina}: {e}",
         )
 
-    # Build Aztec → Ours phase mapping by NAME (case-insensitive substring match
+    # Build Aztec → Orienta phase mapping by NAME (case-insensitive substring match
     # so Aztec's "Aluminium" lines up with our "Al"). Pixels with phase_id 0 in
     # Aztec are unindexed and stay -1 in our convention.
     our_phase_id_2d = np.asarray(_dataset.xmap.phase_id).reshape(grid)
@@ -804,7 +804,7 @@ def aztec_comparison():
     # Panel 2: Our phase (same colors via name-hash so visually comparable)
     ours_rgb = _phase_to_rgb(our_phase_id_2d, our_phase_names)
     axes[1].imshow(ours_rgb)
-    axes[1].set_title(f"Ours Phase\n{len(our_phase_names)} phase(s)", color='white', fontsize=11)
+    axes[1].set_title(f"Orienta Phase\n{len(our_phase_names)} phase(s)", color='white', fontsize=11)
     axes[1].axis('off')
 
     # Panel 3: misorientation heatmap (only on agreeing pixels)

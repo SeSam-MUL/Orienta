@@ -141,6 +141,8 @@ def idstMatrix(
 
 # Weighted DCT and DST implemented as linear layers
 # Adapted from https://github.com/zh217/torch-dct/blob/master/torch_dct/_dct.py
+# (MIT): (c) Copyright 2018 Ziyang Hu. Permission notice and disclaimer:
+# licenses/torch-dct-License.txt.
 class weightedDCST(Linear):
     """Discrete Cosine Transform and Discrete Sine Transform implemented as linear layers
 

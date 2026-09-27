@@ -71,6 +71,24 @@ def test_update_start_rejects_a_zip_install(client, monkeypatch):
     assert "cannot update itself" in r.json()["detail"]
 
 
+def test_update_start_sends_a_packaged_install_to_the_installer(client, monkeypatch):
+    """It refuses, as before -- there is no git and no Node to rebuild with --
+    but "cannot update itself" was a dead end. A packaged copy CAN be updated:
+    by running the new installer, which fetches the matching runtime."""
+    from backend.api.services import github_releases, updater
+
+    monkeypatch.setattr(updater, "install_kind", lambda: "bundle")
+    monkeypatch.setattr(github_releases, "releases_page_url",
+                        lambda: "https://example.invalid/releases")
+    r = client.post("/api/system/update/start", json={"tag": "v0.5.0"})
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert "https://example.invalid/releases" in detail
+    assert "cannot update itself" not in detail
+    # The sentence a tester needs most: nothing of theirs is thrown away.
+    assert "stay where they are" in detail
+
+
 def test_update_start_rejects_a_concurrent_run(client, monkeypatch):
     from backend.api.services import updater
 

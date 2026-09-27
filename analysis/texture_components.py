@@ -4,7 +4,7 @@ Texture Component Definitions for EBSD Analysis.
 Phase-agnostic preset system for ideal texture components (FCC rolling, BCC rolling, etc.).
 Each component is defined by Miller indices {hkl}<uvw> or Euler angles.
 
-Reference: MATLAB/MTEX TextureAnalysis_mtex6.m lines 12-25
+Reference: MATLAB/MTEX TextureAnalysis_mtex6.m lines 16-29
 Architecture: the MTEX-equivalence design notes §2.4
 FEAT-12: 14 FCC components (including Rot.Cube ND10 via Euler angles)
 """

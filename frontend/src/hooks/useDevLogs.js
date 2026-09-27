@@ -12,6 +12,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { closeWebSocket } from '../services/api';
 
 const MAX_ENTRIES = 500;
 const FLUSH_INTERVAL_MS = 200;
@@ -86,15 +87,17 @@ export default function useDevLogs(opts = {}) {
       };
 
       ws.onclose = () => {
-        if (mounted) {
+        // Not after we closed it ourselves (unmount, or React's dev remount).
+        if (mounted && !ws.__closingIntentionally) {
           setIsConnected(false);
           reconnectTimer.current = setTimeout(connect, 3000);
         }
       };
 
-      ws.onerror = () => {
-        ws.close();
-      };
+      // The error event carries no detail; onclose runs right after it and owns
+      // the reconnect. Closing here as well tore down a still-connecting socket
+      // and produced a console warning on every load.
+      ws.onerror = () => {};
     };
 
     connect();
@@ -106,7 +109,7 @@ export default function useDevLogs(opts = {}) {
         clearTimeout(flushTimerRef.current);
         flushTimerRef.current = null;
       }
-      if (wsRef.current) wsRef.current.close();
+      closeWebSocket(wsRef.current);
     };
   }, []);
 

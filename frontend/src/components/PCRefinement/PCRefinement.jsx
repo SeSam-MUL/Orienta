@@ -18,6 +18,7 @@
  *                 sub-GroupBox: Pixel Size & Binning
  */
 
+import { localiseParams } from '../../i18n/formatDateTime';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { pcApi, ebsdApi, calibrationApi, indexApi } from '../../services/api';
@@ -29,6 +30,7 @@ import FloatingPhasePanel from '../Indexing/FloatingPhasePanel';
 import {
   checkPixelSize, plausibleWidthMm, TYPICAL_MIN_UM, TYPICAL_MAX_UM,
 } from './pixelSizeCheck';
+import { pickShtForPhase } from './previewSht';
 import {
   colors,
   alpha,
@@ -2126,7 +2128,7 @@ function ControlsPanel({
               border: '1px solid #e0a020', borderRadius: 4,
               color: colors.text, fontSize: '8.5pt', lineHeight: 1.4,
             }}>
-              ⚠ {result.pc_warning}
+              ⚠ {pcWarningText(result, t)}
             </div>
           )}
           <Button
@@ -2218,6 +2220,29 @@ function ControlsPanel({
 // ---------------------------------------------------------------------------
 // Main PCRefinement component
 // ---------------------------------------------------------------------------
+/** A value no translation can equal, so a missing key is detectable.
+ *  i18next here has returnEmptyString:false, which makes '' unusable. */
+const I18N_MISS = ' miss';
+
+/**
+ * The reliability warning after a PC refine, in the reader's language.
+ *
+ * The backend sends `pc_warning_codes` (a stable code plus its numbers) and
+ * its English sentence in `pc_warning`. Translate on the codes; fall back to
+ * the sentence, so an older backend or a code this build has no text for
+ * still says something true.
+ */
+export function pcWarningText(result, t) {
+  const codes = result?.pc_warning_codes;
+  if (Array.isArray(codes) && codes.length) {
+    const parts = codes
+      .map((c) => t(`warnings.${c.code}`, { ...localiseParams(c.params), defaultValue: I18N_MISS }))
+      .filter((s) => s && s !== I18N_MISS);
+    if (parts.length === codes.length) return parts.join('  ');
+  }
+  return result?.pc_warning || '';
+}
+
 export default function PCRefinement({ onNavigate }) {
   const { t } = useTranslation('pcrefinement');
   const [askPrompt, promptProps] = usePrompt();
@@ -2470,16 +2495,21 @@ export default function PCRefinement({ onNavigate }) {
     }
     // Direct fetch — the existing api.js doesn't currently expose a
     // typed wrapper for the indexing/files endpoint.
+    // A later phase change must not be overwritten by an earlier, slower reply.
+    let stale = false;
     fetch('/api/indexing/files/spherical')
       .then(r => r.json())
       .then(d => {
+        if (stale) return;
         const files = Array.isArray(d?.files) ? d.files : [];
         setShtChoices(files);
-        if (files.length > 0 && !shtPath) setShtPath(files[0].path);
+        // The master of the LOADED phase: the first file was Al while Ni was
+        // being calibrated, and the preview reported a good PC as NCC 0.03.
+        setShtPath(pickShtForPhase(files, phaseLabel));
       })
-      .catch(() => { setShtChoices([]); });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phaseLoaded]);
+      .catch(() => { if (!stale) setShtChoices([]); });
+    return () => { stale = true; };
+  }, [phaseLoaded, phaseLabel]);
 
   // --- Debounced fetch of the simulated preview ---
   // Watches the trial geometry + selected pattern + SHT + bandwidth and

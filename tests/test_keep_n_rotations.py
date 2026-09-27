@@ -148,3 +148,29 @@ def test_ipf_of_a_collapsed_map_equals_the_rank_zero_colours():
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
+
+
+def test_collapse_of_a_navigation_masked_map():
+    """A region-selected Dictionary run on the CPU path crashed here.
+
+    kikuchipy returns a map whose `is_in_data` covers only the selected
+    pixels, while `prop` keeps the full-grid arrays and masks them in
+    __getitem__. Copying prop.items() put the full arrays into the smaller
+    map, and the next read raised "boolean index did not match indexed array
+    along axis 0; size of axis is 28086 but size of corresponding boolean
+    axis is 3720" (measured on LoGainNi, 2026-09-22).
+    """
+    xmap = _keep_n_map(n_rows=4, n_cols=5)
+    sel = np.zeros(xmap.size, dtype=bool)
+    sel[:8] = True          # a contiguous region, as a row selection gives
+    masked = xmap[sel]
+    assert masked.size == 8 and masked.prop["scores"].shape[0] == 8
+
+    out = _best_match_only(masked)
+
+    assert out.size == 8
+    assert out.prop["scores"].shape == (8, 5)          # read must not raise
+    np.testing.assert_array_equal(out.prop["scores"], masked.prop["scores"])
+    np.testing.assert_allclose(out.rotations.data, masked.rotations.data[:, 0])
+    np.testing.assert_allclose(out.x, masked.x)      # the back-mapping relies on these
+    np.testing.assert_allclose(out.y, masked.y)

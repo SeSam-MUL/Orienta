@@ -20,13 +20,47 @@
  * @param {'checking'|'connected'|'disconnected'} o.status
  * @param {boolean} o.everConnected  has this page ever seen the backend?
  * @param {number} o.sinceLoadSec    seconds since the page loaded
+ * @param {number} [o.sinceFirstFailSec] seconds the health poll has been
+ *   failing without interruption. Undefined means "not tracked" and keeps the
+ *   old, immediate rule.
  * @returns {{ kind: 'none'|'starting'|'down'|'lost', elapsed?: number }}
  */
 export const STARTUP_GRACE_SEC = 180; // matches start_app.py / electron main.js
 
-export function backendBanner({ status, everConnected, sinceLoadSec }) {
+/**
+ * How long the health poll must keep failing before "lost" is shown.
+ *
+ * A single failed request is not evidence that the backend is gone: it times
+ * out after 4 s (services/api.js) and the event loop can be GIL-blocked for
+ * longer than that while the process is perfectly alive. Reported from the
+ * 0.4.5 laptop test, where a red "connection lost" appeared during normal use.
+ *
+ * Measured from the FIRST FAILURE, not from the last successful reply. While
+ * connected the poll only runs every 30 s (App.jsx), so "no reply for 10 s" is
+ * never true at the moment we find out — we were not asking. The first failure
+ * is the first instant we have any evidence at all, and from there App.jsx
+ * retries every 2 s, so the window covers about five attempts.
+ *
+ * That is the same reasoning as the loader's STALE_THRESHOLD_MS (services/api.js,
+ * session 2026-05-27) — a wall clock over a period we are actually watching —
+ * and deliberately NOT a count of consecutive failures.
+ *
+ * Cost, stated plainly: a backend that dies right after a successful poll is
+ * still reported up to ~30 s later (unchanged — that is the poll gap), and now
+ * ~10 s after that. What it buys is that a 4 s stall no longer turns the banner
+ * red.
+ */
+export const LOST_AFTER_FAILING_SEC = 10;
+
+export function backendBanner({ status, everConnected, sinceLoadSec, sinceFirstFailSec }) {
   if (status !== 'disconnected') return { kind: 'none' };
-  if (everConnected) return { kind: 'lost' };
+  if (everConnected) {
+    // Failing for less than the threshold: a hiccup, not a loss.
+    if (typeof sinceFirstFailSec === 'number' && sinceFirstFailSec < LOST_AFTER_FAILING_SEC) {
+      return { kind: 'none' };
+    }
+    return { kind: 'lost' };
+  }
   const elapsed = Math.max(0, Math.floor(sinceLoadSec || 0));
   if (elapsed < STARTUP_GRACE_SEC) return { kind: 'starting', elapsed };
   return { kind: 'down', elapsed };
@@ -56,3 +90,15 @@ export function rememberEverConnected(storage = typeof sessionStorage !== 'undef
     /* forgetting is the fallback */
   }
 }
+
+/**
+ * Monotonic clock for the failure window.
+ *
+ * `performance.now()` does not move when the system clock is corrected (NTP,
+ * a manual change), so a backwards jump cannot make the elapsed time negative
+ * and suppress the banner forever. Falls back to Date.now() where it is absent.
+ */
+export const monoNow = () =>
+  (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now();

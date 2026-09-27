@@ -5,6 +5,7 @@ Wraps existing Python EBSD analysis logic with a REST + WebSocket API
 
 import sys
 import os
+import time
 import asyncio
 import json
 import logging
@@ -53,7 +54,18 @@ if _LOG_FILE is not None:
     logger.info("Python %s on %s", sys.version.split()[0], sys.platform)
     logger.info("Log file: %s", _LOG_FILE)
 
-from backend.api.log_broadcast import install_ws_log_handler
+# macOS: PyEBSDIndex's band detector on the CPU path, before any route imports
+# it (see pyebsdindex_mode). After the file log exists, so a Mac bug report
+# shows which detector ran. No-op on other platforms.
+from pyebsdindex_mode import force_cpu_band_detection
+force_cpu_band_detection()
+
+from backend.api.log_broadcast import install_ws_log_handler, uninstall_ws_log_handler
+
+
+# Its own name so the dev-panel handler can suppress exactly this one without
+# silencing anything else — see log_broadcast._SUPPRESSED_LOGGERS.
+_ws_prune_logger = logging.getLogger("backend.api.ws_prune")
 
 
 class ConnectionManager:
@@ -82,10 +94,25 @@ class ConnectionManager:
         for connection in tuple(self.active_connections):
             try:
                 await connection.send_json(message)
-            except Exception:
-                dead.append(connection)
-        for conn in dead:
+            except Exception as exc:
+                dead.append((connection, exc))
+        for conn, exc in dead:
             self.active_connections.discard(conn)
+            # SAY WHY. This prune is what emptied active_connections on the M5
+            # tester's Mac while the window was open: the log records four
+            # "connection open" lines and not one "connection closed", so the
+            # reason a live socket was dropped had to be inferred. One line here
+            # turns the next diagnostics bundle into an answer.
+            #
+            # Logged under its own logger name, which log_broadcast suppresses
+            # for the WebSocket handler: a record broadcast from inside broadcast
+            # reaches the same dead socket, raises again, and logs again — the
+            # feedback loop fixed in d370a976, rebuilt by hand. The file log
+            # still gets it, which is where a bug report reads it.
+            _ws_prune_logger.warning(
+                "Dropped a WebSocket from the broadcast set: %s: %s",
+                type(exc).__name__, exc,
+            )
 
     async def send_progress(self, task_id: str, progress: float, message: str = ""):
         await self.broadcast({
@@ -106,6 +133,9 @@ class ConnectionManager:
 ws_manager = ConnectionManager()
 
 
+# Set by note_http_activity; read by the frontend watchdog.
+_last_http_activity = 0.0
+_parent_watchdog_task = None
 _frontend_heartbeat_task = None
 
 
@@ -148,10 +178,41 @@ async def _frontend_watchdog():
                 if len(ws_manager.active_connections) > 0:
                     logger.info("Frontend reconnected after %ds, watchdog resets.", waited)
                     break
-            if len(ws_manager.active_connections) == 0:
-                logger.info("No frontend reconnected after %ds — shutting down backend.",
-                            grace_period)
-                os._exit(0)
+            if len(ws_manager.active_connections) != 0:
+                continue
+            # Two second opinions before killing a running app.
+            #
+            # Measured on the M5 tester's Mac (2026-09-25, report point 4, log
+            # in tasks/mac-test-m5-2026-09-25/): this watchdog shut the backend
+            # down at 09:54:00 with the window OPEN and in use. Two WebSockets
+            # opened at 09:33:27 and the log never records either closing, yet
+            # the count was zero by 09:43:56. What emptied it is an INFERENCE
+            # from what the log does not contain: uvicorn logged "connection
+            # open" for every session and "connection closed" for none, and the
+            # /ws handler's own cleanup path logs "WebSocket endpoint raised",
+            # which never appears - so the silent prune in
+            # ConnectionManager.broadcast (which discards a connection whose
+            # send raises) is the only remaining route to an empty set. That
+            # prune now logs its reason, so the next bundle will say rather than
+            # imply. Meanwhile the backend went
+            # on serving that same "absent" frontend: CIF parsing at 09:48:58, a
+            # simulation at 09:49:18, spherical at 09:53:04 - all AFTER the
+            # countdown had started. And the Electron parent, PID 3350, was
+            # alive across all four backend restarts that morning.
+            #
+            # So an empty WebSocket count is not evidence that the app is gone.
+            if _ui_parent_is_alive():
+                logger.info("No WebSocket, but the window-owning parent is alive "
+                            "- not shutting down. _parent_watchdog owns that case.")
+                continue
+            idle = seconds_since_http_activity()
+            if idle < grace_period:
+                logger.info("No WebSocket, but an HTTP request arrived %.0fs ago "
+                            "- not shutting down.", idle)
+                continue
+            logger.info("No frontend reconnected after %ds and no HTTP for %.0fs "
+                        "- shutting down backend.", grace_period, idle)
+            os._exit(0)
 
 
 async def _prewarm_kikuchipy_imports():
@@ -209,6 +270,72 @@ async def _reap_orphaned_emsoft():
             )
     except Exception:
         logger.exception("Startup reaper failed (non-fatal)")
+
+
+def _ensure_addon_dir():
+    """Create ~/.orienta/addons once, at startup. Never fatal.
+
+    Imported lazily and wrapped: nothing about a missing add-on folder should
+    be able to stop the backend from starting, and the discovery path reads a
+    missing directory as empty anyway.
+    """
+    try:
+        from backend.api.services.addons.discovery import ensure_user_addon_dir
+        ensure_user_addon_dir()
+    except Exception:
+        logger.exception("Could not prepare the add-on directory (non-fatal)")
+
+
+def _ui_parent_is_alive() -> bool:
+    """Is a parent that OWNS A WINDOW still there?
+
+    The frontend watchdog treats this as proof that a user is present, so the
+    question is deliberately narrower than _parent_watchdog's. Both launchers
+    pass KIKUCHIPY_PARENT_PID, but only Electron passes KIKUCHIPY_UI_PARENT,
+    and the difference matters:
+
+      * Electron holds the window. While it lives, someone can see the app,
+        even when the renderer has dropped off ws_manager.
+      * start_app.py opens a browser tab and then blocks in
+        ``backend_proc.wait()``. Its liveness is implied by the backend's own,
+        so trusting it would mean the watchdog can never fire: launcher waits
+        for backend, parent watchdog waits for launcher, frontend watchdog
+        defers to the parent watchdog. The backend would hold port 8000, the
+        loaded dataset and its HDF5 handles forever after the tab is closed —
+        the 19-hour backend with dead file handles from 2026-08-05, and the
+        opposite of what start_app.py and INSTALL.md promise.
+
+    On that path the HTTP clock decides instead, which is what a closed tab
+    actually changes: App.jsx stops polling /api/health.
+
+    No create_time() pin here, unlike _parent_watchdog: a recycled PID can only
+    be believed for the <=3 s until that watchdog notices the identity mismatch
+    and exits the process outright. The two can only disagree in the direction
+    "do not exit yet", and the parent watchdog overrides that by exiting.
+    """
+    if os.environ.get("KIKUCHIPY_UI_PARENT", "").strip() != "1":
+        return False
+    raw = os.environ.get("KIKUCHIPY_PARENT_PID", "").strip()
+    if not raw:
+        return False
+    try:
+        import psutil
+        return psutil.pid_exists(int(raw))
+    except Exception:
+        return False
+
+
+def note_http_activity() -> None:
+    """Record that a client just asked us for something."""
+    global _last_http_activity
+    _last_http_activity = time.monotonic()
+
+
+def seconds_since_http_activity() -> float:
+    """Seconds since the last request, or inf when there has never been one."""
+    if not _last_http_activity:
+        return float("inf")
+    return time.monotonic() - _last_http_activity
 
 
 async def _parent_watchdog():
@@ -277,18 +404,42 @@ async def lifespan(app: FastAPI):
     _frontend_heartbeat_task = asyncio.create_task(_frontend_watchdog())
     # Hard guarantee that closing the desktop app (or its console) takes the
     # backend with it — see _parent_watchdog for why the other two paths fail.
-    asyncio.create_task(_parent_watchdog())
+    # Reference held: asyncio may collect a task nobody keeps, and the frontend
+    # watchdog now DELEGATES to this one ("_parent_watchdog owns that case"). If
+    # this task ever failed to run, the backend would have no watchdog at all
+    # rather than one.
+    global _parent_watchdog_task
+    _parent_watchdog_task = asyncio.create_task(_parent_watchdog())
     # Fire-and-forget prewarm — the first load no longer pays import cost.
     asyncio.create_task(_prewarm_kikuchipy_imports())
     # Fire-and-forget reaper — clean up EMsoft processes left running in WSL
     # by a previous backend session that was restarted/killed without cleanup.
     asyncio.create_task(_reap_orphaned_emsoft())
+    # The add-on folder, so the one the empty Add-ons page NAMES exists and a
+    # user can open it. Here and not in discovery: GET requests are ungated on
+    # Origin because "they change nothing", and a listing that created a
+    # directory would have made that false.
+    _ensure_addon_dir()
     install_ws_log_handler(ws_manager)
     logger.info("Dev-Panel WebSocket log handler installed")
-    yield
-    logger.info("Orienta Backend shutting down...")
-    if _frontend_heartbeat_task:
-        _frontend_heartbeat_task.cancel()
+    try:
+        yield
+    finally:
+        # `finally`, because an abrupt shutdown throws CancelledError into the
+        # generator at `yield`; without it the tear-down below is skipped and
+        # the handler outlives its loop after exactly the kind of shutdown that
+        # is hardest to debug. (Two paths still skip it: a second Ctrl+C makes
+        # uvicorn drop lifespan.shutdown entirely, and the watchdogs call
+        # os._exit. Both are covered by the other brakes in log_broadcast.)
+        logger.info("Orienta Backend shutting down...")
+        if _frontend_heartbeat_task:
+            _frontend_heartbeat_task.cancel()
+        # Detach the dev-panel log handler BEFORE the loop closes. Left
+        # attached, it turns every later log record into a scheduling attempt
+        # against a dead loop — the runaway measured on the Linux runner.
+        # Safe here: uvicorn shuts every connection down, including the dev
+        # panel's WebSocket, before it awaits lifespan.shutdown.
+        uninstall_ws_log_handler()
 
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -304,6 +455,14 @@ class HTTPTimingMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
+
+        # Before the exclusions: a request is a sign of life whoever made it
+        # and whatever it was for. /api/health is excluded from the dev-panel
+        # LOG, and it is exactly the request a live frontend makes every 30 s —
+        # so putting this call after the exclusion list would make a healthy
+        # frontend's poll count for nothing. (Counterfactual, not a cause: no
+        # activity clock existed when the 09:54 shutdown was measured.)
+        note_http_activity()
 
         if any(path.startswith(p) for p in self._EXCLUDED_PREFIXES):
             return await call_next(request)
@@ -350,6 +509,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # The error code the interface translates on. The default dev server is
+    # same-origin (vite proxies /api to 8000), so this matters for a frontend
+    # pointed straight at the backend with VITE_API_URL — where, without it,
+    # errors would be translated in the packaged app and English in dev.
+    expose_headers=["X-Orienta-Code"],
 )
 app.add_middleware(HTTPTimingMiddleware)
 
@@ -538,6 +702,7 @@ async def websocket_endpoint(websocket: WebSocket):
 # Import and register route modules
 from backend.api.routes import h5_viewer, ebsd_viewer, pcrefinement, simulation
 from backend.api.routes import indexing, phase_map, analysis, ml_hub, database, eds
+from backend.api.routes import eds_export
 from backend.api.routes import calibration, settings, batch_v2, refinement
 from backend.api.routes import install, virtual_images, system
 from backend.api.routes import dictionary_gpu
@@ -546,6 +711,8 @@ from backend.api.routes import crystal_hint
 from backend.api.routes import reference_frame as reference_frame_routes
 from backend.api.routes import pole_figure as pole_figure_routes
 from backend.api.routes import citations
+from backend.api.routes import addons
+from backend.api.routes import phase_collections
 
 app.include_router(h5_viewer.router, prefix="/api/h5", tags=["HDF5 Viewer"])
 app.include_router(ebsd_viewer.router, prefix="/api/ebsd", tags=["EBSD Viewer"])
@@ -561,6 +728,7 @@ app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])
 app.include_router(ml_hub.router, prefix="/api/ml", tags=["ML Hub"])
 app.include_router(database.router, prefix="/api/database", tags=["Database"])
 app.include_router(eds.router, prefix="/api/eds", tags=["EDS"])
+app.include_router(eds_export.router, prefix="/api/eds", tags=["EDS Export"])
 app.include_router(calibration.router, prefix="/api/calibration", tags=["Calibration"])
 app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(batch_v2.router, prefix="/api/batch-v2", tags=["Batch v2"])
@@ -575,6 +743,10 @@ app.include_router(reference_frame_routes.router)
 # pole_figure.router self-prefixes "/api" (route lives at /api/pole-figure).
 app.include_router(pole_figure_routes.router)
 app.include_router(citations.router, prefix="/api/citations", tags=["Citations"])
+# The prefix must stay equal to addons.API_PREFIX: a map output's values_url
+# is built from it, and a test fetches that URL.
+app.include_router(addons.router, prefix="/api/addons", tags=["Add-ons"])
+app.include_router(phase_collections.router, prefix="/api/phase-collections", tags=["Phase Collections"])
 
 # Serve built React frontend in production mode
 FRONTEND_DIST = Path(PROJECT_ROOT) / "frontend" / "dist"

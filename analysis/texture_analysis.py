@@ -7,7 +7,7 @@ Implements:
 - ODF estimation (simplified kernel density approach)
 - Texture index and entropy calculation
 
-Reference: MATLAB/MTEX TextureAnalysis_mtex6.m lines 149-519
+Reference: MATLAB/MTEX TextureAnalysis_mtex6.m lines 153-523
 Architecture: the MTEX-equivalence design notes §2.4
 """
 
@@ -71,7 +71,7 @@ def calculate_volume_fraction(orientations: "Orientation", ideal_orientations: "
     Returns:
         Volume fraction in percent (0-100)
 
-    Reference: TextureAnalysis_mtex6.m lines 150-163 (EBSD-based volume fractions)
+    Reference: TextureAnalysis_mtex6.m lines 154-167 (EBSD-based volume fractions)
     """
     if not ORIX_AVAILABLE:
         raise ImportError("orix is required for texture analysis")
@@ -128,7 +128,7 @@ def calculate_texture_component_fractions(dataset, components: Dict[str, "Textur
     Returns:
         Dictionary of {component_name: volume_fraction_percent}
 
-    Reference: TextureAnalysis_mtex6.m lines 149-203
+    Reference: TextureAnalysis_mtex6.m lines 153-207
     """
     if not ORIX_AVAILABLE:
         raise ImportError("orix is required for texture analysis")
@@ -199,7 +199,7 @@ def calculate_surface_plane_fraction(dataset, miller_hkl: list,
     Returns:
         Volume fraction in percent (0-100)
 
-    Reference: TextureAnalysis_mtex6.m lines 437-519
+    Reference: TextureAnalysis_mtex6.m lines 441-523
 
     MATLAB logic:
     ```matlab

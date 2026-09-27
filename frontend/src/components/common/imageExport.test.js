@@ -204,9 +204,19 @@ describe('outputSize', () => {
 });
 
 describe('defaultFactor', () => {
-  it('offers magnification for small maps and shrinking for big sheets', () => {
-    expect(defaultFactor({ width: 120 })).toBe(4);      // EBSD overview
-    expect(defaultFactor({ width: 156 })).toBe(4);      // detector pattern
+  it('opens a small map as a picture, not a thumbnail', () => {
+    // The M5 tester's cropped scan: 21 x 21 px came out at 84 px under a
+    // flat 4x. Small maps get the smallest factor >= 8 that reaches 800 px
+    // on the long side, capped at the largest listed factor.
+    expect(defaultFactor({ width: 21, height: 21 })).toBe(16);   // 336 px, the cap
+    expect(defaultFactor({ width: 120, height: 90 })).toBe(8);   // EBSD overview -> 960 px
+    expect(defaultFactor({ width: 156, height: 128 })).toBe(8);  // detector pattern
+    expect(defaultFactor({ width: 60, height: 199 })).toBe(8);   // the long side decides
+  });
+
+  it('keeps the earlier rule for anything that is already a picture', () => {
+    expect(defaultFactor({ width: 200, height: 200 })).toBe(4);
+    expect(defaultFactor({ width: 500 })).toBe(4);
     expect(defaultFactor({ width: 1024 })).toBe(2);     // electron image
     expect(defaultFactor({ width: 5280 })).toBeLessThan(1);  // all-maps sheet
   });
@@ -217,9 +227,10 @@ describe('defaultFactor', () => {
     }
   });
 
-  it('survives nonsense input', () => {
-    expect(SCALE_FACTORS).toContain(defaultFactor(null));
-    expect(SCALE_FACTORS).toContain(defaultFactor({ width: 0 }));
+  it('survives nonsense input with the old flat 4x, not the small-map branch', () => {
+    expect(defaultFactor(null)).toBe(4);
+    expect(defaultFactor({ width: 0 })).toBe(4);
+    expect(defaultFactor({})).toBe(4);
   });
 });
 

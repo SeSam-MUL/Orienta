@@ -4,7 +4,7 @@
  * PyQt5 structure:
  *   MainHub(QMainWindow)
  *   ├── Sidebar (270px, #1a1b26)
- *   │   ├── Title "Kikuchipy GUI"
+ *   │   ├── Title "Orienta"
  *   │   ├── StatusIndicator
  *   │   ├── 9 Module buttons (checkable, exclusive)
  *   │   └── HDF5 Viewer tool button (bottom)
@@ -33,7 +33,7 @@ import Sidebar from './components/shared/Sidebar';
 import StatusBar from './components/shared/StatusBar';
 import ToastContainer from './components/shared/ToastContainer';
 import DevPanel from './components/shared/DevPanel';
-import { backendBanner, readEverConnected, rememberEverConnected } from './components/shared/backendBanner';
+import { backendBanner, readEverConnected, rememberEverConnected, monoNow } from './components/shared/backendBanner';
 // Dashboard is the initial route — keep it synchronous so the first paint is fast.
 import Dashboard from './components/Dashboard/Dashboard';
 
@@ -56,6 +56,9 @@ const SettingsPage = lazy(() => import('./components/Settings/SettingsPage'));
 const BatchPage = lazy(() => import('./components/Batch/BatchPage'));
 const RefinementPage = lazy(() => import('./components/Refinement/RefinementPage'));
 const CrystalHintPage = lazy(() => import('./components/CrystalHint/CrystalHintPage'));
+const AddonsPage = lazy(() => import('./components/Addons/AddonsPage'));
+const CollectionPicker = lazy(() => import('./components/PhaseCollections/CollectionPicker'));
+const CollectionManager = lazy(() => import('./components/PhaseCollections/CollectionManager'));
 
 // Fallback UI shown while a route chunk is being fetched. Kept simple so
 // it flashes only briefly on first navigation to a given page.
@@ -71,6 +74,7 @@ const PageLoader = () => {
   );
 };
 import useDevLogs from './hooks/useDevLogs';
+import { SIDEBAR_PAGES } from './components/shared/sidebarPages';
 
 // Error Boundary prevents white-screen crashes
 class ErrorBoundary extends Component {
@@ -148,36 +152,7 @@ class ErrorBoundary extends Component {
  * Sections: Data → Calibration & Simulation → Index & Analyze → Tools
  * Keyboard shortcuts: Ctrl+1..9,0 for pages, Ctrl+H for HDF5 Viewer
  */
-// Labels + tooltips are resolved at render time from the `nav` i18n namespace
-// by page id (nav:pages.<id>.label / .tooltip) and section key
-// (nav:sections.<sectionKey>). Keep this list to ids/shortcuts/icons only.
-const SIDEBAR_PAGES = [
-  // --- Data ---
-  { id: '_section', sectionKey: 'data' },
-  { id: 'dashboard',    shortcut: '1', icon: 'LayoutDashboard' },
-  { id: 'ebsdviewer',   shortcut: '2', icon: 'ScanLine' },
-  { id: 'eds',          shortcut: '3', icon: 'Atom' },
-  // --- Calibration & Simulation ---
-  { id: '_section', sectionKey: 'calibration' },
-  { id: 'pcrefinement', shortcut: '4', icon: 'Crosshair' },
-  { id: 'crystal',      shortcut: '5', icon: 'Gem' },
-  { id: 'simulation',   shortcut: '6', icon: 'Cpu' },
-  { id: 'database',     shortcut: '7', icon: 'HardDrive' },
-  // --- Index & Analyze ---
-  { id: '_section', sectionKey: 'indexAnalyze' },
-  { id: 'indexing',     shortcut: '8', icon: 'Grid3x3' },
-  { id: 'phasemap',     shortcut: '9', icon: 'Map' },
-  { id: 'analysis',     shortcut: '0', icon: 'BarChart3' },
-  { id: 'batch',        icon: 'Package' },
-  { id: 'refinement',   icon: 'SlidersHorizontal' },
-  { id: 'crystalhint',  icon: 'Atom' },
-  // --- Tools ---
-  { id: '_section', sectionKey: 'tools' },
-  { id: 'mlhub',        icon: 'Brain' },
-  // --- Settings ---
-  { id: '_section', sectionKey: 'settings' },
-  { id: 'settings',     icon: 'Settings' },
-];
+
 
 function App() {
   const { t, i18n } = useTranslation(['nav', 'shell']);
@@ -191,6 +166,11 @@ function App() {
   // reloaded page must not restart the "starting … N s" count on a backend
   // that was already there — that is "connection lost", not a cold start.
   const everConnectedRef = useRef(readEverConnected());
+  // Wall clock for the banner: when did the current run of failed health polls
+  // start? A single failed poll is not a loss — see LOST_AFTER_FAILING_SEC.
+  // Anchored on the first failure because while connected we only ask every
+  // 30 s, so before it we have no evidence either way.
+  const firstFailAtRef = useRef(0);
   const [bannerTick, setBannerTick] = useState(0);
   const [h5ViewerOpen, setH5ViewerOpen] = useState(false);
   const [edsColorsOpen, setEdsColorsOpen] = useState(false);
@@ -198,6 +178,13 @@ function App() {
   // the trail it collects is most complete right then.
   const [reportOpen, setReportOpen] = useState(false);
   const [reportShot, setReportShot] = useState(null);
+  // The collections dialog, opened from the toolbar picker's "manage" entry.
+  // Lives here rather than inside CollectionPicker so it can sit above the
+  // whole shell (Escape closes it like every other floating panel below).
+  // The database browser opens its OWN instance from its own button for the
+  // same dialog — both read and write the same `useCollectionStore`, so an
+  // edit made through either is visible in both immediately.
+  const [collectionManagerOpen, setCollectionManagerOpen] = useState(false);
 
   // Capture BEFORE the dialog renders, or the picture shows the dialog
   // instead of the screen the user is complaining about.
@@ -264,6 +251,7 @@ function App() {
       healthCheck()
         .then(() => {
           everConnectedRef.current = true;
+          firstFailAtRef.current = 0; // the run of failures, if any, is over
           rememberEverConnected();
           setBackendStatus(prev => prev === 'connected' ? prev : 'connected');
           // Once connected, switch to slow polling
@@ -274,6 +262,7 @@ function App() {
           retryCount = maxFastRetries + 1; // stop fast retries
         })
         .catch(() => {
+          if (!firstFailAtRef.current) firstFailAtRef.current = monoNow();
           setBackendStatus(prev => prev === 'disconnected' ? prev : 'disconnected');
           setBannerTick(Date.now()); // re-render the "starting … N s" counter
           retryCount++;
@@ -344,6 +333,7 @@ function App() {
     // Escape closes floating panels, topmost first
     if (e.key === 'Escape') {
       if (reportOpen) { setReportOpen(false); return; }
+      if (collectionManagerOpen) { setCollectionManagerOpen(false); return; }
       if (shortcutHelpOpen) { setShortcutHelpOpen(false); return; }
       if (edsColorsOpen) { setEdsColorsOpen(false); return; }
       if (h5ViewerOpen) { setH5ViewerOpen(false); return; }
@@ -373,7 +363,7 @@ function App() {
         setCurrentPage(page.id);
       }
     }
-  }, [edsColorsOpen, h5ViewerOpen, shortcutHelpOpen]);
+  }, [edsColorsOpen, h5ViewerOpen, shortcutHelpOpen, collectionManagerOpen]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -492,6 +482,14 @@ function App() {
           >
             {t('shell:toolbar.edsColors')}
           </button>
+          {/* Phase collection picker — narrows every phase list in the app
+              (Phase Test, Indexing, the database browser) to one named
+              collection. Owns its own dropdown open-state, so it needs
+              nothing from handleKeyDown's Escape branch or its dependency
+              array above. */}
+          <Suspense fallback={null}>
+            <CollectionPicker onManage={() => setCollectionManagerOpen(true)} />
+          </Suspense>
           {/* Report a problem — in the toolbar so it is reachable from every
               page, not only from Settings and the crash screen. */}
           <button
@@ -562,6 +560,9 @@ function App() {
             status: backendStatus,
             everConnected: everConnectedRef.current,
             sinceLoadSec: (Date.now() - loadedAtRef.current) / 1000,
+            sinceFirstFailSec: firstFailAtRef.current
+              ? (monoNow() - firstFailAtRef.current) / 1000
+              : undefined,
           });
           if (banner.kind === 'none') return null;
           const tone = banner.kind === 'starting' ? colors.yellow : colors.red;
@@ -606,6 +607,7 @@ function App() {
           <div data-page="batch" style={pageStyle('batch')}><ErrorBoundary><Suspense fallback={<PageLoader />}><BatchPage onNavigate={handleNavigate} isActive={currentPage === 'batch'} /></Suspense></ErrorBoundary></div>
           <div data-page="refinement" style={pageStyle('refinement')}><ErrorBoundary><Suspense fallback={<PageLoader />}><RefinementPage onNavigate={handleNavigate} isActive={currentPage === 'refinement'} /></Suspense></ErrorBoundary></div>
           <div data-page="crystalhint" style={pageStyle('crystalhint')}><ErrorBoundary><Suspense fallback={<PageLoader />}><CrystalHintPage onNavigate={handleNavigate} isActive={currentPage === 'crystalhint'} /></Suspense></ErrorBoundary></div>
+          <div data-page="addons" style={pageStyle('addons')}><ErrorBoundary><Suspense fallback={<PageLoader />}><AddonsPage isActive={currentPage === 'addons'} /></Suspense></ErrorBoundary></div>
         </main>
 
         {/* Status bar */}
@@ -769,6 +771,11 @@ function App() {
       )}
       {updateInfo && (
         <UpdateDialog info={updateInfo} onClose={closeUpdate} onSkip={skipUpdate} />
+      )}
+      {collectionManagerOpen && (
+        <Suspense fallback={null}>
+          <CollectionManager onClose={() => setCollectionManagerOpen(false)} />
+        </Suspense>
       )}
     </div>
   );

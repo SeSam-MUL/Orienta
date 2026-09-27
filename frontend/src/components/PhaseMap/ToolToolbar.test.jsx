@@ -50,7 +50,7 @@ describe('ToolToolbar', () => {
     // Lens + Linescan + Export buttons.
     expect(getByRole('button', { name: /Lens OFF/i })).toBeTruthy();
     expect(getByRole('button', { name: /Linescan OFF/i })).toBeTruthy();
-    expect(getByRole('button', { name: /Export PNG/i })).toBeTruthy();
+    expect(getByRole('button', { name: /Export image/i })).toBeTruthy();
     // Tile-min slider hidden in stack view.
     expect(queryByLabelText(/Minimum tile width/i)).toBeNull();
     // Swipe mock present.
@@ -93,12 +93,12 @@ describe('ToolToolbar', () => {
     expect(setLens).toHaveBeenCalledWith(true);
   });
 
-  it('clicking Export PNG calls onExport', () => {
+  it('clicking Export image calls onExport', () => {
     const onExport = vi.fn();
     const { getByRole } = render(
       <ToolToolbar {...baseProps} onExport={onExport} />
     );
-    fireEvent.click(getByRole('button', { name: /Export PNG/i }));
+    fireEvent.click(getByRole('button', { name: /Export image/i }));
     expect(onExport).toHaveBeenCalledTimes(1);
   });
 

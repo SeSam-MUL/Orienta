@@ -14,6 +14,8 @@ import time
 from typing import Optional, List
 from pathlib import Path
 
+from display_names import display_stem
+
 import numpy as np
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -228,7 +230,7 @@ def _register_loaded_file(path: str) -> None:
     for entry in _loaded_files:
         if _canonical_path(entry["path"]) == canon:
             return
-    _loaded_files.append({"path": path, "name": _P(path).stem})
+    _loaded_files.append({"path": path, "name": display_stem(path)})
 
 
 def _update_progress(request_id: Optional[str], **state) -> None:
@@ -303,7 +305,7 @@ def load_ebsd_file(path: str) -> bool:
         # _restore_registry_for_file re-registers the windows that belong to
         # THIS file a few lines below.
         crop_window_service.clear_all()
-        dataset_name = Path(path).stem
+        dataset_name = display_stem(path)
         _raw_signals[dataset_name] = signal
         _positions[dataset_name] = (0, 0)
         _active_dataset = dataset_name
@@ -699,7 +701,7 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
 
     response = {
         "success": True,
-        "dataset_name": Path(path).stem,
+        "dataset_name": display_stem(path),
         "file_path": path,
         "format_type": "Oxford" if 'h5oina' in path.lower() else "EDAX",
         "pc_source": None,
@@ -812,7 +814,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
         reset_prior_warning_dedupe()
     except Exception:  # pragma: no cover - never block a load on this
         logger.debug("could not re-arm the EDS chemistry warnings", exc_info=True)
-    dataset_name = Path(path).stem
+    dataset_name = display_stem(path)
     _raw_signals[dataset_name] = signal
     _positions[dataset_name] = (0, 0)
     _active_dataset = dataset_name
@@ -2521,7 +2523,7 @@ async def overview(mode: str = "mean"):
         nav_map = None
         sampled = False
         if (_ebsd_file_path
-                and active_dataset == Path(_ebsd_file_path).stem
+                and active_dataset == display_stem(_ebsd_file_path)
                 and active_dataset not in _dirty_datasets):
             nav_map = _read_stored_quality_map(_ebsd_file_path, mode, n_rows, n_cols)
         native_hit = nav_map is not None

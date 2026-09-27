@@ -10,6 +10,7 @@ the overall clinfo device index.
 """
 
 import logging
+import math
 import os
 import re
 import subprocess
@@ -374,13 +375,32 @@ def compute_emsoft_devid(devices: List[OpenCLDevice], target_gpu: Optional[OpenC
     return 0
 
 
+def _add_warning(rec: dict, code: str, values: dict, message: str) -> None:
+    """Record a warning twice: as English prose, and as code + values.
+
+    ``warnings`` (prose) is what every existing reader expects and stays
+    exactly as it was, character for character. ``warning_items`` is what the
+    interface can translate: Settings -> System Status showed the English
+    sentence inside the German app, because there was nothing else to show
+    (0.4.5 laptop test). Anything without a code keeps arriving as prose and is
+    displayed verbatim, as before.
+
+    ``values`` carries display strings, not raw numbers: "8.0" formatted in
+    Python survives as "8.0", where a JSON 8.0 reaches i18next as ``8`` and
+    would print a different number than the same warning in English.
+    """
+    rec["warnings"].append(message)
+    rec.setdefault("warning_items", []).append(
+        {"code": code, "values": values, "message": message})
+
+
 def recommend_device(status: OpenCLStatus) -> dict:
     """Recommend compute settings based on detected hardware.
 
     Returns:
         Dict with keys: mode ("gpu"/"cpu"), platid, devid, emsoft_devid,
         globalworkgrpsz, nthreads, mc_program, master_program, sht_program,
-        warnings.
+        warnings, warning_items.
     """
     rec = {
         "mode": "cpu",
@@ -395,6 +415,7 @@ def recommend_device(status: OpenCLStatus) -> dict:
         "master_program": "EMEBSDmaster",
         "sht_program": "EMEBSDmasterSHT",
         "warnings": [],
+        "warning_items": [],
     }
 
     if not status.available:
@@ -419,21 +440,43 @@ def recommend_device(status: OpenCLStatus) -> dict:
 
         # GPU master pattern: blocksize determines VRAM usage
         # blocksize=32 -> ~8-16 GB, blocksize=16 -> ~2-4 GB, blocksize=8 -> ~0.5-1 GB
+        #
+        # Print the value we COMPARED. `global_memory_gb` is bytes / 1024**3
+        # and OpenCL reports usable memory, a little under the nominal card
+        # size, so a card whose true value is just under 8 (7.95 <= v < 8.0)
+        # printed "8.0" through `.1f` while `>= 8` was False. The user read
+        # "GPU has 8.0 GB - using blocksize=8", a message denying the decision
+        # it was explaining (0.4.5 laptop test).
+        #
+        # FLOOR, not round: floor to one decimal never crosses a threshold
+        # (floor1(v) >= 8 exactly when v >= 8), so every card keeps the
+        # blocksize it had before this change. Rounding would move the boundary
+        # to 7.95 and hand blocksize=16 to the very card in the report -- a
+        # tuning decision, and blocksize goes straight into the NML for
+        # EMEBSDmasterOpenCL. What blocksize=16 costs on an 8 GB card is a
+        # measurement that has not been made; this change must not pre-empt it.
+        #
+        # So the honest complaint in the report stands and is not fixed here:
+        # a typical 8 GB card reporting ~7.86 GiB still gets blocksize=8. It
+        # now says 7.8 while doing so, instead of contradicting itself.
         rec["master_program"] = "EMEBSDmasterOpenCL"
-        if gpu.global_memory_gb >= 16:
+        gpu_gb = math.floor(gpu.global_memory_gb * 10) / 10
+        if gpu_gb >= 16:
             rec["blocksize"] = 32
-        elif gpu.global_memory_gb >= 8:
+        elif gpu_gb >= 8:
             rec["blocksize"] = 16
-            rec["warnings"].append(
-                f"GPU has {gpu.global_memory_gb:.1f} GB — "
-                f"using blocksize=16 for EMEBSDmasterOpenCL (reduced from 32)."
+            _add_warning(
+                rec, "gpuBlocksizeReduced", {"gb": f"{gpu_gb:.1f}", "blocksize": 16},
+                f"GPU has {gpu_gb:.1f} GB — "
+                f"using blocksize=16 for EMEBSDmasterOpenCL (reduced from 32).",
             )
         else:
             rec["blocksize"] = 8
-            rec["warnings"].append(
-                f"GPU has {gpu.global_memory_gb:.1f} GB — "
+            _add_warning(
+                rec, "gpuBlocksizeMinimal", {"gb": f"{gpu_gb:.1f}", "blocksize": 8},
+                f"GPU has {gpu_gb:.1f} GB — "
                 f"using blocksize=8 for EMEBSDmasterOpenCL. "
-                f"Complex crystals (>20 atoms) may still fail."
+                f"Complex crystals (>20 atoms) may still fail.",
             )
     else:
         rec["warnings"].append("No GPU found — using CPU-only pipeline")

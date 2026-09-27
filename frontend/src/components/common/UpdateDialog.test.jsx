@@ -105,3 +105,68 @@ describe('UpdateDialog — a zip install', () => {
     expect(queryByText('Install update')).toBeNull();
   });
 });
+
+// An installed copy — the dmg, the AppImage, the Setup.exe. Every tester has
+// one of these, and until 2026-09-24 the check never even reached this dialog:
+// it answered `not_a_git_install` without asking GitHub, so the app said
+// nothing was available while the release sat on the page.
+const bundleInfo = {
+  install_kind: 'bundle',
+  current: 'v0.4.5',
+  latest: 'v0.5.0',
+  notes: '## v0.5.0\n- macOS and Linux',
+  download_url: 'https://example.invalid/releases',
+};
+
+describe('UpdateDialog — an installed copy', () => {
+  it('sends the user to the installer, not to INSTALL.md', () => {
+    const { getByText, queryByText } = render(
+      <UpdateDialog info={bundleInfo} onClose={() => {}} onSkip={() => {}} />,
+    );
+    expect(getByText(/updated by running the new installer/)).toBeTruthy();
+    // The zip wording tells them to build from source. That is the wrong job
+    // for somebody who installed a dmg.
+    expect(queryByText(/rather than a git clone/)).toBeNull();
+    expect(queryByText(/cannot update itself/)).toBeNull();
+  });
+
+  it('promises that nothing of theirs is thrown away', () => {
+    // The question a tester actually has before double-clicking an installer.
+    const { getByText } = render(
+      <UpdateDialog info={bundleInfo} onClose={() => {}} onSkip={() => {}} />,
+    );
+    expect(getByText(/stay where they are/)).toBeTruthy();
+  });
+
+  it('links the address the backend resolved, not a hardcoded repository', () => {
+    // ORIENTA_RELEASES_URL has to reach the link, or a fork points at ours.
+    const { getByText } = render(
+      <UpdateDialog info={bundleInfo} onClose={() => {}} onSkip={() => {}} />,
+    );
+    const link = getByText('https://example.invalid/releases');
+    expect(link.getAttribute('href')).toBe('https://example.invalid/releases');
+  });
+
+  it('falls back to the project page when the backend named none', () => {
+    const { getByText } = render(
+      <UpdateDialog info={{ ...bundleInfo, download_url: undefined }}
+        onClose={() => {}} onSkip={() => {}} />,
+    );
+    expect(getByText('https://github.com/SeSam-MUL/Orienta')).toBeTruthy();
+  });
+
+  it('offers no install button — the backend would refuse it', () => {
+    const { queryByText } = render(
+      <UpdateDialog info={bundleInfo} onClose={() => {}} onSkip={() => {}} />,
+    );
+    expect(queryByText('Install update')).toBeNull();
+  });
+
+  it('still names both versions', () => {
+    const { getByText } = render(
+      <UpdateDialog info={bundleInfo} onClose={() => {}} onSkip={() => {}} />,
+    );
+    expect(getByText(/You have v0\.4\.5/)).toBeTruthy();
+    expect(getByText(/available: v0\.5\.0/)).toBeTruthy();
+  });
+});

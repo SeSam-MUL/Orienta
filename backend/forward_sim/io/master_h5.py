@@ -184,7 +184,14 @@ def _write_crystal_data(f: h5py.File, structure: CrystalStructure) -> None:
     cd.create_dataset(
         "SpaceGroupNumber", data=np.array([int(structure.space_group)], dtype=np.int32)
     )
-    cd.create_dataset("SpaceGroupSetting", data=np.array([1], dtype=np.int32))
+    # Carry the structure's own origin choice: read_crystal_structure is used
+    # on master .h5 too, and hard-coding 1 silently reverted a setting-2
+    # structure to the unshifted expansion on the way back in.
+    cd.create_dataset(
+        "SpaceGroupSetting",
+        data=np.array([int(getattr(structure, "space_group_setting", 1) or 1)],
+                      dtype=np.int32),
+    )
     cd.create_dataset(
         "CrystalSystem",
         data=np.array([int(structure.crystal_system)], dtype=np.int32),

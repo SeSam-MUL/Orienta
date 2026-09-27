@@ -1,37 +1,16 @@
 {
-  "appTitle": "Orienta",
   "appSubtitle": "EBSD Pattern Analysis",
-  "loadingModule": "Loading module…",
-  "toolbar": {
-    "edsColors": "EDS Colors",
-    "reportProblem": "⚠ Report a problem",
-    "reportProblemTooltip": "Describe a problem and save a report with logs and version to attach to a bug report.",
-    "edsColorsTooltip": "Configure element colors for EDS overlay maps",
-    "shortcutsTooltip": "Keyboard shortcuts (?)"
+  "appTitle": "Orienta",
+  "crash": {
+    "title": "This module crashed"
   },
   "disconnected": {
     "starting": "Backend is starting… {{seconds}} s. The first start after an installation or an update loads the scientific libraries and can take a minute or two.",
     "lost": "Connection to the backend lost — reconnecting…",
     "message": "Backend not connected — it did not answer within 3 minutes. Close Orienta completely and start it again; if this repeats, use Settings → Report a problem (the report contains logs/backend-console.log with the reason)."
   },
-  "crash": {
-    "title": "This module crashed"
-  },
-  "sidebar": {
-    "expand": "Expand sidebar",
-    "collapse": "Collapse sidebar",
-    "dataLoaded": "Data loaded",
-    "themeTooltip": "Theme: {{name}} — click to change",
-    "backendTooltip": "Backend: {{status}}",
-    "connected": "Connected",
-    "language": "Language"
-  },
   "hdf5": {
     "title": "HDF5 Viewer"
-  },
-  "shortcuts": {
-    "title": "Keyboard Shortcuts",
-    "closeHint": "Press {{k1}} or {{k2}} to close"
   },
   "hoverTips": {
     "errorTryAgain": "Dismiss the error and try re-mounting this module without reloading the app",
@@ -48,5 +27,44 @@
     "copyLogs": "Copy logs",
     "clearLogs": "Clear logs",
     "closeDevPanel": "Close (Ctrl+Shift+D)"
+  },
+  "loadingModule": "Loading module…",
+  "shortcuts": {
+    "title": "Keyboard Shortcuts",
+    "closeHint": "Press {{k1}} or {{k2}} to close"
+  },
+  "sidebar": {
+    "backendTooltip": "Backend: {{status}}",
+    "checking": "Checking…",
+    "collapse": "Collapse sidebar",
+    "connected": "Connected",
+    "dataLoaded": "Data loaded",
+    "disconnected": "Disconnected",
+    "expand": "Expand sidebar",
+    "language": "Language",
+    "themeTooltip": "Theme: {{name}} — click to change"
+  },
+  "status": {
+    "backend": "Backend: {{state}}",
+    "edsElements": "EDS: {{count}} elem",
+    "emsoftMissing": "EMsoft: Not found",
+    "emsoftOk": "EMsoft: OK",
+    "gpuNone": "No GPU",
+    "gpuOpencl": "GPU: OpenCL",
+    "noFile": "No file loaded",
+    "sphinxMissing": "EMSphinx: Not found",
+    "sphinxOk": "EMSphinx: OK",
+    "tasks_one": "{{count}} task",
+    "tasks_other": "{{count}} tasks",
+    "wslDistro": "WSL: {{distro}}",
+    "wslMissing": "WSL: Not installed",
+    "wslOk": "WSL: OK"
+  },
+  "toolbar": {
+    "edsColors": "EDS Colors",
+    "reportProblem": "⚠ Report a problem",
+    "reportProblemTooltip": "Describe a problem and save a report with logs and version to attach to a bug report.",
+    "edsColorsTooltip": "Configure element colors for EDS overlay maps",
+    "shortcutsTooltip": "Keyboard shortcuts (?)"
   }
 }

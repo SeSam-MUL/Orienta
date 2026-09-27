@@ -30,7 +30,13 @@
       "notFound": "見つかりません",
       "available": "利用可能",
       "notAvailable": "利用不可",
-      "modeRecommended": "{{mode}} を推奨"
+      "modeRecommended": "{{mode}} を推奨",
+      "notSetUp": "未設定"
+    },
+    "warnings": {
+      "gpuBlocksizeReduced": "GPU のメモリは {{gb}} GB です。GPU マスターパターンのブロックサイズを {{blocksize}} にします（メモリに収めるため 32 から縮小）。",
+      "gpuBlocksizeMinimal": "GPU のメモリは {{gb}} GB です。GPU マスターパターンのブロックサイズを最小の {{blocksize}} にします。原子数が 20 を超える複雑な結晶ではメモリが不足することがあります。",
+      "emsoftNotOffered": "このコンピュータには EMsoft が設定されていません。EMsoft は任意です。Orienta Engine は EMsoft を必要としません。"
     }
   },
   "manualPaths": {
@@ -55,6 +61,8 @@
     "toggleTooltip": "共有ネットワークデータベース（サーバー）モードを有効または無効にします。",
     "databaseRootLabel": "データベースルート",
     "databaseRootPlaceholder": "Z:\\SharedDrive\\EBSD_Database",
+    "databaseRootPlaceholderMac": "/Volumes/Share/EBSD_Database",
+    "databaseRootPlaceholderLinux": "/mnt/share/EBSD_Database",
     "databaseRootTooltip": "ネットワークドライブ上の共有 EBSD データベースルートへのパス。",
     "discovery": {
       "sht": "SHT データベース",
@@ -233,12 +241,18 @@
       "infoMacos": "macOS では、EMsoft は WSL なしで直接インストールされます。下の「Run Install」をクリックしてインストールを開始してください。",
       "infoLinux": "Linux では、EMsoft は WSL なしで直接インストールされます。下の「Run Install」をクリックしてインストールを開始してください。",
       "alreadyInstalled": "EMsoft のバイナリは既にインストールされ、PATH で利用可能です。"
+    },
+    "notOffered": {
+      "title": "EMsoft（任意）",
+      "status": "未設定",
+      "infoMacos": "Orienta Engine はこの Mac で動作し、EMsoft を必要としません。マスターパターン、モンテカルロ、SHT はいずれも EMsoft なしで実行できます。EMsoft 自体はここではまだ提供していません。インストールスクリプトには macOS 用の分岐（Homebrew 経由）がありますが、誰もまだ実行したことがありません。大規模な Fortran プロジェクトの未検証のビルドを、ボタン一つで始められるようにはしていません。",
+      "infoLinux": "Orienta Engine はこのコンピュータで動作し、EMsoft を必要としません。マスターパターン、モンテカルロ、SHT はいずれも EMsoft なしで実行できます。EMsoft 自体はここではまだ提供していません。インストールスクリプトには Linux 用の分岐（apt 経由）がありますが、誰もまだ実行したことがありません。大規模な Fortran プロジェクトの未検証のビルドを、ボタン一つで始められるようにはしていません。"
     }
   },
   "about": {
       "title": "Orienta について",
       "copyright": "Orienta — EBSD パターン解析 · Copyright © 2026 Orienta authors",
-      "licenseLine": "本プログラムはフリーソフトウェアです。GNU General Public License バージョン3（またはそれ以降のバージョン）の条件の下で再配布および改変できます。",
+      "licenseLine": "本プログラムはフリーソフトウェアです。GNU General Public License バージョン3（またはそれ以降のバージョン）の条件の下で再配布および改変できます。インストールされたパッケージには、GPL バージョン3のみでライセンスされている PyQt5 も含まれます。PyQt5 を含むコピーはバージョン3の下で再配布できます（NOTICE.md を参照）。",
       "noWarranty": "本プログラムは完全に無保証で提供されます（現状有姿）。適用法で認められる最大限の範囲で、著者・著作権者およびその所属機関は、本ソフトウェアの使用に起因するいかなる損害（データの損失・破損、不正確な結果を含む）についても責任を負いません。",
       "dataNote": "すべての処理はこのマシン上でローカルに行われ、データが著者に送信されることはありません。Orienta は測定ファイルを読み取り専用で開き、結果は別ファイルに書き込みます。それでも元データのバックアップを保持し、自動結果（指数付け、相同定、定量）は利用前に独立に検証してください。",
       "viewLicense": "ライセンス全文 (GPL-3.0)",
@@ -272,6 +286,10 @@
     "versions": "現在: {{current}} · 利用可能: {{latest}}",
     "whatHappens": "新しいバージョンを取得し、変更されたパッケージをインストールし、インターフェースを再ビルドしてから再起動します。数分かかることがあります。失敗した場合は現在のバージョンがそのまま残ります。",
     "manualOnly": "このインストールは自動更新できません。",
+    "installerOnly": "このインストールは、新しいインストーラーを実行して更新します。",
+    "installerHow": "パッケージから導入されているため、取得して再ビルドする対象がありません。新しいバージョンのインストーラーをダウンロードして実行してください。データフォルダー、設定、導入済みの環境はそのまま残ります。",
+    "rateLimited": "GitHub が現在この確認を拒否しました（このネットワークからの要求が多すぎます）。数分後にもう一度お試しください。",
+    "checkIncomplete": "確認を完了できませんでした（{{reason}}）。",
     "manualHow": "git クローンではなくダウンロードした書庫から設定されているため、更新元がありません。新しいバージョンをダウンロードし INSTALL.md の手順に従うか、自動更新のために git ベースのインストールをご依頼ください。",
     "install": "アップデートをインストール",
     "later": "後で",
@@ -301,5 +319,38 @@
     "confirmPassword": "新しい WSL ユーザーのパスワードを再入力して一致を確認します。",
     "newPassword": "既存の WSL ユーザーの新しいパスワードを入力します。",
     "confirmNewPassword": "新しいパスワードを再入力して一致を確認します。"
-  }
+  },
+    "removeData": {
+      "title": "Orienta のデータを削除",
+      "intro": "アプリを削除しても、ダウンロードされたものは残ります。ここでは Orienta 自身のファイルを削除します。ご自身で置いたファイルはそのまま残ります。",
+      "folder": "フォルダ",
+      "button": "データを削除…",
+      "askFiles": "ダウンロードされた Python とプログラムファイル（2.5～8 GB）も削除しますか？結晶ライブラリは次の手順で選ばない限り保持されます。",
+      "askLibrary": "結晶ライブラリも削除しますか？収集した構造とシミュレーションが含まれます。",
+      "yes": "はい、削除します",
+      "no": "キャンセル",
+      "yesLibrary": "はい、ライブラリも削除",
+      "keepLibrary": "いいえ、ライブラリは残す",
+      "busy": "削除中…",
+      "done": "Orienta のファイルを削除しました。",
+      "failed": "何も削除されませんでした。",
+      "refused": {
+        "notOurs": "このフォルダは Orienta のものと確認できません。何も変更していません。",
+        "isRepo": "これはソースコードのフォルダです。何も変更していません。",
+        "isLink": "このフォルダはリンクです。リンクをたどることはありません。",
+        "isHome": "これはホームディレクトリです。何も変更していません。",
+        "tooShallow": "これはドライブのルートです。何も変更していません。",
+        "noFolder": "削除するデータフォルダがありません。",
+        "error": "フォルダを読み取れませんでした。",
+        "notHere": "このシステムではアンインストーラーが処理します。",
+        "backendRunning": "Orienta のバックエンドが実行中のため、何も削除していません。Orienta を閉じてから再度お試しください。"
+      },
+      "partly": "Orienta のファイルを削除しました。結晶ライブラリは保持されています。",
+      "someLeft_one": "1 件を削除できず、フォルダに残っています。",
+      "someLeft_other": "{{count}} 件を削除できず、フォルダに残っています。",
+      "libraryWasLink": "結晶ライブラリはリンクでした。リンクは削除されましたが、実体のファイルはそのままです。",
+      "keptList": "保持: {{list}}",
+      "keepsForeign_one": "追加された 1 件は保持されます。",
+      "keepsForeign_other": "追加された {{count}} 件は保持されます。"
+    }
 }

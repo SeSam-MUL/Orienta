@@ -12,7 +12,7 @@
     "eds": { "label": "EDS Analysis", "tooltip": "Element maps, quantification, phase suggestion from chemistry" },
     "pcrefinement": { "label": "PC Refinement", "tooltip": "Pattern Center calibration and refinement" },
     "crystal": { "label": "Crystal DB", "tooltip": "CIF/XTAL converter, crystal database, DWF editor" },
-    "simulation": { "label": "Simulation", "tooltip": "EMsoft Monte Carlo + master pattern simulation" },
+    "simulation": { "label": "Simulation", "tooltip": "Monte Carlo + master pattern simulation (Orienta Engine or EMsoft)" },
     "database": { "label": "Database Browser", "tooltip": "Browse simulation results on the network share" },
     "indexing": { "label": "Indexing", "tooltip": "Hough, Dictionary, or Spherical (EMSphinx) indexing" },
     "phasemap": { "label": "Phase Maps", "tooltip": "Visualize indexing results with a configurable scalebar" },
@@ -20,6 +20,7 @@
     "batch": { "label": "Batch", "tooltip": "Multi-phase batch indexing with checkpoint recovery" },
     "refinement": { "label": "Refinement", "tooltip": "Review and refine multi-phase indexing results" },
     "crystalhint": { "label": "Crystal Hint", "tooltip": "Detect symmetry + lattice from patterns. Suggest candidate phases when the library has no match." },
+    "addons": { "label": "Add-ons", "tooltip": "Analyses contributed by other groups, and what they cite" },
     "mlhub": { "label": "ML Predictor", "tooltip": "Train an ML model from indexing results, predict phases" },
     "settings": { "label": "Settings", "tooltip": "System status, server mode, EMsoft/EMSphinx paths" }
   },

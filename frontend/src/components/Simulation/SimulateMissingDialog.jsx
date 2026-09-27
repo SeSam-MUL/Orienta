@@ -17,7 +17,7 @@ const SIZE_LABEL_KEY = { ok: 'sizeLevelOk', moderate: 'sizeLevelModerate', large
  *
  * The whole batch routes to a single pipeline chosen by the manual engine
  * switch — `engine` is 'ours' (default) or 'emsoft'. There is no per-phase
- * EMsoft-vs-ours routing, so no per-phase engine column is shown.
+ * EMsoft-vs-Orienta-Engine routing, so no per-phase engine column is shown.
  */
 export default function SimulateMissingDialog({ missing, defaultDmin, onLaunch, onClose, engine = 'ours' }) {
   const { t } = useTranslation(['simulation', 'common']);

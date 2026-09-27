@@ -10,11 +10,25 @@
  *   method: 'hough' | 'dictionary' | 'spherical'
  *   open: boolean
  *   onClose: () => void
+ *   collectionKeys: Set|null — keys of the active collection (its stems, for
+ *     Hough). `null` = no collection active, offer everything.
+ *   allowedPaths: Set|null — the paths the server resolved for THIS method
+ *     (Spherical/Dictionary; see the filter comment on `visibleFiles`).
+ *   onShowAll: () => void — escapes the filter for this picker only.
+ *   overriddenCollectionName: string|null — set while `onShowAll` has been
+ *     used (`collectionKeys`/`allowedPaths` are both null as a RESULT of
+ *     that, not because no collection is active) and names which one is
+ *     being ignored here. The escape row above disappears once overridden —
+ *     it is a filter escape, not a status line — so without this the
+ *     toolbar could still read "Collection: Matrix" while this picker
+ *     silently offered the whole library with nothing saying so.
+ *   onReapplyCollection: () => void — undoes onShowAll for this picker.
  */
 
 import { useRef, useEffect, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors as C } from '../../theme/tokens';
+import { keyForPath } from '../PhaseCollections/collectionFilter';
 
 function fileTypeTag(fileType, t) {
   switch (fileType) {
@@ -34,8 +48,13 @@ export default function PhaseDropdown({
   method = 'hough',
   open,
   onClose,
+  collectionKeys = null,
+  allowedPaths = null,
+  onShowAll,
+  overriddenCollectionName = null,
+  onReapplyCollection,
 }) {
-  const { t } = useTranslation('indexing');
+  const { t } = useTranslation(['indexing', 'collections']);
   const containerRef = useRef(null);
   const searchRef = useRef(null);
   const [search, setSearch] = useState('');
@@ -72,11 +91,27 @@ export default function PhaseDropdown({
     return () => document.removeEventListener('keydown', handleKey);
   }, [open, onClose]);
 
-  // For dictionary: hide pure dict files
+  // Collection filter runs FIRST, before the dictionary-type filter and the
+  // search, so `grouped`/`ungrouped`/`handleSelectAll`/`handleSelectNone`
+  // (all derived from `visibleFiles`) get it for free.
+  //
+  // Two different filters, because the filenames differ. Hough files ARE
+  // named by the stem (the CIF itself), so the stem is the key. Spherical
+  // and Dictionary files are not: an .sht is
+  // `Formula (CIF_stem) [Pearson] {kV}.sht`, and a master is matched by a
+  // fuzzy filename search that lives on the backend — so those two match on
+  // the PATHS the server resolved (`allowedPaths`), never on the stem.
+  // Filtering them by stem would offer nothing at all (see
+  // indexingCollection.test.jsx's REGRESSION case).
   const visibleFiles = useMemo(() => {
-    let files = method === 'dictionary'
-      ? discoveredFiles.filter(f => f.file_type !== 'dictionary')
-      : discoveredFiles;
+    let files = discoveredFiles;
+    if (collectionKeys) {
+      files = method === 'hough'
+        ? files.filter(f => collectionKeys.has(keyForPath(f.path)))
+        : files.filter(f => allowedPaths?.has(f.path));
+    }
+    // For dictionary: hide pure dict files
+    if (method === 'dictionary') files = files.filter(f => f.file_type !== 'dictionary');
     // Apply search filter
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -88,7 +123,7 @@ export default function PhaseDropdown({
       );
     }
     return files;
-  }, [discoveredFiles, method, search]);
+  }, [discoveredFiles, collectionKeys, allowedPaths, method, search]);
 
   // Group files
   const grouped = useMemo(() => {
@@ -225,6 +260,58 @@ export default function PhaseDropdown({
           </button>
         </div>
       </div>
+
+      {/* Collection filter escape — only shown while a collection actually
+          narrows this list. `collectionKeys` is `null` once the parent
+          drops the filter (no active collection, or the user already used
+          this escape), so the row disappears on its own. */}
+      {collectionKeys && onShowAll && (
+        <div style={{
+          padding: '4px 10px', borderTop: `1px solid ${C.border}`,
+          backgroundColor: C.bgSecondary, flexShrink: 0, textAlign: 'right',
+        }}>
+          <button
+            onClick={onShowAll}
+            style={{
+              background: 'none', border: 'none', color: C.cyan,
+              fontSize: '9pt', cursor: 'pointer', padding: 0,
+              textDecoration: 'underline',
+            }}
+          >
+            {t('collections:counts.showAll')}
+          </button>
+        </div>
+      )}
+
+      {/* Persistent notice for the OPPOSITE state: the escape above was
+          used, so `collectionKeys`/`allowedPaths` are both null and the row
+          above is gone — without this, nothing on this picker would say the
+          toolbar's named collection is being ignored here. Stays up until
+          `onReapplyCollection` is used or the active collection itself
+          changes (IndexingPage.jsx resets `overrideAll` on that). */}
+      {overriddenCollectionName && (
+        <div style={{
+          padding: '4px 10px', borderTop: `1px solid ${C.border}`,
+          backgroundColor: C.bgSecondary, flexShrink: 0,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8,
+        }}>
+          <span style={{ fontSize: '9pt', color: C.orange }}>
+            {t('collections:counts.overriddenNotice', { name: overriddenCollectionName })}
+          </span>
+          {onReapplyCollection && (
+            <button
+              onClick={onReapplyCollection}
+              style={{
+                background: 'none', border: 'none', color: C.cyan,
+                fontSize: '9pt', cursor: 'pointer', padding: 0,
+                textDecoration: 'underline', whiteSpace: 'nowrap',
+              }}
+            >
+              {t('collections:counts.reapply')}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Manual file picker link */}
       <div style={{

@@ -7,7 +7,8 @@ Three defects (tasks/install-security-audit-2026-09-09.md, M1 + O1):
    pipe REPLACES stdin, so every ``echo <path> | sudo tee <file>`` in
    install_emsoft.sh wrote either nothing or — once sudo's timestamp was warm,
    i.e. always after the pre-check — the password itself into /etc/fstab and
-   the OpenCL ICD files. That is the "ICD files contained 1234" finding.
+   the OpenCL ICD files. That is the February finding that the ICD files
+   held a stray value where a library path belonged.
 2. The wrapper file holding the password was chmod 0755 on Linux/macOS for the
    whole 30-90 minute build.
 3. Passwords were spliced into ``bash -c`` command lines, visible in ``ps``.

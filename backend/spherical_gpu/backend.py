@@ -67,7 +67,11 @@ class PhaseConfig:
 
     def __post_init__(self) -> None:
         if not self.name:
-            self.name = Path(self.sht_file).stem
+            # display_stem, not Path.stem: sht_file comes from a request or a
+            # config, and a Windows path handed to a POSIX backend would make
+            # the whole path the phase name. See display_names.
+            from display_names import display_stem
+            self.name = display_stem(self.sht_file)
 
 
 @dataclass

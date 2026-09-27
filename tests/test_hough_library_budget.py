@@ -21,6 +21,12 @@ bit-identical, but 24 collapses to 192/800 indexed at 119.7 deg deviation and 16
 returns a median fit of 180 deg — silently, as plausible-looking orientations.
 So the machine refuses, says what each count would cost, and the choice stays
 with the user.
+
+That Al7FeCu2.cif was repaired on 2026-09-13 (P4/mnc, #128) and the P 1 phase is
+now synthesised in ``tests/synthetic_cif``. It reproduces the two unaffordable
+steps of that table to the digit — 1,000,494,880 and 112,498,750 rows — and its
+trimmed steps differ (22,862,700 and 4,607,680), because trimming keeps a
+different set of families on a different lattice.
 """
 import sys
 from pathlib import Path
@@ -37,12 +43,19 @@ from ebsd_utils import (  # noqa: E402
     sanitize_cif,
 )
 
+from tests.synthetic_cif import synthetic_p1_phase_list  # noqa: E402
+
 LIB = Path(__file__).resolve().parents[1] / "Database" / "CIF_Library"
 CUBIC = LIB / "Al.cif"
-NO_SYMMETRY = LIB / "Al7FeCu2.cif"
 
-pytestmark = pytest.mark.skipif(not CUBIC.exists(),
-                                reason="Database/ is not in version control")
+# NOT a module-level mark. The three tests below that read Al.cif need the
+# crystal library; `test_prediction_costs_nothing_and_falls_with_the_count` owns
+# its phase and must run in a fresh clone, in CI and in the public repo, where
+# `Database/` does not exist (it is gitignored and `scripts/make_build_repo.py`
+# excludes it). A module mark would have left the one test this file freed from
+# the library still skipping with it.
+needs_library = pytest.mark.skipif(not CUBIC.exists(),
+                                   reason="Database/ is not in version control")
 
 
 def _phase_list(cif):
@@ -57,6 +70,7 @@ def _detector():
     return kp.detectors.EBSDDetector(shape=(60, 60), pc=(0.5, 0.5, 0.5), sample_tilt=70.0)
 
 
+@needs_library
 def test_budget_follows_free_memory_and_can_be_pinned(monkeypatch):
     monkeypatch.delenv("ORIENTA_HOUGH_LIBRARY_BUDGET_MB", raising=False)
     auto = _triplet_library_budget_bytes()
@@ -69,6 +83,7 @@ def test_budget_follows_free_memory_and_can_be_pinned(monkeypatch):
     assert _triplet_library_budget_bytes() == auto or True  # falls back, never raises
 
 
+@needs_library
 def test_an_unaffordable_library_is_refused_not_attempted(monkeypatch):
     """The ask itself is the damage, so it must not be made.
 
@@ -95,6 +110,7 @@ def test_an_unaffordable_library_is_refused_not_attempted(monkeypatch):
     assert "Dictionary or Spherical" in msg  # and the way round it
 
 
+@needs_library
 def test_the_user_can_choose_the_reflector_count(monkeypatch):
     """`max_reflectors` is the caller's dial; nothing picks it for them."""
     monkeypatch.setenv("ORIENTA_HOUGH_LIBRARY_BUDGET_MB", "8192")
@@ -109,11 +125,18 @@ def test_the_user_can_choose_the_reflector_count(monkeypatch):
     assert trimmed.phaselist[0].lauecode == full.phaselist[0].lauecode
 
 
-@pytest.mark.skipif(not NO_SYMMETRY.exists(), reason="phase not in this library")
-def test_prediction_costs_nothing_and_falls_with_the_count(monkeypatch):
-    """Sizes come from the refused request, so nothing large is ever created."""
+def test_prediction_costs_nothing_and_falls_with_the_count(tmp_path, monkeypatch):
+    """Sizes come from the refused request, so nothing large is ever created.
+
+    The symmetry-less phase is synthesised (``tests/synthetic_cif``). It used to
+    be ``Database/CIF_Library/Al7FeCu2.cif``, which was stored as P 1 by
+    accident; repairing that file to P4/mnc on 2026-09-13 dropped this
+    prediction to 0 bytes and the test went red while nothing was wrong with
+    the code. A test for "no symmetry is expensive" must own its P 1 phase.
+    """
     monkeypatch.setenv("ORIENTA_HOUGH_LIBRARY_BUDGET_MB", "8192")
-    pl = _phase_list(NO_SYMMETRY)
+    pl, _cif = synthetic_p1_phase_list(tmp_path)
+    assert pl[pl.ids[0]].point_group.name == "1"   # the premise, stated
     table = predict_triplet_library(_detector(), pl, prepare_reflectors(pl))
     assert len(table) >= 4
     sizes = [b for _c, _r, b in table]

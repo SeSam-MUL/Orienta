@@ -126,7 +126,16 @@ def _load_xtal_with_sg(p: Path):
         {Element.from_Z(int(at.Z)).symbol: round(float(at.occ), 6)}
         for at in cs.atoms
     ]
-    coords = [list(at.xyz) for at in cs.atoms]
+    # Same origin-choice trap as the forward-sim expansion: pymatgen's
+    # from_spacegroup uses origin choice 1, so a choice-2 coordinate lands on
+    # the wrong Wyckoff site here too (measured: silicon's 8a gave 16 atoms
+    # and 4.66 g/cm3 instead of 8 and 2.33).
+    from backend.forward_sim.crystal.origin_choice import to_choice_1
+
+    _setting = int(getattr(cs, 'space_group_setting', 1) or 1)
+    coords = [
+        list(to_choice_1(at.xyz, cs.space_group, _setting)) for at in cs.atoms
+    ]
     try:
         s = Structure.from_spacegroup(int(cs.space_group), lattice, species, coords)
         # Collapse EMsoft's per-species partial-occupancy duplicates that now sit

@@ -4,10 +4,12 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { translateSystemWarnings } from './systemWarnings';
 import { simApi, settingsApi } from '../../services/api';
 import InstallWizardSection from './InstallWizardSection';
 import ApiKeysSection from './ApiKeysSection';
 import AboutSection from './AboutSection';
+import RemoveDataSection from './RemoveDataSection';
 import {
   colors, alpha, spacing,
   Button, Input, GroupBox, Label,
@@ -75,51 +77,54 @@ function Toggle({ enabled, onChange }) {
 // Section 1 — System Status
 // ---------------------------------------------------------------------------
 
-function SystemStatusSection() {
-  const { t } = useTranslation('settings');
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  const fetchStatus = useCallback(async (opts = {}) => {
-    setLoading(true);
-    setError(null);
-    try {
-      // The Re-Check button should bypass the 5-min backend cache so users
-      // see the actual current state after fixing a dependency.
-      const res = await simApi.systemStatus({ force: !!opts.force });
-      setStatus(res.data);
-    } catch (err) {
-      setError(err?.response?.data?.detail ?? err.message ?? t('settings:systemStatus.fetchError'));
-    } finally {
-      setLoading(false);
-    }
-  }, [t]);
-
-  useEffect(() => { fetchStatus(); }, [fetchStatus]);
-
-  const rows = status ? [
-    {
+/**
+ * The rows of the system-status panel, as data.
+ *
+ * Pulled out of the component so the platform rule below can be tested: a
+ * panel that must NOT show something is exactly the kind of claim a rendering
+ * test of a 700-line page never gets asked.
+ */
+export function systemStatusRows(status, t) {
+  if (!status) return [];
+  const onWindows = (status.platform_os || 'windows') === 'windows';
+  // Off Windows the app offers no way to install EMsoft (see
+  // simulation/system_check.py::_emsoft_is_unoffered — the script has a
+  // branch for both, but nobody has run either). A red dot means "something
+  // is wrong and you should act"; there is nothing to act on, and the app's
+  // own simulation engine does not need EMsoft. So its absence is shown as a
+  // state, in grey, and the install section below says why.
+  const emsoftUnoffered = ['macos', 'linux'].includes(status.platform_os || 'windows');
+  const absent = emsoftUnoffered
+    ? { value: t('settings:systemStatus.values.notSetUp'), dot: null }
+    : { value: t('settings:systemStatus.values.notFound'), dot: 'error' };
+  return [
+    // WSL is a Windows feature. Off Windows the backend reports
+    // wsl_distro = "native-linux", and this row showed it with a green dot on
+    // a Mac -- a thing that cannot exist there, reported as installed.
+    ...(onWindows ? [{
       label: t('settings:systemStatus.rows.wsl'),
       value: status.wsl_distro || t('settings:systemStatus.values.dash'),
       dotStatus: status.wsl_installed ? 'ok' : 'error',
-    },
+    }] : []),
     {
       label: t('settings:systemStatus.rows.emsoft'),
-      value: status.emsoft_path || (status.emsoft_available ? t('settings:systemStatus.values.detected') : t('settings:systemStatus.values.notFound')),
-      dotStatus: status.emsoft_available ? 'ok' : 'error',
+      value: status.emsoft_path || (status.emsoft_available ? t('settings:systemStatus.values.detected') : absent.value),
+      dotStatus: status.emsoft_available ? 'ok' : absent.dot,
     },
     {
       label: t('settings:systemStatus.rows.emsphinx'),
-      value: status.emsphinx_path || (status.emsphinx_available ? t('settings:systemStatus.values.detected') : t('settings:systemStatus.values.notFound')),
-      dotStatus: status.emsphinx_available ? 'ok' : 'error',
+      value: status.emsphinx_path || (status.emsphinx_available ? t('settings:systemStatus.values.detected') : absent.value),
+      dotStatus: status.emsphinx_available ? 'ok' : absent.dot,
     },
     {
+      // OpenCL here is EMsoft's GPU Monte-Carlo backend, nothing else. Where
+      // EMsoft is not offered, a yellow dot warns about a dependency of a
+      // feature that is not on offer -- and Apple deprecated OpenCL anyway.
       label: t('settings:systemStatus.rows.opencl'),
       value: status.opencl_available
         ? (status.gpu_name || t('settings:systemStatus.values.available'))
         : t('settings:systemStatus.values.notAvailable'),
-      dotStatus: status.opencl_available ? 'ok' : 'warning',
+      dotStatus: status.opencl_available ? 'ok' : (emsoftUnoffered ? null : 'warning'),
     },
     {
       label: t('settings:systemStatus.rows.gpuMemory'),
@@ -142,7 +147,49 @@ function SystemStatusSection() {
         : t('settings:systemStatus.values.dash'),
       dotStatus: null,
     },
-  ] : [];
+  ];
+}
+
+/**
+ * Which path example to show under "Database root".
+ *
+ * The field offered `Z:\SharedDrive\EBSD_Database` on every platform. On a Mac
+ * that is not a path, it is a Windows drive letter -- and it was the ghost text
+ * of an empty field next to a switch that was ON, which is how the M5 tester
+ * read it as a configured share.
+ *
+ * Exported so the rule can be tested without rendering the settings page.
+ */
+export function serverPathPlaceholderKey(platformOs) {
+  if (platformOs === 'macos') return 'settings:serverMode.databaseRootPlaceholderMac';
+  if (platformOs === 'linux') return 'settings:serverMode.databaseRootPlaceholderLinux';
+  return 'settings:serverMode.databaseRootPlaceholder';
+}
+
+function SystemStatusSection() {
+  const { t, i18n } = useTranslation('settings');
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const fetchStatus = useCallback(async (opts = {}) => {
+    setLoading(true);
+    setError(null);
+    try {
+      // The Re-Check button should bypass the 5-min backend cache so users
+      // see the actual current state after fixing a dependency.
+      const res = await simApi.systemStatus({ force: !!opts.force });
+      setStatus(res.data);
+    } catch (err) {
+      setError(err?.response?.data?.detail ?? err.message ?? t('settings:systemStatus.fetchError'));
+    } finally {
+      setLoading(false);
+    }
+  }, [t]);
+
+  useEffect(() => { fetchStatus(); }, [fetchStatus]);
+
+  const rows = status ? systemStatusRows(status, t) : [];
 
   return (
     <GroupBox title={t('settings:systemStatus.title')}>
@@ -227,7 +274,9 @@ function SystemStatusSection() {
 
       {status?.warnings?.length > 0 && (
         <div style={{ marginTop: status?.errors?.length > 0 ? 4 : spacing.groupSpacing }}>
-          {status.warnings.map((msg, i) => (
+          {/* Warnings that carry a code are shown in the user's language;
+              the rest stay as the backend's English prose. */}
+          {translateSystemWarnings(status.warnings, status.warning_items, t, i18n?.exists?.bind(i18n)).map((msg, i) => (
             <div key={i} style={{ color: colors.yellow, fontSize: '11px', marginTop: 4 }}>
               {t('settings:systemStatus.warningPrefix', { message: msg })}
             </div>
@@ -379,6 +428,9 @@ function ServerModeSection() {
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState(null);
+  // Windows unless the backend says otherwise, which is what every
+  // installation before v0.4.5 was.
+  const [platformOs, setPlatformOs] = useState('windows');
 
   useEffect(() => {
     settingsApi.get()
@@ -386,6 +438,7 @@ function ServerModeSection() {
         const srv = res.data?.server ?? {};
         const isEnabled = srv.enabled ?? false;
         const root = srv.database_root ?? '';
+        setPlatformOs(res.data?.platform_os ?? 'windows');
         setEnabled(isEnabled);
         setDbRoot(root);
         setOriginalConfig({ enabled: isEnabled, database_root: root });
@@ -464,7 +517,7 @@ function ServerModeSection() {
           <Input
             value={dbRoot}
             onChange={(e) => setDbRoot(e.target.value)}
-            placeholder={t('settings:serverMode.databaseRootPlaceholder')}
+            placeholder={t(serverPathPlaceholderKey(platformOs))}
             disabled={!enabled}
             title={t('settings:serverMode.databaseRootTooltip')}
           />
@@ -666,6 +719,7 @@ export default function SettingsPage({ isActive = false, onNavigate }) {
       <ApiKeysSection />
       <ManualPathsSection />
       <ServerModeSection />
+      <RemoveDataSection />
       <AboutSection />
     </div>
   );

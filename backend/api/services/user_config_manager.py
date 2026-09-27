@@ -72,7 +72,16 @@ def _legacy_manual_paths_path() -> Path:
 _DEFAULT_CONFIG: dict[str, Any] = {
     "schema_version": 1,
     "server": {
-        "enabled": True,
+        # Off until somebody turns it on. It used to default to True with an
+        # empty database_root, so a fresh installation came up with "Server
+        # mode" switched ON and pointing nowhere -- the M5 Mac tester found it
+        # that way on 2026-09-25, next to an input showing its Windows example
+        # path. A switch that is on and does nothing teaches people that the
+        # switches here do not mean anything.
+        #
+        # This only moves installations that never decided: _deep_merge keeps
+        # whatever is on disk, so anyone who saved server mode keeps it.
+        "enabled": False,
         "database_root": "",
         "offline_mode": False,
     },

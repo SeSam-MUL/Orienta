@@ -63,13 +63,3 @@ triangle is built from and render it wrong.
   glyph (Segoe UI 680, letter-spacing −1): centre `84.5` at font-size 58, `50.4` at 40.
   Change the font, the size or the letter-spacing → re-measure, don't eyeball. Verified
   centre-of-mass offset is ≤0.35 px across the mark.
-
-## Naming / trademark note
-Preliminary screening (web): no direct software/scientific product named
-"Orienta" found → low infringement risk, usable. But "Orienta" is a generic
-word (Spanish/Italian "it orients"; some unrelated HR/education services use it),
-so it is a **weak/descriptive mark** — fine to *use* for this research tool, not
-easily *ownable* as an exclusive trademark. Bare handles (`orienta.com`, PyPI
-`orienta`) are likely taken → qualify them for repo/package (e.g. `orienta-ebsd`)
-while the **display name stays "Orienta"**. Binding clearance = institutional
-legal/tech-transfer via EUIPO eSearch + USPTO before public release.

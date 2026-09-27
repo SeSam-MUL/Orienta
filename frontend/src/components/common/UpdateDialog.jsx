@@ -35,6 +35,14 @@ export default function UpdateDialog({ info, onClose, onSkip }) {
   const logRef = useRef(null);
 
   const canSelfUpdate = info?.install_kind === 'git';
+  // An installed copy (dmg, AppImage, Setup.exe) is not the same as an
+  // unpacked zip: it cannot pull and rebuild, but running the new installer
+  // does the whole job and keeps the data folder. Telling it "there is nothing
+  // to update from — follow INSTALL.md" sends a tester to build from source.
+  const isBundle = info?.install_kind === 'bundle';
+  // The backend resolves this from ORIENTA_RELEASES_URL when it is set, so a
+  // fork or a local mirror is not hardcoded to this repository.
+  const downloadUrl = info?.download_url || REPO_URL;
 
   useEffect(() => () => clearTimeout(timerRef.current), []);
 
@@ -112,18 +120,18 @@ export default function UpdateDialog({ info, onClose, onSkip }) {
         {phase === 'offer' && !canSelfUpdate && (
           <>
             <div style={{ color: colors.yellow }}>
-              {t('settings:update.manualOnly')}
+              {isBundle ? t('settings:update.installerOnly') : t('settings:update.manualOnly')}
             </div>
             <div style={{ color: colors.textSecondary, fontSize: 11, lineHeight: 1.6 }}>
-              {t('settings:update.manualHow')}
+              {isBundle ? t('settings:update.installerHow') : t('settings:update.manualHow')}
             </div>
             <a
-              href={REPO_URL}
+              href={downloadUrl}
               target="_blank"
               rel="noreferrer"
               style={{ color: colors.cyan, fontSize: 11 }}
             >
-              {REPO_URL}
+              {downloadUrl}
             </a>
           </>
         )}

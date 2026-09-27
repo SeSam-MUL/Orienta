@@ -8,7 +8,7 @@ import SwipeCompareController from '../EDS/SwipeCompareController';
  *   - Tile-min slider (visible only in Grid view)
  *   - Linescan ON/OFF toggle
  *   - Magnifier (Lens) ON/OFF toggle
- *   - Export PNG button
+ *   - "Export image…" button (opens the export dialog via the page's map menu)
  *   - SwipeCompareController (A/B layer dropdowns)
  *
  * All state is owned by the parent — this is a pure presentational shell.

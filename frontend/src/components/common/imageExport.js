@@ -153,15 +153,41 @@ export function outputSize(crop, mode) {
   return { width, height, factor: width / c.width, limited: width < requested };
 }
 
+/** Sources whose long side is below this are "small maps": a cropped EBSD
+ *  scan, a 21 x 21 px test region. Their first offer must already be a
+ *  picture, not a thumbnail — the M5 tester's 21 px map came out at 84 px
+ *  under the old 4x rule and was unusable for a report. */
+export const SMALL_MAP_PX = 200;
+/** What a small map is magnified to, at least: the long side in output px. */
+export const SMALL_MAP_TARGET_PX = 800;
+
 /**
  * A sensible starting magnification for a given source.
  *
- * A flat 4x is right for a 120 px overview and absurd for an already-composed
- * multi-map sheet, so pick the largest sane factor that keeps the first offer
- * a manageable size. The user can still choose anything from the list.
+ * Small maps (long side under `SMALL_MAP_PX`): the smallest listed factor of
+ * at least 8 that brings the long side to `SMALL_MAP_TARGET_PX`, capped by the
+ * largest factor on the list — a 21 px map opens at 16x (336 px), a 120 px
+ * overview at 8x (960 px).
+ *
+ * Everything else keeps the earlier rule: a flat 4x is right for a 500 px
+ * overview and absurd for an already-composed multi-map sheet, so the largest
+ * factor up to 4 that keeps the width within 4000 px. The user can still
+ * choose anything from the list.
  */
 export function defaultFactor(natural) {
-  const w = Math.max(1, natural?.width || 1);
+  // No size known: the old flat 4x, not the small-map branch (a missing
+  // width must not read as "a 1 px map").
+  if (!(natural?.width > 0)) return 4;
+  const w = Math.max(1, natural.width);
+  const h = Math.max(1, natural?.height || 1);
+  const long = Math.max(w, h);
+  if (long < SMALL_MAP_PX) {
+    const big = SCALE_FACTORS.filter((f) => f >= 8);
+    for (const f of big) {
+      if (long * f >= SMALL_MAP_TARGET_PX) return f;
+    }
+    return big[big.length - 1] ?? SCALE_FACTORS[SCALE_FACTORS.length - 1];
+  }
   const candidates = SCALE_FACTORS.filter((f) => f <= 4);
   for (let i = candidates.length - 1; i >= 0; i -= 1) {
     if (w * candidates[i] <= 4000) return candidates[i];

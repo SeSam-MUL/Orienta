@@ -109,7 +109,7 @@ export function makeFolderWriter(api = (typeof window !== 'undefined' ? window.e
     let dir = null;
     return {
       kind: 'folder',
-      async pick() { dir = await api.openFolder(); return dir; },
+      async pick() { dir = await api.openFolder({ remember: true }); return dir; },
       async write(blob, filename) {
         if (!dir) throw new Error('no folder chosen');
         const base64 = bufferToBase64(await blob.arrayBuffer());

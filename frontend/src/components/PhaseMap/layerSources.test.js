@@ -75,22 +75,30 @@ describe('buildAddLayerOptions', () => {
   });
   const find = (o, value) => o.find((x) => x.value === value);
 
-  it('captions the provenance layer with its translated name', () => {
+  it('captions a layer, and its group, with their translated names', () => {
     expect(find(opts(), 'assignment-source')).toEqual({
       value: 'assignment-source',
-      label: 'Forward Diagnostics: translated(layers.assignmentSource)',
+      label: 'translated(layers.groupDiagnostics): translated(layers.assignmentSource)',
       // group + name are what the picker groups and searches on; the joined
       // label stays for the type dropdown, which shows one flat line.
-      group: 'Forward Diagnostics',
+      group: 'translated(layers.groupDiagnostics)',
       name: 'translated(layers.assignmentSource)',
       disabled: false,
       tip: null,
     });
   });
 
-  it('leaves every other caption on its English literal', () => {
-    expect(find(opts(), 'phase').label).toBe('Indexing Result: Phase Map');
-    expect(find(opts(), 'phase-margin').label).toBe('Forward Diagnostics: Phase Check');
+  it('translates every caption that is a word, not a notation', () => {
+    expect(find(opts(), 'phase').label)
+      .toBe('translated(layers.groupResult): translated(layers.namePhase)');
+    expect(find(opts(), 'phase-margin').label)
+      .toBe('translated(layers.groupDiagnostics): translated(layers.namePhaseCheck)');
+    // Notation is the same in every language and is left alone, so a German
+    // user still sees the axis they can look up in the literature.
+    expect(find(opts(), 'ipf-z').label)
+      .toBe('translated(layers.groupResult): IPF-Z [001]');
+    expect(find(opts(), 'kam').label)
+      .toBe('translated(layers.groupAnalysis): KAM');
   });
 
   it('omits layers already in the stack', () => {
@@ -187,12 +195,26 @@ describe('layerLabel', () => {
       .toBe('translated(layers.assignmentSource)');
   });
 
-  it('leaves every other layer on its English literal', () => {
-    // Control that must survive: the catalog names have never been
-    // translated, and opting one layer in must not change the rest.
-    expect(layerLabel(findLayerDef('phase'), t)).toBe('Phase Map');
-    expect(layerLabel(findLayerDef('bc'), t)).toBe('Band Contrast');
-    expect(layerLabel(findLayerDef('phase-margin'), t)).toBe('Phase Check');
+  it('translates the layer names that are words', () => {
+    // The M5 tester read "Band Contrast" and "Grain Boundaries" in an
+    // otherwise German interface; these are the names that must follow the
+    // language.
+    expect(layerLabel(findLayerDef('phase'), t)).toBe('translated(layers.namePhase)');
+    expect(layerLabel(findLayerDef('bc'), t)).toBe('translated(layers.nameBc)');
+    expect(layerLabel(findLayerDef('grain-boundaries'), t))
+      .toBe('translated(layers.nameGrainBoundaries)');
+    expect(layerLabel(findLayerDef('phase-margin'), t))
+      .toBe('translated(layers.namePhaseCheck)');
+  });
+
+  it('leaves notation alone in every language', () => {
+    // IPF axes, KAM, GOS and the PC deltas are written the same way in every
+    // language. Translating them would cost a reader the term they can look
+    // up, and gain nothing.
+    expect(layerLabel(findLayerDef('ipf-z'), t)).toBe('IPF-Z [001]');
+    expect(layerLabel(findLayerDef('kam'), t)).toBe('KAM');
+    expect(layerLabel(findLayerDef('gos'), t)).toBe('GOS');
+    expect(layerLabel(findLayerDef('pc-delta-x'), t)).toBe('PC Δx (px)');
   });
 
   it('falls back for dynamic layers, which have no catalog entry', () => {

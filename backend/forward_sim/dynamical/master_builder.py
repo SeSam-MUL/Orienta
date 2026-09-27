@@ -90,6 +90,7 @@ mask — those hexagon corners genuinely fall outside the hex grid.)
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
@@ -1373,6 +1374,54 @@ def build_master(
     return grid.to(torch.float32)
 
 
+logger = logging.getLogger(__name__)
+
+
+#: Complex128 bytes, and the number of same-shape copies of the depth stack that
+#: are live at once inside one chunk (measured: two at the peak).
+_DEPTH_STACK_BYTES = 16
+_DEPTH_STACK_COPIES = 2
+#: Fraction of *available* RAM the whole build may use for depth stacks. Half,
+#: because everything else (Bethe arrays, U_g table, masks, the master itself)
+#: is outside this estimate and the OS needs room to breathe.
+_DEPTH_STACK_RAM_FRACTION = 0.5
+
+
+def auto_chunk_cells(izz: int, n_workers: int, available_bytes: int,
+                     requested_cells: int) -> int:
+    """Cells per lever-3 chunk that ``n_workers`` of them fit in RAM.
+
+    WHY THIS EXISTS. A tester's M5 Mac was killed by the OS, twice, ~6 % into a
+    silicon master at npx=500 — no traceback, no MemoryError, which is what a
+    kernel kill looks like. Reproduced here on a 64 GB Windows box: the same
+    build peaks at 41-49 GB and killed the process outright at 12 workers.
+
+    Measured attribution (live-tensor census during a build): the peak is the
+    **depth stack**, tensors of shape ``(B', n, n, izz)`` in complex128, with
+    several workers holding one at once. ``chunk_cells`` bounds ``B'·n²``, so
+    one chunk is ``chunk_cells · izz · 16`` bytes — at the old fixed default of
+    4e6 cells and izz≈101 that is **6.5 GB per worker**, and nothing reduced it
+    on a small machine: the default was a constant, and the only RAM-aware cap
+    in this file was explicitly CUDA-only, on the belief that "CPU has host RAM
+    headroom".
+
+    So the budget is taken from what the machine actually has free, divided by
+    the number of chunks that can be in flight. ``requested_cells`` stays the
+    upper bound — this only ever makes the chunk smaller, never larger.
+
+    Chunking is bit-faithful here: the chunks are independent and the docstring
+    of ``_lever3_eval`` already guarantees the result does not depend on how the
+    directions are divided.
+    """
+    izz = max(1, int(izz))
+    n_workers = max(1, int(n_workers))
+    per_chunk_bytes = _DEPTH_STACK_BYTES * _DEPTH_STACK_COPIES * izz
+    budget = max(0, int(available_bytes)) * _DEPTH_STACK_RAM_FRACTION / n_workers
+    cells = int(budget // per_chunk_bytes)
+    # Never zero, and never above what the caller asked for.
+    return max(1, min(int(requested_cells), cells))
+
+
 def _lever3_eval(
     *,
     out: torch.Tensor,
@@ -1479,6 +1528,29 @@ def _lever3_eval(
     if n_workers is None:
         n_workers = min(os.cpu_count() or 1, 24)
     n_workers = max(1, int(n_workers))
+
+    # Size the direction batch to the machine, not to a constant. See
+    # auto_chunk_cells: the depth stack (B', n, n, izz) is what the peak is made
+    # of, and n_workers of them are live at once.
+    _izz = 1 if depth_weight is None else int(depth_weight.shape[0])
+    try:
+        import psutil  # noqa: PLC0415
+
+        _available = int(psutil.virtual_memory().available)
+    except Exception:          # psutil missing or unreadable: keep the old size
+        _available = 0
+    if _available > 0:
+        _safe_cells = auto_chunk_cells(_izz, n_workers, _available, int(chunk_cells))
+        if _safe_cells < int(chunk_cells):
+            logger.warning(
+                "master build: cutting the direction batch from %d to %d cells so "
+                "%d worker(s) x %d depth steps fit in the %.1f GB currently free "
+                "(the depth stack is what fills memory here)",
+                int(chunk_cells), _safe_cells, n_workers, _izz,
+                _available / 1024 ** 3,
+            )
+        chunk_cells = _safe_cells
+
     eig_dtype = torch.complex64 if complex64_eig else torch.complex128
 
     # Strong-beam count per inside direction (mask sum); group identical counts.

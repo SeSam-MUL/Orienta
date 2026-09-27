@@ -77,6 +77,24 @@ not require any Settings changes.
    page shows where the key is stored and only ever displays a masked preview — the
    raw key is never returned by the server.
 
+#### The Materials Project key
+
+- **Where to get one:** signup is free. The **Get a key →** link next to the
+  field opens <https://next-gen.materialsproject.org/api>, where you create an
+  account and copy the key (it starts with `mp_`). Orienta never ships a key of
+  its own: it is stored only on this machine, in the user-config file whose path
+  this page shows, and is sent only to the Materials Project.
+- **What uses it:** the external search in [Crystal Hint](CrystalHint.md), which
+  offers Materials Project hits next to COD ones — and, when you download such a
+  hit, the CIF itself together with its DOI and citation, which are written into
+  the CIF that lands in your library.
+- **Without a key nothing breaks.** Crystal Hint simply shows COD results only;
+  both sources are queried side by side, so nothing else changes. No error, no
+  dialog.
+- **Running the CIF builder as a script** (outside the app) takes the key from
+  the `MP_API_KEY` environment variable first, and otherwise falls back to the
+  key stored here when it is run from inside the project folder.
+
 ### Manual Paths
 
 7. If auto-detection fails, set the **EMsoft binary directory** and **EMSphInx

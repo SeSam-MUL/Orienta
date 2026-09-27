@@ -215,3 +215,36 @@ describe('submitted payload', () => {
     expect(generate).not.toHaveBeenCalled();
   });
 });
+
+describe('the backend radio names the device it will actually use', () => {
+  // A review found the label change this covers was covered by NOTHING:
+  // reverting it left all 201 tests green, and a Mac user saw "GPU (PyTorch)"
+  // again. The old guard only checked that the word `noCudaHere` appeared in
+  // the source. This renders the thing.
+  //
+  // Plain assertions: this file does not load jest-dom's matchers.
+  const gpuRadio = () => screen.queryByLabelText(/GPU \(PyTorch\)/);
+  const cpuRadio = () => screen.queryByLabelText(/PyTorch \(CPU on this machine\)/);
+
+  it('says GPU on a machine that has one', () => {
+    renderDialog({ noCudaHere: false });
+    expect(gpuRadio()).not.toBeNull();
+    expect(cpuRadio()).toBeNull();
+  });
+
+  it('does not promise a GPU on a machine without one', () => {
+    renderDialog({ noCudaHere: true });
+    expect(gpuRadio()).toBeNull();
+    const radio = cpuRadio();
+    expect(radio).not.toBeNull();
+    // and it is still preselected: the compute path does not move, because the
+    // only alternative here is kikuchipy's own CPU routine.
+    expect(radio.checked).toBe(true);
+  });
+
+  it('defaults to the GPU label when nobody says otherwise', () => {
+    // The prop is optional; an omitted prop must not silently claim CPU.
+    renderDialog();
+    expect(gpuRadio()).not.toBeNull();
+  });
+});

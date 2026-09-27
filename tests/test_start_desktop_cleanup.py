@@ -5,6 +5,7 @@ spawns a child which holds a port, exactly the shape of npm -> concurrently ->
 electron -> python that made a backend outlive the closed window.
 """
 
+import os
 import subprocess
 import sys
 import textwrap
@@ -39,7 +40,23 @@ def _spawn_tree(port: int):
         while True:
             time.sleep(0.2)
     """)
-    return subprocess.Popen([sys.executable, "-c", parent_src])
+    # The same isolation the launcher gives its own child (start_desktop.py:
+    # `start_new_session=True` on POSIX, CREATE_NEW_PROCESS_GROUP on Windows).
+    #
+    # Without it this tree inherits PYTEST's process group, and `_kill_tree`
+    # on POSIX is `killpg(getpgid(pid), SIGTERM)` -- so the test signals the
+    # whole group: pytest, the shell, everything. Measured on the Linux
+    # runner (run 35989161362): the suite died mid-test at 94 % with exit 143,
+    # SIGTERM, no verdict line. Windows never showed it because its branch is
+    # `taskkill /PID /T`, which is scoped to a pid rather than a group.
+    #
+    # So this is not merely "the test used to kill its runner". The test was
+    # exercising a process shape the application never creates, and on the one
+    # platform where that difference is observable it took the session down
+    # with it.
+    isolate = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+               if sys.platform == "win32" else {"start_new_session": True})
+    return subprocess.Popen([sys.executable, "-c", parent_src], **isolate)
 
 
 def _wait_for_owner(port, timeout=25):
@@ -77,6 +94,56 @@ def test_killing_the_tree_takes_the_port_holder_with_it():
         assert start_desktop._port_owner(PORT) is None, "port still held after the tree kill"
     finally:
         _kill_quietly(parent)
+
+
+def test_lsof_is_used_where_psutil_is_refused_the_scan(monkeypatch):
+    """macOS gives psutil.net_connections to root only.
+
+    Measured on the runner (36000286001): four tests in this file fail with
+    "None is not None" on macOS and all seven pass on Linux, because
+    net_connections raises AccessDenied, _port_owner returned None, and the
+    launcher's last-resort cleanup could therefore never identify a backend it
+    had started. A Mac left with an orphaned process on port 8000 is exactly
+    the failure the identity check was written for.
+
+    Driven with a stub rather than a real lsof, so the test says the same
+    thing on every platform.
+    """
+    import start_desktop
+
+    def refuse(*_args, **_kwargs):
+        raise psutil.AccessDenied(pid=None)
+
+    monkeypatch.setattr(psutil, "net_connections", refuse)
+
+    me = os.getpid()
+    calls = []
+
+    def fake_lsof(cmd, **_kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=str(me) + chr(10), stderr="")
+
+    monkeypatch.setattr(start_desktop.subprocess, "run", fake_lsof)
+
+    owner = start_desktop._port_owner(PORT)
+    assert owner is not None, "the fallback did not run"
+    assert owner[0] == me
+    assert owner[1] == psutil.Process(me).create_time()
+    assert calls and calls[0][0] == "lsof" and f"-iTCP:{PORT}" in calls[0]
+
+
+def test_the_lsof_fallback_survives_a_machine_without_lsof(monkeypatch):
+    """No lsof, or a hung one, must be "cannot tell" -- never a crash.
+
+    _port_owner is called while the launcher is shutting down. An exception
+    there would replace an orderly cleanup with a traceback.
+    """
+    import start_desktop
+
+    for boom in (FileNotFoundError("lsof"), subprocess.TimeoutExpired("lsof", 5)):
+        def raiser(*_a, **_k):
+            raise boom
+        assert start_desktop._port_owner_via_lsof(PORT, run=raiser) is None
 
 
 def test_the_port_owner_is_identified_by_pid_and_start_time():

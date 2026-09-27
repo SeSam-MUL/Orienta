@@ -19,6 +19,7 @@ Spec: docs/superpowers/specs/2026-08-19-eds-chemistry-phase-map-design.md
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -71,7 +72,82 @@ class ClusterMatch:
 #:
 #: The cost is boundary resolution — features thinner than the box are absorbed
 #: — which is why this is a user-facing control and not a constant.
+#:
+#: It is a PIXEL count, which is not a physical length. Prefer
+#: :func:`scale_px_from_um` wherever a step size is available — see its
+#: docstring for why a saved recipe in pixels is not one analysis.
 DEFAULT_SCALE = 5
+
+
+def scale_px_from_um(scale_um: float, step_um: float) -> int:
+    """Smoothing box width in PIXELS for a physical width in microns.
+
+    A pixel count is not a physical length. 5 px at a 0.2 um step is a 1 um
+    averaging box; 5 px at a 2 um step is a 10 um one — so the same saved
+    recipe applied to two step sizes is two different physical analyses
+    presented as one, with nothing on screen saying so. The physical width is
+    the quantity that transfers between datasets, and the one a reader of the
+    report can check: "Scale 5" means nothing to anybody, "a 3.3 um averaging
+    box" is a statement about the sample.
+
+    A ``step_um`` that is missing, non-finite or non-positive raises rather
+    than guessing. The caller then decides whether to fall back to the pixel
+    value **and say so** — inventing a step would put a wrong physical width
+    into the provenance, which is worse than admitting the step is unknown.
+
+    Rounding is half-up to the nearest whole pixel and floored at 0. Zero is a
+    legitimate answer meaning "no smoothing" (see :func:`_smooth_maps`, where
+    ``scale <= 1`` is a pass-through), not an error: a requested width below
+    half a pixel genuinely cannot be applied, and reporting 0 says that.
+
+    The box stays SQUARE IN PIXELS — ``ndimage.uniform_filter(size=n)`` takes
+    a single integer — so on a scan whose ``X Step`` and ``Y Step`` differ the
+    physical box is NOT square, and this returns a width converted through one
+    axis. Report both edges with :func:`scale_box_um` rather than quoting one
+    number as if it applied to both.
+    """
+    try:
+        step = float(step_um)
+    except (TypeError, ValueError):
+        step = float("nan")
+    if not math.isfinite(step) or step <= 0.0:
+        raise ValueError(
+            "Cannot convert a smoothing length to pixels without a positive "
+            f"step size (got {step_um!r})."
+        )
+    try:
+        length = float(scale_um)
+    except (TypeError, ValueError):
+        length = float("nan")
+    if not math.isfinite(length) or length <= 0.0:
+        return 0
+    return int(math.floor(length / step + 0.5))
+
+
+def scale_box_um(
+    scale_px: int,
+    step_x_um: Optional[float],
+    step_y_um: Optional[float],
+) -> Tuple[Optional[float], Optional[float]]:
+    """Physical edge lengths ``(x, y)`` of the smoothing box, in microns.
+
+    Two numbers rather than one because the box is square in pixels: a scan
+    with different X and Y steps has a rectangular physical box, and quoting a
+    single "3.3 um box" for it is a wrong number in a report.
+
+    ``None`` for an axis whose step size is unknown — never a guess, for the
+    same reason :func:`scale_px_from_um` refuses one.
+    """
+    def edge(step):
+        try:
+            s = float(step)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(s) or s <= 0.0:
+            return None
+        return float(int(scale_px) * s)
+
+    return edge(step_x_um), edge(step_y_um)
 
 
 def _smooth_maps(

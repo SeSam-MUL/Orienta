@@ -12,7 +12,7 @@
     "eds": { "label": "EDS-Analyse", "tooltip": "Elementverteilungskarten, Quantifizierung, Phasenvorschlag aus der Chemie" },
     "pcrefinement": { "label": "PC-Verfeinerung", "tooltip": "Musterzentrum-Kalibrierung und -Verfeinerung" },
     "crystal": { "label": "Kristall-DB", "tooltip": "CIF/XTAL-Konverter, Kristalldatenbank, DWF-Editor" },
-    "simulation": { "label": "Simulation", "tooltip": "EMsoft Monte-Carlo- und Master-Pattern-Simulation" },
+    "simulation": { "label": "Simulation", "tooltip": "Monte-Carlo- und Master-Pattern-Simulation (Orienta Engine oder EMsoft)" },
     "database": { "label": "Datenbank-Browser", "tooltip": "Simulationsergebnisse auf der Netzwerkfreigabe durchsuchen" },
     "indexing": { "label": "Indizierung", "tooltip": "Hough-, Dictionary- oder Spherical-Indizierung (EMSphinx)" },
     "phasemap": { "label": "Phasenkarten", "tooltip": "Indizierungsergebnisse mit konfigurierbarem Maßstab visualisieren" },
@@ -20,6 +20,7 @@
     "batch": { "label": "Stapel", "tooltip": "Mehrphasen-Stapelindizierung mit Checkpoint-Wiederherstellung" },
     "refinement": { "label": "Verfeinerung", "tooltip": "Mehrphasen-Indizierungsergebnisse prüfen und verfeinern" },
     "crystalhint": { "label": "Kristall-Hinweis", "tooltip": "Symmetrie + Gitter aus Mustern erkennen. Schlägt Kandidatenphasen vor, wenn die Bibliothek keine Übereinstimmung hat." },
+    "addons": { "label": "Add-ons", "tooltip": "Auswertungen aus anderen Gruppen, und was sie zitieren" },
     "mlhub": { "label": "ML-Prädiktor", "tooltip": "ML-Modell aus Indizierungsergebnissen trainieren, Phasen vorhersagen" },
     "settings": { "label": "Einstellungen", "tooltip": "Systemstatus, Server-Modus, EMsoft/EMSphinx-Pfade" }
   },

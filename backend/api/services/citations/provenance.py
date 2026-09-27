@@ -147,11 +147,43 @@ def ensure_provenance(result) -> Dict[str, Any]:
     return prov
 
 
-def record_step(result, key: str, params: Optional[dict] = None) -> None:
+def record_step(result, key: str, params: Optional[dict] = None, *,
+                replace: bool = False) -> None:
     """Record that ``key`` ran on ``result`` with ``params``.
 
     A step that did not run records nothing: absence IS the record that it
     was off.
+
+    ``replace`` — OPT-IN, off for every core call site, and the add-on runner
+    is the only caller that passes it. Appending is right for a core step: a
+    multi-phase Dictionary run records one ``indexing.dictionary`` step PER
+    PHASE with genuinely different ``dict_size``, and both are facts about the
+    one run (``render.render_methods`` names this case and is pinned on it).
+    An ADD-ON, new with the add-on runtime, can be re-run on the same result
+    any number of times, and tuning a parameter is the most ordinary thing its
+    author does. Measured in the running application: three runs of one
+    analysis (``n_components=3``, ``3``, then ``2``) left three steps and a
+    methods paragraph asserting both 3 and 2 components about the same data,
+    neither marked superseded, in the text a researcher pastes into a paper.
+
+    With ``replace=True`` an earlier step of the same ``key`` is overwritten
+    IN PLACE and any further ones are dropped, so the trail carries exactly
+    one entry for that key, with the latest params. In place, rather than
+    appended at the end, because position is when the analysis entered the
+    pipeline: tuning a number must not reshuffle the paragraph around it.
+
+    The superseded run leaves NO trace, deliberately. This subtree's contract
+    is to describe what produced the outputs the result currently carries, and
+    the add-on map store already settled that question the same way — it keys
+    on ``(name, result_id, analysis_key, key)``, so the later run REPLACED the
+    earlier map. A retained entry would assert a claim about outputs nobody
+    holds any more, in a paragraph that has no way to say "not this one". The
+    discarded run is still in the application log, which is where an account
+    of what the operator DID belongs; this is an account of what the result IS.
+
+    Validation runs BEFORE any of it, so a re-run refused here (an undeclared
+    key, a path-looking param) leaves the earlier step standing rather than
+    deleting the record of the run whose outputs are still on the result.
     """
     from .steps import get_step
 
@@ -168,7 +200,18 @@ def record_step(result, key: str, params: Optional[dict] = None) -> None:
     # object stringifies to a path here, not before).
     _reject_local_paths(key, jsonable)
     prov = ensure_provenance(result)
-    prov["steps"].append({"key": key, "params": jsonable})
+    entry = {"key": key, "params": jsonable}
+    if replace:
+        at = [i for i, step in enumerate(prov["steps"])
+              if isinstance(step, dict) and step.get("key") == key]
+        if at:
+            prov["steps"][at[0]] = entry
+            # Later duplicates: a trail written before this existed, or
+            # loaded from an .h5 that was.
+            for i in reversed(at[1:]):
+                del prov["steps"][i]
+            return
+    prov["steps"].append(entry)
 
 
 def get_steps(result) -> List[dict]:

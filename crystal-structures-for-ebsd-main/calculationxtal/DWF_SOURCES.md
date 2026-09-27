@@ -31,10 +31,14 @@ against Peng during this work:
   the FCC value at 300 K is an extrapolation of a non-stable phase). For Fe in
   intermetallics the true B is site-specific, but BCC is the RT-grounded
   reference and the DWF only weakly affects the simulated pattern.
-- **Mn** — **not present in Peng 1996** (it has no Mn or Co). Kept at its
-  legacy value `0.0048` and flagged `unverified` in the Reference column. If a
-  cited Mn (or Co) value is needed, see Butt, Bashir, Willis & Heger (1988),
-  Acta Cryst. **A44**, 396 (cubic-element compilation), or another source.
+- **Mn** — **not present in Peng 1996** (it has no Mn or Co), and not in
+  Butt, Bashir, Willis & Heger (1988), Acta Cryst. **A44**, 396 either (22
+  cubic elements, no Mn). Set on 2026-06-08 to **0.0037 nm²** (B ≈ 0.37 Å² at
+  300 K), read from a published B(T) plot for Mn in the La2/3Ba1/3MnO3
+  perovskite — an oxide environment, but consistent with a Debye-model
+  estimate for metallic Mn (Θ_D = 410 K → 0.39 Å²) and with the 3d neighbours
+  in Peng (Cr 0.26, Fe 0.33, Ni 0.36). The Reference column names that plot;
+  the value is the one non-Peng entry in the table.
 
 ### Alternative phase values (not used, for reference)
 - Fe (FCC) @ 300 K = 0.5710 Å² = 0.005710 nm²

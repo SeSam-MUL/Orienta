@@ -100,7 +100,7 @@ about the same scientific value for ~0.1 % of the disk footprint.
 | Attr | Type | Meaning |
 |---|---|---|
 | `method` | str | `"spherical"`, `"dictionary"`, `"hough"`, … |
-| `software` | str | always `"Kikuchipy GUI"` |
+| `software` | str | always `"Orienta"` |
 | `created` | str | ISO-8601 UTC timestamp |
 | `grid_shape` | int[2] | `[R, C]` — rows, cols |
 | `format_version` | str | currently `"1.1"` |

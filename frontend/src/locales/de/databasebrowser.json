@@ -23,8 +23,24 @@
     "downloadAllTooltip": "Öffnet den Download-Dialog: auswählen, welche Kategorien (SHT, Master, CIF, XTAL, …) vom Server in den lokalen Cache geholt werden — mit Fortschrittsbalken.",
     "uploadSelected": "Auf Server hochladen ({{count}})",
     "uploadSelectedTooltip": "Die ausgewählten lokalen Dateien (jeder Typ — SHT, MC h5, Master, CIF, XTAL) auf den Server kopieren. Abweichende Serverkopien bleiben erhalten, sofern Sie das Überschreiben nicht bestätigen.",
+    "manageCollectionsTooltip": "Sammlungen anlegen, umbenennen und Phasen darin ablegen. Siehe den Leitfaden „Phase Collections“.",
+    "moveToCollection_one": "{{count}} Datei in Sammlung verschieben…",
+    "moveToCollection_other": "{{count}} Dateien in Sammlung verschieben…",
+    "moveToCollectionTooltip": "Die ausgewählten Phasen in diese Sammlung verschieben. Eine Phase verlässt dabei jede andere exklusive Sammlung, in der sie abgelegt war — beim Verschieben in die Arbeitsauswahl bleibt sie in ihrer bisherigen Sammlung erhalten.",
+    "moveToCollectionNoneYet": "Noch keine Sammlungen — zuerst unter „Sammlungen verwalten…“ eine anlegen.",
+    "moveToCollectionNotAPhase": "Keine Phase — die CIF (oder XTAL) ablegen; abgeleitete Dateien (SHT, Master, MC, Dictionary) folgen automatisch.",
+    "movedToCollection_one": "{{count}} Phase in „{{name}}“ verschoben.",
+    "movedToCollection_other": "{{count}} Phasen in „{{name}}“ verschoben.",
+    "moveToCollectionFailed": "Verschieben in Sammlung fehlgeschlagen: {{error}}",
     "deleteSelected": "Ausgewählte löschen ({{count}})",
     "deleteSelectedTooltip": "Ausgewählte Dateien mit kaskadierender Abhängigkeitsauflösung löschen"
+  },
+  "groups": {
+    "unassigned": "Nicht abgelegt",
+    "expandTooltip": "Diese Sammlung ausklappen.",
+    "collapseTooltip": "Diese Sammlung einklappen.",
+    "showTooltip": "Diese Sammlung wieder in Pickern anzeigen.",
+    "hideTooltip": "Diese Sammlung aus Pickern ausblenden (die Dateien bleiben hier)."
   },
   "filter": {
     "searchPlaceholder": "Dateien suchen...",
@@ -211,7 +227,7 @@
   "crystalStructure": {
     "downloadFirst": "Lade die Datei zuerst herunter, um die Struktur zu sehen.",
     "parsing": "Struktur wird geparst…",
-    "selectLocal": "Wähle eine lokale CIF/XTAL-Datei.",
+    "selectLocal": "Wählen Sie eine lokale CIF/XTAL-Datei.",
     "loadingViewer": "3D-Viewer wird geladen…",
     "loadError": "Struktur konnte nicht geladen werden: {{error}}",
     "loadErrorFallback": "Struktur konnte nicht geladen werden.",

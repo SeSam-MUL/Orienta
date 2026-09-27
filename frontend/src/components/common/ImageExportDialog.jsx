@@ -185,7 +185,14 @@ function StyleEditor({ style, onChange, t, showBarScale, children }) {
  * of the user.
  */
 function BoundScalebarEditor({ binding, unitLabel, t }) {
-  const choices = binding.lengthChoices?.length ? binding.lengthChoices : [1, 2, 5, 10, 20, 50, 100];
+  const base = binding.lengthChoices?.length ? binding.lengthChoices : [1, 2, 5, 10, 20, 50, 100];
+  // The bar's current length may sit off the ladder — the map's own control
+  // is a free number field, and the seeded length follows the map width — and
+  // a <select> without its value shows nothing selected while the bar is drawn.
+  const current = Number(binding.lengthUm);
+  const choices = (Number.isFinite(current) && current > 0 && !base.includes(current))
+    ? [...base, current].sort((a, b) => a - b)
+    : base;
   return (
     <div style={{
       marginLeft: 19, marginBottom: 8, paddingLeft: 8,
@@ -359,6 +366,8 @@ export default function ImageExportDialog({
   boxesRef.current = boxes;
 
   const hasScale = Number.isFinite(unitsPerPixel) && unitsPerPixel > 0;
+  const uppRef = useRef(unitsPerPixel);
+  uppRef.current = unitsPerPixel;
   const hasCrosshair = !!annotations?.crosshair;
   const hasRoi = !!annotations?.roi;
   const hasLabel = !!annotations?.label;
@@ -378,6 +387,16 @@ export default function ImageExportDialog({
         // A montage of every EDS map is already thousands of pixels wide; a
         // flat 4x there would blow past what the browser can encode.
         setScaleMode((m) => ({ ...m, type: 'factor', factor: defaultFactor(nat) }));
+        // A picture for a report needs its scale bar; when the pixel size is
+        // known the bar starts ON and is one click to remove, rather than
+        // being the setting everyone forgot (the M5 tester's exports had
+        // none). A caller that owns the bar (`scalebarBinding`) keeps its
+        // own state; this flag is ignored there.
+        // Read through a ref so a parent re-render with a fresh number does
+        // not re-run this effect and reset the crop and factor under the
+        // user's hand.
+        const upp = uppRef.current;
+        setShowScalebar(Number.isFinite(upp) && upp > 0);
       })
       .catch((e) => { if (!cancelled) setLoadError(e.message); });
     return () => { cancelled = true; };

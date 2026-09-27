@@ -10,6 +10,7 @@
  * the old separate Data Source box was redundant and removed.
  */
 
+import { problemText } from '../../services/problemText';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import api, {
@@ -29,6 +30,9 @@ import useResultStore from '../../stores/useResultStore';
 import useDataStore from '../../stores/useDataStore';
 import { toast } from '../../stores/useToastStore';
 import usePhaseColorStore from '../../stores/usePhaseColorStore';
+import useAddonLayerRequests from '../../stores/useAddonLayerRequests';
+import { MAX_LAYERS } from './layerStackReducer';
+import { planAddonDrain, baseOf } from './addonLayerDrain';
 import LayeredCanvas from './LayeredCanvas';
 import LayerStackPanel from './LayerStackPanel';
 import { adoptDecision } from './adoptDecision';
@@ -61,6 +65,7 @@ import GrainBoundaryPanel from './GrainBoundaryPanel';
 import ScaleLegend from './ScaleLegend';
 import { defaultBands as defaultGbBands } from './grainBoundaryBands';
 import { drawAnnotationsOnto } from './annotations/composeExport';
+import { seedScalebar } from './annotations/seedScalebar';
 import { keyImageToCanvas, ipfKeyExportItems } from './ipfKeyExport';
 import {
   applyPatch, withAdded, withRemoved, withScaleBody, scaleMargins,
@@ -81,7 +86,6 @@ import { areaForLayer, umPerPxForLayer } from '../EDS/layerPixelSize';
 import ThresholdHistogram from '../EDS/ThresholdHistogram';
 import LinescanProfilePlot from '../EDS/LinescanProfilePlot';
 import MagnifierLens from '../EDS/MagnifierLens';
-import { exportComposite } from '../EDS/compositeExporter';
 import { useRectangleDrag } from '../EDS/hooks/useRectangleDrag';
 import { useHeatmapPick } from '../common/useHeatmapPick';
 import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
@@ -1696,13 +1700,16 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         },
       });
       setMapExportAnnots(withAnnotations
-        ? [
+        // Opens WITH a scale bar when the picture has a scale and the map has
+        // none yet: the dialog's own bar default is bypassed on this path
+        // (its controls edit the map's annotation), so the owner seeds it.
+        ? seedScalebar([
           ...(annotRef.current || []).map((a) => ({ ...a, props: { ...a.props } })),
           // The scales the page is showing right now, so the figure opens as
           // the view looks. Every one of them is a body the user can move or
           // switch off again in the dialog.
           ...(extraAnnots || []),
-        ]
+        ], { umPerPx, mapWidthPx: built?.mapWidth ?? canvas.width })
         : null);
     } catch (err) {
       setMapExportError(err?.message || String(err));
@@ -1930,7 +1937,81 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     modal_filter_size: cleanupModalSize,
   }), [cleanupCI, cleanupUnc, cleanupMinCluster, cleanupFillUnindexed, cleanupModalSize]);
 
-  const layerStack = useLayerStack({ cleanupParams, resetSignal, frameSig, colorOverrides: phaseColorOverrides });
+  // The result the SELECTED gallery entry stands for. Deliberately not
+  // `shownResultId`: this changes in the same render as `resetSignal`, which
+  // is what the re-seed's add-on keep needs -- see the note in useLayerStack.
+  // Entries added from a file carry no result_id, and null means "keep
+  // nothing", which is the old behaviour.
+  const selectedEntryResultId = useMemo(
+    () => gallery[selectedGalleryIdx]?.result_id ?? null,
+    [gallery, selectedGalleryIdx]);
+
+  const layerStack = useLayerStack({ cleanupParams, resetSignal, frameSig,
+                                     colorOverrides: phaseColorOverrides,
+                                     resultId: shownResultId ?? null,
+                                     seedResultId: selectedEntryResultId });
+
+  // ----- add-on maps handed over from the Add-ons page -----
+  // A queue, drained here and emptied. Not a mirror of the stack: state held
+  // twice with one copy updated is this branch's dominant defect.
+  const addonRequests = useAddonLayerRequests((s) => s.requests);
+  const addonSuperseded = useAddonLayerRequests((s) => s.superseded);
+
+  // A layer whose run has been superseded is REMOVED rather than left to
+  // redraw someone else's numbers under its own label. Separate from the
+  // request drain: a re-run that the user never asked to show must still
+  // invalidate what is on the stack.
+  useEffect(() => {
+    if (!addonSuperseded.length) return;
+    const bases = useAddonLayerRequests.getState().takeSuperseded();
+    if (!bases.length) return;
+    const doomed = layerStack.layers
+      .filter((l) => bases.includes(baseOf(l.id)))
+      .map((l) => l.id);
+    for (const id of doomed) layerStack.removeLayer(id);
+    if (doomed.length) {
+      toast.info(t('phasemap:addonLayerSuperseded', { count: doomed.length }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addonSuperseded]);
+
+  useEffect(() => {
+    // NOT gated on the page being active: pages are never unmounted (App.jsx
+    // hides the inactive ones), so after the first visit the ordinary case is
+    // a request enqueued while this page is mounted and hidden — a drain that
+    // ran only on mount would never see it.
+    if (!addonRequests.length) return;
+    // Read and clear in ONE synchronous step. StrictMode runs this effect
+    // setup/cleanup/setup in development, and a drain reading a render
+    // snapshot would hand the same requests over twice.
+    const pending = useAddonLayerRequests.getState().take();
+    if (!pending.length) return;
+
+    const { toAdd, toRemove, refused } = planAddonDrain(
+      pending, layerStack.layers, MAX_LAYERS);
+    // Remove first: a re-run takes its predecessor's place rather than
+    // stacking a second row with the same label over the older map.
+    for (const id of toRemove) layerStack.removeLayer(id);
+    for (const req of toAdd) layerStack.addLayer(req.id, { label: req.label });
+    // Decided BEFORE dispatching, never from the reducer returning an
+    // unchanged state: ADD returns the state unchanged for a full stack AND
+    // for a duplicate, so inferring the refusal from it would report
+    // StrictMode's second, deduplicated add as "stack full" on every
+    // development run.
+    // SHOWN, not merely computed. The earlier version set a state nothing
+    // read: with a full stack the user clicked "Show as layer", was carried
+    // to this page, and found no layer, no message and no request — a silent
+    // no-op that reads as a broken feature, or as an empty map. A toast,
+    // because the user has just arrived here and is looking at the map, not
+    // at the layer panel.
+    if (refused.length) {
+      toast.warning(t('phasemap:addonLayerFull', {
+        max: MAX_LAYERS,
+        names: refused.map((r) => r.label || r.id).join(', '),
+      }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addonRequests]);
 
   // ----- Tier-2 tooling state (new) -----
   const [view, setView] = useState('stack');           // 'stack' | 'grid'
@@ -1977,15 +2058,6 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layerStack.bitmaps, layerStack.bitmapVersion]);
-
-  const onExportPng = useCallback(() => {
-    exportComposite({
-      layers: layerStack.layers,
-      bitmaps: layerStack.bitmaps,
-      shape: stackShape,
-      filename: 'phase-map-composite.png',
-    });
-  }, [layerStack.layers, layerStack.bitmaps, stackShape]);
 
   // Threshold extras for the LayerStackPanel — show only for scalar layers
   // where threshold-on-luma carries physical meaning. Phase / IPF layers are
@@ -2629,6 +2701,16 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   }, [t, openMapExport, layerStack, stackShape, effectiveTitle,
       composeMapExport, initialScaleBodies, layerUmPerPx]);
 
+  // The toolbar's export button takes the same way in as the right-click
+  // menu's "Export the map…": the dialog, with magnification and scale bar.
+  // It used to write the composite at scan resolution straight into the
+  // browser's download folder (the M5 tester: 21 x 21 px, no scale bar, in
+  // Downloads), which is a second, worse exporter for the same picture.
+  const onExportPng = useCallback(() => {
+    const item = mapMenuItems(null).find((i) => i.id === 'map');
+    if (item) item.onSelect();
+  }, [mapMenuItems]);
+
   // Export
   const [exportPath, setExportPath] = useState('');
   const [exportFormat, setExportFormat] = useState('png');
@@ -2701,7 +2783,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         setForwardNccState(s => ({ ...s, computing: false }));
       }
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || t('phasemap:info.forwardNccComputeFailed');
+      const msg = problemText(err, t, 'phasemap') || t('phasemap:info.forwardNccComputeFailed');
       setMapError(msg);
       setForwardNccState(s => ({ ...s, computing: false }));
     } finally {
@@ -2733,7 +2815,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           setForwardNccState(s => ({ ...s, ready: false, needsCompute: true }));
         }
       } catch (err) {
-        const msg = err.response?.data?.detail || err.message || t('phasemap:info.forwardNccUnavailable');
+        const msg = problemText(err, t, 'phasemap') || t('phasemap:info.forwardNccUnavailable');
         setMapError(msg);
       } finally {
         setMapLoading(false);
@@ -2780,7 +2862,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         setInfoText(t('phasemap:info.noPhaseMapAvailable'));
       }
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || t('phasemap:info.renderFailed');
+      const msg = problemText(err, t, 'phasemap') || t('phasemap:info.renderFailed');
       setMapError(msg);
       setInfoText(msg);
     } finally {
@@ -2844,7 +2926,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           return handleRefreshPreview();
         })
         .catch((err) => {
-          const msg = err.response?.data?.detail || err.message || 'Handoff load failed';
+          const msg = problemText(err, t, 'phasemap') || 'Handoff load failed';
           setInfoText(t('phasemap:info.batchHandoffFailed', { msg }));
           setMapError(msg);
           console.warn('[PhaseMap] batch handoff load failed:', err);
@@ -3198,7 +3280,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       setExportPath(res.data?.path || targetPath);
       setExportFormat(fmt);
     } catch (err) {
-      setExportMsg(err.response?.data?.detail || err.message || t('phasemap:exportImage.exportFailed'));
+      setExportMsg(problemText(err, t, 'phasemap') || t('phasemap:exportImage.exportFailed'));
       setExportErr(true);
     } finally {
       setExporting(false);
@@ -3370,7 +3452,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       }, { responseType: 'blob' });
       setInfoText(t('phasemap:info.saved', { label: entry.label, path: targetPath }));
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || 'export failed';
+      const msg = problemText(err, t, 'phasemap') || 'export failed';
       setInfoText(t('phasemap:info.saveFailed', { msg }));
     }
   };
@@ -4710,30 +4792,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           style={{ width: '100%', marginBottom: 4 }}>
           {t('phasemap:exportImage.copyClipboard')}
         </Button>
-        {/* Composite export — Layer stack + Annotations baked into one PNG.
-            Uses client-side Canvas2D so the on-canvas layout is exactly
-            what the user sees in the preview (legend, scalebar, title,
-            arrow positions are pixel-identical). Scale factor doubles
-            the pixel count for crisper print. */}
+        {/* Composite export — layer stack + the annotations as placed. The
+            same way in as the toolbar button and the right-click menu: the
+            export dialog, with the map's annotations copied in (editable,
+            burnt in at save time), magnification and a scale bar. This used
+            to be a third exporter of the same picture that ignored layer
+            thresholds and wrote a 2x PNG straight into the download folder. */}
         <Button small variant="primary"
-          onClick={async () => {
-            try {
-              const { downloadComposedExport } = await import('./annotations/composeExport');
-              await downloadComposedExport({
-                layers: layerStack.layers,
-                bitmaps: layerStack.bitmaps,
-                shape: stackShape ? { rows: stackShape[0], cols: stackShape[1] } : null,
-                annotations: annotState.annotations,
-                scale: 2,
-                phaseStats: phaseStatsForAnnot,
-                stepX: knownStepX,  // physical-length scalebar; null = no bar
-              }, `phase_map_composed_${Date.now()}.png`);
-            } catch (e) {
-              // surface to console only; existing exportMsg is for the
-              // backend-driven path and we don't want to fight over it
-              console.warn('Composite export failed:', e);
-            }
-          }}
+          onClick={onExportPng}
           disabled={!stackShape || !stackShape[0] || !stackShape[1] || layerStack.layers.length === 0}
           title={t('phasemap:exportImage.composedPngTooltip')}
           style={{ width: '100%', marginBottom: 4 }}>

@@ -54,6 +54,12 @@ PREG = 0.664840340614319        # = 2·m_e·e/h²·1e-18  (V → nm⁻²)
 _TWOPI = 2.0 * math.pi
 _FOURPI = 4.0 * math.pi
 
+#: Cells per unit cell edge when deciding whether two symmetry images are the
+#: same atom (see :func:`_expand_symmetry_orbit`). 10 000 = a 1e-4 fractional
+#: grid, chosen from the measured gap: coincident images of one atom differ by
+#: at most 6e-8, distinct sites by at least 1.0e-1, across the whole library.
+_ORBIT_GRID: int = 10_000
+
 # Large-cell OOM guard threshold for build_ug_lut.
 # The dense path allocates (M, M, 3) int64 + (M, M) float64 host arrays.
 # Peak RAM ≈ M² × (24 + 8) bytes.  Cap at ~3 GB → M ≈ sqrt(3e9 / 32) ≈ 9682.
@@ -140,14 +146,45 @@ def _expand_symmetry_orbit(structure: CrystalStructure):
     """
     from diffpy.structure.spacegroups import GetSpaceGroup
 
+    from .origin_choice import to_choice_1
+
     sg = GetSpaceGroup(int(structure.space_group))
+    setting = int(getattr(structure, "space_group_setting", 1) or 1)
+    # diffpy hands us origin choice 1 for every one of the 24 groups that have
+    # two (measured against spglib for all 230). Coordinates from a database CIF
+    # are normally choice 2, and the same three numbers then denote a DIFFERENT
+    # Wyckoff site: silicon's 8a at (1/8,1/8,1/8) in choice 2 is the 16-fold
+    # 16c/16d in choice 1, which is how our own Monte Carlo came to run silicon
+    # at twice its density and the master to be built from the wrong structure.
+    #
+    # The "unverified setting" warning deliberately does NOT live here. This
+    # function runs once per Lambert direction on the large-cell path
+    # (_LazySghMatrix -> compute_Sgh), which at npx=500 is ~1e6 calls, and every
+    # logger.warning also lands in logs/orienta.log — the shape that put 280 000
+    # copies of one line in a log on 2026-09-24. It is emitted once per read in
+    # xtal_io.read_crystal_structure instead, where the path is known and can be
+    # named.
     out = []
     for atom in structure.atoms:
-        base = np.asarray(atom.xyz, dtype=np.float64)
+        base = to_choice_1(atom.xyz, structure.space_group, setting)
         seen = set()
         for op in sg.symop_list:
             r = (op.R @ base + op.t) % 1.0
-            key = tuple(np.round(r, 6))
+            # Two images of the same atom have to collapse to one key, and
+            # ``np.round(r, 6)`` was too fine to do it. ``AtomData`` in a .xtal
+            # is float32, so a site on a special position is only on it to about
+            # seven digits: Mg17Al12's (0.672099, 0.327900, 0.327900) misses the
+            # exact relation in the sixth decimal, eight images that coincide got
+            # eight different keys, an 8-fold site expanded to 24, and the cell
+            # came out with 74 atoms instead of 58.
+            #
+            # Measured across the library: the widest spread inside a genuinely
+            # coincident cluster is 6e-8, and the closest two DISTINCT sites are
+            # 1.0e-1 apart. A 1e-4 grid sits between them with room either way,
+            # and changes the atom count of exactly one of 35 files -- the one
+            # that was wrong. The ``% _ORBIT_GRID`` is the wrap: 0.99999 and
+            # 0.00001 are the same atom and must not land in different cells.
+            key = tuple((np.round(r * _ORBIT_GRID).astype(np.int64) % _ORBIT_GRID).tolist())
             if key in seen:
                 continue
             seen.add(key)

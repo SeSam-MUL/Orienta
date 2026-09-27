@@ -10,7 +10,9 @@ vi.mock('../../theme/components', () => ({
   },
   alpha: () => '#000',
   spacing: { sm: 4, md: 8, lg: 16 },
-  Button: ({ children, ...p }) => <button {...p}>{children}</button>,
+  // type defaults to 'button' like the real one (theme/components.jsx): a
+  // type-less button inside the new <form> would submit it.
+  Button: ({ children, type = 'button', ...p }) => <button type={type} {...p}>{children}</button>,
   Input: ({ value, onChange, type, ...p }) =>
     <input type={type || 'text'} value={value} onChange={onChange} {...p} />,
   GroupBox: ({ title, children }) => <fieldset><legend>{title}</legend>{children}</fieldset>,

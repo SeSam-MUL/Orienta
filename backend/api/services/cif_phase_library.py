@@ -210,12 +210,40 @@ def _cif_dir_for(xlsx_path: Path) -> Path:
     return Path(xlsx_path).parent / "CIF_Library"
 
 
+#: Markers a repair leaves in the name of the copy it kept. Such a file is a
+#: backup, never a phase: on 2026-09-13 a session symmetrised three library
+#: CIFs and kept the originals as ``<name>.P1-backup-<date>.cif``. All three
+#: were then offered in the phase list AND in the Hough phase picker, where a
+#: P1 cell is the shape that made a triplet library ask for 1.4 TiB
+#: (2026-08-03).
+#:
+#: Matched on the marker, not on the date. ``backup`` is matched WITHOUT the
+#: separator that follows it, because ``.bak`` does not cover ``.backup``
+#: (b-a-**c**-k-u-p) — the first version of this list silently let
+#: ``X.backup.cif`` through while catching ``X.backup-2026.cif``. A dropped
+#: file is reported (see ``load_cif_phase_library_with_skips``), so a wrong
+#: guess here is visible rather than silent.
+_BACKUP_MARKERS = ("backup", ".bak.", ".bak", ".orig.", ".orig")
+
+
+def is_backup_file(path) -> bool:
+    """True for a repair's leftover copy — not a phase when listing phases."""
+    name = Path(path).name.lower()
+    return any(m in name for m in _BACKUP_MARKERS)
+
+
 def _cif_paths(cif_dir: Path) -> List[Path]:
     """Every CIF under ``cif_dir``, ordered by filename.
 
     The suffix test is case-insensitive because the database builder accepts
     ``.CIF`` as well, and on a case-sensitive filesystem ``rglob("*.cif")``
     would quietly miss those.
+
+    Repair backups are INCLUDED here and rejected by the caller, so that they
+    reach the ``skipped`` report and the folder signature. Dropping them at
+    this level was the first fix and it was wrong in exactly the way this
+    module exists to prevent: the file is on disk, the user can see it, and
+    nothing would have said why it is not a phase.
     """
     if not cif_dir.is_dir():
         return []
@@ -408,6 +436,23 @@ def load_cif_phase_library_with_skips(
 
     library = _entries_from_xlsx(p)
     skipped: List[Dict[str, str]] = []
+
+    # A repair's leftover copy is not a phase, but it IS on disk, so it is
+    # reported rather than dropped. Named before the spreadsheet is consulted:
+    # a backup that happens to carry a listed filename must not become an
+    # entry either.
+    backups = [q for q in paths if is_backup_file(q)]
+    for q in backups:
+        skipped.append({
+            "file": q.name,
+            "code": "repair_backup",
+            "reason": ("this looks like the copy a repair kept beside the "
+                       "file it repaired, so it is not offered as a phase. "
+                       "Rename it if it is a phase you want."),
+        })
+    paths = [q for q in paths if not is_backup_file(q)]
+    library = {k: v for k, v in library.items()
+               if not is_backup_file(k)}
 
     unlisted = [q for q in paths if q.name not in library]
     if unlisted:

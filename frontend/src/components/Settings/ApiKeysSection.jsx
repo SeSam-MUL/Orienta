@@ -33,7 +33,13 @@ function MaskedInput({ value, onChange, placeholder, disabled }) {
   const { t } = useTranslation('settings');
   const [revealed, setRevealed] = useState(false);
   return (
-    <div style={{ display: 'flex', gap: 6, alignItems: 'stretch', flex: 1 }}>
+    // A <form> only because the masked field is type="password": without an
+    // enclosing form Chrome logs "Password field is not contained in a form"
+    // on every page load. Nothing is ever submitted this way.
+    <form
+      onSubmit={(e) => e.preventDefault()}
+      style={{ display: 'flex', gap: 6, alignItems: 'stretch', flex: 1 }}
+    >
       <Input
         type={revealed ? 'text' : 'password'}
         value={value}
@@ -55,7 +61,7 @@ function MaskedInput({ value, onChange, placeholder, disabled }) {
       >
         {revealed ? t('settings:apiKeys.hideKey') : t('settings:apiKeys.showKey')}
       </Button>
-    </div>
+    </form>
   );
 }
 

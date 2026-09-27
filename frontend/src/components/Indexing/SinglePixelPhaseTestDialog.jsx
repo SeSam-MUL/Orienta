@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { indexApi, ebsdApi, edsApi } from '../../services/api';
 import useDataStore from '../../stores/useDataStore';
+import useCollectionStore from '../../stores/useCollectionStore';
+import { activeKeySet, activeKeySignature, narrowSelection } from '../PhaseCollections/collectionFilter';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
@@ -25,7 +27,7 @@ const MEASURED_VIEW = 'measured';
 const COMPARE_VIEW = 'compare';
 
 export default function SinglePixelPhaseTestDialog({ open, onClose, currentMethod = 'hough', onUsePhase }) {
-  const { t } = useTranslation(['indexing', 'phasemap']);
+  const { t } = useTranslation(['indexing', 'phasemap', 'collections']);
   // One view per picture, not one shared view: the scan map, the measured
   // pattern and the comparison panels show different things at different
   // native sizes, so zooming one says nothing about the others. The three
@@ -37,6 +39,12 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   const setPosition = useDataStore((s) => s.setPosition);
   const fileLoaded = useDataStore((s) => s.ebsdLoaded || s.isFileOpen);
   const filePath = useDataStore((s) => s.filePath);
+  // The active phase collection, if any — narrows which phases get
+  // pre-selected below. `data.state` is `{}` until the store's first load
+  // resolves, so `?.active` (not `.active`) is required here: reading past
+  // an undefined `state` would throw, not just read as "no collection".
+  const collections = useCollectionStore((s) => s.data.collections);
+  const activeName = useCollectionStore((s) => s.data.state?.active || null);
 
   const [nRows, nCols] = gridShape;
 
@@ -87,6 +95,31 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   const [phases, setPhases] = useState([]);
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [showPhases, setShowPhases] = useState(false);
+  // The fetch of the testable phase list has three outcomes, but
+  // `phases.length === 0` cannot distinguish any of them: still in flight,
+  // resolved to an empty list, or rejected. That collapse is exactly the
+  // hole this state exists to close — with a collection active, "still
+  // loading" and "failed to load" both left `noneSelected` false (it
+  // requires `phases.length > 0`) AND `allSelected` true (its own
+  // `phases.length === 0` clause), so the button read "Auto-Run all
+  // phases" and, uncaught, ran the entire library on click while the
+  // toolbar named a specific collection. `phasesLoadState` tracks the
+  // fetch itself, independently of what `phases` currently holds, so the
+  // collection-aware guard below can tell those three states apart.
+  // `retryTick` exists purely to give "Retry" something to bump — it is
+  // read only as a dependency of the fetch effect, never for its value.
+  const [phasesLoadState, setPhasesLoadState] = useState('idle'); // idle | loading | loaded | error
+  const [phasesRetryTick, setPhasesRetryTick] = useState(0);
+  const retryPhases = useCallback(() => setPhasesRetryTick((n) => n + 1), []);
+  // True while `selectedKeys` is still exactly the collection-derived
+  // auto-seed; false once the user hand-edits it (checkbox, select-all/none,
+  // or "show all phases"). The collection-follow effect below only ever
+  // overwrites the selection while this is still true — App.jsx keeps this
+  // dialog mounted-but-hidden rather than unmounting it, so the active
+  // collection can change while the dialog sits open in the background, and
+  // an untouched selection should follow it back in without ever clobbering
+  // a choice the user already made.
+  const isAutoSeedRef = useRef(true);
 
   // Background-job state. ``progress`` mirrors the backend poll response.
   const [progress, setProgress] = useState(null);
@@ -155,16 +188,100 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   useEffect(() => {
     if (!open || !fileLoaded) return;
     let cancelled = false;
+    setPhasesLoadState('loading');
     indexApi.phaseTestPhases()
       .then((r) => {
         if (cancelled) return;
         const list = Array.isArray(r?.data) ? r.data : [];
         setPhases(list);
-        setSelectedKeys(new Set(list.map((p) => p.key)));
+        setPhasesLoadState('loaded');
+        // Seed the selection from the active collection, if any — narrowed to
+        // the phases this dialog can actually run (each needs an .sht
+        // master). `phases` itself STAYS the full list: only `selectedKeys`
+        // is narrowed here. Shrinking `phases` instead would make
+        // `selectedKeys.size === phases.length` true again for a fully-
+        // selected collection, `subsetSelected` would go false, and the run
+        // would silently test the WHOLE library — see
+        // phaseTestCollection.test.jsx for the pinned regression.
+        //
+        // Read the collection LIVE from the store here, not the
+        // `collections`/`activeName` render-scope selectors: this callback's
+        // closure over those was captured when the effect was SCHEDULED, but
+        // the promise can resolve after the user switched the active
+        // collection elsewhere (the dialog can sit open-but-hidden while
+        // that happens — see the collection-follow effect right below). If
+        // this used the closed-over values, the seed would silently match
+        // whatever collection was active when the request was SENT, not the
+        // one active when the phases actually ARRIVED — the collection-
+        // follow effect only fires on an `activeName` change, so if that
+        // change already happened before this `.then()` runs, nothing would
+        // ever correct the mismatch.
+        const live = useCollectionStore.getState().data;
+        const liveActiveName = live?.state?.active || null;
+        const liveCollections = live?.collections || [];
+        const colKeys = activeKeySet(liveCollections, liveActiveName);
+        const { keys } = narrowSelection(
+          list.map((p) => p.key), colKeys, list.map((p) => p.key));
+        setSelectedKeys(new Set(keys));
+        isAutoSeedRef.current = true;   // fresh seed: nothing hand-edited yet
       })
-      .catch(() => { if (!cancelled) setPhases([]); });
+      .catch(() => {
+        if (cancelled) return;
+        setPhases([]);
+        setPhasesLoadState('error');
+      });
     return () => { cancelled = true; };
-  }, [open, fileLoaded, filePath]);
+    // This effect itself fires ONCE per dialog-open/file-load, matching its
+    // existing intent ("Default the selection to ALL of them" above) — the
+    // `.then()` above no longer even reads the render-scope `collections`/
+    // `activeName` (it reads the store live instead, for the reason
+    // explained there). A later collection SWITCH while the dialog stays
+    // open is handled by the separate effect right below, which only
+    // touches the selection while it is still untouched (isAutoSeedRef);
+    // "Show all phases" is the manual escape either way. `phasesRetryTick`
+    // is in the deps purely so "Retry" (after a failed fetch) re-runs this
+    // exact effect — it never appears anywhere else.
+  }, [open, fileLoaded, filePath, phasesRetryTick]);
+
+  // Follow the active collection while the dialog sits open — AND follow a
+  // membership change to that SAME collection, made from somewhere else
+  // while this dialog never closed (Task 10 added the one place that can
+  // cause that: the database browser's "move to collection", or the
+  // Collection Manager, editing the collection this dialog is already
+  // showing). `membersSignature` is a content fingerprint of exactly that
+  // collection's effective members (`activeKeySignature`, see
+  // `collectionFilter.js`), not `collections` itself — `collections` gets a
+  // brand-new array reference from the store on every refresh anywhere in
+  // the app (including an unrelated collection's own edit), and depending on
+  // it directly would reseed this dialog on every one of those for no
+  // reason; the signature only changes when THIS collection's members did.
+  //
+  // App.jsx keeps every page mounted and merely hides inactive ones with
+  // `display: none` rather than unmounting them — `showPhaseTestDialog` is
+  // local state untouched by the `isActive` prop, so this dialog (and its
+  // `open`/`fileLoaded`/`filePath` deps above) can stay exactly as they were
+  // while the user navigates away, flips the toolbar's active collection (or
+  // edits it), and navigates back. Without this effect the header would
+  // recompute against the NEW `activeName`/membership on every render (it is
+  // derived from `phases`/`collections`/`activeName` directly, not cached)
+  // while `selectedKeys` stayed pinned to the OLD selection — the count line
+  // would then name a collection the checkboxes disagree with.
+  //
+  // Deliberately separate from the fetch effect above (not merged into it,
+  // and not added to its deps) so that effect's own "seeds once" comment
+  // stays true; this one seeds again, but ONLY while nothing has been
+  // hand-edited since the last seed.
+  const membersSignature = activeKeySignature(collections, activeName);
+  useEffect(() => {
+    if (!isAutoSeedRef.current || phases.length === 0) return;
+    const colKeys = activeKeySet(collections, activeName);
+    const { keys } = narrowSelection(
+      phases.map((p) => p.key), colKeys, phases.map((p) => p.key));
+    setSelectedKeys(new Set(keys));
+    // still true: re-deriving from the collection is not a hand edit
+    isAutoSeedRef.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeName, membersSignature]);
 
   // Stop polling + invalidate the run when the dialog closes or unmounts so
   // a late poll response can't setState after close/unmount.
@@ -254,7 +371,15 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
     setResult(null); setSelected(null); setProgress(null); setError(null);
     setPreviewB64(null); setPreviewError(null); setOverviewB64(null);
     setEdsOverlaySel([]); setEdsOverlayMaps({}); setEdsElements([]);
+    // Blank to empty here only. The phaseTestPhases fetch effect above also
+    // has `filePath` in its deps and fires on the same render, but its
+    // reseed happens inside an async `.then()` — so it lands after every
+    // effect in this commit has run, this one included, regardless of which
+    // is declared first. Collection-aware seeding lives in that ONE place,
+    // not here.
     setPhases([]); setSelectedKeys(new Set());
+    setPhasesLoadState('idle');   // the fetch effect below flips this to 'loading' again
+    isAutoSeedRef.current = true;   // no phases yet: nothing to have hand-edited
     markerCtl.clearMarkers(); markerCtl.setHover(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath]);
@@ -272,9 +397,60 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   const allSelected = phases.length === 0 || selectedKeys.size === phases.length;
   const subsetSelected =
     phases.length > 0 && selectedKeys.size > 0 && selectedKeys.size < phases.length;
+  // Library phases exist but the (collection-narrowed) selection is empty.
+  // The backend reads an ABSENT phase_keys as "test every phase" — sending
+  // `phase_keys: []` is not the fix, omitting it is what triggers the whole
+  // library, which is exactly the trap this guards against. "0 selected"
+  // must refuse to run, not silently widen to everything. Mirrors
+  // PhaseMapPanel.jsx's `noneSelected` (EDS "Suggest Phases" panel) so the
+  // two screens agree.
+  const noneSelected = phases.length > 0 && selectedKeys.size === 0;
   const running = progress?.status === 'running';
 
+  // The same trap through a different door: `noneSelected` only fires once
+  // the phase list has actually loaded (it requires `phases.length > 0`).
+  // While a collection is active and the fetch is still in flight — or
+  // failed outright — `phases` is `[]`, `noneSelected` is false, AND
+  // `allSelected` is true (its own `phases.length === 0` clause), so the
+  // button reads "Auto-Run all phases" and a click would run the whole
+  // library while the toolbar names a specific collection. Gated on
+  // `activeName`: with no collection active, an empty `phases` list
+  // legitimately means "the backend will test everything" (the normal,
+  // library-loading and no-collections case), and this must not touch that.
+  const collectionPhasesBlocked = !!activeName && phasesLoadState !== 'loaded';
+  const collectionBlockReason = !collectionPhasesBlocked ? null
+    : phasesLoadState === 'error'
+      ? t('phaseTest.collectionPhasesFailed', { collection: activeName })
+      : t('phaseTest.collectionPhasesLoading', { collection: activeName });
+
+  // Counts for the phase-picker header, shown only while a collection is
+  // active. Computed from the SAME narrowSelection used to seed the
+  // selection above, so the number on screen can never disagree with what
+  // actually gets sent.
+  const collectionInfo = activeName
+    ? narrowSelection(
+        phases.map((p) => p.key), activeKeySet(collections, activeName), phases.map((p) => p.key))
+    : null;
+  const notUsableHere = collectionInfo ? collectionInfo.inCollection - collectionInfo.usableHere : 0;
+
   const runAuto = useCallback(async () => {
+    // "0 selected" must not run the whole library — the button is already
+    // disabled for this, but the check is repeated here so a stray call
+    // (e.g. a race between disabling and a queued click) cannot slip
+    // through to `phaseTestStart` with an omitted `phase_keys`, which the
+    // backend reads as "test everything".
+    if (noneSelected) {
+      setError(t('phaseTest.noneSelected'));
+      return;
+    }
+    // Same reasoning, the "still loading"/"failed to load" door: refuse
+    // rather than let an unresolved collection silently widen to the whole
+    // library. See `collectionPhasesBlocked` above for why `noneSelected`
+    // alone does not already cover this.
+    if (collectionPhasesBlocked) {
+      setError(collectionBlockReason);
+      return;
+    }
     // Invalidate any in-flight job, then start a fresh one.
     const myRun = ++runIdRef.current;
     stopPolling();
@@ -337,7 +513,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
     } finally {
       if (myRun === runIdRef.current) setLoading(false);
     }
-  }, [pixelIndex, edsMode, aperture, apertureRadius, bandwidth, bgRemove, usePixelPc, subsetSelected, selectedKeys, stopPolling, t]);
+  }, [pixelIndex, edsMode, aperture, apertureRadius, bandwidth, bgRemove, usePixelPc, subsetSelected, selectedKeys, noneSelected, collectionPhasesBlocked, collectionBlockReason, stopPolling, t]);
 
   const cancelRun = useCallback(async () => {
     const jobId = jobIdRef.current;
@@ -371,6 +547,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   }, [aperture, apertureRadius, result, running, loading, runAuto, t]);
 
   const toggleKey = useCallback((key) => {
+    isAutoSeedRef.current = false;   // hand edit: the collection-follow effect must leave this alone now
     setSelectedKeys((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
@@ -379,8 +556,19 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   }, []);
 
   const toggleAll = useCallback(() => {
+    isAutoSeedRef.current = false;   // hand edit, even when the result happens to be "all"
     setSelectedKeys((prev) =>
       prev.size === phases.length ? new Set() : new Set(phases.map((p) => p.key)));
+  }, [phases]);
+
+  // The escape hatch: a collection filter with no one-click way back out is
+  // the exact defect this feature must avoid. Restores every phase, not just
+  // the collection's — same target set as toggleAll's "select all". Counts
+  // as a hand edit too: once the user has explicitly asked for everything, a
+  // later collection switch must not narrow it back down under them.
+  const showAllPhases = useCallback(() => {
+    isAutoSeedRef.current = false;
+    setSelectedKeys(new Set(phases.map((p) => p.key)));
   }, [phases]);
 
   if (!open) return null;
@@ -589,6 +777,26 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
                     fontSize: 10, padding: '6px 12px', width: '100%', textAlign: 'left' }}>
                   {selectedKeys.size === phases.length ? t('phaseTest.selectNone') : t('phaseTest.selectAll')}
                 </button>
+                {activeName && collectionInfo && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    gap: 8, padding: '2px 12px 6px', fontSize: 9.5, color: C.textSecondary,
+                    borderBottom: `1px solid ${C.border}` }}>
+                    <span>
+                      {t('collections:counts.usableHere', {
+                        usable: collectionInfo.usableHere, total: collectionInfo.inCollection,
+                        collection: activeName,
+                      })}
+                      {notUsableHere > 0 && (
+                        <> · {t('collections:counts.notUsableHere', { count: notUsableHere })}</>
+                      )}
+                    </span>
+                    <button onClick={showAllPhases}
+                      style={{ background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
+                        fontSize: 9.5, padding: 0, textDecoration: 'underline', whiteSpace: 'nowrap' }}>
+                      {t('collections:counts.showAll')}
+                    </button>
+                  </div>
+                )}
                 <div style={{ maxHeight: 180, overflowY: 'auto', padding: '0 12px 8px' }}>
                   {phases.map((p) => (
                     <label key={p.key} title={t('hoverTips.phaseTestPhaseCheckbox', { label: p.label })} style={{ display: 'flex', alignItems: 'center', gap: 6,
@@ -602,17 +810,46 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
                     </label>
                   ))}
                 </div>
+                {noneSelected && (
+                  <div style={{ fontSize: 9.5, color: C.orange, padding: '0 12px 8px' }}>
+                    {t('phaseTest.noneSelected')}
+                  </div>
+                )}
               </div>
             )}
           </div>
         )}
 
+        {/* The same refusal as `noneSelected` above, reached through the
+            OTHER door: a collection is active but the phase list hasn't
+            resolved yet (or failed), so the checkbox list above doesn't even
+            exist to show its own "select at least one phase" line. This is
+            that line's counterpart for that case — same box, same inline
+            styling — plus a retry when the fetch itself is what failed. */}
+        {phases.length === 0 && collectionPhasesBlocked && (
+          <div style={{ marginBottom: 10, background: C.bg, border: `1px solid ${C.border}`,
+            borderRadius: 6, padding: '8px 12px', fontSize: 9.5, color: C.orange }}>
+            {collectionBlockReason}
+            {phasesLoadState === 'error' && (
+              <button onClick={retryPhases}
+                title={t('hoverTips.phaseTestPhasesRetry')}
+                style={{ background: 'transparent', border: 'none', color: C.accent, cursor: 'pointer',
+                  fontSize: 9.5, padding: 0, marginLeft: 6, textDecoration: 'underline' }}>
+                {t('phaseTest.retry')}
+              </button>
+            )}
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
-          <button onClick={runAuto} disabled={!fileLoaded || running || loading}
-            title={t('hoverTips.phaseTestRun')}
+          <button onClick={runAuto}
+            disabled={!fileLoaded || running || loading || noneSelected || collectionPhasesBlocked}
+            title={noneSelected ? t('phaseTest.noneSelected')
+              : collectionPhasesBlocked ? collectionBlockReason
+              : t('hoverTips.phaseTestRun')}
             style={{ background: C.accent, color: '#fff', border: 'none', borderRadius: 4,
               padding: '8px 16px', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-              opacity: (!fileLoaded || running || loading) ? 0.5 : 1 }}>
+              opacity: (!fileLoaded || running || loading || noneSelected || collectionPhasesBlocked) ? 0.5 : 1 }}>
             {(running || loading) ? t('phaseTest.testing')
               : allSelected ? t('phaseTest.autoRunAll') : t('phaseTest.runSelected', { count: selectedKeys.size })}
           </button>

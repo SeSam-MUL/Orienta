@@ -13,14 +13,11 @@ import re
 import h5py
 import numpy as np
 import pandas as pd
-import spglib
 from pathlib import Path
 from datetime import date, datetime
 from functools import partial
 import html # For HTML entity decoding
 
-from pymatgen.core.structure import Structure 
-from pymatgen.io.cif import CifParser
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from PyQt5.QtCore import Qt, QSettings, pyqtSignal
@@ -31,6 +28,35 @@ from PyQt5.QtWidgets import (
     QComboBox, QTableWidget, QTableWidgetItem, QAbstractItemView,
     QMessageBox, QGroupBox, QStatusBar, QProgressDialog
 )
+
+# --- ORIGIN-CHOICE HELPER (shared with the Orienta backend) ---
+def _load_cif_origin():
+    """Return ``(structure_from_cif, CifOriginError)`` from the Orienta backend.
+
+    This tool lives inside the Orienta tree but does not otherwise import from
+    it, so the repository root goes on ``sys.path`` here. Imported lazily and
+    loudly: if the backend is not alongside, conversion must stop with an
+    explanation rather than fall back on pymatgen's origin-blind parse, which is
+    what wrote the doubled silicon cell in the first place.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    try:
+        from backend.forward_sim.crystal.cif_origin import (
+            CifOriginError,
+            structure_from_cif,
+        )
+    except ImportError as exc:      # pragma: no cover - deployment accident
+        raise RuntimeError(
+            "backend.forward_sim.crystal.cif_origin is not importable from "
+            f"{repo_root}. It decides which ITA origin choice a CIF is written "
+            "in; without it this tool would silently produce cells with the "
+            "atoms on the wrong Wyckoff site. Run the generator from inside the "
+            f"Orienta tree. ({exc})"
+        ) from exc
+    return structure_from_cif, CifOriginError
+
 
 # --- HELPER FUNCTION TO GET ICON PATH ---
 def icon_path(icon_name):
@@ -359,47 +385,18 @@ class EMsoftXtalGenerator(QWidget):
         item = self.lstCIFs.item(item_index)
         item.setIcon(QIcon(icon_path('refresh-cw.svg')))
         try:
-            parser = CifParser(str(cif_path))
-            structures = parser.parse_structures()
-            if not structures:
-                raise ValueError("Pymatgen could not parse any structure from the CIF file.")
-            structure: Structure = structures[0] 
+            # Honour the ITA origin choice the CIF was written in. pymatgen does
+            # not: it expands a choice-2 cell with choice-1 operators, which puts
+            # the atoms on a different Wyckoff site (silicon at 4.658 g/cm3
+            # instead of 2.329, MgCu2 as Mg2Cu). See
+            # backend/forward_sim/crystal/cif_origin.py for the measurements.
+            structure_from_cif, CifOriginError = _load_cif_origin()
+            structure, origin_report = structure_from_cif(cif_path)
+            print(f"CIF -> xtal: {origin_report.summary()}")
 
-            ordered_structure_for_spglib: Structure
-            if not structure.is_ordered:
-                self.statusBar.showMessage(f"Disordered structure for {cif_path.name}. Ordering for spglib...", 0); QApplication.processEvents()
-                try:
-                    temp_struct = structure.get_primitive_structure(tolerance=0.25)
-                    ordered_structure_for_spglib = temp_struct.get_sorted_structure()
-                    if not ordered_structure_for_spglib.is_ordered:
-                        possible_orderings = temp_struct.get_orderings()
-                        if possible_orderings: ordered_structure_for_spglib = possible_orderings[0]
-                        else: raise ValueError("Could not derive an ordered structure using get_orderings().")
-                except Exception as e_order_complex:
-                    print(f"Warning: Complex ordering for {cif_path.name} failed ({e_order_complex}). Simpler ordering."); QApplication.processEvents()
-                    species, coords = [], []
-                    for site in structure:
-                        if site.is_ordered: species.append(site.specie)
-                        else: species.append(max(site.species, key=site.species.get))
-                        coords.append(site.frac_coords)
-                    ordered_structure_for_spglib = Structure(structure.lattice, species, coords)
-            else:
-                ordered_structure_for_spglib = structure
-            
-            if not hasattr(ordered_structure_for_spglib, 'atomic_numbers'):
-                if ordered_structure_for_spglib.is_ordered:
-                     raise AttributeError(f"Ordered structure for spglib is missing 'atomic_numbers'. Structure: {ordered_structure_for_spglib.formula}")
-                else: 
-                    atomic_numbers_list = []
-                    for site_idx, site in enumerate(ordered_structure_for_spglib):
-                        if site.is_ordered: atomic_numbers_list.append(site.specie.number)
-                        elif site.species: atomic_numbers_list.append(site.species.elements[0].number)
-                        else: raise ValueError(f"Site {site_idx} in {cif_path.name} has no species information.")
-                    sym_data_input_tuple = (ordered_structure_for_spglib.lattice.matrix, ordered_structure_for_spglib.frac_coords, atomic_numbers_list)
-            else:
-                sym_data_input_tuple = (ordered_structure_for_spglib.lattice.matrix, ordered_structure_for_spglib.frac_coords, ordered_structure_for_spglib.atomic_numbers)
-            
-            sym_data = spglib.get_symmetry_dataset(sym_data_input_tuple, symprec=1e-5)
+            # (The disorder-ordering dance that used to sit here existed only to
+            # feed spglib, whose only consumer was the origin_shift heuristic that
+            # this commit's parent removed.)
 
             raw_text = cif_path.read_text(encoding="utf8", errors="ignore")
             found_refs = []
@@ -423,8 +420,14 @@ class EMsoftXtalGenerator(QWidget):
             sga = SpacegroupAnalyzer(structure, symprec=1e-5)
             csys_num = {v.lower(): k for k, v in self.CRYSTAL_SYSTEMS.items()}.get(sga.get_crystal_system().lower(), 7)
             spg_number = sga.get_space_group_number()
-            origin_shift = sym_data.get('origin_shift', np.zeros(3))
-            spacegroup_setting = 2 if np.linalg.norm(origin_shift) > 1e-6 else 1
+            # 1 by construction: the coordinates below come from pymatgen's
+            # operator set, which is ITA origin choice 1 for all 24 groups that
+            # have two, and _load_cif_origin's builder has already moved a
+            # choice-2 cell there. The old expression used spglib's
+            # 'origin_shift', which is the translation to the standardised cell
+            # — an unrelated quantity that never once fired on the two library
+            # files that really are choice 2.
+            spacegroup_setting = 1
             reps = sga.get_symmetrized_structure().equivalent_sites
             
             self.parsed_data[cif_path] = { 

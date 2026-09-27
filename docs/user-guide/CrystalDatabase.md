@@ -74,6 +74,16 @@ and carries a citation).
    bar). **View Database** then opens a table of all structures that you can
    browse and edit cell-by-cell.
 
+   **The build stays offline.** It reads each CIF and takes the DOI and
+   reference from the file itself, or from what you typed into the table; it
+   never queries an online database. A DOI you see here therefore came in with
+   the CIF — for structures downloaded through
+   [Crystal Hint](CrystalHint.md) from the Materials Project, the DOI and
+   citation are written into the CIF at download time, which needs the API key
+   described under [Settings](Settings.md#the-materials-project-key). The
+   stand-alone script `cif_database_builder.py` has an online DOI search, but
+   the app never switches it on.
+
 7. **Edit Debye–Waller factors.** Click **View DWF Table** to open the DWF
    dialog. You can edit existing B-factors, add a literature reference per
    element, and add entirely new elements. New/edited values are used by the

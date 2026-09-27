@@ -316,6 +316,11 @@ def build_database(cif_folder=None, output_path=None, skip_online=False,
     cif_folder = Path(cif_folder) if cif_folder else SEARCH_FOLDER
     output_path = Path(output_path) if output_path else EXCEL_FILE_PATH
 
+    # Every build says once whether the MP key is missing. Without this the
+    # backend, which is long-lived and builds per request, would explain it
+    # only for the first build of the session.
+    reset_mp_key_warning()
+
     logging.info("Starting CIF Database Builder...")
     if not cif_folder.exists():
         logging.error(f"Directory '{cif_folder}' not found.")

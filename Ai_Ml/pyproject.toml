@@ -8,6 +8,12 @@ version = "0.1.0"
 description = "Machine Learning Phase Classifier for EBSD Patterns"
 requires-python = ">=3.10"
 dependencies = [
+    # NOTE: install the repository's root requirements.txt FIRST. These ranges
+    # cannot name a CUDA build (a pyproject carries no --extra-index-url), so
+    # `pip install -e Ai_Ml` into a bare environment resolves torch from PyPI,
+    # which is CPU-only on Windows. The root requirements.txt pins
+    # torch==2.11.0+cu126 and satisfies these ranges; see
+    # tests/test_requirements_torch_index_guard.py for why that pin is exact.
     "torch>=2.0",
     "torchvision>=0.15",
     "numpy>=1.23",

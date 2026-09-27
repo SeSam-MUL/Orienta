@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
-import EdsPreflightPanel from './EdsPreflightPanel';
+import EdsPreflightPanel, { detailText } from './EdsPreflightPanel';
 
 afterEach(() => cleanup());
 
@@ -181,5 +181,54 @@ describe('EdsPreflightPanel', () => {
     const { getByText } = render(<EdsPreflightPanel result={result} />);
     expect(getByText(/not measured: Nb/)).toBeTruthy();
     expect(getByText('not judgeable')).toBeTruthy();
+  });
+});
+
+/**
+ * The pre-flight detail text in the reader's language.
+ *
+ * The M5 tester ran the app in German and read "Element-Abdeckung: some
+ * phases cannot be judged chemically" — a translated label with English prose
+ * beside it (report, section 5, point 4). The prose comes from the backend,
+ * so the panel now translates on a stable code and keeps the prose only as a
+ * fallback.
+ */
+describe('detailText', () => {
+  const t = (key, opts = {}) => {
+    const table = {
+      'edsPrior.details.coverageIncomplete': 'Einige Phasen sind chemisch nicht beurteilbar',
+      'edsPrior.details.notMeasured': 'nicht gemessen: {{elements}}',
+    };
+    const hit = table[key];
+    if (hit === undefined) return opts.defaultValue ?? key;
+    return hit.replace(/{{(\w+)}}/g, (_, k) => opts[k] ?? '');
+  };
+
+  it('translates on the code, not on the English prose', () => {
+    expect(detailText(
+      { code: 'coverageIncomplete', detail: 'some phases cannot be judged chemically' }, t,
+    )).toBe('Einige Phasen sind chemisch nicht beurteilbar');
+  });
+
+  it('fills the parameters the backend sent', () => {
+    expect(detailText(
+      { code: 'notMeasured', params: { elements: 'Fe, Mn' }, detail: 'not measured: Fe, Mn' }, t,
+    )).toBe('nicht gemessen: Fe, Mn');
+  });
+
+  it('falls back to the prose for a code this build has no text for', () => {
+    // The loader's own exception message travels this way on purpose.
+    expect(detailText(
+      { code: 'edsUnavailable', detail: 'No EDS data in this file' }, t,
+    )).toBe('No EDS data in this file');
+    // And for a code added by a newer backend than this frontend.
+    expect(detailText(
+      { code: 'somethingNewer', detail: 'a message from the future' }, t,
+    )).toBe('a message from the future');
+  });
+
+  it('survives an entry with neither code nor detail', () => {
+    expect(detailText({}, t)).toBe('');
+    expect(detailText(null, t)).toBe('');
   });
 });

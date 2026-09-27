@@ -6,11 +6,18 @@
  * Bottom bar: cache stats, Clear Local Cache button.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { formatTime } from '../../i18n/formatDateTime';
+import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useImageExport, exportStem } from '../common/useImageExport';
 import { useFullscreen, FullscreenButton } from '../common/useFullscreen';
-import { dbApi, h5Api } from '../../services/api';
+import { dbApi, h5Api, collectionsApi } from '../../services/api';
+import useCollectionStore from '../../stores/useCollectionStore';
+import CollectionManager from '../PhaseCollections/CollectionManager';
+import {
+  entryIdentity, groupEntriesByCollection, flattenGroups,
+  groupOrderSignature, libraryKeySet, movableMemberKeys,
+} from './databaseGrouping';
 import CascadeDeleteDialog from './CascadeDeleteDialog';
 import MasterSphereViewer from './MasterSphereViewer';
 import CrystalStructureViewer from './CrystalStructureViewer';
@@ -75,6 +82,53 @@ export const TAB_DEFS = [
   },
 ];
 
+/**
+ * Is this poll's reply the same set of files as the one on screen?
+ *
+ * Deliberately field-by-field over a fixed list rather than JSON.stringify.
+ * stringify depends on key ORDER, so a backend that serialised the same record
+ * differently would read as "changed" and re-render the page for nothing. That
+ * is a preference, not an averted defect: today's /browse builds each entry
+ * from one dict literal per branch, so its key order cannot vary. It also
+ * avoids allocating a string per poll.
+ *
+ * The fields are the ones the table and the preview actually read. `location`
+ * matters most: it is what a background poll is FOR (a file finishing its
+ * download must appear), so a change there must still get through.
+ */
+const COMPARED_FIELDS = [
+  'name', 'filename', 'file_type', 'type', 'category',
+  'material', 'location', 'size', 'size_bytes',
+];
+
+export function sameEntries(a, b) {
+  if (a === b) return true;
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i], y = b[i];
+    if (x === y) continue;
+    if (!x || !y) return false;
+    // A field the backend starts sending — `modified`, a checksum, the
+    // `exists_local` flag the sync dialog wants — would otherwise be ignored
+    // silently, and the page would stop noticing a change it should show. The
+    // shape changing is itself a change.
+    if (Object.keys(x).length !== Object.keys(y).length) return false;
+    for (const f of COMPARED_FIELDS) {
+      if (x[f] !== y[f]) return false;
+    }
+  }
+  return true;
+}
+
+/** One level deep; the cache-status reply is a flat object of numbers. */
+export function shallowEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  if (ka.length !== kb.length) return false;
+  return ka.every((k) => a[k] === b[k]);
+}
+
 /** True if `entry` belongs in `tabDef` (matches on file_type → type → category). */
 export function entryMatchesTab(entry, tabDef) {
   const ft = (entry.file_type || entry.type || entry.category || '').toLowerCase();
@@ -110,12 +164,20 @@ function formatBytes(bytes) {
 // ---------------------------------------------------------------------------
 // File table (one per tab)
 // ---------------------------------------------------------------------------
-function FileTable({ tabDef, entries, onRowClick, loading, selectedFiles, onToggleSelect, onSelectAll, onDownload }) {
-  const { t } = useTranslation('databasebrowser');
+export function FileTable({
+  tabDef, entries, onRowClick, loading, selectedFiles, onToggleSelect, onSelectAll, onDownload,
+  collections,
+}) {
+  const { t } = useTranslation(['databasebrowser', 'collections']);
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('All');
   const [materialFilter, setMaterialFilter] = useState('All');
   const [selectedRow, setSelectedRow] = useState(-1);
+
+  const collapsed = useCollectionStore((s) => s.collapsed);
+  const toggleCollapsed = useCollectionStore((s) => s.toggleCollapsed);
+  const hiddenNames = useCollectionStore((s) => s.data.state?.hidden) || [];
+  const setHidden = useCollectionStore((s) => s.setHidden);
 
   // Derive available materials from entries
   const materials = ['All', ...Array.from(
@@ -140,9 +202,51 @@ function FileTable({ tabDef, entries, onRowClick, loading, selectedFiles, onTogg
     return true;
   });
 
+  // Group by collection (see databaseGrouping.js). With no collections, or
+  // when none of THIS tab's rows are filed anywhere, grouping degenerates to
+  // one unassigned bucket holding every row in its original order — treated
+  // below as "nothing to show a header for", so a fresh install (no
+  // collections yet) renders exactly as it did before this feature existed.
+  const groups = groupEntriesByCollection(filtered, collections);
+  const showGroups = !(groups.length <= 1 && groups[0]?.collection == null);
+  // The row order actually on screen — a permutation of `filtered`, never a
+  // subset: `groupEntriesByCollection` files every row into exactly one
+  // bucket (collection membership is resolved first-match, see its own
+  // tests), so nothing here can duplicate or drop a row.
+  const orderedEntries = flattenGroups(groups);
+
+  // `selectedRow` is an index into `orderedEntries`. A real regroup — a
+  // phase's collection membership changing (moved via this page's own "move
+  // to collection", or from the Collection Manager elsewhere), a collection
+  // appearing/disappearing, or the search/material filter narrowing which
+  // rows are in `filtered` at all — can put a DIFFERENT row at the same
+  // index, which would then paint the wrong row as selected even though the
+  // preview panel still shows whatever was actually clicked — a purely
+  // cosmetic split between what is highlighted and what is loaded. (Toggling
+  // a collapse triangle is NOT one of these: it only changes which rows the
+  // render loop below skips over via `cursor`, never `groups`/`orderSignature`
+  // itself — a collapsed row keeps its index, and no reset is needed or
+  // triggered for it.) Reset rather than try to re-find the old row, matching
+  // the brief's own fix.
+  const orderSignature = groupOrderSignature(groups);
+  useEffect(() => { setSelectedRow(-1); }, [orderSignature]);
+
   const handleRowClick = (idx) => {
     setSelectedRow(idx);
-    if (onRowClick) onRowClick(filtered[idx]);
+    if (onRowClick) onRowClick(orderedEntries[idx]);
+  };
+
+  const UNASSIGNED_GROUP_KEY = '\u0000unassigned';
+  const groupHeaderStyle = {
+    padding: '4px 8px',
+    fontSize: '8.5pt',
+    fontWeight: 600,
+    color: colors.textSecondary,
+    background: alpha(colors.purple, 6),
+    borderBottom: `1px solid ${alpha(colors.border, 20)}`,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
   };
 
   const headerStyle = {
@@ -213,7 +317,7 @@ function FileTable({ tabDef, entries, onRowClick, loading, selectedFiles, onTogg
               <th style={{ ...headerStyle, width: 32, textAlign: 'center' }}>
                 <input
                   type="checkbox"
-                  checked={filtered.length > 0 && filtered.every(e => selectedFiles?.has(e.name || e.filename))}
+                  checked={filtered.length > 0 && filtered.every(e => selectedFiles?.has(entryIdentity(e)))}
                   onChange={() => onSelectAll?.(filtered)}
                   title={t('databasebrowser:table.selectAllTooltip')}
                 />
@@ -252,105 +356,189 @@ function FileTable({ tabDef, entries, onRowClick, loading, selectedFiles, onTogg
                   </div>
                 </td>
               </tr>
-            ) : filtered.map((entry, i) => {
-              const isSelected = i === selectedRow;
-              const locMeta = getLocationMeta(entry.location, t);
-              const ft = (entry.file_type || entry.type || entry.category || '').toUpperCase();
-              const isDownloadable = (entry.location || '').toLowerCase() === 'server';
-              const isOpenable = ['local', 'both'].includes((entry.location || '').toLowerCase());
-
-              return (
-                <tr
-                  key={entry.filename || entry.name || i}
-                  onClick={() => handleRowClick(i)}
-                  className="list-item-interactive"
-                  title={t('databasebrowser:table.rowClickTooltip')}
-                  style={{ cursor: 'pointer', transition: 'background 0.1s' }}
-                  onMouseEnter={(e) => !isSelected && (e.currentTarget.style.background = colors.bgTertiary)}
-                  onMouseLeave={(e) => !isSelected && (e.currentTarget.style.background = 'transparent')}
-                >
-                  <td style={{ ...cellStyle(isSelected), width: 32, textAlign: 'center' }}
-                      onClick={(e) => e.stopPropagation()}>
-                    <input
-                      type="checkbox"
-                      checked={selectedFiles?.has(entry.name || entry.filename) || false}
-                      onChange={() => onToggleSelect?.(entry.name || entry.filename)}
-                      title={t('databasebrowser:table.rowSelectTooltip')}
-                    />
-                  </td>
-                  <td style={cellStyle(isSelected, true)}>
-                    <span style={{
-                      color: locMeta.color, fontWeight: 600, fontSize: '8pt',
-                      padding: '1px 6px', borderRadius: 8,
-                      background: alpha(locMeta.color, 10),
-                      border: `1px solid ${alpha(locMeta.color, 20)}`,
-                    }}>
-                      {locMeta.label}
-                    </span>
-                  </td>
-                  <td style={{ ...cellStyle(isSelected), maxWidth: 300 }} title={entry.filename || entry.name}>
-                    {entry.filename || entry.name || '—'}
-                  </td>
-                  <td style={cellStyle(isSelected)}>
-                    {entry.material || '—'}
-                  </td>
-                  <td style={cellStyle(isSelected)}>
-                    <span style={{ color: colors.textSecondary }}>{ft}</span>
-                  </td>
-                  <td style={{ ...cellStyle(isSelected), textAlign: 'right' }}>
-                    {formatBytes(entry.size_bytes ?? entry.size)}
-                  </td>
-                  <td style={cellStyle(isSelected)}>
-                    {isDownloadable && (
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => { e.stopPropagation(); onDownload?.(entry); }}
-                        title={t('databasebrowser:table.downloadTooltip')}
-                        style={{
-                        color: colors.orange, fontWeight: 600, fontSize: '8pt', cursor: 'pointer',
-                        padding: '2px 8px', borderRadius: 4,
-                        background: alpha(colors.orange, 8),
-                        transition: 'background 0.15s',
-                      }}>
-                        {'\u2B07'} {t('databasebrowser:table.download')}
-                      </span>
-                    )}
-                    {isOpenable && (
-                      <span
-                        role="button"
-                        tabIndex={0}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const p = entry.path || entry.name || '';
-                          if (/\.(h5|h5oina|hdf5)$/i.test(p)) {
-                            // h5/master file \u2192 open in the in-app HDF5 viewer
-                            try { sessionStorage.setItem('h5_preload_path', p); } catch { /* unavailable */ }
-                            window.dispatchEvent(new CustomEvent('navigate-to', { detail: { page: 'h5viewer' } }));
-                          } else {
-                            // CIF/XTAL \u2192 show the structure preview panel
-                            handleRowClick(i);
-                          }
-                        }}
-                        title={t('databasebrowser:table.openTooltip')}
-                        style={{
-                        color: colors.cyan, fontWeight: 600, fontSize: '8pt', cursor: 'pointer',
-                        padding: '2px 8px', borderRadius: 4,
-                        background: alpha(colors.cyan, 8),
-                        transition: 'background 0.15s',
-                      }}>
-                        {'\u2197'} {t('databasebrowser:table.open')}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
+            ) : !showGroups ? (
+              orderedEntries.map((entry, i) => renderDataRow(entry, i))
+            ) : (
+              // Grouped: one header row per collection (own children right
+              // after it — the server already sorts that way, see
+              // `groupEntriesByCollection`'s own docstring), then unassigned
+              // last. `cursor` keeps each row's index into `orderedEntries`
+              // correct even while a group ahead of it is collapsed — it
+              // advances by the group's size either way, matching the reason
+              // `orderSignature` exists above.
+              (() => {
+                let cursor = 0;
+                const out = [];
+                for (const g of groups) {
+                  const groupName = g.collection ? g.collection.name : null;
+                  const groupKey = groupName === null ? UNASSIGNED_GROUP_KEY : groupName;
+                  const isCollapsed = !!collapsed[groupKey];
+                  const isHidden = groupName ? hiddenNames.includes(groupName) : false;
+                  const missing = g.collection
+                    ? (g.collection.members || []).filter((m) => !m.present).length : 0;
+                  out.push(
+                    <tr key={`group-${groupKey}`}>
+                      <td colSpan={7} style={{ padding: 0 }}>
+                        <div style={groupHeaderStyle}>
+                          <button
+                            type="button"
+                            onClick={() => toggleCollapsed(groupKey)}
+                            title={isCollapsed ? t('databasebrowser:groups.expandTooltip')
+                                                : t('databasebrowser:groups.collapseTooltip')}
+                            style={{ background: 'transparent', border: 'none', color: 'inherit',
+                                     cursor: 'pointer', fontSize: '8pt', padding: '0 2px' }}
+                          >
+                            {isCollapsed ? '▸' : '▾'}
+                          </button>
+                          <span style={{ fontWeight: 700, opacity: isHidden ? 0.55 : 1 }}>
+                            {groupName || t('databasebrowser:groups.unassigned')}
+                          </span>
+                          <span>({g.entries.length})</span>
+                          {missing > 0 && (
+                            <span style={{ color: colors.orange }}>
+                              {t('collections:counts.missingFromLibrary', { count: missing })}
+                            </span>
+                          )}
+                          <div style={{ flex: 1 }} />
+                          {groupName && (
+                            <button
+                              type="button"
+                              onClick={() => setHidden(
+                                isHidden ? hiddenNames.filter((n) => n !== groupName)
+                                         : [...hiddenNames, groupName])}
+                              title={isHidden ? t('databasebrowser:groups.showTooltip')
+                                               : t('databasebrowser:groups.hideTooltip')}
+                              style={{ background: 'transparent', border: 'none', color: 'inherit',
+                                       cursor: 'pointer', fontSize: '9pt', padding: '0 2px' }}
+                            >
+                              {isHidden ? '🙈' : '👁️'}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                  if (!isCollapsed) {
+                    for (const entry of g.entries) {
+                      out.push(renderDataRow(entry, cursor));
+                      cursor += 1;
+                    }
+                  } else {
+                    cursor += g.entries.length;
+                  }
+                }
+                return out;
+              })()
+            )}
           </tbody>
         </table>
       </div>
     </div>
   );
+
+  /** One row. Factored out so both the flat and grouped branches above
+   *  render identically — a divergence here is exactly how the two paths
+   *  would silently drift apart. `i` is always this row's position in
+   *  `orderedEntries`, the same index space `selectedRow` lives in. */
+  function renderDataRow(entry, i) {
+    const isSelected = i === selectedRow;
+    const locMeta = getLocationMeta(entry.location, t);
+    const ft = (entry.file_type || entry.type || entry.category || '').toUpperCase();
+    const isDownloadable = (entry.location || '').toLowerCase() === 'server';
+    const isOpenable = ['local', 'both'].includes((entry.location || '').toLowerCase());
+    const id = entryIdentity(entry);
+
+    return (
+      <tr
+        key={id || i}
+        onClick={() => handleRowClick(i)}
+        className="list-item-interactive"
+        title={t('databasebrowser:table.rowClickTooltip')}
+        // Also the stable hook the `selectedRow`-reset-on-regroup test reads:
+        // a visual-only signal (`cellStyle`'s background) is fragile to a
+        // future restyle in a way an explicit a11y attribute is not.
+        aria-selected={isSelected}
+        style={{ cursor: 'pointer', transition: 'background 0.1s' }}
+        onMouseEnter={(e) => !isSelected && (e.currentTarget.style.background = colors.bgTertiary)}
+        onMouseLeave={(e) => !isSelected && (e.currentTarget.style.background = 'transparent')}
+      >
+        <td style={{ ...cellStyle(isSelected), width: 32, textAlign: 'center' }}
+            onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={selectedFiles?.has(id) || false}
+            onChange={() => onToggleSelect?.(id)}
+            title={t('databasebrowser:table.rowSelectTooltip')}
+          />
+        </td>
+        <td style={cellStyle(isSelected, true)}>
+          <span style={{
+            color: locMeta.color, fontWeight: 600, fontSize: '8pt',
+            padding: '1px 6px', borderRadius: 8,
+            background: alpha(locMeta.color, 10),
+            border: `1px solid ${alpha(locMeta.color, 20)}`,
+          }}>
+            {locMeta.label}
+          </span>
+        </td>
+        <td style={{ ...cellStyle(isSelected), maxWidth: 300 }} title={entry.filename || entry.name}>
+          {entry.filename || entry.name || '—'}
+        </td>
+        <td style={cellStyle(isSelected)}>
+          {entry.material || '—'}
+        </td>
+        <td style={cellStyle(isSelected)}>
+          <span style={{ color: colors.textSecondary }}>{ft}</span>
+        </td>
+        <td style={{ ...cellStyle(isSelected), textAlign: 'right' }}>
+          {formatBytes(entry.size_bytes ?? entry.size)}
+        </td>
+        <td style={cellStyle(isSelected)}>
+          {isDownloadable && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => { e.stopPropagation(); onDownload?.(entry); }}
+              title={t('databasebrowser:table.downloadTooltip')}
+              style={{
+              color: colors.orange, fontWeight: 600, fontSize: '8pt', cursor: 'pointer',
+              padding: '2px 8px', borderRadius: 4,
+              background: alpha(colors.orange, 8),
+              transition: 'background 0.15s',
+            }}>
+              {'\u2B07'} {t('databasebrowser:table.download')}
+            </span>
+          )}
+          {isOpenable && (
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={(e) => {
+                e.stopPropagation();
+                const p = entry.path || entry.name || '';
+                if (/\.(h5|h5oina|hdf5)$/i.test(p)) {
+                  // h5/master file \u2192 open in the in-app HDF5 viewer
+                  try { sessionStorage.setItem('h5_preload_path', p); } catch { /* unavailable */ }
+                  window.dispatchEvent(new CustomEvent('navigate-to', { detail: { page: 'h5viewer' } }));
+                } else {
+                  // CIF/XTAL \u2192 show the structure preview panel
+                  handleRowClick(i);
+                }
+              }}
+              title={t('databasebrowser:table.openTooltip')}
+              style={{
+              color: colors.cyan, fontWeight: 600, fontSize: '8pt', cursor: 'pointer',
+              padding: '2px 8px', borderRadius: 4,
+              background: alpha(colors.cyan, 8),
+              transition: 'background 0.15s',
+            }}>
+              {'\u2197'} {t('databasebrowser:table.open')}
+            </span>
+          )}
+        </td>
+      </tr>
+    );
+  }
 }
 
 function ThumbnailPreview({ filename, isLocal, fileType }) {
@@ -502,7 +690,18 @@ export function ShtInfoBlocks({ filename, isLocal }) {
 // ---------------------------------------------------------------------------
 // Preview panel (right side)
 // ---------------------------------------------------------------------------
-function PreviewPanel({ entry, onOpenViewer }) {
+/**
+ * Memoised on purpose.
+ *
+ * The 5 s auto-refresh updates the "last refreshed" time and the cache
+ * statistics, which re-renders the page. Without this, that re-render reached
+ * the preview — and the preview is a WebGL scene for SHT/CIF/XTAL
+ * (MasterSphereViewer, CrystalStructureViewer). A Mac tester reported the
+ * picture flickering while the browser refreshed. `entry` only changes when a
+ * row is clicked, so memoising costs nothing and cuts the preview off from
+ * everything the poll touches.
+ */
+const PreviewPanel = memo(function PreviewPanel({ entry, onOpenViewer }) {
   const { t } = useTranslation('databasebrowser');
   if (!entry) {
     return (
@@ -604,13 +803,13 @@ function PreviewPanel({ entry, onOpenViewer }) {
       </Button>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 export default function DatabasePage({ onNavigate, isActive = false }) {
-  const { t } = useTranslation(['databasebrowser', 'common']);
+  const { t } = useTranslation(['databasebrowser', 'common', 'collections']);
   const [activeTab, setActiveTab] = useState('sht');
   const [allEntries, setAllEntries] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -635,21 +834,51 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
   const [syncSummary, setSyncSummary] = useState(null);       // { uploaded, upToDate, conflicts, errors, cancelled }
   const syncCancelRef = useRef(false);
   const syncAbortRef = useRef(null);   // AbortController for the in-flight upload
+  // The collections dialog. A second, independent instance of the same
+  // component App.jsx opens from the toolbar picker — both read and write
+  // `useCollectionStore`, so an edit here is visible there immediately too.
+  const [showCollectionManager, setShowCollectionManager] = useState(false);
+  const [movingToCollection, setMovingToCollection] = useState(false);
+  const collections = useCollectionStore((s) => s.data.collections) || [];
+  const unassigned = useCollectionStore((s) => s.data.unassigned) || [];
+  const loadCollections = useCollectionStore((s) => s.load);
+  // Every key the library actually knows about — the set "move to
+  // collection" refuses a row against. A phase's member key is its filename
+  // stem; an SHT/master/MC/dictionary row's stem carries simulation
+  // parameters and essentially never equals one, so a row from those tabs
+  // must be refused rather than filed under a key nothing can ever resolve.
+  const validLibraryKeys = useMemo(
+    () => libraryKeySet(collections, unassigned), [collections, unassigned]);
 
   // ---------------------------------------------------------------------------
   // Load data
   // ---------------------------------------------------------------------------
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  /**
+   * Fetch the file list.
+   *
+   * @param {{silent?: boolean}} [opts] `silent` is the 5 s auto-refresh: it
+   *   must not announce itself. The visible `loading` flag dims the Refresh
+   *   button and swaps its label, and a background poll doing that every 5 s
+   *   is a blink the user did not ask for.
+   *
+   * A poll that finds the same files must change NO state at all. The response
+   * is a new array of new objects every time, so the previous code handed React
+   * a new identity on every tick; everything downstream re-rendered, including
+   * the preview — which is a WebGL scene for SHT/CIF/XTAL. That is the reported
+   * flicker. Comparing first makes an unchanged poll free.
+   */
+  const loadData = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const res = await dbApi.browse('all', '');
       const entries = res.data?.entries || res.data?.files || res.data || [];
-      setAllEntries(Array.isArray(entries) ? entries : []);
+      const next = Array.isArray(entries) ? entries : [];
+      setAllEntries((prev) => (sameEntries(prev, next) ? prev : next));
     } catch (err) {
       setError(err.response?.data?.detail || err.message || t('databasebrowser:status.loadFailed'));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
       setLastRefreshed(new Date());
     }
   }, []);
@@ -657,7 +886,9 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
   const loadCacheStats = useCallback(async () => {
     try {
       const res = await dbApi.cacheStatus();
-      setCacheStats(res.data);
+      // Same reasoning as the file list: an identical reply must not produce a
+      // new object, or the page re-renders every 5 s for nothing.
+      setCacheStats((prev) => (shallowEqual(prev, res.data) ? prev : res.data));
     } catch {
       // ignore — stats are non-critical
     }
@@ -667,20 +898,45 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
     if (!isActive) return;
     loadData();
     loadCacheStats();
+    // So the grouping (and the "move to collection" target list) reflects a
+    // collection created or edited elsewhere — the Manager dialog itself
+    // refreshes the store on every write, but this page can be the one that
+    // was open when that happened.
+    loadCollections();
 
-    // Auto-refresh every 5 s when page is visible (matches PyQt5 parity)
+    // Auto-refresh every 5 s when page is visible (matches PyQt5 parity).
+    // `silent`: the poll updates the list if it changed and is otherwise
+    // invisible — see loadData.
     const timer = setInterval(() => {
       if (!offlineMode) {
-        loadData();
+        loadData({ silent: true });
         loadCacheStats();
+        loadCollections();
       }
     }, 5000);
     return () => clearInterval(timer);
-  }, [isActive, loadData, loadCacheStats, offlineMode]);
+  }, [isActive, loadData, loadCacheStats, loadCollections, offlineMode]);
 
   // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
+  /**
+   * Stable identity on purpose. Passed as a prop to the memoised PreviewPanel;
+   * written inline it was a NEW function on every render, so `memo` compared
+   * unequal props every time and the WebGL preview re-rendered on every poll —
+   * measured, and the reason memo alone did not fix the reported flicker.
+   */
+  const openInH5Viewer = useCallback((entry) => {
+    const path = entry.path || entry.name;
+    if (!path) return;
+    h5Api.open(path).then(() => {
+      if (onNavigate) onNavigate('h5viewer');
+    }).catch((err) => {
+      const detail = err.response?.data?.detail || err.message || t('databasebrowser:status.unknownError');
+      setStatusMsg({ text: t('databasebrowser:status.openFailed', { name: entry.name || path, detail }), type: 'error' });
+    });
+  }, [onNavigate, t]);
+
   const handleRefresh = () => {
     loadData();
     loadCacheStats();
@@ -777,11 +1033,11 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
 
   const handleUploadSelected = () => {
     const entries = allEntries
-      .filter(e => selectedFiles.has(e.name || e.filename))
+      .filter(e => selectedFiles.has(entryIdentity(e)))
       // Only files present locally can be uploaded.
       .filter(e => ['local', 'both'].includes((e.location || '').toLowerCase()))
       .map(e => ({
-        name: e.name || e.filename,
+        name: entryIdentity(e),
         category: (e.file_type || e.type || e.category || '').toLowerCase(),
         material: e.material || '',
       }));
@@ -799,7 +1055,7 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
   const handleDownload = async (entry) => {
     if (!entry) return;
     const file = {
-      name: entry.name || entry.filename,
+      name: entryIdentity(entry),
       category: (entry.file_type || entry.type || entry.category || '').toLowerCase(),
       material: entry.material || '',
     };
@@ -900,7 +1156,7 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
       .filter(e => wanted.has((e.file_type || e.type || e.category || '').toLowerCase()))
       .filter(e => locWanted.includes((e.location || '').toLowerCase()))
       .map(e => ({
-        name: e.name || e.filename,
+        name: entryIdentity(e),
         category: (e.file_type || e.type || e.category || '').toLowerCase(),
         material: e.material || '',
       }));
@@ -977,17 +1233,73 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
 
   const handleSelectAll = useCallback((filteredEntries) => {
     setSelectedFiles(prev => {
-      const allNames = new Set(filteredEntries.map(e => e.name || e.filename));
-      const allSelected = filteredEntries.every(e => prev.has(e.name || e.filename));
+      const allNames = new Set(filteredEntries.map(entryIdentity));
+      const allSelected = filteredEntries.every(e => prev.has(entryIdentity(e)));
       if (allSelected) return new Set(); // deselect all
       return allNames;
     });
   }, []);
 
+  // The currently-selected rows that can actually be filed: a collection's
+  // member is a phase, and a phase is its crystal structure — the CIF (or
+  // the XTAL derived from it). An SHT, a master `.h5` and an MC `.h5` are
+  // derived ARTEFACTS of a phase, not phases, and filing one under its own
+  // filename stem would silently create a member the library can never
+  // resolve (permanently `present: false` — see `movableMemberKeys`'s own
+  // docstring for the full chain of what that breaks). Recomputed from
+  // `allEntries`/`selectedFiles`/`validLibraryKeys` on every render — cheap
+  // at browser-library scale, and it is what both the control's
+  // enabled/disabled state and the move itself must agree on.
+  const movableSelectedKeys = movableMemberKeys(
+    allEntries.filter((e) => selectedFiles.has(entryIdentity(e))), validLibraryKeys);
+
+  // Move the selected rows into a collection. Moving into an EXCLUSIVE
+  // collection IS destructive to the phase's other exclusive membership, not
+  // just additive: `POST /members` -> `phase_collections.py#assign` walks
+  // every other exclusive collection and strips the key out of it — a phase
+  // has exactly one exclusive "home". Moving into the working set
+  // (`exclusive: false`) is additive ONLY: `assign()` strips other exclusive
+  // collections precisely when `target is None or target.exclusive`
+  // (`phase_collections.py`, guard right before the strip loop) — a
+  // non-exclusive target skips it entirely, so filing into the working set
+  // never removes the phase from wherever else it already lives, and filing
+  // into the working set is never removed from a phase's exclusive home
+  // either. (This guard is the fix for a real bug found in review: the strip
+  // loop used to run unconditionally regardless of the TARGET's own
+  // exclusivity, so starring a phase silently un-filed it from its real
+  // collection — see `tests/test_phase_collections.py::
+  // test_assign_into_working_set_leaves_exclusive_home_intact`.)
+  const handleMoveSelectedToCollection = async (targetName) => {
+    if (!targetName) return;
+    const keys = movableSelectedKeys;
+    if (keys.length === 0) return;
+    setMovingToCollection(true);
+    try {
+      await collectionsApi.addMembers(targetName, keys);
+      await loadCollections();
+      setStatusMsg({
+        text: t('databasebrowser:controls.movedToCollection', { count: keys.length, name: targetName }),
+        type: 'success',
+      });
+      setTimeout(() => setStatusMsg(null), 8000);
+      setSelectedFiles(new Set());
+    } catch (err) {
+      setStatusMsg({
+        text: t('databasebrowser:controls.moveToCollectionFailed', {
+          error: err.response?.data?.detail || err.message,
+        }),
+        type: 'error',
+      });
+      setTimeout(() => setStatusMsg(null), 8000);
+    } finally {
+      setMovingToCollection(false);
+    }
+  };
+
   const handleDeleteSelected = async () => {
-    const entries = allEntries.filter(e => selectedFiles.has(e.name || e.filename));
+    const entries = allEntries.filter(e => selectedFiles.has(entryIdentity(e)));
     const cascadeFiles = entries.map(e => ({
-      name: e.name || e.filename,
+      name: entryIdentity(e),
       category: (e.file_type || e.type || e.category || '').toLowerCase(),
       material: e.material || '',
     }));
@@ -1053,6 +1365,12 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
     sht: 'tabs.shtTip', mc: 'tabs.mcTip', master: 'tabs.masterTip',
     cif: 'tabs.cifTip', xtal: 'tabs.xtalTip', dict: 'tabs.dictTip',
   };
+  // Counted the same way `FileTable`'s `filtered` starts (`entryMatchesTab`,
+  // before that table's own OWN search/material narrowing, which is per-tab
+  // local state and resets on every tab switch anyway — see `FileTable`).
+  // Grouping never changes which rows match a tab, only their order and
+  // whether a header sits between them, so this count and the table it
+  // labels can never disagree over rows a collection filed or hid.
   const tabs = TAB_DEFS.map((tab) => {
     const count = allEntries.filter((e) => entryMatchesTab(e, tab)).length;
     return {
@@ -1089,7 +1407,7 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
           <div style={{ flex: 1 }} />
           {lastRefreshed && (
             <span style={{ fontSize: '8pt', color: colors.textSecondary, opacity: 0.6 }}>
-              {t('databasebrowser:controls.updated', { time: lastRefreshed.toLocaleTimeString() })}
+              {t('databasebrowser:controls.updated', { time: formatTime(lastRefreshed) })}
             </span>
           )}
           <Button onClick={handleRefresh} disabled={loading} title={t('databasebrowser:controls.refreshTooltip')}>
@@ -1113,6 +1431,13 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
           >
             {'⬆'} {t('databasebrowser:controls.uploadAll')}
           </Button>
+          <Button
+            variant="ghost"
+            onClick={() => setShowCollectionManager(true)}
+            title={t('databasebrowser:controls.manageCollectionsTooltip')}
+          >
+            {t('collections:picker.manage')}
+          </Button>
           {selectedFiles.size > 0 && (
             <Button
               onClick={handleUploadSelected}
@@ -1122,6 +1447,46 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
               {'⬆'} {t('databasebrowser:controls.uploadSelected', { count: selectedFiles.size })}
             </Button>
           )}
+          {/* "Move to collection" — files rows into a collection. Deliberately
+              NOT shaped like Delete Selected: a plain select rather than a
+              red button, because the harm profile is different — Delete
+              Selected removes files from disk, this only ever changes which
+              collection(s) a phase is filed under. It IS a move, not a pure
+              add (see `handleMoveSelectedToCollection`'s own comment): a
+              phase leaves whatever OTHER exclusive collection it was in.
+              Disabled, with a reason, when nothing selected can actually be
+              filed — a row from the SHT/Master H5/MC h5/Dictionary tabs has
+              no library key to file under (`movableMemberKeys`). */}
+          {selectedFiles.size > 0 && (() => {
+            const canMoveAny = movableSelectedKeys.length > 0;
+            const disabledReason = !canMoveAny
+              ? t('databasebrowser:controls.moveToCollectionNotAPhase')
+              : collections.length === 0
+                ? t('databasebrowser:controls.moveToCollectionNoneYet')
+                : null;
+            return (
+              <select
+                value=""
+                disabled={movingToCollection || !canMoveAny}
+                onChange={(e) => { if (e.target.value) handleMoveSelectedToCollection(e.target.value); }}
+                title={disabledReason || t('databasebrowser:controls.moveToCollectionTooltip')}
+                style={{
+                  background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 4,
+                  color: colors.text, fontSize: '9pt', padding: '4px 8px', height: spacing.buttonHeight,
+                  cursor: canMoveAny && collections.length > 0 ? 'pointer' : 'not-allowed',
+                }}
+              >
+                <option value="">
+                  {canMoveAny
+                    ? t('databasebrowser:controls.moveToCollection', { count: movableSelectedKeys.length })
+                    : t('databasebrowser:controls.moveToCollectionNotAPhase')}
+                </option>
+                {collections.map((c) => (
+                  <option key={c.name} value={c.name}>{c.parent ? `↳ ${c.name}` : c.name}</option>
+                ))}
+              </select>
+            );
+          })()}
           {selectedFiles.size > 0 && (
             <Button
               variant="danger"
@@ -1200,6 +1565,7 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
               onToggleSelect={handleToggleSelect}
               onSelectAll={handleSelectAll}
               onDownload={handleDownload}
+              collections={collections}
             />
           </TabPanel>
         ))}
@@ -1233,17 +1599,7 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
     }}>
       <ResizableSplitter
         left={tableArea}
-        right={<PreviewPanel entry={selectedEntry} onOpenViewer={(entry) => {
-          const path = entry.path || entry.name;
-          if (path) {
-            h5Api.open(path).then(() => {
-              if (onNavigate) onNavigate('h5viewer');
-            }).catch((err) => {
-              const detail = err.response?.data?.detail || err.message || t('databasebrowser:status.unknownError');
-              setStatusMsg({ text: t('databasebrowser:status.openFailed', { name: entry.name || path, detail }), type: 'error' });
-            });
-          }
-        }} />}
+        right={<PreviewPanel entry={selectedEntry} onOpenViewer={openInH5Viewer} />}
         defaultLeftWidth={700}
         minLeftWidth={400}
         maxLeftWidth={1200}
@@ -1276,6 +1632,9 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
         onCancel={handleCancelSync}
         onClose={handleCloseSyncUpload}
       />
+      {showCollectionManager && (
+        <CollectionManager onClose={() => setShowCollectionManager(false)} />
+      )}
     </div>
   );
 }

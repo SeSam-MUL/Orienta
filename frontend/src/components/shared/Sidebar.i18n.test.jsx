@@ -53,3 +53,53 @@ describe('Sidebar i18n', () => {
     await act(async () => { await i18n.changeLanguage('en'); });
   });
 });
+
+/**
+ * The backend state in the status row.
+ *
+ * Sidebar calls useTranslation(['nav', 'shell']), and react-i18next binds `t`
+ * to the FIRST namespace. A bare key like 'sidebar.connected' therefore
+ * resolves against `nav`, misses, and renders as the key itself — which this
+ * branch shipped for one commit, in every language. The namespace has to be
+ * written out.
+ */
+describe('Sidebar backend state', () => {
+  it('names the state, never a translation key', async () => {
+    await act(async () => { await i18n.changeLanguage('de'); });
+    const { container } = renderSidebar();
+    expect(container.textContent).toContain('Verbunden');
+    expect(container.textContent).not.toContain('sidebar.');
+    cleanup();
+  });
+
+  it('says it in English too, and in Japanese', async () => {
+    await act(async () => { await i18n.changeLanguage('en'); });
+    let r = renderSidebar();
+    expect(r.container.textContent).toContain('Connected');
+    expect(r.container.textContent).not.toContain('sidebar.');
+    cleanup();
+
+    await act(async () => { await i18n.changeLanguage('ja'); });
+    r = renderSidebar();
+    expect(r.container.textContent).toContain('接続済み');
+    expect(r.container.textContent).not.toContain('sidebar.');
+    cleanup();
+    await act(async () => { await i18n.changeLanguage('en'); });
+  });
+
+  it('shows a disconnected backend by name, not by raw status', async () => {
+    await act(async () => { await i18n.changeLanguage('de'); });
+    const { container } = render(
+      <Sidebar
+        pages={pages} currentPage="dashboard" onNavigate={() => {}}
+        backendStatus="disconnected" onToggleH5Viewer={() => {}}
+        h5ViewerOpen={false} collapsed={false} onToggleCollapse={() => {}}
+        dataReady={{}}
+      />,
+    );
+    expect(container.textContent).toContain('Getrennt');
+    expect(container.textContent).not.toContain('disconnected');
+    cleanup();
+    await act(async () => { await i18n.changeLanguage('en'); });
+  });
+});

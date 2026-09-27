@@ -2,6 +2,7 @@
  * Results store - tracks indexing results, phase maps, grain data.
  */
 
+import { formatTime } from '../i18n/formatDateTime';
 import { create } from 'zustand';
 
 const useResultStore = create((set, get) => ({
@@ -42,7 +43,7 @@ const useResultStore = create((set, get) => ({
       phases: result.phases || [],
       mean_ci: result.mean_ci ?? null,
       n_indexed: result.n_indexed ?? 0,
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: formatTime(),
       result_id: result.result_id || null,
     };
     set((state) => ({

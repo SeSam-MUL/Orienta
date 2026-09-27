@@ -12,7 +12,7 @@
     "eds": { "label": "EDS 分析", "tooltip": "元素分布图、定量、基于成分的相推荐" },
     "pcrefinement": { "label": "PC 精修", "tooltip": "花样中心 (PC) 的校准与精修" },
     "crystal": { "label": "晶体数据库", "tooltip": "CIF/XTAL 转换、晶体数据库、DWF 编辑器" },
-    "simulation": { "label": "模拟", "tooltip": "EMsoft 蒙特卡洛 + 主花样模拟" },
+    "simulation": { "label": "模拟", "tooltip": "蒙特卡洛 + 主花样模拟（Orienta Engine 或 EMsoft）" },
     "database": { "label": "数据库浏览器", "tooltip": "浏览网络共享上的模拟结果" },
     "indexing": { "label": "标定", "tooltip": "Hough、Dictionary 或 Spherical (EMSphinx) 标定" },
     "phasemap": { "label": "相分布图", "tooltip": "用可配置比例尺可视化标定结果" },
@@ -20,6 +20,7 @@
     "batch": { "label": "批处理", "tooltip": "带检查点恢复的多相批量标定" },
     "refinement": { "label": "精修", "tooltip": "查看并精修多相标定结果" },
     "crystalhint": { "label": "晶体提示", "tooltip": "从花样检测对称性和点阵。当库中无匹配时推荐候选相。" },
+    "addons": { "label": "插件", "tooltip": "来自其他课题组的分析，及其引用" },
     "mlhub": { "label": "ML 预测器", "tooltip": "从标定结果训练 ML 模型，预测相" },
     "settings": { "label": "设置", "tooltip": "系统状态、服务器模式、EMsoft/EMSphinx 路径" }
   },

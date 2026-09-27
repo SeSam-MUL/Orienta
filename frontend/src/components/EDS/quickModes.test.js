@@ -71,3 +71,23 @@ describe('EDS quick-mode buttons', () => {
     expect(unlabelled, `no label for ${unlabelled.join(', ')}`).toEqual([]);
   });
 });
+
+describe('EDS quick-mode buttons toggle, they do not replace the stack', () => {
+  // One click on "BC" used to `clear()` the stack: SE image and every element
+  // layer gone, and the way back ("+ Add Layer") sat below the fold of a list
+  // that did not scroll. User report 2026-08-31.
+  const body = () => {
+    const m = /const onSetSingleLayer = useCallback\(\(id\) => \{([\s\S]*?)\n  \}, \[/.exec(page);
+    expect(m, 'EDSPage must define onSetSingleLayer').toBeTruthy();
+    return m[1];
+  };
+
+  it('never clears the stack', () => {
+    expect(body()).not.toMatch(/stack\.clear\(\)/);
+  });
+
+  it('removes the layer when it is already there, adds it otherwise', () => {
+    expect(body()).toMatch(/stack\.removeLayer\(id\)/);
+    expect(body()).toMatch(/stack\.addLayer\(layer\)/);
+  });
+});

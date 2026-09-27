@@ -9,7 +9,7 @@
  *   Footer hint
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, alpha } from '../../theme/tokens';
 import { Button, useConfirm, ConfirmDialog } from '../../theme/components';
@@ -23,6 +23,7 @@ import {
 import CrystalBackground from './CrystalBackground';
 import VantaBackground from './VantaBackground';
 import WandererOverlay from './WandererOverlay';
+import { pageShortcuts } from '../shared/sidebarPages';
 
 // ---------------------------------------------------------------------------
 // Module card definitions — workflow order, unified accent color
@@ -180,6 +181,15 @@ function ModuleCard({ id, accentVar, icon, LucideIcon, onNavigate, ready }) {
             color: 'rgba(255,255,255,0.85)',
             lineHeight: 1.2,
             flex: 1,
+            // A flex child will not shrink below its content without this, and
+            // the card clips what overflows.
+            minWidth: 0,
+            // German builds one word where English uses two: "Phase
+            // Refinement" wraps at the space, "Phasenverfeinerung" has none
+            // and was cut off on the M5 tester's dashboard. Let a long
+            // compound break inside the word rather than disappear.
+            overflowWrap: 'anywhere',
+            hyphens: 'auto',
           }}>
             {title}
           </span>
@@ -436,18 +446,17 @@ function ShortcutHint() {
           gap: '4px 12px', fontSize: '8.5pt', color: colors.textSecondary,
           textAlign: 'left', marginTop: 6, animation: 'pageFadeIn 0.2s ease-out',
         }}>
-          <span className="kbd">Ctrl+1</span><span>{t('dashboard:shortcuts.dashboard')}</span>
-          <span className="kbd">Ctrl+2</span><span>{t('dashboard:shortcuts.ebsdViewer')}</span>
-          <span className="kbd">Ctrl+3</span><span>{t('dashboard:shortcuts.analysis')}</span>
-          <span className="kbd">Ctrl+4</span><span>{t('dashboard:shortcuts.crystalDb')}</span>
-          <span className="kbd">Ctrl+5</span><span>{t('dashboard:shortcuts.simulation')}</span>
-          <span className="kbd">Ctrl+6</span><span>{t('dashboard:shortcuts.database')}</span>
-          <span className="kbd">Ctrl+7</span><span>{t('dashboard:shortcuts.phaseMaps')}</span>
-          <span className="kbd">Ctrl+8</span><span>{t('dashboard:shortcuts.indexing')}</span>
-          <span className="kbd">Ctrl+9</span><span>{t('dashboard:shortcuts.mlPredictor')}</span>
-          <span className="kbd">Ctrl+0</span><span>{t('dashboard:shortcuts.pcRefinement')}</span>
+          {/* One list, read from the same place the handler reads it.
+              The hand-kept copy that used to sit here had drifted until
+              seven of the ten numbers named a different page than the
+              one they open, and advertised a Ctrl+E that no handler has. */}
+          {pageShortcuts().map(({ id, shortcut }) => (
+            <Fragment key={id}>
+              <span className="kbd">Ctrl+{shortcut}</span>
+              <span>{t(`nav:pages.${id}.label`)}</span>
+            </Fragment>
+          ))}
           <span className="kbd">Ctrl+H</span><span>{t('dashboard:shortcuts.hdf5Viewer')}</span>
-          <span className="kbd">Ctrl+E</span><span>{t('dashboard:shortcuts.edsAnalysis')}</span>
           <span className="kbd">Ctrl+B</span><span>{t('dashboard:shortcuts.toggleSidebar')}</span>
         </div>
       )}

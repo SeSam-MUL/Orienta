@@ -333,10 +333,13 @@ class SimulationController:
             Username string (e.g. "wsluser"), or None if unavailable.
         """
         if sys.platform != "win32":
-            # Running natively on Linux/WSL — current user IS the Linux user
+            # Running natively on Linux/WSL/macOS — the current user IS the
+            # shell user. Saying "Linux username" on a Mac was one of the
+            # lines the 2026-09-25 Mac tester read as evidence that Orienta
+            # thought it was on the wrong machine.
             username = os.environ.get('USER') or os.environ.get('LOGNAME') or ''
             if username:
-                logger.info(f"Detected Linux username: {username}")
+                logger.info("Detected shell username: %s", username)
                 return username
 
         # Windows: ask WSL
@@ -1190,18 +1193,17 @@ class SimulationController:
         EMEBSDmaster, EMEBSDmasterSHT, EMEBSDmasterOpenCL) via
         WSL's kill command.
         """
-        emsoft_binaries = [
-            "EMMCOpenCL", "EMMC", "EMEBSDmaster",
-            "EMEBSDmasterSHT", "EMEBSDmasterOpenCL",
-        ]
-        for binary in emsoft_binaries:
-            try:
-                subprocess.run(
-                    ["wsl", "pkill", "-f", binary],
-                    capture_output=True, timeout=5,
-                )
-            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-                pass  # WSL not available or process not found — that's OK
+        for binary in ORPHAN_EMSOFT_BINARIES:
+            # `wsl pkill` on a machine without WSL fails with FileNotFoundError
+            # and the except swallows it, so cancelling a NATIVE Linux run
+            # stopped nothing: the compute kept burning cores while the user
+            # was told it had been cancelled. macOS has no EMsoft path at all,
+            # so there the honest answer is to do nothing.
+            for cmd in _pkill_command(binary, own_bin_dir=_configured_emsoft_bin_dir()):
+                try:
+                    subprocess.run(cmd, capture_output=True, timeout=5)
+                except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                    pass  # not available, or no such process -- both are fine
 
     def get_all_jobs(self) -> List[SimulationJob]:
         """
@@ -1522,6 +1524,131 @@ ORPHAN_EMSOFT_BINARIES = (
 )
 
 
+def _configured_emsoft_bin_dir(config_path=None) -> str:
+    """The binary directory Orienta itself uses, from emsphinx_config.ini.
+
+    Read straight from the file rather than from a live controller, because
+    the startup reaper runs before anything has built one. Returns "" when the
+    file, the section or the paths are missing -- and "" means "kill nothing
+    that is not obviously ours", which is the safe direction.
+    """
+    try:
+        import configparser
+        path = Path(config_path) if config_path else (
+            Path(__file__).resolve().parents[1]
+            / "crystal-structures-for-ebsd-main" / "_Phyton_Automization"
+            / "windwos_to_WSL" / "emsphinx_config.ini"
+        )
+        if not path.exists():
+            return ""
+        parser = configparser.ConfigParser()
+        parser.read(path, encoding="utf-8")
+        if not parser.has_section("EMsoftPaths"):
+            return ""
+        for _key, value in parser.items("EMsoftPaths"):
+            value = (value or "").strip()
+            if "/" in value:
+                return value.rsplit("/", 1)[0]
+    except Exception:
+        return ""
+    return ""
+
+
+def _pkill_command(binary: str, platform: str = None, own_bin_dir: str = None) -> list:
+    """The command(s) that stop a running EMsoft binary, per platform.
+
+    Windows reaches the compute inside the WSL VM Orienta set up, where
+    everything of that name is ours. Native Linux is the user's own machine:
+    `pkill -f EMMC` there would also match a colleague's build, and even a
+    text editor whose command line happens to contain the name. So the pattern
+    is the full path of OUR binary, and only our own processes are considered.
+    Without a known directory we stop nothing -- a cancel that does nothing is
+    recoverable; killing somebody else's twelve-hour run is not. macOS has no
+    EMsoft path at all.
+    """
+    plat = platform or sys.platform
+    if plat == "win32":
+        return [["wsl", "pkill", "-f", binary]]
+    if plat.startswith("linux"):
+        own = (own_bin_dir or "").rstrip("/")
+        if not own:
+            return []
+        uid = _current_uid()
+        pattern = f"^{own}/{binary}( |$)"
+        if uid == "":
+            return [["pkill", "-f", pattern]]
+        return [["pkill", "-u", str(uid), "-f", pattern]]
+    return []
+
+
+def _current_uid():
+    """The user id, or "" where there is none (Windows)."""
+    try:
+        return os.getuid()
+    except AttributeError:
+        return ""
+
+
+def _ps_command(platform: str = None) -> str:
+    """`ps` listing pid, elapsed time and command line, per platform.
+
+    procps (Linux, and the WSL VM) has `etimes`, elapsed SECONDS. BSD `ps`
+    (macOS) has no such field -- it prints nothing for it, so every line would
+    lose a column and the reaper would skip every process. There it asks for
+    `etime` and parses its [[dd-]hh:]mm:ss form.
+    """
+    plat = platform or sys.platform
+    field = "etime" if plat == "darwin" else "etimes"
+    return f"ps -eo pid=,{field}=,args="
+
+
+def _parse_elapsed(value: str) -> int:
+    """Seconds from `etimes` (a number) or BSD `etime`; -1 when unreadable."""
+    text = (value or "").strip()
+    if text.isdigit():
+        return int(text)
+    days = 0
+    if "-" in text:
+        day_part, _, text = text.partition("-")
+        if not day_part.isdigit():
+            return -1
+        days = int(day_part)
+    parts = text.split(":")
+    if not parts or not all(part.isdigit() for part in parts):
+        return -1
+    secs = 0
+    for part in parts:
+        secs = secs * 60 + int(part)
+    return days * 86400 + secs
+
+
+def _is_ours(args: str, own_bin_dir: str, platform: str = None, binaries=None) -> bool:
+    """Did this EMsoft process come from the installation Orienta drives?
+
+    On Windows the binaries live in the WSL distribution Orienta set up, and
+    the reaper has always assumed everything there is its own. On a native
+    Linux workstation that assumption is wrong and expensive: a colleague's
+    own EMsoft build, started in another terminal, matches the same names, and
+    killing it at our startup destroys hours of somebody else's compute. So
+    off Windows a process is only ours when its command line names the
+    binary directory we were configured with.
+    """
+    plat = platform or sys.platform
+    if plat == "win32":
+        return True
+    if not own_bin_dir:
+        return False
+    own = own_bin_dir.rstrip("/")
+    # The whole path of the binary, at a word boundary. A bare substring test
+    # is not enough twice over: "/opt/o" also matches "/opt/o-other/EMMC", and
+    # "vim /opt/o/Bin/EMMC_notes.txt" satisfies both the name match and the
+    # directory match -- a text editor would get SIGKILL.
+    for binary in (binaries or ORPHAN_EMSOFT_BINARIES):
+        if re.search(rf"(^|\s){re.escape(own)}/{re.escape(binary)}(\s|$)", args):
+            return True
+    return False
+
+
 def _default_reaper_runner(cmd: str, timeout: int = 15):
     """Platform-aware bash runner for the reaper; returns None on failure.
 
@@ -1534,7 +1661,7 @@ def _default_reaper_runner(cmd: str, timeout: int = 15):
         return None
 
 
-def reap_orphaned_emsoft_processes(runner=None, logger_=None) -> List[dict]:
+def reap_orphaned_emsoft_processes(runner=None, logger_=None, emsoft_bin_dir=None) -> List[dict]:
     """Kill EMsoft processes orphaned by a previous backend session.
 
     Run ONCE at backend startup. EMsoft binaries execute inside the WSL2 VM
@@ -1565,9 +1692,10 @@ def reap_orphaned_emsoft_processes(runner=None, logger_=None) -> List[dict]:
     """
     runner = runner or _default_reaper_runner
     log = logger_ or logger
+    own_bin_dir = emsoft_bin_dir if emsoft_bin_dir is not None else _configured_emsoft_bin_dir()
     reaped: List[dict] = []
     try:
-        proc = runner("ps -eo pid=,etimes=,args=")
+        proc = runner(_ps_command())
         if proc is None or getattr(proc, "returncode", 1) != 0 or not getattr(proc, "stdout", ""):
             return reaped
 
@@ -1581,10 +1709,14 @@ def reap_orphaned_emsoft_processes(runner=None, logger_=None) -> List[dict]:
             matched = [b for b in ORPHAN_EMSOFT_BINARIES if b in args]
             if not matched:
                 continue
-            try:
-                secs = int(etimes)
-            except ValueError:
-                secs = -1
+            if not _is_ours(args, own_bin_dir, binaries=matched):
+                log.info(
+                    "Startup reaper: leaving %s (pid=%s) alone; it did not come "
+                    "from Orienta's EMsoft installation.",
+                    max(matched, key=len), pid,
+                )
+                continue
+            secs = _parse_elapsed(etimes)
             reaped.append({
                 "pid": pid,
                 "name": max(matched, key=len),

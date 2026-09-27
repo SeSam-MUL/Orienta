@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, alpha, Button } from '../../theme/components';
+import { currentLocale } from '../../i18n/formatDateTime';
 
 function formatDate(isoString) {
   if (!isoString) return '—';
   try {
-    return new Date(isoString).toLocaleString(undefined, {
+    // currentLocale(), not undefined: `undefined` asks the BROWSER, which on
+    // the M5 tester's Mac was English while Orienta was set to German.
+    return new Date(isoString).toLocaleString(currentLocale(), {
       year: 'numeric', month: '2-digit', day: '2-digit',
       hour: '2-digit', minute: '2-digit',
     });

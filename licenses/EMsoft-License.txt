@@ -3,7 +3,11 @@ EMsoft — BSD 3-Clause License
 
 Orienta contains code and tabulated data derived from EMsoft
 (https://github.com/EMsoft-org/EMsoft). See NOTICE.md for the exact locations.
-The EMsoft license is reproduced below in full, as its terms require.
+The EMsoft BSD-3-Clause grant is reproduced below in full, as its terms
+require. EMsoft's License.txt carries one further paragraph, about the
+separate EMSphInx repository ("for EMSphInx, a non-commercial license
+applies ..."); it concerns no file Orienta uses and is discussed under
+"External tools" in NOTICE.md.
 
 Copyright (c) 2013-2019, Marc De Graef Research Group/Carnegie Mellon University.
 All rights reserved.

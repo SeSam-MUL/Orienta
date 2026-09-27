@@ -154,7 +154,10 @@ def batch_hough_orientations(
 
     phase = Phase.from_cif(sanitize_cif(str(cif_path)))
     try:
-        phase.name = Path(cif_path).stem
+        from display_names import display_stem
+        # This name lands on the xmap and is exported; cif_path comes from the
+        # request, so it must not be read with the platform's separator rules.
+        phase.name = display_stem(cif_path)
     except Exception:
         pass
     pl = PhaseList(phase)

@@ -1,37 +1,16 @@
 {
-  "appTitle": "Orienta",
   "appSubtitle": "EBSD パターン解析",
-  "loadingModule": "モジュールを読み込み中…",
-  "toolbar": {
-    "edsColors": "EDS カラー",
-    "reportProblem": "⚠ 問題を報告",
-    "reportProblemTooltip": "問題を記入し、ログとバージョンを含むレポートを保存します。バグ報告に添付できます。",
-    "edsColorsTooltip": "EDS オーバーレイマップの元素カラーを設定",
-    "shortcutsTooltip": "キーボードショートカット (?)"
+  "appTitle": "Orienta",
+  "crash": {
+    "title": "このモジュールがクラッシュしました"
   },
   "disconnected": {
     "starting": "バックエンドを起動中… {{seconds}} 秒。インストールや更新後の初回起動は科学計算ライブラリの読み込みに1〜2分かかることがあります。",
     "lost": "バックエンドとの接続が切れました — 再接続中…",
     "message": "バックエンド未接続 — 3分以内に応答がありませんでした。Orienta を完全に終了して再起動してください。繰り返す場合は 設定 → 問題を報告 からレポートを作成してください（原因が記録された logs/backend-console.log が含まれます）。"
   },
-  "crash": {
-    "title": "このモジュールがクラッシュしました"
-  },
-  "sidebar": {
-    "expand": "サイドバーを展開",
-    "collapse": "サイドバーを折りたたむ",
-    "dataLoaded": "データ読み込み済み",
-    "themeTooltip": "テーマ：{{name}} — クリックで変更",
-    "backendTooltip": "バックエンド：{{status}}",
-    "connected": "接続済み",
-    "language": "言語"
-  },
   "hdf5": {
     "title": "HDF5 ビューア"
-  },
-  "shortcuts": {
-    "title": "キーボードショートカット",
-    "closeHint": "{{k1}} または {{k2}} で閉じる"
   },
   "hoverTips": {
     "errorTryAgain": "エラーを解除し、アプリを再読み込みせずにこのモジュールを再マウントします",
@@ -48,5 +27,44 @@
     "copyLogs": "ログをコピー",
     "clearLogs": "ログをクリア",
     "closeDevPanel": "閉じる (Ctrl+Shift+D)"
+  },
+  "loadingModule": "モジュールを読み込み中…",
+  "shortcuts": {
+    "title": "キーボードショートカット",
+    "closeHint": "{{k1}} または {{k2}} で閉じる"
+  },
+  "sidebar": {
+    "backendTooltip": "バックエンド：{{status}}",
+    "checking": "確認中…",
+    "collapse": "サイドバーを折りたたむ",
+    "connected": "接続済み",
+    "dataLoaded": "データ読み込み済み",
+    "disconnected": "未接続",
+    "expand": "サイドバーを展開",
+    "language": "言語",
+    "themeTooltip": "テーマ：{{name}} — クリックで変更"
+  },
+  "status": {
+    "backend": "バックエンド：{{state}}",
+    "edsElements": "EDS: {{count}} 元素",
+    "emsoftMissing": "EMsoft: 見つかりません",
+    "emsoftOk": "EMsoft: OK",
+    "gpuNone": "GPU なし",
+    "gpuOpencl": "GPU: OpenCL",
+    "noFile": "ファイルが読み込まれていません",
+    "sphinxMissing": "EMSphinx: 見つかりません",
+    "sphinxOk": "EMSphinx: OK",
+    "tasks_one": "{{count}} 件のタスク",
+    "tasks_other": "{{count}} 件のタスク",
+    "wslDistro": "WSL: {{distro}}",
+    "wslMissing": "WSL: 未インストール",
+    "wslOk": "WSL: OK"
+  },
+  "toolbar": {
+    "edsColors": "EDS カラー",
+    "reportProblem": "⚠ 問題を報告",
+    "reportProblemTooltip": "問題を記入し、ログとバージョンを含むレポートを保存します。バグ報告に添付できます。",
+    "edsColorsTooltip": "EDS オーバーレイマップの元素カラーを設定",
+    "shortcutsTooltip": "キーボードショートカット (?)"
   }
 }

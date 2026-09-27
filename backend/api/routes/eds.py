@@ -16,7 +16,7 @@ from typing import Optional, List, Dict
 
 import numpy as np
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 try:  # eds_utils lives at the repo root; see the lazy-import note below
     from eds_utils import UnknownLineError as _UnknownLineError
@@ -40,7 +40,9 @@ from backend.api.services.cif_phase_library import (
 from backend.api.services.chemistry_score import (
     background_levels, infer_matrix_element,
 )
-from backend.api.services.eds_clustering import cluster_and_match
+from backend.api.services.eds_clustering import (
+    DEFAULT_SCALE, cluster_and_match, scale_box_um, scale_px_from_um,
+)
 from backend.api.services.eds_wand import (
     flood_from, global_growth_curve, selection_stats, wand_field,
 )
@@ -253,19 +255,42 @@ def _crystal_db_path() -> Path:
     return _project_root() / "Database" / "crystal_database.xlsx"
 
 
+# A field a request model does not declare is a TYPO, not an extension.
+#
+# A PhD tester sent ``{"mode": "cluster", "scale_px": 3}`` to
+# ``POST /api/eds/auto-classify``, got a 200, and got back
+# ``scale_px_used = 5`` -- the default. The field is called ``scale``; his
+# smoothing width was silently dropped, and he runs 60 scans in batches, so
+# the wrong analysis is one he would never have looked at twice. A junk field
+# went through just as quietly.
+#
+# ``extra="forbid"`` turns that into a 422 naming the field. It costs a caller
+# a minute; the silent default costs a dataset. The nested free-form payloads
+# (``rules``, ``region_defs``, ``settings``) stay plain dicts on purpose --
+# they have their own parsers, and those parsers are where their vocabulary is
+# defined.
+_STRICT = ConfigDict(extra="forbid")
+
+
 class QuantifyRequest(BaseModel):
+    model_config = _STRICT
+
     row: int
     col: int
     display_mode: str = "counts"  # "counts", "wt_pct", "at_pct"
 
 
 class ProbeRequest(BaseModel):
+    model_config = _STRICT
+
     row: int
     col: int
     display_mode: str = "at_pct"  # one of counts / wt_pct / at_pct
 
 
 class RegionQuantifyRequest(BaseModel):
+    model_config = _STRICT
+
     row_start: int
     row_end: int
     col_start: int
@@ -274,6 +299,8 @@ class RegionQuantifyRequest(BaseModel):
 
 
 class PhaseSuggestionRequest(BaseModel):
+    model_config = _STRICT
+
     row: int
     col: int
 
@@ -768,6 +795,8 @@ async def cif_phases():
 
 
 class ChemMaskFilter(BaseModel):
+    model_config = _STRICT
+
     element: str
     operator: str  # ">", "<", ">=", "<=", "between"
     min_val: float = 0.0
@@ -776,6 +805,8 @@ class ChemMaskFilter(BaseModel):
 
 
 class ChemMaskRequest(BaseModel):
+    model_config = _STRICT
+
     filters: List[ChemMaskFilter]
     combine: str = "and"  # "and" or "or"
     margin_px: int = 0    # positive = dilate, negative = erode
@@ -940,6 +971,8 @@ class AutoClassifyRequest(BaseModel):
       against nominal stoichiometries separated by ~1 at% is not reliable.
     - ``"pixel"``: match every pixel independently. Kept for comparison.
     """
+    model_config = _STRICT
+
     tolerance: float = 15.0   # retained for API compatibility; unused by the scorer
     min_score: float = 0.3    # below this -> unclassified
     mode: str = "cluster"
@@ -948,6 +981,14 @@ class AutoClassifyRequest(BaseModel):
     # Box width in pixels for smoothing the composition before clustering.
     # None = the module default. 0 reproduces the pre-2026-08-24 behaviour.
     scale: Optional[int] = None
+    # The same smoothing box as a PHYSICAL width in microns. Wins over
+    # `scale` whenever this dataset carries a step size, because a pixel
+    # count is not a length: 5 px at a 0.2 um step and 5 px at a 2 um step
+    # are a 1 um and a 10 um averaging box. A recipe saved in pixels and
+    # replayed on another scan is therefore two different analyses under one
+    # name. With no step size in the file this cannot be honoured, and the
+    # response says so (`scale_source`) rather than quietly using pixels.
+    scale_um: Optional[float] = None
     # User-authored rules. See backend/api/services/phase_rules.py — they
     # decide which phases may COMPETE for a region, not how well they score.
     rules: Optional[dict] = None
@@ -969,6 +1010,287 @@ class AutoClassifyRequest(BaseModel):
     # (True, the default) or put all of it in one leftover region (False,
     # the fully manual case).
     cluster_remainder: bool = True
+
+
+# ---------------------------------------------------------------------------
+# what the scoring cannot see
+# ---------------------------------------------------------------------------
+#
+# ``chemistry_fit`` drops carbon and oxygen before it compares anything
+# (``crystal_hint_phase_fit._CHEM_IGNORE``) and renormalises over what is left.
+# On an oxide or a carbide that is not a detail: Al2O3 is scored on its
+# aluminium content alone, which after the drop is 100 % aluminium -- exactly
+# what Al metal is. The two are then INDISTINGUISHABLE, and whichever the
+# tie-break happens to prefer is what the map says.
+#
+# The export's caveat states this, in the folder, after the run. The classify
+# response said nothing at all, so a service lab doing batteries and ceramics
+# found out at the end of the day. These warnings say it at the moment the map
+# is made, and they name the consequence rather than the fact.
+
+#: Mean C+O over the map, in at%, above which the drop is worth saying out
+#: loud. Calibrated to stay quiet on a clean metal scan and to fire on a real
+#: oxide: on the SampleB export (a 6xxx aluminium extrusion, no oxide phase)
+#: the per-pixel at% sum EXCLUDING C and O runs 91.30-100.00 with mean 98.44,
+#: i.e. C+O carries 1.56 at% on average and 8.70 at% in its worst pixel. Ten
+#: at% is above that whole range, and it is also the point at which a tenth of
+#: the composition is invisible to every phase score in the run. An alumina
+#: scan is ~60 at% oxygen and clears it by a factor of six.
+_EXCLUDED_MEAN_AT_PCT = 10.0
+
+#: A single pixel at or above this much C+O is a stoichiometric oxide or
+#: carbide rather than surface contamination: Al2O3 is 60 at% O, SiO2 66,
+#: TiC 50, Fe3C 25 -- the floor of the family.
+_EXCLUDED_PIXEL_AT_PCT = 25.0
+
+#: ...and this many of them make it a feature rather than a handful of dead
+#: pixels. One percent of a 10 800 px scan is 108 px, which is a particle.
+_EXCLUDED_PIXEL_FRAC = 0.01
+
+
+def _excluded_signal_warning(at_maps) -> Optional[dict]:
+    """Do C and O carry enough signal here that dropping them changes answers?
+
+    Measured on the scan in front of us, not assumed from the sample name.
+    """
+    from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
+
+    present = [el for el in at_maps if el in _CHEM_IGNORE]
+    if not present:
+        return None
+    total = None
+    for el in present:
+        a = np.asarray(at_maps[el], dtype=float).ravel()
+        total = a.copy() if total is None else total + a
+    if total is None or total.size == 0:
+        return None
+
+    mean = float(total.mean())
+    peak = float(total.max())
+    frac = float((total >= _EXCLUDED_PIXEL_AT_PCT).mean())
+    if mean < _EXCLUDED_MEAN_AT_PCT and frac < _EXCLUDED_PIXEL_FRAC:
+        return None
+
+    where = (f"{frac * 100:.1f} % of pixels carry at least "
+             f"{_EXCLUDED_PIXEL_AT_PCT:g} at%" if frac >= _EXCLUDED_PIXEL_FRAC
+             else f"the peak pixel carries {peak:.1f} at%")
+    return {
+        "code": "scoring_ignores_c_and_o",
+        "message": (
+            f"{' and '.join(present)} carry {mean:.1f} at% of the composition "
+            f"in this scan on average ({where}), and phase scoring drops them "
+            f"before it compares anything. Every phase here was therefore "
+            f"matched on its metal content alone: an oxide or a carbide is "
+            f"scored exactly like the metal it contains -- Al2O3 cannot be "
+            f"told from Al -- so a named metal may be sitting where the oxide "
+            f"is. Confirm any phase whose identity depends on C or O by "
+            f"another method before quoting this map."),
+        "detail": {"elements": sorted(present),
+                   "mean_at_pct": round(mean, 3),
+                   "max_at_pct": round(peak, 3),
+                   "frac_px_above": round(frac, 5),
+                   "px_threshold_at_pct": _EXCLUDED_PIXEL_AT_PCT},
+    }
+
+
+def _phase_label(entry) -> str:
+    """How a candidate is named in a warning. One definition, because a
+    message that calls the same phase two different things is a message the
+    reader has to decode twice."""
+    return str(getattr(entry, "cif_filename", "")
+               or getattr(entry, "key", "") or "?")
+
+
+def _no_scoreable_chemistry(entry) -> bool:
+    """Is this candidate made only of elements the scorer throws away?"""
+    from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
+    comp = getattr(entry, "composition", None) or {}
+    return not any(el not in _CHEM_IGNORE and float(v or 0.0) > 0.0
+                   for el, v in comp.items())
+
+
+def _degenerate_candidate_warnings(candidates) -> List[dict]:
+    """Candidates that this scoring provably cannot separate from each other.
+
+    Not a heuristic. ``chemistry_fit`` is ``1 - 0.5*L1`` over the C/O-stripped,
+    renormalised compositions, so for ANY measured pixel p the two scores
+    differ by at most ``0.5*L1(q1, q2)`` (triangle inequality) -- and that
+    bound is exactly ``1 - chemistry_fit(q1, q2)``. When it sits at or below
+    ``TIE_TOLERANCE``, which is the library's own definition of "a tie, not a
+    decision", no pixel in any scan can separate the pair. Al2O3 against Al is
+    the degenerate case: distance 0.
+
+    Only pairs involving a C- or O-bearing phase are examined. A carbide or an
+    oxide among the participating candidates is the clearest evidence that the
+    user is looking for one, and it keeps this O(n) in practice.
+    """
+    from backend.api.services.cif_phase_library import TIE_TOLERANCE
+    from backend.api.services.crystal_hint_phase_fit import (
+        _CHEM_IGNORE, chemistry_fit,
+    )
+
+    out: List[dict] = []
+    blind = [c for c in candidates if _no_scoreable_chemistry(c)]
+    if blind:
+        names = [_phase_label(c) for c in blind]
+        out.append({
+            "code": "phase_has_no_scoreable_chemistry",
+            "message": (
+                f"{len(blind)} candidate phase(s) are made only of elements "
+                f"the scorer discards ({', '.join(sorted(_CHEM_IGNORE))}): "
+                f"{', '.join(names[:6])}"
+                + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+                + ". A phase with nothing left to compare scores neutral "
+                  "against every pixel, so where it wins it won by tie-break "
+                  "rather than by chemistry."),
+            "detail": {"phases": names},
+        })
+
+    co = [c for c in candidates
+          if not _no_scoreable_chemistry(c)
+          and any(el in _CHEM_IGNORE for el in (getattr(c, "composition", None) or {}))]
+    if not co:
+        return out
+
+    scoreable = [c for c in candidates if not _no_scoreable_chemistry(c)]
+    seen: set = set()
+    pairs: List[tuple] = []
+    for a in co:
+        for b in scoreable:
+            if a is b:
+                continue
+            key = tuple(sorted((id(a), id(b))))
+            if key in seen:
+                continue
+            seen.add(key)
+            gap = 1.0 - float(chemistry_fit(a.composition, b.composition))
+            if gap <= TIE_TOLERANCE:
+                pairs.append((_phase_label(a), _phase_label(b),
+                              round(gap, 6)))
+    if pairs:
+        shown = "; ".join(f"{x} vs {y}" for x, y, _g in pairs[:6])
+        out.append({
+            "code": "indistinguishable_after_excluding_c_and_o",
+            "message": (
+                f"{len(pairs)} candidate pair(s) become indistinguishable once "
+                f"carbon and oxygen are dropped for scoring: {shown}"
+                + (f" and {len(pairs) - 6} more" if len(pairs) > 6 else "")
+                + f". Their scores can never differ by more than the "
+                  f"tie tolerance ({TIE_TOLERANCE:g}) on ANY pixel, so which "
+                  f"of them the map names is decided by the tie-break and not "
+                  f"by the measured chemistry. Where one of these is reported, "
+                  f"treat the other as equally likely."),
+            "detail": {"pairs": [{"a": x, "b": y, "score_gap_bound": g}
+                                 for x, y, g in pairs],
+                       "tie_tolerance": float(TIE_TOLERANCE)},
+        })
+    return out
+
+
+def _eds_step_um() -> tuple[Optional[float], Optional[float]]:
+    """``(step_x, step_y)`` in microns for the grid the EDS maps live on.
+
+    ``(None, None)`` is a real answer, not a failure: ``get_pixel_sizes``
+    returns ``None`` for an area that carries no header geometry, and a
+    guessed step would put a wrong physical length into everything that
+    quotes it. Callers must fall back and say so.
+
+    The EDS area is asked first and EBSD second — on these files they share
+    one acquisition grid, which is what lets an EDS map be indexed with EBSD
+    ``(row, col)`` at all. The electron image is NEVER used: measured
+    2026-08-14 on a real file it sits on a 10.6x finer step over a different
+    field of view (EBSD/EDS 0.6579 um, electron image 0.0621 um), so
+    borrowing its step would shrink every reported length by an order of
+    magnitude.
+
+    A step in units this function does not recognise is treated as unknown
+    for the same reason — "0.5" is a different length in nm than in um.
+
+    Deliberately defensive: this sits on the auto-classify path, and an
+    extractor that cannot answer must cost the user a physical unit, not
+    their classification.
+    """
+    try:
+        if not is_open():
+            return None, None
+        getter = getattr(get_extractor(), "get_pixel_sizes", None)
+        if getter is None:
+            return None, None
+        info = getter() or {}
+        for area in ("eds", "ebsd"):
+            entry = info.get(area)
+            if not entry:
+                continue
+            units = str(entry.get("units", "")).strip().lower()
+            if units not in ("um", "µm", "micron", "microns"):
+                continue
+            try:
+                x = float(entry.get("x"))
+                y = entry.get("y")
+                y = float(y) if y is not None else x
+            except (TypeError, ValueError):
+                continue
+            if x > 0 and y > 0:
+                return x, y
+    except Exception:
+        logger.debug("EDS step size unavailable", exc_info=True)
+    return None, None
+
+
+def _resolve_scale(
+    scale: Optional[int], scale_um: Optional[float] = None,
+) -> tuple[int, Dict[str, object]]:
+    """``(scale_px, report)`` — the smoothing width to use, and how it was got.
+
+    Precedence: a physical width wins when this dataset has a step size;
+    otherwise the pixel path runs with EXACTLY the arithmetic it always had
+    (``DEFAULT_SCALE if scale is None else int(scale)``). That "exactly" is
+    the point — this sits under every phase map this app has ever made, so
+    the no-``scale_um`` path must not merely behave similarly.
+
+    The conversion goes through the X step and the report carries both edges,
+    because the box is square in pixels and need not be square in microns.
+
+    ``report`` gives RESOLVED values, not requested ones. "requested 3 um,
+    resolved 5 px, i.e. 3.29 um" is the distinction the whole provenance
+    design turns on; the requested value is kept beside it so the two can be
+    compared. ``scale_source`` is a code the UI can translate:
+
+    ``"um"``              the physical width was honoured
+    ``"pixels"``          no physical width was asked for
+    ``"pixels_no_step"``  one was, and this file has no step size to use
+    """
+    step_x, step_y = _eds_step_um()
+    scale_px = DEFAULT_SCALE if scale is None else int(scale)
+    source = "pixels"
+    if scale_um is not None:
+        try:
+            scale_px = scale_px_from_um(float(scale_um), step_x)
+            source = "um"
+        except (TypeError, ValueError):
+            # No usable step size. Fall back to the pixel value — and the
+            # caller reports `pixels_no_step`, because a physical width that
+            # silently became a pixel count is the failure this whole change
+            # exists to prevent.
+            source = "pixels_no_step"
+    box_x, box_y = scale_box_um(scale_px, step_x, step_y)
+    report = {
+        "scale_px_used": int(scale_px),
+        "scale_um_used": box_x,
+        "step_x_um": step_x,
+        "step_y_um": step_y,
+        "scale_box_um": (None if box_x is None
+                         else {"x": box_x, "y": box_y}),
+        "scale_source": source,
+        "scale_um_requested": (None if scale_um is None else float(scale_um)),
+    }
+    if source == "pixels_no_step":
+        report["scale_note"] = (
+            f"Requested a {float(scale_um):g} um smoothing box, but this file "
+            f"carries no step size for the EDS or EBSD grid — used "
+            f"{int(scale_px)} px instead."
+        )
+    return int(scale_px), report
 
 
 def _region_feature_matrix(at_maps, n_rows: int, n_cols: int,
@@ -1099,6 +1421,19 @@ def _state_to_response(include_image: bool = True) -> dict:
     # a measured assignment and downstream (indexing) consumes both.
     response["n_locked"] = (int(state.locked_mask.sum())
                             if state.locked_mask is not None else 0)
+    # WHAT was done by hand, not just how many pixels ended up locked. Naming
+    # a region, merging, splitting, growing and snapping all move the map and
+    # none of them lock a pixel, so ``n_locked`` alone cannot answer "did this
+    # person merge nothing, or merge forty times until it looked right?" -
+    # which is the question a reviewer signing off on a map has to ask.
+    # ``counts`` is all-null on a map restored from a sidecar written before
+    # edits were recorded: zero would be a claim there, not a measurement.
+    #
+    # ``region_grid_edited`` is the one to act on: region-derived particle ids
+    # are ordered by (region_id, -n_px, centroid), so a merge pops an id and
+    # renumbers everything above it. A report figure carrying ids from before
+    # a boundary edit no longer points at the same particles.
+    response["hand_edits"] = state.edit_summary()
     # What an undo would take back, so the button can name it instead of
     # asking the user to remember.
     response["undo_label"] = store.undo_label
@@ -1238,6 +1573,17 @@ def _auto_classify_blocking(req, cif_library, mode: str,
 
     clusters_payload: List[dict] = []
     k_used = 0
+    # Resolved ONCE and passed everywhere below. The clustering and the
+    # region feature matrix must smooth on the same box: a map grouped at one
+    # scale and re-split at another would disagree with the boundaries it is
+    # adjusting, and re-deriving `req.scale` per call site is exactly how the
+    # two drift apart.
+    scale_px, scale_report = _resolve_scale(req.scale, req.scale_um)
+    # This file's own step, taken from that same report. Read once, so the
+    # settings stored with the map and the response cannot quote different
+    # geometry for the same run.
+    step_x_um = scale_report.get("step_x_um")
+    step_y_um = scale_report.get("step_y_um")
 
     from backend.api.services.phase_rules import (
         region_defs_from_list, region_defs_to_list, rule_set_from_dict,
@@ -1299,7 +1645,7 @@ def _auto_classify_blocking(req, cif_library, mode: str,
             candidates=candidates,
             k=req.n_clusters,
             min_score=req.min_score,
-            scale=req.scale,
+            scale=scale_px,
             rule_set=rule_set,
             element_weights=req.element_weights,
             region_defs=region_defs,
@@ -1366,8 +1712,47 @@ def _auto_classify_blocking(req, cif_library, mode: str,
             if 0 <= m.cluster_id < n_struct:
                 region_phase[m.cluster_id] = int(m.phase_index)
         region_features = _region_feature_matrix(at_maps, n_rows, n_cols,
-                                                 req.scale,
+                                                 scale_px,
                                                  req.element_weights)
+
+    if mode == "pixel":
+        # Pixel mode never smooths, so claiming a smoothing width - in the
+        # response OR in what is stored with the map - would be a false entry
+        # in the provenance. The step sizes are still true and still reported.
+        scale_report = {
+            **scale_report,
+            "scale_px_used": None,
+            "scale_um_used": None,
+            "scale_box_um": None,
+            "scale_source": "not_applicable",
+        }
+
+    # How this map was made, stored WITH the map. Resolved values beside
+    # requested ones throughout: "asked for auto, resolved 8" is the
+    # distinction the whole provenance design turns on, and a reload that kept
+    # only the request could not answer the one question an export has to -
+    # what width was actually averaged over. A pixel count does not answer it
+    # either, which is why the step travels with it.
+    settings = {
+        "mode": mode,
+        # RESOLVED px: what was actually smoothed with, after a physical width
+        # won or failed to. None in pixel mode, where nothing was smoothed.
+        "scale": (None if mode == "pixel" else int(scale_px)),
+        "scale_um": (None if req.scale_um is None else float(req.scale_um)),
+        "scale_px_requested": (None if req.scale is None else int(req.scale)),
+        "scale_report": dict(scale_report),
+        # Requested. None means "let the distinctness criterion choose", which
+        # is a different statement from any number, so it stays None.
+        "n_clusters": req.n_clusters,
+        "k_used": int(k_used),
+        "min_score": float(req.min_score),
+        "cluster_remainder": bool(req.cluster_remainder),
+        "phase_keys": (None if req.phase_keys is None
+                       else list(req.phase_keys)),
+        "rules": req.rules,
+        "step_x_um": step_x_um,
+        "step_y_um": step_y_um,
+    }
 
     store = get_phase_map_store()
     store.set_classification(
@@ -1386,12 +1771,22 @@ def _auto_classify_blocking(req, cif_library, mode: str,
         # request, so what is stored is what was actually evaluated.
         region_defs=region_defs_to_list(region_defs or []),
         element_weights=dict(req.element_weights or {}),
+        settings=settings,
     )
     response = _state_to_response(include_image=True)
     response["mode"] = mode
     response["k_used"] = k_used
     response["clusters"] = clusters_payload
     response["n_ambiguous"] = int(np.asarray(ambiguous).sum())
+    response.update(scale_report)
+    # Last, so `scale_report` cannot shadow it. Additive: the response had no
+    # `warnings` key at all, and every caller that ignores it is unchanged.
+    warnings: List[dict] = []
+    excluded = _excluded_signal_warning(at_maps)
+    if excluded:
+        warnings.append(excluded)
+    warnings.extend(_degenerate_candidate_warnings(candidates))
+    response["warnings"] = warnings
     # The phase map is only as quantitative as the at% it was clustered from.
     response["quantification"] = _quant_provenance(at_maps)
     # Files that never became phases, and phases whose stored composition
@@ -1479,6 +1874,8 @@ def _refuse_write_on_grid_mismatch(state) -> None:
 
 class AssignRegionRequest(BaseModel):
     """Paint a rectangular region with a phase id (-1 = unclassified)."""
+    model_config = _STRICT
+
     row_start: int
     row_end: int
     col_start: int
@@ -1496,6 +1893,8 @@ class AssignPolygonRequest(BaseModel):
     test handles concave outlines fine but cannot fix figure-of-eight
     self-crossings (the inside/outside is undefined).
     """
+    model_config = _STRICT
+
     vertices: List[List[float]]
     phase_index: int  # -1 -> mark unclassified
 
@@ -1873,6 +2272,8 @@ async def probe(req: ProbeRequest):
 
 
 class LinescanRequest(BaseModel):
+    model_config = _STRICT
+
     start_row: int
     start_col: int
     end_row: int
@@ -2007,6 +2408,8 @@ async def linescan(req: LinescanRequest):
 
 class WandFieldRequest(BaseModel):
     """Seed a selection at one pixel."""
+    model_config = _STRICT
+
     row: int
     col: int
     smooth: int = 5     # composition smoothing window; see eds_wand's docstring
@@ -2021,6 +2424,8 @@ class WandAssignRequest(BaseModel):
     code computes rather than what the preview showed — and for a manual
     correction, what-you-saw-is-what-you-get matters more than the bytes.
     """
+    model_config = _STRICT
+
     mask_b64: str
     phase_index: int    # -1 marks the region unclassified
 
@@ -2127,6 +2532,8 @@ def _unpack_mask(mask_b64: str, n_rows: int, n_cols: int) -> np.ndarray:
 
 class ReplacePhaseRequest(BaseModel):
     """Repoint every pixel of one phase at another, map-wide."""
+    model_config = _STRICT
+
     from_phase_index: int
     to_phase_index: int
 
@@ -2164,6 +2571,8 @@ async def undo_endpoint():
 
 class PhaseColorsRequest(BaseModel):
     """Phase-name -> "#rrggbb". An empty dict clears every override."""
+    model_config = _STRICT
+
     overrides: Dict[str, str]
 
 
@@ -2196,26 +2605,36 @@ async def set_phase_colors(req: PhaseColorsRequest):
 # one names one grouped region. The rename to "region" put the two a
 # collision apart, and pydantic would have silently used whichever came last.
 class AssignRegionPhaseRequest(BaseModel):
+    model_config = _STRICT
+
     region_id: int
     phase_index: int          # -1 clears the name
 
 
 class MergeRegionsRequest(BaseModel):
+    model_config = _STRICT
+
     keep_id: int
     drop_id: int
 
 
 class SplitRegionRequest(BaseModel):
+    model_config = _STRICT
+
     region_id: int
     n_parts: int = 2
 
 
 class GrowRegionRequest(BaseModel):
+    model_config = _STRICT
+
     region_id: int
     n_pixels: int             # negative shrinks
 
 
 class SnapEdgesRequest(BaseModel):
+    model_config = _STRICT
+
     strength: float = 1.0     # erosion radius in px: how wide a band is re-decided
 
 
@@ -2278,6 +2697,8 @@ async def snap_edges_endpoint(req: SnapEdgesRequest):
 
 
 class RegionAtRequest(BaseModel):
+    model_config = _STRICT
+
     row: int
     col: int
 
@@ -2453,6 +2874,8 @@ async def get_region_detail(region_id: int):
 
 class SeedFromPixelRequest(BaseModel):
     """Build a composition window from one pixel the user pointed at."""
+    model_config = _STRICT
+
 
     row: int
     col: int
@@ -2476,6 +2899,12 @@ class SeedFromPixelRequest(BaseModel):
     #: over the map, not a constant they cannot see.
     tolerance: float = 0.6
     scale: Optional[int] = None
+    # Same meaning as on AutoClassifyRequest: a physical smoothing width,
+    # which wins over `scale` when the file has a step size. Accepted here
+    # because these endpoints exist to agree with the classification — a
+    # preview smoothed on a different box than the run is the disagreement
+    # they were built to remove.
+    scale_um: Optional[float] = None
 
 
 @router.post("/phase-map/region-defs/seed-from-pixel")
@@ -2495,7 +2924,7 @@ async def seed_region_def_from_pixel(req: SeedFromPixelRequest):
     """
     from backend.api.services.chemistry_score import background_levels
     from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
-    from backend.api.services.eds_clustering import DEFAULT_SCALE, _smooth_maps
+    from backend.api.services.eds_clustering import _smooth_maps
     from backend.api.services.phase_rules import renormalised_at_pct
 
     at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
@@ -2505,7 +2934,7 @@ async def seed_region_def_from_pixel(req: SeedFromPixelRequest):
             detail=f"Pixel ({req.row}, {req.col}) is outside this "
                    f"{n_rows}x{n_cols} map.",
         )
-    scale = DEFAULT_SCALE if req.scale is None else int(req.scale)
+    scale, scale_report = _resolve_scale(req.scale, req.scale_um)
     # Smoothed, because a window is evaluated on the smoothed composition.
     # Seeding from the raw pixel would hand back a threshold the classifier
     # then refuses - measured on a real particle: 40.97 at% raw against
@@ -2546,6 +2975,7 @@ async def seed_region_def_from_pixel(req: SeedFromPixelRequest):
         "row": req.row,
         "col": req.col,
         "scale": scale,
+        **scale_report,
         # Everything measured there, so the UI can say what it left out and
         # why, rather than silently handing back two clauses out of eight.
         "composition": dict(sorted(here.items(), key=lambda kv: -kv[1])),
@@ -2586,9 +3016,17 @@ def _seed_name(clauses) -> str:
 
 class RegionDefPreviewRequest(BaseModel):
     """Try hand-written region definitions without committing to them."""
+    model_config = _STRICT
+
 
     region_defs: List[dict] = []
     scale: Optional[int] = None
+    # Same meaning as on AutoClassifyRequest: a physical smoothing width,
+    # which wins over `scale` when the file has a step size. Accepted here
+    # because these endpoints exist to agree with the classification — a
+    # preview smoothed on a different box than the run is the disagreement
+    # they were built to remove.
+    scale_um: Optional[float] = None
 
 
 @router.post("/phase-map/region-defs/preview")
@@ -2605,13 +3043,13 @@ async def preview_region_defs(req: RegionDefPreviewRequest):
     use, so the preview and the run cannot disagree.
     """
     from backend.api.services.chemistry_score import background_levels
-    from backend.api.services.eds_clustering import DEFAULT_SCALE, _smooth_maps
+    from backend.api.services.eds_clustering import _smooth_maps
     from backend.api.services.phase_rules import (
         region_defs_from_list, region_labels,
     )
 
     at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
-    scale = DEFAULT_SCALE if req.scale is None else int(req.scale)
+    scale, scale_report = _resolve_scale(req.scale, req.scale_um)
     smoothed = _smooth_maps(at_maps, n_rows, n_cols, scale)
     background = background_levels(at_maps)
 
@@ -2661,6 +3099,7 @@ async def preview_region_defs(req: RegionDefPreviewRequest):
         "unclaimed_percentage": round(unclaimed / n_px * 100, 2) if n_px else 0.0,
         "total_pixels": n_px,
         "scale": scale,
+        **scale_report,
     }
 
 @router.post("/phase-map/region-at")

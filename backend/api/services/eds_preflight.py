@@ -92,6 +92,7 @@ def run_preflight(phase_files: list[str],
         checks["eds_present"] = {
             "severity": "block", "ok": False,
             "detail": str(getattr(exc, "detail", exc))[:200], "elements": [],
+            "code": "edsUnavailable", "params": {},
         }
         blocking.append("eds_present")
         return {"checks": checks, "phases": [], "can_index": False,
@@ -100,6 +101,7 @@ def run_preflight(phase_files: list[str],
     elements = sorted(at_maps.keys())
     checks["eds_present"] = {"severity": "ok", "ok": True,
                              "detail": f"{len(elements)} elements",
+                             "code": "elementsFound", "params": {"count": len(elements)},
                              "elements": elements}
 
     # ---- 2. grid match (BLOCKING) ---------------------------------------
@@ -114,6 +116,8 @@ def run_preflight(phase_files: list[str],
                    if grid_ok else
                    "EDS grid does not match the EBSD navigation grid — every "
                    "pattern would be paired with the wrong pixel's chemistry"),
+        "code": "gridMatch" if grid_ok else "gridMismatch",
+        "params": {},
     }
     if not grid_ok:
         blocking.append("grid")
@@ -138,6 +142,7 @@ def run_preflight(phase_files: list[str],
     if median_counts is None:
         checks["signal"] = {"severity": "warn", "ok": True,
                             "median_counts_per_px": None,
+                            "code": "countsUnavailable", "params": {},
                             "detail": "raw counts unavailable — cannot judge signal"}
     else:
         weak = median_counts < LOW_COUNTS_PER_PX
@@ -147,6 +152,10 @@ def run_preflight(phase_files: list[str],
             "detail": (f"median {median_counts:,.0f} counts/pixel — thin, the "
                        f"at% conversion is noise-dominated"
                        if weak else f"median {median_counts:,.0f} counts/pixel"),
+            "code": "signalThin" if weak else "signalOk",
+            # Raw, not pre-formatted: "12,345" reads as twelve point three
+            # four five in German. The page formats it for its own locale.
+            "params": {"median": round(median_counts)},
         }
 
     # ---- 4 + 5. per-phase coverage and plausibility ----------------------
@@ -169,12 +178,15 @@ def run_preflight(phase_files: list[str],
     any_missing = False
     for path, formula in zip(phase_files, phase_formulas):
         defining = defining_elements(formula)
-        from pathlib import Path as _P
-        entry: dict = {"path": path, "name": _P(path).stem, "formula": formula,
+        # The displayed name of a phase file the request named — separator
+        # rules must not depend on the platform. See display_names.
+        from display_names import display_stem
+        entry: dict = {"path": path, "name": display_stem(path), "formula": formula,
                        "defining": {k: round(v, 1) for k, v in defining.items()}}
         if not defining:
             entry.update({"severity": "warn", "max_area_pct": None,
                           "missing_elements": [],
+                          "code": "noFormula", "params": {},
                           "detail": "no parseable formula — chemistry cannot "
                                     "judge this phase (it will pass unchanged)"})
             any_missing = True
@@ -186,6 +198,8 @@ def run_preflight(phase_files: list[str],
         if missing:
             any_missing = True
             entry.update({"severity": "warn", "max_area_pct": None,
+                          "code": "notMeasured",
+                          "params": {"elements": ", ".join(missing)},
                           "detail": "not measured: " + ", ".join(missing)
                                     + " — chemistry is blind to this phase"})
             phases.append(entry)
@@ -209,12 +223,19 @@ def run_preflight(phase_files: list[str],
         entry["weak_bound"] = len(defining) < 2
         if frac <= 0.0:
             entry.update({"severity": "warn",
+                          "code": "vetoed",
+                          "params": {"elements": ", ".join(sorted(defining)),
+                                     "threshold": PRESENT_AT_PCT},
                           "detail": "chemistry vetoes this phase on the whole "
                                     "map — no pixel carries "
                                     + ", ".join(sorted(defining))
                                     + f" at >= {PRESENT_AT_PCT:g} at%"})
         else:
             entry["severity"] = "ok"
+            entry["code"] = "notRuledOut"
+            entry["params"] = {"pct": round(frac, 2),
+                               "elements": ", ".join(sorted(defining)),
+                               "threshold": PRESENT_AT_PCT}
             entry["detail"] = (
                 f"not ruled out on {frac:.2f} % of the map "
                 f"(needs " + ", ".join(sorted(defining))
@@ -223,6 +244,8 @@ def run_preflight(phase_files: list[str],
 
     checks["coverage"] = {
         "severity": "warn" if any_missing else "ok", "ok": True,
+        "code": "coverageIncomplete" if any_missing else "coverageComplete",
+        "params": {},
         "detail": ("some phases cannot be judged chemically"
                    if any_missing else "all defining elements are measured"),
     }

@@ -30,7 +30,13 @@
       "notFound": "Not found",
       "available": "Available",
       "notAvailable": "Not available",
-      "modeRecommended": "{{mode}} recommended"
+      "modeRecommended": "{{mode}} recommended",
+      "notSetUp": "Not set up"
+    },
+    "warnings": {
+      "gpuBlocksizeReduced": "GPU has {{gb}} GB — using blocksize={{blocksize}} for the GPU master pattern (reduced from 32 to fit the memory).",
+      "gpuBlocksizeMinimal": "GPU has {{gb}} GB — using the smallest blocksize {{blocksize}} for the GPU master pattern. Complex crystals (more than 20 atoms) may still run out of memory.",
+      "emsoftNotOffered": "EMsoft is not set up on this computer. It is optional — the Orienta Engine needs no EMsoft."
     }
   },
   "manualPaths": {
@@ -55,6 +61,8 @@
     "toggleTooltip": "Enable or disable shared network database (server) mode.",
     "databaseRootLabel": "Database Root",
     "databaseRootPlaceholder": "Z:\\SharedDrive\\EBSD_Database",
+    "databaseRootPlaceholderMac": "/Volumes/Share/EBSD_Database",
+    "databaseRootPlaceholderLinux": "/mnt/share/EBSD_Database",
     "databaseRootTooltip": "Path to the shared EBSD database root on the network drive.",
     "discovery": {
       "sht": "SHT Database",
@@ -233,12 +241,18 @@
       "infoMacos": "On macOS, EMsoft is installed directly without WSL. Click \"Run Install\" below to start the installation.",
       "infoLinux": "On Linux, EMsoft is installed directly without WSL. Click \"Run Install\" below to start the installation.",
       "alreadyInstalled": "EMsoft binaries are already installed and available in PATH."
+    },
+    "notOffered": {
+      "title": "EMsoft (optional)",
+      "status": "Not set up",
+      "infoMacos": "The Orienta Engine runs on this Mac and needs no EMsoft: master patterns, Monte Carlo and SHT all work without it. EMsoft itself is not offered here yet. The install script does carry a macOS branch (through Homebrew), but nobody has ever run it, and an untested build of a large Fortran project is not something to start from a button.",
+      "infoLinux": "The Orienta Engine runs on this computer and needs no EMsoft: master patterns, Monte Carlo and SHT all work without it. EMsoft itself is not offered here yet. The install script does carry a Linux branch (through apt), but nobody has ever run it, and an untested build of a large Fortran project is not something to start from a button."
     }
   },
   "about": {
       "title": "About Orienta",
       "copyright": "Orienta — EBSD pattern analysis · Copyright © 2026 the Orienta authors",
-      "licenseLine": "This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version.",
+      "licenseLine": "This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version. The installed package also contains PyQt5, which is licensed under GPL version 3 only; a copy that includes it may be passed on under version 3 (see NOTICE.md).",
       "noWarranty": "This program comes with ABSOLUTELY NO WARRANTY. It is provided “as is”; to the maximum extent permitted by applicable law, the authors, copyright holders, and their institutions accept no liability for any damages arising from its use — including loss of or damage to data, or inaccurate results.",
       "dataNote": "All processing happens locally on this machine; your data is never transmitted to the authors. Orienta opens measurement files read-only and writes results to separate files — still, keep backups of your original data and independently validate automated results (indexing, phase identification, quantification) before relying on them.",
       "viewLicense": "Full license text (GPL-3.0)",
@@ -272,6 +286,10 @@
     "versions": "You have {{current}} · available: {{latest}}",
     "whatHappens": "Orienta will download the new version, install any changed packages, rebuild the interface and then restart. This can take a few minutes. If anything fails, your current version stays in place.",
     "manualOnly": "This installation cannot update itself.",
+    "installerOnly": "This installation is updated by running the new installer.",
+    "installerHow": "It was set up from a package, so there is nothing to pull and rebuild. Download the installer for the new version and run it — your data folder, your settings and the installed environment all stay where they are.",
+    "rateLimited": "GitHub declined the check for now (too many requests from this network). Try again in a few minutes.",
+    "checkIncomplete": "The check did not complete ({{reason}}).",
     "manualHow": "It was set up from a downloaded archive rather than a git clone, so there is nothing to update from. Download the new version and follow the install steps in INSTALL.md, or ask for a git-based installation to get automatic updates.",
     "install": "Install update",
     "later": "Later",
@@ -301,5 +319,38 @@
     "confirmPassword": "Re-enter the new WSL user password to confirm it matches.",
     "newPassword": "Enter a new password for the existing WSL user.",
     "confirmNewPassword": "Re-enter the new password to confirm it matches."
-  }
+  },
+    "removeData": {
+      "title": "Remove Orienta's data",
+      "intro": "Deleting the application does not remove what it downloaded. This removes Orienta's own files; anything you put in the folder yourself is left alone.",
+      "folder": "Folder",
+      "button": "Remove data…",
+      "askFiles": "Also remove the downloaded Python and program files (2.5 to 8 GB)? Your crystal library is kept unless you choose otherwise in the next step.",
+      "askLibrary": "Also DELETE your crystal library? It holds the structures and simulations you collected.",
+      "yes": "Yes, remove them",
+      "no": "Cancel",
+      "yesLibrary": "Yes, delete the library",
+      "keepLibrary": "No, keep the library",
+      "busy": "Removing…",
+      "done": "Orienta's files were removed.",
+      "failed": "Nothing was removed.",
+      "refused": {
+        "notOurs": "This folder is not recognisably Orienta's, so nothing was touched.",
+        "isRepo": "This is a source checkout, not a data folder. Nothing was touched.",
+        "isLink": "This folder is a link. A link is never followed; nothing was touched.",
+        "isHome": "This is your home directory. Nothing was touched.",
+        "tooShallow": "This is a drive root. Nothing was touched.",
+        "noFolder": "There is no data folder to remove.",
+        "error": "The folder could not be read.",
+        "notHere": "This is handled by the uninstaller on this system.",
+        "backendRunning": "Orienta's backend is still running, so nothing was removed. Close Orienta and try again."
+      },
+      "partly": "Orienta's files were removed; the crystal library was kept.",
+      "someLeft_one": "One item could not be removed and is still in the folder.",
+      "someLeft_other": "{{count}} items could not be removed and are still in the folder.",
+      "libraryWasLink": "Your crystal library was a link. The link was removed; the files it pointed at were not touched.",
+      "keptList": "Kept: {{list}}",
+      "keepsForeign_one": "One file you added will be kept.",
+      "keepsForeign_other": "{{count}} files you added will be kept."
+    }
 }

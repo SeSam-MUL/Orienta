@@ -88,7 +88,7 @@ def calculate_kam(dataset, order: int = 2, threshold_deg: float = 7.0) -> np.nda
     Returns:
         KAM map of shape (ny, nx) in degrees
 
-    Reference: DeformationAnalysis.m lines 138-143
+    Reference: DeformationAnalysis.m lines 142-147
     """
     if not ORIX_AVAILABLE:
         raise ImportError("orix is required for KAM calculation")
@@ -162,7 +162,7 @@ def calculate_kam_histogram(kam: np.ndarray, bin_width: float = 0.25) -> Tuple[n
         counts: Histogram counts (probability normalized, sums to 1.0)
         edges: Bin edges
 
-    Reference: DeformationAnalysis.m line 143
+    Reference: DeformationAnalysis.m line 147
     """
     # Filter out NaN and invalid values
     kam_valid = kam[np.isfinite(kam)]
@@ -205,7 +205,7 @@ def classify_grain_boundaries(grains, sagb_min_deg: float = 3.0, sagb_max_deg: f
         hagb_mask: Boolean mask for HAGB segments
         all_gb_mask: Boolean mask for all grain boundaries (>sagb_min_deg)
 
-    Reference: DeformationAnalysis.m lines 10-14
+    Reference: DeformationAnalysis.m lines 14-18
     """
     if grains.boundary_type is None:
         raise ValueError("Grain boundary types not calculated. Run reconstruct_grains first.")
@@ -237,7 +237,7 @@ def calculate_gb_metrics(grains, dataset, sagb_min_deg: float = 3.0,
             hagb_per_phase_area, hagb_per_field_area
             sagb_per_phase_area, sagb_per_field_area
 
-    Reference: DeformationAnalysis.m lines 10-31
+    Reference: DeformationAnalysis.m lines 14-35
     """
     sagb_mask, hagb_mask, all_gb_mask = classify_grain_boundaries(
         grains, sagb_min_deg, sagb_max_deg, hagb_min_deg
@@ -298,7 +298,7 @@ def calculate_gb_segment_histogram(grains, dataset,
         counts: Sum of segment lengths per bin (µm)
         bins: Bin centers (degrees)
 
-    Reference: DeformationAnalysis.m lines 103-113
+    Reference: DeformationAnalysis.m lines 107-117
     """
     if grains.boundary_type is None:
         raise ValueError("Grain boundary types not calculated")
@@ -332,7 +332,7 @@ def calculate_sphericity(grains) -> np.ndarray:
     Returns:
         Sphericity array (length = n_grains)
 
-    Reference: DeformationAnalysis.m line 47
+    Reference: DeformationAnalysis.m line 51
     """
     if grains.area is None or grains.ecd is None:
         raise ValueError("Grain area and ECD not calculated")

@@ -20,6 +20,7 @@ workflow at the bottom of this page.
 | [EBSD Viewer](EBSDViewer.md) | Load an EBSD scan, browse its Kikuchi patterns on an overview map, and apply pattern preprocessing (background removal, frame averaging, contrast). |
 | [HDF5 Viewer](HDF5Viewer.md) | Low-level explorer for the contents of an H5OINA / HDF5 file ("H5OINA Cockpit") — groups, datasets, patterns, and EDS spectra. |
 | [EDS](EDS.md) | Turn per-pixel EDS X-ray counts into element maps and composition (counts / wt% / at%) for chemistry-aware analysis. |
+| [EDS chemistry prior](EDS-prior.md) | How the measured chemistry weighs in on phase assignment during indexing, what it cannot do, and when to leave it off. |
 
 ## Calibration
 
@@ -54,12 +55,13 @@ workflow at the bottom of this page.
 | [Crystal Database](CrystalDatabase.md) | Manage the crystal structures Orienta uses for indexing, including CIF→.xtal conversion. |
 | [Simulation](Simulation.md) | Generate the simulated reference data (master patterns, SHT, dictionaries) that indexing needs, via the EMsoft/EMSphInx toolchain. |
 | [Database Browser](DatabaseBrowser.md) | Central file manager for your local crystal/simulation database (structures, master patterns, SHT files). |
+| [Phase Collections](Phase-Collections.md) | File phases from your library into named collections so pickers can be narrowed to one group instead of the whole library. |
 
 ## Settings
 
 | Page | What it does |
 |---|---|
-| [Settings](Settings.md) | Configure system dependencies and preferences — system-status health check, install wizard, compute mode, and appearance. |
+| [Settings](Settings.md) | Configure system dependencies and preferences — system-status health check, install wizard, API keys, compute mode, and appearance. |
 | [Updating Orienta](Updating.md) | Install a new release from inside the app, and what happens if it fails. |
 | [Reporting a problem](ReportingProblems.md) | Package version, logs and your description into one zip to attach to a bug report. |
 

@@ -47,7 +47,20 @@ export default function AboutSection() {
     not_a_git_install: t('settings:update.manualOnly'),
     no_local_release: t('settings:update.upToDate'),
     check_failed: t('settings:update.unreachable'),
+    // An installed copy asks GitHub directly, so it can hear things a git
+    // checkout never hears.
+    rate_limited: t('settings:update.rateLimited'),
+    unreachable: t('settings:update.unreachable'),
+    not_found: t('settings:update.unreachable'),
+    no_release_tag: t('settings:update.unreachable'),
   };
+
+  // A reason nobody mapped used to render NOTHING: the user pressed "check for
+  // updates" and the line stayed empty, which reads as "it is fine". Say the
+  // raw reason rather than say nothing.
+  const checkMessage = checkState === 'idle' || checkState === 'busy'
+    ? ''
+    : (CHECK_MESSAGES[checkState] || t('settings:update.checkIncomplete', { reason: checkState }));
 
   useEffect(() => {
     let mounted = true;
@@ -109,13 +122,13 @@ export default function AboutSection() {
               ? t('settings:update.checking')
               : t('settings:update.checkNow')}
           </button>
-          {CHECK_MESSAGES[checkState] && (
+          {checkMessage && (
             <span style={{
               color: checkState === 'up_to_date' || checkState === 'no_local_release'
                 ? colors.textSecondary : colors.yellow,
               fontSize: '11px',
             }}>
-              {CHECK_MESSAGES[checkState]}
+              {checkMessage}
             </span>
           )}
           <DiagnosticsExportButton />

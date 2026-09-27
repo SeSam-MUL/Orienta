@@ -11,6 +11,7 @@
  * Bitmap cache and fetch lifecycle live in useLayerStack.js — this
  * module is purely state transitions.
  */
+import { parseAddonLayerId } from './addonLayerDrain';
 
 export const MAX_LAYERS = 8;
 
@@ -87,8 +88,37 @@ export function layerStackReducer(state, action) {
       next.splice(to, 0, moved);
       return { ...state, layers: next };
     }
+    // `keepAddonsFor` is a RESULT ID, and only the re-seed passes it.
+    //
+    // Measured in the running app: the first "show as layer" on a Phase Maps
+    // page that had not been opened yet was lost. The add-on page queues the
+    // layer and navigates; the drain adds it; and then useLayerStack's
+    // resetSignal effect fires — the result id has just arrived — and re-seeds
+    // the stack from the last quick mode, or from the default preset when
+    // there is none (which is what happened here), replacing everything
+    // including the layer the user is being carried over to look at. The
+    // second click worked, which is what made it look like a fluke rather
+    // than an ordering.
+    //
+    // Kept by RESULT, not by "is an add-on layer": a layer bound to a
+    // different result draws that result's pixels over this one's map, and
+    // says nothing about it — fetchLayer's wrong-result guard only bites once
+    // the id it compares against has caught up. Which is why the caller must
+    // pass a result id that moves WITH the selection; see the note there.
+    //
+    // Appended, so the seeded layers keep the order the preset gives them and
+    // the add-on map stays on top, where the drain put it. MAX_LAYERS is
+    // honoured: a seed that fills the stack wins over a kept layer, because
+    // the seed is what the user's own last choice asked for.
     case 'REPLACE_ALL': {
-      return { ...state, layers: action.layers ?? [] };
+      const seeded = action.layers ?? [];
+      const keepFor = action.keepAddonsFor;
+      if (!keepFor) return { ...state, layers: seeded };
+      const kept = state.layers.filter((l) => {
+        const p = parseAddonLayerId(l.id);
+        return p && p.resultId === keepFor && !seeded.some((s) => s.id === l.id);
+      });
+      return { ...state, layers: [...seeded, ...kept].slice(0, MAX_LAYERS) };
     }
     case 'CLEAR': {
       return { ...state, layers: [] };

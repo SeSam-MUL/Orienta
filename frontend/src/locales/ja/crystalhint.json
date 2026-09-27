@@ -202,7 +202,7 @@
     "inLibraryBadge": "ライブラリ内",
     "viewCif": "CIF #{{id}} を表示",
     "savedToLibrary": "✓ ライブラリに保存しました",
-    "nextStep": "次のステップ: Simulation タブで SHT を生成します (CIF → XTAL → MC → Master → SHT、WSL/EMsoft 経由で約 30-60 分)。",
+    "nextStep": "次のステップ：シミュレーションタブで SHT を生成（CIF → XTAL → MC → Master → SHT、EMsoft で約 30～60 分）。",
     "openInSimulation": "→ Simulation で開く",
     "openInSimulationTooltip": "この CIF で Simulation ページを事前入力し、その SHT マスターを生成します。",
     "downloadFailed": "✗ {{msg}}",

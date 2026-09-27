@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import {
-  estimateCpuSphericalSeconds, formatRoughDuration, isSphericalCpuFallback,
+  estimateCpuSphericalSeconds, estimateGpuSphericalSeconds, formatRoughDuration, hasNoCudaDevice, isSphericalCpuFallback,
 } from '../Indexing/cpuEstimate';
 import { colors, spacing } from '../../theme/tokens';
 import { Button, GroupBox, Input } from '../../theme/components';
@@ -271,6 +271,12 @@ export default function BatchWorkflow({ isActive = true }) {
     batchPatterns,
     files[0]?.config?.spherical_bandwidth ?? SPHERICAL_DEFAULTS.spherical_bandwidth,
   ));
+  const gpuEstimate = formatRoughDuration(estimateGpuSphericalSeconds(batchPatterns));
+  // Asks about the machine, not about the selected backend, through the same
+  // predicate the Indexing page uses — both screens share these strings, so a
+  // label that differs between them is what the comment at the dropdown warns
+  // about.
+  const noCudaHere = hasNoCudaDevice(runtimeInfo);
 
   const handleStartBatch = async (confirmedCpu = false) => {
     setError(null);
@@ -662,7 +668,7 @@ export default function BatchWorkflow({ isActive = true }) {
             }}>
               {'⚠'}{' '}
               {cpuEstimate
-                ? t('indexing:spherical.cpuFallbackWithEstimate', { n: batchPatterns, estimate: cpuEstimate })
+                ? t('indexing:spherical.cpuFallbackWithEstimate', { n: batchPatterns, estimate: cpuEstimate, gpuEstimate })
                 : t('indexing:spherical.cpuFallback')}
             </div>
           )}
@@ -683,7 +689,11 @@ export default function BatchWorkflow({ isActive = true }) {
               onChange={(e) => u({ backend: e.target.value })}
               style={{ background: colors.bg, border: `1px solid ${colors.border}`, color: colors.text, borderRadius: 4, padding: '2px 6px' }}
             >
-              <option value="spherical_gpu">{t('indexing:spherical.backendGpu')}</option>
+              <option value="spherical_gpu">
+                {noCudaHere
+                  ? t('indexing:spherical.backendGpuOnCpu')
+                  : t('indexing:spherical.backendGpu')}
+              </option>
               <option value="emsphinx">{t('indexing:spherical.backendEmsphinx')}</option>
             </select>
             <span>{t('step5.bandwidth')}</span><Input value={cfg.spherical_bandwidth ?? SPHERICAL_DEFAULTS.spherical_bandwidth} type="number" title={t('step5.bandwidthTooltip')} onChange={(e) => u({ spherical_bandwidth: +e.target.value || SPHERICAL_DEFAULTS.spherical_bandwidth })} />
@@ -790,7 +800,7 @@ export default function BatchWorkflow({ isActive = true }) {
             </div>
             <div style={{ fontSize: '10pt', color: colors.text, lineHeight: 1.55, marginBottom: 16 }}>
               {cpuEstimate
-                ? t('indexing:spherical.cpuConfirmBodyWithEstimate', { n: batchPatterns, estimate: cpuEstimate })
+                ? t('indexing:spherical.cpuConfirmBodyWithEstimate', { n: batchPatterns, estimate: cpuEstimate, gpuEstimate })
                 : t('indexing:spherical.cpuConfirmBody')}
             </div>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

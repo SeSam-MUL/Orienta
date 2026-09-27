@@ -1,9 +1,12 @@
 # Core scientific libraries
-kikuchipy>=0.11.3
-orix>=0.14
+# Upper bounds until the newer releases are validated on real data (tasks/mac-compat/).
+# orix 0.15 changes the order in which misorientation reduction applies symmetry, which the
+# pseudo-symmetry code depends on; kikuchipy 0.12.1 excludes pyebsdindex 0.3.10 over a PC bug.
+kikuchipy>=0.11.3,<0.12
+orix>=0.14,<0.15
 diffsims>=0.7
 diffpy.structure>=3.3  # space-group symmetry orbits for forward_sim U_g table
-pyebsdindex>=0.3
+pyebsdindex>=0.3,<0.3.10
 hyperspy>=2.4
 numpy
 scipy
@@ -27,7 +30,6 @@ uvicorn[standard]
 pydantic
 httpx>=0.25
 requests  # Crystal Hint external phase lookup (COD / Materials Project / CIF downloaders)
-python-multipart
 websockets
 
 # Image processing
@@ -39,6 +41,7 @@ dask[array]  # lazy EBSD arrays + dask.callbacks progress hook in backend/api/ro
 openpyxl
 PyYAML  # CITATION.cff parsing (backend/api/services/citations/self_entry.py)
 scikit-learn>=1.0
+threadpoolctl  # scripts/check_runtime_health.py gate 2: which OpenMP runtimes are loaded
 xlsxwriter
 beautifulsoup4
 seaborn
@@ -51,10 +54,23 @@ psutil
 ray
 
 # Machine Learning (EBSD AI phase classifier)
-# PyTorch with CUDA 12.1 support (install separately, see below)
---extra-index-url https://download.pytorch.org/whl/cu121
-torch>=2.0
-torchvision>=0.15
+#
+# PyTorch MUST be pinned to a +cuXXX local version, not merely offered a CUDA
+# index. `--extra-index-url` makes pip consider BOTH indexes and take the
+# HIGHEST version: the cu121 index stops at torch 2.5.1+cu121 (cp311/Windows)
+# while PyPI is far ahead, so an unpinned `torch>=2.0` always resolved to the
+# PyPI wheel -- which is CPU-only on Windows. Measured 2026-09-17 on an RTX
+# 4070: `pip install -r requirements.txt` gave torch 2.14.0+cpu and
+# torch.cuda.is_available() == False, silently, because cupy kept working.
+# Cost: 0.71 TFLOP/s instead of 11.2 TFLOP/s (fp32).
+# An exact +cu126 pin exists only in the PyTorch index, so there is no version
+# contest left. Guarded by tests/test_requirements_torch_index_guard.py.
+# macOS has no CUDA wheels and takes the plain build of the same version.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.11.0+cu126 ; platform_system != "Darwin"
+torchvision==0.26.0+cu126 ; platform_system != "Darwin"
+torch==2.11.0 ; platform_system == "Darwin"
+torchvision==0.26.0 ; platform_system == "Darwin"
 scikit-image>=0.20
 faiss-cpu
 
@@ -89,7 +105,6 @@ numba>=0.59
 
 # Test infrastructure
 pytest
-pytest-asyncio
 pytest-timeout
 
 # -------------------------------------------------------

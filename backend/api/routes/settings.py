@@ -81,11 +81,18 @@ async def get_settings():
         }
         for name, value in api_keys.items()
     }
+    import sys
     return {
         "server": cfg.get("server", {}),
         "manual_paths": cfg.get("manual_paths", {}),
         "api_keys": redacted,
         "config_path": str(uc.config_path()),
+        # So the page can show a path example that exists on this machine. The
+        # server-mode input offered "Z:\\SharedDrive\\EBSD_Database" to a Mac
+        # user, which is not a path there at all.
+        "platform_os": ("windows" if sys.platform == "win32"
+                        else "macos" if sys.platform == "darwin"
+                        else "linux"),
     }
 
 

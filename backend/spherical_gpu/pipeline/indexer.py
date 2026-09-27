@@ -323,8 +323,17 @@ class Tier1Indexer:
         else:
             sigma_deg = 70.0
         self.sample_tilt_deg = sigma_deg
-        self._alpha_tilt = math.radians(sigma_deg - float(geom.tilt_deg))
-        # Wait — EMSphInx uses (90 - sTlt + dTlt). Reverting to that formula.
+        # (90 - sTlt + dTlt), the same combination EMSphInx uses and the same one
+        # PyEBSDIndex builds from `sampleTilt` and `camElev`
+        # (`_ebsd_index_single.py`: `tiltang = -(90 - sampleTilt + camElev)`),
+        # which is why the Hough and spherical routes share a convention instead
+        # of differing by the camera elevation. That the elevation reaches
+        # PyEBSDIndex at all is pinned by `tests/test_hough_camera_tilt.py`; the
+        # recorded agreement figures between the two routes are in
+        # `tasks/retire-hough/RESULTS.md` (0.33 deg on 7050, 0.357 deg on crop1).
+        # A `sigma - tilt` version stood here first, was overwritten two lines
+        # later by this one, and the dead assignment plus its "Wait —" note
+        # survived until 2026-09-26.
         self._alpha_tilt = math.radians(90.0 - sigma_deg + float(geom.tilt_deg))
 
         # Precompute per-instance state used in every batch.

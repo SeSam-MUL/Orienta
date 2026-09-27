@@ -102,7 +102,7 @@ class BatchProcessor:
         Returns:
             List of file paths
 
-        Reference: EBSDanalysis_frame.m lines 30-32 (dir command)
+        Reference: EBSDanalysis_frame.m lines 34-36 (dir command)
         """
         files = []
         for pattern in self.file_patterns:
@@ -128,7 +128,7 @@ class BatchProcessor:
         Returns:
             Dictionary with all analysis results, or None if processing failed
 
-        Reference: EBSDanalysis_frame.m main loop (lines 95-400+)
+        Reference: EBSDanalysis_frame.m main loop (lines 99-404+)
         """
         dataset_name = file_path.stem  # Filename without extension
 

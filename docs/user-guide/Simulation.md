@@ -9,7 +9,7 @@ backscatter diffraction.
 
 It supports two compute engines:
 
-- **Ours** (default) — a self-contained GPU/CPU forward-simulation pipeline
+- **Orienta Engine** (default) — a self-contained GPU/CPU forward-simulation pipeline
   (PyTorch Monte Carlo + dynamical master-pattern builder). It needs no external
   installation; it runs on a CUDA GPU when available and falls back to CPU.
 - **EMsoft** (optional) — the established EMsoft Monte-Carlo + master-pattern
@@ -41,12 +41,12 @@ lacks output for the chosen voltage and queue them in one batch.
 ## How to use it — step by step
 
 The page has three tabs: **Configure**, **Queue**, and **History**. The engine
-switch (**Ours / EMsoft**) lives in the header; EMsoft is greyed out unless it
+switch (**Orienta Engine / EMsoft**) lives in the header; EMsoft is greyed out unless it
 is detected.
 
 ### Configure
 
-1. **Choose the engine.** Leave it on **Ours** for the built-in pipeline (the
+1. **Choose the engine.** Leave it on **Orienta Engine** for the built-in pipeline (the
    header shows the hardware path it will use, e.g. your GPU name or CPU cores),
    or switch to **EMsoft** if it is available.
 2. **Pick a crystal file.** Select the `.xtal` to simulate (via the crystal
@@ -61,13 +61,13 @@ is detected.
      slower. The default is 0.05; large unit cells may need a coarser value.
    - **Output type** — SHT only, Master only, or Both (see table above).
    - **Total electrons**, **resolution / npx**, and **threads** as needed. The
-     "Ours" engine needs far fewer electrons than EMsoft (the default adjusts
+     Orienta Engine needs far fewer electrons than EMsoft (the default adjusts
      automatically when you switch engines).
    - **Advanced** Monte-Carlo and master-pattern options are available for fine
      control.
 4. **Compute mode (EMsoft only).** When EMsoft is selected, an
    Auto / GPU-only / CPU-only switch chooses the OpenCL vs OpenMP path for the
-   EMsoft binaries. This card is hidden under the "Ours" engine because that
+   EMsoft binaries. This card is hidden under the Orienta Engine because that
    pipeline picks GPU-vs-CPU itself.
 5. **Start.** Click **Start Simulation** to queue a single job. The view
    switches to the Queue tab.
@@ -118,10 +118,10 @@ not overwrite each other.
 
 ## Tips & notes
 
-- **"Ours" needs no WSL/EMsoft and runs on GPU when present.** It is the
+- **The Orienta Engine needs no WSL/EMsoft and runs on GPU when present.** It is the
   recommended default; the header label tells you whether it resolved to GPU
   (CUDA) or CPU. EMsoft is optional and only enabled when WSL + EMsoft are
-  detected — if EMsoft becomes unavailable the page falls back to "Ours"
+  detected — if EMsoft becomes unavailable the page falls back to the Orienta Engine
   automatically.
 - **GPU work is serialised.** Concurrent GPU simulation jobs (single or batch)
   queue on a single GPU lock to avoid running two master-pattern builds at once
@@ -138,6 +138,6 @@ not overwrite each other.
 - **Long EMsoft steps can look frozen.** The EMsoft SHT step computes internally
   for a long time without log output; the queue shows an elapsed-time / CPU-load
   heartbeat so a slow run is distinguishable from a stalled one.
-- **The "Ours" forward-simulation pipeline is comparatively new** relative to
+- **The Orienta Engine is comparatively new** relative to
   the long-established EMsoft path. For phases where exact agreement with EMsoft
   matters, you can switch to the EMsoft engine (when available) and compare.

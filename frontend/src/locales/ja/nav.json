@@ -12,7 +12,7 @@
     "eds": { "label": "EDS 解析", "tooltip": "元素マップ、定量、組成からの相提案" },
     "pcrefinement": { "label": "PC 精密化", "tooltip": "パターン中心 (PC) のキャリブレーションと精密化" },
     "crystal": { "label": "結晶 DB", "tooltip": "CIF/XTAL 変換、結晶データベース、DWF エディタ" },
-    "simulation": { "label": "シミュレーション", "tooltip": "EMsoft モンテカルロ + マスターパターンのシミュレーション" },
+    "simulation": { "label": "シミュレーション", "tooltip": "モンテカルロ + マスターパターンのシミュレーション（Orienta Engine または EMsoft）" },
     "database": { "label": "データベースブラウザ", "tooltip": "ネットワーク共有上のシミュレーション結果を閲覧" },
     "indexing": { "label": "指数付け", "tooltip": "Hough、Dictionary、または Spherical (EMSphinx) 指数付け" },
     "phasemap": { "label": "相分布図", "tooltip": "指数付け結果をスケールバー付きで可視化" },
@@ -20,6 +20,7 @@
     "batch": { "label": "バッチ", "tooltip": "チェックポイント復元付きの多相バッチ指数付け" },
     "refinement": { "label": "精密化", "tooltip": "多相の指数付け結果を確認・精密化" },
     "crystalhint": { "label": "結晶ヒント", "tooltip": "パターンから対称性と格子を検出。ライブラリに一致がない場合に候補相を提案。" },
+    "addons": { "label": "アドオン", "tooltip": "他のグループが提供する解析と、その引用" },
     "mlhub": { "label": "ML 予測器", "tooltip": "指数付け結果から ML モデルを学習し、相を予測" },
     "settings": { "label": "設定", "tooltip": "システム状態、サーバーモード、EMsoft/EMSphinx パス" }
   },

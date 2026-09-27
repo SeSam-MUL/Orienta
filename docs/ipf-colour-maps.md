@@ -112,6 +112,25 @@ and does the whole 5304-px map in 4.4 s. The render-NCC peak is very sharp
 The map records this: `metadata["orientation_source"]` = `hough`, and the UI
 shows the "⬡ Orientierung aus Hough" badge.
 
+
+> **Update 2026-09-22 — retired for m-3/23 and mmm/222/mm2.** The "wrong basin" above
+> was the decode error fixed in `a4b7710c` + `13dd72f4` (a constant C2<1 -1 0> that is
+> a symmetry of O and D4 but not of m-3 or mmm, plus a half-bin origin). Measured
+> after the fix, raw spherical without any substitution: synthetic m-3 0.17° / mmm
+> 0.26° median to the truth (100 % within 2°); the real 7050 S-phase renders 0.711
+> vs Hough 0.703, 0.33° apart; crop1 alpha is 0.145° from EMSphInx against 0.292° for
+> the Hough-anchored pipeline, and the run is 45 % faster. `spherical_unreliable()`
+> now keeps only **-43m** (58 % within 2°, the rest a 90° variant) — and a z_rot=2
+> master of unknown class — on Hough. `ORIENTA_HOUGH_ANCHOR_ALL_ZROT2=1` restores the
+> old gate. Measurements: `tasks/retire-hough/`.
+> Consequence to know: the map-wide variant unification (3.3) runs only for phases
+> the resolver touched, so it no longer runs for alpha or the S phase. Its
+> five-fold classes existed for Hough's second basin, which the raw sphere does not
+> produce (crop1 alpha: 4 px beyond 5° from EMSphInx raw, 7 with the anchor); its
+> per-grain speckle clean-up of noisy pixels is not applied to those phases any
+> more — per pixel measured without loss on crop1 only; on SampleB and 7050 only the
+> map-level forward-NCC was compared (unchanged, worst pixel better).
+
 ### 3.3 Map-wide variant unification
 
 Because Hough is variant-blind, its output still mixes variant classes across

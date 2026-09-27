@@ -1,6 +1,6 @@
 """GPU-native forward-simulation runner service.
 
-This is the "Ours" engine: FULLY SELF-CONTAINED and HARDWARE-ADAPTIVE — it
+This is the Orienta Engine: FULLY SELF-CONTAINED and HARDWARE-ADAPTIVE — it
 requires NO EMsoft and NO WSL, and auto-picks the fastest available hardware
 path for every step (GPU when CUDA is present, else CPU).  EMsoft is a SEPARATE,
 optional engine (the ``/start`` pipeline) the user picks manually; it is never
@@ -10,18 +10,18 @@ Wraps the full pipeline:
     read_crystal_structure
     -> [MC SOURCE STRATEGY] obtain MCData (EMsoft-free, hardware-adaptive):
          (a) load from existing MC .h5 (free, ~instant)
-         (b) run OUR GPU MC via run_gpu_mc (engine="auto" -> cupy CUDA kernel,
+         (b) run the Orienta Engine GPU MC via run_gpu_mc (engine="auto" -> cupy CUDA kernel,
              ~1.4 s / 50M e⁻) when CUDA + cupy are available.  The full-pipeline
              benchmark (tasks/forward_sim/iterations/PIPE2/pipe2.json) proved our
              GPU MC is FASTER than EMsoft EMMCOpenCL (~14 s / 500M default) AND
              master-NCC-equivalent (0.9999 vs the EMsoft oracle).
-         (c) run OUR numba CPU MC (engine="auto" -> numba njit prange loop) when
+         (c) run the Orienta Engine numba CPU MC (engine="auto" -> numba njit prange loop) when
              no CUDA/cupy is present but numba compiles — the no-GPU fast path.
          (d) PyTorch step-major CPU loop (capped) — last resort, emits a LOUD
              warning because it is ~400× slower than the cupy kernel.
        Strategies (b)/(c)/(d) all route through ``run_gpu_mc(engine="auto")``,
        which itself fans out cupy -> numba -> pytorch; the runner only chooses the
-       per-host messaging.  EMsoft EMMCOpenCL is NOT in this chain (the "Ours"
+       per-host messaging.  EMsoft EMMCOpenCL is NOT in this chain (the Orienta Engine
        engine must not require WSL/EMsoft, and our MC is faster anyway).
     -> build_master         (dynamical master builder)
     -> write_master_h5      (if output_type in {master_only, both})
@@ -99,7 +99,7 @@ def _sht_filename_for(stem, xtal_path, energy_kV, sig, cif_library_dir=None):
 
 
 # The provenance sidecar writer now lives in sht_provenance (engine-neutral, no
-# heavy deps) so BOTH the GPU "Ours" runner and the EMsoft controller share it.
+# heavy deps) so BOTH the GPU Orienta Engine runner and the EMsoft controller share it.
 # Re-exported here so existing callers/tests keep importing it from gpu_sim_runner.
 # (sht_provenance does NOT import gpu_sim_runner -> no import cycle.)
 from backend.api.services.sht_provenance import write_provenance_sidecar  # noqa: E402,F401
@@ -164,11 +164,11 @@ def _wsl_available() -> bool:
     timeout.
 
     NB: this is a CAPABILITY PROBE only — it is NOT a fallback path for the
-    "Ours" pipeline (:func:`run_gpu_simulation` is EMsoft-free; its MC chain is
+    Orienta Engine pipeline (:func:`run_gpu_simulation` is EMsoft-free; its MC chain is
     cupy -> numba -> pytorch).  It is used by (1) the auto engine-router
     (``engine_router.recommend_engine_for_xtal``) and (2) capability reporting
     so the frontend can enable/disable the manual EMsoft engine switch (EMsoft is
-    an optional engine the user picks explicitly, not something "Ours" requires).
+    an optional engine the user picks explicitly, not something Orienta Engine requires).
     """
     try:
         from simulation.simulation_controller import SimulationController  # noqa: PLC0415
@@ -199,7 +199,7 @@ def run_gpu_simulation(
 ) -> Dict[str, Optional[str]]:
     """Run the full GPU forward-sim pipeline and return paths to produced files.
 
-    This is the "Ours" engine: EMsoft-free and hardware-adaptive.  It NEVER
+    This is the Orienta Engine: EMsoft-free and hardware-adaptive.  It NEVER
     invokes EMsoft / WSL — that is a separate, optional engine the user picks
     manually (the ``/start`` pipeline, unchanged).
 
@@ -209,7 +209,7 @@ def run_gpu_simulation(
        greps for) → load it immediately via ``emsoft_mc_input.load_mc`` (free,
        instant).  This is a self-consistent cache hit: a prior run for the same
        stem/kV/sig/numsx.
-    2. Else run OUR MC via ``run_gpu_mc(engine="auto")``, which fans out to the
+    2. Else run the Orienta Engine MC via ``run_gpu_mc(engine="auto")``, which fans out to the
        fastest available hardware path with NO EMsoft:
          * cupy one-thread-per-electron CUDA kernel when CUDA + cupy compile
            (~1.4 s / 50M e⁻; the full-pipeline benchmark proved this is FASTER
@@ -304,7 +304,7 @@ def run_gpu_simulation(
         )
 
     # --- resolve device (HARDWARE-ADAPTIVE: CUDA-if-available-else-CPU) ---
-    # The "Ours" engine must run on a GPU OR a CPU-only machine with NO env var
+    # The Orienta Engine must run on a GPU OR a CPU-only machine with NO env var
     # required.  Unlike get_device() (which fail-loud raises ForwardSimError on a
     # CPU-only host to protect the GPU-native indexing paths),
     # resolve_device_adaptive honours FORWARD_SIM_DEVICE, else uses cuda when
@@ -360,7 +360,7 @@ def run_gpu_simulation(
     electrons_actual: int = int(totnum_el)
 
     # ------------------------------------------------------------------
-    # Shared helper: run OUR MC via run_gpu_mc(engine="auto").  This single call
+    # Shared helper: run the Orienta Engine MC via run_gpu_mc(engine="auto").  This single call
     # is the WHOLE EMsoft-free hardware-adaptive MC: engine="auto" fans out to
     # cupy (CUDA) -> numba (CPU) -> pytorch (CPU) internally.  The runner only
     # picks the surrounding message; there is NO EMsoft branch.
@@ -413,7 +413,7 @@ def run_gpu_simulation(
         return _mc
 
     # Strategy (a): existing MC .h5 (instant cache hit; keep first).  The cached
-    # .h5 may have been written by a prior "Ours" run OR by the separate EMsoft
+    # .h5 may have been written by a prior Orienta Engine run OR by the separate EMsoft
     # engine — either way it is a valid MC source we just load, no re-run.
     if expected_mc_path.exists():
         progress_cb(10.0, "MC: loading existing MC .h5…")
@@ -441,10 +441,10 @@ def run_gpu_simulation(
             log_cb(f"[gpu_sim] Failed to load existing MC .h5 ({e}); falling through to re-run")
             mc_data = None
 
-    # Strategy (b/c/d): OUR EMsoft-free MC.  ONE call to run_gpu_mc(engine="auto")
+    # Strategy (b/c/d): the Orienta Engine EMsoft-free MC.  ONE call to run_gpu_mc(engine="auto")
     # does the hardware fan-out internally: cupy CUDA kernel -> numba CPU loop ->
     # PyTorch CPU loop.  EMsoft EMMCOpenCL / WSL is intentionally NOT in this
-    # chain — the "Ours" engine must be self-contained and never require WSL.
+    # chain — the Orienta Engine must be self-contained and never require WSL.
     #
     # ``device`` is hardware-adaptive (cuda-if-available-else-cpu); when it is NOT
     # a CUDA device with a working cupy MC kernel, the run will use the slow CPU
@@ -454,33 +454,58 @@ def run_gpu_simulation(
         _gpu_mc_ready = _is_cuda and cupy_mc_available()
         if _gpu_mc_ready:
             log_cb(
-                f"[gpu_sim] MC source (b): OUR GPU MC (cupy CUDA kernel)  "
+                f"[gpu_sim] MC source (b): Orienta Engine GPU MC (cupy CUDA kernel)  "
                 f"ekev={ekev} sig={sig} n_el={totnum_el:,}"
             )
-            mc_data = _run_our_mc("GPU MC", "Monte Carlo (GPU, EMsoft-free): running…")
+            mc_data = _run_our_mc("GPU MC", "Monte Carlo (GPU, Orienta Engine): running…")
             mc_source_used = "gpu_native"
             progress_cb(38.0, "Monte Carlo (GPU): done")
         else:
             # No CUDA+cupy MC kernel: run_gpu_mc(engine="auto") will use numba
             # (CPU fast path) when it compiles, else the PyTorch loop.  Both are
             # far slower than the cupy kernel — warn loudly, but DO NOT touch
-            # EMsoft (the "Ours" engine is EMsoft-free by design).
+            # EMsoft (the Orienta Engine is EMsoft-free by design).
             n_sim_d: int = min(max(1, totnum_el), GPU_MC_MAX_ELECTRONS)
+            # Two different situations used to share one WARNING line, and the
+            # UI colours any line containing "WARNING" orange
+            # (SimulationPage.jsx:1451). A Mac tester read it and asked whether
+            # PyTorch was broken — on a machine without an NVIDIA card this is
+            # simply the normal path, and there is nothing to act on.
+            #
+            # Having a CUDA device but no working cupy kernel IS worth a
+            # warning: the user owns a GPU that is not being used and can fix
+            # that. So the two are split, and only the second one shouts.
             if not _is_cuda:
-                _cause_phrase = "no CUDA device — CPU MC path"
+                log_cb(
+                    f"Computing with the Orienta Engine (PyTorch/numba, CPU) — "
+                    f"this machine has no CUDA GPU, which is normal on a Mac. "
+                    f"Using {n_sim_d:,} electrons. An NVIDIA GPU with cupy would "
+                    f"be considerably faster."
+                )
+                logger.info(
+                    "[gpu_sim] no CUDA device -> Orienta Engine CPU MC "
+                    "(numba/pytorch), %d electrons",
+                    n_sim_d,
+                )
             else:
-                _cause_phrase = "cupy MC kernel unavailable — CPU MC path"
-            log_cb(
-                f"WARNING: {_cause_phrase} (EMsoft-free): using OUR numba/PyTorch "
-                f"CPU MC (the PyTorch loop is ~400x slower than the cupy kernel), "
-                f"capped {n_sim_d:,} electrons. For fast MC use a CUDA GPU with cupy."
-            )
-            logger.warning(
-                "[gpu_sim] %s -> OUR CPU MC (numba/pytorch, ~400x slower), capped %d electrons",
-                _cause_phrase,
-                n_sim_d,
-            )
-            mc_data = _run_our_mc("CPU MC", "Monte Carlo (CPU, EMsoft-free): running…")
+                log_cb(
+                    f"WARNING: a CUDA device is present but the cupy Monte-Carlo "
+                    f"kernel is unavailable, so the Orienta Engine falls back to "
+                    f"its CPU path (PyTorch/numba), which is ~400x slower than the "
+                    f"cupy kernel. Using {n_sim_d:,} electrons. Installing cupy "
+                    f"for this CUDA version restores the fast path."
+                )
+                logger.warning(
+                    "[gpu_sim] cupy MC kernel unavailable on a CUDA device -> "
+                    "Orienta Engine CPU MC (numba/pytorch, ~400x slower), capped "
+                    "%d electrons",
+                    n_sim_d,
+                )
+            # Plain words: this string is the job status the user watches
+            # (progress_cb -> job.progress_message -> SimulationPage). "EMsoft-free"
+            # is internal vocabulary and reads as something missing; "Orienta
+            # Engine" is the one name the guard test pins.
+            mc_data = _run_our_mc("CPU MC", "Monte Carlo (CPU, Orienta Engine): running…")
             mc_source_used = "cpu_fallback"
             progress_cb(38.0, "Monte Carlo (CPU): done")
 
@@ -678,7 +703,7 @@ def run_gpu_simulation(
         # .sht.  best-effort — a sidecar failure must never fail the simulation.
         # NB: ``bethe`` is omitted (no Bethe-parameters variable is in scope in
         # this GPU path).  ``electrons`` is the ACTUAL simulated count (capped or
-        # read back from a reused MC .h5), and ``engine`` marks this as an "Ours"
+        # read back from a reused MC .h5), and ``engine`` marks this as an Orienta Engine
         # (EMsoft-free) master so provenance can tell the two engines apart.
         try:
             write_provenance_sidecar(

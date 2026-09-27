@@ -20,6 +20,8 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from backend.api.services.cif_phase_library import is_backup_file
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -278,22 +280,22 @@ _SYSTEM_STATUS_TTL_SEC = 300.0  # 5 minutes
 
 
 def forward_sim_capabilities() -> dict:
-    """Report which hardware paths the EMsoft-free "Ours" engine can use.
+    """Report which hardware paths the EMsoft-free Orienta Engine can use.
 
-    The frontend uses this to (1) label the "Ours" hardware path (GPU / CPU) and
-    (2) enable/disable the manual ``[EMsoft | Ours]`` engine switch — EMsoft is an
-    OPTIONAL engine, disabled in the UI when WSL+EMsoft is not detected; "Ours"
+    The frontend uses this to (1) label the Orienta Engine hardware path (GPU / CPU) and
+    (2) enable/disable the manual ``[EMsoft | Orienta Engine]`` engine switch — EMsoft is an
+    OPTIONAL engine, disabled in the UI when WSL+EMsoft is not detected; Orienta Engine
     requires neither WSL nor EMsoft and is always available (GPU or CPU).
 
     Returns a dict with three booleans:
 
     * ``gpu_available`` — a CUDA GPU is present (``torch.cuda.is_available``) AND
       the cupy one-thread-per-electron MC kernel compiles.  This is the fast
-      "Ours" path; when False, "Ours" still runs on the numba/PyTorch CPU MC.
+      Orienta Engine path; when False, Orienta Engine still runs on the numba/PyTorch CPU MC.
     * ``numba_available`` — the numba njit CPU MC kernel compiles (the no-GPU
-      fast path; when False, "Ours" falls back to the slow PyTorch CPU loop).
+      fast path; when False, Orienta Engine falls back to the slow PyTorch CPU loop).
     * ``emsoft_available`` — WSL + the EMMCOpenCL binary are reachable (the
-      manual EMsoft engine can be selected).  NOT required by "Ours".
+      manual EMsoft engine can be selected).  NOT required by Orienta Engine.
 
     Every probe is wrapped fail-safe (returns False on any error) so a missing
     optional dependency never breaks the status endpoint.
@@ -338,9 +340,10 @@ def forward_sim_capabilities() -> dict:
 
 def _build_system_status() -> dict:
     """Run the full check and format the response dict."""
+    import sys
     from simulation.system_check import check_system_status
     status = check_system_status()
-    # EMsoft-free "Ours"-engine capability probe (GPU / numba / EMsoft switch).
+    # EMsoft-free Orienta Engine capability probe (GPU / numba / EMsoft switch).
     caps = forward_sim_capabilities()
     return {
         # emsoft_available: prefer the dedicated WSL+binary probe (what the manual
@@ -348,6 +351,12 @@ def _build_system_status() -> dict:
         "emsoft_available": caps["emsoft_available"] or getattr(status, 'emsoft_available', False),
         "wsl_installed": getattr(status, 'wsl_installed', False),
         "wsl_distro": getattr(status, 'wsl_distro', ''),
+        # Which OS this is, so the interface does not report a Windows feature
+        # to someone on a Mac: off Windows there is no WSL, and the status line
+        # used to say "WSL: native-linux" on macOS.
+        "platform_os": ("windows" if sys.platform == "win32"
+                        else "macos" if sys.platform == "darwin"
+                        else "linux"),
         "emsphinx_available": getattr(status, 'emsphinx_available', False),
         "opencl_available": getattr(status, 'opencl_available', False),
         "has_gpu": getattr(status, 'has_gpu', False),
@@ -358,7 +367,10 @@ def _build_system_status() -> dict:
         "recommended_settings": getattr(status, 'recommended_settings', {}),
         "errors": getattr(status, 'errors', []),
         "warnings": getattr(status, 'warnings', []),
-        # --- "Ours" engine hardware capabilities (EMsoft-free) ---
+        # Same warnings, with a code and values where one exists, so the page
+        # can translate them; prose-only entries stay in "warnings".
+        "warning_items": getattr(status, 'warning_items', []),
+        # --- Orienta Engine hardware capabilities (EMsoft-free) ---
         "gpu_available": caps["gpu_available"],
         "numba_available": caps["numba_available"],
         "checked_at": _time.time(),
@@ -390,16 +402,16 @@ async def system_status(force: bool = False):
 
 @router.get("/forward-sim/capabilities")
 async def forward_sim_capabilities_endpoint(include_emsoft: bool = True):
-    """Report the EMsoft-free "Ours"-engine hardware capabilities.
+    """Report the EMsoft-free Orienta Engine hardware capabilities.
 
     Returns ``{gpu_available, numba_available, emsoft_available,
-    ours_hardware_path}`` so the frontend can label the "Ours" hardware path and
-    enable/disable the manual ``[EMsoft | Ours]`` switch.  ``ours_hardware_path``
-    is a human label for the path "Ours" will actually take ("GPU (CUDA + cupy)"
-    / "CPU (numba)" / "CPU (PyTorch)") — "Ours" always runs regardless.
+    ours_hardware_path}`` so the frontend can label the Orienta Engine hardware path and
+    enable/disable the manual ``[EMsoft | Orienta Engine]`` switch.  ``ours_hardware_path``
+    is a human label for the path Orienta Engine will actually take ("GPU (CUDA + cupy)"
+    / "CPU (numba)" / "CPU (PyTorch)") — Orienta Engine always runs regardless.
 
     Pass ``?include_emsoft=false`` to skip the WSL probe (a cheap ``test -f``,
-    but it does spawn WSL) when only the "Ours" GPU/CPU label is needed; then
+    but it does spawn WSL) when only the Orienta Engine GPU/CPU label is needed; then
     ``emsoft_available`` is reported as ``None`` (not probed).
     """
     try:
@@ -962,7 +974,7 @@ async def start_batch_gpu(req: BatchStartRequest, background_tasks: BackgroundTa
                 continue
 
             entry["status"] = "running"
-            entry["message"] = "Starting (GPU)…"
+            entry["message"] = "Starting (Orienta Engine)…"
             task_id = entry["task_id"]
             log_lines: list = []
 
@@ -1318,7 +1330,7 @@ async def start_gpu_simulation(req: SimulationStartRequest, background_tasks: Ba
         _simulation_tasks[task_id] = {
             "status": "running",
             "progress": 0.0,
-            "message": "Starting GPU simulation…",
+            "message": "Starting Orienta Engine simulation…",
             "result": None,
             "error": None,
             "logLines": [],
@@ -1449,6 +1461,11 @@ async def crystal_picker(kv: int = 20):
 
     results = []
     for xtal_file in sorted(xtal_dir.glob("*.xtal")):
+        # A repair's leftover copy is not a phase to simulate — this list is
+        # the "Simulate All Missing" dialog, and it would offer to spend hours
+        # of GPU time on a duplicate of a phase the user already has.
+        if is_backup_file(xtal_file):
+            continue
         stem = xtal_file.stem
         stem_lower = stem.lower()
         # Normalize stem for matching: replace special chars

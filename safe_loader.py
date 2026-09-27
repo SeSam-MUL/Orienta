@@ -18,6 +18,7 @@ bug that crashes on Oxford H5OINA files written by Aztec 6.2+; see
 import contextlib
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -42,6 +43,23 @@ def _kp():
     return kp
 
 logger = logging.getLogger(__name__)
+
+
+def _kikuchipy_needs_binning_patch() -> bool:
+    """True for kikuchipy < 0.12, the versions whose Oxford reader crashes on
+    a missing ``Camera Binning Mode``.
+
+    A version string without a leading ``major.minor`` answers False with a
+    warning: raising here would happen inside the load and send every H5OINA
+    to the eager fallback — the very failure this gate exists to prevent."""
+    version = str(getattr(_kp(), "__version__", ""))
+    m = re.match(r"(\d+)\.(\d+)", version)
+    if m is None:
+        logger.warning(
+            "Cannot read the kikuchipy version %r; assuming >= 0.12 and "
+            "leaving its Oxford reader unpatched", version)
+        return False
+    return (int(m.group(1)), int(m.group(2))) < (0, 12)
 
 
 @contextlib.contextmanager
@@ -69,9 +87,16 @@ def _kikuchipy_oxford_camera_binning_workaround():
     of the load call only, then restores the original. Survives kikuchipy
     upgrades as long as ``OxfordH5EBSDReader.scan2dict`` keeps its name.
 
-    TODO: submit upstream PR widening ``except (IndexError, ValueError)`` to
-    also catch ``AttributeError`` / ``TypeError``.
+    Fixed upstream in kikuchipy 0.12.0 (``get_binning``, which also reads
+    ``Camera Mode`` for Aztec >= 7.0). From 0.12 on this is a no-op: patching
+    there would replace the newer reader with this 0.11.3 copy, and the copy
+    imports ``kikuchipy.detectors.ebsd_detector``, a module 0.12 removed —
+    the ImportError sent every H5OINA to the eager fallback, silently.
     """
+    if not _kikuchipy_needs_binning_patch():
+        yield
+        return
+
     from kikuchipy.io.plugins.oxford_h5ebsd import _api as _ox_api
     Reader = _ox_api.OxfordH5EBSDReader
     original = Reader.scan2dict
@@ -79,7 +104,7 @@ def _kikuchipy_oxford_camera_binning_workaround():
     import h5py
     import numpy as np
     from orix.crystal_map import CrystalMap
-    from kikuchipy.detectors.ebsd_detector import EBSDDetector
+    from kikuchipy.detectors import EBSDDetector
     from kikuchipy.io.plugins._h5ebsd import _hdf5group2dict
 
     def patched_scan2dict(self, group: "h5py.Group", lazy: bool = False) -> dict:
@@ -278,6 +303,16 @@ def load_ebsd_safe(
 
     except Exception as e_kp:
         # Kikuchipy failed - log and try fallback
+        if file_name.lower().endswith(".h5oina"):
+            # Every H5OINA is meant to load natively (lazily). A fall-through
+            # here costs minutes and the whole file in RAM, so it is never
+            # only an INFO line: that is how a kikuchipy upgrade once turned
+            # the fast path off for every installation without a trace.
+            logger.warning(
+                "kikuchipy's native loader failed on %s (%s: %s); retrying "
+                "with an explicit scan group, and if that fails too, falling "
+                "back to the eager loader, which reads the whole file into "
+                "memory", file_name, type(e_kp).__name__, str(e_kp)[:150])
         if verbose:
             error_msg = str(e_kp)
             # Truncate very long error messages

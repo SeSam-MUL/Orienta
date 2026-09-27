@@ -65,7 +65,7 @@
     "title": "Zuletzt verwendete Dateien",
     "empty": {
       "title": "Keine zuletzt verwendeten Dateien",
-      "hint": "Öffne eine H5OINA/HDF5-Datei im EBSD Viewer, um zu beginnen"
+      "hint": "Öffnen Sie eine H5OINA/HDF5-Datei im EBSD Viewer, um zu beginnen"
     },
     "itemTooltip": "Zum Laden klicken: {{path}}",
     "quickLoad": "Zuletzt geöffnete Datei laden",

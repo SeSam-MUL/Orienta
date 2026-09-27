@@ -16,31 +16,31 @@ const GB_DEFAULT_BANDS = defaultGrainBoundaryBands();
 
 export const LAYER_SOURCES = {
   result: {
-    label: 'Indexing Result',
+    label: 'Indexing Result', labelKey: 'layers.groupResult',
     layers: [
-      { id: 'phase',       label: 'Phase Map',     kind: 'phase',       defaultBlend: 'normal',   defaultOpacity: 1.0 },
+      { id: 'phase',       label: 'Phase Map', labelKey: 'layers.namePhase',     kind: 'phase',       defaultBlend: 'normal',   defaultOpacity: 1.0 },
       { id: 'ipf-z',       label: 'IPF-Z [001]',   kind: 'ipf-z',       defaultBlend: 'normal',   defaultOpacity: 1.0 },
       { id: 'ipf-x',       label: 'IPF-X [100]',   kind: 'ipf-x',       defaultBlend: 'normal',   defaultOpacity: 1.0 },
       { id: 'ipf-y',       label: 'IPF-Y [010]',   kind: 'ipf-y',       defaultBlend: 'normal',   defaultOpacity: 1.0 },
-      { id: 'bc',          label: 'Band Contrast', kind: 'bc',          defaultBlend: 'multiply', defaultOpacity: 0.6 },
-      { id: 'ci',          label: 'CI (Best)',     kind: 'ci',          defaultBlend: 'normal',   defaultOpacity: 0.5 },
-      { id: 'uncertainty', label: 'Uncertainty',   kind: 'uncertainty', defaultBlend: 'normal',   defaultOpacity: 0.5 },
+      { id: 'bc',          label: 'Band Contrast', labelKey: 'layers.nameBc', kind: 'bc',          defaultBlend: 'multiply', defaultOpacity: 0.6 },
+      { id: 'ci',          label: 'CI (Best)', labelKey: 'layers.nameCi',     kind: 'ci',          defaultBlend: 'normal',   defaultOpacity: 0.5 },
+      { id: 'uncertainty', label: 'Uncertainty', labelKey: 'layers.nameUncertainty',   kind: 'uncertainty', defaultBlend: 'normal',   defaultOpacity: 0.5 },
       // Misindex-diagnose helper (2026-05-26): pixels with CI outside the
       // configured band are painted in `out_color` (default red @ 60%
       // alpha). Default band [0, 0.3] flags low-confidence pixels.
-      { id: 'ci-threshold',label: 'CI Threshold',  kind: 'ci-threshold',defaultBlend: 'normal',   defaultOpacity: 0.6,
+      { id: 'ci-threshold',label: 'CI Threshold', labelKey: 'layers.nameCiThreshold',  kind: 'ci-threshold',defaultBlend: 'normal',   defaultOpacity: 0.6,
         params: { band_min: 0.0, band_max: 0.3, out_color: 'ff3333', out_alpha: 153 } },
       // Grain boundaries drawn ON the interfaces between pixels, classified by
       // misorientation angle. The three classes travel as one JSON param so the
       // backend gets them atomically — half-applied bands would paint a map
       // that matches no setting the user ever chose.
-      { id: 'grain-boundaries', label: 'Grain Boundaries', kind: 'grain-boundaries',
+      { id: 'grain-boundaries', label: 'Grain Boundaries', labelKey: 'layers.nameGrainBoundaries', kind: 'grain-boundaries',
         defaultBlend: 'normal', defaultOpacity: 1.0,
         params: { gb_bands: JSON.stringify(GB_DEFAULT_BANDS) } },
     ],
   },
   analysis: {
-    label: 'Analysis (xmap)',
+    label: 'Analysis (xmap)', labelKey: 'layers.groupAnalysis',
     layers: [
       { id: 'kam', label: 'KAM',   defaultBlend: 'normal', defaultOpacity: 0.6 },
       { id: 'gos', label: 'GOS',   defaultBlend: 'normal', defaultOpacity: 0.6 },
@@ -49,19 +49,19 @@ export const LAYER_SOURCES = {
   ebsd: {
     label: 'EBSD',
     layers: [
-      { id: 'vbse', label: 'Virtual BSE', defaultBlend: 'normal', defaultOpacity: 1.0 },
+      { id: 'vbse', label: 'Virtual BSE', labelKey: 'layers.nameVbse', defaultBlend: 'normal', defaultOpacity: 1.0 },
     ],
   },
   diagnostics: {
-    label: 'Forward Diagnostics',
+    label: 'Forward Diagnostics', labelKey: 'layers.groupDiagnostics',
     layers: [
-      { id: 'forward-ncc',      label: 'Forward NCC',      kind: 'forward_ncc',
+      { id: 'forward-ncc',      label: 'Forward NCC', labelKey: 'layers.nameForwardNcc',      kind: 'forward_ncc',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresCompute: true },
-      { id: 'local-anomaly',    label: 'NCC Anomaly',      kind: 'local_anomaly',
+      { id: 'local-anomaly',    label: 'NCC Anomaly', labelKey: 'layers.nameNccAnomaly',      kind: 'local_anomaly',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresCompute: true },
-      { id: 'pc-sensitivity',   label: 'PC Sensitivity',   kind: 'pc_sensitivity',
+      { id: 'pc-sensitivity',   label: 'PC Sensitivity', labelKey: 'layers.namePcSensitivity',   kind: 'pc_sensitivity',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresCompute: true },
-      { id: 'pattern-residual', label: 'Pattern Residual', kind: 'pattern_residual',
+      { id: 'pattern-residual', label: 'Pattern Residual', labelKey: 'layers.namePatternResidual', kind: 'pattern_residual',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresCompute: true },
       // Render-verified phase check (Stage A): per-grain margin of the
       // stored phase vs the best alternative phase. Computed by the
@@ -73,7 +73,7 @@ export const LAYER_SOURCES = {
       // the frame the map is drawn in -- see roiFrame.js. Adding it collapsed
       // the whole map onto the handful of flagged pixels: a 39x136 scan drawn
       // as a ~20-pixel block with a 100 nm scalebar, reported 2026-09-07.
-      { id: 'phase-margin',     label: 'Phase Check',      kind: 'phase_margin',
+      { id: 'phase-margin',     label: 'Phase Check', labelKey: 'layers.namePhaseCheck',      kind: 'phase_margin',
         defaultBlend: 'normal', defaultOpacity: 0.85, sparse: true },
       // Provenance of the grain-based phase assignment: which pixels the
       // automation changed (cyan) and which grains it refused to judge
@@ -100,13 +100,14 @@ export const LAYER_SOURCES = {
     ],
   },
   refinement: {
-    label: 'R+PC Refinement',
+    label: 'R+PC Refinement', labelKey: 'layers.groupRefinement',
     layers: [
-      { id: 'refined-ncc',         label: 'Refined NCC',     kind: 'refined_ncc',
+      { id: 'refined-ncc',         label: 'Refined NCC', labelKey: 'layers.nameRefinedNcc',     kind: 'refined_ncc',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresRefinement: true },
-      { id: 'convergence-status',  label: 'Convergence',     kind: 'convergence_status',
+      { id: 'convergence-status',  label: 'Convergence', labelKey: 'layers.nameConvergence',     kind: 'convergence_status',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresRefinement: true },
-      { id: 'orientation-delta',   label: 'Orientation Δ',   kind: 'orientation_delta',
+      { id: 'orientation-delta',   label: 'Orientation Δ', labelKey: 'layers.nameOrientationDelta',
+        kind: 'orientation_delta',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresRefinement: true },
       { id: 'pc-delta-x',          label: 'PC Δx (px)',      kind: 'pc_delta_x',
         defaultBlend: 'normal', defaultOpacity: 0.7, requiresRefinement: true },
@@ -117,7 +118,7 @@ export const LAYER_SOURCES = {
     ],
   },
   h5: {
-    label: 'H5OINA Source',
+    label: 'H5OINA Source', labelKey: 'layers.groupH5',
     layers: [],   // populated dynamically (SE images + EDS elements)
   },
 };
@@ -202,8 +203,8 @@ export function buildAddLayerOptions({
       const name = layerLabel(layer, t);
       opts.push({
         value: layer.id,
-        label: `${group.label}: ${name}`,
-        group: group.label,
+        label: `${layerLabel(group, t)}: ${name}`,
+        group: layerLabel(group, t),
         name,
         disabled: !!gate,
         tip: gate ? (gate.reason ?? null) : null,

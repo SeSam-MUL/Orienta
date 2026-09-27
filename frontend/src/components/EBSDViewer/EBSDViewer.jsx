@@ -12,6 +12,7 @@
  * Uses ONLY shared components from theme/components.jsx — no local primitives.
  */
 
+import { formatTime } from '../../i18n/formatDateTime';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ebsdApi, edsApi, pcApi } from '../../services/api';
@@ -382,7 +383,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const log = useCallback((msg) => {
     setLogLines((prev) => [
       ...prev.slice(-200),
-      `[${new Date().toLocaleTimeString()}] ${msg}`,
+      `[${formatTime()}] ${msg}`,
     ]);
   }, []);
 

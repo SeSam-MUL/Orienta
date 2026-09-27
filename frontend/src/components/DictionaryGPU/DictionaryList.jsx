@@ -7,6 +7,7 @@
  * a dash.
  */
 
+import { formatDateTime } from '../../i18n/formatDateTime';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, spacing, Button, GroupBox } from '../../theme/components';
@@ -20,7 +21,7 @@ function fmtSize(mb) {
 function fmtDate(iso) {
   if (!iso) return '—';
   try {
-    return new Date(iso).toLocaleString();
+    return formatDateTime(iso);
   } catch {
     return iso;
   }

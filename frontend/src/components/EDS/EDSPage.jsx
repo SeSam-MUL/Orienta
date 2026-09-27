@@ -56,7 +56,6 @@ import useMapBackground, { fovRatio } from './useMapBackground';
 import PhaseRules from './PhaseRules';
 import RegionDefs, { seedDefFromRegion } from './RegionDefs';
 import { elementSymbols } from './elementSymbol';
-import { exportComposite } from './compositeExporter';
 import ContextMenu from '../common/ContextMenu';
 import ImageExportDialog from '../common/ImageExportDialog';
 import {
@@ -1200,11 +1199,12 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                     {linescanMode ? t('overlay.linescanOn') : t('overlay.linescanOff')}
                   </button>
                   <button
-                    onClick={() => exportComposite({
-                      layers: stack.layers,
-                      bitmaps: stack.bitmaps,
-                      shape: stack.shape,
-                    })}
+                    // The same way in as the right-click "Export the overlay…":
+                    // the dialog, with the scan step as the scale of every
+                    // pixel. The button used to write the composite at scan
+                    // resolution into the download folder with no scale bar.
+                    onClick={() => exportMenuItems({ kind: 'overlay' })
+                      .find((i) => i.id === 'overlay')?.onSelect()}
                     disabled={!stack.shape || stack.layers.length === 0}
                     style={{
                       background: 'transparent',

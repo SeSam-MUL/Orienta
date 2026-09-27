@@ -22,8 +22,10 @@ to a hard filter. The prior is not a tie-breaker at that strength; it decides.
 
 In order of authority:
 
-1. **What you typed for that phase.** A per-phase expected composition overrides
-   everything below. Use it when you know your alloy.
+1. **An expected composition supplied with the run.** The request accepts one
+   per phase and it overrides everything below, but the page has no field for
+   it, so in the app this is never set. It is reachable only by calling the
+   indexing API directly.
 2. **The structure the master pattern was simulated from** — the refined atom
    sites of its CIF — when it names the same elements as the file name.
 3. **The formula in the file name.**
@@ -74,7 +76,7 @@ reads 20-40 at% and stays Al.
 
 When the prior is on, a second pass therefore runs after the phase decision,
 for every pair of phases in the run that share a point group and that the
-prior actually weighed (a phase with EDS influence 0 takes no part). It takes the
+prior actually weighed (a phase the prior left alone takes no part). It takes the
 element the particle phase has and the matrix phase lacks (Si for Al/Si; it is
 read from the simulated structures, nothing is hard-coded), finds connected
 blobs where that element is at least 15 at% and five times the matrix

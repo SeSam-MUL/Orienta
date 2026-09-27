@@ -1,3 +1,7 @@
+% GrainSizeAnalysis_mtex6.m - MATLAB/MTEX reference scripts of Orienta (see README.md in this folder)
+% Copyright (C) 2026 Dr. Irmgard Weissensteiner and Montanuniversitaet Leoben (ASCII spelling; see LICENSE)
+% SPDX-License-Identifier: GPL-2.0-or-later
+% This header was added for publication; the code below is as received.
 function [EBSDdata_smDat, GSheader] = GrainSizeAnalysis_mtex6( ...
         grains_in, datname, filename, particleRem, minLIL, step, ...
         foldername, n, ebsd1plot, CS, ebsd_smoothedFill)

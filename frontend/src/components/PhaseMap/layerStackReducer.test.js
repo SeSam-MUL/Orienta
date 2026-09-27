@@ -90,6 +90,68 @@ describe('layerStackReducer', () => {
     expect(s.layers.map(l => l.id)).toEqual(['new-1', 'new-2']);
   });
 
+  describe('REPLACE_ALL with keepAddonsFor (the re-seed)', () => {
+    const ADDON = (result) =>
+      sampleLayer(`addon:bc-gmm/${result}/addon.bc_gmm/component_map#run-1`);
+
+    it('keeps an add-on layer bound to the result being seeded', () => {
+      let s = layerStackReducer(initialState, { type: 'ADD', layer: ADDON('r1') });
+      s = layerStackReducer(s, {
+        type: 'REPLACE_ALL', keepAddonsFor: 'r1', layers: [sampleLayer('phase')],
+      });
+      expect(s.layers.map((l) => l.id))
+        .toEqual(['phase', 'addon:bc-gmm/r1/addon.bc_gmm/component_map#run-1']);
+    });
+
+    it('drops one bound to a different result', () => {
+      // It draws that result's pixels; useLayerStack refuses to fetch it and
+      // says so by name. Keeping it would make the refusal permanent.
+      let s = layerStackReducer(initialState, { type: 'ADD', layer: ADDON('r2') });
+      s = layerStackReducer(s, {
+        type: 'REPLACE_ALL', keepAddonsFor: 'r1', layers: [sampleLayer('phase')],
+      });
+      expect(s.layers.map((l) => l.id)).toEqual(['phase']);
+    });
+
+    it('keeps nothing that is not an add-on layer', () => {
+      // A preset is the user saying what the stack should be; only the add-on
+      // map is exempt, because nothing else arrives from another page.
+      let s = layerStackReducer(initialState, { type: 'ADD', layer: sampleLayer('bc') });
+      s = layerStackReducer(s, {
+        type: 'REPLACE_ALL', keepAddonsFor: 'r1', layers: [sampleLayer('phase')],
+      });
+      expect(s.layers.map((l) => l.id)).toEqual(['phase']);
+    });
+
+    it('without keepAddonsFor it still replaces everything', () => {
+      // Picking a preset by hand, which must keep behaving as it always has.
+      let s = layerStackReducer(initialState, { type: 'ADD', layer: ADDON('r1') });
+      s = layerStackReducer(s, { type: 'REPLACE_ALL', layers: [sampleLayer('phase')] });
+      expect(s.layers.map((l) => l.id)).toEqual(['phase']);
+    });
+
+    it('does not duplicate a layer the seed already contains', () => {
+      const id = 'addon:bc-gmm/r1/addon.bc_gmm/component_map#run-1';
+      let s = layerStackReducer(initialState, { type: 'ADD', layer: ADDON('r1') });
+      s = layerStackReducer(s, {
+        type: 'REPLACE_ALL', keepAddonsFor: 'r1', layers: [sampleLayer(id)],
+      });
+      expect(s.layers.map((l) => l.id)).toEqual([id]);
+    });
+
+    it('never exceeds MAX_LAYERS', () => {
+      // A full seed wins over a kept layer: the seed is the user's own last
+      // choice, and the cap is what the whole stack is built against.
+      let s = layerStackReducer(initialState, { type: 'ADD', layer: ADDON('r1') });
+      const full = Array.from({ length: MAX_LAYERS }, (_, i) => sampleLayer(`l${i}`));
+      s = layerStackReducer(s, {
+        type: 'REPLACE_ALL', keepAddonsFor: 'r1', layers: full,
+      });
+      expect(s.layers).toHaveLength(MAX_LAYERS);
+      expect(s.layers.map((l) => l.id)).toEqual(full.map((l) => l.id));
+    });
+  });
+
   it('CLEAR empties the stack', () => {
     let s = layerStackReducer(initialState, { type: 'ADD', layer: sampleLayer('phase') });
     s = layerStackReducer(s, { type: 'CLEAR' });

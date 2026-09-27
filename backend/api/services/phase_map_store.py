@@ -32,7 +32,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy import ndimage
@@ -50,6 +50,77 @@ from backend.api.services.cif_phase_library import CifPhaseEntry
 # written by an older rule would silently outlive the rule that produced
 # it, so those files are ignored and the map is recomputed.
 _SIDECAR_SCHEMA = 4
+
+#: How many individual edits the sidecar keeps, newest last. A user who
+#: clicks for an hour must not bloat the sidecar, but a truncated log that
+#: LOOKS complete is the exact failure this record exists to prevent - so
+#: ``edit_log_total`` is kept beside the retained entries and every reader is
+#: told when the two differ.
+_EDIT_LOG_CAP = 500
+
+#: Label passed to :meth:`PhaseMapStore._snapshot` -> canonical op name. The
+#: labels are what the undo button shows, so they are user-facing prose; the
+#: op names are the record and must stay stable across relabelling.
+_EDIT_OPS = {
+    "assign region": "paint",
+    "assign selection": "paint",
+    "replace phase": "replace_phase",
+    "name region": "name_region",
+    "merge regions": "merge",
+    "split region": "split",
+    "move boundary": "grow",
+    "snap boundaries": "snap_edges",
+}
+
+#: Snapshots that are not a thumb on the map. A re-classify replaces the whole
+#: state (and starts a fresh log); recording it as a hand edit would be a
+#: false entry in somebody's provenance.
+_NOT_A_HAND_EDIT = {"re-classify"}
+
+#: op -> the counter it increments. The names are the ones the export writes.
+_OP_COUNTER = {
+    "name_region": "regions_named",
+    "merge": "merges",
+    "split": "splits",
+    "grow": "grows",
+    "snap_edges": "edge_snaps",
+    "paint": "paints",
+    "replace_phase": "phase_replacements",
+}
+
+#: Every counter, so a map that WAS tracked reports a real 0 rather than a
+#: missing key - "no merges happened" and "merges were never recorded" are
+#: different answers and the export has to be able to tell them apart.
+_EDIT_COUNT_KEYS = tuple(_OP_COUNTER.values())
+
+#: The ops that change WHICH pixel carries which region id. Particle ids are
+#: ordered by ``(region_id, -n_px, centroid)``, so any of these renumbers
+#: them: a merge pops an id and everything above shifts down, a split appends,
+#: grow and snap move pixels between regions and change the sizes and
+#: centroids the tie-break reads. Ids burned onto a report figure before one
+#: of these no longer point at the same particle afterwards.
+_REGION_GRID_OPS = {"merge", "split", "grow", "snap_edges"}
+
+
+def _jsonable(value):
+    """Coerce an edit detail to something ``json.dumps`` will take.
+
+    Details are built from numpy-derived counts, and a sidecar that failed to
+    serialise would lose the whole map, not just the log.
+    """
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    return str(value)
 
 
 def _sidecar_path_for(file_path: str) -> Path:
@@ -106,10 +177,93 @@ class PhaseMapState:
     # manual path unusable for anything real.
     region_defs: List[dict] = field(default_factory=list)
     element_weights: Dict[str, float] = field(default_factory=dict)
+    # The classification request that produced this map, in wire form: mode,
+    # the smoothing width as resolved AND as asked for, the cluster count, the
+    # rules, the phase selection. Same reason as the two fields above, one step
+    # further: without it a reloaded map cannot say how it was made, and an
+    # export that cannot state its smoothing width is not defensible - 5 px at
+    # a 0.66 um step is a 3.3 um averaging box, larger than most of the
+    # particles being counted, and nobody reading a report knows what
+    # "Scale 5" means.
+    settings: Dict[str, Any] = field(default_factory=dict)
+    # --- Edit log (2026-08-27) ---
+    # What was done to this map by hand, in order. Six ways exist to put a
+    # thumb on a phase map and exactly one of them - painting - used to leave
+    # a trace, via ``locked_mask``. The export could therefore only say
+    # "not tracked" for names, merges, splits, grows and edge snaps, and a
+    # reviewer could not tell "merged nothing" from "merged forty times until
+    # the answer looked right".
+    #
+    # Append-only, small, JSON-shaped: ``{"op": "merge", "detail": {...}}``.
+    # Deliberately NOT a second copy of the map - a detail says which regions
+    # and how many pixels moved, never which pixels.
+    edit_log: List[Dict[str, Any]] = field(default_factory=list)
+    # Every edit ever recorded, including any the cap dropped. len(edit_log)
+    # is what is RETAINED; this is what HAPPENED.
+    edit_log_total: int = 0
+    # Tallied as each entry is recorded, never by counting ``edit_log``: the
+    # log is capped, so counting it would silently undercount exactly the
+    # heavily-edited map whose count matters most.
+    edit_counts: Dict[str, int] = field(default_factory=dict)
+    # Whether this map was made by a build that records edits at all. A map
+    # restored from a sidecar written before this existed has an empty log
+    # AND an unknown history; reporting 0 for it would be a claim, not a
+    # measurement. Default False for the same reason: a state assembled by
+    # hand elsewhere has not been watched.
+    edits_tracked: bool = False
+    # Whether the region grid has been edited since classification - i.e.
+    # whether region-derived particle ids may have been renumbered. See
+    # ``_REGION_GRID_OPS``.
+    region_grid_edited: bool = False
 
     @property
     def n_regions(self) -> int:
         return len(self.region_phase)
+
+    @property
+    def edit_log_truncated(self) -> bool:
+        """True when the cap dropped entries that ``edit_log`` no longer holds."""
+        return int(self.edit_log_total) > len(self.edit_log)
+
+    def edit_summary(self) -> Dict[str, Any]:
+        """The hand-edit record, in the shape a report can quote.
+
+        ``counts`` is all-None when this map predates edit tracking, so a
+        consumer cannot mistake "not recorded" for "none happened". When it is
+        tracked, every counter is present as a real integer including the
+        zeros - "0 merges" is then a measurement.
+        """
+        tracked = bool(self.edits_tracked)
+        counts = {k: int(self.edit_counts.get(k, 0)) for k in _EDIT_COUNT_KEYS}
+        # A future op that is not in the table still gets reported.
+        for key, value in (self.edit_counts or {}).items():
+            counts.setdefault(str(key), int(value))
+        truncated = self.edit_log_truncated
+        if not tracked:
+            note = ("This map carries no edit record - it was restored from a "
+                    "sidecar written before edits were tracked. A count of 0 "
+                    "would be a claim, so the counts are null.")
+        elif truncated:
+            note = (f"Complete counts; the listed entries are the most recent "
+                    f"{len(self.edit_log)} of {int(self.edit_log_total)} "
+                    f"(cap {_EDIT_LOG_CAP}).")
+        else:
+            note = "Complete: every edit since classification is listed."
+        return {
+            "tracked": tracked,
+            "counts": counts if tracked else {k: None for k in counts},
+            "n_edits": int(self.edit_log_total) if tracked else None,
+            "log": [dict(e) for e in self.edit_log],
+            "log_retained": len(self.edit_log),
+            "log_truncated": bool(truncated),
+            "log_cap": _EDIT_LOG_CAP,
+            # None, not False: an untracked map cannot say its regions were
+            # left alone, and region-derived particle ids are only stable if
+            # they were.
+            "region_grid_edited": (bool(self.region_grid_edited)
+                                   if tracked else None),
+            "note": note,
+        }
 
 
 class PhaseMapStore:
@@ -142,8 +296,18 @@ class PhaseMapStore:
         self._undo: Optional[PhaseMapState] = None
         self._undo_label: Optional[str] = None
 
-    def _snapshot(self, label: str) -> None:
-        """Remember the current state so :meth:`undo` can put it back.
+    def _snapshot(self, label: str,
+                  detail: Optional[Dict[str, Any]] = None) -> None:
+        """Remember the current state so :meth:`undo` can put it back, and
+        record the edit that is about to happen.
+
+        Every mutating method already calls this with a human label, so it is
+        the one hook that sees all of them - including any added later, which
+        are logged under their own label even if nobody remembers to declare
+        an op. ``detail`` is optional and small (which regions, how many
+        pixels moved); it is recorded on the CURRENT state, AFTER the undo
+        copy has been taken, so undo restores the log as it was before the
+        edit.
 
         Caller must already hold the lock.
         """
@@ -171,8 +335,36 @@ class PhaseMapStore:
             # definitions on disk, the one thing they exist to survive.
             region_defs=list(st.region_defs or []),
             element_weights=dict(st.element_weights or {}),
+            settings=dict(st.settings or {}),
+            edit_log=list(st.edit_log),
+            edit_log_total=int(st.edit_log_total),
+            edit_counts=dict(st.edit_counts or {}),
+            edits_tracked=bool(st.edits_tracked),
+            region_grid_edited=bool(st.region_grid_edited),
         )
         self._undo_label = label
+        self._record_edit(st, label, detail)
+
+    def _record_edit(self, st: PhaseMapState, label: str,
+                     detail: Optional[Dict[str, Any]]) -> None:
+        """Append one entry to ``st``'s log and bump its counters.
+
+        Called from :meth:`_snapshot` AFTER the undo copy has been taken, so
+        the copy holds the pre-edit log and an undo rolls the record back with
+        the map. Caller holds the lock.
+        """
+        if label in _NOT_A_HAND_EDIT:
+            return
+        op = _EDIT_OPS.get(label) or (label.strip().lower().replace(" ", "_")
+                                      or "edit")
+        st.edit_log.append({"op": op, "detail": _jsonable(detail or {})})
+        if len(st.edit_log) > _EDIT_LOG_CAP:
+            del st.edit_log[:len(st.edit_log) - _EDIT_LOG_CAP]
+        st.edit_log_total = int(st.edit_log_total) + 1
+        key = _OP_COUNTER.get(op, op)
+        st.edit_counts[key] = int(st.edit_counts.get(key, 0)) + 1
+        if op in _REGION_GRID_OPS:
+            st.region_grid_edited = True
 
     @property
     def undo_label(self) -> Optional[str]:
@@ -236,6 +428,7 @@ class PhaseMapStore:
         region_features: Optional[np.ndarray] = None,
         region_defs: Optional[List[dict]] = None,
         element_weights: Optional[Dict[str, float]] = None,
+        settings: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Replace the stored classification with a freshly computed one.
 
@@ -308,6 +501,11 @@ class PhaseMapStore:
                                  if region_phase is not None else []),
                 region_defs=list(region_defs or []),
                 element_weights=dict(element_weights or {}),
+                settings=dict(settings or {}),
+                # A fresh classification starts a fresh record: the counts are
+                # "since this classification", the only span in which they
+                # mean anything. Tracked from here on, so 0 is a measurement.
+                edits_tracked=True,
             )
             self._region_features = (
                 np.asarray(region_features, dtype=np.float64)
@@ -355,10 +553,14 @@ class PhaseMapStore:
             c1 = min(st.n_cols - 1, int(col_end))
             if r0 > r1 or c0 > c1:
                 return 0
-            self._snapshot("assign region")
+            n = (r1 - r0 + 1) * (c1 - c0 + 1)
+            self._snapshot("assign region", {
+                "shape": "rect", "phase_index": int(target_phase_index),
+                "phase": self._phase_name(st, target_phase_index),
+                "n_px": int(n), "bbox": [r0, c0, r1, c1],
+            })
 
             sub = st.phase_grid[r0:r1 + 1, c0:c1 + 1]
-            n = int(sub.size)
             sub[:] = int(target_phase_index)
 
             # Track manually-overwritten pixels so a "re-classify in
@@ -407,7 +609,12 @@ class PhaseMapStore:
             n = int(mask.sum())
             if n == 0:
                 return 0
-            self._snapshot("replace phase")
+            self._snapshot("replace phase", {
+                "from_phase_index": int(from_phase_index),
+                "to_phase_index": int(to_phase_index),
+                "phase": self._phase_name(st, to_phase_index),
+                "n_px": int(n),
+            })
 
             st.phase_grid[mask] = int(to_phase_index)
             if st.locked_mask is None:
@@ -452,7 +659,11 @@ class PhaseMapStore:
                 return 0
             # Snapshot only once the write is certain to happen, so a
             # rejected call cannot consume the user's one undo slot.
-            self._snapshot("assign selection")
+            self._snapshot("assign selection", {
+                "shape": "mask", "phase_index": int(target_phase_index),
+                "phase": self._phase_name(st, target_phase_index),
+                "n_px": int(n),
+            })
             st.phase_grid[bool_mask] = int(target_phase_index)
             if st.locked_mask is None:
                 st.locked_mask = np.zeros((st.n_rows, st.n_cols), dtype=bool)
@@ -462,6 +673,21 @@ class PhaseMapStore:
         return n
 
     # --- Regions (2026-08-24) ---
+
+    @staticmethod
+    def _phase_name(st: PhaseMapState, phase_index: int) -> str:
+        """The name an edit assigned, for the log.
+
+        An index alone is useless in a record: the list it indexes into is
+        rebuilt by the next classification. The name is what a reader needs
+        ("region 3 named Si.cif"), so it is stored beside the index.
+        """
+        if phase_index == -1:
+            return "unclassified"
+        if 0 <= phase_index < len(st.phase_entries):
+            return str(getattr(st.phase_entries[phase_index],
+                               "cif_filename", "") or "")
+        return ""
 
     def _repaint_regions(self, st, sids) -> int:
         """Paint the given regions onto ``phase_grid`` from their names.
@@ -514,7 +740,12 @@ class PhaseMapStore:
             n = int(m.sum())
             if n == 0:
                 return 0
-            self._snapshot("name region")
+            self._snapshot("name region", {
+                "region_id": int(region_id),
+                "phase_index": int(target_phase_index),
+                "phase": self._phase_name(st, target_phase_index),
+                "n_px": int(n),
+            })
             st.region_phase[region_id] = int(target_phase_index)
             self._repaint_regions(st, [region_id])
         self._autosave()
@@ -542,7 +773,14 @@ class PhaseMapStore:
             if keep_id == drop_id:
                 return 0
             moved = int((st.region_grid == drop_id).sum())
-            self._snapshot("merge regions")
+            self._snapshot("merge regions", {
+                "keep_id": int(keep_id), "drop_id": int(drop_id),
+                "pixels_moved": int(moved),
+                # Ids above the dropped one shift down by one, so anything
+                # keyed on a region id from before this merge is stale.
+                "region_ids_renumbered_above": int(drop_id),
+                "n_regions_after": len(st.region_phase) - 1,
+            })
             st.region_grid[st.region_grid == drop_id] = keep_id
             st.region_grid[st.region_grid > drop_id] -= 1
             st.region_phase.pop(drop_id)
@@ -586,7 +824,16 @@ class PhaseMapStore:
             if n_new < 2:
                 return 0
 
-            self._snapshot("split region")
+            self._snapshot("split region", {
+                "region_id": int(region_id), "n_parts": int(n_new),
+                # The parts keep the original id plus ids appended at the end
+                # of the list; taken before the appends below, which is where
+                # those ids come from.
+                "new_region_ids": ([int(region_id)]
+                                   + [len(st.region_phase) + i
+                                      for i in range(n_new - 1)]),
+                "n_px": int(m.sum()),
+            })
             phase = st.region_phase[region_id]
             flat = st.region_grid.ravel().copy()
             idx = np.nonzero(m)[0]
@@ -645,7 +892,11 @@ class PhaseMapStore:
             changed = int((grid != before).sum())
             if changed == 0:
                 return 0
-            self._snapshot("move boundary")
+            self._snapshot("move boundary", {
+                "region_id": int(region_id), "steps": int(steps),
+                "direction": "grow" if steps > 0 else "shrink",
+                "pixels_changed": int(changed),
+            })
             st.region_grid = grid
             self._repaint_regions(st, range(len(st.region_phase)))
         self._autosave()
@@ -722,7 +973,10 @@ class PhaseMapStore:
             changed = int((new != grid).sum())
             if changed == 0:
                 return 0
-            self._snapshot("snap boundaries")
+            self._snapshot("snap boundaries", {
+                "strength": float(strength), "radius_px": int(radius),
+                "pixels_changed": int(changed),
+            })
             st.region_grid = new
             self._repaint_regions(st, range(n_s))
         self._autosave()
@@ -793,6 +1047,19 @@ class PhaseMapStore:
                 # wire form, so it rides along with the rest of the meta.
                 "region_defs": list(state.region_defs or []),
                 "element_weights": dict(state.element_weights or {}),
+                # An OPTIONAL key, so the schema stays 4 on purpose: a bump
+                # would discard every map already on a user's disk, hand edits
+                # and all, to gain a field an older sidecar simply reads as {}.
+                "settings": dict(state.settings or {}),
+                # The hand-edit record. Also OPTIONAL keys, same reason: an
+                # older sidecar simply reads them as "nothing recorded", which
+                # is the truth about it, and nobody's map is discarded.
+                "edit_tracking": bool(state.edits_tracked),
+                "edit_log": [dict(e) for e in state.edit_log],
+                "edit_log_total": int(state.edit_log_total),
+                "edit_counts": {str(k): int(v)
+                                for k, v in (state.edit_counts or {}).items()},
+                "region_grid_edited": bool(state.region_grid_edited),
             }
             sidecar = _sidecar_path_for(file_path)
             np.savez_compressed(
@@ -914,6 +1181,20 @@ class PhaseMapStore:
                 # the editor then opens empty, which is the truth.
                 region_defs=list(meta.get("region_defs") or []),
                 element_weights=dict(meta.get("element_weights") or {}),
+                # Absent in every sidecar written before 2026-08-27. Empty is
+                # the truth for those: the map is real, how it was made is not
+                # recorded, and the export says so rather than inventing it.
+                settings=dict(meta.get("settings") or {}),
+                # Absent in every sidecar written before 2026-08-27. Absent
+                # means "this map's edits were never watched", which is NOT
+                # the same as "it was never edited" - so the flag stays False
+                # and the record reports nulls rather than zeros.
+                edits_tracked=bool(meta.get("edit_tracking", False)),
+                edit_log=[dict(e) for e in (meta.get("edit_log") or [])],
+                edit_log_total=int(meta.get("edit_log_total") or 0),
+                edit_counts={str(k): int(v) for k, v in
+                             (meta.get("edit_counts") or {}).items()},
+                region_grid_edited=bool(meta.get("region_grid_edited", False)),
             )
             # Splitting and snapping need the composition, which is derived
             # data and deliberately not in the sidecar. Both fail loud with a

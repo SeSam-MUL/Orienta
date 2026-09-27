@@ -11,6 +11,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
+# Every name in here is derived from a path a caller handed in, and lands on
+# the xmap, in the methods paragraph and in the exported .h5. Path.stem would
+# read a Windows path as one long name on a POSIX backend. See display_names.
+from display_names import display_stem
+
 
 @dataclass
 class PhaseMetadata:
@@ -165,7 +170,7 @@ def _build_display_label(meta: PhaseMetadata) -> str:
     (e.g. ``sd_0302719``) where digits are NOT stoichiometry; the picker paths
     (composition_for_cif / crystal_hint) subscript the real reduced_formula."""
     if not meta.formula:
-        return meta.cif_path.stem if meta.cif_path else ""
+        return display_stem(meta.cif_path) if meta.cif_path else ""
     return meta.formula
 
 
@@ -185,7 +190,7 @@ def extract_metadata_from_cif(cif_path: Path) -> PhaseMetadata:
         raw = _parse_cif_field(text, "_chemical_formula_iupac")
         formula = raw.replace(" ", "") if raw else ""
     if not formula:
-        formula = cif_path.stem
+        formula = display_stem(cif_path)
 
     # Space group with fallback
     space_group = _parse_cif_field(text, "_symmetry_space_group_name_H-M")
@@ -254,7 +259,7 @@ _SHT_REGEX = re.compile(
 
 def extract_metadata_from_sht_filename(sht_path: Path) -> PhaseMetadata:
     """Extract metadata from SHT filename convention."""
-    stem = sht_path.stem
+    stem = display_stem(sht_path)
     m = _SHT_REGEX.match(stem)
     if m:
         formula = m.group("formula").strip()
@@ -421,8 +426,8 @@ def extract_metadata_from_h5(h5_path: Path) -> PhaseMetadata:
         with h5py.File(str(h5_path), "r") as f:
             if "CrystalData" not in f:
                 return PhaseMetadata(
-                    formula=h5_path.stem, source="stem",
-                    display_label=h5_path.stem,
+                    formula=display_stem(h5_path), source="stem",
+                    display_label=display_stem(h5_path),
                 )
             cd = f["CrystalData"]
 
@@ -458,7 +463,7 @@ def extract_metadata_from_h5(h5_path: Path) -> PhaseMetadata:
                     lat = [None] * 6
 
             meta = PhaseMetadata(
-                formula=formula or h5_path.stem,
+                formula=formula or display_stem(h5_path),
                 space_group=space_group,
                 source="h5_crystaldata",
                 lattice_a=lat[0], lattice_b=lat[1], lattice_c=lat[2],
@@ -472,8 +477,8 @@ def extract_metadata_from_h5(h5_path: Path) -> PhaseMetadata:
 
     except Exception:
         return PhaseMetadata(
-            formula=h5_path.stem, source="stem",
-            display_label=h5_path.stem,
+            formula=display_stem(h5_path), source="stem",
+            display_label=display_stem(h5_path),
         )
 
 
@@ -506,7 +511,7 @@ def find_linked_cif(
     file_path: Path, cif_library_dir: Path
 ) -> Optional[Path]:
     """Find the CIF file linked to an SHT/H5/XTAL file."""
-    stem = file_path.stem
+    stem = display_stem(file_path)
     ext = file_path.suffix.lower()
 
     # Strategy 1: Direct stem match
@@ -543,8 +548,23 @@ def find_linked_cif(
         return None
 
     # Strategy 3: Search CIF library by formula exact match
+    #
+    # Repair backups are skipped, and here it is not merely tidiness: a
+    # backup SORTS BEFORE the file it backs up (".P" < ".c", so
+    # "Al7FeCu2.P1-backup-2026-09-13.cif" comes first), and this loop returns
+    # the first match. A P1 copy has the same composition as its symmetrised
+    # twin, so the formula test cannot tell them apart — but the Pearson
+    # symbol and space group differ, and those travel on into .sht filenames
+    # and provenance sidecars via resolve_sht_name_fields.
+    try:
+        from backend.api.services.cif_phase_library import is_backup_file
+    except Exception:          # the root modules must import without backend
+        def is_backup_file(_p):
+            return False
     try:
         for cif_file in sorted(cif_library_dir.glob("*.cif")):
+            if is_backup_file(cif_file):
+                continue
             cif_meta = extract_metadata_from_cif(cif_file)
             if search_formula and _formulas_match(search_formula, cif_meta.formula):
                 return cif_file
@@ -595,8 +615,8 @@ def get_phase_metadata(
 
     # Ultimate fallback
     return PhaseMetadata(
-        formula=file_path.stem, source="stem",
-        display_label=file_path.stem,
+        formula=display_stem(file_path), source="stem",
+        display_label=display_stem(file_path),
     )
 
 

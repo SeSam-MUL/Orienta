@@ -250,7 +250,9 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
     #
     # A suspect grain is "suspect" because its stored phase rendered badly AT
     # ITS STORED ORIENTATION. For a phase whose spherical orientation is
-    # unreliable (z_rot == 2: mmm, -43m, m-3 ...) that is not evidence against
+    # unreliable (z_rot == 2: mmm, -43m, m-3 ... -- measured 2026-09-07, before the
+    # decode fix; since then only -43m, but taking the better of the two answers
+    # stays correct, it only costs one Hough pass) that is not evidence against
     # the phase at all -- it is the indexer's orientation being wrong. On the
     # real 7050 the whole MgCuAl2 particle (one grain, ~250 px) was flipped to
     # Al this way: MgCuAl2 rendered 0.207 at its stored orientation, but 0.420

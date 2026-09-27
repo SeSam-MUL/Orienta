@@ -115,7 +115,7 @@ def calculate_grain_average_kam(kam: np.ndarray, grain_ids: np.ndarray) -> np.nd
         Array of gKAM values per grain (length = number of grains)
         Grain IDs are assumed to be 1-indexed (ID=0 is no grain)
 
-    Reference: RxxAnalysis.m lines 14-15 (gKAM.m helper function)
+    Reference: RxxAnalysis.m lines 18-19 (gKAM.m helper function)
     """
     if not SCIPY_AVAILABLE:
         # Fallback: manual loop
@@ -155,7 +155,7 @@ def calculate_area_weighted_histogram(values_per_grain: np.ndarray, grain_sizes:
         - counts: Area-weighted counts per bin
         - bin_centers: Center of each bin
 
-    Reference: RxxAnalysis.m lines 104, 117 (histogram function with grain weights)
+    Reference: RxxAnalysis.m lines 108, 121 (histogram function with grain weights)
     """
     # Filter NaN values
     valid = np.isfinite(values_per_grain)
@@ -211,7 +211,7 @@ def classify_rx_grains(grains, dataset, g_kam: np.ndarray, g_bc: np.ndarray,
     Returns:
         Array of grain IDs classified as RX
 
-    Reference: RxxAnalysis.m lines 48-63
+    Reference: RxxAnalysis.m lines 52-67
     """
     n_grains = grains.n_grains
 
@@ -271,7 +271,7 @@ def calculate_rx_fraction(rx_grain_ids: np.ndarray, grain_ids: np.ndarray,
     Returns:
         RX fraction in percent (0-100)
 
-    Reference: RxxAnalysis.m line 69
+    Reference: RxxAnalysis.m line 73
     ```matlab
     RXedGrainFraction=sum(RXedGrains(ph).numPixel)/sum(grains_smoothed(ph).numPixel)*100
     ```

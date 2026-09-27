@@ -1,3 +1,11 @@
+# The WEKO coefficient tables and the FPHON/FSCATT logic below are transcribed
+# from EMsoft, Source/EMsoftLib/others.f90 (BSD-3-Clause):
+#   Copyright (c) 2013-2019, Marc De Graef Research Group/Carnegie Mellon University.
+#   All rights reserved.
+# EMsoft's file states that block is the Weickenmeier-Kohl implementation,
+# "included with permission from H. Kohl" (A. Weickenmeier & H. Kohl, Acta
+# Cryst. A47, 590, 1991). Full license text: licenses/EMsoft-License.txt;
+# provenance: NOTICE.md.
 """Weickenmeier-Kohl (WK) complex electron scattering factor (SP0, Task 3).
 
 This module provides :func:`wk_scattering_factor`, the most NCC-critical primitive

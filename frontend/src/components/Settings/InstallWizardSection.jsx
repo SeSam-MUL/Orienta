@@ -417,136 +417,150 @@ function Step2User({ wslStatus, onRefresh }) {
   }, [existingUser, resetPw, t]);
 
   return (
+    // Password inputs need a <form> ancestor, otherwise Chrome logs
+    // "Password field is not contained in a form" on every page load and
+    // password managers misbehave. Nothing is submitted the HTML way, so the
+    // submit handler just stops the default navigation.
     <StepContainer dimmed={!stepAvailable}>
-      <StepHeader number={2} title={t('settings:install.step2.title')} status={statusProps} />
+      <form onSubmit={(e) => e.preventDefault()}>
+        <StepHeader number={2} title={t('settings:install.step2.title')} status={statusProps} />
 
-      {stepAvailable && needsUser && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <FieldRow label={t('settings:install.step2.usernameLabel')}>
-            <Input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder={t('settings:install.step2.usernamePlaceholder')}
-              title={t('settings:install.step2.usernameTooltip')}
-            />
-          </FieldRow>
+        {stepAvailable && needsUser && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <FieldRow label={t('settings:install.step2.usernameLabel')}>
+              <Input
+                // The username that belongs to the two new-password fields
+                // below; without it the browser cannot tell which credential
+                // they form.
+                autoComplete="username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder={t('settings:install.step2.usernamePlaceholder')}
+                title={t('settings:install.step2.usernameTooltip')}
+              />
+            </FieldRow>
 
-          <FieldRow label={t('settings:install.step2.passwordLabel')}>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={t('settings:install.step2.passwordPlaceholder')}
-              title={t('settings:install.step2.passwordTooltip')}
-            />
-          </FieldRow>
-
-          <FieldRow label={t('settings:install.step2.confirmLabel')}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <FieldRow label={t('settings:install.step2.passwordLabel')}>
               <Input
                 type="password"
-                value={confirm}
-                onChange={(e) => setConfirm(e.target.value)}
-                placeholder={t('settings:install.step2.confirmPlaceholder')}
-                title={t('settings:hoverTips.confirmPassword')}
+                autoComplete="new-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={t('settings:install.step2.passwordPlaceholder')}
+                title={t('settings:install.step2.passwordTooltip')}
               />
-              {confirm.length > 0 && (
-                <span style={{ fontSize: 11, color: passwordsMatch ? colors.green : colors.red, whiteSpace: 'nowrap' }}>
-                  {passwordsMatch ? t('settings:install.step2.matches') : t('settings:install.step2.noMatch')}
-                </span>
-              )}
-            </div>
-          </FieldRow>
+            </FieldRow>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Button
-              variant="primary"
-              onClick={handleCreate}
-              disabled={creating || !username || !passwordsMatch}
-              title={t('settings:install.step2.createUserTooltip')}
-            >
-              {creating ? t('settings:install.step2.creating') : t('settings:install.step2.createUser')}
-            </Button>
-          </div>
-
-          {createMsg && (
-            <span style={{ fontSize: 11, color: createMsg.ok ? colors.green : colors.red }}>
-              {createMsg.text}
-            </span>
-          )}
-        </div>
-      )}
-
-      {stepAvailable && hasUser && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 12, color: colors.text }}>
-            {t('settings:install.step2.userConfiguredPrefix')} <code style={{ color: colors.accent }}>{existingUser}</code> {t('settings:install.step2.userConfiguredSuffix')}{' '}
-            <button
-              type="button"
-              onClick={() => setShowReset((v) => !v)}
-              title={t('settings:install.step2.resetPasswordToggleTooltip')}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: colors.cyan ?? colors.accent,
-                cursor: 'pointer',
-                fontSize: 12,
-                textDecoration: 'underline',
-                padding: 0,
-              }}
-            >
-              {showReset ? t('common:cancel') : t('settings:install.step2.resetPassword')}
-            </button>
-          </div>
-
-          {showReset && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-              <FieldRow label={t('settings:install.step2.newPasswordLabel')}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Input
-                    type="password"
-                    value={resetPw}
-                    onChange={(e) => setResetPw(e.target.value)}
-                    placeholder={t('settings:install.step2.newPasswordPlaceholder')}
-                    title={t('settings:hoverTips.newPassword')}
-                  />
-                </div>
-              </FieldRow>
-              <FieldRow label={t('settings:install.step2.confirmLabel')}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <Input
-                    type="password"
-                    value={resetConfirm}
-                    onChange={(e) => setResetConfirm(e.target.value)}
-                    placeholder={t('settings:install.step2.confirmPlaceholder')}
-                    title={t('settings:hoverTips.confirmNewPassword')}
-                  />
-                  {resetConfirm.length > 0 && (
-                    <span style={{ fontSize: 11, color: resetMatch ? colors.green : colors.red, whiteSpace: 'nowrap' }}>
-                      {resetMatch ? t('settings:install.step2.matches') : t('settings:install.step2.noMatch')}
-                    </span>
-                  )}
-                </div>
-              </FieldRow>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <Button
-                  variant="primary"
-                  onClick={handleReset}
-                  disabled={resetting || !resetMatch}
-                  title={t('settings:install.step2.resetButtonTooltip')}
-                >
-                  {resetting ? t('settings:install.step2.resetting') : t('settings:install.step2.resetButton')}
-                </Button>
+            <FieldRow label={t('settings:install.step2.confirmLabel')}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Input
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                  placeholder={t('settings:install.step2.confirmPlaceholder')}
+                  title={t('settings:hoverTips.confirmPassword')}
+                />
+                {confirm.length > 0 && (
+                  <span style={{ fontSize: 11, color: passwordsMatch ? colors.green : colors.red, whiteSpace: 'nowrap' }}>
+                    {passwordsMatch ? t('settings:install.step2.matches') : t('settings:install.step2.noMatch')}
+                  </span>
+                )}
               </div>
-              {resetMsg && (
-                <span style={{ fontSize: 11, color: resetMsg.ok ? colors.green : colors.red }}>
-                  {resetMsg.text}
-                </span>
-              )}
+            </FieldRow>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Button
+                variant="primary"
+                onClick={handleCreate}
+                disabled={creating || !username || !passwordsMatch}
+                title={t('settings:install.step2.createUserTooltip')}
+              >
+                {creating ? t('settings:install.step2.creating') : t('settings:install.step2.createUser')}
+              </Button>
             </div>
-          )}
-        </div>
-      )}
+
+            {createMsg && (
+              <span style={{ fontSize: 11, color: createMsg.ok ? colors.green : colors.red }}>
+                {createMsg.text}
+              </span>
+            )}
+          </div>
+        )}
+
+        {stepAvailable && hasUser && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ fontSize: 12, color: colors.text }}>
+              {t('settings:install.step2.userConfiguredPrefix')} <code style={{ color: colors.accent }}>{existingUser}</code> {t('settings:install.step2.userConfiguredSuffix')}{' '}
+              <button
+                type="button"
+                onClick={() => setShowReset((v) => !v)}
+                title={t('settings:install.step2.resetPasswordToggleTooltip')}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: colors.cyan ?? colors.accent,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  textDecoration: 'underline',
+                  padding: 0,
+                }}
+              >
+                {showReset ? t('common:cancel') : t('settings:install.step2.resetPassword')}
+              </button>
+            </div>
+
+            {showReset && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+                <FieldRow label={t('settings:install.step2.newPasswordLabel')}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Input
+                      type="password"
+                      autoComplete="new-password"
+                      value={resetPw}
+                      onChange={(e) => setResetPw(e.target.value)}
+                      placeholder={t('settings:install.step2.newPasswordPlaceholder')}
+                      title={t('settings:hoverTips.newPassword')}
+                    />
+                  </div>
+                </FieldRow>
+                <FieldRow label={t('settings:install.step2.confirmLabel')}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <Input
+                      type="password"
+                      autoComplete="new-password"
+                      value={resetConfirm}
+                      onChange={(e) => setResetConfirm(e.target.value)}
+                      placeholder={t('settings:install.step2.confirmPlaceholder')}
+                      title={t('settings:hoverTips.confirmNewPassword')}
+                    />
+                    {resetConfirm.length > 0 && (
+                      <span style={{ fontSize: 11, color: resetMatch ? colors.green : colors.red, whiteSpace: 'nowrap' }}>
+                        {resetMatch ? t('settings:install.step2.matches') : t('settings:install.step2.noMatch')}
+                      </span>
+                    )}
+                  </div>
+                </FieldRow>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <Button
+                    variant="primary"
+                    onClick={handleReset}
+                    disabled={resetting || !resetMatch}
+                    title={t('settings:install.step2.resetButtonTooltip')}
+                  >
+                    {resetting ? t('settings:install.step2.resetting') : t('settings:install.step2.resetButton')}
+                  </Button>
+                </div>
+                {resetMsg && (
+                  <span style={{ fontSize: 11, color: resetMsg.ok ? colors.green : colors.red }}>
+                    {resetMsg.text}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </form>
     </StepContainer>
   );
 }
@@ -666,72 +680,82 @@ function Step3Emsoft({ wslStatus }) {
     : null;
 
   return (
+    // Password inputs need a <form> ancestor, otherwise Chrome logs
+    // "Password field is not contained in a form" on every page load and
+    // password managers misbehave. Nothing is submitted the HTML way, so the
+    // submit handler just stops the default navigation.
     <StepContainer dimmed={!isReady}>
-      <StepHeader number={3} title={t('settings:install.step3.title')} status={statusProps} />
+      <form onSubmit={(e) => e.preventDefault()}>
+        <StepHeader number={3} title={t('settings:install.step3.title')} status={statusProps} />
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <div>
-          <Label style={{ display: 'block', marginBottom: 4, fontSize: 11, color: colors.textSecondary }}>
-            {t('settings:install.step3.sudoPasswordLabel')}
-          </Label>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={t('settings:install.step3.sudoPasswordPlaceholder')}
-              title={t('settings:install.step3.sudoPasswordTooltip')}
-              style={{ maxWidth: 260 }}
-            />
-            <Button
-              variant="primary"
-              onClick={handleInstall}
-              disabled={installing || !password}
-              title={t('settings:install.step3.runInWslTooltip')}
-            >
-              {installing ? t('settings:install.step3.installing') : t('settings:install.step3.runInWsl')}
-            </Button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div>
+            <Label style={{ display: 'block', marginBottom: 4, fontSize: 11, color: colors.textSecondary }}>
+              {t('settings:install.step3.sudoPasswordLabel')}
+            </Label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Input
+                type="password"
+                // Not "current-password": that invites the browser to fill this
+                // from credentials saved for the page's origin. A WSL sudo
+                // password is not one of those, and nothing here is submitted.
+                autoComplete="off"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={t('settings:install.step3.sudoPasswordPlaceholder')}
+                title={t('settings:install.step3.sudoPasswordTooltip')}
+                style={{ maxWidth: 260 }}
+              />
+              <Button
+                variant="primary"
+                onClick={handleInstall}
+                disabled={installing || !password}
+                title={t('settings:install.step3.runInWslTooltip')}
+              >
+                {installing ? t('settings:install.step3.installing') : t('settings:install.step3.runInWsl')}
+              </Button>
+            </div>
           </div>
+
+          {(logs.length > 0 || installing) && (
+            <div style={{
+              background: '#1a1b23',
+              border: `1px solid ${alpha(colors.border, 50)}`,
+              borderRadius: 6,
+              padding: '10px 12px',
+              maxHeight: 300,
+              overflowY: 'auto',
+              fontFamily: 'monospace',
+              fontSize: 11,
+              lineHeight: 1.5,
+              color: '#f8f8f2',
+            }}>
+              {logs.length === 0 && installing && (
+                <span style={{ color: colors.textSecondary }}>{t('settings:install.step3.starting')}</span>
+              )}
+              {logs.map((line, i) => (
+                <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                  {line}
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          )}
+
+          {finalStatus && (
+            <div style={{
+              fontSize: 12,
+              color: finalStatus.ok ? colors.green : colors.red,
+              background: alpha(finalStatus.ok ? colors.green : colors.red, 8),
+              border: `1px solid ${alpha(finalStatus.ok ? colors.green : colors.red, 20)}`,
+              borderRadius: 4,
+              padding: '6px 10px',
+            }}>
+              {finalStatus.text}
+            </div>
+          )}
         </div>
-
-        {(logs.length > 0 || installing) && (
-          <div style={{
-            background: '#1a1b23',
-            border: `1px solid ${alpha(colors.border, 50)}`,
-            borderRadius: 6,
-            padding: '10px 12px',
-            maxHeight: 300,
-            overflowY: 'auto',
-            fontFamily: 'monospace',
-            fontSize: 11,
-            lineHeight: 1.5,
-            color: '#f8f8f2',
-          }}>
-            {logs.length === 0 && installing && (
-              <span style={{ color: colors.textSecondary }}>{t('settings:install.step3.starting')}</span>
-            )}
-            {logs.map((line, i) => (
-              <div key={i} style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-                {line}
-              </div>
-            ))}
-            <div ref={logEndRef} />
-          </div>
-        )}
-
-        {finalStatus && (
-          <div style={{
-            fontSize: 12,
-            color: finalStatus.ok ? colors.green : colors.red,
-            background: alpha(finalStatus.ok ? colors.green : colors.red, 8),
-            border: `1px solid ${alpha(finalStatus.ok ? colors.green : colors.red, 20)}`,
-            borderRadius: 4,
-            padding: '6px 10px',
-          }}>
-            {finalStatus.text}
-          </div>
-        )}
-      </div>
+      </form>
     </StepContainer>
   );
 }
@@ -808,29 +832,62 @@ export default function InstallWizardSection() {
             />
           </>
         )}
-        {/* On Linux/macOS, show a simpler info message instead of WSL steps */}
+        {/*
+          Off Windows, EMsoft is not on offer at all, so this block must not be
+          headed "Direct Installation -- no WSL needed" with a green tick: that
+          header promised an installation the step below no longer contains.
+
+          Linux joined macOS on 2026-09-25. The endpoint does run the install
+          script natively there -- but nobody has ever run it, and an untested
+          build of a large Fortran project is not something to start from a
+          button. Same reasoning, same treatment.
+        */}
         {wslStatus?.platform && wslStatus.platform.os !== 'windows' && (
           <StepContainer>
-            <StepHeader number={1} title={t('settings:install.direct.title')} status={{ ok: true, warn: false, text: t('settings:install.direct.noWslNeeded') }} />
+            <StepHeader
+              number={1}
+              title={t('settings:install.notOffered.title')}
+              status={{ ok: false, warn: false, text: t('settings:install.notOffered.status') }}
+            />
             <div style={{ fontSize: 12, color: colors.textSecondary, lineHeight: 1.6 }}>
               {wslStatus.platform.os === 'macos'
-                ? t('settings:install.direct.infoMacos')
-                : t('settings:install.direct.infoLinux')}
+                ? t('settings:install.notOffered.infoMacos')
+                : t('settings:install.notOffered.infoLinux')}
               {wslStatus.emsoft_installed && (
-                <div style={{
-                  marginTop: 8,
-                  color: colors.green,
-                  fontSize: 11,
-                }}>
+                <div style={{ marginTop: 8, color: colors.green, fontSize: 11 }}>
                   {t('settings:install.direct.alreadyInstalled')}
                 </div>
               )}
             </div>
           </StepContainer>
         )}
-        <Step3Emsoft
-          wslStatus={wslStatus}
-        />
+        {/*
+          Step 3 asks for a sudo password and sends it to an endpoint that
+          validates it against WSL. On a Mac there is no WSL, so the field
+          could only ever fail -- and a Mac tester on 2026-09-25 was shown
+          "WSL-Sudo-Passwort" with a button "In WSL ausführen" directly under a
+          line reading "macOS: built natively, no WSL needed". A password box
+          that cannot work is worse than no box: it invites someone to type a
+          real password into a dead end.
+
+          The Darwin branch of install_emsoft.sh exists, but nobody has ever
+          run it. Until someone has, this is not offered on macOS; the step
+          above says so. Windows and Linux are unchanged.
+        */}
+        {/*
+          Rendered only once we KNOW the platform. Written as "we have an
+          answer and it is not macOS" rather than "not macOS", because
+          wslStatus starts null and STAYS null when the status request fails:
+          the looser test let the WSL password field appear on a Mac whose
+          backend call errored — permanently, since nothing retries — and flash
+          on every normal load. A review found it; the component test could not,
+          because it only ever resolved the mock.
+        */}
+        {wslStatus?.platform && wslStatus.platform.os === 'windows' && (
+          <Step3Emsoft
+            wslStatus={wslStatus}
+          />
+        )}
       </div>
     </GroupBox>
   );
