@@ -44,7 +44,7 @@ def display_stem(path) -> str:
 
     >>> display_stem(r"C:\\Users\\operator\\Database\\Al.cif")
     'Al'
-    >>> display_stem("/home/sesam/Database/Al.cif")
+    >>> display_stem("/home/operator/Database/Al.cif")
     'Al'
     >>> display_stem("Al.cif")
     'Al'

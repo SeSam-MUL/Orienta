@@ -28,8 +28,8 @@ from simulation.opencl_detector import (
 # Constants — override via environment variables for portability
 # ---------------------------------------------------------------------------
 ICD_DIR = Path("/etc/OpenCL/vendors")
-EMSOFT_BIN = Path(os.environ.get("EMSOFT_BIN", "/home/sesam/emsoft/builds/EMsoft-Release/Bin"))
-EMSOFT_DATA = Path(os.environ.get("EMSOFT_DATA", "/home/sesam/EMsoftData"))
+EMSOFT_BIN = Path(os.environ.get("EMSOFT_BIN", str(Path.home() / "emsoft/builds/EMsoft-Release/Bin")))
+EMSOFT_DATA = Path(os.environ.get("EMSOFT_DATA", str(Path.home() / "EMsoftData")))
 TEST_DIR_NAME = "TestICD"
 TEST_DIR = EMSOFT_DATA / TEST_DIR_NAME
 
@@ -187,7 +187,7 @@ class TestFullRoundtrip:
         if not emmcopencl.exists():
             pytest.skip("EMMCOpenCL binary not found")
 
-        xtal_file = Path(os.environ.get("EMSOFT_XTAL", "/home/sesam/EMsoftXtal")) / "Al.xtal"
+        xtal_file = Path(os.environ.get("EMSOFT_XTAL", str(Path.home() / "EMsoftXtal"))) / "Al.xtal"
         if not xtal_file.exists():
             pytest.skip("Al.xtal not found")
 

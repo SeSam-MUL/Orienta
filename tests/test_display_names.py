@@ -23,7 +23,7 @@ import pytest
 from display_names import display_basename, display_stem
 
 WINDOWS_PATH = r"C:\Users\operator\Orienta\Database\CIF_Library\Al.cif"
-POSIX_PATH = "/home/sesam/Orienta/Database/CIF_Library/Al.cif"
+POSIX_PATH = "/home/operator/Orienta/Database/CIF_Library/Al.cif"
 BARE_NAME = "Al.cif"
 
 
@@ -91,7 +91,7 @@ def test_a_path_object_is_accepted_not_just_a_string():
 def test_a_trailing_separator_does_not_produce_an_empty_name():
     # Path("x/y/").name is "y" — a directory handed in by mistake should still
     # read as a name, not as "".
-    assert display_stem("/home/sesam/Database/") == "Database"
+    assert display_stem("/home/operator/Database/") == "Database"
     assert display_stem("C:\\Database\\") == "Database"
 
 

@@ -46,12 +46,12 @@ class _FakeRunner:
 # the tests never read the developer's own emsphinx_config.ini -- that file is
 # gitignored, so on a fresh checkout (and on the Linux runner) the reaper would
 # find no directory, treat every process as somebody else's, and reap nothing.
-BIN = "/home/sesam/emsoft/builds/EMsoft-Release/Bin"
+BIN = "/home/operator/emsoft/builds/EMsoft-Release/Bin"
 
 # A realistic-looking `ps -eo pid=,etimes=,args=` dump (pid, elapsed-seconds, args)
 _PS_WITH_TWO_ORPHANS = (
-    "   1240 36000 /home/sesam/emsoft/builds/EMsoft-Release/Bin/EMEBSDmasterSHT EMEBSDmasterSHT_Al-Cu-Fe-Si.nml\n"
-    "   3532  1460 /home/sesam/emsoft/builds/EMsoft-Release/Bin/EMEBSDmasterSHT EMEBSDmasterSHT_Al-Fe-Cu-Si.nml\n"
+    "   1240 36000 /home/operator/emsoft/builds/EMsoft-Release/Bin/EMEBSDmasterSHT EMEBSDmasterSHT_Al-Cu-Fe-Si.nml\n"
+    "   3532  1460 /home/operator/emsoft/builds/EMsoft-Release/Bin/EMEBSDmasterSHT EMEBSDmasterSHT_Al-Fe-Cu-Si.nml\n"
     "      1 99999 /sbin/init\n"
     "    210    88 /usr/bin/dbus-daemon --system\n"
 )
