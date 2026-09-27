@@ -12,7 +12,7 @@ that makes the two promises visible at once:
 
   * the version on disk moves v0.4.4 -> v0.4.6
   * a file the new MANIFEST drops is pruned, not left behind for ever
-  * `runtime/Database` -- the user's crystal library -- is untouched
+  * `runtime/Database` -- the crystal library -- is untouched
 
 Node is required, because the parking half IS JavaScript; where there is no node
 the test skips rather than asserting a weaker thing.
