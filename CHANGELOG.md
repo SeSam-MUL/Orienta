@@ -66,9 +66,15 @@ and master pattern included: silicon 16 → **8 atoms**, density 4.658 →
 **2.329 g/cm³**; MgCu₂ Mg32Cu8 → **Mg8Cu16**, 6.145 → **5.787 g/cm³**; and
 β-AlFeSi from the silicon-bearing CIF it should have used. An audit across the
 whole library afterwards found **34 files and no remaining deviation**. The
-superseded files were moved aside rather than deleted, into
-`Database/_superseded-2026-09-26/`. The affected files are listed one by one in
-`tasks/orbit-multiplicity/affected-artefacts.md`.
+superseded files were moved aside rather than deleted.
+
+**Nothing shipped in this repository is affected.** The four structures under
+`sample_data/phases/` were checked against their CIFs with Orienta's own audit:
+all four come back with the atom count and density they should have, and none of
+them is in one of the 24 space groups that have two origins. The three wrong
+files were in the maintainers' own crystal library, which this repository has
+never contained — if you built masters from your own copies of `Si`, MgCu₂ or
+β-AlFeSi, those are the ones to rebuild.
 
 **So if you indexed silicon or MgCu₂ with Dictionary or Spherical indexing in an
 earlier version, index those maps again.** On silicon the new master is a

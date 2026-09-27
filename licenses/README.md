@@ -13,6 +13,7 @@ belongs to.
 | `Feather-License.txt` | the SVG icons in `crystal-structures-for-ebsd-main/calculationxtal/icons/` |
 | `python-build-standalone/` | components of the standalone CPython the Windows and Linux installers download |
 | `micromamba-License.txt` | the micromamba binary the macOS installer downloads and keeps in the runtime folder |
+| `freezeColors-Upstream-MIT.txt` | `matlab_testskripts/freezeColors.m`, another author's work bundled with the MATLAB reference scripts |
 
 This directory is part of every release package (`scripts/build_runtime_package.py`),
 and the release build refuses a package whose `NOTICE.md` points at a file that

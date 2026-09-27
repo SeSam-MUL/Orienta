@@ -21,7 +21,6 @@ and at the project root (`safe_loader.py`, `ebsd_utils.py`, `analysis/`,
 | [`forward_sim/`](forward_sim/) | GPU-native EBSD **forward model** — computes a phase's dynamical master pattern from EMsoft crystal data + a Monte-Carlo energy/depth distribution, in parallel to EMsoft (which stays the validation oracle). Organised into `crystal/`, `mc/`, `dynamical/`, `io/`, and `validate/` (NCC / pattern-parity checks vs EMsoft). |
 | [`workers/`](workers/) | Reserved package for background workers; currently a namespace placeholder (empty `__init__.py`). Long-running jobs today are managed in `api/services/` (e.g. batch managers) and the root-level `simulation/` package. |
 | [`tests/`](tests/) | Backend-local test package marker. The bulk of the project's pytest suite lives in the repository-root [`tests/`](../tests) directory. |
-| [`requirements.txt`](requirements.txt) | The minimal web-layer dependencies (FastAPI, uvicorn, websockets, pydantic, httpx, pytest). The scientific stack (kikuchipy, orix, diffsims, torch, h5py, …) is declared in the project-root `requirements.txt`. |
 
 ## How it fits the Orienta architecture
 

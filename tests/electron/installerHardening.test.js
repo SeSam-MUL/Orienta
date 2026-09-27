@@ -534,8 +534,12 @@ describe('the runtime that came in the box', () => {
     const extra = pkg.build.extraResources || [];
     expect(extra.some((e) => e.from === 'bundled-runtime')).toBe(true);
 
-    const builder = fs.readFileSync(
-      path.resolve(import.meta.dirname, '..', '..', 'scripts', 'build_release.py'), 'utf8');
+    // `scripts/build_release.py` is not part of the public repository, so the
+    // two assertions about its staging step can only run in the development
+    // tree. Skipping beats deleting: there the guard still bites.
+    const builderPath = path.resolve(import.meta.dirname, '..', '..', 'scripts', 'build_release.py');
+    if (!fs.existsSync(builderPath)) return;
+    const builder = fs.readFileSync(builderPath, 'utf8');
     expect(builder).toMatch(/def stage_bundled_runtime/);
     // Cleared first: a package from an earlier version shipping beside the
     // current one would be found by name and could be chosen instead of it.
