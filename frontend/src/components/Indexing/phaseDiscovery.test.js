@@ -108,8 +108,8 @@ describe('phase discovery', () => {
   });
 
   // Switching method twice quickly: the first reply must not land on the
-  // second's list. Seen in the wild as the Hough CIF library appearing under
-  // a Spherical run (CLAUDE.md, the comment at the discover call site).
+  // second's list. Seen in the wild as the Hough CIF library appearing under a
+  // Spherical run -- the comment at the discover call site says the same thing.
   it('a slow reply from an older call is discarded', async () => {
     let releaseFirst;
     const discover = vi.fn()

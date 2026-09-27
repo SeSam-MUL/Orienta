@@ -51,11 +51,53 @@ def _run_git(args: list[str], cwd: Path) -> str | None:
     return out or None
 
 
+def _git_dirs(root: Path) -> tuple[Path, Path] | None:
+    """`(gitdir, commondir)`: where HEAD lives, and where the refs live.
+
+    In an ordinary clone both are `<root>/.git`. In a **git worktree** -- and in
+    a submodule -- `.git` is a FILE holding `gitdir: <path>`, HEAD lives in that
+    directory, and the refs live in the directory its `commondir` names. Reading
+    `<root>/.git/HEAD` there gets `NotADirectoryError`, which this module caught
+    as `OSError` and turned into "no git information found".
+
+    That is why Orienta reported its version as unknown when run from a
+    worktree without a git binary, and why two tests failed in every worktree
+    and every session that used one: the fallback that exists for the case
+    "there is no git binary" could not read the layout git itself created.
+    """
+    dot = root / ".git"
+    if dot.is_dir():
+        return dot, dot
+    try:
+        text = dot.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return None
+    if not text.startswith("gitdir:"):
+        return None
+    gitdir = Path(text[len("gitdir:"):].strip())
+    if not gitdir.is_absolute():
+        # Relative to the directory holding the .git file, which is how git
+        # writes it for a submodule.
+        gitdir = (root / gitdir).resolve()
+    common = gitdir
+    try:
+        named = (gitdir / "commondir").read_text(encoding="utf-8").strip()
+    except OSError:
+        named = ""
+    if named:
+        candidate = Path(named)
+        common = candidate if candidate.is_absolute() else (gitdir / candidate).resolve()
+    return gitdir, common
+
+
 def _read_git_files(root: Path) -> tuple[str | None, str | None]:
     """Fallback without the git binary: (short_hash, branch) from .git files."""
-    head_file = root / ".git" / "HEAD"
+    dirs = _git_dirs(root)
+    if dirs is None:
+        return None, None
+    gitdir, common = dirs
     try:
-        head = head_file.read_text(encoding="utf-8", errors="replace").strip()
+        head = (gitdir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
     except OSError:
         return None, None
 
@@ -63,11 +105,12 @@ def _read_git_files(root: Path) -> tuple[str | None, str | None]:
         ref = head[5:].strip()  # e.g. refs/heads/golive/unified-phase-identity
         branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
         branch = branch or None
-        ref_file = root / ".git" / Path(ref)
+        # The ref itself is shared: a worktree's HEAD points into the common
+        # directory, not into its own.
         try:
-            commit = ref_file.read_text(encoding="utf-8").strip()
+            commit = (common / Path(ref)).read_text(encoding="utf-8").strip()
         except OSError:
-            commit = _lookup_packed_ref(root, ref)
+            commit = _lookup_packed_ref(common, ref)
         return (commit[:9] if commit else None), branch
 
     # Detached HEAD: the file holds the hash itself.
@@ -76,8 +119,9 @@ def _read_git_files(root: Path) -> tuple[str | None, str | None]:
     return None, None
 
 
-def _lookup_packed_ref(root: Path, ref: str) -> str | None:
-    packed = root / ".git" / "packed-refs"
+def _lookup_packed_ref(common: Path, ref: str) -> str | None:
+    """`packed-refs` lives in the common directory, beside `refs/`."""
+    packed = common / "packed-refs"
     try:
         for line in packed.read_text(encoding="utf-8", errors="replace").splitlines():
             line = line.strip()

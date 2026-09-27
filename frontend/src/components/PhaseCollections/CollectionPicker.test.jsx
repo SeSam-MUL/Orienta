@@ -73,10 +73,10 @@ describe('CollectionPicker', () => {
 
   // The store's initial `data` is an empty-but-VALID shape and only
   // `collapsed` is persisted, so on every single start there is a window in
-  // which the menu is empty and says so by saying nothing. Sebastian read
-  // exactly that as the app having lost his collections: "beim starten der
-  // app laden die phasen nicht sofort ... das kann zu missverstaendnissen
-  // fuehren". The store has tracked `loading` all along; nobody read it.
+  // which the menu is empty and says so by saying nothing. That was reported as
+  // the app having lost the user's collections -- the phases do not load
+  // immediately at startup, and an empty menu in that window is read as an empty
+  // library. The store has tracked `loading` all along; nobody read it.
   it('says it is loading rather than showing an empty menu', async () => {
     // The store is module-level and the tests above have already filled it.
     // This test is about the FIRST start, so put it back to what a fresh app
