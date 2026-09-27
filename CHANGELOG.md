@@ -349,7 +349,8 @@ port then copied the file from the development tree, which still carried the
 literal, and put it back without anyone noticing.
 
 **Anyone who cloned, downloaded or browsed this repository between those two
-releases could read that key. Treat it as compromised.** It is out of the source
+releases could read that key. Treat it as compromised; it has since been
+revoked, so it no longer opens anything.** It is out of the source
 again: the key comes from **Settings → API keys** or from the `MP_API_KEY`
 environment variable, and when none is set the database builder simply works
 offline from your local CIF files.
