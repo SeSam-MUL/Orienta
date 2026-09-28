@@ -96,10 +96,8 @@ const indexEol = (() => {
  * Anything not in the map is untracked, and this guard is about what the
  * repository carries, not about a scratch file someone left lying around.
  */
-const hasCrlf = (rel) => {
-  const eol = indexEol.get(rel);
-  return eol === 'crlf' || eol === 'mixed';
-};
+export const crlfish = (eol) => eol === 'crlf' || eol === 'mixed';
+const hasCrlf = (rel) => crlfish(indexEol.get(rel));
 
 describe('line endings under frontend/src', () => {
   it('there are files to check', () => {
@@ -112,6 +110,27 @@ describe('line endings under frontend/src', () => {
       .toBeGreaterThan(400);
   });
 
+  it('the verdict can say yes as well as no', () => {
+    /**
+     * The positive control, and it has to live here rather than on real files.
+     * It used to be implicit: the old third test asserted the KNOWN entries were
+     * still CRLF, so a detector that always said "no" failed it. That only worked
+     * in a repository that HAS a CRLF file in its index, and the public one has
+     * none — so on the side where this guard matters most, nothing proved it could
+     * still see. A blind `() => false` passes every other test in this file.
+     */
+    expect(crlfish('crlf')).toBe(true);
+    expect(crlfish('mixed')).toBe(true);
+    expect(crlfish('lf')).toBe(false);
+    expect(crlfish('none')).toBe(false);
+    expect(crlfish(undefined)).toBe(false);
+    // ... and the parser really produced git's vocabulary, not empty strings.
+    const seen = new Set(indexEol.values());
+    expect([...seen].every((v) => ['lf', 'crlf', 'mixed', 'none', '-text'].includes(v)),
+      `unexpected eol values from git: ${[...seen]}`).toBe(true);
+    expect(seen.has('lf'), 'no file reported as lf — the parse is wrong').toBe(true);
+  });
+
   it('nothing outside the known list uses CRLF', () => {
     const offenders = files.map(relOf)
       .filter((r) => !KNOWN.has(r))
@@ -119,14 +138,27 @@ describe('line endings under frontend/src', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the known list may only shrink -- every entry still exists and is still CRLF', () => {
-    // An entry that has been cleaned up, or deleted, should leave the list.
-    // Stale exceptions are how an exception list becomes a blanket.
-    const stale = [...KNOWN].filter((r) => {
-      const p = path.join(SRC, r);
-      return !fs.existsSync(p) || !hasCrlf(r);
-    });
-    expect(stale).toEqual([]);
+  it('every entry of the known list still names a file, and the list has not grown', () => {
+    /**
+     * This used to also require each entry to be STILL CRLF, and that made the
+     * exception list a fact about one repository. Measured: all seven are
+     * `i/crlf` or `i/mixed` in the development tree and all seven are `i/lf` in
+     * the public one, because `core.autocrlf=true` normalised them on the way in.
+     * The public repository is CLEANER here, and the old assertion called that
+     * staleness and went red — a guard that fails because the problem went away.
+     *
+     * An entry that has become LF is the outcome the list exists to make
+     * possible, so it is not a failure. What is still checked is what actually
+     * protects the list: a path that no longer exists (the file was deleted or
+     * moved, and the exception is now a blanket over nothing), and growth —
+     * because adding an entry has to be a visible, reviewed change rather than
+     * something a patch script does on the way past.
+     */
+    const missing = [...KNOWN].filter((r) => !fs.existsSync(path.join(SRC, r)));
+    expect(missing, 'exceptions that no longer name a file').toEqual([]);
+    expect(KNOWN.size,
+      'the exception list grew — a new CRLF file needs a reason, not an entry')
+      .toBeLessThanOrEqual(7);
   });
 });
 
