@@ -175,6 +175,26 @@ affected. The note then said they were not.
   with the nominal composition of the phase it was matched to, and says plainly
   when they disagree by more than a factor of two. It changes no assignment.
 
+### The phase library
+
+There is a new page that shows what is actually in your crystal library: one card
+per phase with its formula, space group, structure type, the elements it contains,
+and which of the three indexing methods can use it — a CIF alone is enough for
+Hough, spherical needs a simulated master. You can search it, filter by element,
+give a phase your own name or a synonym without renaming files on disk, and drag
+phases into groups. Where a phase carries a source, the card offers it for
+citation.
+
+It replaces looking for a `.cif` in a folder, which is where the page came from:
+"ich musste ewig suchen um das cif zu finden".
+
+*This page is not finished, and 0.4.6 ships it anyway because what is there is
+usable on its own. The open points — mostly around groups, keyboard use and a few
+panels that still read better than they behave — are listed in the repository under
+`tasks/collections-round2/FRONTEND-OPEN.md` and are meant for 0.4.7. Nothing on
+this page deletes or moves a file, so the worst an unfinished corner can cost you
+is a second attempt.*
+
 ### Phase collections
 
 Phases can now be filed into named collections — "Intermetallics in Al",
