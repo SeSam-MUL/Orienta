@@ -24,6 +24,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,18 +57,65 @@ function walk(dir, out = []) {
 
 const files = walk(SRC);
 const relOf = (p) => path.relative(SRC, p).replace(/\\/g, '/');
-const hasCrlf = (p) => fs.readFileSync(p).includes('\r\n');
+
+/**
+ * THE INDEX, NOT THE WORKING TREE.
+ *
+ * This guard used to read the checked-out bytes. That is only the same question
+ * where `core.autocrlf` is off — and off is NOT git's default on Windows. In the
+ * public repository, which has `core.autocrlf=true`, the working tree is CRLF by
+ * design and this test reported **710 offenders** (`App.css` and 709 more) on a
+ * tree whose content is pure LF. It was a guard bound to the machine it was
+ * written on: green here, red for anyone who clones with git's own defaults.
+ *
+ * What cannot be argued with is the INDEX: `git ls-files --eol` reports it as
+ * `i/lf` or `i/crlf` whatever the checkout does. That is the byte sequence a
+ * diff, `git blame` and the port all see, which is what the paragraph above is
+ * actually about.
+ */
+const indexEol = (() => {
+  const out = execFileSync('git', ['ls-files', '--eol', '-z', '--', SRC],
+                           { cwd: REPO, encoding: 'utf8', maxBuffer: 64 << 20 });
+  const map = new Map();
+  for (const entry of out.split('\0')) {
+    if (!entry) continue;
+    // `i/lf    w/crlf  attr/                 \tpath`
+    const tab = entry.indexOf('\t');
+    if (tab < 0) continue;
+    const eol = /(^|\s)i\/(\S+)/.exec(entry.slice(0, tab));
+    if (!eol) continue;
+    map.set(path.relative(SRC, path.join(REPO, entry.slice(tab + 1))).replace(/\\/g, '/'),
+            eol[2]);
+  }
+  return map;
+})();
+
+/**
+ * A file git has no opinion about is not judged: `i/none` means "no line
+ * endings at all" (an empty file) and `i/-text` means git treats it as binary.
+ * Anything not in the map is untracked, and this guard is about what the
+ * repository carries, not about a scratch file someone left lying around.
+ */
+const hasCrlf = (rel) => {
+  const eol = indexEol.get(rel);
+  return eol === 'crlf' || eol === 'mixed';
+};
 
 describe('line endings under frontend/src', () => {
   it('there are files to check', () => {
     // A walk that found nothing would pass forever.
     expect(files.length).toBeGreaterThan(400);
+    // ... and so would an index view that came back empty, which is what happens
+    // if `git` is missing or this is not a checkout. Then the guard cannot judge,
+    // and "cannot judge" must not read as "clean".
+    expect(indexEol.size, 'git ls-files reported nothing — the guard is blind')
+      .toBeGreaterThan(400);
   });
 
   it('nothing outside the known list uses CRLF', () => {
     const offenders = files.map(relOf)
       .filter((r) => !KNOWN.has(r))
-      .filter((r) => hasCrlf(path.join(SRC, r)));
+      .filter((r) => hasCrlf(r));
     expect(offenders).toEqual([]);
   });
 
@@ -76,7 +124,7 @@ describe('line endings under frontend/src', () => {
     // Stale exceptions are how an exception list becomes a blanket.
     const stale = [...KNOWN].filter((r) => {
       const p = path.join(SRC, r);
-      return !fs.existsSync(p) || !hasCrlf(p);
+      return !fs.existsSync(p) || !hasCrlf(r);
     });
     expect(stale).toEqual([]);
   });
@@ -102,8 +150,16 @@ describe('line endings under docs/user-guide', () => {
   });
 
   it('none of them uses CRLF', () => {
-    const offenders = docs
-      .filter((f) => hasCrlf(path.join(DOCS, f)));
+    // Its own `ls-files` call: DOCS is outside `frontend/src`, so the map above
+    // does not cover it, and reusing that map would have quietly checked nothing.
+    const out = execFileSync('git', ['ls-files', '--eol', '-z', '--', DOCS],
+                             { cwd: REPO, encoding: 'utf8', maxBuffer: 16 << 20 });
+    const rows = out.split('\0').filter(Boolean);
+    expect(rows.length, 'git listed no guides — the check would be vacuous')
+      .toBeGreaterThan(10);
+    const offenders = rows
+      .filter((row) => /(^|\s)i\/(crlf|mixed)/.test(row.slice(0, row.indexOf('\t'))))
+      .map((row) => row.slice(row.indexOf('\t') + 1));
     expect(offenders).toEqual([]);
   });
 });
