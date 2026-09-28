@@ -61,6 +61,8 @@
     "wslOk": "WSL: OK"
   },
   "toolbar": {
+    "phaseLibrary": "相ライブラリ",
+    "phaseLibraryTooltip": "相ライブラリを開く: すべての相、その内容、利用できる手法",
     "edsColors": "EDS カラー",
     "reportProblem": "⚠ 問題を報告",
     "reportProblemTooltip": "問題を記入し、ログとバージョンを含むレポートを保存します。バグ報告に添付できます。",

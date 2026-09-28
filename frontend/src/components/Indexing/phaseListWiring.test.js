@@ -44,10 +44,30 @@ describe('the phase dropdown is wired to the load state', () => {
     expect(dropdownJsx()).toMatch(/onRetry=\{retryDiscover\}/);
   });
 
+  /**
+   * The whole STATEMENT, not its first line.
+   *
+   * This read one line, and broke the day a third condition made the
+   * expression wrap -- while the gate it checks was still there and still
+   * correct. A source-reading test should be exactly as brittle as the
+   * thing it protects, and no more.
+   */
+  const canStartExpr = () => {
+    const i = SRC.indexOf('const canStart');
+    expect(i).toBeGreaterThan(-1);
+    return SRC.slice(i, SRC.indexOf(';', i));
+  };
+
   it('Start is gated on the phase list', () => {
-    const line = SRC.split('\n').find((l) => l.includes('const canStart'));
-    expect(line).toBeDefined();
-    expect(line).toMatch(/!phaseListBlocked/);
+    expect(canStartExpr()).toMatch(/!phaseListBlocked/);
+  });
+
+  it('and on the active group still existing', () => {
+    // An active group that resolves to nothing used to widen the run to the
+    // whole library in silence. It offers nothing now, so starting has to be
+    // blocked too -- otherwise the button is live over an empty selection
+    // and the reason is nowhere on screen.
+    expect(canStartExpr()).toMatch(/!groupMissing/);
   });
 
   it('...and the gate leaves a way out when the user picked a phase by hand', () => {

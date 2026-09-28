@@ -55,8 +55,15 @@ def _is_backup(path: Path) -> bool:
 # new families need to be checked.
 #
 # _PHASE_NICKNAMES is imported from phase_metadata (the single source) above and
-# re-exported here for the existing collision test. _prettify_formula (kept for
-# back-compat) and build_canonical_label both consult it.
+# re-exported here for the existing collision test.
+#
+# Its two readers are `_prettify_formula` below and
+# `phase_metadata.build_canonical_label` -- and NEITHER is reached from this
+# module: `build_index` sets the display fields with `format_formula_subscripts`
+# directly, and `build_canonical_label` has no backend caller at all. So the
+# nicknames are, today, a table nothing displays. That is why the synonym store
+# (`phase_synonyms`) SEEDS from this table rather than replacing it: whoever
+# eventually wires a label builder should find the names still here.
 
 
 def _prettify_formula(raw: str, space_group: str, elements: tuple[str, ...]) -> str:
@@ -146,10 +153,17 @@ class LocalEntry:
     sht_path: Optional[Path] = None
 
     formula: str = ""
-    # Canonical phase-identity label (the SAME format the Indexing path uses):
-    # `<formula-or-(elements)> — <pearson> (<H-M>)[ · <nickname>]`. Built via
-    # phase_metadata.build_canonical_label so the Phase-Tester / Crystal-Hint
-    # stop disagreeing with the Indexing dropdown.
+    # BOTH of these are the pymatgen `reduced_formula` rendered with subscripts
+    # (`format_formula_subscripts`), set in `build_index`.
+    #
+    # They are NOT `phase_metadata.build_canonical_label`, whatever this comment
+    # said until 2026-09-27. That function exists and produces
+    # `<formula-or-(elements)> — <pearson> (<H-M>)[ · <nickname>]`, but nothing in
+    # the backend calls it: measured, zero call sites outside its own tests. The
+    # visible consequence is that `alpha-AlFeMnSi_ICSD-52623` carries
+    # `Mn₅.₂₆₈Al₁₀₀.₈₉Fe₂₁.₂₄Si₁₀.₆₀₂` here while its literature nickname
+    # `α-Al(Fe,Mn)Si` sits in the nickname table and appears nowhere. A reader who
+    # believed the old comment would look for the bug in the label builder.
     display_formula: str = ""
     display_label: str = ""
     elements: tuple[str, ...] = ()
@@ -159,6 +173,11 @@ class LocalEntry:
     lattice_a_A: Optional[float] = None
     lattice_b_A: Optional[float] = None
     lattice_c_A: Optional[float] = None
+    # Angles too, because the phase library's card promises "all lattice
+    # parameters" and 12 of the 36 phases have one that is not 90 deg.
+    lattice_alpha_deg: Optional[float] = None
+    lattice_beta_deg: Optional[float] = None
+    lattice_gamma_deg: Optional[float] = None
     n_atoms: Optional[int] = None
     parse_error: Optional[str] = None
 
@@ -238,6 +257,16 @@ def _parse_cif(cif_path: Path) -> dict:
             "a_A": s.lattice.a,
             "b_A": s.lattice.b,
             "c_A": s.lattice.c,
+            # The angles come from the SAME parsed structure as `n_atoms` and
+            # the composition. Taking them from a second reader would let one
+            # phase card describe two different data blocks without anyone
+            # noticing -- and `a b c` without gamma = 120 deg is three numbers,
+            # not a cell. 12 of the 36 library phases have an angle off 90 deg
+            # (eight hexagonal, Al13Fe4 monoclinic 107.669, both beta-AlFeSi
+            # 90.42, Fe3_Al2_Si3 triclinic).
+            "alpha_deg": s.lattice.alpha,
+            "beta_deg": s.lattice.beta,
+            "gamma_deg": s.lattice.gamma,
             "n_atoms": len(s),
         }
     except Exception as exc:
@@ -329,7 +358,10 @@ def _readable_without_structure(cif: Path) -> dict:
         out["space_group_number"] = meta.space_group_number
         out["crystal_system"] = _system_from_sg_number(meta.space_group_number)
     for src, dst in (("lattice_a", "lattice_a_A"), ("lattice_b", "lattice_b_A"),
-                     ("lattice_c", "lattice_c_A")):
+                     ("lattice_c", "lattice_c_A"),
+                     ("lattice_alpha", "lattice_alpha_deg"),
+                     ("lattice_beta", "lattice_beta_deg"),
+                     ("lattice_gamma", "lattice_gamma_deg")):
         v = getattr(meta, src, None)
         if v:
             out[dst] = v
@@ -382,6 +414,9 @@ def build_index() -> dict[str, LocalEntry]:
                 lattice_a_A=info["a_A"],
                 lattice_b_A=info["b_A"],
                 lattice_c_A=info["c_A"],
+                lattice_alpha_deg=info.get("alpha_deg"),
+                lattice_beta_deg=info.get("beta_deg"),
+                lattice_gamma_deg=info.get("gamma_deg"),
                 n_atoms=info["n_atoms"],
             )
 
@@ -411,6 +446,9 @@ def build_index() -> dict[str, LocalEntry]:
                     lattice_a_A=info["a_A"],
                     lattice_b_A=info["b_A"],
                     lattice_c_A=info["c_A"],
+                    lattice_alpha_deg=info.get("alpha_deg"),
+                    lattice_beta_deg=info.get("beta_deg"),
+                    lattice_gamma_deg=info.get("gamma_deg"),
                     n_atoms=info["n_atoms"],
                 )
             else:

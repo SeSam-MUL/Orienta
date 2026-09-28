@@ -27,7 +27,11 @@ const de = import.meta.glob('./de/*.json', { eager: true });
 const ALLOWED = new Set([
   'aktuell', 'aktuelle', 'aktuellem', 'aktuellen', 'aktueller', 'aktuelles',
   'aufbauen', 'bauen', 'datenquelle', 'dauerhaft', 'dauern', 'dauert',
-  'genaue', 'genauer', 'genauere', 'graue', 'issue', 'kartensteuerung', 'laue',
+  'genaue', 'genauer', 'genauere', 'graue', 'issue', 'kartensteuerung',
+  // From the Latin, not a flattened umlaut: Koeffizient has no ö.
+  'koeffizient', 'koeffizienten', 'laue',
+  // Greek rhombos + hedron: no umlaut was flattened here either.
+  'rhomboedrisch', 'rhomboeder',
   'literaturquelle', 'manuell', 'manuelle', 'manuellen', 'manuelles',
   'musterquelle', 'neue', 'neuem', 'neuen', 'neuer', 'neuere', 'neues',
   'neueste', 'neuesten', 'neuexport', 'niederfrequenten', 'quell', 'quellcode',

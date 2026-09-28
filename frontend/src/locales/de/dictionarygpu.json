@@ -75,6 +75,6 @@
     "colCreated": "Erstellt",
     "delete": "Löschen",
     "deleteTooltip": "Diese Wörterbuch-Datei von der Festplatte löschen (mit Rückfrage; nicht rückgängig machbar).",
-    "deleteConfirm": "\"{{name}}\" löschen? Dies kann nicht rückgängig gemacht werden."
+    "deleteConfirm": "„{{name}}“ löschen? Dies kann nicht rückgängig gemacht werden."
   }
 }

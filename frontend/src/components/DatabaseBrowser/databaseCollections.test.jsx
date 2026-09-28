@@ -188,37 +188,43 @@ describe('groupEntriesByCollection', () => {
     expect(flattenGroups(groups)).toEqual([alCif, alXtal, alFeMnSi, niCif]);
   });
 
-  describe('IMPORTANT 2 — an exclusive collection always wins over the working set', () => {
-    // Dual membership is the designed state: `phase_collections.py#assign`
-    // deliberately leaves a non-exclusive (working-set) collection holding a
-    // key when that same key is filed into an exclusive one. The browser
-    // exists to show where a phase is ACTUALLY filed, so the real, exclusive
-    // collection must win the grouping regardless of name-sort order.
-    it('wins when the working set sorts BEFORE the real collection', () => {
+  describe('IMPORTANT 2 — a phase in several groups prints once, under the first', () => {
+    // These two tests asserted that an EXCLUSIVE collection beat a working
+    // set regardless of order. Under the tag model there are no exclusive
+    // groups -- but files written before schema 2 still carry
+    // `exclusive: false` and `from_dict` keeps it, so the row a phase
+    // appeared under depended on THE AGE OF THE FILES in the library. A
+    // rule nobody can see, turning on a field nobody sets any more.
+    //
+    // The fixtures now carry an id that differs from the name and no
+    // `exclusive` at all, so neither can come back by accident.
+    it('the first group in server order wins, whatever it is called', () => {
       const cols = [
-        { name: 'Arbeitsauswahl', exclusive: false, members: [{ key: 'Al' }] },
-        { name: 'Matrix', exclusive: true, members: [{ key: 'Al' }] },
+        { id: 'Zeta_working_set', name: 'Zeta working set',
+          members: [{ key: 'Al' }] },
+        { id: 'Matrix', name: 'Matrix', members: [{ key: 'Al' }] },
+      ];
+      const groups = groupEntriesByCollection([alCif], cols);
+      expect(groups.map((g) => g.collection.name)).toEqual(['Zeta working set']);
+    });
+
+    it('and the same when the order is the other way round', () => {
+      const cols = [
+        { id: 'Matrix', name: 'Matrix', members: [{ key: 'Al' }] },
+        { id: 'Zeta_working_set', name: 'Zeta working set',
+          members: [{ key: 'Al' }] },
       ];
       const groups = groupEntriesByCollection([alCif], cols);
       expect(groups.map((g) => g.collection.name)).toEqual(['Matrix']);
     });
 
-    it('wins when the working set sorts AFTER the real collection too', () => {
+    it('a key only ONE group holds gets that group', () => {
       const cols = [
-        { name: 'Matrix', exclusive: true, members: [{ key: 'Al' }] },
-        { name: 'Zeta working set', exclusive: false, members: [{ key: 'Al' }] },
+        { id: 'Matrix', name: 'Matrix', members: [{ key: 'Ni' }] },
+        { id: 'Al_systems', name: 'Al systems', members: [{ key: 'Al' }] },
       ];
       const groups = groupEntriesByCollection([alCif], cols);
-      expect(groups.map((g) => g.collection.name)).toEqual(['Matrix']);
-    });
-
-    it('a key ONLY the working set holds still gets its own group', () => {
-      const cols = [
-        { name: 'Matrix', exclusive: true, members: [{ key: 'Ni' }] },
-        { name: 'Arbeitsauswahl', exclusive: false, members: [{ key: 'Al' }] },
-      ];
-      const groups = groupEntriesByCollection([alCif], cols);
-      expect(groups.map((g) => g.collection.name)).toEqual(['Arbeitsauswahl']);
+      expect(groups.map((g) => g.collection.name)).toEqual(['Al systems']);
     });
   });
 });

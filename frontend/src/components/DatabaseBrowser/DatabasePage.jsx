@@ -8,12 +8,12 @@
 
 import { formatTime } from '../../i18n/formatDateTime';
 import { useState, useEffect, useCallback, useMemo, useRef, memo } from 'react';
+import useDatabaseReveal from '../../stores/useDatabaseReveal';
 import { useTranslation } from 'react-i18next';
 import { useImageExport, exportStem } from '../common/useImageExport';
 import { useFullscreen, FullscreenButton } from '../common/useFullscreen';
 import { dbApi, h5Api, collectionsApi } from '../../services/api';
 import useCollectionStore from '../../stores/useCollectionStore';
-import CollectionManager from '../PhaseCollections/CollectionManager';
 import {
   entryIdentity, groupEntriesByCollection, flattenGroups,
   groupOrderSignature, libraryKeySet, movableMemberKeys,
@@ -166,10 +166,19 @@ function formatBytes(bytes) {
 // ---------------------------------------------------------------------------
 export function FileTable({
   tabDef, entries, onRowClick, loading, selectedFiles, onToggleSelect, onSelectAll, onDownload,
-  collections,
+  collections, incomingSearch = null,
 }) {
   const { t } = useTranslation(['databasebrowser', 'collections']);
   const [search, setSearch] = useState('');
+
+  // A deep link from the phase library's profile card: "show me this file in
+  // the database browser". It arrives as a NAME, not a row index -- the
+  // library does not know this table's ordering, and an index would go stale
+  // the moment anything regrouped. Setting the search is what a person would
+  // do, and it survives a re-sort.
+  useEffect(() => {
+    if (incomingSearch) setSearch(incomingSearch);
+  }, [incomingSearch]);
   const [typeFilter, setTypeFilter] = useState('All');
   const [materialFilter, setMaterialFilter] = useState('All');
   const [selectedRow, setSelectedRow] = useState(-1);
@@ -811,6 +820,9 @@ const PreviewPanel = memo(function PreviewPanel({ entry, onOpenViewer }) {
 export default function DatabasePage({ onNavigate, isActive = false }) {
   const { t } = useTranslation(['databasebrowser', 'common', 'collections']);
   const [activeTab, setActiveTab] = useState('sht');
+  //: {tab, name} of a deep link from the phase library, once taken.
+  const [revealed, setRevealed] = useState(null);
+  const takeReveal = useDatabaseReveal((st) => st.take);
   const [allEntries, setAllEntries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -837,7 +849,6 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
   // The collections dialog. A second, independent instance of the same
   // component App.jsx opens from the toolbar picker — both read and write
   // `useCollectionStore`, so an edit here is visible there immediately too.
-  const [showCollectionManager, setShowCollectionManager] = useState(false);
   const [movingToCollection, setMovingToCollection] = useState(false);
   const collections = useCollectionStore((s) => s.data.collections) || [];
   const unassigned = useCollectionStore((s) => s.data.unassigned) || [];
@@ -1253,22 +1264,16 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
   const movableSelectedKeys = movableMemberKeys(
     allEntries.filter((e) => selectedFiles.has(entryIdentity(e))), validLibraryKeys);
 
-  // Move the selected rows into a collection. Moving into an EXCLUSIVE
-  // collection IS destructive to the phase's other exclusive membership, not
-  // just additive: `POST /members` -> `phase_collections.py#assign` walks
-  // every other exclusive collection and strips the key out of it — a phase
-  // has exactly one exclusive "home". Moving into the working set
-  // (`exclusive: false`) is additive ONLY: `assign()` strips other exclusive
-  // collections precisely when `target is None or target.exclusive`
-  // (`phase_collections.py`, guard right before the strip loop) — a
-  // non-exclusive target skips it entirely, so filing into the working set
-  // never removes the phase from wherever else it already lives, and filing
-  // into the working set is never removed from a phase's exclusive home
-  // either. (This guard is the fix for a real bug found in review: the strip
-  // loop used to run unconditionally regardless of the TARGET's own
-  // exclusivity, so starring a phase silently un-filed it from its real
-  // collection — see `tests/test_phase_collections.py::
-  // test_assign_into_working_set_leaves_exclusive_home_intact`.)
+  // File the selected rows into a group. ADDITIVE, always: `POST /members`
+  // -> `phase_collections.assign` adds and touches no other group unless
+  // it is asked to (`move=True`, which nothing here passes). A phase can
+  // be in as many groups as somebody puts it in.
+  //
+  // This paragraph described the opposite until schema 2 -- a collection
+  // was a folder, filing into one stripped the phase out of its previous
+  // one, and a starred "working set" was the single additive exception.
+  // That model is gone; the comment outlived it, which is how a reader
+  // ends up trusting a sentence the code stopped honouring.
   const handleMoveSelectedToCollection = async (targetName) => {
     if (!targetName) return;
     const keys = movableSelectedKeys;
@@ -1371,6 +1376,17 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
   // Grouping never changes which rows match a tab, only their order and
   // whether a header sits between them, so this count and the table it
   // labels can never disagree over rows a collection filed or hid.
+  // Drained when the page becomes visible, and only then: the request is
+  // made on another page, and taking it while this one is hidden would set a
+  // tab nobody is looking at and lose the request.
+  useEffect(() => {
+    if (!isActive) return;
+    const pending = takeReveal();
+    if (!pending) return;
+    setActiveTab(pending.tab);
+    setRevealed(pending);
+  }, [isActive, takeReveal]);
+
   const tabs = TAB_DEFS.map((tab) => {
     const count = allEntries.filter((e) => entryMatchesTab(e, tab)).length;
     return {
@@ -1431,13 +1447,6 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
           >
             {'⬆'} {t('databasebrowser:controls.uploadAll')}
           </Button>
-          <Button
-            variant="ghost"
-            onClick={() => setShowCollectionManager(true)}
-            title={t('databasebrowser:controls.manageCollectionsTooltip')}
-          >
-            {t('collections:picker.manage')}
-          </Button>
           {selectedFiles.size > 0 && (
             <Button
               onClick={handleUploadSelected}
@@ -1447,16 +1456,16 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
               {'⬆'} {t('databasebrowser:controls.uploadSelected', { count: selectedFiles.size })}
             </Button>
           )}
-          {/* "Move to collection" — files rows into a collection. Deliberately
-              NOT shaped like Delete Selected: a plain select rather than a
-              red button, because the harm profile is different — Delete
-              Selected removes files from disk, this only ever changes which
-              collection(s) a phase is filed under. It IS a move, not a pure
-              add (see `handleMoveSelectedToCollection`'s own comment): a
-              phase leaves whatever OTHER exclusive collection it was in.
-              Disabled, with a reason, when nothing selected can actually be
-              filed — a row from the SHT/Master H5/MC h5/Dictionary tabs has
-              no library key to file under (`movableMemberKeys`). */}
+          {/* Files the selected rows into a group. Deliberately NOT shaped
+              like Delete Selected: a plain select rather than a red button,
+              because the harm profile is different — Delete Selected
+              removes files from disk, this only changes which groups a
+              phase is filed under, and it ADDS: nothing is taken out of
+              anywhere (the sentence here used to say the opposite, from
+              when a collection was a folder). Disabled, with a reason, when
+              nothing selected can be filed — a row from the SHT/Master
+              H5/MC h5/Dictionary tabs has no library key to file under
+              (`movableMemberKeys`). */}
           {selectedFiles.size > 0 && (() => {
             const canMoveAny = movableSelectedKeys.length > 0;
             const disabledReason = !canMoveAny
@@ -1558,6 +1567,10 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
           >
             <FileTable
               tabDef={tabDef}
+              // Only the tab the link pointed at: handing the name to every
+              // table would filter five tabs on a file that is in one.
+              incomingSearch={revealed && revealed.tab === tabDef.id
+                ? revealed.name : null}
               entries={allEntries}
               onRowClick={setSelectedEntry}
               loading={loading}
@@ -1632,9 +1645,6 @@ export default function DatabasePage({ onNavigate, isActive = false }) {
         onCancel={handleCancelSync}
         onClose={handleCloseSyncUpload}
       />
-      {showCollectionManager && (
-        <CollectionManager onClose={() => setShowCollectionManager(false)} />
-      )}
     </div>
   );
 }

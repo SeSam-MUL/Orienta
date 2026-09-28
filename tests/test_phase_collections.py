@@ -153,31 +153,52 @@ def test_unassign_from_an_unknown_collection_raises_rather_than_mutating():
     assert [m.key for m in pc.load_all()[0][0].members] == ["Al"]
 
 
-def test_assign_moves_a_key_out_of_its_previous_collection():
+def test_assign_adds_and_only_move_removes():
+    """REVERSED BY SCHEMA 2 (spec §2.5): membership is a tag, not a folder.
+
+    This used to assert that `assign` MOVES -- filing `Si` into B emptied it out
+    of A. Under tags that is wrong by default: a phase belongs in every group it
+    is put in, `Al2Cu` in both "Al systems" and "Cu systems". Removing from the
+    others is still available, as the named action it now is: `move=True`, the
+    ⋯ menu entry and Alt-drag.
+
+    The old behaviour was not asked for by the caller at all -- it was derived
+    from `exclusive` on the collection, so a drag could not express either
+    intention.
+    """
     pc.save(_c("A", ["Al", "Si"]))
     pc.save(_c("B", []))
     pc.assign(["Si"], "B")
     by_name = {c.name: c for c in pc.load_all()[0]}
-    assert [m.key for m in by_name["A"].members] == ["Al"]
+    assert [m.key for m in by_name["A"].members] == ["Al", "Si"], "adding must not evict"
+    assert [m.key for m in by_name["B"].members] == ["Si"]
+
+    pc.assign(["Si"], "B", move=True)
+    by_name = {c.name: c for c in pc.load_all()[0]}
+    assert [m.key for m in by_name["A"].members] == ["Al"], "move must evict"
     assert [m.key for m in by_name["B"].members] == ["Si"]
 
 
-def test_a_key_in_two_collections_is_reported_not_resolved():
-    # REVIEW FOCUS 3. Hand-edited files; the app must not pick a winner.
+def test_a_key_in_two_collections_is_normal_and_not_a_problem():
+    """REVERSED BY SCHEMA 2 (spec §2.5).
+
+    This used to assert a `duplicate_key` problem: with one home per phase, being
+    in two collections was a contradiction the app must report rather than
+    resolve. Under tags it is the ordinary case, and reporting it would put a
+    permanent warning on correct filing.
+
+    Both halves are checked, because "no problem reported" would also be true if
+    the membership itself had been lost: A and B must BOTH still hold Al.
+    """
     pc.save(_c("A", ["Al"]))
     pc.save(_c("B", ["Al"]))
-    # Write A's file directly. It must be A, not B: saving B already stripped
-    # Al out of A, so rewriting B changes nothing and the test would pass for
-    # the wrong reason. Writing behind save()'s back is exactly what a hand
-    # edit or a copied collection file does.
-    p = pc.collections_dir() / "A.json"
-    d = json.loads(p.read_text(encoding="utf-8"))
-    d["members"] = [{"key": "Al"}]
-    p.write_text(json.dumps(d), encoding="utf-8", newline="\n")
-    _cols, problems = pc.load_all()
-    dupes = [pr for pr in problems if pr["kind"] == "duplicate_key"]
-    assert len(dupes) == 1 and dupes[0]["key"] == "Al"
-    assert set(dupes[0]["collections"]) == {"A", "B"}
+    cols, problems = pc.load_all()
+    by_name = {c.name: c for c in cols}
+    assert [m.key for m in by_name["A"].members] == ["Al"], (
+        "saving B must not strip A -- a save touching another group was the "
+        "quietest way this could go wrong")
+    assert [m.key for m in by_name["B"].members] == ["Al"]
+    assert [pr for pr in problems if pr["kind"] == "duplicate_key"] == []
 
 
 def test_unknown_schema_is_refused_and_the_others_still_load():
@@ -215,17 +236,58 @@ def test_effective_members_are_own_then_children_in_order():
         ["Al", "Si", "Al13Fe4", "Mg2Si"]
 
 
-def test_renaming_a_parent_follows_into_children_and_into_the_active_state():
-    # REVIEW FOCUS 5.
-    pc.save(_c("Parent", []))
-    pc.save(_c("Child", [], parent="Parent"))
+def test_a_rename_does_not_disturb_children_or_the_active_state():
+    """REVIEWED FOCUS 5, REVERSED BY SCHEMA 2 (§2.5.1): references are ids now.
+
+    This used to assert `cols["Child"].parent == "Umbenannt"` -- that a rename
+    walked every other collection file and the state file and REPAIRED the name
+    it found there. That repair was not a feature, it was the tax for using a
+    name as a key: every reference had to be rewritten because the key itself
+    had changed. Any file the walk missed (a share that was read-only for a
+    moment, a collection added by a second machine) silently lost its parent.
+
+    Now the child points at the parent's IDENTITY, which a rename does not
+    touch, so there is nothing to repair and nothing to miss. The link is
+    asserted through what it is FOR -- the child's members still come back under
+    the renamed parent -- rather than by reading the stored string, which would
+    pass just as well if the whole mechanism were dead.
+    """
+    pc.save(_c("Parent", ["Al"]))
+    pc.save(_c("Child", ["Si"], parent="Parent"))
+    parent_id = {c.name: c for c in pc.load_all()[0]}["Parent"].id
+    assert parent_id, "a saved collection must have an identity"
     pc.save_state({"schema": 1, "active": "Parent", "hidden": ["Parent"]})
+
     pc.rename("Parent", "Umbenannt")
+
     cols = {c.name: c for c in pc.load_all()[0]}
-    assert cols["Child"].parent == "Umbenannt"
+    assert set(cols) == {"Umbenannt", "Child"}
+    assert cols["Child"].parent == parent_id, "the id must not move"
+    # The link still works, which is the actual claim:
+    assert [m.key for m in pc.effective_members("Umbenannt", cols)] == ["Al", "Si"]
+
+    # The state was written by an older build and holds the OLD NAME. It is
+    # migrated to the identity here rather than repaired to the new name --
+    # this is the last rename that has to think about it.
+    state = pc.resolve_state(pc.load_state(), cols.values())
+    assert state["active"] == parent_id
+    assert state["hidden"] == [parent_id]
+
+
+def test_a_rename_keeps_a_state_reference_that_was_already_an_identity():
+    """The other half: an id in the state file must survive a rename untouched.
+
+    Both directions are needed. A `rename` that rewrote ids to names would pass
+    the test above (the name fallback would still resolve it) and quietly undo
+    the migration on every rename.
+    """
+    pc.save(_c("Parent", ["Al"]))
+    parent_id = {c.name: c for c in pc.load_all()[0]}["Parent"].id
+    pc.save_state({"active": parent_id, "hidden": [parent_id]})
+    pc.rename("Parent", "Umbenannt")
     state = pc.load_state()
-    assert state["active"] == "Umbenannt"
-    assert state["hidden"] == ["Umbenannt"]
+    assert state["active"] == parent_id
+    assert state["hidden"] == [parent_id]
 
 
 def test_deleting_a_parent_promotes_children_and_clears_the_active_state():
@@ -311,16 +373,23 @@ def test_assign_into_exclusive_collection_leaves_the_working_set_intact():
     assert [m.key for m in by_name["Arbeitsauswahl"].members] == ["Al"]   # untouched
 
 
-def test_assign_into_exclusive_collection_still_strips_other_exclusive_ones():
-    """A phase still has exactly one EXCLUSIVE home -- unchanged behaviour
-    (also covered by `test_assign_moves_a_key_out_of_its_previous_collection`
-    above), named explicitly here so the asymmetry with the two working-set
-    tests above is legible from the three test names alone."""
-    pc.save(_c("Matrix", ["Al"]))
-    pc.save(_c("Intermetallics", []))
+def test_the_exclusive_flag_no_longer_changes_anything():
+    """REVERSED BY SCHEMA 2 (spec §2.5): the flag is read, written and ignored.
+
+    This used to assert that filing into an exclusive collection strips the key
+    from the other exclusive ones. That behaviour is gone -- not renamed: the
+    decision moved from the DATA to the CALLER (`move=True`), because a flag on
+    the collection could not express what a particular drag meant.
+
+    The flag itself stays on disk so a schema-1 file still loads. This test is
+    what stops it quietly acquiring meaning again.
+    """
+    pc.save(_c("Matrix", ["Al"], exclusive=True))
+    pc.save(_c("Intermetallics", [], exclusive=True))
     pc.assign(["Al"], "Intermetallics")
     by_name = {c.name: c for c in pc.load_all()[0]}
-    assert [m.key for m in by_name["Matrix"].members] == []               # stripped
+    assert [m.key for m in by_name["Matrix"].members] == ["Al"], (
+        "exclusive must no longer evict")
     assert [m.key for m in by_name["Intermetallics"].members] == ["Al"]
 
 

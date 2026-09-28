@@ -1,0 +1,317 @@
+{
+  "title": "Phasenbibliothek",
+  "searchLabel": "Phasenbibliothek durchsuchen",
+  "searchPlaceholder": "Element, Formel, Raumgruppe, Name — z. B. Al-Fe-Si, Al2CuMg, Im-3",
+  "facetsComing": "Hier kommen die Filter hin.",
+  "facets": {
+    "elements": "Elemente",
+    "reset": "Zurücksetzen",
+    "findElement": "Element suchen",
+    "methods": "Indizierbar mit",
+    "method": {
+      "hough": "Hough",
+      "spherical": "Spherical",
+      "dictionary": "Dictionary"
+    },
+    "methodNeeds": {
+      "hough": "Braucht ein CIF",
+      "spherical": "Braucht eine simulierte .sht",
+      "dictionary": "Braucht einen EMsoft-Master oder ein fertiges Dictionary"
+    },
+    "unassignedMasters_one": "{{count}} simulierter Master im Ordner ist keiner Phase hier zugeordnet — der Bibliothek fehlt deswegen nichts.",
+    "unassignedMasters_other": "{{count}} simulierte Master im Ordner sind keiner Phase hier zugeordnet — der Bibliothek fehlt deswegen nichts.",
+    "methodLibraryFact": "{{capable}} von {{total}} Phasen dieser Bibliothek",
+    "resetElements": "Elemente zurücksetzen",
+    "resetMethods": "Methoden zurücksetzen",
+    "elementNames": "Auch zu finden als: {{names}}"
+  },
+  "group": {
+    "prototype": "Gleicher Strukturtyp",
+    "citation": "Im Literaturzitat erwähnt"
+  },
+  "state": {
+    "loading": "Phasenbibliothek wird gelesen…",
+    "errorTitle": "Die Phasenbibliothek konnte nicht gelesen werden.",
+    "errorRetrying": "Es wird weiter versucht. Meist heißt das, dass das Backend noch nicht läuft.",
+    "retryNow": "Jetzt versuchen",
+    "emptyTitle": "In der Bibliothek liegt keine Phase.",
+    "emptyWhere": "Phasen kommen aus der Kristalldatenbank. Wer dort ein CIF ablegt, sieht es hier.",
+    "filteredEmptyTitle": "Keine der {{total}} Phasen passt.",
+    "filteredEmptyBy": "Nichts passt zu {{filter}}.",
+    "clearFilters": "Filter zurücksetzen",
+    "loadingSlow": "Der erste Lesevorgang nach dem Start von Orienta geht durch jede Strukturdatei der Kristallbibliothek. Bei einer großen Bibliothek kann das bis zu einer Minute dauern. Danach geht es sofort.",
+    "filterSearch": "der Suche „{{value}}“",
+    "filterElements": "den Elementen {{value}}",
+    "filterMethods": "den Methoden {{value}}"
+  },
+  "selectPhase": "{{name}} auswählen",
+  "view": {
+    "label": "Ansicht",
+    "systems": "Systeme",
+    "list": "Liste"
+  },
+  "glossary": {
+    "title": "Was diese Wörter bedeuten",
+    "pearson": {
+      "name": "Pearson-Symbol",
+      "text": "Ein Kurzzeichen für das Gitter: Kristallsystem (a triklin, m monoklin, o orthorhombisch, t tetragonal, h hexagonal — dort stehen auch trigonal und rhomboedrisch — und c kubisch), Zentrierung (P primitiv, S seitenzentriert, auch A, B oder C geschrieben, I innenzentriert, F flächenzentriert, R rhomboedrisch) und die Zahl der Atome in der konventionellen Zelle. cF4 ist kubisch flächenzentriert mit vier Atomen — Aluminium."
+    },
+    "prototype": {
+      "name": "Strukturtyp",
+      "text": "Die bekannte Verbindung, deren Atomanordnung diese Phase teilt. Reines Aluminium und reines Nickel haben beide den Strukturtyp Cu: dieselbe Anordnung, ein anderes Element. Es ist nicht, was die Phase IST — deshalb stehen solche Treffer in der Suche in einer eigenen Gruppe."
+    },
+    "itNumber": {
+      "name": "IT-Nummer",
+      "text": "Die Nummer der Raumgruppe in den International Tables for Crystallography, 1 bis 230. Eine Gruppe hat mehrere Schreibweisen (Im-3, Im3, I m -3), die Nummer hat eine. Sie legt aber nur die GRUPPE fest, nicht die Aufstellung und nicht die Ursprungswahl: Gruppe 227 hat zwei Ursprünge mit verschiedenen Atomlagen, und eine Datei dieser Bibliothek meldet aus einem Block Fd-3m und aus einem anderen Fd-3m O1."
+    },
+    "cif": {
+      "name": "CIF",
+      "text": "Crystallographic Information File: die Textdatei mit Elementarzelle, Symmetrie und Atomlagen. Hough-Indizierung arbeitet damit, und alles andere hier ist daraus abgeleitet."
+    },
+    "xtal": {
+      "name": "XTAL",
+      "text": "Dieselbe Struktur in EMsofts eigener Binärform, aus dem CIF erzeugt. Eingabe für eine Simulation, nicht für die Indizierung."
+    },
+    "master": {
+      "name": "Master-Pattern",
+      "text": "Die simulierte Beugungskugel einer Phase, aus der XTAL über einen BEREICH von Strahlenergien berechnet — Monte-Carlo-Klassen bis zur Beschleunigungsspannung — und als energieaufgelöster Stapel gespeichert. Dictionary-Indizierung gewichtet daraus oder wählt aus und projiziert das Ergebnis auf den Detektor."
+    },
+    "sht": {
+      "name": "SHT",
+      "text": "Das Master-Pattern als Kugelflächenfunktions-Koeffizienten. Spherical-Indizierung korreliert gegen diese kompakte Form statt gegen die volle Kugel."
+    },
+    "ht": {
+      "name": "ht",
+      "text": "Die Hochtemperatur-Modifikation einer Phase, in der Benennung von SpringerMaterials (rt Raumtemperatur, lt Tieftemperatur). Eine Phase hier trägt sie: Fe1.8Al4.4Si0.6 ht."
+    },
+    "placements": {
+      "name": "Platzierungen",
+      "text": "Eine Phase erscheint in jedem Legierungssystem, zu dem sie gehört, also zeigt die Bandansicht mehr Karten als es Phasen gibt: hier 36 Phasen in 93 Karten. Eine Al-Fe-Si-Phase steht in allen drei Bändern, und sie unter einem davon abzulegen wäre eine Entscheidung, die diese Bibliothek Ihnen nicht abnehmen sollte."
+    },
+    "labelOnly": {
+      "name": "nur laut Etikett",
+      "text": "Ein Treffer, der auf den NAMEN der Phase passt, nicht auf ihre Struktur. `beta-AlFeSi` ist nach Silizium benannt, und die Struktur in der Datei enthält keines — die Suche nach Al-Fe-Si findet die Phase also und sagt warum, während die Silizium-Facette, die Strukturen zählt, sie nicht führt."
+    }
+  },
+  "why": {
+    "name": "Name",
+    "synonym": "Synonym",
+    "formula": "Formel",
+    "element": "Element",
+    "system": "System",
+    "spaceGroup": "Raumgruppe",
+    "pearson": "Pearson",
+    "filename": "Dateiname",
+    "prototype": "Strukturtyp",
+    "citation": "Zitat",
+    "labelOnly": "nur laut Etikett"
+  },
+  "identity": {
+    "it": "IT",
+    "provenance": {
+      "label": "Eine im File hinterlegte Phasenbezeichnung",
+      "structure": "Aus der Struktur im File berechnet",
+      "stem": "Nur der Dateiname — für diese Phase ist kein Name hinterlegt"
+    },
+    "system": {
+      "triclinic": "triklin",
+      "monoclinic": "monoklin",
+      "orthorhombic": "orthorhombisch",
+      "tetragonal": "tetragonal",
+      "hexagonal": "hexagonal",
+      "cubic": "kubisch"
+    },
+    "centring": {
+      "primitive": "primitiv",
+      "bodyCentred": "innenzentriert",
+      "faceCentred": "flächenzentriert",
+      "baseCentred": "basiszentriert",
+      "rhombohedral": "rhomboedrisch"
+    }
+  },
+  "activeFilters": "Gefiltert nach: {{filters}}",
+  "bands": {
+    "collapseAll": "Alle Bänder einklappen",
+    "expandAll": "Alle Bänder ausklappen",
+    "header": "Band {{element}}, {{count}} Phasen"
+  },
+  "selectPhaseInBand": "{{name}} auswählen, im Band {{band}}",
+  "selection": {
+    "count_one": "{{count}} Phase ausgewählt",
+    "count_other": "{{count}} Phasen ausgewählt",
+    "forNow": "die Auswahl bleibt vorerst auf dieser Seite",
+    "clear": "Auswahl aufheben"
+  },
+  "entryCount": "{{shown}} von {{total}} Einträgen",
+  "entryCountBands": "{{shown}} von {{total}} Einträgen · {{placements}} Platzierungen",
+  "entryCountFiltered": "{{shown}} von {{total}} Einträgen — gefiltert nach {{filters}}",
+  "card": {
+    "loading": "Diese Phase wird gelesen…",
+    "missing": "Diese Phase liegt nicht in der lokalen Bibliothek.",
+    "error": "Diese Phase konnte nicht gelesen werden.",
+    "composition": "Zusammensetzung",
+    "fromStructure": "laut Struktur",
+    "fromLabel": "laut Etikett",
+    "lattice": "Gitter",
+    "setting": "gezeigte Aufstellung",
+    "atoms": "Atome in der Zelle",
+    "files": "Dateien",
+    "absent": "nicht vorhanden",
+    "masterParameters": "Der Master wurde gebaut mit",
+    "shtParameters": "Die .sht wurde gebaut mit",
+    "cellAxis": {
+      "a": "a",
+      "b": "b",
+      "c": "c",
+      "alpha": "α",
+      "beta": "β",
+      "gamma": "γ"
+    },
+    "file": {
+      "cif": "CIF",
+      "xtal": "XTAL",
+      "master": "Master-Pattern",
+      "sht": "SHT",
+      "dictionary": "Dictionary"
+    },
+    "param": {
+      "energy": "Strahlenergie",
+      "dmin": "dmin",
+      "npx": "npx",
+      "tilt": "Probenneigung",
+      "electrons": "Elektronen",
+      "program": "Programm",
+      "bandwidth": "Bandbreite",
+      "engine": "Engine"
+    },
+    "builtFrom": {
+      "xtal": "gebaut aus",
+      "cif": "und aus"
+    },
+    "notice": {
+      "parseError": "Dieses CIF ist nicht lesbar: {{detail}} Was unten steht, stammt aus den anderen Dateien.",
+      "elementsDisagree": "Name und Struktur nennen nicht dieselben Elemente. Die Zusammensetzung unten zeigt beides.",
+      "cellConflict": "Die Datenblöcke dieser Datei widersprechen sich bei der Zelle: {{detail}}",
+      "severalSettings": "Diese Datei nennt mehrere Zellaufstellungen ({{detail}}). Gezeigt wird {{shown}}.",
+      "referenceRejected": "Die Datei nennt eine Quelle, und sie wurde verworfen: {{detail}}"
+    },
+    "showInBrowser": "im Datenbank-Browser zeigen",
+    "inGroups_one": "In dieser Gruppe:",
+    "inGroups_other": "In diesen Gruppen:",
+    "builtElsewhere": "gegen eine andere Bibliothek gebaut",
+    "dictionaryFromMaster": "noch keins — ein Master-Pattern ist vorhanden, eines kann erzeugt werden"
+  },
+  "groups": {
+    "title": "Gruppen",
+    "new": "+ Neue Gruppe",
+    "newPlaceholder": "Name, z. B. Al-Fe-Intermetallische",
+    "newLabel": "Name der neuen Gruppe",
+    "undo": "Rückgängig",
+    "none": "Noch keine Gruppe. Eine anlegen, dann Phasen darauf ziehen — oder ein paar anhaken und den +-Knopf an der Gruppe benutzen.",
+    "count_one": "{{count}} Phase",
+    "count_other": "{{count}} Phasen",
+    "countFiltered": "{{shown}} von {{total}} sichtbar",
+    "addShort": "+{{count}}",
+    "addSelected": "Die {{count}} ausgewählten Phasen zu {{name}} hinzufügen",
+    "menuLabel": "Aktionen für {{name}}",
+    "menuAdd_one": "{{count}} ausgewählte Phase hinzufügen",
+    "menuAdd_other": "{{count}} ausgewählte Phasen hinzufügen",
+    "menuAddNone": "Ausgewählte Phasen hinzufügen (nichts ausgewählt)",
+    "menuMove_one": "{{count}} ausgewählte Phase hierher verschieben",
+    "menuMove_other": "{{count}} ausgewählte Phasen hierher verschieben",
+    "menuMoveNone": "Ausgewählte Phasen hierher verschieben (nichts ausgewählt)",
+    "menuUse": "Diese Gruppe für den nächsten Lauf nehmen",
+    "menuRename": "Umbenennen…",
+    "menuDelete": "Gruppe löschen",
+    "renameLabel": "Neuer Name für {{name}}",
+    "thisMachine": "Gruppen liegen in diesem Browser, auf diesem Rechner. Sie wandern noch nicht mit der Bibliothek mit.",
+    "storageUnavailable": "Gruppen stehen nicht zur Verfügung: die Bibliothek hat nicht geantwortet. Es wird erneut versucht.",
+    "notSaved": "Die letzte Änderung steht auf dem Schirm, wurde aber nicht gespeichert: {{reason}}",
+    "menuNest": "Untergruppe von…",
+    "menuNestNone": "Untergruppe von… (kein Platz dafür)",
+    "nestUnder": "{{name}} einordnen unter:",
+    "toTopLevel": "Oberste Ebene",
+    "activeHere": "für den nächsten Lauf",
+    "menuMoveAlt_one": "{{count}} ausgewählte Phase hierher verschieben (oder Alt-Ziehen)",
+    "menuMoveAlt_other": "{{count}} ausgewählte Phasen hierher verschieben (oder Alt-Ziehen)",
+    "menuUseEmpty": "Diese Gruppe für den nächsten Lauf nehmen (sie ist leer)",
+    "menuRemove_one": "{{count}} ausgewählte Phase aus dieser Gruppe nehmen",
+    "menuRemove_other": "{{count}} ausgewählte Phasen aus dieser Gruppe nehmen",
+    "menuRemoveNone": "Ausgewählte Phasen herausnehmen (keine davon ist in dieser Gruppe)",
+    "removeOne": "{{phase}} aus {{name}} herausnehmen",
+    "emptyOpened": "Noch nichts in dieser Gruppe. Eine Phase darauf ziehen, oder ein paar anhaken und den +-Knopf benutzen.",
+    "stopUsing": "Ganze Bibliothek nehmen",
+    "stopUsingTip": "Läufe nicht mehr auf eine Gruppe einengen. Es stehen wieder alle Phasen der Bibliothek zur Auswahl.",
+    "notSavedCount_one": "{{count}} Änderung steht auf dem Schirm, aber nicht in der Bibliothek:",
+    "notSavedCount_other": "{{count}} Änderungen stehen auf dem Schirm, aber nicht in der Bibliothek:",
+    "notSavedOne": "{{name}} — {{reason}}",
+    "reread": "Bibliothek neu lesen",
+    "notSavedMore_one": "… und {{count}} weitere, hier nicht aufgeführt.",
+    "notSavedMore_other": "… und {{count}} weitere, hier nicht aufgeführt."
+  },
+  "drag": {
+    "willAdd_one": "{{count}} hinzufügen",
+    "willAdd_other": "{{count}} hinzufügen",
+    "willMove_one": "{{count}} hierher verschieben",
+    "willMove_other": "{{count}} hierher verschieben"
+  },
+  "name": {
+    "give": "Dieser Phase einen Namen geben…",
+    "change": "Diesen Namen ändern…",
+    "display": "Name",
+    "displayPlaceholder": "Der im Haus übliche Name, z. B. α-Al(Fe,Mn)Si",
+    "terms": "Auch finden über",
+    "termsPlaceholder": "Andere Schreibweisen, mit Komma: s phase, s-phase",
+    "author": "Ihr Name",
+    "authorPlaceholder": "Fürs Protokoll, in einer geteilten Bibliothek",
+    "hint": "Der Name steht vor dem Dateinamen, nie an seiner Stelle: {{key}} findet diese Phase weiterhin.",
+    "save": "Speichern",
+    "saving": "Speichert…",
+    "cancel": "Abbrechen",
+    "by": "benannt von {{author}}, {{when}}"
+  },
+  "suggest": {
+    "run": "Gruppen aus der Bibliothek vorschlagen…",
+    "running": "Sucht…",
+    "nothingYet": "Es wird nichts angelegt, bevor Sie zustimmen.",
+    "empty": "Nichts vorzuschlagen — die Bibliothek ist schon geordnet oder zu klein zum Gruppieren.",
+    "members_one": "{{count}} Phase",
+    "members_other": "{{count}} Phasen",
+    "apply_one": "{{count}} Gruppe anlegen",
+    "apply_other": "{{count}} Gruppen anlegen",
+    "cancel": "Abbrechen",
+    "created_one": "{{count}} Gruppe angelegt.",
+    "created_other": "{{count}} Gruppen angelegt.",
+    "skipped_one": "Ausgelassen, der Name ist vergeben: {{names}}",
+    "skipped_other": "Ausgelassen, diese Namen sind vergeben: {{names}}",
+    "untouched_one": "{{count}} Phase der Bibliothek ist in keiner davon und bliebe ungeordnet.",
+    "untouched_other": "{{count}} Phasen der Bibliothek sind in keiner davon und blieben ungeordnet."
+  },
+  "activeGroup": {
+    "label": "Gruppe: {{name}}",
+    "count_one": "{{count}} Phase",
+    "count_other": "{{count}} Phasen",
+    "tip": "Die Phasenauswahl ist auf die Gruppe „{{name}}“ eingeengt. Klick öffnet die Phasenbibliothek.",
+    "missing": "Gruppe „{{name}}“ nicht gefunden",
+    "missingTip": "Die aktive Gruppe „{{name}}“ ist nicht in der Bibliothek — umbenannt oder gelöscht, vielleicht auf einem anderen Rechner. Bis eine andere gewählt ist, steht keine Phase zur Auswahl. Klick öffnet die Phasenbibliothek.",
+    "startBlockedTip": "Die aktive Gruppe „{{name}}“ ist nicht in der Bibliothek, es steht also keine Phase zur Auswahl. In der Phasenbibliothek eine andere Gruppe wählen oder die Einengung aufheben."
+  },
+  "capability": {
+    "letter": {
+      "hough": "H",
+      "spherical": "S",
+      "dictionary": "D"
+    },
+    "can": "mit {{method}} indizierbar",
+    "cannot": "keine Dateien für {{method}}"
+  },
+  "sibling": {
+    "intro_one": "Ein anderer Eintrag hat dieselbe Raumgruppe und dieselbe Verbindung:",
+    "intro_other": "Andere Einträge haben dieselbe Raumgruppe und dieselbe Verbindung:",
+    "alsoIndexableWith": "er ist zusätzlich mit {{methods}} indizierbar",
+    "notIndexableWith": "er ist nicht mit {{methods}} indizierbar",
+    "composition": "seine Struktur führt {{elements}}",
+    "reference": "er stammt aus {{reference}}",
+    "cellA": "sein a ist {{theirs}} Å, hier sind es {{mine}} Å"
+  }
+}

@@ -13,6 +13,7 @@
     "pcrefinement": { "label": "PC-Verfeinerung", "tooltip": "Musterzentrum-Kalibrierung und -Verfeinerung" },
     "crystal": { "label": "Kristall-DB", "tooltip": "CIF/XTAL-Konverter, Kristalldatenbank, DWF-Editor" },
     "simulation": { "label": "Simulation", "tooltip": "Monte-Carlo- und Master-Pattern-Simulation (Orienta Engine oder EMsoft)" },
+    "phaselibrary": { "label": "Phasenbibliothek", "tooltip": "Alle Phasen der Kristallbibliothek: finden, ansehen, gruppieren" },
     "database": { "label": "Datenbank-Browser", "tooltip": "Simulationsergebnisse auf der Netzwerkfreigabe durchsuchen" },
     "indexing": { "label": "Indizierung", "tooltip": "Hough-, Dictionary- oder Spherical-Indizierung (EMSphinx)" },
     "phasemap": { "label": "Phasenkarten", "tooltip": "Indizierungsergebnisse mit konfigurierbarem Maßstab visualisieren" },

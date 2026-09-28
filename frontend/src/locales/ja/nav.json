@@ -13,6 +13,7 @@
     "pcrefinement": { "label": "PC 精密化", "tooltip": "パターン中心 (PC) のキャリブレーションと精密化" },
     "crystal": { "label": "結晶 DB", "tooltip": "CIF/XTAL 変換、結晶データベース、DWF エディタ" },
     "simulation": { "label": "シミュレーション", "tooltip": "モンテカルロ + マスターパターンのシミュレーション（Orienta Engine または EMsoft）" },
+    "phaselibrary": { "label": "相ライブラリ", "tooltip": "結晶ライブラリのすべての相: 検索・確認・グループ化" },
     "database": { "label": "データベースブラウザ", "tooltip": "ネットワーク共有上のシミュレーション結果を閲覧" },
     "indexing": { "label": "指数付け", "tooltip": "Hough、Dictionary、または Spherical (EMSphinx) 指数付け" },
     "phasemap": { "label": "相分布図", "tooltip": "指数付け結果をスケールバー付きで可視化" },

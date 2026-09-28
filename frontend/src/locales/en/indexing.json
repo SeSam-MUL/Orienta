@@ -53,8 +53,8 @@
     "selected": "selected",
     "cannotAdd": "Cannot add \"{{name}}\": {{method}} indexing needs a .{{ext}} file (got .{{got}})",
     "skippedNoFile": "Skipped {{count}} phase(s) without a .{{ext}} file ({{method}} indexing)",
-    "adoptCollection": "Use collection: {{name}}",
-    "adoptCollectionFailed": "Could not load the collection: {{error}}"
+    "adoptCollection": "Use group: {{name}}",
+    "adoptCollectionFailed": "Could not load the group: {{error}}"
   },
   "edsPrior": {
     "atMost": "at most {{pct}} %",
@@ -653,7 +653,11 @@
     "scanOverviewAlt": "Scan overview (mean intensity)",
     "failed": "failed",
     "cancelled": "Cancelled",
-    "remaskFailed": "remask failed"
+    "remaskFailed": "remask failed",
+    "unsupportedCount_one": "{{count}} phase was asked for and cannot be tested",
+    "unsupportedCount_other": "{{count}} phases were asked for and cannot be tested",
+    "unsupportedRowNoSht": "{{key}} — no simulated master (.sht), so there is nothing to compare against",
+    "unsupportedRow": "{{key}} — {{reason}}"
   },
   "hoverTips": {
     "degeneracyReduceToOne": "Keep only one phase from this degenerate group and drop the redundant duplicates",
@@ -744,7 +748,7 @@
     "reflectorNoSymmetry": "The CIF is stored in space group P 1: every atom listed, no symmetry recorded. PyEBSDIndex then treats each reflector family as a single pole, so the number of distinct inter-pole angles - and with it the band-triplet library - explodes. Re-exporting the phase in its real space group makes this small and is the better fix; lowering the reflector count here is the workaround.",
     "batchPickSht": "Pick a master pattern (.sht) from the database for spherical indexing",
     "batchShtInput": "Path to the master pattern (.sht). Spherical indexing needs one.",
-    "adoptCollection": "Fill the phase list from the “{{name}}” collection for the current method. See the “Phase Collections” guide."
+    "adoptCollection": "Fill the phase list from the “{{name}}” group for the current method. See the “Phase Library” guide."
   },
   "reflectors": {
     "label": "Reflectors:",

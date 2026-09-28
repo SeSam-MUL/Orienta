@@ -40,7 +40,6 @@ const KEYS = [
   ['manager.addTo', {}],
   ['manager.add', {}],
   ['manager.moveTo', {}],
-  ['manager.moveToTooltip', {}],
   ['manager.removeMemberTooltip', {}],
   ['manager.moveUp', {}],
   ['manager.moveDown', {}],

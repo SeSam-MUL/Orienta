@@ -27,6 +27,7 @@ import {
   tagOf,
   bundledPackage,
   installedTag,
+  installedDigest,
   alreadyParked,
   updateDecision,
   digestFrom,
@@ -100,6 +101,34 @@ describe('what the installation on disk says it is', () => {
     expect(installedTag(at('home'))).toBeNull();
     expect(installedTag(undefined)).toBeNull();
   });
+
+  it('reads which build the runtime came from, and refuses anything else', () => {
+    const runtime = at('home', 'runtime');
+    fs.mkdirSync(runtime, { recursive: true });
+    const digest = 'c'.repeat(64);
+
+    fs.writeFileSync(path.join(runtime, 'SOURCE_SHA256'), `${digest}\n`);
+    expect(installedDigest(at('home'))).toBe(digest);
+
+    // Written with the filename beside it, the way a `.sha256` looks.
+    fs.writeFileSync(path.join(runtime, 'SOURCE_SHA256'), `${digest}  orienta-runtime-v0.4.6.zip\n`);
+    expect(installedDigest(at('home'))).toBe(digest);
+
+    // Upper case is the same digest; a caller comparing strings must not care.
+    fs.writeFileSync(path.join(runtime, 'SOURCE_SHA256'), digest.toUpperCase());
+    expect(installedDigest(at('home'))).toBe(digest);
+
+    // Anything that is not a sha256 is null, not a value to compare against:
+    // a truncated or half-written file must read as "cannot tell".
+    for (const junk of ['', 'not a digest', 'abc123', `${digest}extra`]) {
+      fs.writeFileSync(path.join(runtime, 'SOURCE_SHA256'), junk);
+      expect(installedDigest(at('home')), `accepted ${JSON.stringify(junk)}`).toBeNull();
+    }
+
+    fs.rmSync(path.join(runtime, 'SOURCE_SHA256'));
+    expect(installedDigest(at('home'))).toBeNull();     // every older installation
+    expect(installedDigest(undefined)).toBeNull();
+  });
 });
 
 describe('the decision', () => {
@@ -111,8 +140,12 @@ describe('the decision', () => {
     expect(d.reason).toMatch(/v0\.4\.6.*newer.*v0\.4\.4/);
   });
 
-  it('does nothing when they are the same version', () => {
-    expect(updateDecision({ bundled, installed: 'v0.4.6' }).action).toBe('none');
+  it('does nothing on the same version when no digest can settle the build', () => {
+    // The bundle states no digest, so "same build" is not knowable. Parking
+    // would repeat on every start, since nothing would ever be learned.
+    const d = updateDecision({ bundled, installed: 'v0.4.6' });
+    expect(d.action).toBe('none');
+    expect(d.reason).toMatch(/states no digest/);
   });
 
   it('never downgrades, and says why in the log', () => {
@@ -127,6 +160,62 @@ describe('the decision', () => {
       .toBe('park');
     expect(updateDecision({ bundled: { tag: 'v0.9.0' }, installed: 'v0.10.0' }).action)
       .toBe('none');
+  });
+
+  // --- same tag, different build ------------------------------------------
+  // 0.4.6 was rebuilt four times, and Sebastian's machine holds Build 3 under
+  // that tag. Comparing tags alone answers "nothing to do" and leaves the
+  // program files a build behind beneath a new shell: this module's own bug,
+  // returning through the version number. These four cases are the whole of it.
+  describe('the same version rebuilt', () => {
+    const A = 'a'.repeat(64);
+    const B = 'b'.repeat(64);
+
+    it('does nothing when the builds are the same', () => {
+      const d = updateDecision({
+        bundled, installed: 'v0.4.6', bundledDigest: A, installedDigest: A,
+      });
+      expect(d.action).toBe('none');
+      expect(d.reason).toMatch(/same build/);
+    });
+
+    it('APPLIES when the same version is a different build', () => {
+      const d = updateDecision({
+        bundled, installed: 'v0.4.6', bundledDigest: B, installedDigest: A,
+      });
+      expect(d.action).toBe('park');
+      expect(d.reason).toMatch(/DIFFERENT build/);
+      // The reason names both builds, because "it updated again" needs an
+      // answer in the log that is not "trust me".
+      expect(d.reason).toContain(A.slice(0, 12));
+      expect(d.reason).toContain(B.slice(0, 12));
+    });
+
+    it('applies once when the runtime does not say which build it is', () => {
+      // Every installation made before the applier recorded this — including
+      // the one the release will be accepted on.
+      const d = updateDecision({
+        bundled, installed: 'v0.4.6', bundledDigest: B, installedDigest: null,
+      });
+      expect(d.action).toBe('park');
+      expect(d.reason).toMatch(/does not say which build/);
+    });
+
+    it('does not loop when only the bundle is unknown', () => {
+      // Nothing would ever be learned from applying, so it must not apply.
+      const d = updateDecision({
+        bundled, installed: 'v0.4.6', bundledDigest: null, installedDigest: A,
+      });
+      expect(d.action).toBe('none');
+    });
+
+    it('still refuses to downgrade, whatever the digests say', () => {
+      const d = updateDecision({
+        bundled: { tag: 'v0.4.4' }, installed: 'v0.4.6', bundledDigest: B, installedDigest: A,
+      });
+      expect(d.action).toBe('none');
+      expect(d.reason).toMatch(/newer than the bundled/);
+    });
   });
 
   it('leaves a first install to the wizard', () => {

@@ -29,7 +29,7 @@
     "addFolderTooltip": "Ordner nach EBSD-Dateien durchsuchen und zum Stapel hinzufügen.",
     "scanning": "Scanne...",
     "filesLoaded": "{{count}} Datei(en) geladen",
-    "hint": "Auf \"Ordner hinzufügen\" klicken, um nach EBSD-Dateien zu suchen",
+    "hint": "Auf „Ordner hinzufügen“ klicken, um nach EBSD-Dateien zu suchen",
     "enterFolderPrompt": "Ordnerpfad eingeben:",
     "noFilesFound": "Keine EBSD-Dateien gefunden",
     "scanFailed": "Scan fehlgeschlagen"
@@ -43,7 +43,7 @@
     "colFile": "Datei",
     "colPc": "PC",
     "colSource": "Quelle",
-    "footer": "PC-Verfeinerungs-Seite nutzen, dann \"PC anwenden\" in der Dateibaum-Seitenleiste, um auf andere Dateien zu kopieren."
+    "footer": "PC-Verfeinerungs-Seite nutzen, dann „PC anwenden“ in der Dateibaum-Seitenleiste, um auf andere Dateien zu kopieren."
   },
   "step3": {
     "preprocessingTitle": "Vorverarbeitung",

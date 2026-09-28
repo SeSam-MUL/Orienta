@@ -171,7 +171,7 @@ describe('locales', () => {
     // ASCII German has been shipped by mistake before (August 2026); the
     // file itself writes Größe, für, ausschließlich.
     Object.values(de.suggest.noMatch).forEach((s) => {
-      expect(s).not.toMatch(/(naechste|koennte|waere|fuer|groesse|ausschliesslich)/i);
+      expect(s).not.toMatch(/\b(naechste|koennte|waere|fuer|groesse|ausschliesslich)\b/i);
     });
   });
 

@@ -82,7 +82,57 @@ def test_empty_library_returns_a_usable_shape(client):
     assert body["collections"] == []
     assert sorted(m["key"] for m in body["unassigned"]) == ["Al", "Si"]
     assert body["problems"] == []
-    assert body["state"] == {"schema": 1, "active": None, "hidden": []}
+    # The schema travels with the state file, so it moves with the format.
+    assert body["state"] == {"schema": pc.COLLECTION_SCHEMA,
+                             "active": None, "hidden": []}
+
+
+def test_a_created_collection_carries_who_and_when(client):
+    """The measurement the 2026-09-27 review made: `create(name=...)` produced
+    `author: ''`, `updated: ''`, `created: ''`. No code path filled any of them,
+    while schema 2's commit message claimed they "already answer 'who was that'
+    when the folder is copied by hand".
+
+    Through the ROUTE, because that is where the gap was -- the service could
+    carry the fields and did, which is exactly what the old service-level test
+    proved and why it could not fail.
+    """
+    assert client.post("/api/phase-collections/",
+                       json={"name": "Matrix", "author": "irmgard"}
+                       ).status_code == 200
+    doc = json.loads((pc.collections_dir() / "Matrix.json")
+                     .read_text(encoding="utf-8"))
+    assert doc["author"] == "irmgard"
+    assert doc["created"] and doc["updated"], doc
+    assert doc["created"].endswith("+00:00")
+
+
+def test_a_created_collection_without_an_author_says_unknown(client):
+    """The frontend sends none today. "unknown" is what the synonym store writes
+    in the same situation, and it is honest: somebody did this and did not say."""
+    client.post("/api/phase-collections/", json={"name": "Matrix"})
+    doc = json.loads((pc.collections_dir() / "Matrix.json")
+                     .read_text(encoding="utf-8"))
+    assert doc["author"] == "unknown"
+
+
+def test_update_can_set_the_author_and_leaves_it_alone_otherwise(client):
+    client.post("/api/phase-collections/", json={"name": "Matrix",
+                                                 "author": "irmgard"})
+    # No `author` in the body: the stored one survives, as with `description`.
+    assert client.put("/api/phase-collections/update",
+                      json={"name": "Matrix", "description": "d"}
+                      ).status_code == 200
+    doc = json.loads((pc.collections_dir() / "Matrix.json")
+                     .read_text(encoding="utf-8"))
+    assert doc["author"] == "irmgard" and doc["description"] == "d"
+
+    assert client.put("/api/phase-collections/update",
+                      json={"name": "Matrix", "author": "sebastian"}
+                      ).status_code == 200
+    doc = json.loads((pc.collections_dir() / "Matrix.json")
+                     .read_text(encoding="utf-8"))
+    assert doc["author"] == "sebastian"
 
 
 def test_create_then_list_carries_counts_and_capabilities(client):

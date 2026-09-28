@@ -305,6 +305,36 @@ def _result(applied=False, tag=None, error=None, dirty=False, terminal=False) ->
             "dirty": dirty, "terminal": terminal}
 
 
+#: Beside `VERSION`, and for the question `VERSION` cannot answer: WHICH build of
+#: that version is installed. Sebastian's 0.4.6 decision made this load-bearing —
+#: Build 4 carries the same tag as Build 3, and comparing tags alone says "nothing
+#: to do", so the shell would be new while the program files stayed old. That is
+#: the bug this whole module was written to close, returning through the version
+#: number instead of the shell.
+#:
+#: Not inside the package: a zip cannot state its own digest. Written by whoever
+#: unpacked it, from the digest that was verified anyway, so no file is ever
+#: hashed twice.
+SOURCE_DIGEST_FILE = "SOURCE_SHA256"
+
+
+def _record_source_digest(runtime: Path, digest: str) -> None:
+    """Write the digest of the package this runtime came from, best effort.
+
+    Best effort on purpose: the tree is already correct at this point, and a
+    failure here must not turn a good apply into a dirty one. The cost of losing
+    it is one unnecessary (idempotent) apply on the next start, which is the same
+    cost as an installation from before this file existed.
+    """
+    digest = (digest or "").strip().lower()
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        return
+    try:
+        (runtime / SOURCE_DIGEST_FILE).write_text(digest + "\n", encoding="utf-8", newline="")
+    except OSError:
+        pass
+
+
 def apply(home: Path) -> dict:
     """Apply the parked package, if there is one. Never raises."""
     runtime = home / "runtime"
@@ -388,6 +418,7 @@ def apply(home: Path) -> dict:
     except Exception as exc:  # noqa: BLE001
         return _result(tag=tag or None, error=str(exc), dirty=True)
 
+    _record_source_digest(runtime, str(record.get("sha256") or ""))
     marker.unlink(missing_ok=True)
     pending_json.unlink(missing_ok=True)
     return _result(applied=True, tag=tag)
@@ -412,6 +443,13 @@ def extract_only(archive: Path, into: Path, home: Path) -> dict:
         safe_extract(archive, into)
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": str(exc)}
+    # The digest is computed here rather than passed in: this path takes an
+    # archive, not a record, and the caller that has already checked the
+    # `.sha256` is the wizard, on the other side of a process boundary. One hash
+    # of a five-megabyte zip during an installation that takes minutes buys a
+    # fresh install the same identity an updated one has — without it, the first
+    # start would apply the very package it was just installed from.
+    _record_source_digest(into, sha256_of(archive))
     return {"ok": True, "error": None}
 
 

@@ -30,6 +30,12 @@ const IGNORED_PATH_PARTS = [
   // until the backend answers. Measured on a backend that stays down:
   // 15 requests in 10 minutes, 65 in 60 -- and the ring holds 60.
   '/api/indexing/files',
+  // And the phase library index, same schedule again. This one does not go
+  // silent: PhaseLibrary/libraryLoad.js writes one breadcrumb when the
+  // outage starts and one when it ends, so a user who reports "my phases
+  // are gone" has it in the trail without the other fifty-eight entries
+  // being pushed out by the retries.
+  '/api/phase-library/index',
   '/progress',
   '/status',
 ];

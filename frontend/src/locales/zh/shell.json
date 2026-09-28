@@ -61,6 +61,8 @@
     "wslOk": "WSL: OK"
   },
   "toolbar": {
+    "phaseLibrary": "相库",
+    "phaseLibraryTooltip": "打开相库：所有相、它们是什么，以及哪些方法可以使用",
     "edsColors": "EDS 颜色",
     "reportProblem": "⚠ 报告问题",
     "reportProblemTooltip": "描述问题并保存包含日志和版本的报告，可附在错误报告中。",

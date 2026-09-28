@@ -1,0 +1,317 @@
+{
+  "title": "相ライブラリ",
+  "searchLabel": "相ライブラリを検索",
+  "searchPlaceholder": "元素・化学式・空間群・名称 — 例: Al-Fe-Si, Al2CuMg, Im-3",
+  "facetsComing": "ここに絞り込みが入ります。",
+  "facets": {
+    "elements": "元素",
+    "reset": "解除",
+    "findElement": "元素を探す",
+    "methods": "指数付けできる手法",
+    "method": {
+      "hough": "Hough",
+      "spherical": "Spherical",
+      "dictionary": "Dictionary"
+    },
+    "methodNeeds": {
+      "hough": "CIF が必要",
+      "spherical": "シミュレートした .sht が必要",
+      "dictionary": "EMsoft マスター、または作成済み辞書が必要"
+    },
+    "unassignedMasters_one": "フォルダー内の {{count}} 件のマスターは、ここのどの相にも対応していません — ライブラリに欠けているものはありません。",
+    "unassignedMasters_other": "フォルダー内の {{count}} 件のマスターは、ここのどの相にも対応していません — ライブラリに欠けているものはありません。",
+    "methodLibraryFact": "このライブラリの {{total}} 件中 {{capable}} 件",
+    "resetElements": "元素を解除",
+    "resetMethods": "手法を解除",
+    "elementNames": "次の名前でも検索できます: {{names}}"
+  },
+  "group": {
+    "prototype": "同じ構造型",
+    "citation": "文献情報に含まれる"
+  },
+  "state": {
+    "loading": "相ライブラリを読み込んでいます…",
+    "errorTitle": "相ライブラリを読み込めませんでした。",
+    "errorRetrying": "再試行を続けています。多くの場合、バックエンドがまだ起動していません。",
+    "retryNow": "今すぐ再試行",
+    "emptyTitle": "ライブラリに相がありません。",
+    "emptyWhere": "相は結晶データベースから来ます。そこに CIF を置くと、ここに表示されます。",
+    "filteredEmptyTitle": "{{total}} 件の相のいずれも一致しません。",
+    "filteredEmptyBy": "{{filter}} に一致するものはありません。",
+    "clearFilters": "フィルターを解除",
+    "loadingSlow": "Orienta の起動後の最初の読み取りでは、結晶ライブラリのすべての構造ファイルを調べます。大きなライブラリでは 1 分ほどかかることがあります。以降は即座に表示されます。",
+    "filterSearch": "検索「{{value}}」",
+    "filterElements": "元素 {{value}}",
+    "filterMethods": "手法 {{value}}"
+  },
+  "selectPhase": "{{name}} を選択",
+  "view": {
+    "label": "表示",
+    "systems": "系",
+    "list": "一覧"
+  },
+  "glossary": {
+    "title": "用語の説明",
+    "pearson": {
+      "name": "ピアソン記号",
+      "text": "格子を表す短い記号。晶体系（a 三斜、m 単斜、o 斜方、t 正方、h 六方——三方・菱面体もここに含まれる——、c 立方）、格子の心（P 単純、S 側面心（A、B、C とも表記）、I 体心、F 面心、R 菱面体）、そして単位格子内の原子数。cF4 は面心立方で原子 4 個——アルミニウム。"
+    },
+    "prototype": {
+      "name": "構造型",
+      "text": "この相と同じ原子配列をもつ既知の化合物。純アルミニウムも純ニッケルも構造型は Cu：配列は同じで元素が違います。相そのものではないため、検索では別のグループに分けています。"
+    },
+    "itNumber": {
+      "name": "IT 番号",
+      "text": "International Tables for Crystallography における空間群の番号（1～230）。同じ群には複数の表記（Im-3、Im3、I m -3）がありますが、番号は一つです。ただし番号が決めるのは群だけで、設定（setting）や原点の選択は決まりません。227 番には原子座標の異なる二つの原点があり、本ライブラリのあるファイルは一方のブロックで Fd-3m、他方で Fd-3m O1 と報告します。"
+    },
+    "cif": {
+      "name": "CIF",
+      "text": "Crystallographic Information File：単位格子、対称性、原子位置を含むテキストファイル。Hough 法はこれを使い、ここの他の情報もこれから導かれます。"
+    },
+    "xtal": {
+      "name": "XTAL",
+      "text": "同じ構造を EMsoft 独自のバイナリ形式にしたもので、CIF から変換されます。シミュレーションの入力であり、指数付けの入力ではありません。"
+    },
+    "master": {
+      "name": "マスターパターン",
+      "text": "ある相のシミュレートされた回折球で、XTAL から加速電圧までのエネルギー範囲（モンテカルロのビン）にわたって計算され、エネルギー別のスタックとして保存されます。Dictionary 法はそのビンを重み付けまたは選択して検出器に投影します。"
+    },
+    "sht": {
+      "name": "SHT",
+      "text": "マスターパターンを球面調和関数の係数で表したもの。Spherical 法は球全体ではなくこのコンパクトな形式と相関をとります。"
+    },
+    "ht": {
+      "name": "ht",
+      "text": "相の高温変形を示す SpringerMaterials の表記（rt 室温、lt 低温）。ここでは 1 相がこれをもちます：Fe1.8Al4.4Si0.6 ht。"
+    },
+    "placements": {
+      "name": "配置",
+      "text": "相は属するすべての合金系に一度ずつ現れるため、帯表示のカード数は相の数より多くなります：ここでは 36 相が 93 枚。Al-Fe-Si 相は三つの帯すべてに入ります。"
+    },
+    "labelOnly": {
+      "name": "名称のみ",
+      "text": "相の「名前」には一致するが、構造には一致しないヒット。`beta-AlFeSi` はケイ素にちなんだ名前ですが、ファイル内の構造にケイ素はありません。"
+    }
+  },
+  "why": {
+    "name": "名称",
+    "synonym": "別名",
+    "formula": "化学式",
+    "element": "元素",
+    "system": "系",
+    "spaceGroup": "空間群",
+    "pearson": "ピアソン記号",
+    "filename": "ファイル名",
+    "prototype": "構造型",
+    "citation": "文献",
+    "labelOnly": "名称のみ"
+  },
+  "identity": {
+    "it": "IT",
+    "provenance": {
+      "label": "ファイルに記載された相の名称",
+      "structure": "ファイル内の構造から計算",
+      "stem": "ファイル名のみ — この相には名称が記載されていません"
+    },
+    "system": {
+      "triclinic": "三斜",
+      "monoclinic": "単斜",
+      "orthorhombic": "斜方",
+      "tetragonal": "正方",
+      "hexagonal": "六方",
+      "cubic": "立方"
+    },
+    "centring": {
+      "primitive": "単純",
+      "bodyCentred": "体心",
+      "faceCentred": "面心",
+      "baseCentred": "底心",
+      "rhombohedral": "菱面体"
+    }
+  },
+  "activeFilters": "絞り込み: {{filters}}",
+  "bands": {
+    "collapseAll": "すべての帯を折りたたむ",
+    "expandAll": "すべての帯を展開",
+    "header": "{{element}} の帯、{{count}} 件の相"
+  },
+  "selectPhaseInBand": "{{band}} の帯の {{name}} を選択",
+  "selection": {
+    "count_one": "{{count}} 件の相を選択中",
+    "count_other": "{{count}} 件の相を選択中",
+    "forNow": "選択は今のところこのページ内にとどまります",
+    "clear": "選択を解除"
+  },
+  "entryCount": "{{total}} 件中 {{shown}} 件のエントリ",
+  "entryCountBands": "{{total}} 件中 {{shown}} 件のエントリ · {{placements}} 件の配置",
+  "entryCountFiltered": "{{total}} 件中 {{shown}} 件のエントリ — 絞り込み: {{filters}}",
+  "card": {
+    "loading": "この相を読み込んでいます…",
+    "missing": "この相はローカルライブラリにありません。",
+    "error": "この相を読み込めませんでした。",
+    "composition": "組成",
+    "fromStructure": "構造より",
+    "fromLabel": "名称より",
+    "lattice": "格子",
+    "setting": "表示している設定",
+    "atoms": "単位格子内の原子数",
+    "files": "ファイル",
+    "absent": "ありません",
+    "masterParameters": "マスターの作成条件",
+    "shtParameters": ".sht の作成条件",
+    "cellAxis": {
+      "a": "a",
+      "b": "b",
+      "c": "c",
+      "alpha": "α",
+      "beta": "β",
+      "gamma": "γ"
+    },
+    "file": {
+      "cif": "CIF",
+      "xtal": "XTAL",
+      "master": "マスターパターン",
+      "sht": "SHT",
+      "dictionary": "辞書"
+    },
+    "param": {
+      "energy": "加速電圧",
+      "dmin": "dmin",
+      "npx": "npx",
+      "tilt": "試料傾斜",
+      "electrons": "電子数",
+      "program": "プログラム",
+      "bandwidth": "帯域幅",
+      "engine": "エンジン"
+    },
+    "builtFrom": {
+      "xtal": "作成元",
+      "cif": "および"
+    },
+    "notice": {
+      "parseError": "この CIF は読み込めません: {{detail}} 以下の内容は他のファイルから得たものです。",
+      "elementsDisagree": "名称と構造で元素が一致しません。下の組成に両方を示します。",
+      "cellConflict": "このファイルのデータブロックは格子について食い違っています: {{detail}}",
+      "severalSettings": "このファイルは複数の格子設定を宣言しています ({{detail}})。表示しているのは {{shown}} です。",
+      "referenceRejected": "ファイルは出典を挙げていますが、採用しませんでした: {{detail}}"
+    },
+    "showInBrowser": "データベースブラウザーで表示",
+    "inGroups_one": "所属グループ：",
+    "inGroups_other": "所属グループ：",
+    "builtElsewhere": "別のライブラリに対して構築",
+    "dictionaryFromMaster": "まだありません — マスターパターンがあるので生成できます"
+  },
+  "groups": {
+    "title": "グループ",
+    "new": "+ 新しいグループ",
+    "newPlaceholder": "名前（例：Al-Fe 金属間化合物）",
+    "newLabel": "新しいグループの名前",
+    "undo": "元に戻す",
+    "none": "グループはまだありません。作成してから相をドラッグして重ねるか、いくつか選んでグループの + ボタンを押してください。",
+    "count_one": "{{count}} 相",
+    "count_other": "{{count}} 相",
+    "countFiltered": "{{total}} 中 {{shown}} 件表示",
+    "addShort": "+{{count}}",
+    "addSelected": "選択中の {{count}} 相を {{name}} に追加",
+    "menuLabel": "{{name}} の操作",
+    "menuAdd_one": "選択中の {{count}} 相を追加",
+    "menuAdd_other": "選択中の {{count}} 相を追加",
+    "menuAddNone": "選択中の相を追加（未選択）",
+    "menuMove_one": "選択中の {{count}} 相をここに移動",
+    "menuMove_other": "選択中の {{count}} 相をここに移動",
+    "menuMoveNone": "選択中の相をここに移動（未選択）",
+    "menuUse": "このグループを次の実行に使う",
+    "menuRename": "名前を変更…",
+    "menuDelete": "グループを削除",
+    "renameLabel": "{{name}} の新しい名前",
+    "thisMachine": "グループはこのブラウザ、このマシンに保存されます。まだライブラリと一緒には移動しません。",
+    "storageUnavailable": "グループを利用できません: ライブラリが応答しませんでした。再試行しています。",
+    "notSaved": "直前の変更は画面にありますが、保存されていません：{{reason}}",
+    "menuNest": "…のサブグループにする",
+    "menuNestNone": "サブグループにする（置き場所がありません）",
+    "nestUnder": "{{name}} の入れ先：",
+    "toTopLevel": "最上位",
+    "activeHere": "次の実行に使用",
+    "menuMoveAlt_one": "選択中の {{count}} 相をここに移動（Alt を押しながらのドラッグでも）",
+    "menuMoveAlt_other": "選択中の {{count}} 相をここに移動（Alt を押しながらのドラッグでも）",
+    "menuUseEmpty": "このグループを次の実行に使う（空です）",
+    "menuRemove_one": "選択中の {{count}} 相をこのグループから外す",
+    "menuRemove_other": "選択中の {{count}} 相をこのグループから外す",
+    "menuRemoveNone": "選択中の相を外す（このグループには入っていません）",
+    "removeOne": "{{phase}} を {{name}} から外す",
+    "emptyOpened": "このグループはまだ空です。相をドラッグして重ねるか、いくつか選んで + ボタンを押してください。",
+    "stopUsing": "ライブラリ全体を使う",
+    "stopUsingTip": "実行をグループに絞るのをやめます。ライブラリのすべての相が再び提示されます。",
+    "notSavedCount_one": "{{count}} 件の変更が画面にありますが、ライブラリには入っていません：",
+    "notSavedCount_other": "{{count}} 件の変更が画面にありますが、ライブラリには入っていません：",
+    "notSavedOne": "{{name}} — {{reason}}",
+    "reread": "ライブラリを読み直す",
+    "notSavedMore_one": "… ほか {{count}} 件（ここには表示されていません）。",
+    "notSavedMore_other": "… ほか {{count}} 件（ここには表示されていません）。"
+  },
+  "drag": {
+    "willAdd_one": "{{count}} を追加",
+    "willAdd_other": "{{count}} を追加",
+    "willMove_one": "{{count}} をここに移動",
+    "willMove_other": "{{count}} をここに移動"
+  },
+  "name": {
+    "give": "この相に名前を付ける…",
+    "change": "この名前を変更…",
+    "display": "名前",
+    "displayPlaceholder": "現場での呼び名（例：α-Al(Fe,Mn)Si）",
+    "terms": "検索語",
+    "termsPlaceholder": "別の表記をカンマ区切りで：s phase, s-phase",
+    "author": "あなたの名前",
+    "authorPlaceholder": "共有ライブラリの記録用",
+    "hint": "名前はファイル名の前に出るだけで、置き換えません。{{key}} でも引き続き見つかります。",
+    "save": "保存",
+    "saving": "保存中…",
+    "cancel": "キャンセル",
+    "by": "{{author}} が {{when}} に命名"
+  },
+  "suggest": {
+    "run": "ライブラリからグループを提案…",
+    "running": "検索中…",
+    "nothingYet": "承認するまで何も作成されません。",
+    "empty": "提案はありません — すでに整理されているか、グループ化するには小さすぎます。",
+    "members_one": "{{count}} 相",
+    "members_other": "{{count}} 相",
+    "apply_one": "{{count}} 件のグループを作成",
+    "apply_other": "{{count}} 件のグループを作成",
+    "cancel": "キャンセル",
+    "created_one": "{{count}} 件のグループを作成しました。",
+    "created_other": "{{count}} 件のグループを作成しました。",
+    "skipped_one": "名前が既に使われているため見送りました：{{names}}",
+    "skipped_other": "名前が既に使われているため見送りました：{{names}}",
+    "untouched_one": "ライブラリの {{count}} 相はいずれにも含まれず、未整理のままになります。",
+    "untouched_other": "ライブラリの {{count}} 相はいずれにも含まれず、未整理のままになります。"
+  },
+  "activeGroup": {
+    "label": "グループ：{{name}}",
+    "count_one": "{{count}} 相",
+    "count_other": "{{count}} 相",
+    "tip": "相の選択はグループ「{{name}}」に絞られています。クリックで相ライブラリを開きます。",
+    "missing": "グループ「{{name}}」が見つかりません",
+    "missingTip": "アクティブなグループ「{{name}}」がライブラリにありません — 別のマシンで改名または削除された可能性があります。別のグループを選ぶまで、相は提示されません。クリックで相ライブラリを開きます。",
+    "startBlockedTip": "アクティブなグループ「{{name}}」がライブラリにないため、相が提示されません。相ライブラリで別のグループを選ぶか、絞り込みを解除してください。"
+  },
+  "capability": {
+    "letter": {
+      "hough": "H",
+      "spherical": "S",
+      "dictionary": "D"
+    },
+    "can": "{{method}} で指標付けできます",
+    "cannot": "{{method}} 用のファイルがありません"
+  },
+  "sibling": {
+    "intro_one": "同じ空間群・同じ組成の項目が他にあります：",
+    "intro_other": "同じ空間群・同じ組成の項目が他にあります：",
+    "alsoIndexableWith": "{{methods}} でも指標付けできます",
+    "notIndexableWith": "{{methods}} では指標付けできません",
+    "composition": "構造には {{elements}} が入っています",
+    "reference": "出典は {{reference}} です",
+    "cellA": "a は {{theirs}} Å（こちらは {{mine}} Å）"
+  }
+}

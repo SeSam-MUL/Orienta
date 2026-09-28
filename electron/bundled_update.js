@@ -99,6 +99,31 @@ function installedTag(home, deps = {}) {
   }
 }
 
+/**
+ * The digest of the package the installed runtime came from, or null.
+ *
+ * `runtime/VERSION` answers "which version", and from 0.4.6 onwards that is not
+ * enough: a release may be rebuilt under the same tag, and then the tag says
+ * "nothing to do" while the program files are a build behind — the exact failure
+ * this module exists to close, coming back through the version number.
+ *
+ * null is the honest answer for every installation made before the applier began
+ * recording this, and the decision below treats it as "cannot tell" rather than
+ * as "identical".
+ */
+function installedDigest(home, deps = {}) {
+  const fs = deps.fs || fsDefault;
+  const path = deps.path || pathDefault;
+  if (!home) return null;
+  try {
+    const text = fs.readFileSync(path.join(home, 'runtime', 'SOURCE_SHA256'), 'utf8');
+    const token = String(text).trim().split(/\s+/)[0] || '';
+    return /^[0-9a-f]{64}$/i.test(token) ? token.toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Is a package already parked? Then it, not the bundle, is what applies. */
 function alreadyParked(home, deps = {}) {
   const fs = deps.fs || fsDefault;
@@ -123,7 +148,9 @@ function alreadyParked(home, deps = {}) {
  * silently would be the same class of surprise as this module exists to fix.
  * It is logged, so "why does About still say the newer number" has an answer.
  */
-function updateDecision({ bundled, installed, parked }) {
+function updateDecision({
+  bundled, installed, parked, bundledDigest = null, installedDigest = null,
+}) {
   if (parked) {
     return { action: 'apply', reason: 'a package is already parked; applying that' };
   }
@@ -143,7 +170,43 @@ function updateDecision({ bundled, installed, parked }) {
     };
   }
   if (order === 0) {
-    return { action: 'none', reason: `the installed ${installed} is what this shell carries` };
+    // SAME TAG, which since 0.4.6 no longer means same build: that release was
+    // rebuilt four times, and Sebastian's machine holds Build 3 as v0.4.6. Tags
+    // alone would answer "nothing to do" and leave the program files a build
+    // behind under a new shell — this module's own bug, returning through the
+    // version number. So compare what the builds actually are.
+    if (bundledDigest && installedDigest && bundledDigest === installedDigest) {
+      return {
+        action: 'none',
+        reason: `the installed ${installed} is the same build as this shell carries`,
+      };
+    }
+    if (bundledDigest && installedDigest) {
+      return {
+        action: 'park',
+        reason: `the installed ${installed} is a DIFFERENT build of the same version `
+              + `(${installedDigest.slice(0, 12)} vs ${bundledDigest.slice(0, 12)})`,
+      };
+    }
+    if (bundledDigest && !installedDigest) {
+      // Every installation made before the applier recorded this. Apply once and
+      // let it record; the applier is idempotent, prunes by manifest diff and
+      // refuses anything under `Database/`, so an unnecessary apply costs one
+      // unpack and nothing else. Skipping it is what would be expensive.
+      return {
+        action: 'park',
+        reason: `the installed ${installed} does not say which build it is; `
+              + 'applying once so that it does',
+      };
+    }
+    // No digest for the BUNDLE — a malformed `.sha256` beside it. Parking would
+    // repeat on every start, because nothing would ever be learned. Say why and
+    // leave the runtime alone.
+    return {
+      action: 'none',
+      reason: `the installed ${installed} matches this shell's tag, and the bundled `
+            + 'package states no digest to compare builds by',
+    };
   }
   return {
     action: 'none',
@@ -233,6 +296,7 @@ module.exports = {
   tagOf,
   bundledPackage,
   installedTag,
+  installedDigest,
   alreadyParked,
   updateDecision,
   digestFrom,

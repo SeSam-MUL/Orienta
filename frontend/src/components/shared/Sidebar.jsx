@@ -13,14 +13,14 @@ import { setLanguage, LANGUAGES } from '../../i18n';
 import {
   LayoutDashboard, ScanLine, Atom, Crosshair, Gem, Cpu, HardDrive,
   Grid3x3, Map, BarChart3, Brain, Database, Settings,
-  Package, SlidersHorizontal, Zap, Puzzle,
+  Package, SlidersHorizontal, Zap, Puzzle, Library,
 } from 'lucide-react';
 
 /** Map icon name strings from SIDEBAR_PAGES to Lucide components */
 const ICON_MAP = {
   LayoutDashboard, ScanLine, Atom, Crosshair, Gem, Cpu, HardDrive,
   Grid3x3, Map, BarChart3, Brain, Database, Settings,
-  Package, SlidersHorizontal, Zap, Puzzle,
+  Package, SlidersHorizontal, Zap, Puzzle, Library,
 };
 
 const S = {

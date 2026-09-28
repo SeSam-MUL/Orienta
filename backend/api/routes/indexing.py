@@ -24,6 +24,7 @@ from display_names import display_stem as _stem
 from backend.api.services.image_utils import array_to_base64_png, array_to_base64_raw, colormap_array_to_base64
 from backend.api.services.calibration_store import calibration_store
 from backend.api.services import state_version
+from backend.api.problem import problem
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -1973,12 +1974,53 @@ def get_pixel_at_pct_for_phase_test(pixel_index: int):
 
 
 def _phase_test_library_entries(phase_keys):
+    """The library phases to test. THREE CASES, and they are not the same thing.
+
+    ``None``        -- not filtered. Every phase with an SHT. What
+                      ``/single-pixel-phase-test/phases`` wants when it lists
+                      what is testable.
+    ``[]``          -- an empty SELECTION, so an empty result. The caller must
+                      refuse to run rather than fall back to everything.
+    ``[k, ...]``    -- exactly those, in the order given. A key that names no
+                      library phase at all raises, because it is a stale
+                      reference and running anyway hides it.
+
+    WHY THE TYPES. This said ``if phase_keys:`` -- so ``None`` and ``[]`` both
+    meant "all", and a selection that resolved to nothing silently ran over the
+    WHOLE LIBRARY. It is the second time this project paid for that exact shape:
+    the phase-collections merge fixed it at the call site while this function kept
+    the old meaning for every caller after it, and `collectionFilter.js:26` has
+    the same fallback on the frontend ("renamed or deleted: filter nothing").
+    A filter that cannot find what it was asked for must not WIDEN.
+
+    A key that exists but has no SHT is a different thing again: not an error --
+    a collection may legitimately hold `Al`, which has no SHT -- so those are
+    dropped and RETURNED as `unsupported` for the caller to report rather than
+    swallowed.
+    """
     from backend.api.services.crystal_hint_local_library import get_index
-    entries = [e for e in get_index().values() if e.sht_path is not None]
-    if phase_keys:
-        wanted = set(phase_keys)
-        entries = [e for e in entries if e.key in wanted]
-    return entries
+
+    index = get_index()
+    testable = [e for e in index.values() if e.sht_path is not None]
+    if phase_keys is None:
+        return testable, []
+
+    wanted = [str(k).strip() for k in phase_keys if str(k).strip()]
+    if not wanted:
+        return [], []
+
+    unknown = [k for k in wanted if k not in index]
+    if unknown:
+        raise problem(
+            400, "unknownPhaseKey",
+            "These phases are not in the crystal library: "
+            + ", ".join(sorted(unknown))
+            + ". The selection may point at phases that were renamed or removed.")
+
+    by_key = {e.key: e for e in testable}
+    entries = [by_key[k] for k in wanted if k in by_key]
+    unsupported = [{"key": k, "reason": "no_sht"} for k in wanted if k not in by_key]
+    return entries, unsupported
 
 
 def _dictionary_library_files():
@@ -1995,29 +2037,49 @@ def _dictionary_library_files():
 
 
 def _master_h5_for_phase(entry, files=None):
-    """Best-effort match of a phase to a dictionary/master ``.h5`` by name, so the
-    Phase-Test 'Use for indexing' picker can show whether Dictionary indexing is
-    available for it. Returns a path string or None (None -> Dictionary disabled).
+    """The master/dictionary ``.h5`` Dictionary indexing would use, or None.
 
-    Matching is intentionally conservative (substring of the canonical key/formula
-    stem in the filename); a miss just disables Dictionary for that phase — the
-    user can still generate a master pattern via the Dictionary/Simulation tools.
+    ONE ANSWER TO ONE QUESTION. This used to be a separate, conservative
+    substring match over ``Dictionary_Library`` only, and it answered **2** for a
+    library where **16** phases have a master. Two reasons, both in its own old
+    docstring: it never looked in ``EBSD_H5_Cache``, where the EMsoft masters
+    actually live, and it rejected candidate tokens shorter than four characters
+    so that ``Al`` and ``Ni`` could never find ``Al_master_E20kV_npx500.h5`` and
+    ``Ni_master_E20kV_npx500.h5`` sitting in plain sight.
+
+    That mattered the moment the phase library started SHOWING the capability:
+    the card said "Dictionary ✓" for 16 phases while
+    ``resolve(method="dictionary")`` refused 14 of them with ``no_master`` -- a
+    green tick the backend declines, which is the shape this codebase keeps
+    paying for. So both now ask
+    :mod:`backend.api.services.phase_library`, which matches the phase key
+    forward through ``path_utils.sanitize_filename`` at a stem boundary and, for
+    a master, confirms the file really carries ``EMData/EBSDmaster/mLPNH``
+    (a header lookup -- the 44 MB array is never read).
+
+    ``files`` is accepted and ignored, for the callers that pre-scanned.
     """
-    if files is None:
-        files = _dictionary_library_files()
-    if not files:
+    from backend.api.services import phase_library as pl
+
+    key = (getattr(entry, "key", "") or "").strip()
+    if not key:
         return None
-    key = (getattr(entry, "key", "") or "").strip().lower()
-    formula = (getattr(entry, "formula", "") or "").strip().lower()
-    # Distinctive tokens only (>= 4 chars) so short formulas like "ni"/"al" don't
-    # over-match an unrelated master and falsely show Dictionary as available. A
-    # miss just disables Dictionary (✗) — far safer than attaching a wrong master.
-    cands = [s for s in (key, key.split(" ")[0], formula.split(" ")[0]) if s and len(s) >= 4]
-    for f in files:
-        nm = f.name.lower()
-        if any(c in nm for c in cands):
-            return str(f)
-    return None
+    try:
+        master = pl.master_for_key(key)
+        if master is not None:
+            return str(master)
+        # A pre-built dictionary answers the question on its own. Ranked against
+        # the library for the same reason: `beta-AlFeSi` must not be handed
+        # `beta-AlFeSi_withSi_COD-2107329`'s file.
+        from backend.api.services import crystal_hint_local_library as chl
+        from path_utils import DATABASE_SUBFOLDERS, get_local_database_path
+        dict_dir = get_local_database_path() / DATABASE_SUBFOLDERS["dictionary_library"]
+        dicts = sorted(dict_dir.rglob("*.h5")) if dict_dir.is_dir() else []
+        found = pl._pick_one(pl.assign_files(dicts, chl.get_index()).get(key))
+        return str(found) if found is not None else None
+    except Exception:
+        logger.debug("master lookup failed for %s", key, exc_info=True)
+        return None
 
 
 class IndexingParams(BaseModel):
@@ -2314,6 +2376,12 @@ class SinglePixelPhaseTestResponse(BaseModel):
     bandwidth: int = 128
     candidates: list[PhaseTestCandidate] = []
     excluded: list[PhaseTestCandidate] = []
+    #: Selected phases that this method cannot test, with a reason -- today only
+    #: `no_sht`. Its own field, not merged into `excluded`: that one means
+    #: "excluded by the EDS pre-filter", and two reasons in one list is how a
+    #: caller ends up reporting the wrong one. Same shape `resolve()` uses for
+    #: `Al -> no_master`.
+    unsupported: list[dict] = []
 
 
 class ComparisonRequest(BaseModel):
@@ -7844,7 +7912,7 @@ async def single_pixel_phase_test(req: SinglePixelPhaseTestRequest):
 
     # EDS pre-filter
     pixel_at_pct = get_pixel_at_pct_for_phase_test(req.pixel_index)
-    entries = _phase_test_library_entries(req.phase_keys)
+    entries, unsupported = _phase_test_library_entries(req.phase_keys)
     tested, excluded, chem_by_key, eff_mode = eds_prefilter(
         entries, pixel_at_pct, req.eds_weighting, req.eds_filter_threshold)
 
@@ -7879,7 +7947,8 @@ async def single_pixel_phase_test(req: SinglePixelPhaseTestRequest):
         pixel_index=req.pixel_index, row=row, col=col,
         experimental_png=_png(exp_display), pixel_at_pct=pixel_at_pct,
         eds_weighting_effective=eff_mode, mask_applied=mask is not None,
-        bandwidth=req.max_bandwidth, candidates=out_candidates, excluded=out_excluded)
+        bandwidth=req.max_bandwidth, candidates=out_candidates,
+        excluded=out_excluded, unsupported=unsupported)
 
 
 # ---------------------------------------------------------------------------
@@ -7929,7 +7998,8 @@ def _new_phase_test_job() -> str:
 async def _run_phase_test_job(jid: str, *, exp, det_params, sht_paths_by_phase,
                               phase_names, mask, max_bandwidth,
                               id_to_entry, chem_by_key, eff_mode, excluded,
-                              row, col, pixel_index, exp_display, pixel_at_pct):
+                              row, col, pixel_index, exp_display, pixel_at_pct,
+                              unsupported=()):
     job = _phase_test_jobs[jid]
     # The first run builds the multi-phase spherical backend (~25 s) inside
     # _compute_phase_compare_results BEFORE any per-phase progress tick. Surface
@@ -7969,7 +8039,8 @@ async def _run_phase_test_job(jid: str, *, exp, det_params, sht_paths_by_phase,
             pixel_index=pixel_index, row=row, col=col,
             experimental_png=exp_display, pixel_at_pct=pixel_at_pct,
             eds_weighting_effective=eff_mode, mask_applied=mask is not None,
-            bandwidth=max_bandwidth, candidates=out_candidates, excluded=out_excluded
+            bandwidth=max_bandwidth, candidates=out_candidates,
+            excluded=out_excluded, unsupported=list(unsupported),
         ).model_dump()
         job["status"] = "done"
 
@@ -8039,7 +8110,7 @@ async def single_pixel_phase_test_start(req: SinglePixelPhaseTestRequest):
     exp_display_arr = apply_circular_mask(exp, mask) if mask is not None else exp
 
     pixel_at_pct = get_pixel_at_pct_for_phase_test(req.pixel_index)
-    entries = _phase_test_library_entries(req.phase_keys)
+    entries, unsupported = _phase_test_library_entries(req.phase_keys)
     tested, excluded, chem_by_key, eff_mode = eds_prefilter(
         entries, pixel_at_pct, req.eds_weighting, req.eds_filter_threshold)
     id_to_entry = {i: e for i, e in enumerate(tested)}
@@ -8059,7 +8130,8 @@ async def single_pixel_phase_test_start(req: SinglePixelPhaseTestRequest):
         phase_names=phase_names, mask=mask, max_bandwidth=req.max_bandwidth,
         id_to_entry=id_to_entry, chem_by_key=chem_by_key, eff_mode=eff_mode,
         excluded=excluded, row=row, col=col, pixel_index=req.pixel_index,
-        exp_display=exp_png, pixel_at_pct=pixel_at_pct))
+        exp_display=exp_png, pixel_at_pct=pixel_at_pct,
+        unsupported=unsupported))
     return {"job_id": jid, "total": len(tested), "excluded_count": len(excluded),
             "eds_weighting_effective": eff_mode, "experimental_png": exp_png,
             "pixel_at_pct": pixel_at_pct, "row": row, "col": col}
@@ -8197,7 +8269,7 @@ async def single_pixel_phase_test_remask(req: PhaseTestRemaskRequest):
 @router.get("/single-pixel-phase-test/phases")
 async def single_pixel_phase_test_phases():
     """List the library phases that can be tested (those with an SHT)."""
-    entries = _phase_test_library_entries(None)
+    entries, _unsupported = _phase_test_library_entries(None)
     return [{"key": e.key, "label": (e.display_formula or e.formula or e.key),
              "space_group": getattr(e, "space_group", "") or ""} for e in entries]
 

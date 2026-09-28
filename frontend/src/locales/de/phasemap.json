@@ -65,7 +65,7 @@
     "export": "Exportieren…",
     "exportTip": "Den Export-Composer für Publikationsfiguren öffnen",
     "clearMarkers": "Marker löschen ({{count}})",
-    "assignBtn": "\"{{phase}}\" diesem Korn zuweisen",
+    "assignBtn": "„{{phase}}“ diesem Korn zuweisen",
     "assignBusy": "Wird zugewiesen…",
     "assignTip": "Widmet das zusammenhängende Korn am angeklickten Pixel auf diese Phase um. Jedes Pixel erhält seine eigene Hough-Orientierung der neuen Phase; einstufiges Undo.",
     "assignDone": "{{n}} px von {{from}} auf {{to}} umgewidmet.",

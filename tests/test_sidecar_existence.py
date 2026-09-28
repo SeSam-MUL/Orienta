@@ -80,19 +80,53 @@ def test_a_foreign_path_is_mapped_onto_the_local_library_by_name(tmp_path):
 
     p = build_sht_info(sht, xtal_dir=tmp_path, cif_dir=tmp_path)["provenance"]
     assert p["source_xtal"]["found"] is True
-    assert p["source_xtal"]["path"] == str(tmp_path / "Ni.xtal")
+    # `path` used to be the absolute local path. It is project-relative now, and
+    # the bare name when the file is outside the project -- as `tmp_path` is.
+    # See tests/test_phase_library_no_local_paths.py: f7 found this field coming
+    # back as `C:\Users\<name>\...` on 29 of 36 phases.
+    assert p["source_xtal"]["path"] == "Ni.xtal"
     assert "E:" not in p["source_xtal"]["path"]
     assert "recorded_path" not in p["source_xtal"], (
         "resolved locally, so there is nothing unresolved to report")
 
 
-def test_an_unresolvable_recorded_path_is_kept_visible(tmp_path):
-    """Not silently dropped: a reader has to be able to see what was recorded."""
+def test_an_unresolvable_recorded_path_is_kept_visible_without_the_machine_path(tmp_path):
+    """NARROWED, and it is a trade-off rather than a cleanup.
+
+    This used to assert `recorded_path == r"E:\\elsewhere\\Ni.xtal"` verbatim,
+    so that a reader could see what the sidecar claimed. But an unresolvable
+    recorded path is by definition a path on somebody ELSE's machine, and these
+    answers get pasted into bug reports -- `E:\\elsewhere` here, `C:\\Users\\<name>`
+    in the wild.
+
+    Reducing it to `Ni.xtal` alone would have quietly killed the field: it would
+    then repeat `name` and tell the reader nothing. So the one thing they
+    actually needed -- "this master was built against a library that is not this
+    one" -- is kept as its own flag.
+    """
     sht = _sht(tmp_path)
     _sidecar(sht)
     p = build_sht_info(sht, xtal_dir=tmp_path, cif_dir=tmp_path)["provenance"]
     assert p["source_xtal"]["path"] is None
-    assert p["source_xtal"]["recorded_path"] == r"E:\elsewhere\Ni.xtal"
+    assert p["source_xtal"]["recorded_path"] == "Ni.xtal"
+    assert p["source_xtal"]["recorded_elsewhere"] is True
+    # No part of the foreign path survives. Checked on the VALUES: the key
+    # `recorded_elsewhere` legitimately contains the word, and asserting against
+    # the whole dict caught that instead of the thing it was looking for.
+    values = [v for v in p["source_xtal"].values() if isinstance(v, str)]
+    assert not [v for v in values if "E:" in v or "elsewhere" in v], values
+
+
+def test_a_relative_recorded_path_is_not_flagged_as_elsewhere(tmp_path):
+    """The other side of the flag. Sidecars written since this change record a
+    project-relative path; calling those "elsewhere" would put a warning on
+    every ordinary file and make the flag worthless."""
+    sht = _sht(tmp_path)
+    _sidecar(sht, source_xtal={"name": "Ni.xtal", "found": True,
+                               "path": "Database/XTAL_Library/Ni.xtal"})
+    p = build_sht_info(sht, xtal_dir=tmp_path, cif_dir=tmp_path)["provenance"]
+    assert p["source_xtal"]["recorded_path"] == "Database/XTAL_Library/Ni.xtal"
+    assert p["source_xtal"]["recorded_elsewhere"] is False
 
 
 def test_it_finds_a_file_in_a_material_subfolder(tmp_path):
@@ -104,7 +138,13 @@ def test_it_finds_a_file_in_a_material_subfolder(tmp_path):
     (sub / "Ni.xtal").write_bytes(b"x")
     p = build_sht_info(sht, xtal_dir=tmp_path, cif_dir=tmp_path)["provenance"]
     assert p["source_xtal"]["found"] is True
-    assert p["source_xtal"]["path"] == str(sub / "Ni.xtal")
+    # `found` is what this test is about, and the recursive lookup behind it is
+    # unchanged. The path is reported project-relative now, and `tmp_path` is
+    # outside the project, so it reduces to the name. Were such a folder to sit
+    # under the project the relative form would keep it -- measured today the
+    # shipped `Database/XTAL_Library` has NO material subfolders at all, so that
+    # is a statement about the code, not about the library.
+    assert p["source_xtal"]["path"] == "Ni.xtal"
 
 
 def test_a_name_with_glob_metacharacters_still_resolves(tmp_path):

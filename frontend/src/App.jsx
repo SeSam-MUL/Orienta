@@ -57,8 +57,11 @@ const BatchPage = lazy(() => import('./components/Batch/BatchPage'));
 const RefinementPage = lazy(() => import('./components/Refinement/RefinementPage'));
 const CrystalHintPage = lazy(() => import('./components/CrystalHint/CrystalHintPage'));
 const AddonsPage = lazy(() => import('./components/Addons/AddonsPage'));
-const CollectionPicker = lazy(() => import('./components/PhaseCollections/CollectionPicker'));
-const CollectionManager = lazy(() => import('./components/PhaseCollections/CollectionManager'));
+const PhaseLibraryPage = lazy(() => import('./components/PhaseLibrary/PhaseLibraryPage'));
+// An indicator, not a picker: choosing a group happens in the library,
+// where you can see what is in it. This says, on every page, that the phase
+// choice is narrowed -- and says so in red when the group it names is gone.
+const ActiveGroupChip = lazy(() => import('./components/PhaseLibrary/ActiveGroupChip'));
 
 // Fallback UI shown while a route chunk is being fetched. Kept simple so
 // it flashes only briefly on first navigation to a given page.
@@ -178,14 +181,6 @@ function App() {
   // the trail it collects is most complete right then.
   const [reportOpen, setReportOpen] = useState(false);
   const [reportShot, setReportShot] = useState(null);
-  // The collections dialog, opened from the toolbar picker's "manage" entry.
-  // Lives here rather than inside CollectionPicker so it can sit above the
-  // whole shell (Escape closes it like every other floating panel below).
-  // The database browser opens its OWN instance from its own button for the
-  // same dialog — both read and write the same `useCollectionStore`, so an
-  // edit made through either is visible in both immediately.
-  const [collectionManagerOpen, setCollectionManagerOpen] = useState(false);
-
   // Capture BEFORE the dialog renders, or the picture shows the dialog
   // instead of the screen the user is complaining about.
   const openReport = useCallback(async () => {
@@ -333,7 +328,6 @@ function App() {
     // Escape closes floating panels, topmost first
     if (e.key === 'Escape') {
       if (reportOpen) { setReportOpen(false); return; }
-      if (collectionManagerOpen) { setCollectionManagerOpen(false); return; }
       if (shortcutHelpOpen) { setShortcutHelpOpen(false); return; }
       if (edsColorsOpen) { setEdsColorsOpen(false); return; }
       if (h5ViewerOpen) { setH5ViewerOpen(false); return; }
@@ -363,7 +357,7 @@ function App() {
         setCurrentPage(page.id);
       }
     }
-  }, [edsColorsOpen, h5ViewerOpen, shortcutHelpOpen, collectionManagerOpen]);
+  }, [edsColorsOpen, h5ViewerOpen, shortcutHelpOpen]);
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyDown);
@@ -482,13 +476,33 @@ function App() {
           >
             {t('shell:toolbar.edsColors')}
           </button>
-          {/* Phase collection picker — narrows every phase list in the app
-              (Phase Test, Indexing, the database browser) to one named
-              collection. Owns its own dropdown open-state, so it needs
-              nothing from handleKeyDown's Escape branch or its dependency
-              array above. */}
+          {/* Phase library — the entry point (spec 2.10). A button and not a
+              dialog: the library is a place you go and stay, and the pages
+              that USE phases link into it. Pulled forward into M0 because
+              without it the page is unreachable for the user tests. */}
+          <button
+            onClick={() => handleNavigate('phaselibrary')}
+            style={{
+              background: currentPage === 'phaselibrary' ? colors.purple : 'transparent',
+              color: currentPage === 'phaselibrary' ? colors.bg : colors.purple,
+              fontWeight: 'bold',
+              padding: '4px 12px',
+              border: `1px solid ${colors.border}`,
+              borderRadius: 3,
+              fontSize: '9pt',
+              cursor: 'pointer',
+              transition: 'background 0.12s, color 0.12s, border-color 0.12s',
+            }}
+            title={t('shell:toolbar.phaseLibraryTooltip')}
+          >
+            {t('shell:toolbar.phaseLibrary')}
+          </button>
+          {/* Says that the phase choice is narrowed, on whatever page you
+              are on, and takes you to the library to change it. It shows
+              nothing at all when no group is active, which is the ordinary
+              case and needs no announcement. */}
           <Suspense fallback={null}>
-            <CollectionPicker onManage={() => setCollectionManagerOpen(true)} />
+            <ActiveGroupChip onOpenLibrary={() => handleNavigate('phaselibrary')} />
           </Suspense>
           {/* Report a problem — in the toolbar so it is reachable from every
               page, not only from Settings and the crash screen. */}
@@ -607,6 +621,7 @@ function App() {
           <div data-page="batch" style={pageStyle('batch')}><ErrorBoundary><Suspense fallback={<PageLoader />}><BatchPage onNavigate={handleNavigate} isActive={currentPage === 'batch'} /></Suspense></ErrorBoundary></div>
           <div data-page="refinement" style={pageStyle('refinement')}><ErrorBoundary><Suspense fallback={<PageLoader />}><RefinementPage onNavigate={handleNavigate} isActive={currentPage === 'refinement'} /></Suspense></ErrorBoundary></div>
           <div data-page="crystalhint" style={pageStyle('crystalhint')}><ErrorBoundary><Suspense fallback={<PageLoader />}><CrystalHintPage onNavigate={handleNavigate} isActive={currentPage === 'crystalhint'} /></Suspense></ErrorBoundary></div>
+          <div data-page="phaselibrary" style={pageStyle('phaselibrary')}><ErrorBoundary><Suspense fallback={<PageLoader />}><PhaseLibraryPage onNavigate={handleNavigate} isActive={currentPage === 'phaselibrary'} /></Suspense></ErrorBoundary></div>
           <div data-page="addons" style={pageStyle('addons')}><ErrorBoundary><Suspense fallback={<PageLoader />}><AddonsPage isActive={currentPage === 'addons'} /></Suspense></ErrorBoundary></div>
         </main>
 
@@ -771,11 +786,6 @@ function App() {
       )}
       {updateInfo && (
         <UpdateDialog info={updateInfo} onClose={closeUpdate} onSkip={skipUpdate} />
-      )}
-      {collectionManagerOpen && (
-        <Suspense fallback={null}>
-          <CollectionManager onClose={() => setCollectionManagerOpen(false)} />
-        </Suspense>
       )}
     </div>
   );

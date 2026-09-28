@@ -341,8 +341,30 @@ _PHASE_NICKNAMES: dict[tuple[str, tuple[str, ...]], str] = {
 }
 
 
-def phase_nickname(space_group: str, elements) -> str:
-    """Literature nickname (\u03b1/\u03b2/\u03c0\u2026) for a (space group, elements) pair, or ""."""
+def phase_nickname(space_group: str, elements, key: str = "") -> str:
+    """Literature nickname (\u03b1/\u03b2/\u03c0\u2026) for a phase, or "".
+
+    Reads the SYNONYM STORE first when a library `key` is given, so a name a user
+    gave a phase is the name that appears. Falls back to :data:`_PHASE_NICKNAMES`,
+    which is the seed the store is initialised from and NOT dead weight: the store
+    only knows a phase after it has been seeded or edited, and this function is
+    called from contexts that have no key at all.
+
+    The table is deliberately not deleted. Two comments in this codebase claim
+    `build_canonical_label` feeds `LocalEntry.display_label` -- it does not, that
+    field is set from the subscripted formula -- so the day someone makes the
+    claim true, the nicknames must still be there to be found. Removing the table
+    would have made them disappear at that moment, with the cause three commits
+    away.
+    """
+    if key:
+        try:
+            from backend.api.services.phase_synonyms import display_name
+            stored = display_name(key)
+            if stored:
+                return stored
+        except Exception:      # no store, no library, no problem
+            logger.debug("synonym store unavailable", exc_info=True)
     sg_norm = (space_group or "").replace(" ", "")
     return _PHASE_NICKNAMES.get((sg_norm, tuple(sorted(elements))), "")
 

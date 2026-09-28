@@ -238,8 +238,8 @@
     "direct": {
       "title": "Direkte Installation",
       "noWslNeeded": "Kein WSL nötig",
-      "infoMacos": "Unter macOS wird EMsoft direkt ohne WSL installiert. Klicken Sie unten auf \"Run Install\", um die Installation zu starten.",
-      "infoLinux": "Unter Linux wird EMsoft direkt ohne WSL installiert. Klicken Sie unten auf \"Run Install\", um die Installation zu starten.",
+      "infoMacos": "Unter macOS wird EMsoft direkt ohne WSL installiert. Klicken Sie unten auf „Run Install“, um die Installation zu starten.",
+      "infoLinux": "Unter Linux wird EMsoft direkt ohne WSL installiert. Klicken Sie unten auf „Run Install“, um die Installation zu starten.",
       "alreadyInstalled": "EMsoft-Binärdateien sind bereits installiert und im PATH verfügbar."
     },
     "notOffered": {

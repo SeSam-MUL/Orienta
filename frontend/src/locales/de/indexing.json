@@ -51,10 +51,10 @@
     "noFileLoaded": "Keine Datei geladen",
     "removePhase": "Phase entfernen",
     "selected": "gewählt",
-    "cannotAdd": "\"{{name}}\" kann nicht hinzugefügt werden: {{method}}-Indizierung benötigt eine .{{ext}}-Datei (erhalten: .{{got}})",
+    "cannotAdd": "„{{name}}“ kann nicht hinzugefügt werden: {{method}}-Indizierung benötigt eine .{{ext}}-Datei (erhalten: .{{got}})",
     "skippedNoFile": "{{count}} Phase(n) ohne .{{ext}}-Datei übersprungen ({{method}}-Indizierung)",
-    "adoptCollection": "Sammlung übernehmen: {{name}}",
-    "adoptCollectionFailed": "Sammlung konnte nicht geladen werden: {{error}}"
+    "adoptCollection": "Gruppe übernehmen: {{name}}",
+    "adoptCollectionFailed": "Gruppe konnte nicht geladen werden: {{error}}"
   },
   "edsPrior": {
     "atMost": "höchstens {{pct}} %",
@@ -234,7 +234,7 @@
     "cuda": "CUDA: {{name}} · {{free}} / {{total}} GB frei",
     "cpu": "CPU ({{name}})",
     "noCuda": "kein CUDA",
-    "lowVram": "⚠ Wenig VRAM — ein vorheriger Lauf belegt evtl. noch die GPU. Auf \"GPU freigeben\" klicken, um sie zu leeren."
+    "lowVram": "⚠ Wenig VRAM — ein vorheriger Lauf belegt evtl. noch die GPU. Auf „GPU freigeben“ klicken, um sie zu leeren."
   },
   "actions": {
     "startIndexing": "Indizierung starten",
@@ -653,7 +653,11 @@
     "scanOverviewAlt": "Scan-Übersicht (mittlere Intensität)",
     "failed": "fehlgeschlagen",
     "cancelled": "Abgebrochen",
-    "remaskFailed": "Neumaskierung fehlgeschlagen"
+    "remaskFailed": "Neumaskierung fehlgeschlagen",
+    "unsupportedCount_one": "{{count}} angeforderte Phase kann nicht getestet werden",
+    "unsupportedCount_other": "{{count}} angeforderte Phasen können nicht getestet werden",
+    "unsupportedRowNoSht": "{{key}} — kein simulierter Master (.sht), es gibt also nichts zum Vergleichen",
+    "unsupportedRow": "{{key}} — {{reason}}"
   },
   "hoverTips": {
     "degeneracyReduceToOne": "Nur eine Phase aus dieser entarteten Gruppe behalten und die redundanten Duplikate entfernen",
@@ -744,7 +748,7 @@
     "reflectorNoSymmetry": "Die CIF ist in Raumgruppe P 1 gespeichert: alle Atome einzeln aufgelistet, keine Symmetrie eingetragen. PyEBSDIndex behandelt dann jede Reflektorfamilie als einzelnen Pol, wodurch die Zahl verschiedener Polwinkel - und mit ihr die Bandtriplett-Bibliothek - explodiert. Ein Neuexport der Phase in ihrer echten Raumgruppe macht das klein und ist die bessere Lösung; die Reflektorzahl hier zu senken ist der Notbehelf.",
     "batchPickSht": "Master-Pattern (.sht) aus der Datenbank wählen (für Spherical)",
     "batchShtInput": "Pfad zum Master-Pattern (.sht). Spherical braucht eines.",
-    "adoptCollection": "Füllt die Phasenliste aus der Sammlung „{{name}}“ für die aktuelle Methode. Siehe den Leitfaden „Phase Collections“."
+    "adoptCollection": "Füllt die Phasenliste aus der Gruppe „{{name}}“ für die aktuelle Methode. Siehe den Leitfaden „Phase Library“."
   },
   "reflectors": {
     "label": "Reflektoren:",

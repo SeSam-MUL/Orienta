@@ -55,7 +55,7 @@ workflow at the bottom of this page.
 | [Crystal Database](CrystalDatabase.md) | Manage the crystal structures Orienta uses for indexing, including CIF→.xtal conversion. |
 | [Simulation](Simulation.md) | Generate the simulated reference data (master patterns, SHT, dictionaries) that indexing needs, via the EMsoft/EMSphInx toolchain. |
 | [Database Browser](DatabaseBrowser.md) | Central file manager for your local crystal/simulation database (structures, master patterns, SHT files). |
-| [Phase Collections](Phase-Collections.md) | File phases from your library into named collections so pickers can be narrowed to one group instead of the whole library. |
+| [Phase Library](Phase-Library.md) | Find a phase, see what it is and what you can index it with, name it the way your group does, and arrange the library into groups. |
 
 ## Settings
 

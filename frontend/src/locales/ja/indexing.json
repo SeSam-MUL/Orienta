@@ -53,8 +53,8 @@
     "selected": "選択済み",
     "cannotAdd": "\"{{name}}\" を追加できません: {{method}} 指数付けには .{{ext}} ファイルが必要です（.{{got}} を取得）",
     "skippedNoFile": ".{{ext}} ファイルのない {{count}} 相をスキップしました（{{method}} 指数付け）",
-    "adoptCollection": "コレクションを使用: {{name}}",
-    "adoptCollectionFailed": "コレクションを読み込めませんでした: {{error}}"
+    "adoptCollection": "グループを使用: {{name}}",
+    "adoptCollectionFailed": "グループを読み込めませんでした: {{error}}"
   },
   "edsPrior": {
     "atMost": "最大 {{pct}} %",
@@ -653,7 +653,11 @@
     "scanOverviewAlt": "スキャン概観（平均強度）",
     "failed": "失敗",
     "cancelled": "キャンセルされました",
-    "remaskFailed": "再マスク失敗"
+    "remaskFailed": "再マスク失敗",
+    "unsupportedCount_one": "要求された {{count}} 件の相はテストできません",
+    "unsupportedCount_other": "要求された {{count}} 件の相はテストできません",
+    "unsupportedRowNoSht": "{{key}} — シミュレーション済みマスター（.sht）がないため、比較対象がありません",
+    "unsupportedRow": "{{key}} — {{reason}}"
   },
   "hoverTips": {
     "degeneracyReduceToOne": "この縮退グループから1つの相だけを残し、冗長な重複を削除します",
@@ -744,7 +748,7 @@
     "reflectorNoSymmetry": "この CIF は空間群 P 1 で保存されています。つまり全原子が個別に並び、対称性が記録されていません。PyEBSDIndex は各反射面ファミリーを単一の極として扱うため、極間角度の種類が増え、バンド三重項ライブラリが爆発的に大きくなります。本来の空間群で書き出し直せば小さくなり、それが良い解決です。ここで反射面の数を下げるのは回避策です。",
     "batchPickSht": "球面インデックス用のマスターパターン (.sht) をデータベースから選択",
     "batchShtInput": "マスターパターン (.sht) のパス。球面インデックスに必要です。",
-    "adoptCollection": "現在の手法用にコレクション「{{name}}」から相リストを入力します。詳しくは「Phase Collections」ガイドを参照。"
+    "adoptCollection": "現在の手法について、グループ「{{name}}」から相リストを埋めます。ガイド「Phase Library」を参照してください。"
   },
   "reflectors": {
     "label": "反射面:",

@@ -683,7 +683,22 @@ async function applyBundledUpdate(python) {
   const bundled = bundledUpdate.bundledPackage(process.resourcesPath);
   const installed = bundledUpdate.installedTag(home);
   const parked = bundledUpdate.alreadyParked(home);
-  const decision = bundledUpdate.updateDecision({ bundled, installed, parked });
+  // Both digests are read HERE so the decision stays a pure function of data:
+  // the bundle states its own in the `.sha256` beside it (no hashing), and the
+  // runtime states which build it came from since the applier began recording
+  // it. Needed because 0.4.6 was rebuilt under one tag — see updateDecision.
+  let bundledDigest = null;
+  if (bundled) {
+    try {
+      bundledDigest = bundledUpdate.digestFrom(bundled.sum);
+    } catch (err) {
+      logShellLine(`Runtime update: the bundled package states no usable digest (${err.message})`);
+    }
+  }
+  const decision = bundledUpdate.updateDecision({
+    bundled, installed, parked, bundledDigest,
+    installedDigest: bundledUpdate.installedDigest(home),
+  });
   logShellLine(`Runtime update: ${decision.action} — ${decision.reason}`);
   if (decision.action === 'none') return { ok: true };
 

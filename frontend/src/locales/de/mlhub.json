@@ -119,7 +119,7 @@
     "storeCleared": "Trainingsspeicher geleert.",
     "clearFailed": "Leeren fehlgeschlagen."
   },
-  "clearStorePrompt": "ALLE Proben aus dem Trainingsspeicher löschen? Dies kann nicht rückgängig gemacht werden (über \"Add from Indexing\" erneut hinzufügen). Zum Bestätigen \"clear\" eingeben:",
+  "clearStorePrompt": "ALLE Proben aus dem Trainingsspeicher löschen? Dies kann nicht rückgängig gemacht werden (über „Add from Indexing“ erneut hinzufügen). Zum Bestätigen „clear“ eingeben:",
   "prediction": {
     "title": "Vorhersage",
     "desc": "Musterindizes (durch Komma oder Leerzeichen getrennt) eingeben, um die Phasenvorhersage auszuführen.",

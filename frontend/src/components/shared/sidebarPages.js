@@ -18,6 +18,12 @@ export const SIDEBAR_PAGES = [
   { id: 'dashboard',    shortcut: '1', icon: 'LayoutDashboard' },
   { id: 'ebsdviewer',   shortcut: '2', icon: 'ScanLine' },
   { id: 'eds',          shortcut: '3', icon: 'Atom' },
+  // Under DATA, as the spec's decided §10.4 says: the library is a view of
+  // what EXISTS, next to the data pages. The database browser stays where it
+  // is, as the file-and-sync view, and the library links to it. No digit:
+  // 1-9 and 0 are taken, and renumbering would move shortcuts out from under
+  // people who have learned them.
+  { id: 'phaselibrary', icon: 'Library' },
   // --- Calibration & Simulation ---
   { id: '_section', sectionKey: 'calibration' },
   { id: 'pcrefinement', shortcut: '4', icon: 'Crosshair' },

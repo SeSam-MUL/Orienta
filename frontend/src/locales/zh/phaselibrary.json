@@ -1,0 +1,317 @@
+{
+  "title": "相库",
+  "searchLabel": "搜索相库",
+  "searchPlaceholder": "元素、化学式、空间群、名称 — 例如 Al-Fe-Si、Al2CuMg、Im-3",
+  "facetsComing": "筛选条件将显示在这里。",
+  "facets": {
+    "elements": "元素",
+    "reset": "清除",
+    "findElement": "查找元素",
+    "methods": "可用于标定的方法",
+    "method": {
+      "hough": "Hough",
+      "spherical": "Spherical",
+      "dictionary": "Dictionary"
+    },
+    "methodNeeds": {
+      "hough": "需要 CIF",
+      "spherical": "需要模拟的 .sht",
+      "dictionary": "需要 EMsoft 主图，或预先生成的字典"
+    },
+    "unassignedMasters_one": "文件夹中有 {{count}} 个主图未与此处任何相对应—— 本库并未因此缺少任何内容。",
+    "unassignedMasters_other": "文件夹中有 {{count}} 个主图未与此处任何相对应—— 本库并未因此缺少任何内容。",
+    "methodLibraryFact": "本库 {{total}} 个相中的 {{capable}} 个",
+    "resetElements": "清除元素",
+    "resetMethods": "清除方法",
+    "elementNames": "也可用以下名称搜索：{{names}}"
+  },
+  "group": {
+    "prototype": "相同结构类型",
+    "citation": "文献信息中提到"
+  },
+  "state": {
+    "loading": "正在读取相库…",
+    "errorTitle": "无法读取相库。",
+    "errorRetrying": "正在继续重试。通常这表示后端尚未启动。",
+    "retryNow": "立即重试",
+    "emptyTitle": "库中没有相。",
+    "emptyWhere": "相来自晶体数据库。在那里放入 CIF 文件，这里就会显示。",
+    "filteredEmptyTitle": "{{total}} 个相中没有一个匹配。",
+    "filteredEmptyBy": "没有与 {{filter}} 匹配的项。",
+    "clearFilters": "清除筛选",
+    "loadingSlow": "Orienta 启动后的首次读取会遍历晶体库中的每个结构文件。库较大时可能需要长达一分钟。之后即为瞬时。",
+    "filterSearch": "搜索“{{value}}”",
+    "filterElements": "元素 {{value}}",
+    "filterMethods": "方法 {{value}}"
+  },
+  "selectPhase": "选择 {{name}}",
+  "view": {
+    "label": "视图",
+    "systems": "体系",
+    "list": "列表"
+  },
+  "glossary": {
+    "title": "这些术语的含义",
+    "pearson": {
+      "name": "皮尔逊符号",
+      "text": "描述晶格的简短代码：晶系（a 三斜、m 单斜、o 正交、t 四方、h 六方——也包括三方和菱方——以及 c 立方）、心式（P 简单、S 侧心（也写作 A、B、C）、I 体心、F 面心、R 菱方）以及常规晶胞中的原子数。cF4 是面心立方、含 4 个原子——铝。"
+    },
+    "prototype": {
+      "name": "结构类型",
+      "text": "与该相具有相同原子排列的已知化合物。纯铝和纯镍的结构类型都是 Cu：排列相同，元素不同。它不是该相本身，因此搜索将这类命中单独分组。"
+    },
+    "itNumber": {
+      "name": "IT 编号",
+      "text": "空间群在 International Tables for Crystallography 中的编号，1 到 230。同一个群有多种写法（Im-3、Im3、I m -3），编号只有一个。但编号只确定群，不确定设置与原点选择：227 号有两个原点，原子坐标不同；本库中有一个文件在一个数据块中报告 Fd-3m，在另一个中报告 Fd-3m O1。"
+    },
+    "cif": {
+      "name": "CIF",
+      "text": "Crystallographic Information File：包含晶胞、对称性和原子位置的文本文件。Hough 标定使用它，这里的其余信息也由它推导。"
+    },
+    "xtal": {
+      "name": "XTAL",
+      "text": "由 CIF 转换而来的同一结构，采用 EMsoft 自己的二进制格式。它是模拟的输入，而不是标定的输入。"
+    },
+    "master": {
+      "name": "主图（Master）",
+      "text": "某一相的模拟衍射球，由 XTAL 在直至加速电压的一个能量范围（蒙特卡罗能量分箱）上计算，并以按能量分层的形式存储。Dictionary 标定从中加权或选取，再投影到探测器上。"
+    },
+    "sht": {
+      "name": "SHT",
+      "text": "以球谐系数表示的主图。Spherical 标定与这种紧凑形式做相关，而不是与完整的球。"
+    },
+    "ht": {
+      "name": "ht",
+      "text": "相的高温变体，按 SpringerMaterials 的命名（rt 室温，lt 低温）。本库中有一个相带有它：Fe1.8Al4.4Si0.6 ht。"
+    },
+    "placements": {
+      "name": "归属",
+      "text": "一个相会出现在它所属的每个合金体系中，因此带视图的卡片数多于相数：本库 36 个相共 93 张卡片。Al-Fe-Si 相同时属于这三个带。"
+    },
+    "labelOnly": {
+      "name": "仅按名称",
+      "text": "只匹配相的「名称」而不匹配其结构的命中。`beta-AlFeSi` 以硅命名，但其文件中的结构并不含硅。"
+    }
+  },
+  "why": {
+    "name": "名称",
+    "synonym": "别名",
+    "formula": "化学式",
+    "element": "元素",
+    "system": "体系",
+    "spaceGroup": "空间群",
+    "pearson": "皮尔逊符号",
+    "filename": "文件名",
+    "prototype": "结构类型",
+    "citation": "文献",
+    "labelOnly": "仅按名称"
+  },
+  "identity": {
+    "it": "IT",
+    "provenance": {
+      "label": "文件中记录的相名称",
+      "structure": "由文件中的结构计算得出",
+      "stem": "仅有文件名 — 该相没有记录名称"
+    },
+    "system": {
+      "triclinic": "三斜",
+      "monoclinic": "单斜",
+      "orthorhombic": "正交",
+      "tetragonal": "四方",
+      "hexagonal": "六方",
+      "cubic": "立方"
+    },
+    "centring": {
+      "primitive": "简单",
+      "bodyCentred": "体心",
+      "faceCentred": "面心",
+      "baseCentred": "底心",
+      "rhombohedral": "菱方"
+    }
+  },
+  "activeFilters": "筛选条件：{{filters}}",
+  "bands": {
+    "collapseAll": "折叠所有条带",
+    "expandAll": "展开所有条带",
+    "header": "{{element}} 条带，{{count}} 个相"
+  },
+  "selectPhaseInBand": "选择 {{band}} 条带中的 {{name}}",
+  "selection": {
+    "count_one": "已选择 {{count}} 个相",
+    "count_other": "已选择 {{count}} 个相",
+    "forNow": "目前该选择仅保留在本页",
+    "clear": "清除选择"
+  },
+  "entryCount": "{{total}} 个条目中的 {{shown}} 个",
+  "entryCountBands": "{{total}} 个条目中的 {{shown}} 个 · {{placements}} 处归属",
+  "entryCountFiltered": "{{total}} 个条目中的 {{shown}} 个 — 筛选条件：{{filters}}",
+  "card": {
+    "loading": "正在读取该相…",
+    "missing": "本地库中没有该相。",
+    "error": "无法读取该相。",
+    "composition": "成分",
+    "fromStructure": "按结构",
+    "fromLabel": "按名称",
+    "lattice": "点阵",
+    "setting": "所显示的设置",
+    "atoms": "晶胞内原子数",
+    "files": "文件",
+    "absent": "不存在",
+    "masterParameters": "主图的生成条件",
+    "shtParameters": ".sht 的生成条件",
+    "cellAxis": {
+      "a": "a",
+      "b": "b",
+      "c": "c",
+      "alpha": "α",
+      "beta": "β",
+      "gamma": "γ"
+    },
+    "file": {
+      "cif": "CIF",
+      "xtal": "XTAL",
+      "master": "主图",
+      "sht": "SHT",
+      "dictionary": "字典"
+    },
+    "param": {
+      "energy": "加速电压",
+      "dmin": "dmin",
+      "npx": "npx",
+      "tilt": "样品倾角",
+      "electrons": "电子数",
+      "program": "程序",
+      "bandwidth": "带宽",
+      "engine": "引擎"
+    },
+    "builtFrom": {
+      "xtal": "生成自",
+      "cif": "以及"
+    },
+    "notice": {
+      "parseError": "该 CIF 无法读取：{{detail}} 下面显示的内容来自其他文件。",
+      "elementsDisagree": "名称与结构给出的元素不一致。下面的成分同时显示两者。",
+      "cellConflict": "该文件的数据块在晶胞上互相矛盾：{{detail}}",
+      "severalSettings": "该文件声明了多个晶胞设置（{{detail}}）。当前显示的是 {{shown}}。",
+      "referenceRejected": "文件给出了出处，但未被采用：{{detail}}"
+    },
+    "showInBrowser": "在数据库浏览器中显示",
+    "inGroups_one": "所在分组：",
+    "inGroups_other": "所在分组：",
+    "builtElsewhere": "针对另一个相库构建",
+    "dictionaryFromMaster": "尚无 — 已有主图，可以生成"
+  },
+  "groups": {
+    "title": "分组",
+    "new": "+ 新建分组",
+    "newPlaceholder": "名称，例如 Al-Fe 金属间化合物",
+    "newLabel": "新分组的名称",
+    "undo": "撤销",
+    "none": "还没有分组。先新建一个，然后把物相拖到上面 — 或者勾选几个，再点分组上的 + 按钮。",
+    "count_one": "{{count}} 个物相",
+    "count_other": "{{count}} 个物相",
+    "countFiltered": "共 {{total}} 个，显示 {{shown}} 个",
+    "addShort": "+{{count}}",
+    "addSelected": "将选中的 {{count}} 个物相加入 {{name}}",
+    "menuLabel": "{{name}} 的操作",
+    "menuAdd_one": "加入选中的 {{count}} 个物相",
+    "menuAdd_other": "加入选中的 {{count}} 个物相",
+    "menuAddNone": "加入选中的物相（未选中）",
+    "menuMove_one": "将选中的 {{count}} 个物相移到这里",
+    "menuMove_other": "将选中的 {{count}} 个物相移到这里",
+    "menuMoveNone": "将选中的物相移到这里（未选中）",
+    "menuUse": "用这个分组进行下一次标定",
+    "menuRename": "重命名…",
+    "menuDelete": "删除分组",
+    "renameLabel": "{{name}} 的新名称",
+    "thisMachine": "分组保存在这台机器的浏览器里，还不会随数据库一起转移。",
+    "storageUnavailable": "分组不可用：相库没有响应。正在重试。",
+    "notSaved": "最后一次更改已显示在屏幕上，但没有保存：{{reason}}",
+    "menuNest": "设为…的子分组",
+    "menuNestNone": "设为子分组（没有可放的位置）",
+    "nestUnder": "把 {{name}} 放到：",
+    "toTopLevel": "顶层",
+    "activeHere": "用于下一次标定",
+    "menuMoveAlt_one": "将选中的 {{count}} 个物相移到这里（也可按住 Alt 拖动）",
+    "menuMoveAlt_other": "将选中的 {{count}} 个物相移到这里（也可按住 Alt 拖动）",
+    "menuUseEmpty": "用这个分组进行下一次标定（它是空的）",
+    "menuRemove_one": "将选中的 {{count}} 个物相移出这个分组",
+    "menuRemove_other": "将选中的 {{count}} 个物相移出这个分组",
+    "menuRemoveNone": "移出选中的物相（它们都不在这个分组里）",
+    "removeOne": "把 {{phase}} 移出 {{name}}",
+    "emptyOpened": "这个分组还是空的。把物相拖到上面，或者勾选几个再点 + 按钮。",
+    "stopUsing": "使用整个库",
+    "stopUsingTip": "不再把标定限定到某个分组。库中的所有物相会重新可选。",
+    "notSavedCount_one": "有 {{count}} 处更改显示在屏幕上，但没有进入库中：",
+    "notSavedCount_other": "有 {{count}} 处更改显示在屏幕上，但没有进入库中：",
+    "notSavedOne": "{{name}} — {{reason}}",
+    "reread": "重新读取库",
+    "notSavedMore_one": "… 还有 {{count}} 项未在此列出。",
+    "notSavedMore_other": "… 还有 {{count}} 项未在此列出。"
+  },
+  "drag": {
+    "willAdd_one": "加入 {{count}}",
+    "willAdd_other": "加入 {{count}}",
+    "willMove_one": "将 {{count}} 个移到这里",
+    "willMove_other": "将 {{count}} 个移到这里"
+  },
+  "name": {
+    "give": "给这个物相起个名字…",
+    "change": "修改这个名字…",
+    "display": "名称",
+    "displayPlaceholder": "大家平时怎么叫，例如 α-Al(Fe,Mn)Si",
+    "terms": "也可通过以下词搜索",
+    "termsPlaceholder": "其他写法，用逗号分隔：s phase, s-phase",
+    "author": "你的名字",
+    "authorPlaceholder": "用于共享库中的记录",
+    "hint": "名字只是排在文件名前面，不会取代它：{{key}} 仍然能找到这个物相。",
+    "save": "保存",
+    "saving": "正在保存…",
+    "cancel": "取消",
+    "by": "由 {{author}} 于 {{when}} 命名"
+  },
+  "suggest": {
+    "run": "根据库内容建议分组…",
+    "running": "查找中…",
+    "nothingYet": "在你确认之前不会创建任何内容。",
+    "empty": "没有可建议的分组 — 库已经整理过，或者太小。",
+    "members_one": "{{count}} 个物相",
+    "members_other": "{{count}} 个物相",
+    "apply_one": "创建 {{count}} 个分组",
+    "apply_other": "创建 {{count}} 个分组",
+    "cancel": "取消",
+    "created_one": "已创建 {{count}} 个分组。",
+    "created_other": "已创建 {{count}} 个分组。",
+    "skipped_one": "名称已被占用，已跳过：{{names}}",
+    "skipped_other": "名称已被占用，已跳过：{{names}}",
+    "untouched_one": "库中有 {{count}} 个物相不在其中任何一组，将保持未分组。",
+    "untouched_other": "库中有 {{count}} 个物相不在其中任何一组，将保持未分组。"
+  },
+  "activeGroup": {
+    "label": "分组：{{name}}",
+    "count_one": "{{count}} 个物相",
+    "count_other": "{{count}} 个物相",
+    "tip": "物相选择已限定为分组“{{name}}”。点击打开物相库。",
+    "missing": "未找到分组“{{name}}”",
+    "missingTip": "当前分组“{{name}}”不在库中 — 可能已在另一台机器上重命名或删除。在选择其他分组之前，没有物相可供选择。点击打开物相库。",
+    "startBlockedTip": "当前分组“{{name}}”不在库中，因此没有物相可供选择。请在物相库中另选一个分组，或取消限定。"
+  },
+  "capability": {
+    "letter": {
+      "hough": "H",
+      "spherical": "S",
+      "dictionary": "D"
+    },
+    "can": "可用 {{method}} 标定",
+    "cannot": "没有 {{method}} 所需的文件"
+  },
+  "sibling": {
+    "intro_one": "库中还有空间群和化合物都相同的条目：",
+    "intro_other": "库中还有空间群和化合物都相同的条目：",
+    "alsoIndexableWith": "它还可以用 {{methods}} 标定",
+    "notIndexableWith": "它不能用 {{methods}} 标定",
+    "composition": "它的结构包含 {{elements}}",
+    "reference": "它来自 {{reference}}",
+    "cellA": "它的 a 是 {{theirs}} Å，这里是 {{mine}} Å"
+  }
+}

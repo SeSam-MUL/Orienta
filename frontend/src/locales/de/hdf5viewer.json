@@ -75,7 +75,7 @@
     "bookmarkTooltip": "Aktuelles Muster für spätere Prüfung als Lesezeichen merken.",
     "clearBookmarks": "LZ löschen",
     "clearBookmarksTooltip": "Alle gespeicherten Lesezeichen für diese Datei entfernen.",
-    "bookmarkHint": "Auf \"Merken\" klicken, um interessante Muster zur Prüfung zu speichern",
+    "bookmarkHint": "Auf „Merken“ klicken, um interessante Muster zur Prüfung zu speichern",
     "bookmarksLabel": "Lesezeichen:",
     "bookmarkChipTooltip": "Zu Index {{index}} springen (Zeile {{row}}, Spalte {{col}})"
   },

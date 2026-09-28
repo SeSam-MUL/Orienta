@@ -22,7 +22,9 @@ import { useState, useEffect, useCallback, useRef, useReducer, useMemo, Fragment
 import { useTranslation } from 'react-i18next';
 import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phaseMapApi, collectionsApi } from '../../services/api';
 import useCollectionStore from '../../stores/useCollectionStore';
-import { activeKeySet, activeKeySignature } from '../PhaseCollections/collectionFilter';
+import {
+  activeKeySet, activeKeySignature, activeMissing,
+} from '../PhaseCollections/collectionFilter';
 import { planCollectionAdoption, formatMissingLogMessage, resolveAllowedPaths } from '../PhaseCollections/collectionAdopt';
 import { createPhaseDiscovery, phaseListBlocksRun } from './phaseDiscovery';
 import { estimateCpuSphericalSeconds, estimateGpuSphericalSeconds, formatRoughDuration, hasNoCudaDevice, isSphericalCpuFallback } from './cpuEstimate';
@@ -2868,7 +2870,15 @@ export default function IndexingPage({ isActive }) {
   // an explicit selection is not that case.
   const phaseListBlocked = phaseListBlocksRun(discoverState)
     && effectivePhasePaths.length === 0;
-  const canStart       = dataLoaded && !running && !edsPreflightBlocked && !phaseListBlocked;
+  // The active group names a group that is not there -- renamed on another
+  // machine, deleted, or a reference written in a spelling this build does
+  // not resolve. It used to widen the run to the WHOLE LIBRARY in silence
+  // while the toolbar still named the group. Now it offers nothing, and the
+  // run is blocked with that reason rather than quietly indexing against
+  // structures the user excluded.
+  const groupMissing = activeMissing(collections, activeName);
+  const canStart       = dataLoaded && !running && !edsPreflightBlocked
+    && !phaseListBlocked && !groupMissing;
 
   // --- Spherical without a CUDA GPU -----------------------------------------
   // The PyTorch spherical backend falls back to the CPU (same results, ~10-25x
@@ -3518,6 +3528,8 @@ export default function IndexingPage({ isActive }) {
           title={
             running ? t('actions.indexingInProgress')
               : edsPreflightBlocked ? t('edsPrior.startBlockedTip')
+              : groupMissing ? t('phaselibrary:activeGroup.startBlockedTip',
+                { name: activeName })
               : phaseListBlocked ? t('phaseDropdown.startBlockedTip')
               : t('actions.startIndexingTip')
           }

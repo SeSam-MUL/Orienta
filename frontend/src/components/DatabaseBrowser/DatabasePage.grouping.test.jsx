@@ -109,7 +109,10 @@ const SHT_ENTRY = {
 };
 
 const COLLECTIONS_BODY = {
-  collections: [{ name: 'Matrix', parent: null, exclusive: true, member_count: 1, effective_member_count: 1,
+  // No `exclusive`. Schema-1 files on disk still carry it and `from_dict`
+  // keeps it, but nothing branches on it any more, and a fixture that
+  // states it describes a model the product no longer has.
+  collections: [{ name: 'Matrix', parent: null, member_count: 1, effective_member_count: 1,
                   members: [{ key: 'Al', present: true }] }],
   unassigned: [{ key: 'Ni' }, { key: 'WC' }],
   problems: [], state: { active: null, hidden: [] },
@@ -155,7 +158,7 @@ describe('DatabasePage — the CIF tab badge equals the rows the table shows', (
     // Collapse "Matrix" (holds Al.cif) — the first collapse triangle, since
     // `groupEntriesByCollection` orders Matrix before the trailing
     // "Unassigned" bucket.
-    fireEvent.click(screen.getAllByTitle('Collapse this collection.')[0]);
+    fireEvent.click(screen.getAllByTitle('Collapse this group.')[0]);
 
     expect(visibleDataRows()).toHaveLength(2);                          // Al.cif's row is hidden
     expect(screen.getByRole('tab', { name: /^CIF/ })).toHaveTextContent('CIF (3)');   // badge unchanged
@@ -193,11 +196,19 @@ describe('DatabasePage — "move to collection" refuses a non-phase row', () => 
     // checkbox tooltip is shared by every row, so pick it by position.
     fireEvent.click(screen.getAllByTitle('Select this file for Upload to server or Delete Selected.')[0]);
 
-    const move = await screen.findByTitle(
-      'Move the selected phases into this collection. A phase leaves any other exclusive collection it was filed in — moving into the working set does not.');
-    expect(move).not.toBeDisabled();
+    // The control is now named for what it DOES. It called itself "move"
+    // and described the exclusive-folder model, while the handler called
+    // `addMembers` without the move flag -- so it added, and said it took
+    // the phase out of everywhere else. This assertion pinned that
+    // sentence verbatim, which is why rewording it read as a regression
+    // rather than as the contract change it is.
+    const add = await screen.findByTitle(
+      'Add the selected phases to this group. They stay in every group they are already in — a phase can be in several.');
+    expect(add).not.toBeDisabled();
 
-    fireEvent.change(move, { target: { value: 'Matrix' } });
+    fireEvent.change(add, { target: { value: 'Matrix' } });
+    // ... and what it sends matches what it now says: an add, no move flag.
     await waitFor(() => expect(collectionsApi.addMembers).toHaveBeenCalledWith('Matrix', ['Al']));
+    expect(collectionsApi.addMembers.mock.calls.at(-1)[3]).toBeUndefined();
   });
 });

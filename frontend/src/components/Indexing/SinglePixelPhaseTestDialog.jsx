@@ -4,6 +4,7 @@ import { indexApi, ebsdApi, edsApi } from '../../services/api';
 import useDataStore from '../../stores/useDataStore';
 import useCollectionStore from '../../stores/useCollectionStore';
 import { activeKeySet, activeKeySignature, narrowSelection } from '../PhaseCollections/collectionFilter';
+import { omissions } from './phaseTestOmissions';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
@@ -574,7 +575,9 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   if (!open) return null;
 
   const cands = result?.candidates || [];
-  const excluded = result?.excluded || [];
+  // Two reasons a phase is missing from the table, kept apart. See
+  // `phaseTestOmissions.js` for why they must not be merged.
+  const { excluded, unsupported } = omissions(result);
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex',
@@ -1015,6 +1018,26 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
         ))}
         </div>
 
+        {unsupported.length > 0 && (
+          <div style={{ marginTop: 8 }}>
+            <div style={{ fontSize: 10, color: C.textSecondary,
+                          border: `1px dashed ${C.border}`, borderRadius: 5,
+                          padding: '6px 10px' }}
+                 data-testid="phase-test-unsupported">
+              {t('phaseTest.unsupportedCount', { count: unsupported.length })}
+              {unsupported.map((u) => (
+                <div key={u.key} style={{ padding: '2px 0 0' }}>
+                  {u.known
+                    ? t(`phaseTest.unsupportedRow${u.reason === 'no_sht' ? 'NoSht' : ''}`,
+                        { key: u.key })
+                    : t('phaseTest.unsupportedRow',
+                        { key: u.key, reason: u.reason })}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {excluded.length > 0 && (
           <div style={{ marginTop: 8 }}>
             <button onClick={() => setShowExcluded((v) => !v)} title={t('hoverTips.phaseTestExcludedToggle')} style={{ background: 'transparent',
@@ -1023,8 +1046,8 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
               {t('phaseTest.excludedByEds', { count: excluded.length })}
             </button>
             {showExcluded && excluded.map((e) => (
-              <div key={e.phase_key} style={{ fontSize: 10, color: C.textSecondary, padding: '4px 10px' }}>
-                {t('phaseTest.excludedRow', { formula: e.display_formula || e.formula, value: e.chemistry_fit?.toFixed(2) ?? '—' })}
+              <div key={e.key} style={{ fontSize: 10, color: C.textSecondary, padding: '4px 10px' }}>
+                {t('phaseTest.excludedRow', { formula: e.label, value: e.fit != null ? e.fit.toFixed(2) : '—' })}
               </div>
             ))}
           </div>

@@ -1011,6 +1011,55 @@ export const dbApi = {
 // No path parameters: the name goes in the body, or in the query string for
 // the one read that needs it. A collection may be called "Al / Si", which no
 // path segment can carry, and a `{name}` route would shadow `/state`.
+/**
+ * The phase library (spec §3). One request carries the whole index -- the
+ * phases AND the numbers the facets count -- because two requests would let
+ * the counts arrive before the list, which is the thing §2.8 forbids.
+ *
+ * On the breadcrumb ignore list (`services/breadcrumbs.js`): the page retries
+ * this on the shared backoff, and `components/PhaseLibrary/libraryLoad.js`
+ * notes the outage and the recovery by hand instead.
+ */
+export const phaseLibraryApi = {
+  getIndex: () => api.get('/api/phase-library/index'),
+  // The key goes in a QUERY parameter: library keys carry spaces, dots,
+  // parentheses and Greek (`Al4Fe1.7Si (τ11)`, `α-(AlMnSi)`), and this repo
+  // already has a route that broke on a `{name}` path segment.
+  //
+  // NOT on the breadcrumb ignore list, unlike the index: this one is not
+  // retried on a schedule, it happens because somebody opened a card, and
+  // that is exactly the kind of thing a bug report wants in its trail.
+  getPhase: (key) => api.get('/api/phase-library/phase',
+                             { params: { key } }),
+  // Name a phase, or clear its names by sending them empty.
+  //
+  // The answer carries what was STORED, and the caller shows that rather
+  // than what was typed: the store trims, drops blanks and records the
+  // author, so echoing the form back would show a name the library does not
+  // have. `author` is sent even when empty -- the endpoint writes "unknown"
+  // rather than inheriting whoever named it last, because in a shared
+  // library a name with somebody else's name on it is worse than an
+  // unsigned one.
+  // `display_name`: the EMPTY STRING clears the name, `null` leaves it
+  // alone. That is the service's convention (`phase_synonyms.py`: `if
+  // display_name is not None:`, pinned by `test_phase_synonyms.py`), and it
+  // is the right one -- without it a caller could never update the terms
+  // without restating the name.
+  //
+  // This used to send `displayName || null`, which turned "" into `null`,
+  // so the one documented way to take a name away -- clear the field and
+  // save -- meant "leave unchanged". Measured against the real service: the
+  // name survived, and the editor then repopulated the field with it, so
+  // the screen argued with the user. `?? null` keeps the two apart.
+  setNames: ({ key, displayName, searchTerms, author }) =>
+    api.put('/api/phase-library/names', {
+      key,
+      display_name: displayName ?? null,
+      search_terms: searchTerms || [],
+      author: author || '',
+    }),
+};
+
 export const collectionsApi = {
   list: () => api.get('/api/phase-collections/'),
   create: (body) => api.post('/api/phase-collections/', body),
@@ -1019,8 +1068,13 @@ export const collectionsApi = {
     api.patch('/api/phase-collections/rename', { name, new_name: newName }),
   remove: (name) =>
     api.delete('/api/phase-collections/', { data: { name } }),
-  addMembers: (name, keys, position = null) =>
-    api.post('/api/phase-collections/members', { name, keys, position }),
+  // `move: true` is the named action "move here (remove from others)".
+  // Omitted by default, because membership is a tag: adding a phase to one
+  // group must not quietly take it out of another.
+  addMembers: (name, keys, position = null, { move = false } = {}) =>
+    api.post('/api/phase-collections/members',
+             move ? { name, keys, position, move: true }
+                  : { name, keys, position }),
   removeMembers: (name, keys) =>
     api.delete('/api/phase-collections/members', { data: { name, keys } }),
   putState: ({ active, hidden }) =>

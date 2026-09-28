@@ -246,6 +246,29 @@ async def _prewarm_kikuchipy_imports():
             logger.info("Prewarm: crystal_hint local library cached (%d entries)", n)
         except Exception:
             logger.exception("Prewarm of crystal_hint library failed (non-fatal)")
+        # The phase library's index endpoint. `get_index()` above is most of it,
+        # but not all: the document also scans every `.h5` under EBSD_H5_Cache for
+        # a master (a header lookup each, 65 files here) and reads all 36 CIFs for
+        # cell settings and citations. Measured by f7 in the user loop: the
+        # endpoint answers in 16.4 s cold (74 s the very first time on a machine)
+        # and 0.11 s warm, so whoever opens the page first waits a quarter of a
+        # minute for a payload everyone after them gets instantly.
+        #
+        # ONLY WHEN THE LIBRARY IS THERE. A clone without `Database/` must not
+        # spend the startup discovering that: nothing to warm, and the endpoint
+        # would answer with an empty list just as fast.
+        try:
+            from backend.api.services.crystal_hint_local_library import PROJECT_ROOT
+            if (PROJECT_ROOT / "Database" / "CIF_Library").is_dir():
+                from backend.api.services.phase_library import build_index_document
+                doc = build_index_document()
+                logger.info("Prewarm: phase library index cached (%d phases)",
+                            len(doc.get("phases") or []))
+            else:
+                logger.info("Prewarm: no crystal library on this machine, "
+                            "phase library index not warmed")
+        except Exception:
+            logger.exception("Prewarm of phase library index failed (non-fatal)")
     await asyncio.to_thread(_do_import)
 
 
@@ -713,6 +736,7 @@ from backend.api.routes import pole_figure as pole_figure_routes
 from backend.api.routes import citations
 from backend.api.routes import addons
 from backend.api.routes import phase_collections
+from backend.api.routes import phase_library
 
 app.include_router(h5_viewer.router, prefix="/api/h5", tags=["HDF5 Viewer"])
 app.include_router(ebsd_viewer.router, prefix="/api/ebsd", tags=["EBSD Viewer"])
@@ -747,6 +771,7 @@ app.include_router(citations.router, prefix="/api/citations", tags=["Citations"]
 # is built from it, and a test fetches that URL.
 app.include_router(addons.router, prefix="/api/addons", tags=["Add-ons"])
 app.include_router(phase_collections.router, prefix="/api/phase-collections", tags=["Phase Collections"])
+app.include_router(phase_library.router, prefix="/api/phase-library", tags=["Phase Library"])
 
 FRONTEND_DIST = Path(PROJECT_ROOT) / "frontend" / "dist"
 

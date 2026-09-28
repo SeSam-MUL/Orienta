@@ -61,6 +61,8 @@
     "wslOk": "WSL: OK"
   },
   "toolbar": {
+    "phaseLibrary": "Phasenbibliothek",
+    "phaseLibraryTooltip": "Phasenbibliothek öffnen: alle Phasen, was sie sind, und welche Methode sie nutzen kann",
     "edsColors": "EDS-Farben",
     "reportProblem": "⚠ Problem melden",
     "reportProblemTooltip": "Ein Problem beschreiben und einen Bericht mit Logdateien und Version speichern, den Sie anhängen können.",

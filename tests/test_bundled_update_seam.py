@@ -94,6 +94,55 @@ def _park_via_the_shell(home: Path, resources: Path) -> dict:
     return json.loads(out.stdout)
 
 
+def _decide_and_park(home: Path, resources: Path) -> dict:
+    """The decision as main.js now makes it: both digests read, then park if asked.
+
+    Deliberately a second helper rather than a parameter on the one above: that
+    one reproduces the call WITHOUT digests, which is what shipped in Build 3, and
+    keeping both means the tests can still show what the old wiring decided.
+    """
+    script = (
+        "const bu = require(process.argv[1]);"
+        "const pkg = bu.bundledPackage(process.argv[3]);"
+        "if (!pkg) { console.error('no bundled package found'); process.exit(2); }"
+        "let bundledDigest = null;"
+        "try { bundledDigest = bu.digestFrom(pkg.sum); } catch (e) { bundledDigest = null; }"
+        "const decision = bu.updateDecision({"
+        "  bundled: pkg,"
+        "  installed: bu.installedTag(process.argv[2]),"
+        "  parked: bu.alreadyParked(process.argv[2]),"
+        "  bundledDigest,"
+        "  installedDigest: bu.installedDigest(process.argv[2]),"
+        "});"
+        "let rec = null;"
+        "if (decision.action === 'park') {"
+        "  rec = bu.parkBundled({ home: process.argv[2], bundled: pkg });"
+        "}"
+        "process.stdout.write(JSON.stringify({ decision, rec }));"
+    )
+    out = subprocess.run(
+        [NODE, "-e", script, str(REPO / "electron" / "bundled_update.js"),
+         str(home), str(resources)],
+        capture_output=True, text=True, check=True, cwd=REPO)
+    return json.loads(out.stdout)
+
+
+def _rebuild_bundle(resources: Path, tag: str, marker: str) -> Path:
+    """Another package under the SAME tag, differing only in content."""
+    for stale in resources.glob(f"orienta-runtime-{tag}.zip*"):
+        stale.unlink()
+    zip_path = resources / f"orienta-runtime-{tag}.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.writestr("VERSION", f"{tag}\n")
+        zf.writestr("MANIFEST", "VERSION\nMANIFEST\nbackend/kept.py\nbackend/added.py\n")
+        zf.writestr("backend/kept.py", f"# {marker}\n")
+        zf.writestr("backend/added.py", "# arrived with this release\n")
+    digest = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+    (resources / f"{zip_path.name}.sha256").write_text(
+        f"{digest}  {zip_path.name}\n", encoding="utf-8", newline="")
+    return zip_path
+
+
 def _apply(home: Path) -> dict:
     verdict = home / "verdict.json"
     proc = subprocess.run(
@@ -200,3 +249,92 @@ def test_an_older_bundle_never_rolls_the_installation_back(tmp_path):
     assert "newer than the bundled" in decision["reason"]
     assert not (home / "pending.json").exists()
     assert (home / "runtime" / "VERSION").read_text(encoding="utf-8").strip() == "v0.5.0"
+
+
+def test_the_same_version_rebuilt_still_replaces_the_program_files(tmp_path):
+    """Build 3 -> Build 4 under ONE tag, through the real applier and the real JS.
+
+    This is the case Sebastian's "the release stays 0.4.6" decision creates, and
+    the one a tag comparison gets wrong: his machine holds Build 3 as v0.4.6, so
+    "same version" would mean "nothing to do" and the program files would stay a
+    build behind beneath a new shell. The whole lifecycle is asserted here because
+    each step only makes sense given the next: apply, record, do not loop, and
+    apply again when the content changes again.
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    resources = tmp_path / "resources"
+    _make_installation(home)
+    # What every installation from before this change looks like: the tag of the
+    # release, and nothing saying which build produced it.
+    (home / "runtime" / "VERSION").write_text("v0.4.6\n", encoding="utf-8", newline="")
+    assert not (home / "runtime" / "SOURCE_SHA256").exists()
+    build4 = _make_bundle(resources, "v0.4.6")
+
+    # 1. It must apply, and the reason must say why -- not "newer", because it is
+    #    not newer; because the runtime cannot say which build it is.
+    first = _decide_and_park(home, resources)
+    assert first["decision"]["action"] == "park", first["decision"]
+    assert "does not say which build" in first["decision"]["reason"]
+
+    verdict = _apply(home)
+    assert verdict["applied"] is True, verdict
+    runtime = home / "runtime"
+    assert (runtime / "backend" / "kept.py").read_text(encoding="utf-8") == "# the new one\n"
+    assert (runtime / "backend" / "added.py").is_file()
+    assert not (runtime / "backend" / "dropped.py").exists()      # pruned by manifest diff
+    # Untouched through all of it, which is the one thing that may never break.
+    assert (runtime / "Database" / "CIF_Library" / "Al.cif").read_text(encoding="utf-8") \
+        == "data_Al\n_cell_length_a 4.05\n"
+
+    # 2. The applier recorded the identity the next decision needs, and it is the
+    #    digest of the package that was actually applied.
+    recorded = (runtime / "SOURCE_SHA256").read_text(encoding="utf-8").strip()
+    assert recorded == hashlib.sha256(build4.read_bytes()).hexdigest()
+
+    # 3. Next start: same build, so nothing happens. Without this the fix would
+    #    unpack on every launch for ever, which is worse than the bug.
+    second = _decide_and_park(home, resources)
+    assert second["decision"]["action"] == "none", second["decision"]
+    assert "same build" in second["decision"]["reason"]
+    assert not (home / "pending.json").exists()
+
+    # 4. Build 5, same tag again: applied, and the log names both builds so that
+    #    "why did it update again" has an answer that is not "trust me".
+    build5 = _rebuild_bundle(resources, "v0.4.6", "the fifth build")
+    third = _decide_and_park(home, resources)
+    assert third["decision"]["action"] == "park", third["decision"]
+    assert "DIFFERENT build" in third["decision"]["reason"]
+    assert recorded[:12] in third["decision"]["reason"]
+    assert hashlib.sha256(build5.read_bytes()).hexdigest()[:12] in third["decision"]["reason"]
+
+    assert _apply(home)["applied"] is True
+    assert (runtime / "backend" / "kept.py").read_text(encoding="utf-8") == "# the fifth build\n"
+    assert (runtime / "SOURCE_SHA256").read_text(encoding="utf-8").strip() \
+        == hashlib.sha256(build5.read_bytes()).hexdigest()
+
+
+def test_a_first_install_records_which_build_it_unpacked(tmp_path):
+    """`extract_only` is the wizard's path, and it must leave the same identity.
+
+    Without it a freshly installed copy would apply, on its very first start, the
+    package it had just been installed from -- harmless but absurd, and it would
+    make the log say "does not say which build it is" about a runtime nobody had
+    yet had the chance to change.
+    """
+    home = tmp_path / "home"
+    (home / "runtime").mkdir(parents=True)
+    resources = tmp_path / "resources"
+    archive = _make_bundle(resources, "v0.4.6")
+
+    sys.path.insert(0, str(REPO / "electron"))
+    try:
+        import apply_update
+        result = apply_update.extract_only(archive, home / "runtime", home)
+    finally:
+        sys.path.pop(0)
+
+    assert result["ok"] is True, result
+    assert (home / "runtime" / "VERSION").read_text(encoding="utf-8").strip() == "v0.4.6"
+    assert (home / "runtime" / "SOURCE_SHA256").read_text(encoding="utf-8").strip() \
+        == hashlib.sha256(archive.read_bytes()).hexdigest()

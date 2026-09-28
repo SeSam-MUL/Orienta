@@ -100,26 +100,19 @@ export function movableMemberKeys(entries, validKeys) {
  * `(parent or name).lower()`, so keeping that order reads as a simple nested
  * list without this function having to know about parents at all).
  *
- * A row's key is looked up against every EXCLUSIVE collection's member set
- * first (the first one in `collections` order that claims it wins, so a
- * phase filed in two exclusive collections at once — not the intended shape,
- * but not prevented either — prints once, not twice), and only if no
- * exclusive collection claims it does a non-exclusive one (the working set)
- * get a turn. Dual membership with the working set is the DESIGNED state
- * (`phase_collections.py#assign`: filing a key into an exclusive collection
- * deliberately leaves every non-exclusive one holding it untouched), so a
- * phase that is in both its real, exclusive collection and the working set
- * must group under the real one — the browser exists to show where a phase
- * is actually filed, and a catch-all whose name happens to sort first must
- * not silently win that over a real partition.
+ * A row's key is looked up against every group's member set, and the FIRST
+ * in `collections` order that claims it wins, so a phase in several groups
+ * prints once rather than several times. Being in several is the ordinary
+ * state now -- membership is a tag -- and this table has one row per FILE,
+ * so it can only show one of them. Which groups a phase is really in is a
+ * question the phase library answers, on the phase's card.
  *
  * A row matching no collection's members lands in the trailing group with
  * `collection: null` ("unassigned").
  *
  * Returns `[{ collection, entries }]`, omitting empty groups, in this order:
  * every collection that claimed at least one of THIS tab's filtered rows (in
- * `collections` order — exclusive-first internally does not reorder the
- * OUTPUT, which still follows `collections` order), then unassigned last (if
+ * `collections` order), then unassigned last (if
  * non-empty). When `filtered` is empty, or no collection claims anything, the
  * single unassigned group still carries every row — callers use its
  * presence/absence to decide whether grouping is worth rendering at all
@@ -129,15 +122,24 @@ export function groupEntriesByCollection(filtered, collections) {
   const rows = Array.isArray(filtered) ? filtered : [];
   const list = Array.isArray(collections) ? collections : [];
 
+  /**
+   * ONE ROW PER FILE, so a phase in two groups is shown under the FIRST of
+   * them in server order. That is a limitation of this table, not a
+   * statement about membership -- the phase library is where a phase's
+   * groups are listed, and its card names all of them.
+   *
+   * This used to run in two passes, exclusive groups first, so that a
+   * phase in an old-style "working set" appeared under its folder instead.
+   * Under the tag model there are no exclusive groups -- but files written
+   * before schema 2 still carry `exclusive: false`, and `from_dict` keeps
+   * it. So the row a phase appeared under DEPENDED ON THE AGE OF THE FILES
+   * in the library: an old working set sorted second, a new group of the
+   * same shape did not. Behaviour that turns on a field nobody sets any
+   * more, in a way nobody can see, is worse than a rule somebody can read.
+   * One pass, server order, stated here (found by c1).
+   */
   const collectionForKey = new Map();
   for (const c of list) {
-    if (c.exclusive === false) continue;             // working sets: second pass
-    for (const m of c.members || []) {
-      if (!collectionForKey.has(m.key)) collectionForKey.set(m.key, c);
-    }
-  }
-  for (const c of list) {
-    if (c.exclusive !== false) continue;              // already handled above
     for (const m of c.members || []) {
       if (!collectionForKey.has(m.key)) collectionForKey.set(m.key, c);
     }

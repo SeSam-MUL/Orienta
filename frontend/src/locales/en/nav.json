@@ -13,6 +13,7 @@
     "pcrefinement": { "label": "PC Refinement", "tooltip": "Pattern Center calibration and refinement" },
     "crystal": { "label": "Crystal DB", "tooltip": "CIF/XTAL converter, crystal database, DWF editor" },
     "simulation": { "label": "Simulation", "tooltip": "Monte Carlo + master pattern simulation (Orienta Engine or EMsoft)" },
+    "phaselibrary": { "label": "Phase Library", "tooltip": "Every phase in the crystal library: find it, see what it is, group it" },
     "database": { "label": "Database Browser", "tooltip": "Browse simulation results on the network share" },
     "indexing": { "label": "Indexing", "tooltip": "Hough, Dictionary, or Spherical (EMSphinx) indexing" },
     "phasemap": { "label": "Phase Maps", "tooltip": "Visualize indexing results with a configurable scalebar" },

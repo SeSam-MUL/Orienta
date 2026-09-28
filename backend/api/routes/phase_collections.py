@@ -33,6 +33,11 @@ class CreateRequest(BaseModel):
     parent: Optional[str] = None
     exclusive: bool = True
     description: str = ""
+    #: Who made this group. Optional, and never invented server-side: this app
+    #: has no user identity, so an author is only ever what a caller states.
+    #: It matters because the folder is copied and mailed between machines
+    #: (spec §2.5.3) -- on the other end, "who was that" has no other answer.
+    author: str = ""
 
 
 class UpdateRequest(BaseModel):
@@ -40,6 +45,9 @@ class UpdateRequest(BaseModel):
     parent: Optional[str] = None
     clear_parent: bool = False
     description: Optional[str] = None
+    #: `None` leaves the stored author alone -- the same convention `description`
+    #: uses. An empty string is a deliberate clearing.
+    author: Optional[str] = None
     member_keys: Optional[list[str]] = Field(
         default=None,
         description="Full replacement, in the order they should be stored.",
@@ -61,6 +69,23 @@ class MembersRequest(BaseModel):
     position: Optional[int] = None
 
 
+class AddMembersRequest(MembersRequest):
+    """`POST /members` only.
+
+    `move` lives here rather than on `MembersRequest`, which `DELETE /members`
+    also uses: a field that a second endpoint accepts and ignores is the same
+    defect as a button that silently does nothing, and this project has shipped
+    that twice (the dead IPF-X/Y buttons, the wirelesss `tolerance` slider).
+    """
+
+    #: False adds -- membership is a tag, so filing `Al2Cu` into "Cu systems"
+    #: leaves it in "Al systems". True is the named action "move here (remove
+    #: from the others)": the ⋯ menu entry and Alt-drag. The decision belongs to
+    #: the CALLER; until schema 2 it was derived from the target's `exclusive`
+    #: flag, so a drag could not express which of the two it meant.
+    move: bool = False
+
+
 class StateRequest(BaseModel):
     active: Optional[str] = None
     hidden: list[str] = Field(default_factory=list)
@@ -74,17 +99,33 @@ class SuggestApplyRequest(BaseModel):
 
 
 def _view(c: pc.PhaseCollection, hidden: set, cols: dict,
-          idx: dict, masters: dict) -> dict:
+          idx: dict, masters: dict, name_of: dict | None = None) -> dict:
     eff = pc.effective_members(c.name, cols)
     members = pc.annotate(c.members, idx)
     for m in members:
         m["has_master"] = bool(masters.get(m["key"]))
+    # `hidden` is a set of IDENTITIES, already resolved by the caller: the state
+    # file may hold names (written before schema 2) while `c.parent` is always an
+    # id, so comparing raw strings here would un-hide a group whose parent the
+    # user hid, and say nothing about it.
+    #
+    # `parent` GOES OUT AS A NAME. Identities are a property of the data at rest,
+    # where they solve the real problem: a rename does not break a stored
+    # reference. On the wire they solved nothing and broke the client -- every
+    # consumer compares `c.parent === c.name` (collectionFilter.js:25,
+    # CollectionManager.jsx:295, CollectionPicker.jsx:110), so an id made
+    # `activeKeySet` take its "renamed or deleted: filter nothing" branch and the
+    # phase filter turned OFF while the toolbar still named a collection. Within
+    # one response a name is unambiguous, and the client refetches after every
+    # change, so there is nothing for an id to protect here. `id` is sent
+    # alongside for whoever wants to store a reference across a rename.
     return {
+        "id": c.id,
         "name": c.name,
-        "parent": c.parent,
+        "parent": (name_of or {}).get(c.parent, c.parent),
         "exclusive": c.exclusive,
         "description": c.description,
-        "hidden": c.name in hidden or (c.parent or "") in hidden,
+        "hidden": c.id in hidden or (c.parent or "") in hidden,
         "member_count": len(c.members),
         "effective_member_count": len(eff),
         "members": members,
@@ -99,19 +140,18 @@ def _master_map(idx: dict) -> dict:
     claiming an availability we did not verify.
     """
     try:
-        from backend.api.routes.indexing import (
-            _dictionary_library_files, _master_h5_for_phase,
-        )
-        files = _dictionary_library_files()
+        from backend.api.services.phase_library import dictionary_map, master_map
+        # TWO passes over the library, not two per phase: the freshness check
+        # stats every candidate `.h5`, so a per-key loop cost 1.45 s for 36
+        # phases where the batch costs 0.04 s.
+        masters, dicts = master_map(), dictionary_map()
     except Exception:
-        logger.debug("phase_collections: dictionary scan failed", exc_info=True)
+        logger.debug("phase_collections: master scan failed", exc_info=True)
         return {}
     out = {}
-    for key, entry in idx.items():
-        try:
-            out[key] = _master_h5_for_phase(entry, files)
-        except Exception:
-            out[key] = None
+    for key in idx:
+        p = masters.get(key) or dicts.get(key)
+        out[key] = str(p) if p is not None else None
     return out
 
 
@@ -127,21 +167,45 @@ def list_collections():
     by_name = {c.name: c for c in cols}
     idx = pc._index()
     masters = _master_map(idx)
-    state = pc.load_state()
+    # Resolved to identities for the comparisons below, then turned back into
+    # names for the client (see `_view`). `name_of` is the one translation table.
+    state = pc.resolve_state(pc.load_state(), cols)
     hidden = set(state.get("hidden") or [])
+    name_of = {c.id: c.name for c in cols if c.id}
+    wire_state = {
+        **state,
+        "active": name_of.get(state.get("active"), state.get("active")),
+        "hidden": [name_of.get(h, h) for h in (state.get("hidden") or [])],
+    }
     unassigned = pc.annotate(
         [pc.PhaseMember(key=k) for k in pc.unassigned_keys(idx, cols)], idx)
     for m in unassigned:
         m["has_master"] = bool(masters.get(m["key"]))
     return {
-        "collections": [_view(c, hidden, by_name, idx, masters) for c in
-                        sorted(cols, key=lambda c: (c.parent or c.name).lower())],
+        # Grouped by the parent's NAME, not its id: `databaseGrouping.js:98-101`
+        # tracks no parents of its own and relies on a child following its
+        # parent, and a key mixing ids with names breaks that adjacency
+        # (measured ['Al systems', 'Al then', 'Al-Fe phases'] against
+        # ['Al systems', 'Al-Fe phases', 'Al then']).
+        #
+        # The second term is a PRE-EXISTING defect this made visible: a parent
+        # and its child produce the SAME first key -- the parent's name -- so the
+        # order fell to the stable sort, i.e. to filename order, and
+        # `Al-Fe_phases.json` sorts before `Al_systems.json`. The child came
+        # first and the adjacency the client depends on was never guaranteed.
+        # `0` for a parent, `1` for a child settles it; the third term keeps
+        # siblings in a stable, readable order rather than a filesystem one.
+        "collections": [_view(c, hidden, by_name, idx, masters, name_of) for c in
+                        sorted(cols, key=lambda c: (
+                            (name_of.get(c.parent, c.parent) or c.name).lower(),
+                            1 if c.parent else 0,
+                            c.name.lower()))],
         "unassigned": unassigned,
         "problems": problems + [
             {"kind": "missing_phase", **p}
             for p in pc.propose_repairs(idx, cols)
         ],
-        "state": state,
+        "state": wire_state,
     }
 
 
@@ -161,7 +225,7 @@ def create(req: CreateRequest):
     try:
         pc.save(pc.PhaseCollection(
             name=req.name, parent=req.parent, exclusive=req.exclusive,
-            description=req.description, members=[],
+            description=req.description, author=req.author, members=[],
         ))
     except (ValueError, KeyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -170,13 +234,21 @@ def create(req: CreateRequest):
 
 @router.put("/update")
 def update(req: UpdateRequest):
-    cols = {c.name: c for c in pc.load_all()[0]}
-    if req.name not in cols:
+    # Through `resolve_ref` like the other four write routes. This was the ONE
+    # that still did an exact, case-sensitive dict lookup -- not even casefold --
+    # so it answered 404 for an identity AND for a name whose casing differed,
+    # while `PATCH /rename` on the same collection accepted both. Nesting is the
+    # thing this route does, so the mismatch fell on the one action f7 had just
+    # built. Found by f7's closing review.
+    cols = pc.load_all()[0]
+    c = pc.resolve_ref(req.name, cols)
+    if c is None:
         raise HTTPException(status_code=404,
                             detail=f"no collection named {req.name!r}")
-    c = cols[req.name]
     if req.description is not None:
         c.description = req.description
+    if req.author is not None:
+        c.author = req.author
     # `parent: null` means "leave it alone"; promoting a child to the top
     # level needs its own flag, because null cannot say both things.
     if req.clear_parent:
@@ -214,9 +286,9 @@ def remove(req: NameRequest):
 
 
 @router.post("/members")
-def add_members(req: MembersRequest):
+def add_members(req: AddMembersRequest):
     try:
-        pc.assign(req.keys, req.name, req.position)
+        pc.assign(req.keys, req.name, req.position, move=req.move)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
@@ -239,8 +311,26 @@ def remove_members(req: MembersRequest):
 
 @router.put("/state")
 def put_state(req: StateRequest):
-    pc.save_state({"active": req.active, "hidden": req.hidden})
-    return {"success": True, "state": pc.load_state()}
+    """Set the active collection and the hidden ones.
+
+    The caller may send an identity or a name -- the frontend has both in hand,
+    and a name is what a hand-written request or an older build will send. It is
+    stored as the identity, so a later rename does not break it.
+    """
+    cols = pc.load_all()[0]
+    state = pc.resolve_state({"active": req.active, "hidden": req.hidden}, cols)
+    pc.save_state(state)
+    # Stored as identities, answered as NAMES and in the same shape `GET /`
+    # uses -- including `schema`, which this endpoint used to drop because
+    # `resolve_state`'s `{**state, ...}` only carries what it was handed. A
+    # client that read one response and wrote the other would have seen two
+    # different shapes for one thing.
+    name_of = {c.id: c.name for c in cols if c.id}
+    return {"success": True, "state": {
+        "schema": pc.COLLECTION_SCHEMA,
+        "active": name_of.get(state.get("active"), state.get("active")),
+        "hidden": [name_of.get(h, h) for h in (state.get("hidden") or [])],
+    }}
 
 
 @router.get("/resolve")
@@ -251,10 +341,15 @@ def resolve(name: str = Query(...),
     Both lists matter. A caller that only reads ``paths`` would silently run
     on a subset of the collection the user chose.
     """
-    try:
-        members = pc.effective_members(name)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+    # `name` is a reference: an identity, or a name for one more version. An
+    # indexing run started from a saved identity must not fail because somebody
+    # renamed the collection in between -- that is the whole reason ids exist.
+    cols, _ = pc.load_all()
+    target = pc.resolve_ref(name, cols)
+    if target is None:
+        raise HTTPException(status_code=404,
+                            detail=f"no collection named {name!r}")
+    members = pc.effective_members(target.name, {c.name: c for c in cols})
     from backend.api.services.crystal_hint_local_library import get_index
     from backend.api.routes.indexing import (
         _dictionary_library_files, _master_h5_for_phase,

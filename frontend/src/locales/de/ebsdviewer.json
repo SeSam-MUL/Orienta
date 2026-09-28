@@ -46,7 +46,7 @@
     "deepcopyTooltip": "AN: Erstellt mit jedem Verarbeitungsschritt einen neuen Datensatz (Original bleibt erhalten).\nAUS: Ändert den Originaldatensatz direkt (kein Rückgängig, spart Speicher).\nEmpfehlung: Aktivieren, außer der RAM ist kritisch knapp.",
     "removeTooltip": "Ausgewählten Datensatz aus dem Speicher entfernen.\nGibt von Musterdaten belegten RAM frei. Kann nicht rückgängig gemacht werden.",
     "removeConfirmTitle": "Datensatz entfernen",
-    "removeConfirmMessage": "Datensatz \"{{name}}\" entfernen? Dies gibt RAM frei, kann aber nicht rückgängig gemacht werden.",
+    "removeConfirmMessage": "Datensatz „{{name}}“ entfernen? Dies gibt RAM frei, kann aber nicht rückgängig gemacht werden.",
     "removeConfirmLabel": "Entfernen",
     "merge": "Muster mit Original zusammenführen…",
     "mergeTooltip": "Verarbeitete Muster wieder in den Originaldatensatz zusammenführen.\nErstellt einen kombinierten Datensatz für die weitere Verarbeitung."

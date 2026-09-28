@@ -1,0 +1,2817 @@
+{
+ "schema": 1,
+ "unassigned_masters": [
+  {
+   "folder": "deposit_Al",
+   "name": "deposit_Al_master_E20kV_npx500.h5",
+   "rel": "Database/EBSD_H5_Cache/deposit_Al/deposit_Al_master_E20kV_npx500.h5",
+   "bytes": 210044820,
+   "date": "2026-06-29"
+  },
+  {
+   "folder": "deposit_Al2CuMg",
+   "name": "deposit_Al2CuMg_master_E20kV_npx500.h5",
+   "rel": "Database/EBSD_H5_Cache/deposit_Al2CuMg/deposit_Al2CuMg_master_E20kV_npx500.h5",
+   "bytes": 210044820,
+   "date": "2026-06-29"
+  },
+  {
+   "folder": "deposit_Al7Cu2Fe",
+   "name": "deposit_Al7Cu2Fe_master_E20kV_npx500.h5",
+   "rel": "Database/EBSD_H5_Cache/deposit_Al7Cu2Fe/deposit_Al7Cu2Fe_master_E20kV_npx500.h5",
+   "bytes": 210044820,
+   "date": "2026-06-29"
+  },
+  {
+   "folder": "deposit_alpha-AlMnSi",
+   "name": "deposit_alpha-AlMnSi_master_E20kV_npx500.h5",
+   "rel": "Database/EBSD_H5_Cache/deposit_alpha-AlMnSi/deposit_alpha-AlMnSi_master_E20kV_npx500.h5",
+   "bytes": 210044820,
+   "date": "2026-06-29"
+  }
+ ],
+ "generated": "2026-09-27",
+ "source": "Database/ on this machine, via crystal_hint_local_library.get_index()",
+ "note": "Element sets are normalised (Al0+ -> Al). Until the backend fix lands, the live index still carries the oxidation states and would yield five phantom bands.",
+ "phases": [
+  {
+   "key": "Al",
+   "formula_label": "Al",
+   "formula_structure": "Al",
+   "prototype": "Cu",
+   "pearson": "cF4",
+   "space_group_hm": "Fm-3m",
+   "space_group_it": 225,
+   "crystal_system": "cubic",
+   "n_atoms": 4,
+   "elements_structure": [
+    "Al"
+   ],
+   "elements_label": [
+    "Al"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 4.049,
+    "b": 4.049,
+    "c": 4.049,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Tonejc A., Rocak D., Bonefacic A.: Mechanical and structural properties of Al-Ni alloys rapidly quenched from the melt. Acta Metallurgica 19 (1971) 311-316.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "Al",
+   "files": {
+    "cif": {
+     "name": "Al.cif",
+     "rel": "Database/CIF_Library/Al.cif",
+     "bytes": 4043,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Al.xtal",
+     "rel": "Database/XTAL_Library/Al.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": {
+     "name": "Al_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/Al/Al_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-08-04"
+    },
+    "dictionary": {
+     "name": "Al_master_E20kV_npx500_dict_20kV_128x156_pc503_326_846_2.0deg.h5",
+     "rel": "Database/Dictionary_Library/Al/Al_master_E20kV_npx500_dict_20kV_128x156_pc503_326_846_2.0deg.h5",
+     "bytes": 8021059531,
+     "date": "2026-09-09"
+    },
+    "sht": {
+     "name": "Al (Al) [cF4] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al/Al (Al) [cF4] {20kV}.sht",
+     "bytes": 74844,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Al13Fe4",
+   "formula_label": "Fe4Al13",
+   "formula_structure": "Al13Fe4",
+   "prototype": "Fe4 Al13",
+   "pearson": "mS102",
+   "space_group_hm": "C2/m",
+   "space_group_it": 12,
+   "crystal_system": "monoclinic",
+   "n_atoms": 102,
+   "elements_structure": [
+    "Al",
+    "Fe"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 15.488,
+    "b": 8.0866,
+    "c": 12.4769,
+    "alpha": 90.0,
+    "beta": 107.669,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Popcevic P., Smontara A., Ivkov J., Wencka M., Komelj M., Jeglic P., Vrtnik S., Bobnar M., Jaglicic Z., Bauer B., Gille P., Borrmann H., Burkhardt U., Grin Y., Dolinsek J.: Anisotropic physical properties of the Al13Fe4 complex intermetallic and its ternary derivative Al13(Fe,Ni)4. Physical Review B: Condensed Matter and Materials Physics 81:184203 (2010) 1-12.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "Al13Fe4",
+   "files": {
+    "cif": {
+     "name": "Al13Fe4.cif",
+     "rel": "Database/CIF_Library/Al13Fe4.cif",
+     "bytes": 8533,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Al13Fe4.xtal",
+     "rel": "Database/XTAL_Library/Al13Fe4.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Fe4Al13 (Al13Fe4) [mS102] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al13Fe4/Fe4Al13 (Al13Fe4) [mS102] {20kV}.sht",
+     "bytes": 295868,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Al2Cu_mp-985806_conventional_standard",
+   "formula_label": null,
+   "formula_structure": "Al2Cu",
+   "prototype": null,
+   "pearson": "cF4",
+   "space_group_hm": "Fm-3m",
+   "space_group_it": 225,
+   "crystal_system": "cubic",
+   "n_atoms": 12,
+   "elements_structure": [
+    "Al",
+    "Cu"
+   ],
+   "elements_label": [
+    "Al",
+    "Cu"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 5.76911,
+    "b": 5.76911,
+    "c": 5.76911,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": {
+    "mp": "985806"
+   },
+   "folder": "Al",
+   "files": {
+    "cif": {
+     "name": "Al2Cu_mp-985806_conventional_standard.cif",
+     "rel": "Database/CIF_Library/Al2Cu_mp-985806_conventional_standard.cif",
+     "bytes": 5565,
+     "date": "2026-09-13"
+    },
+    "xtal": {
+     "name": "Al2Cu_mp-985806_conventional_standard.xtal",
+     "rel": "Database/XTAL_Library/Al2Cu_mp-985806_conventional_standard.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "AlCu (Al2Cu_mp-985806_conventional_standard) [cF4] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al/AlCu (Al2Cu_mp-985806_conventional_standard) [cF4] {20kV}.sht",
+     "bytes": 74868,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Al2Zn_MP-mp-aaacqrcb",
+   "formula_label": null,
+   "formula_structure": "Al2Zn",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "P-3m1",
+   "space_group_it": 164,
+   "crystal_system": "trigonal",
+   "n_atoms": 3,
+   "elements_structure": [
+    "Al",
+    "Zn"
+   ],
+   "elements_label": [
+    "Al",
+    "Zn"
+   ],
+   "elements_label_source": "filename",
+   "elements_disagree": false,
+   "cell": {
+    "a": 2.801313,
+    "b": 2.801313,
+    "c": 6.821936,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 120.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Materials Project mp-aaacqrcb. Materials Project mp-aaacqrcb. A. Jain et al., APL Materials 1, 011002 (2013).",
+   "reference_rejected": null,
+   "doi": null,
+   "url": "https://materialsproject.org/materials/mp-aaacqrcb",
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": null,
+   "files": {
+    "cif": {
+     "name": "Al2Zn_MP-mp-aaacqrcb.cif",
+     "rel": "Database/CIF_Library/Al2Zn_MP-mp-aaacqrcb.cif",
+     "bytes": 1202,
+     "date": "2026-08-26"
+    },
+    "xtal": null,
+    "master": null,
+    "dictionary": null,
+    "sht": null
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": false,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Al3Fe2Si_mp-1190708_symmetrized",
+   "formula_label": null,
+   "formula_structure": "Al3Fe2Si",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "Fd-3m",
+   "space_group_it": 227,
+   "crystal_system": "cubic",
+   "n_atoms": 96,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 10.746128,
+    "b": 10.746128,
+    "c": 10.746128,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": "10.1063/1.4812323",
+   "url": "https://doi.org/10.1063/1.4812323",
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": {
+    "mp": "1190708"
+   },
+   "folder": "Al3Fe2Si_mp-1190708_symmetrized",
+   "files": {
+    "cif": {
+     "name": "Al3Fe2Si_mp-1190708_symmetrized.cif",
+     "rel": "Database/CIF_Library/Al3Fe2Si_mp-1190708_symmetrized.cif",
+     "bytes": 6125,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Al3Fe2Si_mp-1190708_symmetrized.xtal",
+     "rel": "Database/XTAL_Library/Al3Fe2Si_mp-1190708_symmetrized.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Al3Fe2Si (Al3Fe2Si_mp-1190708_symmetrized) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al3Fe2Si_mp-1190708_symmetrized/Al3Fe2Si (Al3Fe2Si_mp-1190708_symmetrized) {20kV}.sht",
+     "bytes": 74908,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Al3FeSi2_tau2_ICSD-607628",
+   "formula_label": null,
+   "formula_structure": "Al3FeSi2",
+   "prototype": null,
+   "pearson": "tI24",
+   "space_group_hm": "I4/mcm",
+   "space_group_it": 140,
+   "crystal_system": "tetragonal",
+   "n_atoms": 24,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 6.07,
+    "b": 6.07,
+    "c": 9.5,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Panday P.K., Schubert K.: Strukturuntersuchungen an einigen Mischungen T-B3-B4 (T=Mn,Fe,Co,Ir,Ni,Pd, B3=Al,Ga,Tl, B4=Si,Ge). Journal of the Less-Common Metals 18 (1969) 175-202. ICSD CollCode 607628, Ga5Pd structure type, I4/mcm. NOTE: cell and type only determined (1969) - atomic coordinates are idealised prototype positions, Al/Si statistically share the 16l site (0.5/0.5). Low-resolution, use as approximate phase.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": "607628",
+   "cod": null,
+   "ids_from_filename": {
+    "icsd": "607628"
+   },
+   "folder": "Al3FeSi2_tau2_ICSD-607628",
+   "files": {
+    "cif": {
+     "name": "Al3FeSi2_tau2_ICSD-607628.cif",
+     "rel": "Database/CIF_Library/Al3FeSi2_tau2_ICSD-607628.cif",
+     "bytes": 2844,
+     "date": "2026-06-03"
+    },
+    "xtal": {
+     "name": "Al3FeSi2_tau2_ICSD-607628.xtal",
+     "rel": "Database/XTAL_Library/Al3FeSi2_tau2_ICSD-607628.xtal",
+     "bytes": 12424,
+     "date": "2026-06-26"
+    },
+    "master": {
+     "name": "Al3FeSi2_tau2_ICSD-607628_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/Al3FeSi2_tau2_ICSD-607628/Al3FeSi2_tau2_ICSD-607628_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-06-26"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Al3Fe1Si2 (Al3FeSi2_tau2_ICSD-607628) [tI24] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al3FeSi2_tau2_ICSD-607628/Al3Fe1Si2 (Al3FeSi2_tau2_ICSD-607628) [tI24] {20kV}.sht",
+     "bytes": 75324,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Al4Fe1.7Si (τ11)",
+   "formula_label": "Fe1.8Al4.4Si0.6 ht",
+   "formula_structure": "Al17.6Fe7.2Si2.4",
+   "prototype": "Co2 Al5",
+   "pearson": "hP28",
+   "space_group_hm": "P6_3/mmc",
+   "space_group_it": 194,
+   "crystal_system": "hexagonal",
+   "n_atoms": 28,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 7.5355,
+    "b": 7.5355,
+    "c": 7.5805,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 120.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Marker M.C.J., Skolyszewska Kuhberger B., Effenberger H.S., Schmetterer C., Richter K.W.: Phase equilibria and structural investigations in the system Al-Fe-Si. Intermetallics 19 (2011) 1919-1929.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "Al4Fe1_7Si_11",
+   "files": {
+    "cif": {
+     "name": "Al4Fe1.7Si (τ11).cif",
+     "rel": "Database/CIF_Library/Al4Fe1.7Si (τ11).cif",
+     "bytes": 4717,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Al4Fe1.7Si (τ11).xtal",
+     "rel": "Database/XTAL_Library/Al4Fe1.7Si (τ11).xtal",
+     "bytes": 12424,
+     "date": "2026-06-27"
+    },
+    "master": {
+     "name": "Al4Fe1_7Si_11_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/Al4Fe1_7Si_11/Al4Fe1_7Si_11_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-06-27"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Fe1.8Al4.4Si0.6ht (Al4Fe1.7Si (τ11)) [hP28] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al4Fe1_7Si_11/Fe1.8Al4.4Si0.6ht (Al4Fe1.7Si (τ11)) [hP28] {20kV}.sht",
+     "bytes": 50644,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Al6Fe_mp-570001_symmetrized",
+   "formula_label": null,
+   "formula_structure": "Al6Fe",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "Cmcm",
+   "space_group_it": 63,
+   "crystal_system": "orthorhombic",
+   "n_atoms": 28,
+   "elements_structure": [
+    "Al",
+    "Fe"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 7.430018,
+    "b": 6.440282,
+    "c": 8.816226,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": "10.1063/1.4812323",
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": {
+    "mp": "570001"
+   },
+   "folder": "Al",
+   "files": {
+    "cif": {
+     "name": "Al6Fe_mp-570001_symmetrized.cif",
+     "rel": "Database/CIF_Library/Al6Fe_mp-570001_symmetrized.cif",
+     "bytes": 1275,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Al6Fe_mp-570001_symmetrized.xtal",
+     "rel": "Database/XTAL_Library/Al6Fe_mp-570001_symmetrized.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Al6Fe (Al6Fe_mp-570001_symmetrized) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al/Al6Fe (Al6Fe_mp-570001_symmetrized) {20kV}.sht",
+     "bytes": 148676,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Al7FeCu2",
+   "formula_label": null,
+   "formula_structure": "Al7FeCu2",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "P4/mnc",
+   "space_group_it": 128,
+   "crystal_system": "tetragonal",
+   "n_atoms": 40,
+   "elements_structure": [
+    "Al",
+    "Cu",
+    "Fe"
+   ],
+   "elements_label": [
+    "Al",
+    "Cu",
+    "Fe"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 6.258996,
+    "b": 6.258996,
+    "c": 14.640839,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "Al",
+   "files": {
+    "cif": {
+     "name": "Al7FeCu2.cif",
+     "rel": "Database/CIF_Library/Al7FeCu2.cif",
+     "bytes": 1339,
+     "date": "2026-09-13"
+    },
+    "xtal": {
+     "name": "Al7FeCu2.xtal",
+     "rel": "Database/XTAL_Library/Al7FeCu2.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": {
+     "name": "Al7FeCu2_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/Al7FeCu2/Al7FeCu2_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-09-09"
+    },
+    "dictionary": {
+     "name": "Al7FeCu2_master_E20kV_npx500_dict_20kV_128x156_pc503_326_846_2.0deg.h5",
+     "rel": "Database/Dictionary_Library/Al7FeCu2/Al7FeCu2_master_E20kV_npx500_dict_20kV_128x156_pc503_326_846_2.0deg.h5",
+     "bytes": 24062151855,
+     "date": "2026-09-09"
+    },
+    "sht": {
+     "name": "Al7FeCu2 (Al7FeCu2) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al/Al7FeCu2 (Al7FeCu2) {20kV}.sht",
+     "bytes": 74948,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "alpha-AlFeMnSi_ICSD-52623",
+   "formula_label": null,
+   "formula_structure": "Mn5.268Al100.89Fe21.24Si10.602",
+   "prototype": null,
+   "pearson": "cP138",
+   "space_group_hm": "Pm-3",
+   "space_group_it": 200,
+   "crystal_system": "cubic",
+   "n_atoms": 138,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 12.56,
+    "b": 12.56,
+    "c": 12.56,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Cooper, Malcolm: structure type Al57Mn12. Acta Crystallographica 23 (1967) 1106-1107. ICSD CollCode 52623.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": "52623",
+   "cod": null,
+   "ids_from_filename": {
+    "icsd": "52623"
+   },
+   "folder": "alpha-AlFeMnSi_ICSD-52623",
+   "files": {
+    "cif": {
+     "name": "alpha-AlFeMnSi_ICSD-52623.cif",
+     "rel": "Database/CIF_Library/alpha-AlFeMnSi_ICSD-52623.cif",
+     "bytes": 3173,
+     "date": "2026-06-03"
+    },
+    "xtal": {
+     "name": "alpha-AlFeMnSi_ICSD-52623.xtal",
+     "rel": "Database/XTAL_Library/alpha-AlFeMnSi_ICSD-52623.xtal",
+     "bytes": 12424,
+     "date": "2026-06-27"
+    },
+    "master": {
+     "name": "alpha-AlFeMnSi_ICSD-52623_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/alpha-AlFeMnSi_ICSD-52623/alpha-AlFeMnSi_ICSD-52623_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-06-27"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Al100.89Fe21.24Mn5.31Si10.62 (alpha-AlFeMnSi_ICSD-52623) [cP138] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/alpha-AlFeMnSi_ICSD-52623/Al100.89Fe21.24Mn5.31Si10.62 (alpha-AlFeMnSi_ICSD-52623) [cP138] {20kV}.sht",
+     "bytes": 149572,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "beta-AlFeSi",
+   "formula_label": null,
+   "formula_structure": "Al11Fe2",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "C2/c",
+   "space_group_it": 15,
+   "crystal_system": "monoclinic",
+   "n_atoms": 52,
+   "elements_structure": [
+    "Al",
+    "Fe"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "filename",
+   "elements_disagree": true,
+   "cell": {
+    "a": 6.161,
+    "b": 6.175,
+    "c": 20.813,
+    "alpha": 90.0,
+    "beta": 90.42,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": "10.1107/S0108768193013096",
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": null,
+   "files": {
+    "cif": {
+     "name": "beta-AlFeSi.cif",
+     "rel": "Database/CIF_Library/beta-AlFeSi.cif",
+     "bytes": 5164,
+     "date": "2026-02-16"
+    },
+    "xtal": null,
+    "master": null,
+    "dictionary": null,
+    "sht": null
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": false,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "beta-AlFeSi_withSi_COD-2107329",
+   "formula_label": null,
+   "formula_structure": "Al35.992Fe8Si8.008",
+   "prototype": null,
+   "pearson": "mC52",
+   "space_group_hm": "C2/c",
+   "space_group_it": 15,
+   "crystal_system": "monoclinic",
+   "n_atoms": 52,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 20.813,
+    "b": 6.175,
+    "c": 6.161,
+    "alpha": 90.0,
+    "beta": 90.42,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Romming, C.; Hansen, V.; Gjonnes, J. Crystal structure of beta-Al4.5FeSi. Acta Crystallographica B50 (1994) 307-312. DOI: 10.1107/S0108768193013096",
+   "reference_rejected": null,
+   "doi": "10.1107/S0108768193013096",
+   "url": null,
+   "icsd": null,
+   "cod": "2107329",
+   "ids_from_filename": {
+    "cod": "2107329"
+   },
+   "folder": "beta-AlFeSi_withSi_COD-2107329",
+   "files": {
+    "cif": {
+     "name": "beta-AlFeSi_withSi_COD-2107329.cif",
+     "rel": "Database/CIF_Library/beta-AlFeSi_withSi_COD-2107329.cif",
+     "bytes": 2750,
+     "date": "2026-07-28"
+    },
+    "xtal": {
+     "name": "beta-AlFeSi_withSi_COD-2107329.xtal",
+     "rel": "Database/XTAL_Library/beta-AlFeSi_withSi_COD-2107329.xtal",
+     "bytes": 12424,
+     "date": "2026-09-26"
+    },
+    "master": {
+     "name": "beta-AlFeSi_withSi_COD-2107329_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/beta-AlFeSi_withSi_COD-2107329/beta-AlFeSi_withSi_COD-2107329_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-09-26"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Al9Fe2Si2 (beta-AlFeSi_withSi_COD-2107329) [mC52] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/beta-AlFeSi_withSi_COD-2107329/Al9Fe2Si2 (beta-AlFeSi_withSi_COD-2107329) [mC52] {20kV}.sht",
+     "bytes": 295636,
+     "date": "2026-09-26"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Fe3_Al2_Si3",
+   "formula_label": null,
+   "formula_structure": "Al2(FeSi)3",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "P-1",
+   "space_group_it": 2,
+   "crystal_system": "triclinic",
+   "n_atoms": 16,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 4.6512,
+    "b": 6.326,
+    "c": 7.499,
+    "alpha": 101.38,
+    "beta": 105.923,
+    "gamma": 101.237
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": "10.1107/S0108270196008694",
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "Fe3_Al2_Si3",
+   "files": {
+    "cif": {
+     "name": "Fe3_Al2_Si3.cif",
+     "rel": "Database/CIF_Library/Fe3_Al2_Si3.cif",
+     "bytes": 13851,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Fe3_Al2_Si3.xtal",
+     "rel": "Database/XTAL_Library/Fe3_Al2_Si3.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Fe3Al2Si3 (Fe3_Al2_Si3) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Fe3_Al2_Si3/Fe3Al2Si3 (Fe3_Al2_Si3) {20kV}.sht",
+     "bytes": 590396,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Fe3Al2Si4",
+   "formula_label": null,
+   "formula_structure": "Al2Fe3Si4",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "Cmcm",
+   "space_group_it": 63,
+   "crystal_system": "orthorhombic",
+   "n_atoms": 36,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 3.6687,
+    "b": 12.385,
+    "c": 10.147,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": "10.1107/S0108270196008694",
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "Fe3Al2Si4",
+   "files": {
+    "cif": {
+     "name": "Fe3Al2Si4.cif",
+     "rel": "Database/CIF_Library/Fe3Al2Si4.cif",
+     "bytes": 14126,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Fe3Al2Si4.xtal",
+     "rel": "Database/XTAL_Library/Fe3Al2Si4.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Fe3Si4Al2 (Fe3Al2Si4) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Fe3Al2Si4/Fe3Si4Al2 (Fe3Al2Si4) {20kV}.sht",
+     "bytes": 148732,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Fe3Si_MP-mp-2199",
+   "formula_label": null,
+   "formula_structure": "Fe3Si",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "Fm-3m",
+   "space_group_it": 225,
+   "crystal_system": "cubic",
+   "n_atoms": 16,
+   "elements_structure": [
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 5.627389,
+    "b": 5.627389,
+    "c": 5.627389,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Mishra et al., \"Moessbauer and magnetization studies in Fe3-x Rux Si\", Journal of Applied Physics 57, (1985) | Materials Project mp-2199 (ICSD: icsd-56281, icsd-412838, icsd-633534, icsd-190980, icsd-157941, …)",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": {
+    "mp": "2199"
+   },
+   "folder": "Fe3Si_MP-mp-2199",
+   "files": {
+    "cif": {
+     "name": "Fe3Si_MP-mp-2199.cif",
+     "rel": "Database/CIF_Library/Fe3Si_MP-mp-2199.cif",
+     "bytes": 5861,
+     "date": "2026-06-01"
+    },
+    "xtal": {
+     "name": "Fe3Si_MP-mp-2199.xtal",
+     "rel": "Database/XTAL_Library/Fe3Si_MP-mp-2199.xtal",
+     "bytes": 12424,
+     "date": "2026-07-28"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Fe3Si (Fe3Si_MP-mp-2199) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Fe3Si_MP-mp-2199/Fe3Si (Fe3Si_MP-mp-2199) {20kV}.sht",
+     "bytes": 74908,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "gamma-Al3FeSi_COD-1533819",
+   "formula_label": null,
+   "formula_structure": "Al77.691Fe25.479Si19.83",
+   "prototype": null,
+   "pearson": "hR123",
+   "space_group_hm": "R-3",
+   "space_group_it": 148,
+   "crystal_system": "trigonal",
+   "n_atoms": 123,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 10.222,
+    "b": 10.222,
+    "c": 19.667,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 120.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Sugiyama, K.; Kaji, N.; Hiraga, K. Crystal structure of rhombohedral lambda-(AlFeSi). Journal of Alloys and Compounds 368 (2004) 251-255. DOI: 10.1016/j.jallcom.2003.08.065",
+   "reference_rejected": null,
+   "doi": "10.1016/j.jallcom.2003.08.065",
+   "url": null,
+   "icsd": null,
+   "cod": "1533819",
+   "ids_from_filename": {
+    "cod": "1533819"
+   },
+   "folder": "gamma-Al3FeSi_COD-1533819",
+   "files": {
+    "cif": {
+     "name": "gamma-Al3FeSi_COD-1533819.cif",
+     "rel": "Database/CIF_Library/gamma-Al3FeSi_COD-1533819.cif",
+     "bytes": 2876,
+     "date": "2026-07-28"
+    },
+    "xtal": {
+     "name": "gamma-Al3FeSi_COD-1533819.xtal",
+     "rel": "Database/XTAL_Library/gamma-Al3FeSi_COD-1533819.xtal",
+     "bytes": 12424,
+     "date": "2026-07-28"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Al77.69Fe25.46Si19.85 (gamma-Al3FeSi_COD-1533819) [hR123] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/gamma-Al3FeSi_COD-1533819/Al77.69Fe25.46Si19.85 (gamma-Al3FeSi_COD-1533819) [hR123] {20kV}.sht",
+     "bytes": 198452,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Mg17Al12_mp-2151_conventional_standard",
+   "formula_label": null,
+   "formula_structure": "Mg17Al12",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "I-43m",
+   "space_group_it": 217,
+   "crystal_system": "cubic",
+   "n_atoms": 58,
+   "elements_structure": [
+    "Al",
+    "Mg"
+   ],
+   "elements_label": [
+    "Al",
+    "Mg"
+   ],
+   "elements_label_source": "filename",
+   "elements_disagree": false,
+   "cell": {
+    "a": 10.532584,
+    "b": 10.532584,
+    "c": 10.532584,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": {
+    "mp": "2151"
+   },
+   "folder": null,
+   "files": {
+    "cif": {
+     "name": "Mg17Al12_mp-2151_conventional_standard.cif",
+     "rel": "Database/CIF_Library/Mg17Al12_mp-2151_conventional_standard.cif",
+     "bytes": 2068,
+     "date": "2026-09-13"
+    },
+    "xtal": {
+     "name": "Mg17Al12_mp-2151_conventional_standard.xtal",
+     "rel": "Database/XTAL_Library/Mg17Al12_mp-2151_conventional_standard.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": null
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": false,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Mg17Al12_MP-mp-2151",
+   "formula_label": null,
+   "formula_structure": "Mg17Al12",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "I-43m",
+   "space_group_it": 217,
+   "crystal_system": "cubic",
+   "n_atoms": 58,
+   "elements_structure": [
+    "Al",
+    "Mg"
+   ],
+   "elements_label": [
+    "Al",
+    "Mg"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 10.436466,
+    "b": 10.436466,
+    "c": 10.436466,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Na et al., \"Structural and mechanical properties of Mg17 Al12 and Mg24 Y5 from first-principles calculations\", Journal of Physics D, Applied Physics 41, (2008) | Materials Project mp-2151 (ICSD: icsd-158247, icsd-191276, icsd-163478, icsd-23607, icsd-608398)",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": {
+    "mp": "2151"
+   },
+   "folder": "Mg17Al12_MP-mp-2151",
+   "files": {
+    "cif": {
+     "name": "Mg17Al12_MP-mp-2151.cif",
+     "rel": "Database/CIF_Library/Mg17Al12_MP-mp-2151.cif",
+     "bytes": 2352,
+     "date": "2026-06-01"
+    },
+    "xtal": {
+     "name": "Mg17Al12_MP-mp-2151.xtal",
+     "rel": "Database/XTAL_Library/Mg17Al12_MP-mp-2151.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Mg17Al12 (Mg17Al12_MP-mp-2151) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Mg17Al12_MP-mp-2151/Mg17Al12 (Mg17Al12_MP-mp-2151) {20kV}.sht",
+     "bytes": 296892,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Mg2Si_MP-mp-1367",
+   "formula_label": null,
+   "formula_structure": "Mg2Si",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "Fm-3m",
+   "space_group_it": 225,
+   "crystal_system": "cubic",
+   "n_atoms": 12,
+   "elements_structure": [
+    "Mg",
+    "Si"
+   ],
+   "elements_label": [
+    "Mg",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 6.339636,
+    "b": 6.339636,
+    "c": 6.339636,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Huan et al., \"Pressure-stabilized binary compounds of magnesium and silicon\", Phys. Rev. Materials 2, (2018) | Materials Project mp-1367 (ICSD: icsd-187349, icsd-167736, icsd-642827, icsd-167737, icsd-167510, …)",
+   "reference_rejected": null,
+   "doi": "10.1103/PhysRevMaterials.2.023803",
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": {
+    "mp": "1367"
+   },
+   "folder": "Mg2Si_MP-mp-1367",
+   "files": {
+    "cif": {
+     "name": "Mg2Si_MP-mp-1367.cif",
+     "rel": "Database/CIF_Library/Mg2Si_MP-mp-1367.cif",
+     "bytes": 5868,
+     "date": "2026-06-01"
+    },
+    "xtal": {
+     "name": "Mg2Si_MP-mp-1367.xtal",
+     "rel": "Database/XTAL_Library/Mg2Si_MP-mp-1367.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Mg2Si (Mg2Si_MP-mp-1367) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Mg2Si_MP-mp-1367/Mg2Si (Mg2Si_MP-mp-1367) {20kV}.sht",
+     "bytes": 74876,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Mg2Zn11_sd_1251136",
+   "formula_label": "Mg2Zn11",
+   "formula_structure": "Mg2Zn11",
+   "prototype": "Mg2 Zn11",
+   "pearson": "cP39",
+   "space_group_hm": "Pm-3",
+   "space_group_it": 200,
+   "crystal_system": "cubic",
+   "n_atoms": 39,
+   "elements_structure": [
+    "Mg",
+    "Zn"
+   ],
+   "elements_label": [
+    "Mg",
+    "Zn"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 8.552,
+    "b": 8.552,
+    "c": 8.552,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Pierre Villars (Chief Editor), PAULING FILE in: Inorganic Solid Phases, SpringerMaterials (online database), Springer, Heidelberg (ed.) Source SpringerMaterials Title Mg2Zn11 (Samson, 1949, Pm-3) Crystal Structure - SpringerMat URL Publisher sd_1251136 (Springer-Verlag GmbH, Heidelberg, © 2024) Accessed Accessed: 26-08-2026",
+   "reference_rejected": null,
+   "doi": null,
+   "url": "https://materials.springer.com/isp/crystallographic/docs/sd_1251136",
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": null,
+   "files": {
+    "cif": {
+     "name": "Mg2Zn11_sd_1251136.cif",
+     "rel": "Database/CIF_Library/Mg2Zn11_sd_1251136.cif",
+     "bytes": 11170,
+     "date": "2026-08-26"
+    },
+    "xtal": {
+     "name": "Mg2Zn11_sd_1251136.xtal",
+     "rel": "Database/XTAL_Library/Mg2Zn11_sd_1251136.xtal",
+     "bytes": 12424,
+     "date": "2026-08-26"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": null
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": false,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "MgZn2_sd_0261233",
+   "formula_label": "MgZn2",
+   "formula_structure": "MgZn2",
+   "prototype": "MgZn2",
+   "pearson": "hP12",
+   "space_group_hm": "P6_3/mmc",
+   "space_group_it": 194,
+   "crystal_system": "hexagonal",
+   "n_atoms": 12,
+   "elements_structure": [
+    "Mg",
+    "Zn"
+   ],
+   "elements_label": [
+    "Mg",
+    "Zn"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 5.212,
+    "b": 5.212,
+    "c": 8.6,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 120.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Pierre Villars (Chief Editor), PAULING FILE in: Inorganic Solid Phases, SpringerMaterials (online database), Springer, Heidelberg (ed.) Source SpringerMaterials Title MgZn2 (Lieser, 1952, P63/mmc) Crystal Structure - SpringerMa URL Publisher sd_0261233 (Springer-Verlag GmbH, Heidelberg, © 2024) Accessed Accessed: 26-08-2026",
+   "reference_rejected": null,
+   "doi": null,
+   "url": "https://materials.springer.com/isp/crystallographic/docs/sd_0261233",
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": null,
+   "files": {
+    "cif": {
+     "name": "MgZn2_sd_0261233.cif",
+     "rel": "Database/CIF_Library/MgZn2_sd_0261233.cif",
+     "bytes": 4138,
+     "date": "2026-08-26"
+    },
+    "xtal": {
+     "name": "MgZn2_sd_0261233.xtal",
+     "rel": "Database/XTAL_Library/MgZn2_sd_0261233.xtal",
+     "bytes": 12424,
+     "date": "2026-08-26"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": null
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": false,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Mn2(AlSi)5_ICSD-608515",
+   "formula_label": null,
+   "formula_structure": "Mn2(AlSi)5",
+   "prototype": null,
+   "pearson": "tI24",
+   "space_group_hm": "I4/mcm",
+   "space_group_it": 140,
+   "crystal_system": "tetragonal",
+   "n_atoms": 24,
+   "elements_structure": [
+    "Al",
+    "Mn",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Mn",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 6.087,
+    "b": 6.087,
+    "c": 9.529,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Panday P.K., Schubert K.: Strukturuntersuchungen an einigen Mischungen T-B3-B4 (T=Mn,Fe,Co,Ir,Ni,Pd, B3=Al,Ga,Tl, B4=Si,Ge). Journal of the Less-Common Metals 18 (1969) 175-202. ICSD CollCode 608515, LiIrSn4 structure type, I4/mcm. NOTE: cell and type only determined (1969) - idealised coordinates, Al/Si statistically share the 16l site (0.375/0.625). Redundant with the higher-quality alpha-(AlMnSi), approximate phase only.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": "608515",
+   "cod": null,
+   "ids_from_filename": {
+    "icsd": "608515"
+   },
+   "folder": "Mn2_AlSi_5_ICSD-608515",
+   "files": {
+    "cif": {
+     "name": "Mn2(AlSi)5_ICSD-608515.cif",
+     "rel": "Database/CIF_Library/Mn2(AlSi)5_ICSD-608515.cif",
+     "bytes": 2878,
+     "date": "2026-06-03"
+    },
+    "xtal": {
+     "name": "Mn2(AlSi)5_ICSD-608515.xtal",
+     "rel": "Database/XTAL_Library/Mn2(AlSi)5_ICSD-608515.xtal",
+     "bytes": 12424,
+     "date": "2026-06-26"
+    },
+    "master": {
+     "name": "Mn2_AlSi_5_ICSD-608515_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/Mn2_AlSi_5_ICSD-608515/Mn2_AlSi_5_ICSD-608515_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-06-26"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Al2.5Mn1Si2.5 (Mn2(AlSi)5_ICSD-608515) [tI24] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Mn2_AlSi_5_ICSD-608515/Al2.5Mn1Si2.5 (Mn2(AlSi)5_ICSD-608515) [tI24] {20kV}.sht",
+     "bytes": 75324,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "MnAl6_mp-173_symmetrized",
+   "formula_label": null,
+   "formula_structure": "MnAl6",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "Cmcm",
+   "space_group_it": 63,
+   "crystal_system": "orthorhombic",
+   "n_atoms": 28,
+   "elements_structure": [
+    "Al",
+    "Mn"
+   ],
+   "elements_label": [
+    "Al",
+    "Mn"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 7.539416,
+    "b": 6.460304,
+    "c": 8.819153,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": null,
+   "reference_rejected": null,
+   "doi": "10.17188/1192439",
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": {
+    "mp": "173"
+   },
+   "folder": "Al",
+   "files": {
+    "cif": {
+     "name": "MnAl6_mp-173_symmetrized.cif",
+     "rel": "Database/CIF_Library/MnAl6_mp-173_symmetrized.cif",
+     "bytes": 1272,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "MnAl6_mp-173_symmetrized.xtal",
+     "rel": "Database/XTAL_Library/MnAl6_mp-173_symmetrized.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "MnAl6 (MnAl6_mp-173_symmetrized) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al/MnAl6 (MnAl6_mp-173_symmetrized) {20kV}.sht",
+     "bytes": 148660,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Ni",
+   "formula_label": "Ni",
+   "formula_structure": "Ni",
+   "prototype": "Cu",
+   "pearson": "cF4",
+   "space_group_hm": "Fm-3m",
+   "space_group_it": 225,
+   "crystal_system": "cubic",
+   "n_atoms": 4,
+   "elements_structure": [
+    "Ni"
+   ],
+   "elements_label": [
+    "Ni"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 3.524,
+    "b": 3.524,
+    "c": 3.524,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Pearson W.B., Hume Rothery W.: The constitution and structure of nickel-vanadium alloys in the region 0-60 at.% vanadium. Journal of the Institute of Metals 80 (1951/52) 641-652.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "Ni",
+   "files": {
+    "cif": {
+     "name": "Ni.cif",
+     "rel": "Database/CIF_Library/Ni.cif",
+     "bytes": 4168,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Ni.xtal",
+     "rel": "Database/XTAL_Library/Ni.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": {
+     "name": "Ni_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/Ni/Ni_master_E20kV_npx500.h5",
+     "bytes": 210062952,
+     "date": "2026-02-19"
+    },
+    "dictionary": {
+     "name": "Ni_master_E20kV_npx500_dict_20kV_60x60_pc507_262_558_2.0deg.h5",
+     "rel": "Database/Dictionary_Library/Ni/Ni_master_E20kV_npx500_dict_20kV_60x60_pc507_262_558_2.0deg.h5",
+     "bytes": 1450724235,
+     "date": "2026-08-15"
+    },
+    "sht": {
+     "name": "Ni (Ni) [cF4] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Ni/Ni (Ni) [cF4] {20kV}.sht",
+     "bytes": 74972,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "pi-Al8FeMg3Si6_ICSD-27140",
+   "formula_label": null,
+   "formula_structure": "Mg3Al8FeSi6",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "P-62m",
+   "space_group_it": 189,
+   "crystal_system": "hexagonal",
+   "n_atoms": 18,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Mg",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Mg",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 6.62,
+    "b": 6.62,
+    "c": 7.92,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 120.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Perlitz, H., Westgren, A.: structure type Al8FeMg3Si6. Arkiv foer Kemi, Mineralogi och Geologi 15 (1942) 1-8. ICSD CollCode 27140.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": "27140",
+   "cod": null,
+   "ids_from_filename": {
+    "icsd": "27140"
+   },
+   "folder": "Al",
+   "files": {
+    "cif": {
+     "name": "pi-Al8FeMg3Si6_ICSD-27140.cif",
+     "rel": "Database/CIF_Library/pi-Al8FeMg3Si6_ICSD-27140.cif",
+     "bytes": 2032,
+     "date": "2026-06-03"
+    },
+    "xtal": {
+     "name": "pi-Al8FeMg3Si6_ICSD-27140.xtal",
+     "rel": "Database/XTAL_Library/pi-Al8FeMg3Si6_ICSD-27140.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": {
+     "name": "pi-Al8FeMg3Si6_ICSD-27140_E20kV_sig70_n501_o0.h5",
+     "rel": "Database/EBSD_H5_Cache/pi-Al8FeMg3Si6_ICSD-27140/pi-Al8FeMg3Si6_ICSD-27140_E20kV_sig70_n501_o0.h5",
+     "bytes": 7319884,
+     "date": "2026-06-18"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Al8Si6Mg3Fe (pi-Al8FeMg3Si6_ICSD-27140) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Al/Al8Si6Mg3Fe (pi-Al8FeMg3Si6_ICSD-27140) {20kV}.sht",
+     "bytes": 99948,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "sd_0302719",
+   "formula_label": "Mn0.5Fe0.5Al5Si0.68",
+   "formula_structure": "Mn4.512Al127.296Fe19.488Si16.704",
+   "prototype": "(Mn0.2 Fe0.8 )4 (Al0.9 Si0.1 )19",
+   "pearson": "cI168",
+   "space_group_hm": "Im-3",
+   "space_group_it": 204,
+   "crystal_system": "cubic",
+   "n_atoms": 168,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 12.5,
+    "b": 12.5,
+    "c": 12.5,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Barlock J.G., Mondolfo L.F.: Structure of Some Aluminium-Iron-Magnesium-Manganese-Silicon Alloys. Zeitschrift fur Metallkunde 66 (1975) 605-611.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "sd_0302719",
+   "files": {
+    "cif": {
+     "name": "sd_0302719.cif",
+     "rel": "Database/CIF_Library/sd_0302719.cif",
+     "bytes": 4639,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "sd_0302719.xtal",
+     "rel": "Database/XTAL_Library/sd_0302719.xtal",
+     "bytes": 12424,
+     "date": "2026-06-26"
+    },
+    "master": {
+     "name": "sd_0302719_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/sd_0302719/sd_0302719_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-08-03"
+    },
+    "dictionary": {
+     "name": "sd_0302719_master_E20kV_npx500_dict_20kV_128x156_pc503_326_846_2.0deg.h5",
+     "rel": "Database/Dictionary_Library/sd/sd_0302719_master_E20kV_npx500_dict_20kV_128x156_pc503_326_846_2.0deg.h5",
+     "bytes": 16042113327,
+     "date": "2026-09-09"
+    },
+    "sht": {
+     "name": "Mn0.5Fe0.5Al5Si0.68 (sd_0302719) [cI168] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/sd_0302719/Mn0.5Fe0.5Al5Si0.68 (sd_0302719) [cI168] {20kV}.sht",
+     "bytes": 149076,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "sd_1401510",
+   "formula_label": "Mn0.5Fe0.5Al5Si0.68",
+   "formula_structure": "Mn4.8Al114Fe19.2",
+   "prototype": "(Mn0.2 Fe0.8 )4 (Al0.9 Si0.1 )19",
+   "pearson": "cI168",
+   "space_group_hm": "Im-3",
+   "space_group_it": 204,
+   "crystal_system": "cubic",
+   "n_atoms": 168,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Mn"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": true,
+   "cell": {
+    "a": 12.56,
+    "b": 12.56,
+    "c": 12.56,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Cooper M.A.: The crystal structure of the ternary alloy α(AlFeSi). Acta Crystallographica 23 (1967) 1106-1107.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": null,
+   "files": {
+    "cif": {
+     "name": "sd_1401510.cif",
+     "rel": "Database/CIF_Library/sd_1401510.cif",
+     "bytes": 4846,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "sd_1401510.xtal",
+     "rel": "Database/XTAL_Library/sd_1401510.xtal",
+     "bytes": 12424,
+     "date": "2026-06-26"
+    },
+    "master": {
+     "name": "sd_1401510_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/sd_1401510/sd_1401510_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-06-26"
+    },
+    "dictionary": null,
+    "sht": null
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": false,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "sd_1802610",
+   "formula_label": "Mn0.52Fe1.08Al4.85Si0.55",
+   "formula_structure": "Mn2.08Al19.4Fe4.32Si2.2",
+   "prototype": "Co2 Al5",
+   "pearson": "hP28",
+   "space_group_hm": "P6_3/mmc",
+   "space_group_it": 194,
+   "crystal_system": "hexagonal",
+   "n_atoms": 28,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 7.505,
+    "b": 7.505,
+    "c": 7.606,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 120.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Vybornov M.G., Rogl P., Sommer F.: On the thermodynamic stability and solid solution behavior of the phases τ5-Fe2Al7.4Si and τ6-Fe2Al9Si2. Journal of Alloys and Compounds 247 (1997) 154-157.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "sd_1802610",
+   "files": {
+    "cif": {
+     "name": "sd_1802610.cif",
+     "rel": "Database/CIF_Library/sd_1802610.cif",
+     "bytes": 4660,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "sd_1802610.xtal",
+     "rel": "Database/XTAL_Library/sd_1802610.xtal",
+     "bytes": 12424,
+     "date": "2026-06-27"
+    },
+    "master": {
+     "name": "sd_1802610_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/sd_1802610/sd_1802610_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-06-27"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Mn0.52Fe1.08Al4.85Si0.55 (sd_1802610) [hP28] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/sd_1802610/Mn0.52Fe1.08Al4.85Si0.55 (sd_1802610) [hP28] {20kV}.sht",
+     "bytes": 50676,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "sd_1814127",
+   "formula_label": "MgCuAl2",
+   "formula_structure": "MgAl2Cu",
+   "prototype": "MgCuAl2",
+   "pearson": "oS16",
+   "space_group_hm": "Cmcm",
+   "space_group_it": 63,
+   "crystal_system": "orthorhombic",
+   "n_atoms": 16,
+   "elements_structure": [
+    "Al",
+    "Cu",
+    "Mg"
+   ],
+   "elements_label": [
+    "Al",
+    "Cu",
+    "Mg"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 4.0119,
+    "b": 9.265,
+    "c": 7.124,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Pierre Villars (Chief Editor), PAULING FILE in: Inorganic Solid Phases, SpringerMaterials (online database), Springer, Heidelberg (ed.) SpringerMaterials MgCuAl2 Crystal Structure sd_1814127 (Springer-Verlag GmbH, Heidelberg, © 2024) Accessed: 23-04-2026",
+   "reference_rejected": null,
+   "doi": null,
+   "url": "https://materials.springer.com/isp/crystallographic/docs/sd_1814127",
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "sd_1814127",
+   "files": {
+    "cif": {
+     "name": "sd_1814127.cif",
+     "rel": "Database/CIF_Library/sd_1814127.cif",
+     "bytes": 5499,
+     "date": "2026-04-23"
+    },
+    "xtal": {
+     "name": "sd_1814127.xtal",
+     "rel": "Database/XTAL_Library/sd_1814127.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "MgCuAl2 (sd_1814127) [oS16] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/sd_1814127/MgCuAl2 (sd_1814127) [oS16] {20kV}.sht",
+     "bytes": 148636,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "sd_1816951",
+   "formula_label": "MgCu2",
+   "formula_structure": "MgCu2",
+   "prototype": "MgCu2",
+   "pearson": "cF24",
+   "space_group_hm": "Fd-3m",
+   "space_group_it": 227,
+   "crystal_system": "cubic",
+   "n_atoms": null,
+   "elements_structure": [
+    "Cu",
+    "Mg"
+   ],
+   "elements_label": [
+    "Cu",
+    "Mg"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 7.0309,
+    "b": 7.0309,
+    "c": 7.0309,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Pierre Villars (Chief Editor), PAULING FILE in: Inorganic Solid Phases, SpringerMaterials (online database), Springer, Heidelberg (ed.) SpringerMaterials MgCu2 Crystal Structure sd_1816951 (Springer-Verlag GmbH, Heidelberg, © 2024) Accessed: 07-04-2026",
+   "reference_rejected": null,
+   "doi": null,
+   "url": "https://materials.springer.com/isp/crystallographic/docs/sd_1816951",
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "sd_1816951",
+   "files": {
+    "cif": {
+     "name": "sd_1816951.cif",
+     "rel": "Database/CIF_Library/sd_1816951.cif",
+     "bytes": 4112,
+     "date": "2026-04-07"
+    },
+    "xtal": {
+     "name": "sd_1816951.xtal",
+     "rel": "Database/XTAL_Library/sd_1816951.xtal",
+     "bytes": 12424,
+     "date": "2026-09-26"
+    },
+    "master": {
+     "name": "sd_1816951_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/sd_1816951/sd_1816951_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-09-26"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "MgCu2 (sd_1816951) [cF24] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/sd_1816951/MgCu2 (sd_1816951) [cF24] {20kV}.sht",
+     "bytes": 75148,
+     "date": "2026-09-26"
+    }
+   },
+   "capabilities": {
+    "hough": false,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": "sd_1816951.cif parses to 2 different compositions (Mg2Cu, Mg4Cu); refusing it rather than letting data-block order decide. Check the file.",
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "sd_1962794",
+   "formula_label": "MnFe2Al0.25Si0.75",
+   "formula_structure": "Mn4AlFe8Si3",
+   "prototype": "Cu2 MnAl",
+   "pearson": "cF16",
+   "space_group_hm": "Fm-3m",
+   "space_group_it": 225,
+   "crystal_system": "cubic",
+   "n_atoms": 16,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Mn",
+    "Si"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 5.719,
+    "b": 5.719,
+    "c": 5.719,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Guha S., Kumar R., Kumar R., Pradhan L.K., Pandey R., Kar M.: Crystal structure and magnetic properties study on ferromagnet Fe2MnSi0.75Al0.25 Heusler alloy. Physica B: Condensed Matter (Amsterdam) 579:411805 (2020) 1-6.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "sd_1962794",
+   "files": {
+    "cif": {
+     "name": "sd_1962794.cif",
+     "rel": "Database/CIF_Library/sd_1962794.cif",
+     "bytes": 4537,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "sd_1962794.xtal",
+     "rel": "Database/XTAL_Library/sd_1962794.xtal",
+     "bytes": 12424,
+     "date": "2026-06-26"
+    },
+    "master": {
+     "name": "sd_1962794_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/sd_1962794/sd_1962794_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-06-26"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "MnFe2Al0.25Si0.75 (sd_1962794) [cF16] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/sd_1962794/MnFe2Al0.25Si0.75 (sd_1962794) [cF16] {20kV}.sht",
+     "bytes": 75108,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "Si",
+   "formula_label": "Si",
+   "formula_structure": "Si",
+   "prototype": "C",
+   "pearson": "cF8",
+   "space_group_hm": "Fd-3m",
+   "space_group_it": 227,
+   "crystal_system": "cubic",
+   "n_atoms": 16,
+   "elements_structure": [
+    "Si"
+   ],
+   "elements_label": [
+    "Si"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 5.4309,
+    "b": 5.4309,
+    "c": 5.4309,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Yim W.M., Paff R.J.: Thermal expansion of AlN, sapphire, and silicon. Journal of Applied Physics 45 (1974) 1456-1457.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "Si",
+   "files": {
+    "cif": {
+     "name": "Si.cif",
+     "rel": "Database/CIF_Library/Si.cif",
+     "bytes": 4053,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "Si.xtal",
+     "rel": "Database/XTAL_Library/Si.xtal",
+     "bytes": 12424,
+     "date": "2026-09-26"
+    },
+    "master": {
+     "name": "Si_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/Si/Si_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-09-26"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Si (Si) [cF8] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/Si/Si (Si) [cF8] {20kV}.sht",
+     "bytes": 74900,
+     "date": "2026-09-26"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "T-phase_Mg32(AlZn)49_Bergman",
+   "formula_label": null,
+   "formula_structure": "Mg32Al13Zn36",
+   "prototype": null,
+   "pearson": null,
+   "space_group_hm": "Im-3",
+   "space_group_it": 204,
+   "crystal_system": "cubic",
+   "n_atoms": 162,
+   "elements_structure": [
+    "Al",
+    "Mg",
+    "Zn"
+   ],
+   "elements_label": [
+    "Al",
+    "Mg",
+    "Zn"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 14.29,
+    "b": 14.29,
+    "c": 14.29,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Bergman G., Waugh J.L.T., Pauling L.: The crystal structure of the metallic phase Mg32(Al,Zn)49. Acta Crystallographica 10 (1957) 254-259. Idealised ordered Bergman prototype (NRL crystallographic-prototype POSCAR). Lattice edge a set to 14.29 A per ICDD-PDF 04-010-7478 (Mg32Zn29.4Al19.6) to match the measured phase in MCL XRD report 063/24-UB-AFS14636.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "T-phase_Mg32_AlZn_49_Bergman",
+   "files": {
+    "cif": {
+     "name": "T-phase_Mg32(AlZn)49_Bergman.cif",
+     "rel": "Database/CIF_Library/T-phase_Mg32(AlZn)49_Bergman.cif",
+     "bytes": 2678,
+     "date": "2026-06-02"
+    },
+    "xtal": {
+     "name": "T-phase_Mg32(AlZn)49_Bergman.xtal",
+     "rel": "Database/XTAL_Library/T-phase_Mg32(AlZn)49_Bergman.xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Mg32Al13Zn36 (T-phase_Mg32(AlZn)49_Bergman) {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/T-phase_Mg32_AlZn_49_Bergman/Mg32Al13Zn36 (T-phase_Mg32(AlZn)49_Bergman) {20kV}.sht",
+     "bytes": 148796,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "ZnO_sd_1400158",
+   "formula_label": "ZnO",
+   "formula_structure": "ZnO",
+   "prototype": "ZnO",
+   "pearson": "hP4",
+   "space_group_hm": "P6_3mc",
+   "space_group_it": 186,
+   "crystal_system": "hexagonal",
+   "n_atoms": 4,
+   "elements_structure": [
+    "O",
+    "Zn"
+   ],
+   "elements_label": [
+    "O",
+    "Zn"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 3.2498,
+    "b": 3.2498,
+    "c": 5.2066,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 120.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Pierre Villars (Chief Editor), PAULING FILE in: Inorganic Solid Phases, SpringerMaterials (online database), Springer, Heidelberg (ed.) Source SpringerMaterials Title ZnO, hexagonal (ZnO) Crystal Structure - SpringerMaterials URL Publisher sd_1400158 (Springer-Verlag GmbH, Heidelberg, © 2024) Accessed Accessed: 26-08-2026",
+   "reference_rejected": null,
+   "doi": null,
+   "url": "https://materials.springer.com/isp/crystallographic/docs/sd_1400158",
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": null,
+   "files": {
+    "cif": {
+     "name": "ZnO_sd_1400158.cif",
+     "rel": "Database/CIF_Library/ZnO_sd_1400158.cif",
+     "bytes": 6307,
+     "date": "2026-08-26"
+    },
+    "xtal": {
+     "name": "ZnO_sd_1400158.xtal",
+     "rel": "Database/XTAL_Library/ZnO_sd_1400158.xtal",
+     "bytes": 12424,
+     "date": "2026-08-26"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": null
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": false,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "α-(AlFeSi) (Fe23Al81Si15)",
+   "formula_label": "Fe23Al81Si15",
+   "formula_structure": "Al162.04Fe46Si30",
+   "prototype": "Fe23 Al81 Si15",
+   "pearson": "hP246",
+   "space_group_hm": "P6_3/mmc",
+   "space_group_it": 194,
+   "crystal_system": "hexagonal",
+   "n_atoms": 246,
+   "elements_structure": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Fe",
+    "Si"
+   ],
+   "elements_label_source": "sm_phase_labels",
+   "elements_disagree": false,
+   "cell": {
+    "a": 12.404,
+    "b": 12.404,
+    "c": 26.234,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 120.0
+   },
+   "cell_setting": "standardized_unitcell",
+   "cell_settings_available": [
+    "niggli_reduced_cell",
+    "published_cell",
+    "standardized_unitcell"
+   ],
+   "cell_setting_conflict": null,
+   "reference": "Corby R.N., Black P.J.: The structure of alpha-(AlFeSi) by anomalous-dispersion methods. Acta Crystallographica, Section B: Structural Crystallography and Crystal Chemistry 33 (1977) 3468-3475.",
+   "reference_rejected": null,
+   "doi": null,
+   "url": null,
+   "icsd": null,
+   "cod": null,
+   "ids_from_filename": null,
+   "folder": "alpha-_AlFeSi_Fe23Al81Si15",
+   "files": {
+    "cif": {
+     "name": "α-(AlFeSi) (Fe23Al81Si15).cif",
+     "rel": "Database/CIF_Library/α-(AlFeSi) (Fe23Al81Si15).cif",
+     "bytes": 9514,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "α-(AlFeSi) (Fe23Al81Si15).xtal",
+     "rel": "Database/XTAL_Library/α-(AlFeSi) (Fe23Al81Si15).xtal",
+     "bytes": 12424,
+     "date": "2026-06-08"
+    },
+    "master": null,
+    "dictionary": null,
+    "sht": {
+     "name": "Fe23Al81Si15 (α-(AlFeSi) (Fe23Al81Si15)) [hP246] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/alpha-_AlFeSi_Fe23Al81Si15/Fe23Al81Si15 (α-(AlFeSi) (Fe23Al81Si15)) [hP246] {20kV}.sht",
+     "bytes": 50972,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": false
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  },
+  {
+   "key": "α-(AlMnSi)",
+   "formula_label": null,
+   "formula_structure": "Mn24Al96.3Si17.7",
+   "prototype": null,
+   "pearson": "cP138",
+   "space_group_hm": "Pm-3",
+   "space_group_it": 200,
+   "crystal_system": "cubic",
+   "n_atoms": 138,
+   "elements_structure": [
+    "Al",
+    "Mn",
+    "Si"
+   ],
+   "elements_label": [
+    "Al",
+    "Mn",
+    "Si"
+   ],
+   "elements_label_source": "sht_formula",
+   "elements_disagree": false,
+   "cell": {
+    "a": 12.643,
+    "b": 12.643,
+    "c": 12.643,
+    "alpha": 90.0,
+    "beta": 90.0,
+    "gamma": 90.0
+   },
+   "cell_setting": null,
+   "cell_settings_available": [],
+   "cell_setting_conflict": null,
+   "reference": "Sugiyama, Kazumasa, Kaji, Nobutaka, Hiraga, Kenji Re-Refinement of α-(AlMnSi) Acta Crystallographica Section C, 1998, 54, 445-447",
+   "reference_rejected": null,
+   "doi": "10.1107/S0108270197015989",
+   "url": "https://www.crystallography.net/cod/2007194.html",
+   "icsd": null,
+   "cod": "2007194",
+   "ids_from_filename": null,
+   "folder": "alpha-_AlMnSi",
+   "files": {
+    "cif": {
+     "name": "α-(AlMnSi).cif",
+     "rel": "Database/CIF_Library/α-(AlMnSi).cif",
+     "bytes": 41137,
+     "date": "2026-02-16"
+    },
+    "xtal": {
+     "name": "α-(AlMnSi).xtal",
+     "rel": "Database/XTAL_Library/α-(AlMnSi).xtal",
+     "bytes": 12424,
+     "date": "2026-06-27"
+    },
+    "master": {
+     "name": "alpha-_AlMnSi_master_E20kV_npx500.h5",
+     "rel": "Database/EBSD_H5_Cache/alpha-_AlMnSi/alpha-_AlMnSi_master_E20kV_npx500.h5",
+     "bytes": 210044820,
+     "date": "2026-06-27"
+    },
+    "dictionary": null,
+    "sht": {
+     "name": "Al4.01Mn1Si0.74 (α-(AlMnSi)) [cP138] {20kV}.sht",
+     "rel": "Database/EBSD_SHT_Database/alpha-_AlMnSi/Al4.01Mn1Si0.74 (α-(AlMnSi)) [cP138] {20kV}.sht",
+     "bytes": 149116,
+     "date": "2026-08-03"
+    }
+   },
+   "capabilities": {
+    "hough": true,
+    "spherical": true,
+    "dictionary": true
+   },
+   "parse_error": null,
+   "display_name": null,
+   "search_terms": [],
+   "name_author": null,
+   "name_updated": null
+  }
+ ]
+}

@@ -13,6 +13,7 @@
     "pcrefinement": { "label": "PC 精修", "tooltip": "花样中心 (PC) 的校准与精修" },
     "crystal": { "label": "晶体数据库", "tooltip": "CIF/XTAL 转换、晶体数据库、DWF 编辑器" },
     "simulation": { "label": "模拟", "tooltip": "蒙特卡洛 + 主花样模拟（Orienta Engine 或 EMsoft）" },
+    "phaselibrary": { "label": "相库", "tooltip": "晶体库中的所有相：搜索、查看、分组" },
     "database": { "label": "数据库浏览器", "tooltip": "浏览网络共享上的模拟结果" },
     "indexing": { "label": "标定", "tooltip": "Hough、Dictionary 或 Spherical (EMSphinx) 标定" },
     "phasemap": { "label": "相分布图", "tooltip": "用可配置比例尺可视化标定结果" },

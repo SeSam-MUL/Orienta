@@ -22,6 +22,8 @@
     "test:all": "npm test -- --run && npm run test:electron"
   },
   "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "4.0.0",
+    "@floating-ui/react": "0.27.20",
     "axios": "^1.13.6",
     "i18next": "^26.3.2",
     "lucide-react": "^0.577.0",

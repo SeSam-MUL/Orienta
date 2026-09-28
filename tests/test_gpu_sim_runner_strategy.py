@@ -186,7 +186,12 @@ class TestMcSourceStrategy:
         sidecars = list((tmp_path / "EBSD_SHT_Database").rglob("*.provenance.json"))
         assert len(sidecars) == 1, sidecars
         doc = json.loads(sidecars[0].read_text(encoding="utf-8"))
-        assert doc["source_xtal"]["path"] == str(xtal)
+        # Project-relative since 2026-09-27 (an absolute path here carries the
+        # simulating account's name into a file that is copied and mailed with
+        # the library); `xtal` is under `tmp_path`, outside the project, so it
+        # reduces to its name. What this line checks is unchanged: the record
+        # names THIS crystal, not a blanket-patched one.
+        assert doc["source_xtal"]["path"] == xtal.name
         assert doc["source_xtal"]["found"] is True   # because it really is there
 
         # Log must mention strategy (a) cache hit

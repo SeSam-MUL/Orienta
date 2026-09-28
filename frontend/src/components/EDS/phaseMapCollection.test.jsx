@@ -356,7 +356,9 @@ describe('PhaseMapControls: refreshCifPhases gates newly-arrived phases by the c
 
     screen.getByText('Mg2Si.cif');                       // offered...
     expect(checkbox('Mg2Si.cif').checked).toBe(false);    // ...but not ticked
-    screen.getByText(/1 new phase is outside this collection/);
+    // "group", not "collection": the word changed in the interface when
+    // the manager dialog went. The key and the file on disk did not.
+    screen.getByText(/1 new phase is outside this group/);
   });
 
   it('a CIF that appears mid-session inside the collection is ticked', async () => {
@@ -372,7 +374,7 @@ describe('PhaseMapControls: refreshCifPhases gates newly-arrived phases by the c
     await openPicker();
 
     expect(checkbox('WC.cif').checked).toBe(true);
-    expect(screen.queryByText(/is outside this collection/)).toBeNull();
+    expect(screen.queryByText(/is outside this group/)).toBeNull();
   });
 
   it('a previously-ticked phase that is now outside the collection SURVIVES a refresh — the property the deleted mergeUnderCollection got backwards', async () => {

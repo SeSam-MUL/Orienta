@@ -53,8 +53,8 @@
     "selected": "已选",
     "cannotAdd": "无法添加 \"{{name}}\": {{method}} 标定需要 .{{ext}} 文件（实际为 .{{got}}）",
     "skippedNoFile": "已跳过 {{count}} 个没有 .{{ext}} 文件的相（{{method}} 标定）",
-    "adoptCollection": "使用合集: {{name}}",
-    "adoptCollectionFailed": "无法加载合集: {{error}}"
+    "adoptCollection": "使用分组: {{name}}",
+    "adoptCollectionFailed": "无法加载分组：{{error}}"
   },
   "edsPrior": {
     "atMost": "至多 {{pct}} %",
@@ -653,7 +653,11 @@
     "scanOverviewAlt": "扫描概览（平均强度）",
     "failed": "失败",
     "cancelled": "已取消",
-    "remaskFailed": "重新掩膜失败"
+    "remaskFailed": "重新掩膜失败",
+    "unsupportedCount_one": "请求的 {{count}} 个相无法测试",
+    "unsupportedCount_other": "请求的 {{count}} 个相无法测试",
+    "unsupportedRowNoSht": "{{key}} — 没有模拟主图（.sht），因此没有可比较的对象",
+    "unsupportedRow": "{{key}} — {{reason}}"
   },
   "hoverTips": {
     "degeneracyReduceToOne": "仅保留此简并组中的一个相，并移除冗余的重复项",
@@ -744,7 +748,7 @@
     "reflectorNoSymmetry": "该 CIF 以空间群 P 1 保存，即逐个列出所有原子且未记录对称性。PyEBSDIndex 于是把每个衍射面族当作单个极点，极点间夹角的种类随之激增，带三元组库也随之爆炸式增长。用真实空间群重新导出可使其变小，这才是更好的办法；在此降低衍射面数量只是权宜之计。",
     "batchPickSht": "从数据库中选择球面索引所需的主图谱 (.sht)",
     "batchShtInput": "主图谱 (.sht) 的路径。球面索引需要它。",
-    "adoptCollection": "为当前方法从合集“{{name}}”填充相列表。详见“Phase Collections”指南。"
+    "adoptCollection": "按当前方法，用分组“{{name}}”填充相列表。参见指南“Phase Library”。"
   },
   "reflectors": {
     "label": "衍射面:",
