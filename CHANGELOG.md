@@ -185,29 +185,18 @@ give a phase your own name or a synonym without renaming files on disk, and drag
 phases into groups. Where a phase carries a source, the card offers it for
 citation.
 
-It replaces looking for a `.cif` in a folder, which is where the page came from:
-"ich musste ewig suchen um das cif zu finden".
+Groups can have one level of subgroups. Choose **Use this group for the next run**,
+and the Phase Tester, Indexing and the EDS phase map start from that group's phases:
+Indexing lists only those, the Phase Tester and the EDS phase map pre-select them, and
+**Show all phases** brings back the rest. The toolbar shows which group is active.
+Groups are plain JSON files in `Database/Collections/`, so they travel with your
+library.
 
 *This page is not finished, and 0.4.6 ships it anyway because what is there is
 usable on its own. The open points — mostly around groups, keyboard use and a few
-panels that still read better than they behave — are listed in the repository under
-`tasks/collections-round2/FRONTEND-OPEN.md` and are meant for 0.4.7. Nothing on
-this page deletes or moves a file, so the worst an unfinished corner can cost you
-is a second attempt.*
-
-### Phase collections
-
-Phases can now be filed into named collections — "Intermetallics in Al",
-"Cemented carbides" — with one level of sub-collections and a working set that
-cuts across them. Pick a collection next to the EDS colours at the top, and the
-Phase Tester, Indexing and the EDS phase map offer only its phases; "show all
-phases" is always one click away. Collections are plain JSON files in
-`Database/Collections/`, so they travel with your library and can be mailed to a
-colleague.
-
-Nothing is deleted and no file is touched: a collection only points at phases in
-your library, and "remove from collection" and "delete the file" are separate
-verbs.
+panels — are planned for 0.4.7. Nothing on this page deletes or moves a crystal file
+(deleting a group removes only that group's own file), so the worst an unfinished
+corner can cost you is a second attempt.*
 
 ### Indexing
 
