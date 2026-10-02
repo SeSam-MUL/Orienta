@@ -364,8 +364,7 @@ def run_single_indexing_job(
         # these two required positional arguments, so Hough in the batch manager
         # always raised TypeError and the job failed.
         from orix.crystal_map import PhaseList
-        from orix.crystal_map import Phase as _Phase
-        from ebsd_utils import sanitize_cif
+        from ebsd_utils import hough_phase_from_cif
         from pathlib import Path as _P
 
         n_bands = config_opts.get("n_bands", 12)
@@ -378,7 +377,7 @@ def run_single_indexing_job(
             r_sigma=r_sigma,
         )
 
-        phase = _Phase.from_cif(sanitize_cif(phase_path))
+        phase = hough_phase_from_cif(phase_path)
         original_stem = display_stem(phase_path)
         if phase.name != original_stem:
             phase.name = original_stem

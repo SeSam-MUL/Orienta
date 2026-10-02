@@ -855,6 +855,158 @@ def sanitize_cif(path):
     return path
 
 
+# Origin choice per CIF, keyed on (path, mtime, size). Deciding it costs 2-3 s
+# for a file in one of the 24 two-origin groups (pymatgen rebuilds the space
+# group for every orbit it sizes), and several Hough sites rebuild the phase
+# on every call (the phase check's Hough orientation, the reflector-cost probe,
+# each run). Only the decision is cached: callers rename and mutate the Phase.
+_CIF_ORIGIN_CACHE: dict = {}
+_CIF_ORIGIN_LOCK = threading.Lock()
+
+
+def _cif_origin_choice(path, source, parser, space_group: int) -> int:
+    """Origin choice (1 or 2) of the block diffpy expanded, decided by ``cif_origin``.
+
+    ``path`` is the CIF as the caller named it (cache key, messages); ``source``
+    is what ``sanitize_cif`` made of it, the text diffpy and pymatgen both read.
+
+    Raises ``CifOriginError`` where the master-pattern path would: the block
+    says nothing that decides it, contradicts itself, or states another group.
+    """
+    from backend.forward_sim.crystal.cif_origin import CifOriginError, analyse_cif
+
+    p = Path(path)
+    try:
+        st = p.stat()
+        key = (str(p.resolve()), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None:
+        with _CIF_ORIGIN_LOCK:
+            hit = _CIF_ORIGIN_CACHE.get(key)
+        if hit is not None:
+            return hit
+
+    # diffpy expands the first block that has an atom-site loop. PyCifRW
+    # lowercases block names, pymatgen keeps them, so compare without case.
+    block = next((k for k in parser.ciffile.keys()
+                  if "_atom_site_label" in parser.ciffile[k]), None)
+    verdict = next((v for v in analyse_cif(source)
+                    if block is not None and v.key.lower() == block.lower()), None)
+    if verdict is None:
+        raise CifOriginError(
+            f"{p.name}: the origin choice of block {block!r} could not be established, "
+            f"and space group {space_group} is published in two origin choices.")
+    if verdict.problem is not None:
+        raise CifOriginError(f"{p.name}: {verdict.problem}")
+    if verdict.space_group != space_group:
+        raise CifOriginError(
+            f"{p.name}: diffpy reads space group {space_group} from block {block!r}, "
+            f"the block itself states {verdict.space_group}; the origin shift for "
+            "one would be applied to the other.")
+    if key is not None:
+        with _CIF_ORIGIN_LOCK:
+            _CIF_ORIGIN_CACHE[key] = verdict.choice
+    if verdict.choice == 2:
+        logger.info("%s: block %r is written in origin choice 2 (%s)",
+                    p.name, block, "; ".join(verdict.evidence))
+    return verdict.choice
+
+
+def _expand_in_origin_choice_1(parser, space_group):
+    """diffpy's own expansion of the CIF's asymmetric unit, moved to choice 1 first.
+
+    The same steps as ``P_cif._expandAsymmetricUnit``, with one difference: each
+    coordinate goes through ``origin_choice.to_choice_1`` before the operators
+    of ``space_group`` (diffpy's, i.e. choice 1, the ones diffsims re-expands
+    with in ``sanitise_phase``) are applied. Labels, occupancies and U tensors
+    are carried exactly as diffpy carries them.
+    """
+    from diffpy.structure import Atom
+    from diffpy.structure.symmetryutilities import ExpandAsymmetricUnit
+
+    from backend.forward_sim.crystal.origin_choice import to_choice_1
+
+    core = []
+    for atom in parser.asymmetric_unit:
+        moved = Atom(atom)
+        moved.xyz = to_choice_1(atom.xyz, space_group.number, 2)
+        core.append(moved)
+    eau = ExpandAsymmetricUnit(space_group, [a.xyz for a in core], [a.U for a in core],
+                               eps=parser.eps)
+    atoms = []
+    for i, ca in enumerate(core):
+        for j in range(eau.multiplicity[i]):
+            a = Atom(ca)
+            a.xyz = eau.expandedpos[i][j]
+            if j > 0:
+                a.label += "_" + str(j + 1)
+            if a.anisotropy:
+                a.U = eau.expandedUijs[i][j]
+            atoms.append(a)
+    structure = parser.stru.copy()
+    del structure[:]
+    structure.extend(atoms)
+    return structure
+
+
+def hough_phase_from_cif(path):
+    """``Phase.from_cif(sanitize_cif(path))``, with the CIF's origin choice honoured.
+
+    Every Hough phase (the run, the per-phase split, batch, the cached indexer
+    behind pattern match and phase check, the pseudo-symmetry resolver, the
+    reflector-cost probe, PC refinement) is built here, because the atoms feed
+    the structure factors that choose Hough's reflectors.
+
+    orix reads a CIF through diffpy, and diffpy expands the 24 space groups that
+    have two origin choices with choice-1 operators, whatever the file was
+    written in. ``Si.cif`` (Fd-3m, origin choice 2) came out as 16 Si instead
+    of 8, ``sd_1816951.cif`` (MgCu2) as Mg32 Cu8 instead of Mg8 Cu16. For Si
+    that put the diamond-forbidden {222} into the reflector list and dropped
+    {220} and {224}.
+
+    The decision is ``backend.forward_sim.crystal.cif_origin``'s, the one the
+    master-pattern path uses. When the block is in choice 2 the asymmetric unit
+    is moved to choice 1 and expanded again by diffpy; name, lattice, space
+    group and point group are those of ``Phase.from_cif`` untouched. For the
+    other 206 groups, and for a CIF already in choice 1, the result IS
+    ``Phase.from_cif(sanitize_cif(path))``.
+
+    Raises ``CifOriginError`` for a CIF in a two-origin group whose origin
+    cannot be decided — it is not guessed, as the master-pattern path refuses
+    the same file.
+    """
+    from orix.crystal_map import Phase
+
+    from backend.forward_sim.crystal.origin_choice import has_two_origin_choices
+
+    source = sanitize_cif(str(path))
+    phase = Phase.from_cif(source)
+    number = getattr(phase.space_group, "number", None)
+    if number is None:
+        return phase
+    if not has_two_origin_choices(number):
+        if number > _MAX_STANDARD_SPACE_GROUP and has_two_origin_choices(number % 1000):
+            logger.warning(
+                "%s: space group %s is a non-standard setting of a group with two "
+                "origin choices; its origin choice is not checked, so the atom "
+                "positions used for Hough's reflectors are unverified.",
+                Path(str(path)).name, number)
+        return phase
+
+    from diffpy.structure.parsers import p_cif
+
+    parser = p_cif.P_cif()
+    parser.parseFile(source)
+    if _cif_origin_choice(path, source, parser, number) == 1:
+        return phase
+    n_before = len(phase.structure)
+    phase.structure = _expand_in_origin_choice_1(parser, phase.space_group)
+    logger.info("%s: atoms re-expanded in origin choice 1 for Hough (%d atoms, "
+                "diffpy alone gave %d)", Path(str(path)).name, len(phase.structure), n_before)
+    return phase
+
+
 def validate_pattern(pattern):
     """
     Validate a pattern is a 2D array. Returns (True, array) or (False, reason).

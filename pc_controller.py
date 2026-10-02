@@ -36,10 +36,10 @@ class PCController:
 
     def load_phase(self, path):
         """Load phase from CIF, create PhaseList, reflectors and invalidate cache/indexer."""
-        from orix.crystal_map import Phase, PhaseList
+        from orix.crystal_map import PhaseList
         from pathlib import Path as P
-        from ebsd_utils import sanitize_cif
-        phase = Phase.from_cif(sanitize_cif(path))
+        from ebsd_utils import hough_phase_from_cif
+        phase = hough_phase_from_cif(path)
         # Restore original name if sanitize_cif created a temp file
         original_stem = P(path).stem
         if phase.name != original_stem:

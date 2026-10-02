@@ -1460,9 +1460,9 @@ def _build_phase_configs(req):
         # per-phase Hough split (EDS chemistry prior); the native multi-CIF
         # Hough call already builds a PhaseList itself.
         if req.method == 'hough':
-            from orix.crystal_map import Phase, PhaseList
-            from ebsd_utils import sanitize_cif
-            pc.phase_list = PhaseList(Phase.from_cif(sanitize_cif(p)))
+            from orix.crystal_map import PhaseList
+            from ebsd_utils import hough_phase_from_cif
+            pc.phase_list = PhaseList(hough_phase_from_cif(p))
 
         configs.append(pc)
 
@@ -3630,10 +3630,9 @@ async def start_indexing(req: IndexingStartRequest):
                     # per CIF using the existing helper so per-phase indexing
                     # gets the same data as the legacy single-phase path.
                     try:
-                        from ebsd_utils import sanitize_cif
-                        from orix.crystal_map import Phase, PhaseList
-                        sanitized = sanitize_cif(cif_path)
-                        phase = Phase.from_cif(sanitized)
+                        from ebsd_utils import hough_phase_from_cif
+                        from orix.crystal_map import PhaseList
+                        phase = hough_phase_from_cif(cif_path)
                         if phase.name != _stem(cif_path):
                             phase.name = _stem(cif_path)
                         pc.phase_list = PhaseList(phases=[phase])
@@ -4153,15 +4152,15 @@ async def start_indexing(req: IndexingStartRequest):
                     merge_provenance(
                         result, (r.indexing_result for r in per_phase_results))
                 else:
-                    from orix.crystal_map import Phase, PhaseList
-                    from ebsd_utils import sanitize_cif
+                    from orix.crystal_map import PhaseList
+                    from ebsd_utils import hough_phase_from_cif
 
                     from pathlib import Path as P
 
                     phases = []
                     for cif_path in req.cif_paths:
                         _progress(f"Loading phase from {cif_path}...")
-                        phase = Phase.from_cif(sanitize_cif(cif_path))
+                        phase = hough_phase_from_cif(cif_path)
                         # Restore original name if sanitize_cif created a temp file
                         original_stem = _stem(cif_path)
                         if phase.name != original_stem:
@@ -6244,8 +6243,8 @@ def _hough_indexer_for(cif_path, det_params, n_bands: int = 12):
     the caller did not ask for would return orientations that look perfectly
     valid and are wrong — silent, and far worse than the rebuild it saves.
     """
-    from orix.crystal_map import Phase, PhaseList
-    from ebsd_utils import sanitize_cif, prepare_reflectors, create_indexer
+    from orix.crystal_map import PhaseList
+    from ebsd_utils import hough_phase_from_cif, prepare_reflectors, create_indexer
     from kikuchipy.detectors import EBSDDetector
 
     p = Path(cif_path)
@@ -6266,7 +6265,7 @@ def _hough_indexer_for(cif_path, det_params, n_bands: int = 12):
     if hit is not None:
         return hit
 
-    phase = Phase.from_cif(sanitize_cif(str(cif_path)))
+    phase = hough_phase_from_cif(cif_path)
     try:
         phase.name = _stem(p)
     except Exception:
@@ -6387,15 +6386,15 @@ def _hough_memory_evidence(cif_path):
         pass
     try:
         import kikuchipy as kp
-        from orix.crystal_map import Phase, PhaseList
+        from orix.crystal_map import PhaseList
         from ebsd_utils import (
-            get_phase_reflector_limit, predict_triplet_library,
-            prepare_reflectors, sanitize_cif,
+            get_phase_reflector_limit, hough_phase_from_cif, predict_triplet_library,
+            prepare_reflectors,
         )
         # Same construction as GET /hough/reflector-cost, including the nominal
         # detector: PyEBSDIndex sizes the library from the phase's poles and
         # lattice alone, so this costs a CIF read and allocates nothing.
-        phase = Phase.from_cif(sanitize_cif(str(cif_path)))
+        phase = hough_phase_from_cif(cif_path)
         pl = PhaseList(phase)
         refl = prepare_reflectors(pl)
         det = kp.detectors.EBSDDetector(shape=(60, 60), pc=(0.5, 0.5, 0.5),
@@ -7395,11 +7394,11 @@ def _hough_euler_for_phase(exp_pattern, cif_path, det_params):
     """
     try:
         import numpy as _np
-        from orix.crystal_map import Phase, PhaseList
-        from ebsd_utils import sanitize_cif, prepare_reflectors, create_indexer
+        from orix.crystal_map import PhaseList
+        from ebsd_utils import hough_phase_from_cif, prepare_reflectors, create_indexer
         from kikuchipy.detectors import EBSDDetector
         from kikuchipy.signals import EBSD
-        phase = Phase.from_cif(sanitize_cif(str(cif_path)))
+        phase = hough_phase_from_cif(cif_path)
         try:
             phase.name = _stem(cif_path)
         except Exception:
@@ -9369,13 +9368,13 @@ async def hough_reflector_cost(cif_path: str, n_bands: int = 12):
         raise HTTPException(status_code=404, detail=f"CIF not found: {cif_path}")
     try:
         import kikuchipy as kp
-        from orix.crystal_map import Phase, PhaseList
+        from orix.crystal_map import PhaseList
         from ebsd_utils import (
             _available_memory_bytes, _triplet_library_budget_bytes,
-            predict_triplet_library, prepare_reflectors, sanitize_cif,
+            hough_phase_from_cif, predict_triplet_library, prepare_reflectors,
         )
 
-        phase = Phase.from_cif(sanitize_cif(str(path)))
+        phase = hough_phase_from_cif(path)
         phase.name = _stem(path)
         pl = PhaseList(phase)
         refl = prepare_reflectors(pl)
@@ -10855,11 +10854,11 @@ async def start_batch_indexing(req: BatchRequest):
                 if indexing_method == IndexingMethod.HOUGH:
                     if not ds_config.cif_paths:
                         raise ValueError("Hough requires CIF files")
-                    from orix.crystal_map import Phase, PhaseList
-                    from ebsd_utils import sanitize_cif
+                    from orix.crystal_map import PhaseList
+                    from ebsd_utils import hough_phase_from_cif
                     phases = []
                     for cif in ds_config.cif_paths:
-                        p = Phase.from_cif(sanitize_cif(cif))
+                        p = hough_phase_from_cif(cif)
                         p.name = _stem(cif)
                         phases.append(p)
                     phase_list = PhaseList(phases)

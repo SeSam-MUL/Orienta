@@ -147,12 +147,12 @@ def batch_hough_orientations(
 
     `progress(msg)` is called once per chunk with a count + rate metric.
     """
-    from orix.crystal_map import Phase, PhaseList
-    from ebsd_utils import sanitize_cif, prepare_reflectors, create_indexer
+    from orix.crystal_map import PhaseList
+    from ebsd_utils import hough_phase_from_cif, prepare_reflectors, create_indexer
     from kikuchipy.detectors import EBSDDetector
     from kikuchipy.signals import EBSD
 
-    phase = Phase.from_cif(sanitize_cif(str(cif_path)))
+    phase = hough_phase_from_cif(cif_path)
     try:
         from display_names import display_stem
         # This name lands on the xmap and is exported; cif_path comes from the
