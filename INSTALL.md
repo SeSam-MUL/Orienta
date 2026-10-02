@@ -50,9 +50,9 @@ way that looks like a bug.
 
 **Apple Silicon only** (M1 and newer), macOS 14 or newer. Intel Macs are not
 supported: PyTorch stopped publishing builds for them, and Orienta says so at
-startup rather than failing later. Allow about **7 GB** free — while the
+startup rather than failing later. Allow about **12 GB** free — while the
 environment is built, the package cache and the finished environment are on
-disk at the same time.
+disk at the same time, and the setup checks for that much before it starts.
 
 ```bash
 shasum -a 256 Orienta-<version>-arm64.dmg     # compare with the .sha256
@@ -60,15 +60,17 @@ shasum -a 256 Orienta-<version>-arm64.dmg     # compare with the .sha256
 
 Open the disk image and drag Orienta onto the Applications shortcut beside it.
 
-**The first start needs a right-click.** Orienta is signed, but not with a paid
+**The first start needs one extra step.** Orienta is signed, but not with a paid
 Apple certificate — there is no Apple developer account behind this project —
 so macOS does not recognise the developer. A double-click only says the app
-"cannot be opened" and offers no way forward. Instead:
+cannot be opened or verified. Then:
 
-- right-click (or Control-click) **Orienta** in Applications → **Open**, then
-  **Open** again in the dialog; or
-- System Settings → **Privacy & Security**, scroll to the bottom, where
-  "Orienta was blocked" appears with an **Open Anyway** button.
+- **macOS 15 and later:** click **Done** in that dialog, open System Settings →
+  **Privacy & Security**, scroll to the bottom, where Orienta is listed as
+  blocked, and click **Open Anyway**;
+- **macOS 14:** right-click (or Control-click) **Orienta** in Applications →
+  **Open**, then **Open** again in the dialog. The Privacy & Security route
+  works there too.
 
 After that once, it starts normally.
 
@@ -119,8 +121,8 @@ reason as on macOS.
 
 Download it and run it. Everything else is set up on first start: a private Python for Orienta, all
 packages, and the GPU versions of them when the machine has a suitable NVIDIA
-card. Allow about 8 GB of free space and, depending on your connection,
-10 to 30 minutes.
+card. Allow about 2.5 GB of free space (9 GB with the NVIDIA GPU packages) and,
+depending on your connection, 10 to 30 minutes.
 
 **Windows will warn you.** The installer is not signed with a paid
 certificate, so a blue "Windows protected your PC" window appears. Click

@@ -24,57 +24,64 @@ repository was on 0.3.0; by the rule above this would be a 0.x.0.*
 v0.3.0, read "The Materials Project API key was readable in this repository"
 below — that key must be treated as compromised.**
 
-**Read the next section before you trust an old result on silicon, MgCu₂ or
-Al₃Fe₂Si.**
+**Read the next section before you trust an old result on silicon or MgCu₂.**
 
-### Three crystal structures in the library were wrong, and so was everything
+### Two crystal structures in the library were wrong, and so was everything
 built from them
 
 A structure read from a CIF was expanded with the wrong set of symmetry
 operations. For the 24 space groups that have two possible origins, the
 library Orienta uses publishes its operators for the first origin while
 structure databases publish coordinates for the second — so those structures
-came out with **twice the atoms they should have**. Silicon arrived as 16
-atoms in the unit cell instead of 8, and its density as 4.659 g/cm³ against a
-literature value of 2.329.
+came out with **atoms on the wrong sites**. Silicon arrived as 16 atoms in the
+unit cell instead of 8, and its density as 4.66 g/cm³ against a literature
+value of 2.329.
 
 That is not cosmetic. The atom basis sets the electron density for the Monte
 Carlo step and the crystal potential for the master pattern, so a master built
 from such a structure is wrong throughout, not slightly off.
 
-**Reading is fixed.** A CIF is now expanded on the correct orbit, `.xtal`
-files carry and honour their origin setting, the 3-D structure view and the
-master writer use it, and a file whose setting cannot be verified says so when
-it is read.
+**Reading for simulation is fixed.** A CIF is now expanded on the correct
+orbit, `.xtal` files carry and honour their origin setting, the 3-D structure
+view and the master writer use it, and a file whose setting cannot be verified
+says so when it is read. Hough indexing reads CIF files through a separate
+reader that this fix does not cover: in this version it still expands silicon
+to 16 atoms and MgCu₂ to Mg32Cu8, and the effect on Hough results has not been
+established.
 
-**Three files in the library were not repaired by that fix**, because their
+**Two files in the library were not repaired by that fix**, because their
 error was written into them at conversion time rather than made when reading
-them: `Si.xtal`, `Al3Fe2Si_mp-1190708_symmetrized.xtal` and
-`sd_1816951.xtal` (MgCu₂). Everything computed from them carries it — their
-master patterns, their Monte-Carlo caches, and the Si dictionary. **If you
-indexed against any of those three phases, treat the result as unverified.**
-The other 32 structures in the library are in single-origin space groups and
-are unaffected.
+them: `Si.xtal` and `sd_1816951.xtal` (MgCu₂). Everything computed from them
+carries it — their master patterns, their Monte-Carlo caches, and the Si
+dictionary. **If you indexed against either of those phases, treat the result
+as unverified.** `Al3Fe2Si_mp-1190708_symmetrized.xtal` is in the same space
+group but was written correctly: it has the atom count and density of its CIF.
+An earlier version of this entry listed it as affected. The other 32 structures
+in the library are in single-origin space groups and are unaffected.
 
-**All three have now been rebuilt.** The converter was fixed first, because
+**Both have now been rebuilt.** The converter was fixed first, because
 rebuilding with it would have written a different wrong thing: it used to take
 the origin from an unrelated quantity, and the choice now comes from what a CIF
 says about its own atoms — its operators, the multiplicity of its sites, its
 formula — with a refusal instead of a guess when those contradict each other or
-say nothing. Then all three were regenerated from their CIFs, Monte-Carlo step
-and master pattern included: silicon 16 → **8 atoms**, density 4.658 →
-**2.329 g/cm³**; MgCu₂ Mg32Cu8 → **Mg8Cu16**, 6.145 → **5.787 g/cm³**; and
-β-AlFeSi from the silicon-bearing CIF it should have used. An audit across the
-whole library afterwards found **34 files and no remaining deviation**. The
+say nothing. Then both were regenerated from their CIFs, Monte-Carlo step and
+master pattern included: silicon 16 → **8 atoms**, density 4.66 →
+**2.329 g/cm³**; MgCu₂ Mg32Cu8 → **Mg8Cu16**, 6.145 → **5.787 g/cm³**.
+β-AlFeSi had a different fault: the library used a CIF that models every mixed
+Al/Si site as Al, so the cell contained no silicon. The phase now comes from the
+silicon-bearing CIF it should have used. An audit across the
+whole library afterwards found **34 files and no remaining deviation** (one fewer
+than before: the silicon-free β-AlFeSi entry was retired). The
 superseded files were moved aside rather than deleted.
 
-**Nothing shipped in this repository is affected.** The four structures under
-`sample_data/phases/` were checked against their CIFs with Orienta's own audit:
-all four come back with the atom count and density they should have, and none of
-them is in one of the 24 space groups that have two origins. The three wrong
-files were in the maintainers' own crystal library, which this repository has
-never contained — if you built masters from your own copies of `Si`, MgCu₂ or
-β-AlFeSi, those are the ones to rebuild.
+**No structure file shipped in this repository is affected.** The four structures
+under `sample_data/phases/` were checked against their CIFs with Orienta's own
+audit: all four come back with the atom count and density they should have, and
+none of them is in one of the 24 space groups that have two origins. The wrong
+files — `Si` and MgCu₂ with the origin fault, β-AlFeSi built from a silicon-free
+cell — were in the maintainers' own crystal library, which this repository has
+never contained; if you built masters from your own copies of any of them, those
+are the ones to rebuild.
 
 **So if you indexed silicon or MgCu₂ with Dictionary or Spherical indexing in an
 earlier version, index those maps again.** On silicon the new master is a
@@ -262,11 +269,12 @@ corner can cost you is a second attempt.*
   Both bring their own Python and set themselves up on first start, exactly as
   the Windows installer does. Your measurement files stay where they are.
 - **The first start is different on each, and neither is obvious.** On a Mac a
-  double-click only says the app cannot be opened and offers no way forward:
-  use right-click → **Open**, then **Open** again. Orienta is signed, but not
-  with a paid Apple certificate — there is no Apple developer account behind
-  this project. On Linux the AppImage needs `chmod +x` first; without it a
-  double-click does nothing at all, with no message.
+  double-click only says the app cannot be opened. On macOS 15 and later, click
+  **Done**, then open System Settings → Privacy & Security and click **Open
+  Anyway**; on macOS 14, right-click → **Open**, then **Open** again. Orienta is
+  signed, but not with a paid Apple certificate — there is no Apple developer
+  account behind this project. On Linux the AppImage needs `chmod +x` first;
+  without it a double-click does nothing at all, with no message.
 - **What is not on offer there:** EMsoft simulations, which Orienta reaches
   through WSL, a Windows feature; and graphics-card acceleration, which needs
   an NVIDIA card. Orienta Engine, the built-in simulator, runs on all three
