@@ -1,6 +1,6 @@
 # IPF Colour Maps in Orienta — the Complete Picture
 
-**Date:** 2026-07-12 · **Branch:** `golive/unified-phase-identity`
+**Date:** 2026-07-12
 **Audience:** developers + scientific users. This document records *everything*
 that was built to make IPF (inverse pole figure) orientation maps correct and
 readable, why each piece exists, what it changes (data vs. display), where the
@@ -122,7 +122,7 @@ shows the "⬡ Orientierung aus Hough" badge.
 > the Hough-anchored pipeline, and the run is 45 % faster. `spherical_unreliable()`
 > now keeps only **-43m** (58 % within 2°, the rest a 90° variant) — and a z_rot=2
 > master of unknown class — on Hough. `ORIENTA_HOUGH_ANCHOR_ALL_ZROT2=1` restores the
-> old gate. Measurements: `tasks/retire-hough/`.
+> old gate.
 > Consequence to know: the map-wide variant unification (3.3) runs only for phases
 > the resolver touched, so it no longer runs for alpha or the S phase. Its
 > five-fold classes existed for Hough's second basin, which the raw sphere does not
@@ -347,13 +347,13 @@ Colour toggles need no re-indexing, they re-render layers only.
 
 | Claim | Evidence | Where |
 |---|---|---|
-| Orientations smooth after unification | 840-px `.ang` export, all 4-neighbour pairs < 5° under m-3 | scratchpad `live_result.ang`, session 2026-07-09 |
-| Key discontinuity, not data | 1.29° pair → RGB jump 1.34; 6.7% of sub-3° pairs > 0.3; IPF-X/Y clean | `tasks/_probe_ipf_key_internals.py` |
-| v2 kills speckle, keeps gradients | 159→0 speckle pairs; corr 0.889; 729 colours in 812-px grain | `tasks/_validate_ipf_v2_scan1.py`, `tasks/_scan1_ipfz_{standard,v2}.png` |
+| Orientations smooth after unification | 840-px `.ang` export, all 4-neighbour pairs < 5° under m-3 | maintainers' measurement, 2026-07-09 |
+| Key discontinuity, not data | 1.29° pair → RGB jump 1.34; 6.7% of sub-3° pairs > 0.3; IPF-X/Y clean | maintainers' measurement |
+| v2 kills speckle, keeps gradients | 159→0 speckle pairs; corr 0.889; 729 colours in 812-px grain | maintainers' measurement |
 | Variant decision is not marginal | SampleB render-NCC true 0.50 vs flip 0.09 (margin 0.41) | `tests/test_spherical_gpu/test_variant_unification.py` (real-data E2E) |
-| Second Hough basin is systematic | 20 Scan1 blobs ALL at 71.9° (m-3) to matrix | session diagnosis 2026-07-09; adoption test suite |
-| Hough beats hough-free for mmm | render-NCC 0.69, 5304 px in 4.4 s; spherical ~90° off at 0.19; ~2° FWHM peak | `tasks/golive/optd-hough-free-lowsym-investigation-2026-06-30.md` |
-| Full-map health (25,230 px) | Al 96.1% smooth/111 grains; Al7FeCu2 99.4%/1 crystal; alpha 90.4%/5125-px main grain | full-map `.ang` export, session 2026-07-11 |
+| Second Hough basin is systematic | 20 Scan1 blobs ALL at 71.9° (m-3) to matrix | maintainers' diagnosis 2026-07-09; adoption test suite |
+| Hough beats hough-free for mmm | render-NCC 0.69, 5304 px in 4.4 s; spherical ~90° off at 0.19; ~2° FWHM peak | maintainers' investigation, 2026-06-30 (superseded 2026-09-22: the 90° offset was a decoder error, see the §3.2 update) |
+| Full-map health (25,230 px) | Al 96.1% smooth/111 grains; Al7FeCu2 99.4%/1 crystal; alpha 90.4%/5125-px main grain | full-map `.ang` export, 2026-07-11 |
 
 ## 7. Known limits / open items
 

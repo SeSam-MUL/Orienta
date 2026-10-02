@@ -505,9 +505,10 @@ while the confidence index does not move at all, so only a forward render sees i
 ### Notes
 
 - The crystal database is not part of this repository and is not shipped with it.
-  `tasks/symmetrise_p1_cifs_2026-09-13.py` repairs library CIFs that were stored
-  without their symmetry operators; on one phase that moved the share of pixels
-  within 5° of the spherical answer from 87 % to 97 %.
+  Library CIFs that had been stored without their symmetry operators were repaired
+  with a maintenance script that is not part of this repository either; on one
+  phase that moved the share of pixels within 5° of the spherical answer from
+  87 % to 97 %.
 - Tests that need binary reference data which the repository does not carry are not
   part of the shipped suite.
 

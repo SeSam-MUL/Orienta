@@ -1,5 +1,5 @@
 # Core scientific libraries
-# Upper bounds until the newer releases are validated on real data (tasks/mac-compat/).
+# Upper bounds until the newer releases are validated on real data.
 # orix 0.15 changes the order in which misorientation reduction applies symmetry, which the
 # pseudo-symmetry code depends on; kikuchipy 0.12.1 excludes pyebsdindex 0.3.10 over a PC bug.
 kikuchipy>=0.11.3,<0.12

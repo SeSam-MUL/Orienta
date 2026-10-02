@@ -108,7 +108,7 @@ EMsoft at runtime.
   verbatim: lattice `a, b, c` in nm, angles in degrees, Debye-Waller `B` in nm²,
   `AtomData` rows `[x, y, z, occ, B]`.
 - **EMsoft-parity.** The scattering physics is ported term-for-term from EMsoft
-  source; see the module docstrings and `tasks/forward_sim/lessons.md` for the
+  source; see the module docstrings for the
   unit reconciliations (notably the WK `S`-variable scaling and the `CalcUcg` 4π
   normalisation), which are the load-bearing details for NCC parity.
 - **Outputs are drop-ins, not re-runs.** The `io/` writers never invoke EMsoft;

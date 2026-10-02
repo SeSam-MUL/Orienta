@@ -3,7 +3,6 @@
 **kikuchipy version pinned:** 0.11.3 (see requirements.txt)
 **Reference file:** `kikuchipy/signals/util/_master_pattern.py`
 **Imported on:** 2026-05-11
-**Translation guide:** `tasks/kikuchipy_projection_reference.md`
 
 ## Function map
 
