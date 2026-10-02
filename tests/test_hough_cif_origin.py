@@ -74,9 +74,14 @@ _atom_site_occupancy
 
 def _cif(tmp_path: Path, name: str, *, a: float, symbol: str,
          sites: list[tuple[str, str, str, str, str, str]]) -> Path:
-    """A minimal Fd-3m CIF. An empty Wyckoff symbol on every site drops the column."""
+    """A minimal Fd-3m CIF. An empty Wyckoff symbol on every site drops the column.
+
+    The block name has capitals on purpose: diffpy's CIF reader lowercases block
+    names and pymatgen's does not, and the helper has to find the same block in
+    both. An all-lowercase name would let a case-sensitive match pass here.
+    """
     with_wyckoff = any(s[2] for s in sites)
-    text = _HEADER.format(block=Path(name).stem, a=a, symbol=symbol,
+    text = _HEADER.format(block="Synthetic_" + Path(name).stem, a=a, symbol=symbol,
                           wyckoff_column="_atom_site_Wyckoff_symbol\n" if with_wyckoff else "")
     for label, element, wyckoff, x, y, z in sites:
         cells = [label, element] + ([wyckoff or "."] if with_wyckoff else []) + [x, y, z, "1"]
