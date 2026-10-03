@@ -855,62 +855,114 @@ def sanitize_cif(path):
     return path
 
 
-# Origin choice per CIF, keyed on (path, mtime, size). Deciding it costs 2-3 s
-# for a file in one of the 24 two-origin groups (pymatgen rebuilds the space
-# group for every orbit it sizes), and several Hough sites rebuild the phase
-# on every call (the phase check's Hough orientation, the reflector-cost probe,
-# each run). Only the decision is cached: callers rename and mutate the Phase.
+# Per CIF, keyed on (path, mtime, size, diffpy's space-group number): the origin
+# choice of a file in one of the 24 two-origin groups (1 or 2), or None for a
+# non-standard setting whose origin is not checked. Deciding costs 2-3 s
+# (pymatgen rebuilds the space group for every orbit it sizes), and several
+# Hough sites rebuild the phase on every call (the phase check's Hough
+# orientation, the reflector-cost probe, each run). Everything the helper logs
+# about a file is logged on the miss only.
+# Only the decision is cached, never the Phase: callers rename and mutate it.
 _CIF_ORIGIN_CACHE: dict = {}
 _CIF_ORIGIN_LOCK = threading.Lock()
+_NOT_CACHED = object()
+
+#: pymatgen keeps 74 characters of a CIF block name, PyCifRW all 75 the format
+#: allows (it refuses 76 and more) -- measured 2026-10-03 on pymatgen's CifFile
+#: and diffpy's P_cif. A 75-character name therefore has to be compared at 74,
+#: or a decidable block is refused as "could not be established".
+_PYMATGEN_BLOCK_NAME_CHARS = 74
 
 
-def _cif_origin_choice(path, source, parser, space_group: int) -> int:
-    """Origin choice (1 or 2) of the block diffpy expanded, decided by ``cif_origin``.
+def _cif_identity(path):
+    p = Path(str(path))
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    return (str(p.resolve()), st.st_mtime_ns, st.st_size)
 
-    ``path`` is the CIF as the caller named it (cache key, messages); ``source``
-    is what ``sanitize_cif`` made of it, the text diffpy and pymatgen both read.
+
+def _cached_origin(key):
+    if key is None:
+        return _NOT_CACHED
+    with _CIF_ORIGIN_LOCK:
+        return _CIF_ORIGIN_CACHE.get(key, _NOT_CACHED)
+
+
+def _cache_origin(key, value) -> None:
+    if key is not None:
+        with _CIF_ORIGIN_LOCK:
+            _CIF_ORIGIN_CACHE[key] = value
+
+
+def _atom_block(parser):
+    """The block diffpy expanded: the first one with an atom-site loop."""
+    return next((k for k in parser.ciffile.keys()
+                 if "_atom_site_label" in parser.ciffile[k]), None)
+
+
+def _decide_origin_choice(path, source, parser, space_group: int):
+    """``(choice, evidence, block)`` for the block diffpy expanded, by ``cif_origin``.
+
+    ``path`` is the CIF as the caller named it (messages); ``source`` is what
+    ``sanitize_cif`` made of it, the text diffpy and pymatgen both read.
 
     Raises ``CifOriginError`` where the master-pattern path would: the block
     says nothing that decides it, contradicts itself, or states another group.
     """
     from backend.forward_sim.crystal.cif_origin import CifOriginError, analyse_cif
 
-    p = Path(path)
-    try:
-        st = p.stat()
-        key = (str(p.resolve()), st.st_mtime_ns, st.st_size)
-    except OSError:
-        key = None
-    if key is not None:
-        with _CIF_ORIGIN_LOCK:
-            hit = _CIF_ORIGIN_CACHE.get(key)
-        if hit is not None:
-            return hit
-
-    # diffpy expands the first block that has an atom-site loop. PyCifRW
-    # lowercases block names, pymatgen keeps them, so compare without case.
-    block = next((k for k in parser.ciffile.keys()
-                  if "_atom_site_label" in parser.ciffile[k]), None)
+    name = Path(str(path)).name
+    # PyCifRW lowercases block names and pymatgen does not; pymatgen also
+    # truncates them (see _PYMATGEN_BLOCK_NAME_CHARS).
+    block = _atom_block(parser)
+    wanted = None if block is None else block.lower()[:_PYMATGEN_BLOCK_NAME_CHARS]
     verdict = next((v for v in analyse_cif(source)
-                    if block is not None and v.key.lower() == block.lower()), None)
+                    if v.key.lower()[:_PYMATGEN_BLOCK_NAME_CHARS] == wanted), None)
     if verdict is None:
         raise CifOriginError(
-            f"{p.name}: the origin choice of block {block!r} could not be established, "
+            f"{name}: the origin choice of block {block!r} could not be established, "
             f"and space group {space_group} is published in two origin choices.")
     if verdict.problem is not None:
-        raise CifOriginError(f"{p.name}: {verdict.problem}")
+        raise CifOriginError(f"{name}: {verdict.problem}")
     if verdict.space_group != space_group:
         raise CifOriginError(
-            f"{p.name}: diffpy reads space group {space_group} from block {block!r}, "
+            f"{name}: diffpy reads space group {space_group} from block {block!r}, "
             f"the block itself states {verdict.space_group}; the origin shift for "
             "one would be applied to the other.")
-    if key is not None:
-        with _CIF_ORIGIN_LOCK:
-            _CIF_ORIGIN_CACHE[key] = verdict.choice
-    if verdict.choice == 2:
-        logger.info("%s: block %r is written in origin choice 2 (%s)",
-                    p.name, block, "; ".join(verdict.evidence))
-    return verdict.choice
+    return verdict.choice, list(verdict.evidence), block
+
+
+def _diffpy_used_the_files_operators(parser, space_group) -> bool:
+    """True when the CIF lists operators and they are the set diffpy expanded with.
+
+    diffpy first matches a block's explicit operators against its table, so an
+    alternate setting it found that way (e.g. ``1059 Pmmn2``, Pmmn origin
+    choice 2) carries the file's own operators: whatever origin they are in,
+    the atoms and the operators agree. One it reached from a setting NAME
+    (``'P n c b'`` -> 1050) has no such guarantee.
+    """
+    from diffpy.structure.parsers.p_cif import getSymOp
+    from diffpy.structure.spacegroups import FindSpaceGroup
+
+    block = _atom_block(parser)
+    if block is None:
+        return False
+    data = parser.ciffile[block]
+    ops = None
+    for item in ("_space_group_symop_operation_xyz", "_symmetry_equiv_pos_as_xyz"):
+        if item in data:
+            ops = data[item]
+            break
+    if not ops:
+        return False
+    ops = [ops] if isinstance(ops, str) else list(ops)
+    try:
+        found = FindSpaceGroup([getSymOp(s) for s in ops])
+    except Exception:  # noqa: BLE001 -- no match means "not the file's operators"
+        return False
+    return found.number == space_group.number
 
 
 def _expand_in_origin_choice_1(parser, space_group):
@@ -972,9 +1024,17 @@ def hough_phase_from_cif(path):
     other 206 groups, and for a CIF already in choice 1, the result IS
     ``Phase.from_cif(sanitize_cif(path))``.
 
+    When diffpy lands on a non-standard setting of one of the 24 groups (a
+    number above 230) nothing is shifted. If the CIF's own operators are the
+    ones diffpy expanded with, the result is consistent; otherwise a warning
+    says the positions are unverified, once per file.
+
     Raises ``CifOriginError`` for a CIF in a two-origin group whose origin
     cannot be decided — it is not guessed, as the master-pattern path refuses
     the same file.
+
+    The first call for a two-origin file takes 2-3 s (cached per path, mtime
+    and size afterwards), so async routes must run it off the event loop.
     """
     from orix.crystal_map import Phase
 
@@ -985,25 +1045,50 @@ def hough_phase_from_cif(path):
     number = getattr(phase.space_group, "number", None)
     if number is None:
         return phase
-    if not has_two_origin_choices(number):
-        if number > _MAX_STANDARD_SPACE_GROUP and has_two_origin_choices(number % 1000):
-            logger.warning(
-                "%s: space group %s is a non-standard setting of a group with two "
-                "origin choices; its origin choice is not checked, so the atom "
-                "positions used for Hough's reflectors are unverified.",
-                Path(str(path)).name, number)
+    two_origins = has_two_origin_choices(number)
+    alternate = (not two_origins and number > _MAX_STANDARD_SPACE_GROUP
+                 and has_two_origin_choices(number % 1000))
+    if not (two_origins or alternate):
         return phase
 
     from diffpy.structure.parsers import p_cif
 
+    name = Path(str(path)).name
+    key = _cif_identity(path)
+    if key is not None:
+        key += (number,)     # a two-origin entry (1/2) never meets an alternate one (None)
+    cached = _cached_origin(key)
+    if cached is not _NOT_CACHED and (alternate or cached == 1):
+        return phase
     parser = p_cif.P_cif()
     parser.parseFile(source)
-    if _cif_origin_choice(path, source, parser, number) == 1:
+
+    if alternate:
+        # A non-standard setting of a two-origin group. diffpy's table holds
+        # some of these in a fixed origin; cif_origin's shifts are for the
+        # standard settings only, so nothing is shifted here.
+        if not _diffpy_used_the_files_operators(parser, phase.space_group):
+            logger.warning(
+                "%s: space group %s is a non-standard setting of a group with two "
+                "origin choices; its origin choice is not checked, so the atom "
+                "positions used for Hough's reflectors are unverified.", name, number)
+        _cache_origin(key, None)
         return phase
+
+    if cached is _NOT_CACHED:
+        choice, evidence, block = _decide_origin_choice(path, source, parser, number)
+        _cache_origin(key, choice)
+        if choice == 1:
+            return phase
+    else:
+        evidence = None
     n_before = len(phase.structure)
     phase.structure = _expand_in_origin_choice_1(parser, phase.space_group)
-    logger.info("%s: atoms re-expanded in origin choice 1 for Hough (%d atoms, "
-                "diffpy alone gave %d)", Path(str(path)).name, len(phase.structure), n_before)
+    if evidence is not None:
+        logger.info("%s: block %r is written in origin choice 2 (%s); its atoms are "
+                    "re-expanded in origin choice 1 for Hough: %d atoms, diffpy alone "
+                    "gave %d", name, block, "; ".join(evidence), len(phase.structure),
+                    n_before)
     return phase
 
 

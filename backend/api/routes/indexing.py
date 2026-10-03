@@ -3629,6 +3629,7 @@ async def start_indexing(req: IndexingStartRequest):
                     # which the phase map doesn't track. Build a phase_list once
                     # per CIF using the existing helper so per-phase indexing
                     # gets the same data as the legacy single-phase path.
+                    from backend.forward_sim.crystal.cif_origin import CifOriginError
                     try:
                         from ebsd_utils import hough_phase_from_cif
                         from orix.crystal_map import PhaseList
@@ -3636,6 +3637,13 @@ async def start_indexing(req: IndexingStartRequest):
                         if phase.name != _stem(cif_path):
                             phase.name = _stem(cif_path)
                         pc.phase_list = PhaseList(phases=[phase])
+                    except CifOriginError:
+                        # The CIF read fine but its origin choice cannot be
+                        # established. Skipping it would leave its pixels
+                        # unclassified, and if it was the only phase the run
+                        # would end on "none of the phase-map CIFs are
+                        # present" -- the wrong cause. Fail with this one.
+                        raise
                     except Exception as exc:
                         logger.warning(
                             "Per-phase routing: cannot load phase_list for %s: %s",
@@ -9374,7 +9382,9 @@ async def hough_reflector_cost(cif_path: str, n_bands: int = 12):
             hough_phase_from_cif, predict_triplet_library, prepare_reflectors,
         )
 
-        phase = hough_phase_from_cif(path)
+        # Off the event loop: the first read of a two-origin CIF decides its
+        # origin choice, 2-4 s during which the whole backend would not answer.
+        phase = await asyncio.to_thread(hough_phase_from_cif, path)
         phase.name = _stem(path)
         pl = PhaseList(phase)
         refl = prepare_reflectors(pl)

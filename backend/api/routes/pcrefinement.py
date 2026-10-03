@@ -455,8 +455,16 @@ async def remove_pattern(idx: int = 0):
 async def load_phase(req: LoadPhaseRequest):
     """Load a crystal phase from a CIF file."""
     ctrl = _get_controller()
+
+    # Off the event loop: the first read of a two-origin CIF decides its origin
+    # choice (2-4 s). In a worker thread the controller is changed under
+    # _state_lock, as _index_pattern_locked does.
+    def _load_phase_locked():
+        with _state_lock:
+            return ctrl.load_phase(req.cif_path)
+
     try:
-        phase = ctrl.load_phase(req.cif_path)
+        phase = await asyncio.to_thread(_load_phase_locked)
         return {
             "success": True,
             "phase_name": str(phase.name),
