@@ -128,65 +128,117 @@ def test_the_routes_describe_a_refinement_by_count_and_the_optimiser_the_page_se
 # ------------------------------------------------------- what a run records
 
 @pytest.fixture
-def active(monkeypatch):
-    """The module-level store with one dataset, active, removed afterwards."""
-    from backend.api.routes import ebsd_viewer
-
+def dataset():
+    """A dataset in the module-level store, removed afterwards."""
     name = "pc_refinement_step_test"
     calibration_store.register(name, _Sig())
-    monkeypatch.setattr(ebsd_viewer, "_active_dataset", name)
     yield name
     calibration_store.remove(name)
 
 
+def _run(dataset_name, method="hough", *, switch_to=None):
+    """What a run does: look at the PC's origin when it STARTS, record at the end.
+
+    ``switch_to`` makes the active dataset change in between (the user loads or
+    switches a file while the run is in progress).
+    """
+    from backend.api.routes import ebsd_viewer
+
+    saved = ebsd_viewer._active_dataset
+    ebsd_viewer._active_dataset = dataset_name
+    try:
+        started_with = indexing_routes._pc_refinement_snapshot(ebsd_viewer._active_dataset)
+        if switch_to is not None:
+            ebsd_viewer._active_dataset = switch_to
+        result = _Result()
+        indexing_routes._attach_indexing_metadata(result, method, pc_refinement=started_with)
+        return result
+    finally:
+        ebsd_viewer._active_dataset = saved
+
+
 @pytest.mark.parametrize("method", ["hough", "dictionary", "spherical"])
-def test_a_run_at_a_refined_pc_records_the_step(active, method):
-    calibration_store.update_pc(active, [0.51, 0.31, 0.81], source="refined",
+def test_a_run_at_a_refined_pc_records_the_step(dataset, method):
+    calibration_store.update_pc(dataset, [0.51, 0.31, 0.81], source="refined",
                                 refinement=REFINED)
-    result = _Result()
-    indexing_routes._attach_indexing_metadata(result, method)
-    steps = [s for s in get_steps(result) if s["key"] == KEY]
+    steps = [s for s in get_steps(_run(dataset, method)) if s["key"] == KEY]
     assert steps == [{"key": KEY, "params": REFINED}]
 
 
-def test_recording_twice_does_not_repeat_the_step(active):
-    calibration_store.update_pc(active, [0.51, 0.31, 0.81], source="refined",
+def test_recording_twice_does_not_repeat_the_step(dataset):
+    calibration_store.update_pc(dataset, [0.51, 0.31, 0.81], source="refined",
                                 refinement=REFINED)
     result = _Result()
-    indexing_routes._attach_indexing_metadata(result, "hough")
-    indexing_routes._attach_indexing_metadata(result, "hough")
+    snap = indexing_routes._pc_refinement_snapshot(dataset)
+    indexing_routes._attach_indexing_metadata(result, "hough", pc_refinement=snap)
+    indexing_routes._attach_indexing_metadata(result, "hough", pc_refinement=snap)
     assert _keys(result).count(KEY) == 1
 
 
-def test_a_run_at_the_file_pc_records_nothing(active):
-    result = _Result()
-    indexing_routes._attach_indexing_metadata(result, "hough")
-    assert KEY not in _keys(result)
+def test_a_run_at_the_file_pc_records_nothing(dataset):
+    assert KEY not in _keys(_run(dataset))
 
 
-def test_a_run_at_a_typed_pc_records_nothing(active):
-    calibration_store.update_pc(active, [0.51, 0.31, 0.81], source="refined",
+def test_a_run_at_a_typed_pc_records_nothing(dataset):
+    calibration_store.update_pc(dataset, [0.51, 0.31, 0.81], source="refined",
                                 refinement=REFINED)
-    calibration_store.update_pc(active, [0.55, 0.35, 0.85], source="manual")
-    result = _Result()
-    indexing_routes._attach_indexing_metadata(result, "hough")
-    assert KEY not in _keys(result)
+    calibration_store.update_pc(dataset, [0.55, 0.35, 0.85], source="manual")
+    assert KEY not in _keys(_run(dataset))
 
 
-def test_a_run_after_loading_another_file_records_nothing(active, monkeypatch):
-    from backend.api.routes import ebsd_viewer
-
-    calibration_store.update_pc(active, [0.51, 0.31, 0.81], source="refined",
+def test_a_run_after_loading_another_file_records_nothing(dataset):
+    calibration_store.update_pc(dataset, [0.51, 0.31, 0.81], source="refined",
                                 refinement=REFINED)
-    other = active + "_other"
+    other = dataset + "_other"
     calibration_store.register(other, _Sig())
     try:
-        monkeypatch.setattr(ebsd_viewer, "_active_dataset", other)
-        result = _Result()
-        indexing_routes._attach_indexing_metadata(result, "hough")
-        assert KEY not in _keys(result)
+        assert KEY not in _keys(_run(other))
     finally:
         calibration_store.remove(other)
+
+
+def test_switching_the_active_dataset_during_a_run_does_not_change_what_it_records(dataset):
+    """The PC a run used is the one of the dataset it STARTED on."""
+    other = dataset + "_other"
+    calibration_store.register(other, _Sig())
+    try:
+        # started on a refined dataset, active dataset is a plain one at the end
+        calibration_store.update_pc(dataset, [0.51, 0.31, 0.81], source="refined",
+                                    refinement=REFINED)
+        assert KEY in _keys(_run(dataset, switch_to=other))
+        # started on a plain dataset, active dataset is a refined one at the end
+        calibration_store.update_pc(other, [0.52, 0.32, 0.82], source="refined",
+                                    refinement=REFINED)
+        calibration_store.update_pc(dataset, [0.5, 0.3, 0.8], source="manual")
+        assert KEY not in _keys(_run(dataset, switch_to=other))
+    finally:
+        calibration_store.remove(other)
+
+
+def test_the_snapshot_is_a_copy(dataset):
+    calibration_store.update_pc(dataset, [0.51, 0.31, 0.81], source="refined",
+                                refinement=dict(REFINED))
+    snap = indexing_routes._pc_refinement_snapshot(dataset)
+    snap["n_patterns"] = 999
+    assert calibration_store.get_entry(dataset).pc_refinement == REFINED
+
+
+def test_an_unknown_dataset_has_no_snapshot():
+    assert indexing_routes._pc_refinement_snapshot("no_such_dataset") is None
+    assert indexing_routes._pc_refinement_snapshot(None) is None
+
+
+def test_both_run_routes_take_the_snapshot_at_the_start_and_hand_it_on():
+    """The two indexing routes cannot be run here; this pins that each takes the
+    snapshot where it takes the detector and passes it to the metadata call."""
+    import re
+    from pathlib import Path
+
+    src = Path(indexing_routes.__file__).read_text(encoding="utf-8")
+    assert len(re.findall(r"_pc_refinement_snapshot\(", src)) >= 3      # def + two routes
+    assert len(re.findall(r"_attach_indexing_metadata\(.{0,900}?pc_refinement=", src, re.S)) >= 2
+    # a batch run that applies an explicit PC is not at a refined PC
+    assert re.search(r"detector\.pc = np\.array\(\[pc_to_apply\]\)\s+_run_pc_refinement = None", src)
 
 
 # ------------------------------------------- the routes that move a refined PC

@@ -623,6 +623,7 @@ def _attach_indexing_metadata(
     sht_paths: list | None = None,
     det_params: dict | None = None,
     name_source_paths: list | None = None,
+    pc_refinement: dict | None = None,
 ) -> None:
     """Populate result.metadata fields needed by the SHT forward renderer.
 
@@ -635,6 +636,10 @@ def _attach_indexing_metadata(
       - ``detector_geometry``: vendor-normalized PC + detector shape + tilt
         + pixel size + binning, in the same dict shape produced upstream by
         the indexing route.
+
+    ``pc_refinement`` is the origin of the PC the run was indexed at, taken
+    with :func:`_pc_refinement_snapshot` when the run STARTED (the active dataset
+    can change while it runs); it adds the PC-refinement citation step.
 
     Idempotent and safe to call before ``_store_result``. Adds nothing for
     methods other than spherical that don't have an SHT.
@@ -723,28 +728,40 @@ def _attach_indexing_metadata(
         # Store a defensive copy so later mutations of det_params don't
         # leak into the registered result.
         md["detector_geometry"] = dict(det_params)
-    _record_pc_refinement_step(result)
+    _record_pc_refinement_step(result, pc_refinement)
 
 
-def _record_pc_refinement_step(result) -> None:
+def _pc_refinement_snapshot(dataset_name) -> dict | None:
+    """A copy of how the PC of ``dataset_name`` was refined, or ``None``.
+
+    Taken where a run takes its detector, so the run keeps the origin of the PC
+    it really used even if the active dataset changes before it finishes.
+    """
+    if not dataset_name:
+        return None
+    from backend.api.services.calibration_store import calibration_store
+
+    entry = calibration_store.get_entry(dataset_name)
+    refinement = getattr(entry, "pc_refinement", None)
+    return dict(refinement) if refinement else None
+
+
+def _record_pc_refinement_step(result, pc_refinement) -> None:
     """Credit PyEBSDIndex when the run's pattern centre came from PC refinement.
 
-    Every method indexes at the active dataset's stored PC. The calibration
-    store entry records whether that PC (or PC map) was produced by Orienta's PC
+    Every method indexes at the active dataset's stored PC, and the calibration
+    store records whether that PC (or PC map) was produced by Orienta's PC
     refinement, which runs PyEBSDIndex's optimiser; a PC that was typed, read
     from the file or imported records nothing. ``replace`` keeps the call
     idempotent.
     """
+    if not pc_refinement:
+        return
     try:
-        from backend.api.routes.ebsd_viewer import _active_dataset
-        from backend.api.services.calibration_store import calibration_store
         from backend.api.services.citations.provenance import record_step
 
-        entry = calibration_store.get_entry(_active_dataset)
-        refinement = getattr(entry, "pc_refinement", None)
-        if refinement:
-            record_step(result, "calibration.pc_refinement", dict(refinement),
-                        replace=True)
+        record_step(result, "calibration.pc_refinement", dict(pc_refinement),
+                    replace=True)
     except Exception:
         # Bookkeeping must never abort or fail an indexing run.
         logger.warning("could not record the PC-refinement citation step",
@@ -3638,6 +3655,9 @@ async def start_indexing(req: IndexingStartRequest):
             # Get detector from CalibrationStore (single source of truth)
             from backend.api.routes.ebsd_viewer import _active_dataset
             detector = calibration_store.get_detector(_active_dataset)
+            # How that PC was obtained, taken now: the active dataset can change
+            # before the run ends, and the citation must follow the PC it used.
+            _run_pc_refinement = _pc_refinement_snapshot(_active_dataset)
 
             if detector is None:
                 # Fallback: signal's own detector
@@ -4363,6 +4383,7 @@ async def start_indexing(req: IndexingStartRequest):
                 name_source_paths=(
                     req.phase_name_sources()
                     or req.cif_paths or req.master_h5_paths or req.sht_paths),
+                pc_refinement=_run_pc_refinement,
             )
 
             # Unified EDS-adjusted-pixel log line — covers all three methods.
@@ -10957,6 +10978,8 @@ async def start_batch_indexing(req: BatchRequest):
 
                 # Get detector: explicit config PC > CalibrationStore > signal.detector > default
                 detector = calibration_store.get_detector(dataset_name)
+                # Origin of this file's PC, taken now (see the single-file run).
+                _run_pc_refinement = _pc_refinement_snapshot(dataset_name)
                 if detector is None:
                     detector = getattr(signal, 'detector', None)
                 if detector is None:
@@ -10969,6 +10992,7 @@ async def start_batch_indexing(req: BatchRequest):
                     pc_to_apply = ds_config.pc
                     _log(f"  Applying explicit PC: ({pc_to_apply[0]:.4f}, {pc_to_apply[1]:.4f}, {pc_to_apply[2]:.4f})")
                     detector.pc = np.array([pc_to_apply])
+                    _run_pc_refinement = None   # typed for this run: not a refinement
 
                 # 3. Build selection mask
                 from indexing_controller import (
@@ -11120,6 +11144,7 @@ async def start_batch_indexing(req: BatchRequest):
                         getattr(ds_config, "cif_paths", None)
                         or getattr(ds_config, "master_h5_paths", None)
                         or getattr(ds_config, "sht_paths", None)),
+                    pc_refinement=_run_pc_refinement,
                 )
 
                 # No scan-provenance seed here, deliberately. The loop's own
