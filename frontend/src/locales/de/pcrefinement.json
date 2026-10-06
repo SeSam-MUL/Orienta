@@ -240,5 +240,14 @@
     "step1": "EBSD-Daten laden",
     "step2": "Phase laden (CIF)",
     "step3": "Kalibrier-Muster hinzufügen"
+  },
+  "phaseErrors": {
+    "phase_same_name": "Eine andere Datei mit dem Namen {{name}} ist schon in Gebrauch ({{loaded_path}}). Eine Phase wird an ihrem Dateinamen erkannt: zuerst jene entfernen oder diese Datei umbenennen.",
+    "phase_duplicate": "{{name}} ist schon geladen.",
+    "phase_limit": "Höchstens {{max}} Phasen lassen sich zusammen verwenden; zuerst eine entfernen.",
+    "phase_unreadable": "Die Datei konnte nicht als Phase gelesen werden: {{reason}}",
+    "phase_not_loaded": "{{name}} ist nicht geladen.",
+    "optimization_running": "Eine PC-Optimierung läuft. Warten, bis sie fertig ist, bevor die Phasen geändert werden.",
+    "too_large": "Diese Datei ist {{size_mb}} MB groß, viel zu groß für eine Kristallstrukturdatei (Grenze {{limit_mb}} MB)."
   }
 }

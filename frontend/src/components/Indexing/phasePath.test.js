@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  samePath, findByPath, mergeUserAdded, pathErrorFrom, phaseStem, addPhaseFromPath,
+  samePath, findByPath, mergeUserAdded, pathErrorFrom, phaseStem, addPhaseFromPath, cleanPastedPath,
 } from './phasePath';
 
 describe('samePath', () => {
@@ -116,6 +116,22 @@ describe('addPhaseFromPath', () => {
     expect(remember).not.toHaveBeenCalled();
   });
 
+  it('refuses another FILE with the name of one already selected, and names it', async () => {
+    // A phase (and a reflector selection) is identified by its file name.
+    const { args, select, remember } = mk({ phaseFiles: ['/lib/X.cif'] });
+    const res = await addPhaseFromPath(args);
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe('phase_same_name');
+    expect(res.error.params).toEqual({ name: 'X', loaded_path: '/lib/X.cif', path: '/mine/X.cif' });
+    expect(select).not.toHaveBeenCalled();
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('the name is compared without regard to case', async () => {
+    const { args } = mk({ phaseFiles: ['/lib/x.cif'] });
+    expect((await addPhaseFromPath(args)).error.code).toBe('phase_same_name');
+  });
+
   it('drops the file when the method was switched while it was being checked', async () => {
     const { args, select, remember } = mk({ method: 'spherical' });
     const res = await addPhaseFromPath(args);       // started as 'hough'
@@ -133,5 +149,24 @@ describe('addPhaseFromPath', () => {
       return { data: { file: rec } };
     });
     expect((await addPhaseFromPath(args)).already).toBe(true);
+  });
+});
+
+describe('cleanPastedPath', () => {
+  const p = 'C:\\data\\Al.cif';
+  it.each([
+    ['straight double', `"${p}"`], ['straight single', `'${p}'`],
+    ['typographic double', `“${p}”`], ['typographic single', `‘${p}’`],
+    ['German', `„${p}“`], ['guillemets', `«${p}»`],
+    ['quotes and spaces', `  “ ${p} ”  `], ['nested', `"“${p}”"`],
+  ])('%s quotes are stripped', (_n, raw) => {
+    expect(cleanPastedPath(raw)).toBe(p);
+  });
+  it('leaves a path alone, including an apostrophe inside it', () => {
+    expect(cleanPastedPath(p)).toBe(p);
+    expect(cleanPastedPath("/home/o'brien/Al.cif")).toBe("/home/o'brien/Al.cif");
+  });
+  it('does not strip a quote that has no partner', () => {
+    expect(cleanPastedPath('"/x/Al.cif')).toBe('"/x/Al.cif');
   });
 });

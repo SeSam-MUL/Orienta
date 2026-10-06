@@ -17,6 +17,26 @@ export function samePath(a, b) {
   return normKey(a) === normKey(b);
 }
 
+/**
+ * A pasted path without the quotes "Copy as path" (Windows), a shell, a chat or a
+ * word processor put around it: straight, typographic (English, German) or
+ * guillemets. Mirrors `phase_path._clean` on the server, which the Indexing page
+ * relies on; the PC Refinement page's endpoint reads the path as given.
+ */
+const QUOTE_PAIRS = {
+  '"': '"', "'": "'",
+  '“': '”“', '‘': '’‘',
+  '„': '“”', '‚': '‘’',
+  '«': '»', '»': '«',
+};
+export function cleanPastedPath(raw) {
+  let text = String(raw ?? '').trim();
+  while (text.length >= 2 && (QUOTE_PAIRS[text[0]] || '').includes(text[text.length - 1])) {
+    text = text.slice(1, -1).trim();
+  }
+  return text;
+}
+
 /** The entry of `files` ({path}) that is the file at `path`, if any. */
 export function findByPath(files, path) {
   return (files || []).find((f) => samePath(f.path, path));
@@ -91,10 +111,22 @@ export async function addPhaseFromPath({ method, rawPath, check, latest, remembe
   const inLibrary = findByPath(now.discoveredFiles, record.path);
   const file = inLibrary || record;
   const name = file.display_label || file.formula || file.filename;
-  if (!inLibrary) remember(record);
   if (now.phaseFiles.some((p) => samePath(p, file.path))) {
     return { ok: true, already: true, name };
   }
+  // Another FILE with the same name is already selected. A phase is identified by
+  // its file name (a reflector selection is stored under it as well), so the two
+  // would be one phase to the app: say so instead of adding it.
+  const stem = phaseStem(file.path).toLowerCase();
+  const clash = now.phaseFiles.find((p) => phaseStem(p).toLowerCase() === stem);
+  if (clash) {
+    return {
+      ok: false,
+      error: { code: 'phase_same_name', message: '',
+               params: { name: phaseStem(clash), loaded_path: clash, path: file.path } },
+    };
+  }
+  if (!inLibrary) remember(record);
   now.select(file);
   return { ok: true, name };
 }

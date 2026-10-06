@@ -2,7 +2,7 @@
  * Pure helpers for PC Refinement with SEVERAL phases (duplex steel: austenite
  * and ferrite). Kept out of the 2800-line page so they can be tested.
  */
-import { phaseStem } from '../Indexing/phasePath';
+import { phaseStem, samePath } from '../Indexing/phasePath';
 
 /** Mirrors `PCController.MAX_PHASES` on the backend (which is what enforces it). */
 export const MAX_PC_PHASES = 8;
@@ -14,36 +14,57 @@ export function phaseLabelFor(names, fallback) {
 }
 
 /**
- * Paths of the picker entries that are currently loaded.
+ * The loaded phase that IS the file at `path`, if there is one.
  *
- * The backend names a phase by its file's stem, so a library entry counts as
- * loaded when its stem is one of the loaded names. `added` holds the paths the
- * user typed in (they are not in the library listing).
+ * Phases are identified by FILE, not by name: two different files called Al.cif
+ * are two files. A phase whose file is not known (loaded through the single-phase
+ * path before the page knew files) falls back to the file's name.
+ *
+ * @param {{name: string, path?: string}[]} phases
  */
-export function loadedPaths(files, names, added = []) {
-  const loaded = new Set(names || []);
+export function loadedPhaseFor(phases, path) {
+  const stem = phaseStem(path).toLowerCase();
+  return (phases || []).find((p) => (p.path
+    ? samePath(p.path, path)
+    : String(p.name).toLowerCase() === stem));
+}
+
+/**
+ * A loaded phase with the same NAME as the file at `path` but another file.
+ * The backend refuses it (a name is how a phase, and a reflector selection, is
+ * kept), so the page can say so before asking.
+ */
+export function sameNameOtherFile(phases, path) {
+  const stem = phaseStem(path).toLowerCase();
+  const mine = loadedPhaseFor(phases, path);
+  return (phases || []).find((p) => p !== mine && String(p.name).toLowerCase() === stem);
+}
+
+/**
+ * Paths of the picker entries that are currently loaded: the library entries and
+ * the typed-in paths (`added`) that are the very file of a loaded phase. An entry
+ * that only shares a name with a loaded phase is NOT loaded.
+ */
+export function loadedPaths(files, phases, added = []) {
   const out = [];
-  for (const f of files || []) {
-    if (loaded.has(phaseStem(f.path)) && !out.includes(f.path)) out.push(f.path);
-  }
-  for (const p of added) {
-    if (loaded.has(phaseStem(p)) && !out.includes(p)) out.push(p);
+  for (const p of [...(files || []).map((f) => f.path), ...added]) {
+    if (loadedPhaseFor(phases, p) && !out.some((q) => samePath(q, p))) out.push(p);
   }
   return out;
 }
 
 /**
- * What to do so that exactly `wanted` (paths) are loaded, given the loaded
- * names: `{add: paths to add, remove: names to remove}`. The picker's All /
- * None buttons hand over the whole desired set at once.
+ * What to do so that exactly `wanted` (paths) are loaded: `{add: paths to add,
+ * remove: names to remove}`. The picker's All / None buttons hand over the whole
+ * desired set at once.
  */
-export function planPhaseSync(loadedNames, wanted) {
-  const have = new Set(loadedNames || []);
-  const wantStems = new Map((wanted || []).map((p) => [phaseStem(p), p]));
-  return {
-    add: [...wantStems].filter(([stem]) => !have.has(stem)).map(([, p]) => p),
-    remove: [...have].filter((n) => !wantStems.has(n)),
-  };
+export function planPhaseSync(phases, wanted) {
+  const list = phases || [];
+  const add = (wanted || []).filter((p) => !loadedPhaseFor(list, p));
+  const remove = list
+    .filter((ph) => !(wanted || []).some((p) => loadedPhaseFor([ph], p)))
+    .map((ph) => ph.name);
+  return { add, remove };
 }
 
 /**

@@ -134,6 +134,47 @@ describe('with onAddPath', () => {
     expect(screen.queryByText('The file could not be added.')).toBeNull();
   });
 
+  it('the field has an accessible name, and what appears under it is announced', async () => {
+    mount({ onAddPath: vi.fn().mockResolvedValue({ ok: true, name: 'Al' }) });
+    expect(screen.getByLabelText('Path of a phase file')).toBe(pathInput());
+    const region = screen.getByTestId('phase-path-note');
+    expect(region.getAttribute('role')).toBe('status');
+    expect(region.getAttribute('aria-live')).toBe('polite');
+    expect(region.textContent).toBe('');                  // in the page before anything is said
+    fireEvent.change(pathInput(), { target: { value: 'D:/x/Al.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await waitFor(() => expect(screen.getByTestId('phase-path-note').textContent).toMatch(/Added Al/));
+  });
+
+  it('a refusal is announced assertively', async () => {
+    mount({ onAddPath: vi.fn().mockResolvedValue({ ok: false, error: { code: 'not_found', message: '', params: { path: 'D:/x' } } }) });
+    fireEvent.change(pathInput(), { target: { value: 'D:/x/Al.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await waitFor(() => expect(screen.getByTestId('phase-path-note').getAttribute('role')).toBe('alert'));
+  });
+
+  it('strips typographic quotes pasted around the path before sending it', async () => {
+    const onAddPath = vi.fn().mockResolvedValue({ ok: true, name: 'Al' });
+    mount({ onAddPath });
+    fireEvent.change(pathInput(), { target: { value: '“D:/x/Al.cif”' } });
+    fireEvent.click(screen.getByText('Add'));
+    await waitFor(() => expect(onAddPath).toHaveBeenCalledWith('D:/x/Al.cif'));
+  });
+
+  it("words the new refusals in the user's language", async () => {
+    const onAddPath = vi.fn()
+      .mockResolvedValueOnce({ ok: false, error: { code: 'too_large', message: 'x', params: { size_mb: 210, limit_mb: 20 } } })
+      .mockResolvedValueOnce({ ok: false, error: { code: 'phase_same_name', message: 'x',
+        params: { name: 'Al', loaded_path: 'C:/lib/Al.cif', path: 'D:/m/Al.cif' } } });
+    mount({ onAddPath });
+    fireEvent.change(pathInput(), { target: { value: 'D:/x/big.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await screen.findByText(/This file is 210 MB, far too large/);
+    fireEvent.change(pathInput(), { target: { value: 'D:/m/Al.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await screen.findByText(/A different file named Al is already in use \(C:\/lib\/Al.cif\)/);
+  });
+
   it('says when the phase was already in the list', async () => {
     const onAddPath = vi.fn().mockResolvedValue({ ok: true, already: true, name: 'Al' });
     mount({ onAddPath });

@@ -240,5 +240,14 @@
     "step1": "Load EBSD data",
     "step2": "Load phase (CIF)",
     "step3": "Add calibration patterns"
+  },
+  "phaseErrors": {
+    "phase_same_name": "A different file named {{name}} is already in use ({{loaded_path}}). A phase is identified by its file name: remove that one first, or rename this file.",
+    "phase_duplicate": "{{name}} is already loaded.",
+    "phase_limit": "At most {{max}} phases can be used together; remove one first.",
+    "phase_unreadable": "The file could not be read as a phase: {{reason}}",
+    "phase_not_loaded": "{{name}} is not loaded.",
+    "optimization_running": "A PC optimization is running. Wait for it to finish before changing the phases.",
+    "too_large": "This file is {{size_mb}} MB, far too large for a crystal structure file (the limit is {{limit_mb}} MB)."
   }
 }

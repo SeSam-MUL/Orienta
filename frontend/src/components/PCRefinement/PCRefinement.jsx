@@ -32,7 +32,7 @@ import {
 } from './pixelSizeCheck';
 import { pickShtForPhase } from './previewSht';
 import {
-  MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync,
+  MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync, loadedPhaseFor, sameNameOtherFile,
   summarisePatternPhases, previewPhaseName, createSerialQueue, shortSpaceGroup,
 } from './phaseSet';
 import { phaseStem, pathErrorFrom, samePath } from '../Indexing/phasePath';
@@ -1451,6 +1451,16 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
 // ---------------------------------------------------------------------------
 // Right controls panel — matches _create_controls_panel()
 // ---------------------------------------------------------------------------
+/** A failed phase operation ({code, message, params}) in the user's language. */
+function phaseOpErrorText(t, error) {
+  const code = error?.code || 'generic';
+  if (code === 'generic' && error?.message) return error.message;
+  return t(`pcrefinement:phaseErrors.${code}`, {
+    ...(error?.params || {}),
+    defaultValue: error?.message || t('pcrefinement:controls.phaseLoadFailed'),
+  });
+}
+
 function ControlsPanel({
   phaseLoaded,
   phases = [],
@@ -1505,6 +1515,10 @@ function ControlsPanel({
   const phaseNames = phases.map((p) => p.name);
   const phaseNamesRef = useRef(phaseNames);
   phaseNamesRef.current = phaseNames;
+  // The loaded phases WITH their files: a phase is identified by its file, not by
+  // its name (two different files called Al.cif are two files).
+  const phasesRef = useRef(phases);
+  phasesRef.current = phases;
   const [addedPaths, setAddedPaths] = useState([]);   // typed-in paths we loaded
   const phaseQueueRef = useRef(null);
   if (phaseQueueRef.current === null) phaseQueueRef.current = createSerialQueue();
@@ -1636,9 +1650,12 @@ function ControlsPanel({
       setPhaseInfo(res.data);
       setPhaseMsg(t('pcrefinement:controls.phaseLoaded', { name: res.data.phase_name || res.data.name || t('pcrefinement:controls.phaseInfoUnknown') }));
       setPhaseError(false);
-      onPhaseLoaded(res.data);
+      onPhaseLoaded({ ...res.data, path });
     } catch (err) {
-      setPhaseMsg(err.response?.data?.detail || err.message || t('pcrefinement:controls.phaseLoadFailed'));
+      const detail = err.response?.data?.detail;
+      setPhaseMsg(detail && typeof detail === 'object'
+        ? phaseOpErrorText(t, pathErrorFrom(err))
+        : (detail || err.message || t('pcrefinement:controls.phaseLoadFailed')));
       setPhaseError(true);
     } finally {
       setPhaseLoading(false);
@@ -1667,31 +1684,52 @@ function ControlsPanel({
   // the status line) can both use them.
   const addPhaseCore = async (path) => {
     const stem = phaseStem(path);
-    if (phaseNamesRef.current.includes(stem)) return { ok: true, already: true, name: stem };
-    if (phaseNamesRef.current.length >= MAX_PC_PHASES) {
+    const same = loadedPhaseFor(phasesRef.current, path);
+    if (same) return { ok: true, already: true, name: same.name };
+    // Another FILE with the same name: refused (the backend would too), and said
+    // so, instead of looking like success or silently swapping the phase.
+    const clash = sameNameOtherFile(phasesRef.current, path);
+    if (clash) {
       return {
         ok: false,
-        error: { code: 'limit', message: t('pcrefinement:controls.phaseLimit', { max: MAX_PC_PHASES }), params: {} },
+        error: {
+          code: 'phase_same_name', message: '',
+          params: { name: clash.name, loaded_path: clash.path || '', path },
+        },
       };
+    }
+    if (phaseNamesRef.current.length >= MAX_PC_PHASES) {
+      return { ok: false, error: { code: 'phase_limit', message: '', params: { max: MAX_PC_PHASES } } };
     }
     try {
       const res = await pcApi.addPhase(path);
       phaseNamesRef.current = res.data.phases.map((p) => p.name);
       setAddedPaths((prev) => (prev.some((p) => samePath(p, path)) ? prev : [...prev, path]));
       setPhaseInfo(res.data);
+      clearPerPatternPhases();
       onPhasesChanged(res.data.phases);
-      return { ok: true, name: res.data.phase_name, count: res.data.phases.length };
+      return { ok: true, name: res.data.phase_name || stem, count: res.data.phases.length };
     } catch (err) {
       return { ok: false, error: pathErrorFrom(err) };
     }
   };
 
+  // "Phase per pattern" belongs to the phases it was computed with: when the set
+  // changes it is no longer true of the patterns.
+  const clearPerPatternPhases = () => {
+    setResult((prev) => (prev && (prev.pattern_phases || prev.phase_names)
+      ? { ...prev, pattern_phases: null, phase_names: null } : prev));
+  };
+
   const removePhaseCore = async (name) => {
+    const gone = phasesRef.current.find((p) => p.name === name);
     try {
       const res = await pcApi.removePhase(name);
       phaseNamesRef.current = res.data.phases.map((p) => p.name);
-      setAddedPaths((prev) => prev.filter((p) => phaseStem(p) !== name));
+      setAddedPaths((prev) => prev.filter((p) => !(gone?.path ? samePath(p, gone.path)
+        : phaseStem(p) === name)));
       setPhaseInfo(res.data.phases[0] ? { phase_name: res.data.phases[0].name, ...res.data.phases[0] } : null);
+      clearPerPatternPhases();
       onPhasesChanged(res.data.phases);
       return { ok: true };
     } catch (err) {
@@ -1705,7 +1743,7 @@ function ControlsPanel({
       setPhaseMsg(okText);
       setPhaseError(false);
     } else {
-      setPhaseMsg(res.error?.message || t('pcrefinement:controls.phaseLoadFailed'));
+      setPhaseMsg(phaseOpErrorText(t, res.error));
       setPhaseError(true);
     }
   };
@@ -1717,9 +1755,12 @@ function ControlsPanel({
 
   // Tick or untick one phase of the picker.
   const togglePhase = (file) => runPhaseJob(async () => {
-    const stem = phaseStem(file.path);
-    if (phaseNamesRef.current.includes(stem)) {
-      reportPhaseOp(await removePhaseCore(stem), t('pcrefinement:controls.phaseRemoved', { name: stem }));
+    // Ticked means THIS file is loaded; unticking removes exactly that phase and
+    // never one that only shares its name.
+    const loaded = loadedPhaseFor(phasesRef.current, file.path);
+    if (loaded) {
+      reportPhaseOp(await removePhaseCore(loaded.name),
+                    t('pcrefinement:controls.phaseRemoved', { name: loaded.name }));
     } else {
       const res = await addPhaseCore(file.path);
       reportPhaseOp(res, t('pcrefinement:controls.phaseAdded', { name: res.name, count: res.count }));
@@ -1745,7 +1786,7 @@ function ControlsPanel({
 
   // The picker's All / None buttons hand over the whole wanted set at once.
   const handleSetAllPhases = (paths) => {
-    const plan = planPhaseSync(phaseNamesRef.current, paths);
+    const plan = planPhaseSync(phasesRef.current, paths);
     const resulting = phaseNamesRef.current.length - plan.remove.length + plan.add.length;
     if (resulting > MAX_PC_PHASES) {
       setPhaseMsg(t('pcrefinement:controls.phaseLimit', { max: MAX_PC_PHASES }));
@@ -2098,7 +2139,7 @@ function ControlsPanel({
           <PhaseDropdown
             discoveredFiles={discoveredFiles}
             groups={discoveredGroups}
-            selectedPaths={loadedPaths(discoveredFiles, phaseNames, addedPaths)}
+            selectedPaths={loadedPaths(discoveredFiles, phases, addedPaths)}
             onTogglePath={handlePickPhase}
             onSetAll={handleSetAllPhases}
             onAddPath={addPhaseByPath}
@@ -2670,7 +2711,7 @@ export default function PCRefinement({ onNavigate }) {
     setPhaseLoaded(true);
     const name = info.phase_name || info.name || t('pcrefinement:phaseInfo.unknown');
     setPhaseLabel(name);
-    setPhases([{ name, space_group: info.space_group, lattice: info.lattice }]);
+    setPhases([{ name, space_group: info.space_group, lattice: info.lattice, path: info.path }]);
     setPatterns((prev) => prev.map((p) => ({ ...p, phase: null })));
     const lines = [
       t('pcrefinement:phaseInfo.nameLine', { name }),

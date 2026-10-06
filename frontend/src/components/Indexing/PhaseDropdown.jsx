@@ -35,6 +35,7 @@ import { useRef, useEffect, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors as C } from '../../theme/tokens';
 import { keyForPath } from '../PhaseCollections/collectionFilter';
+import { cleanPastedPath } from './phasePath';
 
 function fileTypeTag(fileType, t) {
   switch (fileType) {
@@ -436,7 +437,7 @@ function PhasePathRow({ method, onAddPath, t }) {
   const canBrowse = typeof window !== 'undefined' && !!window.electronAPI?.openFile;
 
   async function submit(value) {
-    const path = String(value ?? text).trim();
+    const path = cleanPastedPath(value ?? text);
     if (!path || busy) return;
     setBusy(true);
     setNote(null);
@@ -478,6 +479,7 @@ function PhasePathRow({ method, onAddPath, t }) {
           onKeyDown={e => { if (e.key === 'Enter') submit(); }}
           placeholder={t(`phaseDropdown.pathPlaceholder${METHOD_KEY[method] || 'Hough'}`)}
           title={t('hoverTips.phasePathInput')}
+          aria-label={t('phaseDropdown.pathLabel')}
           disabled={busy}
           style={{
             flex: 1, minWidth: 0, padding: '4px 6px', fontSize: '9pt',
@@ -515,14 +517,18 @@ function PhasePathRow({ method, onAddPath, t }) {
           </button>
         )}
       </div>
-      {note && (
-        <div style={{
-          marginTop: 4, fontSize: '9pt', wordBreak: 'break-word',
-          color: note.error ? C.red : C.green,
-        }}>
-          {note.text}
-        </div>
-      )}
+      {/* Always in the page, so a screen reader announces what appears in it. */}
+      <div
+        role={note?.error ? 'alert' : 'status'}
+        aria-live={note?.error ? 'assertive' : 'polite'}
+        data-testid="phase-path-note"
+        style={{
+          marginTop: note ? 4 : 0, fontSize: '9pt', wordBreak: 'break-word',
+          color: note?.error ? C.red : C.green,
+        }}
+      >
+        {note ? note.text : null}
+      </div>
     </div>
   );
 }

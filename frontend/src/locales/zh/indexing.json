@@ -135,8 +135,16 @@
       "unreadable": "无法将该文件读取为相：{{reason}}",
       "not_a_phase": "此 HDF5 文件不是 EMsoft 主花样。",
       "unknown_method": "未知的标定方法。",
-      "generic": "无法添加该文件。"
-    }
+      "generic": "无法添加该文件。",
+      "phase_same_name": "已有另一个同名文件 {{name}} 在使用 ({{loaded_path}})。物相以文件名区分：请先移除那一个，或重命名此文件。",
+      "phase_duplicate": "{{name}} 已加载。",
+      "phase_limit": "最多可同时使用 {{max}} 个物相；请先移除一个。",
+      "phase_unreadable": "无法将该文件读取为物相: {{reason}}",
+      "phase_not_loaded": "{{name}} 未加载。",
+      "optimization_running": "PC 优化正在运行。请等待其结束后再更改物相。",
+      "too_large": "该文件大小为 {{size_mb}} MB，对晶体结构文件来说过大 (上限 {{limit_mb}} MB)。"
+    },
+    "pathLabel": "物相文件的路径"
   },
   "dictCard": {
     "masterCount": "{{masters}} 主花样 · {{dicts}} Dict",

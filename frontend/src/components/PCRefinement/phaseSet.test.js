@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync,
+  MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync, loadedPhaseFor, sameNameOtherFile,
   summarisePatternPhases, previewPhaseName, createSerialQueue,
 } from './phaseSet';
 
@@ -15,27 +15,56 @@ describe('phaseLabelFor', () => {
 describe('loadedPaths', () => {
   const files = [{ path: 'C:\\lib\\austenite.cif' }, { path: 'C:\\lib\\ferrite.cif' },
                  { path: 'C:\\lib\\Al.cif' }];
-  it('marks library entries whose stem is loaded', () => {
-    expect(loadedPaths(files, ['ferrite', 'Al'])).toEqual(['C:\\lib\\ferrite.cif', 'C:\\lib\\Al.cif']);
+  const loaded = (...paths) => paths.map((p) => ({ name: p.split(/[\\/]/).pop().replace(/\.cif$/, ''), path: p }));
+  it('marks library entries that are the loaded file', () => {
+    expect(loadedPaths(files, loaded('C:\\lib\\ferrite.cif', 'C:\\lib\\Al.cif')))
+      .toEqual(['C:\\lib\\ferrite.cif', 'C:\\lib\\Al.cif']);
   });
   it('includes typed-in paths that are loaded and is not fooled by ones that are not', () => {
-    expect(loadedPaths(files, ['mine'], ['/x/mine.cif', '/x/other.cif'])).toEqual(['/x/mine.cif']);
+    expect(loadedPaths(files, loaded('/x/mine.cif'), ['/x/mine.cif', '/x/other.cif'])).toEqual(['/x/mine.cif']);
   });
   it('lists a path once even if both sources have it', () => {
-    expect(loadedPaths(files, ['Al'], ['C:\\lib\\Al.cif'])).toEqual(['C:\\lib\\Al.cif']);
+    expect(loadedPaths(files, loaded('C:\\lib\\Al.cif'), ['C:\\lib\\Al.cif'])).toEqual(['C:\\lib\\Al.cif']);
+  });
+  it('a file that only shares its NAME with a loaded phase is not loaded', () => {
+    // library Al is loaded; an external Al.cif is another file
+    expect(loadedPaths(files, loaded('C:\\lib\\Al.cif'), ['D:\\mine\\Al.cif'])).toEqual(['C:\\lib\\Al.cif']);
+  });
+  it('spellings of one Windows path agree (case, slashes)', () => {
+    expect(loadedPaths(files, loaded('c:/LIB/al.cif'))).toEqual(['C:\\lib\\Al.cif']);
+  });
+  it('a phase whose file is not known is matched by its name (single-phase Load button)', () => {
+    expect(loadedPaths(files, [{ name: 'Al' }])).toEqual(['C:\\lib\\Al.cif']);
+  });
+});
+
+describe('loadedPhaseFor / sameNameOtherFile', () => {
+  const phases = [{ name: 'Al', path: 'C:\\lib\\Al.cif' }];
+  it('finds the phase by file', () => {
+    expect(loadedPhaseFor(phases, 'C:/lib/Al.cif')).toBe(phases[0]);
+    expect(loadedPhaseFor(phases, 'D:\\mine\\Al.cif')).toBeUndefined();
+  });
+  it('sees another file of the same name, whatever its case', () => {
+    expect(sameNameOtherFile(phases, 'D:\\mine\\AL.cif')).toBe(phases[0]);
+    expect(sameNameOtherFile(phases, 'C:\\lib\\Al.cif')).toBeUndefined();   // the same file
+    expect(sameNameOtherFile(phases, 'D:\\mine\\Ni.cif')).toBeUndefined();
   });
 });
 
 describe('planPhaseSync', () => {
+  const ph = (...names) => names.map((n) => ({ name: n, path: `/l/${n}.cif` }));
   it('adds what is wanted and not loaded, removes what is loaded and not wanted', () => {
-    expect(planPhaseSync(['Al', 'Si'], ['/l/Si.cif', '/l/Ni.cif']))
+    expect(planPhaseSync(ph('Al', 'Si'), ['/l/Si.cif', '/l/Ni.cif']))
       .toEqual({ add: ['/l/Ni.cif'], remove: ['Al'] });
   });
   it('does nothing when the sets agree', () => {
-    expect(planPhaseSync(['Al'], ['/l/Al.cif'])).toEqual({ add: [], remove: [] });
+    expect(planPhaseSync(ph('Al'), ['/l/Al.cif'])).toEqual({ add: [], remove: [] });
   });
   it('"None" removes everything loaded', () => {
-    expect(planPhaseSync(['Al', 'Si'], [])).toEqual({ add: [], remove: ['Al', 'Si'] });
+    expect(planPhaseSync(ph('Al', 'Si'), [])).toEqual({ add: [], remove: ['Al', 'Si'] });
+  });
+  it('asking for another file called Al while library Al is loaded swaps nothing silently', () => {
+    expect(planPhaseSync(ph('Al'), ['/mine/Al.cif'])).toEqual({ add: ['/mine/Al.cif'], remove: ['Al'] });
   });
 });
 

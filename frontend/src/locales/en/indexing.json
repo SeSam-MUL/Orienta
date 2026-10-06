@@ -135,8 +135,16 @@
       "unreadable": "The file could not be read as a phase: {{reason}}",
       "not_a_phase": "This HDF5 file is not an EMsoft master pattern.",
       "unknown_method": "Unknown indexing method.",
-      "generic": "The file could not be added."
-    }
+      "generic": "The file could not be added.",
+      "phase_same_name": "A different file named {{name}} is already in use ({{loaded_path}}). A phase is identified by its file name: remove that one first, or rename this file.",
+      "phase_duplicate": "{{name}} is already loaded.",
+      "phase_limit": "At most {{max}} phases can be used together; remove one first.",
+      "phase_unreadable": "The file could not be read as a phase: {{reason}}",
+      "phase_not_loaded": "{{name}} is not loaded.",
+      "optimization_running": "A PC optimization is running. Wait for it to finish before changing the phases.",
+      "too_large": "This file is {{size_mb}} MB, far too large for a crystal structure file (the limit is {{limit_mb}} MB)."
+    },
+    "pathLabel": "Path of a phase file"
   },
   "dictCard": {
     "masterCount": "{{masters}} Master · {{dicts}} Dict",

@@ -240,5 +240,14 @@
     "step1": "EBSD データを読み込む",
     "step2": "相を読み込む (CIF)",
     "step3": "較正パターンを追加する"
+  },
+  "phaseErrors": {
+    "phase_same_name": "同じ名前 {{name}} の別のファイルが既に使われています ({{loaded_path}})。相はファイル名で識別されます。先にそちらを外すか、このファイルの名前を変更してください。",
+    "phase_duplicate": "{{name}} は既に読み込まれています。",
+    "phase_limit": "同時に使える相は最大 {{max}} 個です。先に 1 つ外してください。",
+    "phase_unreadable": "このファイルを相として読み込めませんでした: {{reason}}",
+    "phase_not_loaded": "{{name}} は読み込まれていません。",
+    "optimization_running": "PC 最適化の実行中です。終了してから相を変更してください。",
+    "too_large": "このファイルは {{size_mb}} MB あり、結晶構造ファイルとしては大きすぎます (上限 {{limit_mb}} MB)。"
   }
 }
