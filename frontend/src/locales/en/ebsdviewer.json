@@ -81,9 +81,9 @@
   "processing": {
     "title": "Pattern Processing",
     "bgDynamic": "BG Dynamic",
-    "bgDynamicTooltip": "Remove background using dynamic method (per-pattern Gaussian blur).\nBest for most EBSD patterns. (Alt+D)",
+    "bgDynamicTooltip": "Subtracts a strongly blurred copy of the SAME pattern from itself (Gaussian low-pass, sigma = pattern width / 8) and stretches the result to the full grey range.\nEvery pattern is processed on its own; no other pattern is involved. Removes slowly varying illumination and keeps the bands. (Alt+D)",
     "bgStatic": "BG Static",
-    "bgStaticTooltip": "Remove background using static background image.\nRequires a static background stored in the HDF5 file. (Alt+S)",
+    "bgStaticTooltip": "Subtracts ONE common background pattern from every pattern: the average of all patterns in the scan. The background stored in the file is not used, because the loaded patterns are already vendor-processed.\nRemoves what all patterns share and stretches the result to the full grey range; works best on scans with many different grains. (Alt+S)",
     "windowSizeLabel": "Window size:",
     "windowSizeTooltip": "Kernel window size for pattern processing filters.\nLarger values smooth more but may blur fine details.",
     "frameAverage": "Frame Average",

@@ -81,9 +81,9 @@
   "processing": {
     "title": "花样处理",
     "bgDynamic": "BG 动态",
-    "bgDynamicTooltip": "使用动态方法（逐花样高斯模糊）去除背景。\n适用于大多数 EBSD 花样。(Alt+D)",
+    "bgDynamicTooltip": "从每个花样自身中减去它本身经强高斯模糊后的副本（高斯低通，sigma = 花样宽度/8），并将结果拉伸到完整灰度范围。\n每个花样单独处理，不使用其他任何花样。可去除缓慢变化的照明不均并保留菊池带。(Alt+D)",
     "bgStatic": "BG 静态",
-    "bgStaticTooltip": "使用静态背景图像去除背景。\n需要 HDF5 文件中存储的静态背景。(Alt+S)",
+    "bgStaticTooltip": "从每个花样中减去同一张公共背景花样：即扫描中所有花样的平均值。文件中存储的背景不会被使用，因为加载的花样已经过厂商处理。\n去除所有花样共有的成分，并将结果拉伸到完整灰度范围；晶粒种类丰富的扫描效果最佳。(Alt+S)",
     "windowSizeLabel": "窗口大小:",
     "windowSizeTooltip": "花样处理滤波器的核窗口大小。\n值越大平滑越强，但可能模糊细节。",
     "frameAverage": "帧平均",

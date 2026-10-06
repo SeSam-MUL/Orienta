@@ -408,9 +408,10 @@ class FrameAverageRequest(BaseModel):
 
 class BackgroundRemovalRequest(BaseModel):
     method: str = "dynamic"  # "dynamic" or "static"
-    # Static background params
-    static_bg_row: int = 0
-    static_bg_col: int = 0
+    # Static background reference. Leave both unset to use the scan average
+    # (mean of all patterns); set both to use that single pattern instead.
+    static_bg_row: Optional[int] = None
+    static_bg_col: Optional[int] = None
 
 
 class SelectDatasetRequest(BaseModel):
@@ -2164,22 +2165,34 @@ async def background_removal(req: BackgroundRemovalRequest):
     n_patterns = int(np.prod(signal.axes_manager.navigation_shape))
     logger.info("BG-%s start: %d patterns", req.method, n_patterns)
 
-    # Validate up front (fast, on the event loop). For static BG, the
-    # reference pattern must be inside the scan — previously an out-of-range
-    # (r,c) or any kikuchipy failure was silently swapped for the mean of ALL
-    # patterns, so the data fed to indexing was processed differently than the
-    # user asked, with a green "success". Fail loud instead.
+    # Validate up front (fast, on the event loop). For static BG the reference
+    # is either the scan average (no row/col given) or ONE named pattern, which
+    # must be inside the scan — an out-of-range (r,c) or any kikuchipy failure
+    # must not be silently swapped for something else under a green "success".
+    # Fail loud instead.
+    static_reference = None
     if req.method == "static":
-        nav = signal.axes_manager.navigation_shape  # (n_cols, n_rows)
-        n_cols = int(nav[0]) if len(nav) >= 1 else 1
-        n_rows = int(nav[1]) if len(nav) >= 2 else 1
-        if not (0 <= req.static_bg_row < n_rows and 0 <= req.static_bg_col < n_cols):
+        if (req.static_bg_row is None) != (req.static_bg_col is None):
             raise HTTPException(
                 status_code=400,
-                detail=f"Static-background reference pattern "
-                       f"({req.static_bg_row},{req.static_bg_col}) is outside the "
-                       f"scan {n_rows}x{n_cols}.",
+                detail="Static-background reference pattern needs both "
+                       "static_bg_row and static_bg_col (or neither, for the "
+                       "scan average).",
             )
+        if req.static_bg_row is None:
+            static_reference = "scan_average"
+        else:
+            nav = signal.axes_manager.navigation_shape  # (n_cols, n_rows)
+            n_cols = int(nav[0]) if len(nav) >= 1 else 1
+            n_rows = int(nav[1]) if len(nav) >= 2 else 1
+            if not (0 <= req.static_bg_row < n_rows and 0 <= req.static_bg_col < n_cols):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Static-background reference pattern "
+                           f"({req.static_bg_row},{req.static_bg_col}) is outside the "
+                           f"scan {n_rows}x{n_cols}.",
+                )
+            static_reference = f"pattern({req.static_bg_row},{req.static_bg_col})"
     elif req.method != "dynamic":
         raise HTTPException(status_code=400, detail=f"Unknown background removal method: {req.method}")
 
@@ -2206,8 +2219,22 @@ async def background_removal(req: BackgroundRemovalRequest):
                     if getattr(signal, '_lazy', False):
                         signal.compute()
                     signal.data[..., exclude] = 0
-        else:  # static — reference validated above; no silent mean fallback
-            static_bg = signal.data[req.static_bg_row, req.static_bg_col].astype(signal.data.dtype)
+        else:  # static — reference validated above
+            if static_reference == "scan_average":
+                # Mean over every navigation axis, accumulated in float64
+                # (streams chunk by chunk on a lazy signal). The loaded
+                # patterns are the vendor's already-processed patterns, so the
+                # static background stored in the file (the raw detector
+                # background) does not apply to them; the scan average is the
+                # reference kikuchipy recommends when no usable one exists.
+                nav_axes = tuple(range(signal.data.ndim - 2))
+                mean_bg = np.asarray(signal.data.mean(axis=nav_axes, dtype=np.float64))
+                dtype = signal.data.dtype
+                if np.issubdtype(dtype, np.integer):
+                    mean_bg = np.rint(mean_bg)
+                static_bg = mean_bg.astype(dtype)
+            else:
+                static_bg = signal.data[req.static_bg_row, req.static_bg_col].astype(signal.data.dtype)
             signal.remove_static_background(
                 operation="subtract",
                 static_bg=static_bg,
@@ -2226,9 +2253,12 @@ async def background_removal(req: BackgroundRemovalRequest):
         rate = n_patterns / max(elapsed, 1e-6)
         logger.info("BG-%s done: %d patterns in %.1fs (%.0f patterns/s)",
                     req.method, n_patterns, elapsed, rate)
-        return {"success": True, "method": req.method,
-                "elapsed_seconds": round(elapsed, 2),
-                "n_patterns": n_patterns}
+        result = {"success": True, "method": req.method,
+                  "elapsed_seconds": round(elapsed, 2),
+                  "n_patterns": n_patterns}
+        if static_reference is not None:
+            result["static_reference"] = static_reference
+        return result
     except Exception as e:
         logger.exception("Background removal failed after %.1fs",
                          time.perf_counter() - t0)

@@ -433,11 +433,15 @@ export const ebsdApi = {
   // Signal processing (operate on active dataset in-place)
   frameAverage: (windowSize = 3) =>
     api.post('/api/ebsd/frame-average', { window_size: windowSize }),
-  backgroundRemoval: (method = 'dynamic', staticBgRow = 0, staticBgCol = 0) =>
+  // Static removal without a reference pattern subtracts the scan average.
+  // Pass BOTH staticBgRow and staticBgCol to subtract one named pattern
+  // instead; never default them to 0 (that imprints pattern (0,0) on the map).
+  backgroundRemoval: (method = 'dynamic', staticBgRow = null, staticBgCol = null) =>
     api.post('/api/ebsd/background-removal', {
       method,
-      static_bg_row: staticBgRow,
-      static_bg_col: staticBgCol,
+      ...(method === 'static' && staticBgRow != null && staticBgCol != null
+        ? { static_bg_row: staticBgRow, static_bg_col: staticBgCol }
+        : {}),
     }),
   autocontrast: () => api.post('/api/ebsd/autocontrast'),
   clahe: (kernelSize = 8, requestId = null) =>

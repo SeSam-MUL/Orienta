@@ -81,9 +81,9 @@
   "processing": {
     "title": "Musterverarbeitung",
     "bgDynamic": "BG Dynamisch",
-    "bgDynamicTooltip": "Hintergrund mit dynamischer Methode entfernen (Gauß-Filter pro Muster).\nAm besten für die meisten EBSD-Muster. (Alt+D)",
+    "bgDynamicTooltip": "Zieht eine stark geglättete Kopie desselben Musters von sich selbst ab (Gauß-Tiefpass, Sigma = Musterbreite / 8) und streckt das Ergebnis auf den vollen Grauwertbereich.\nJedes Muster wird für sich verarbeitet, kein anderes Muster fließt ein. Entfernt langsam veränderliche Ausleuchtung und erhält die Bänder. (Alt+D)",
     "bgStatic": "BG Statisch",
-    "bgStaticTooltip": "Hintergrund mit statischem Hintergrundbild entfernen.\nBenötigt einen in der HDF5-Datei gespeicherten statischen Hintergrund. (Alt+S)",
+    "bgStaticTooltip": "Zieht von jedem Muster EIN gemeinsames Hintergrundmuster ab: den Mittelwert aller Muster des Scans. Der in der Datei gespeicherte Hintergrund wird nicht verwendet, weil die geladenen Muster bereits vom Hersteller verarbeitet sind.\nEntfernt, was allen Mustern gemeinsam ist, und streckt das Ergebnis auf den vollen Grauwertbereich; funktioniert am besten bei Scans mit vielen verschiedenen Körnern. (Alt+S)",
     "windowSizeLabel": "Fenstergröße:",
     "windowSizeTooltip": "Kernel-Fenstergröße für Musterverarbeitungsfilter.\nGrößere Werte glätten stärker, können aber feine Details verwischen.",
     "frameAverage": "Bildmittelung",
