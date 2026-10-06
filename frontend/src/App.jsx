@@ -18,7 +18,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense, Comp
 import { useTranslation } from 'react-i18next';
 import i18n from './i18n';
 import { setLanguage, LANGUAGES } from './i18n';
-import { healthCheck, createWebSocket, closeWebSocket } from './services/api';
+import { healthCheck, openBackendSocket } from './services/api';
 import { reportError } from './services/errorReporter';
 import { addBreadcrumb } from './services/breadcrumbs';
 import DiagnosticsExportButton from './components/common/DiagnosticsExportButton';
@@ -278,25 +278,28 @@ function App() {
     return () => { if (intervalId) clearInterval(intervalId); };
   }, []);
 
-  // WebSocket keepalive — prevents backend watchdog from killing the server
+  // WebSocket keepalive — prevents backend watchdog from killing the server.
+  // The socket reconnects by itself (backoff, heartbeat, retry on tab focus);
+  // after a gap the store is re-read from the backend, because whatever
+  // happened while we were away (a restart, a load from another client) is
+  // otherwise only picked up on the next 30 s health poll.
   useEffect(() => {
-    let ws = null;
-    let reconnectTimer = null;
-    const connect = () => {
-      ws = createWebSocket(() => {
+    let gap = false;
+    const socket = openBackendSocket({
+      onMessage: () => {
         // Handle backend push messages if needed
-      });
-      ws.onclose = () => {
-        // No reconnect after we closed it ourselves (unmount / dev remount).
-        if (!ws.__closingIntentionally) reconnectTimer = setTimeout(connect, 5000);
-      };
-    };
-    connect();
-    return () => {
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      closeWebSocket(ws);
-    };
-  }, []);
+      },
+      onStatus: (status) => {
+        if (status === 'open') {
+          if (gap) syncFromBackend();
+          gap = false;
+        } else if (status === 'reconnecting') {
+          gap = true;
+        }
+      },
+    });
+    return () => socket.close();
+  }, [syncFromBackend]);
 
   // Shut down backend when browser tab/window closes + warn about data loss
   useEffect(() => {

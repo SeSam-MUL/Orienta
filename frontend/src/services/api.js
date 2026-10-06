@@ -9,6 +9,7 @@ import axios from 'axios';
 import { addBreadcrumb, addHttpBreadcrumb, formatBreadcrumbs } from './breadcrumbs';
 import { reportError } from './errorReporter';
 import { normalizeRect } from './rect';
+import { openReconnectingSocket } from './reconnectingSocket';
 
 // In dev mode with Vite proxy, use relative URLs. In Electron/production, use full URL.
 const API_BASE = import.meta.env.VITE_API_URL || '';
@@ -1623,46 +1624,28 @@ export const crystalHintApi = {
 };
 
 // --- WebSocket ---
-export const createWebSocket = (onMessage) => {
-  const wsBase = API_BASE || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
-  const wsUrl = wsBase.replace(/^http/, 'ws') + '/ws';
-  const ws = new WebSocket(wsUrl);
-
-  ws.onmessage = (event) => {
-    // Guard against non-JSON frames (ping text, health probe, etc.) so a
-    // single malformed message doesn't throw into the event loop and
-    // silently break subsequent pushes.
-    let data;
-    try {
-      data = JSON.parse(event.data);
-    } catch (err) {
-      console.warn('WebSocket: ignoring non-JSON message:', event.data);
-      return;
-    }
-    try {
-      onMessage(data);
-    } catch (err) {
-      console.error('WebSocket onMessage handler threw:', err);
-    }
+/**
+ * The page's one socket to /ws, kept alive for the whole session: it reconnects
+ * with backoff, notices a half-open connection and retries when the tab becomes
+ * visible again (see reconnectingSocket.js). `onStatus` receives 'connecting' |
+ * 'open' | 'reconnecting'. Returns `{ close, reconnectNow }`.
+ */
+export const openBackendSocket = ({ onMessage, onStatus } = {}) => {
+  const url = () => {
+    const wsBase = API_BASE
+      || `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+    return wsBase.replace(/^http/, 'ws') + '/ws';
   };
-
-  ws.onopen = () => {
-    ws.__opened = true;
-    console.log('WebSocket connected');
-  };
-
-  // A WebSocket error event carries no detail — it is always a bare Event. The
-  // only case worth reporting is a socket that was already carrying traffic and
-  // then broke; a handshake that never completed (backend still starting, or
-  // React's dev double-mount tearing the socket down) is routine and reconnects
-  // on its own, so logging it as an error was pure noise on every page load.
-  ws.onerror = () => {
-    if (ws.__opened && !ws.__closingIntentionally) {
-      console.warn('WebSocket connection lost — reconnecting.');
-    }
-  };
-
-  return ws;
+  return openReconnectingSocket({
+    url,
+    onMessage,
+    // A drop leaves a trace in the problem-report trail: when the socket went
+    // away is exactly what a later bug report needs and cannot reconstruct.
+    onStatus: (status) => {
+      addBreadcrumb('action', `WebSocket ${status}`);
+      if (onStatus) onStatus(status);
+    },
+  });
 };
 
 /**
