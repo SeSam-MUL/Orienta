@@ -1815,7 +1815,9 @@ def build_spherical_det_params(signal, detector, ebsd_file_path: str, pixel_rc=N
         the mean nor the tested pixel — the F3 bug);
       - a single PC (shape (1,3)) is used as-is.
     """
-    from backend.spherical_gpu.pipeline.detector import DEFAULT_PIXEL_SIZE_UM
+    from backend.spherical_gpu.pipeline.detector import (
+        DEFAULT_PIXEL_SIZE_UM, pc_conversion_binning,
+    )
     pc_full = np.asarray(detector.pc, dtype=float)
     if pc_full.ndim == 3 and pixel_rc is not None:
         nr, nc = pc_full.shape[0], pc_full.shape[1]
@@ -1850,7 +1852,12 @@ def build_spherical_det_params(signal, detector, ebsd_file_path: str, pixel_rc=N
     if hasattr(detector, 'shape'):
         det_params['pat_height'] = int(detector.shape[0])
         det_params['pat_width'] = int(detector.shape[1])
-    if hasattr(detector, 'px_size') and detector.px_size > 1.0:
+    # A pixel size read from the file is kikuchipy's unbinned px_size. Oxford
+    # and EDAX files carry only the placeholder 1.0, so the substitute above
+    # (or the BUG-J value below) is used, and that is the size of a pixel of
+    # the STORED pattern - see pc_conversion_binning.
+    px_size_from_file = hasattr(detector, 'px_size') and detector.px_size > 1.0
+    if px_size_from_file:
         det_params['pixel_size'] = float(detector.px_size)
     if hasattr(detector, 'tilt'):
         det_params['tilt'] = float(detector.tilt)
@@ -1860,6 +1867,15 @@ def build_spherical_det_params(signal, detector, ebsd_file_path: str, pixel_rc=N
         det_params['sample_tilt'] = float(detector.sample_tilt)
     if hasattr(detector, 'binning'):
         det_params['binning'] = int(detector.binning)
+    # The file's own value, kept for provenance. 'binning' is what the PC
+    # conversion applies: 1 when pixel_size is a stored-pixel size, so
+    # kikuchipy >= 0.12 (which reports the real factor, 8 for Oxford speed
+    # modes) and 0.11.3 (which reported 1) give the same detector distance.
+    det_params['file_binning'] = det_params['binning']
+    det_params['binning'] = pc_conversion_binning(
+        det_params['binning'],
+        pixel_size_is_stored_pixel=not px_size_from_file,
+    )
 
     # EMSphinx's IndexEBSD rejects detector widths outside [5, 90] mm
     # (BUG-J). Datasets loaded without an explicit pixel_size fell

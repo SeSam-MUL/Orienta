@@ -118,6 +118,22 @@ def convert_pc_to_emsphinx(
     return float(cX), float(cY), float(sDst)
 
 
+def pc_conversion_binning(binning: int, pixel_size_is_stored_pixel: bool) -> int:
+    """Binning factor to hand to :func:`convert_pc_to_emsoft`.
+
+    ``convert_pc_to_emsoft`` follows kikuchipy: ``pixel_size`` is the
+    *unbinned* sensor pixel and ``binning`` scales it up to the pixel of the
+    stored pattern. A pixel size the app substitutes itself
+    (``DEFAULT_PIXEL_SIZE_UM``, or the BUG-J auto-scaled value) is different:
+    it is the size of a pixel of the stored pattern, the quantity the forward
+    renderer and EMSphInx call ``delta``. Binning it again would multiply the
+    detector distance by the binning factor, so the factor is 1 in that case.
+    """
+    if pixel_size_is_stored_pixel:
+        return 1
+    return max(1, int(binning))
+
+
 def convert_pc_to_emsoft(
     pc: Tuple[float, float, float],
     vendor: str,
@@ -145,7 +161,10 @@ def convert_pc_to_emsoft(
     vendor : 'Oxford', 'EDAX', 'Bruker', or 'EMsoft'
     pat_width, pat_height : detector size in pixels (post-binning, the
         shape of the actual loaded pattern array)
-    pixel_size : pixel size in microns (post-binning)
+    pixel_size : UNBINNED sensor pixel size in microns, as in kikuchipy's
+        ``EBSDDetector.px_size``; ``pixel_size * binning`` is the pixel of
+        the stored pattern. For a stored-pixel size pass binning 1 (see
+        :func:`pc_conversion_binning`).
     binning : binning factor
 
     Returns

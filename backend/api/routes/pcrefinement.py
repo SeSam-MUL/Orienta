@@ -1462,8 +1462,13 @@ def _render_preview_sync(req: "RenderPreviewRequest"):
     # alpha-AlFeMnSi → NCC ~0.18 vs Hough's >0.4) and rendered a visibly wrong
     # pattern. The spherical-vs-Hough disagreement is a real indexer bug under
     # investigation; until it's fixed the preview must keep using Hough.
-    from backend.spherical_gpu.pipeline.detector import DEFAULT_PIXEL_SIZE_UM
+    from backend.spherical_gpu.pipeline.detector import (
+        DEFAULT_PIXEL_SIZE_UM, pc_conversion_binning,
+    )
     _px = float(req.pixel_size if req.pixel_size is not None else DEFAULT_PIXEL_SIZE_UM)
+    # The default is the size of a stored (binned) pixel: do not bin it again.
+    _conv_binning = pc_conversion_binning(
+        req.binning, pixel_size_is_stored_pixel=req.pixel_size is None)
     rot_obj = None
     orientation_euler_deg = None
     orientation_source = None
@@ -1519,7 +1524,7 @@ def _render_preview_sync(req: "RenderPreviewRequest"):
             pat_width=W,
             pat_height=H,
             pixel_size=_px,
-            binning=int(req.binning),
+            binning=_conv_binning,
         )
 
         q_arr = _np.asarray(rot_obj.data).reshape(-1)[:4]
