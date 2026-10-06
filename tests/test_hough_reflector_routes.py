@@ -118,19 +118,26 @@ def test_a_slow_table_does_not_stall_the_event_loop(cifs, monkeypatch):
 
     async def scenario():
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as cl:
-            slow = asyncio.create_task(
-                cl.get("/api/indexing/hough/reflectors", params={"cif_path": cifs["Al"]}))
-            await asyncio.sleep(0.2)
-            worst = 0.0
-            while not slow.done():
+        gaps = []
+
+        async def ticker(stop):
+            # what the health poll experiences: how late does a 50 ms timer fire?
+            while not stop.is_set():
                 t0 = time.perf_counter()
-                r = await cl.get("/api/indexing/hough/reflector-specs")
-                worst = max(worst, time.perf_counter() - t0)
-                assert r.status_code == 200
                 await asyncio.sleep(0.05)
-            assert (await slow).json() == {"slow": True}
-            return worst
+                gaps.append(time.perf_counter() - t0 - 0.05)
+
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as cl:
+            stop = asyncio.Event()
+            tick = asyncio.create_task(ticker(stop))
+            await asyncio.sleep(0.1)
+            r = await cl.get("/api/indexing/hough/reflectors", params={"cif_path": cifs["Al"]})
+            polled = await cl.get("/api/indexing/hough/reflector-specs")
+            stop.set()
+            await tick
+            assert r.json() == {"slow": True} and polled.status_code == 200
+            assert len(gaps) > 10           # the loop really kept running during the 1.5 s
+            return max(gaps)
 
     assert asyncio.run(scenario()) < 0.5
 

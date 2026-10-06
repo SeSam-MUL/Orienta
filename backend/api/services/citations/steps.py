@@ -31,7 +31,8 @@ does: the ``.sht`` master patterns both consume are simulated by EMsoft's
 matching method.
 
 Which keys are WIRED (i.e. some code path calls ``record_step`` with them):
-``indexing.hough``, ``indexing.dictionary``, ``indexing.spherical``,
+``indexing.hough``, ``indexing.hough_reflectors`` (only for a phase indexed with its
+own reflector selection), ``indexing.dictionary``, ``indexing.spherical``,
 ``indexing.spherical_emsphinx``, ``eds.chemistry_prior``,
 ``eds.particle_rescue``, ``pseudosym.resolver``, ``indexing.hough_anchor``
 and ``refinement.orientation``.
@@ -90,6 +91,15 @@ _STEPS = (
             "PyEBSDIndex (Rowenhorst et al., 2024), which performs the "
             "Radon-transform band detection and the band indexing by triplet "
             "voting, called from Orienta {orienta_version}."
+        ),
+    ),
+    StepCitation(
+        key="indexing.hough_reflectors",
+        label="Hough reflector families",
+        citation_ids=("pyebsdindex",),
+        sentence=(
+            "Hough indexing of {phase} used the reflector families "
+            "{families} ({source})."
         ),
     ),
     StepCitation(

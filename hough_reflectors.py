@@ -1036,3 +1036,33 @@ def expand_top_n(phase, n, rule=None):
         if len(picked) == n:
             break
     return spec_with_fingerprint(phase, {"mode": "custom", "families": picked})
+
+
+def selection_provenance(phase_list):
+    """What a result has to say about the reflector families it was indexed with.
+
+    One entry per phase that has a selection of its own (empty list when none):
+    the families PyEBSDIndex used, the ones ticked, the spec, and a short phrase
+    for where the list came from. Nothing for a phase on the default list.
+    """
+    out = []
+    for _pid, phase in phase_list:
+        spec = get_spec(getattr(phase, "name", ""))
+        if spec is None:
+            continue
+        shown = describe(phase, spec)
+        if spec["mode"] == "custom":
+            source = "user selection"
+        else:
+            r = spec["rule"]
+            source = (f"default construction with min d {r['min_d']:g} A "
+                      f"and |F| threshold {r['f_threshold']:g}")
+        out.append({
+            "phase": str(phase.name),
+            "mode": spec["mode"],
+            "source": source,
+            "families_used": [f["label"] for f in shown["families"] if f["effective"]],
+            "families_ticked": [f["label"] for f in shown["families"] if f["selected"]],
+            "spec": spec,
+        })
+    return out

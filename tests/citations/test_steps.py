@@ -17,6 +17,7 @@ from backend.api.services.citations.steps import (
 EXPECTED_KEYS = {
     "indexing.hough",
     "indexing.dictionary",
+    "indexing.hough_reflectors",
     "indexing.spherical",
     "indexing.spherical_emsphinx",
     "eds.chemistry_prior",
@@ -30,7 +31,7 @@ EXPECTED_KEYS = {
 
 def test_registry_holds_exactly_the_declared_steps():
     assert set(STEP_REGISTRY) == EXPECTED_KEYS
-    assert len(STEP_REGISTRY) == 10
+    assert len(STEP_REGISTRY) == 11
 
 
 def test_the_emsphinx_step_does_not_claim_an_orienta_reimplementation():

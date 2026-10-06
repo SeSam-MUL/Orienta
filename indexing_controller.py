@@ -788,21 +788,19 @@ def hough_index_patterns(
             rSigma=config.r_sigma,
             max_reflectors=config.max_reflectors,
         )
-    # A phase with a reflector selection of its own says so in the run's log: the
-    # families are part of what the result means.
+    # A phase with a reflector selection of its own says so in the run's log, and
+    # (below) in the result: the families are part of what the result means.
     try:
         import hough_reflectors
-        for _pid, _ph in phase_list:
-            _sp = hough_reflectors.get_spec(getattr(_ph, "name", ""))
-            if _sp is not None:
-                _used = hough_reflectors.describe(_ph, _sp)
-                _progress(
-                    f"Hough: {_ph.name} uses its own reflector selection "
-                    f"({_sp['mode']}): "
-                    + " ".join(f["label"] for f in _used["families"] if f["effective"]),
-                    0.31)
+        _selections = hough_reflectors.selection_provenance(phase_list)
+        for _sel in _selections:
+            _progress(
+                f"Hough: {_sel['phase']} uses its own reflector selection "
+                f"({_sel['mode']}): " + " ".join(_sel["families_used"]),
+                0.31)
     except Exception:  # noqa: BLE001 - a log line must never fail the run
         logger.debug("could not describe the reflector selection", exc_info=True)
+        _selections = []
     _check_cancel()
 
     # --- Step 3: Extract patterns (35% -> 40%) ---
@@ -955,6 +953,20 @@ def hough_index_patterns(
     record_step(result, "indexing.hough", {
         "orienta_version": get_version_info().get("version"),
     })
+    # Runs on the default list record nothing more. A phase with its own selection
+    # says which families PyEBSDIndex used, where a reader of the result looks: the
+    # metadata, and a sentence of the methods paragraph.
+    for _sel in _selections:
+        record_step(result, "indexing.hough_reflectors", {
+            "phase": _sel["phase"],
+            "families": _sel["families_used"],
+            "source": _sel["source"],
+        })
+        result.metadata.setdefault("hough_reflectors", {})[_sel["phase"]] = {
+            "mode": _sel["mode"], "source": _sel["source"],
+            "families_used": _sel["families_used"],
+            "families_ticked": _sel["families_ticked"], "spec": _sel["spec"],
+        }
     return result
 
 
