@@ -394,7 +394,8 @@ def test_phase_add_rejects_duplicate_and_unreadable_files(pc_client, duplex_cifs
     aus, fer = duplex_cifs
     c.post("/api/pc/phase/add", json={"cif_path": aus})
     dup = c.post("/api/pc/phase/add", json={"cif_path": aus})
-    assert dup.status_code == 400 and "already" in dup.json()["detail"]
+    assert dup.status_code == 400 and dup.json()["detail"]["code"] == "phase_duplicate"
+    assert "already" in dup.json()["detail"]["message"]
     missing = c.post("/api/pc/phase/add", json={"cif_path": str(tmp_path / "nope.cif")})
     assert missing.status_code == 400
     assert c.get("/api/pc/status").json()["phase_names"] == ["austenite"]
@@ -446,3 +447,107 @@ def test_several_phases_do_not_recompute_reflectors_for_every_pattern(
         _index_and_simulate(ctrl, i)
     _sim_cache.clear()
     assert len(calls) <= 1, f"reflectors recomputed {len(calls)} times for 3 patterns"
+
+
+# --------------------------------------------------------------------------
+# Errors are coded (the page words them in the user's language) and name files
+# --------------------------------------------------------------------------
+
+def _detail(r):
+    d = r.json()["detail"]
+    assert set(d) == {"code", "message", "params"}, d
+    return d
+
+
+def test_the_phases_of_a_response_carry_the_file_they_came_from(pc_client, duplex_cifs):
+    c, _ = pc_client
+    aus, fer = duplex_cifs
+    c.post("/api/pc/phase/add", json={"cif_path": aus})
+    r = c.post("/api/pc/phase/add", json={"cif_path": fer}).json()
+    from pathlib import Path
+    assert [Path(p["path"]).resolve() for p in r["phases"]] == [Path(aus).resolve(), Path(fer).resolve()]
+    rm = c.post("/api/pc/phase/remove", json={"phase_name": "austenite"}).json()
+    assert [p["name"] for p in rm["phases"]] == ["ferrite"]
+
+
+def test_the_same_file_again_is_a_duplicate(pc_client, duplex_cifs):
+    c, _ = pc_client
+    aus, _ = duplex_cifs
+    c.post("/api/pc/phase/add", json={"cif_path": aus})
+    d = _detail(c.post("/api/pc/phase/add", json={"cif_path": aus}))
+    assert d["code"] == "phase_duplicate" and d["params"]["name"] == "austenite"
+
+
+def test_another_file_with_the_same_name_is_refused_and_says_which_is_loaded(
+        pc_client, duplex_cifs, tmp_path):
+    """Phases are named by their file's stem, and a reflector selection is stored
+    under that name too. Two different files called austenite.cif would be one phase
+    to every one of them: the second is refused, not silently ignored."""
+    c, _ = pc_client
+    aus, _ = duplex_cifs
+    c.post("/api/pc/phase/add", json={"cif_path": aus})
+    other = tmp_path / "elsewhere" / "austenite.cif"
+    other.parent.mkdir()
+    other.write_text(open(aus, encoding="utf-8").read().replace("3.52", "3.60"), encoding="utf-8")
+    r = c.post("/api/pc/phase/add", json={"cif_path": str(other)})
+    d = _detail(r)
+    assert r.status_code == 400 and d["code"] == "phase_same_name"
+    assert d["params"]["name"] == "austenite"
+    assert d["params"]["loaded_path"].endswith("austenite.cif") and d["params"]["path"] == str(other)
+    assert c.get("/api/pc/status").json()["phase_names"] == ["austenite"]
+    # a different spelling of the same name is the same name (the registry is case-blind)
+    upper = tmp_path / "third" / "Austenite.cif"
+    upper.parent.mkdir()
+    upper.write_text(open(aus, encoding="utf-8").read(), encoding="utf-8")
+    assert _detail(c.post("/api/pc/phase/add", json={"cif_path": str(upper)}))["code"] == "phase_same_name"
+
+
+def test_the_limit_is_a_coded_error(pc_client, duplex_cifs, tmp_path, monkeypatch):
+    from pc_controller import PCController
+    monkeypatch.setattr(PCController, "MAX_PHASES", 1)
+    c, _ = pc_client
+    aus, fer = duplex_cifs
+    c.post("/api/pc/phase/add", json={"cif_path": aus})
+    d = _detail(c.post("/api/pc/phase/add", json={"cif_path": fer}))
+    assert d["code"] == "phase_limit" and d["params"]["max"] == 1
+
+
+def test_an_unreadable_file_is_a_coded_error_with_the_reason(pc_client, tmp_path):
+    c, _ = pc_client
+    junk = tmp_path / "junk.cif"
+    junk.write_text("this is not a cif", encoding="utf-8")
+    d = _detail(c.post("/api/pc/phase/add", json={"cif_path": str(junk)}))
+    assert d["code"] == "phase_unreadable" and d["params"]["name"] == "junk"
+    assert d["params"]["reason"]
+    missing = _detail(c.post("/api/pc/phase/add", json={"cif_path": str(tmp_path / "nope.cif")}))
+    assert missing["code"] == "phase_unreadable"
+
+
+def test_a_file_too_large_to_be_a_cif_is_refused_before_it_is_read(pc_client, tmp_path, monkeypatch):
+    from backend.api.services import phase_path
+    from orix.crystal_map import Phase
+    monkeypatch.setattr(phase_path, "MAX_CIF_BYTES", 1024)
+    monkeypatch.setattr(Phase, "from_cif",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("parsed")))
+    c, _ = pc_client
+    big = tmp_path / "big.cif"
+    big.write_bytes(b"x" * 4096)
+    d = _detail(c.post("/api/pc/phase/add", json={"cif_path": str(big)}))
+    assert d["code"] == "too_large" and d["params"]["limit_mb"] == 0
+    assert _detail(c.post("/api/pc/phase/load", json={"cif_path": str(big)}))["code"] == "too_large"
+
+
+def test_removing_a_phase_that_is_not_loaded_is_a_coded_404(pc_client):
+    c, _ = pc_client
+    r = c.post("/api/pc/phase/remove", json={"phase_name": "ghost"})
+    assert r.status_code == 404 and _detail(r)["code"] == "phase_not_loaded"
+    assert _detail(r)["params"]["name"] == "ghost"
+
+
+def test_changing_phases_during_a_refine_is_a_coded_409(pc_client, duplex_cifs, monkeypatch):
+    c, pcr = pc_client
+    monkeypatch.setattr(pcr, "_optimization_active", True)
+    r = c.post("/api/pc/phase/add", json={"cif_path": duplex_cifs[0]})
+    assert r.status_code == 409 and _detail(r)["code"] == "optimization_running"
+    r = c.post("/api/pc/phase/remove", json={"phase_name": "x"})
+    assert r.status_code == 409 and _detail(r)["code"] == "optimization_running"

@@ -65,7 +65,9 @@ def test_a_good_cif_returns_a_library_shaped_record(al_cif):
     assert rec["space_group_number"] == 225
 
 
-@pytest.mark.parametrize("wrap", ['"{}"', "'{}'", "  {}  ", ' "{}" '])
+@pytest.mark.parametrize("wrap", ['"{}"', "'{}'", "  {}  ", ' "{}" ',
+                                  "“{}”", "‘{}’", " “{}” ",
+                                  "„{}“", "«{}»"])
 def test_quotes_and_spaces_pasted_around_a_path_are_ignored(al_cif, wrap):
     """Windows' "Copy as path" puts the path in double quotes."""
     rec = inspect_phase_path("hough", wrap.format(al_cif))
@@ -108,6 +110,32 @@ def test_wrong_extension_names_what_the_method_wants(tmp_path, method, name, exp
     assert err.code == "wrong_extension"
     assert err.params["expected"] == expected
     assert err.params["method"] == method
+
+
+def test_a_huge_file_named_cif_is_refused_before_it_is_parsed(tmp_path, monkeypatch):
+    """A 210 MB binary renamed .cif took 12.6 s and ~800 MB before the parser gave
+    up. A crystal structure file is kilobytes; anything above the cap is not one."""
+    from backend.api.services import phase_path
+    from orix.crystal_map import Phase
+
+    def parser_must_not_run(*a, **k):
+        raise AssertionError("the file must be refused before it is parsed")
+
+    monkeypatch.setattr(Phase, "from_cif", parser_must_not_run)
+    big = tmp_path / "big.cif"
+    with open(big, "wb") as fh:
+        fh.truncate(phase_path.MAX_CIF_BYTES + 1)
+    err = _code("hough", big)
+    assert err.code == "too_large"
+    assert err.params["limit_mb"] == phase_path.MAX_CIF_BYTES // (1024 * 1024)
+    assert err.params["size_mb"] >= err.params["limit_mb"]
+    assert "MB" in err.message
+
+
+def test_the_cap_is_generous_for_a_real_structure(tmp_path):
+    """Largest library CIF is well below 1 MB; the cap leaves orders of magnitude."""
+    from backend.api.services import phase_path
+    assert 5 * 1024 * 1024 <= phase_path.MAX_CIF_BYTES <= 50 * 1024 * 1024
 
 
 def test_text_that_is_not_a_cif(tmp_path):

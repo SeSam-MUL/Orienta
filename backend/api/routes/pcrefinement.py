@@ -16,9 +16,10 @@ from typing import Optional, List, Union
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, BackgroundTasks
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from backend.api.services.image_utils import array_to_base64_raw
+from pc_controller import PhaseSetError
 from backend.api.services.calibration_store import calibration_store
 
 logger = logging.getLogger(__name__)
@@ -170,6 +171,14 @@ _sim_cache = _ActiveSimCacheProxy()
 
 class LoadPhaseRequest(BaseModel):
     cif_path: str
+
+    @model_validator(mode="after")
+    def _not_too_large_to_be_a_cif(self):
+        # Checked here so that `/phase/load` and `/phase/add` both refuse a huge
+        # file (a renamed 210 MB binary took 12.6 s and ~800 MB to fail) before any
+        # parser sees it. An HTTPException passes through pydantic unchanged.
+        _check_cif_file(self.cif_path)
+        return self
 
 
 class SetDetectorRequest(BaseModel):
@@ -1060,10 +1069,32 @@ async def pc_status():
     }
 
 
+def _phase_path_of(phase):
+    """The file a loaded phase came from (None when unknown)."""
+    ctrl = _get_controller()
+    return getattr(ctrl, "phase_paths", {}).get(str(phase.name))
+
+
+def _coded(status, code, message, **params):
+    return HTTPException(status_code=status, detail={"code": code, "message": message,
+                                                     "params": params})
+
+
+def _check_cif_file(path):
+    """Refuse a file too large to be a CIF before anything reads it."""
+    from pathlib import Path
+    from backend.api.services.phase_path import PhasePathError, check_cif_size
+    try:
+        check_cif_size(Path(str(path)))
+    except PhasePathError as exc:
+        raise HTTPException(status_code=400, detail=exc.as_detail())
+
+
 def _phase_summary(phase) -> dict:
     """The part of a phase the page shows: name, space group, lattice."""
     out = {"name": str(phase.name),
            "space_group": str(phase.space_group) if hasattr(phase, 'space_group') else ""}
+    out["path"] = _phase_path_of(phase)
     try:
         out["lattice"] = {
             "a": float(phase.structure.lattice.a),
@@ -1095,11 +1126,9 @@ async def add_phase(req: LoadPhaseRequest):
     is the same as ``/phase/load``.
     """
     if _optimization_active:
-        raise HTTPException(
-            status_code=409,
-            detail="A PC optimization is running. Wait for it to finish "
-                   "before changing the phases.",
-        )
+        raise _coded(409, "optimization_running",
+                     "A PC optimization is running. Wait for it to finish "
+                     "before changing the phases.")
     ctrl = _get_controller()
 
     # Off the event loop (reading the CIF and its reflectors takes a moment) and
@@ -1112,9 +1141,11 @@ async def add_phase(req: LoadPhaseRequest):
 
     try:
         phase = await asyncio.to_thread(_add_locked)
+    except PhaseSetError as e:
+        raise HTTPException(status_code=400, detail=e.as_detail())
     except Exception as e:
         logger.exception("Failed to add phase")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _coded(400, "phase_unreadable", str(e), reason=str(e)[:300])
     return {
         "success": True,
         "phase_name": str(phase.name),
@@ -1128,11 +1159,9 @@ async def add_phase(req: LoadPhaseRequest):
 async def remove_phase(req: RemovePhaseRequest):
     """Remove one loaded phase by name; the rest stay loaded."""
     if _optimization_active:
-        raise HTTPException(
-            status_code=409,
-            detail="A PC optimization is running. Wait for it to finish "
-                   "before changing the phases.",
-        )
+        raise _coded(409, "optimization_running",
+                     "A PC optimization is running. Wait for it to finish "
+                     "before changing the phases.")
     ctrl = _get_controller()
 
     def _remove_locked():
@@ -1143,11 +1172,11 @@ async def remove_phase(req: RemovePhaseRequest):
     try:
         await asyncio.to_thread(_remove_locked)
     except KeyError:
-        raise HTTPException(status_code=404,
-                            detail=f"Phase '{req.phase_name}' is not loaded.")
+        raise _coded(404, "phase_not_loaded", f"Phase '{req.phase_name}' is not loaded.",
+                     name=req.phase_name)
     except Exception as e:
         logger.exception("Failed to remove phase")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise _coded(400, "phase_unreadable", str(e), reason=str(e)[:300])
     phases = _loaded_phases(ctrl)
     return {"success": True, "phases": phases, "n_phases": len(phases),
             "phase_name": phases[0]["name"] if phases else None}

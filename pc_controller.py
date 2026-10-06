@@ -9,6 +9,29 @@ from kikuchipy.signals import EBSD
 from ebsd_utils import create_indexer, optimize_pc, prepare_reflectors
 import hough_reflectors
 
+class PhaseSetError(ValueError):
+    """The set of phases cannot be changed as asked.
+
+    ``code`` and ``params`` are stable (the page words the problem in the user's
+    language); the message is the English sentence for the log.
+    """
+
+    def __init__(self, code, message, **params):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.params = params
+
+    def as_detail(self):
+        return {"code": self.code, "message": self.message, "params": self.params}
+
+
+def _same_file(a, b):
+    """Two paths name the same file (spelling, case on Windows, slashes)."""
+    import os
+    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+
+
 class PCController:
     """
     Controller for EBSD workflows: load phases, manage patterns,
@@ -19,6 +42,7 @@ class PCController:
         self.phase = None
         self.phase_list = None
         self.reflectors = None
+        self.phase_paths = {}         # phase name -> the file it was loaded from
         self.indexer = None
         self.patterns = []            # list of (coords, pattern)
         self.cache = {}               # idx -> {'ci', 'xmap', 'band_data'}
@@ -51,6 +75,8 @@ class PCController:
             phase.name = original_stem
         self.phase = phase
         self.phase_list = PhaseList(phase)
+        import os
+        self.phase_paths = {str(phase.name): os.path.abspath(str(path))}
         # Compute reflectors with current GUI parameters
         self.reflectors = self._compute_reflectors()
         self.indexer = None
@@ -126,29 +152,63 @@ class PCController:
         """Add one more phase to those already loaded and return it.
 
         With nothing loaded this is ``load_phase``. A phase whose name (the CIF
-        stem) is already loaded is refused, and a CIF that cannot be read leaves
-        the loaded phases exactly as they were.
+        stem; a reflector selection is stored under it too) is already loaded is
+        refused - as a duplicate when it is the same file, as "same name, other
+        file" when it is not - and a CIF that cannot be read leaves the loaded
+        phases exactly as they were. Every refusal is a ``PhaseSetError`` with a
+        code.
         """
+        import os
+        from pathlib import Path as P
+        stem = P(str(path)).stem
+        if self.phase_list is not None:
+            for n, loaded in self.phase_paths.items():
+                if n.casefold() == stem.casefold():
+                    if _same_file(loaded, path):
+                        raise PhaseSetError(
+                            "phase_duplicate", f"The phase '{n}' is already loaded.", name=n)
+                    raise PhaseSetError(
+                        "phase_same_name",
+                        f"A different file called '{n}' is already loaded "
+                        f"({loaded}); a phase is identified by its file name.",
+                        name=n, loaded_path=loaded, path=str(path))
         if self.phase_list is None:
-            return self.load_phase(path)
+            try:
+                return self.load_phase(path)
+            except PhaseSetError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - diffpy raises unrelated types
+                raise PhaseSetError(
+                    "phase_unreadable", f"{stem} could not be read: {exc}",
+                    name=stem, path=str(path), reason=str(exc)[:300]) from exc
         previous = [self.phase_list[pid] for pid in self.phase_list.ids]
         if len(previous) >= self.MAX_PHASES:
-            raise ValueError(
+            raise PhaseSetError(
+                "phase_limit",
                 f"At most {self.MAX_PHASES} phases can be used together; "
-                "remove one first.")
-        saved = (self.phase, self.phase_list, self.reflectors)
+                "remove one first.", max=self.MAX_PHASES)
+        saved = (self.phase, self.phase_list, self.reflectors, dict(self.phase_paths))
         try:
             # ``load_phase`` is the one place a CIF is read into a Phase.
             new_phase = self.load_phase(path)
             if str(new_phase.name) in {str(p.name) for p in previous}:
-                raise ValueError(
-                    f"A phase named '{new_phase.name}' is already loaded.")
+                raise PhaseSetError(
+                    "phase_duplicate",
+                    f"A phase named '{new_phase.name}' is already loaded.",
+                    name=str(new_phase.name))
+            paths = dict(saved[3])
+            paths[str(new_phase.name)] = os.path.abspath(str(path))
             self._set_phases(previous + [new_phase])
-        except Exception:
-            self.phase, self.phase_list, self.reflectors = saved
+            self.phase_paths = paths
+        except Exception as exc:
+            self.phase, self.phase_list, self.reflectors, self.phase_paths = saved
             self.indexer = None
             self.clear_cache()
-            raise
+            if isinstance(exc, PhaseSetError):
+                raise
+            raise PhaseSetError(
+                "phase_unreadable", f"{stem} could not be read: {exc}",
+                name=stem, path=str(path), reason=str(exc)[:300]) from exc
         return new_phase
 
     def remove_phase(self, name):
@@ -163,10 +223,12 @@ class PCController:
             self.phase = None
             self.phase_list = None
             self.reflectors = None
+            self.phase_paths = {}
             self.indexer = None
             self.clear_cache()
             return
         self._set_phases(keep)
+        self.phase_paths = {k: v for k, v in self.phase_paths.items() if k != str(name)}
 
     def update_indexing_params(self, min_d=None, f_threshold=None,
                                max_reflectors=None, nBands=None):

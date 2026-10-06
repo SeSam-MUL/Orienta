@@ -44,15 +44,50 @@ class PhasePathError(ValueError):
         return {"code": self.code, "message": self.message, "params": self.params}
 
 
+#: Opening quote -> the closing quotes that may belong to it. Straight quotes pair
+#: with themselves; word processors, chat and web pages bring the typographic
+#: ones (English, German, French).
+_QUOTE_PAIRS = {
+    '"': '"', "'": "'",
+    "“": "”“", "‘": "’‘",     # " "  ' '  (and German closing)
+    "„": "“”", "‚": "‘’",     # German opening
+    "«": "»", "»": "«",                  # guillemets
+}
+
+
 def _clean(raw) -> str:
     """The path as typed: no surrounding spaces or quotes ("Copy as path")."""
     text = str(raw or "").strip()
-    while len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+    while len(text) >= 2 and text[-1] in _QUOTE_PAIRS.get(text[0], ""):
         text = text[1:-1].strip()
     return text
 
 
+#: A crystal structure file is kilobytes (the largest in the library is far below
+#: 1 MB). Above this it is not one, and parsing it would cost seconds and
+#: hundreds of MB before the parser gives up: a 210 MB binary renamed .cif took
+#: 12.6 s and about 800 MB.
+MAX_CIF_BYTES = 20 * 1024 * 1024
+
+
+def check_cif_size(path: Path) -> None:
+    """Refuse a file too large to be a CIF, before anything reads it."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return                      # the later steps report an unreadable file
+    if size > MAX_CIF_BYTES:
+        limit_mb = MAX_CIF_BYTES // (1024 * 1024)
+        size_mb = max(limit_mb, size // (1024 * 1024))
+        raise PhasePathError(
+            "too_large",
+            f"{path.name} is {size_mb} MB; a crystal structure file is far smaller "
+            f"(the limit here is {limit_mb} MB). It is not a CIF.",
+            path=str(path), size_mb=int(size_mb), limit_mb=int(limit_mb))
+
+
 def _check_cif(path: Path) -> None:
+    check_cif_size(path)
     from ebsd_utils import sanitize_cif
     from orix.crystal_map import Phase
 
