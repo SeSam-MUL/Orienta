@@ -1253,6 +1253,32 @@ async def select_patterns(req: PatternSelectionRequest):
     return {"patterns": patterns, "count": len(patterns)}
 
 
+def _display_binning_and_pixel_size(det):
+    """(binning, file_binning, pixel_size) as the app's geometry uses them.
+
+    Indexing and the forward renderer work on the stored (binned) pattern grid
+    with the pixel size of one stored pixel, so the displayed ``binning`` is 1
+    and ``pixel_size`` is kikuchipy's unbinned ``px_size`` times the binning
+    (None while the file carries only the placeholder 1.0). What the file says
+    about binning is ``file_binning``; kikuchipy >= 0.12 reports the real
+    factor (8 for Oxford speed modes), 0.11.3 reported 1.
+    """
+    from backend.spherical_gpu.pipeline.detector import stored_pixel_size
+    try:
+        file_binning = int(det.binning) if hasattr(det, 'binning') else 1
+    except (TypeError, ValueError):
+        file_binning = 1
+    pixel_size = None
+    try:
+        px = float(det.px_size) if hasattr(det, 'px_size') else None
+        if px is not None and px > 1.0:
+            pixel_size = stored_pixel_size(px, file_binning,
+                                           pixel_size_is_stored_pixel=False)
+    except (TypeError, ValueError):
+        pass
+    return 1, file_binning, pixel_size
+
+
 def _build_detector_dict(det):
     """Extract all detector fields into a dict."""
     try:
@@ -1278,12 +1304,7 @@ def _build_detector_dict(det):
     sample_tilt = float(det.sample_tilt) if hasattr(det, 'sample_tilt') else 70.0
     camera_tilt = float(det.tilt) if hasattr(det, 'tilt') else 0.0
     azimuthal = float(det.azimuthal) if hasattr(det, 'azimuthal') else 0.0
-    binning = int(det.binning) if hasattr(det, 'binning') else 1
-    pixel_size = None
-    try:
-        pixel_size = float(det.pixel_size) if hasattr(det, 'pixel_size') else None
-    except Exception:
-        pass
+    binning, file_binning, pixel_size = _display_binning_and_pixel_size(det)
 
     # Build human-readable repr
     lines = []
@@ -1298,6 +1319,8 @@ def _build_detector_dict(det):
     if azimuthal != 0.0:
         lines.append(f"Azimuthal: {azimuthal:.1f} deg")
     lines.append(f"Binning: {binning}")
+    if file_binning != 1:
+        lines.append(f"File binning: {file_binning}")
     if pixel_size is not None:
         lines.append(f"Pixel size: {pixel_size:.2f} um")
     repr_str = "\n".join(lines)
@@ -1310,6 +1333,7 @@ def _build_detector_dict(det):
         "camera_tilt": camera_tilt,
         "azimuthal": azimuthal,
         "binning": binning,
+        "file_binning": file_binning,
         "pixel_size": pixel_size,
         "repr": repr_str,
     }

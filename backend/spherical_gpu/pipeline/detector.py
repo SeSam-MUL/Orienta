@@ -118,20 +118,26 @@ def convert_pc_to_emsphinx(
     return float(cX), float(cY), float(sDst)
 
 
-def pc_conversion_binning(binning: int, pixel_size_is_stored_pixel: bool) -> int:
-    """Binning factor to hand to :func:`convert_pc_to_emsoft`.
+def stored_pixel_size(
+    pixel_size: float, binning: int, pixel_size_is_stored_pixel: bool,
+) -> float:
+    """Pixel size of the STORED pattern grid, in microns.
 
-    ``convert_pc_to_emsoft`` follows kikuchipy: ``pixel_size`` is the
-    *unbinned* sensor pixel and ``binning`` scales it up to the pixel of the
-    stored pattern. A pixel size the app substitutes itself
-    (``DEFAULT_PIXEL_SIZE_UM``, or the BUG-J auto-scaled value) is different:
-    it is the size of a pixel of the stored pattern, the quantity the forward
-    renderer and EMSphInx call ``delta``. Binning it again would multiply the
-    detector distance by the binning factor, so the factor is 1 in that case.
+    Every consumer of the detector geometry (forward renderer, spherical
+    indexer, EMSphInx ``delta``, the detector-width check) works on the grid
+    of the stored patterns, so it needs the size of one stored (binned) pixel.
+    kikuchipy's ``EBSDDetector.px_size`` is the *unbinned* sensor pixel, so a
+    size read from a file is multiplied by the binning. A size the app
+    substitutes itself (``DEFAULT_PIXEL_SIZE_UM``, or the auto-scaled value
+    that keeps the detector width in EMSphInx's range) is already a stored
+    pixel and is returned unchanged.
+
+    The result is meant to be passed to :func:`convert_pc_to_emsoft` together
+    with ``binning=1``: one grid, one pixel size, no second binning.
     """
     if pixel_size_is_stored_pixel:
-        return 1
-    return max(1, int(binning))
+        return float(pixel_size)
+    return float(pixel_size) * max(1, int(binning))
 
 
 def convert_pc_to_emsoft(
@@ -163,8 +169,8 @@ def convert_pc_to_emsoft(
         shape of the actual loaded pattern array)
     pixel_size : UNBINNED sensor pixel size in microns, as in kikuchipy's
         ``EBSDDetector.px_size``; ``pixel_size * binning`` is the pixel of
-        the stored pattern. For a stored-pixel size pass binning 1 (see
-        :func:`pc_conversion_binning`).
+        the stored pattern. The app passes the stored-pixel size with
+        binning 1 (see :func:`stored_pixel_size`).
     binning : binning factor
 
     Returns

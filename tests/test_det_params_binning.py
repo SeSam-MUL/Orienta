@@ -19,7 +19,7 @@ from backend.spherical_gpu.pipeline.detector import (
     DEFAULT_PIXEL_SIZE_UM,
     DetectorGeometry,
     convert_pc_to_emsoft,
-    pc_conversion_binning,
+    stored_pixel_size,
 )
 
 
@@ -48,11 +48,13 @@ def _emsoft(dp):
     )
 
 
-def test_pc_conversion_binning_helper():
-    assert pc_conversion_binning(8, pixel_size_is_stored_pixel=True) == 1
-    assert pc_conversion_binning(8, pixel_size_is_stored_pixel=False) == 8
-    assert pc_conversion_binning(1, pixel_size_is_stored_pixel=False) == 1
-    assert pc_conversion_binning(0, pixel_size_is_stored_pixel=False) == 1
+def test_stored_pixel_size_helper():
+    # a size the app substituted already refers to the stored pixel
+    assert stored_pixel_size(70.0, 8, pixel_size_is_stored_pixel=True) == 70.0
+    # a size from a file is kikuchipy's unbinned px_size
+    assert stored_pixel_size(55.0, 2, pixel_size_is_stored_pixel=False) == 110.0
+    assert stored_pixel_size(55.0, 1, pixel_size_is_stored_pixel=False) == 55.0
+    assert stored_pixel_size(55.0, 0, pixel_size_is_stored_pixel=False) == 55.0
 
 
 def test_substituted_pixel_size_gives_same_geometry_for_binning_1_and_8():
@@ -82,13 +84,30 @@ def test_autoscaled_pixel_size_is_also_a_stored_pixel_size():
     assert _emsoft(d8) == _emsoft(d1)
 
 
-def test_pixel_size_from_the_file_keeps_its_binning():
-    # A file that really carries a pixel size keeps today's behaviour.
+def test_pixel_size_from_the_file_is_folded_into_the_stored_pixel():
+    # px_size > 1 is the UNBINNED size; the stored grid is binned, so the
+    # pixel size handed to every consumer is px_size * binning and the
+    # conversion gets binning 1 - same physical detector as a binning-1 file
+    # whose px_size is already the stored-pixel size.
+    shape = (128, 156)
+    dp2 = build_spherical_det_params(
+        _stub_signal(), _stub_detector(2, px_size=55.0, shape=shape), "")
+    dp1 = build_spherical_det_params(
+        _stub_signal(), _stub_detector(1, px_size=110.0, shape=shape), "")
+    assert dp2["pixel_size"] == 110.0
+    assert dp2["binning"] == 1
+    assert dp2["file_binning"] == 2
+    assert _emsoft(dp2) == _emsoft(dp1)
+    for k in ("pixel_size", "pat_width", "pat_height", "binning"):
+        assert dp2[k] == dp1[k]
+
+
+def test_folded_pixel_size_goes_through_the_width_check():
+    # 8 x 60 um = 480 um per stored pixel, 156 px = 74.9 mm: inside the
+    # [5, 90] mm range, so the folded value is kept (no auto-scale).
     dp = build_spherical_det_params(
-        _stub_signal(), _stub_detector(2, px_size=55.0), "")
-    assert dp["pixel_size"] == 55.0
-    assert dp["binning"] == 2
-    assert dp["file_binning"] == 2
+        _stub_signal(), _stub_detector(8, px_size=60.0), "")
+    assert dp["pixel_size"] == 480.0
 
 
 def test_geometry_object_sees_folded_binning():
@@ -129,13 +148,13 @@ def test_real_sampleb_geometry_is_independent_of_kikuchipy_version(
 
 
 # ---- PC-refinement forward-sim preview --------------------------------------
-@pytest.mark.parametrize("pixel_size, binning, expected", [
-    (None, 8, 1),     # default pixel size = stored pixel -> never binned again
-    (None, 1, 1),
-    (55.0, 8, 8),     # an explicit (unbinned) pixel size keeps its binning
+@pytest.mark.parametrize("pixel_size, binning, expected_px", [
+    (None, 8, DEFAULT_PIXEL_SIZE_UM),   # default = stored pixel, never binned again
+    (None, 1, DEFAULT_PIXEL_SIZE_UM),
+    (55.0, 8, 440.0),                   # explicit (unbinned) size folded to the stored pixel
 ])
 def test_render_preview_binning_passed_to_pc_conversion(
-        monkeypatch, tmp_path, pixel_size, binning, expected):
+        monkeypatch, tmp_path, pixel_size, binning, expected_px):
     from fastapi import HTTPException
     from backend.api.routes import pcrefinement as pcr
     import backend.spherical_gpu.pipeline.detector as det_mod
@@ -161,4 +180,85 @@ def test_render_preview_binning_passed_to_pc_conversion(
     )
     with pytest.raises(HTTPException):
         pcr._render_preview_sync(req)
-    assert seen["binning"] == expected
+    assert seen["binning"] == 1
+    assert seen["pixel_size"] == expected_px
+
+
+# ---- the detector the UI shows must be the geometry the computation uses -----
+def test_detector_display_reports_folded_geometry():
+    from backend.api.routes.ebsd_viewer import _build_detector_dict
+    d = _build_detector_dict(types.SimpleNamespace(
+        shape=(128, 156), pc=np.array([0.5, 0.33, 0.85]), sample_tilt=70.0,
+        tilt=4.3, azimuthal=0.0, binning=8, px_size=1.0))
+    assert d["binning"] == 1 and d["file_binning"] == 8
+    assert d["pixel_size"] is None               # placeholder: no real size known
+    d = _build_detector_dict(types.SimpleNamespace(
+        shape=(128, 156), pc=np.array([0.5, 0.33, 0.85]), sample_tilt=70.0,
+        tilt=4.3, azimuthal=0.0, binning=2, px_size=55.0))
+    assert d["binning"] == 1 and d["file_binning"] == 2
+    assert d["pixel_size"] == 110.0
+    assert "File binning: 2" in d["repr"]
+
+
+def test_pc_detector_info_matches_the_display_dict(monkeypatch):
+    import asyncio
+    from backend.api.routes import pcrefinement as pcr
+    det = types.SimpleNamespace(
+        shape=(128, 156), pc=np.array([[0.5, 0.33, 0.85]]), sample_tilt=70.0,
+        tilt=4.3, azimuthal=0.0, binning=8, px_size=1.0)
+    monkeypatch.setattr(pcr, "_get_controller",
+                        lambda: types.SimpleNamespace(detector=det))
+    info = asyncio.run(pcr.detector_info())
+    assert info["binning"] == 1 and info["file_binning"] == 8
+
+
+# ---- exports written before the fold carry the doubled geometry --------------
+def _write_geometry(path, dg):
+    import json
+    import h5py
+    with h5py.File(path, "w") as f:
+        f.create_group("Indexing").attrs["detector_geometry"] = json.dumps(dg)
+
+
+def _legacy(**over):
+    dg = {"pc_x": 0.5, "pc_y": 0.33, "pc_z": 0.85, "pat_width": 156,
+          "pat_height": 128, "pixel_size": DEFAULT_PIXEL_SIZE_UM,
+          "binning": 8, "tilt": 4.3, "vendor": "Bruker"}
+    dg.update(over)
+    return dg
+
+
+def test_legacy_export_with_default_pixel_size_is_corrected(tmp_path, caplog):
+    from backend.api.routes.indexing import _restore_render_geometry
+    p = tmp_path / "old.h5"
+    _write_geometry(p, _legacy())
+    with caplog.at_level("WARNING"):
+        dg = _restore_render_geometry(p)["detector_geometry"]
+    assert dg["binning"] == 1 and dg["file_binning"] == 8
+    assert dg["pixel_size"] == DEFAULT_PIXEL_SIZE_UM
+    assert any("corrected" in r.getMessage().lower() for r in caplog.records)
+
+
+def test_legacy_export_with_other_pixel_size_is_only_warned_about(tmp_path, caplog):
+    from backend.api.routes.indexing import _restore_render_geometry
+    p = tmp_path / "old.h5"
+    _write_geometry(p, _legacy(pixel_size=55.0))
+    with caplog.at_level("WARNING"):
+        dg = _restore_render_geometry(p)["detector_geometry"]
+    assert dg["binning"] == 8 and "file_binning" not in dg
+    assert any("binning" in r.getMessage() and r.levelname == "WARNING"
+               for r in caplog.records)
+
+
+@pytest.mark.parametrize("dg", [
+    _legacy(binning=1),                          # 0.11.3 export: nothing to do
+    _legacy(binning=1, file_binning=8),          # written after the fold
+])
+def test_current_and_binning_1_exports_are_untouched(tmp_path, caplog, dg):
+    from backend.api.routes.indexing import _restore_render_geometry
+    p = tmp_path / "x.h5"
+    _write_geometry(p, dg)
+    with caplog.at_level("WARNING"):
+        out = _restore_render_geometry(p)["detector_geometry"]
+    assert out == dg
+    assert not caplog.records

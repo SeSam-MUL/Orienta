@@ -616,20 +616,17 @@ async def detector_info():
     except Exception:
         info["camera_tilt"] = 0.0
 
-    try:
-        info["binning"] = int(det.binning)
-    except Exception:
-        info["binning"] = 1
+    # The geometry the app computes with, not the camera's own binning: the
+    # displayed detector width must match what indexing and the forward
+    # renderer use. The file's value is reported separately.
+    from backend.api.routes.ebsd_viewer import _display_binning_and_pixel_size
+    info["binning"], info["file_binning"], info["pixel_size"] = (
+        _display_binning_and_pixel_size(det))
 
     try:
         info["azimuthal"] = float(det.azimuthal)
     except Exception:
         info["azimuthal"] = 0.0
-
-    try:
-        info["pixel_size"] = float(det.pixel_size) if hasattr(det, "pixel_size") else None
-    except Exception:
-        info["pixel_size"] = None
 
     # PC in various conventions — same numpy-coercion concern as above
     try:
@@ -1610,11 +1607,13 @@ def _render_preview_sync(req: "RenderPreviewRequest"):
     # pattern. The spherical-vs-Hough disagreement is a real indexer bug under
     # investigation; until it's fixed the preview must keep using Hough.
     from backend.spherical_gpu.pipeline.detector import (
-        DEFAULT_PIXEL_SIZE_UM, pc_conversion_binning,
+        DEFAULT_PIXEL_SIZE_UM, stored_pixel_size,
     )
-    _px = float(req.pixel_size if req.pixel_size is not None else DEFAULT_PIXEL_SIZE_UM)
-    # The default is the size of a stored (binned) pixel: do not bin it again.
-    _conv_binning = pc_conversion_binning(
+    # One grid, one pixel size: the renderer and the PC conversion both work on
+    # the stored (binned) pattern. The default is already a stored-pixel size;
+    # an explicit pixel size is the unbinned sensor pixel.
+    _px = stored_pixel_size(
+        req.pixel_size if req.pixel_size is not None else DEFAULT_PIXEL_SIZE_UM,
         req.binning, pixel_size_is_stored_pixel=req.pixel_size is None)
     rot_obj = None
     orientation_euler_deg = None
@@ -1675,7 +1674,7 @@ def _render_preview_sync(req: "RenderPreviewRequest"):
             pat_width=W,
             pat_height=H,
             pixel_size=_px,
-            binning=_conv_binning,
+            binning=1,
         )
 
         q_arr = _np.asarray(rot_obj.data).reshape(-1)[:4]

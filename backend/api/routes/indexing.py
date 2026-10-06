@@ -1805,7 +1805,7 @@ def build_spherical_det_params(signal, detector, ebsd_file_path: str, pixel_rc=N
     """Detector-geometry dict for the SHT forward operator + spherical indexer.
 
     Same shape/values the spherical indexing path produces. Includes the
-    BUG-J auto-scale of pixel_size when the detector width falls outside
+    auto-scale of pixel_size when the detector width falls outside
     EMSphinx's [5, 90] mm range, and source-vendor detection.
 
     PC selection from a per-pixel detector map (F3):
@@ -1816,7 +1816,7 @@ def build_spherical_det_params(signal, detector, ebsd_file_path: str, pixel_rc=N
       - a single PC (shape (1,3)) is used as-is.
     """
     from backend.spherical_gpu.pipeline.detector import (
-        DEFAULT_PIXEL_SIZE_UM, pc_conversion_binning,
+        DEFAULT_PIXEL_SIZE_UM, stored_pixel_size,
     )
     pc_full = np.asarray(detector.pc, dtype=float)
     if pc_full.ndim == 3 and pixel_rc is not None:
@@ -1852,33 +1852,31 @@ def build_spherical_det_params(signal, detector, ebsd_file_path: str, pixel_rc=N
     if hasattr(detector, 'shape'):
         det_params['pat_height'] = int(detector.shape[0])
         det_params['pat_width'] = int(detector.shape[1])
-    # A pixel size read from the file is kikuchipy's unbinned px_size. Oxford
+    # A pixel size read from a file is kikuchipy's UNBINNED px_size. Oxford
     # and EDAX files carry only the placeholder 1.0, so the substitute above
-    # (or the BUG-J value below) is used, and that is the size of a pixel of
-    # the STORED pattern - see pc_conversion_binning.
+    # (or the auto-scaled value below) is used; that is already the size of a
+    # pixel of the STORED pattern. Either way det_params["pixel_size"] ends up
+    # as the stored-pixel size, see stored_pixel_size.
     px_size_from_file = hasattr(detector, 'px_size') and detector.px_size > 1.0
-    if px_size_from_file:
-        det_params['pixel_size'] = float(detector.px_size)
     if hasattr(detector, 'tilt'):
         det_params['tilt'] = float(detector.tilt)
     # SAMPLE tilt is separate from detector tilt and is what the
     # SHT forward renderer needs (FEAT-SHT-FWD-A).
     if hasattr(detector, 'sample_tilt'):
         det_params['sample_tilt'] = float(detector.sample_tilt)
-    if hasattr(detector, 'binning'):
-        det_params['binning'] = int(detector.binning)
+    file_binning = int(detector.binning) if hasattr(detector, 'binning') else 1
+    if px_size_from_file:
+        det_params['pixel_size'] = stored_pixel_size(
+            float(detector.px_size), file_binning, pixel_size_is_stored_pixel=False)
     # The file's own value, kept for provenance. 'binning' is what the PC
-    # conversion applies: 1 when pixel_size is a stored-pixel size, so
-    # kikuchipy >= 0.12 (which reports the real factor, 8 for Oxford speed
-    # modes) and 0.11.3 (which reported 1) give the same detector distance.
-    det_params['file_binning'] = det_params['binning']
-    det_params['binning'] = pc_conversion_binning(
-        det_params['binning'],
-        pixel_size_is_stored_pixel=not px_size_from_file,
-    )
+    # conversion applies: always 1, because pixel_size is the stored-pixel
+    # size. kikuchipy >= 0.12 reports the real factor (8 for Oxford speed
+    # modes) where 0.11.3 reported 1; the geometry is the same for both.
+    det_params['file_binning'] = file_binning
+    det_params['binning'] = 1
 
-    # EMSphinx's IndexEBSD rejects detector widths outside [5, 90] mm
-    # (BUG-J). Datasets loaded without an explicit pixel_size fell
+    # EMSphinx's IndexEBSD rejects detector widths outside [5, 90] mm.
+    # Datasets loaded without an explicit pixel_size fell
     # back to 55 µm — on a 60×60 binned detector that's 3.3 mm, below
     # the threshold, and spherical would fail with
     # "unreasonable EBSD detector width".
@@ -9725,6 +9723,45 @@ def _write_render_geometry_attrs(idx_group, md, xmap=None) -> None:
             logger.debug("export: could not serialise sht_paths_by_phase", exc_info=True)
 
 
+def _fix_legacy_binning(dg: dict, source) -> dict:
+    """Undo the doubled binning in a detector geometry exported before the fix.
+
+    Earlier versions stored the substituted default pixel size (a stored-pixel
+    size) next to the camera's binning; the PC conversion then multiplied the
+    binning in a second time (detector distance 8x too large for an Oxford
+    Speed-2 file under kikuchipy >= 0.12). Current exports carry
+    ``file_binning`` and always ``binning == 1``. A geometry without
+    ``file_binning`` and with ``binning > 1`` is corrected when the pixel size
+    is exactly the app default, and only reported otherwise, because a pixel
+    size from the file or the auto-scaled one cannot be told apart here.
+    """
+    from backend.spherical_gpu.pipeline.detector import DEFAULT_PIXEL_SIZE_UM
+    if not isinstance(dg, dict) or "file_binning" in dg:
+        return dg
+    try:
+        binning = int(dg.get("binning", 1))
+        pixel_size = float(dg.get("pixel_size", DEFAULT_PIXEL_SIZE_UM))
+    except (TypeError, ValueError):
+        return dg
+    if binning <= 1:
+        return dg
+    if pixel_size == DEFAULT_PIXEL_SIZE_UM:
+        fixed = dict(dg, binning=1, file_binning=binning)
+        logger.warning(
+            "import: %s stores detector binning %d with the default pixel size "
+            "%.1f um (a stored-pixel size); binning was applied twice. "
+            "Corrected to binning 1 for rendering. Orientations already "
+            "stored in the file were indexed with the doubled geometry and "
+            "are not changed; re-index to refresh them.",
+            source, binning, pixel_size)
+        return fixed
+    logger.warning(
+        "import: %s stores detector binning %d with pixel size %.1f um and no "
+        "file_binning; the render geometry may be off by the binning factor "
+        "and is used as stored.", source, binning, pixel_size)
+    return dg
+
+
 def _restore_render_geometry(h5_path) -> dict:
     """Read detector_geometry + sht_paths_by_phase back from a rich/light
     export's /Indexing group (written by _write_render_geometry_attrs)."""
@@ -9738,7 +9775,8 @@ def _restore_render_geometry(h5_path) -> dict:
                 return out
             dg = idxg.attrs.get("detector_geometry")
             if dg is not None:
-                out["detector_geometry"] = json.loads(dg)
+                out["detector_geometry"] = _fix_legacy_binning(
+                    json.loads(dg), h5_path)
             sht = idxg.attrs.get("sht_paths_by_phase")
             if sht is not None:
                 out["sht_paths_by_phase"] = {int(k): v for k, v in json.loads(sht).items()}
