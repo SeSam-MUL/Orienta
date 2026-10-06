@@ -301,7 +301,9 @@
     "stats": "已用 {{elapsed}}秒",
     "statsRate": "已用 {{elapsed}}秒 · {{rate}} 块/秒",
     "statsEta": "已用 {{elapsed}}秒 · 剩余 ~{{eta}}秒",
-    "statsRateEta": "已用 {{elapsed}}秒 · {{rate}} 块/秒 · 剩余 ~{{eta}}秒"
+    "statsRateEta": "已用 {{elapsed}}秒 · {{rate}} 块/秒 · 剩余 ~{{eta}}秒",
+    "scanAverage": "正在计算 {{count}} 个花样的扫描平均值 – 每个花样只读取一次",
+    "scanAverageNoCount": "正在计算扫描平均值 – 每个花样只读取一次"
   },
   "infoBar": {
     "gridTooltip": "{{rows}} 行 × {{cols}} 列 = {{pixels}} 像素",

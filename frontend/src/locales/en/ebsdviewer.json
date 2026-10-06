@@ -301,7 +301,9 @@
     "stats": "{{elapsed}}s elapsed",
     "statsRate": "{{elapsed}}s elapsed · {{rate}} chunks/s",
     "statsEta": "{{elapsed}}s elapsed · ~{{eta}}s left",
-    "statsRateEta": "{{elapsed}}s elapsed · {{rate}} chunks/s · ~{{eta}}s left"
+    "statsRateEta": "{{elapsed}}s elapsed · {{rate}} chunks/s · ~{{eta}}s left",
+    "scanAverage": "Computing the scan average of {{count}} patterns - every pattern is read once",
+    "scanAverageNoCount": "Computing the scan average - every pattern is read once"
   },
   "infoBar": {
     "gridTooltip": "{{rows}} rows × {{cols}} columns = {{pixels}} pixels",

@@ -301,7 +301,9 @@
     "stats": "{{elapsed}}s vergangen",
     "statsRate": "{{elapsed}}s vergangen · {{rate}} Chunks/s",
     "statsEta": "{{elapsed}}s vergangen · ~{{eta}}s übrig",
-    "statsRateEta": "{{elapsed}}s vergangen · {{rate}} Chunks/s · ~{{eta}}s übrig"
+    "statsRateEta": "{{elapsed}}s vergangen · {{rate}} Chunks/s · ~{{eta}}s übrig",
+    "scanAverage": "Scan-Mittelwert über {{count}} Muster wird berechnet – jedes Muster wird einmal gelesen",
+    "scanAverageNoCount": "Scan-Mittelwert wird berechnet – jedes Muster wird einmal gelesen"
   },
   "infoBar": {
     "gridTooltip": "{{rows}} Zeilen × {{cols}} Spalten = {{pixels}} Pixel",

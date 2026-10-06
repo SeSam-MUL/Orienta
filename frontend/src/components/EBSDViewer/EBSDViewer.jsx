@@ -887,14 +887,15 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     }
   }, [fileSwitching, log, t, clearAllLoadedFiles]);
 
-  // Run CLAHE while polling its backend chunk-progress so the overlay can
+  // Run a long backend op (CLAHE, the BG-static scan average) while polling its
+  // backend progress so the overlay can
   // show a real bar (+ %, count, it/s, ETA) instead of an indeterminate
-  // spinner. The backend runs CLAHE in a worker thread, so the poll is
+  // spinner. The backend runs these in a worker thread, so the poll is
   // served while it computes.
-  const claheWithProgress = useCallback(async (kernel) => {
+  const withProgress = useCallback(async (call, initial = {}) => {
     const rid = (window.crypto?.randomUUID?.() || `clahe-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     let stopped = false;
-    setProcProgress({ fraction: 0, stage: 'running' });
+    setProcProgress({ fraction: 0, stage: 'running', ...initial });
     (async () => {
       while (!stopped) {
         try {
@@ -904,6 +905,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
               fraction: typeof r.data.fraction === 'number' ? r.data.fraction : 0,
               done: r.data.done, total: r.data.total,
               elapsed: r.data.elapsed_seconds, stage: r.data.stage,
+              phase: r.data.phase, nPatterns: r.data.n_patterns,
             });
           }
         } catch { /* poll best-effort */ }
@@ -911,7 +913,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       }
     })();
     try {
-      return await ebsdApi.clahe(kernel, rid);
+      return await call(rid);
     } finally {
       stopped = true;
       setProcProgress(null);
@@ -959,18 +961,18 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         }
       }
       if (op === 'bg_dyn') await timed(t('logMessages.stepBgDynamic'), () => ebsdApi.backgroundRemoval('dynamic'));
-      else if (op === 'bg_stat') await timed(t('logMessages.stepBgStatic'), () => ebsdApi.backgroundRemoval('static'));
+      else if (op === 'bg_stat') await timed(t('logMessages.stepBgStatic'), () => withProgress((rid) => ebsdApi.backgroundRemoval('static', null, null, rid), { phase: 'scan_average' }));
       else if (op === 'avg') await timed(t('logMessages.stepFrameAverage'), () => ebsdApi.frameAverage(windowSize));
       else if (op === 'autocontrast') await timed(t('logMessages.stepAutoContrast'), () => ebsdApi.autocontrast());
       else if (op === 'batch') await timed(t('logMessages.stepBatchAutoContrast'), () => ebsdApi.autocontrast());
-      else if (op === 'clahe') await timed(t('logMessages.stepClahe', { kernel: claheKernel }), () => claheWithProgress(claheKernel));
+      else if (op === 'clahe') await timed(t('logMessages.stepClahe', { kernel: claheKernel }), () => withProgress((rid) => ebsdApi.clahe(claheKernel, rid)));
       else if (op === 'pipeline') {
         // Recommended: Static BG → Dynamic BG → CLAHE in one shot.
         // Each step logs its own start/elapsed line; the user sees
         // exactly where the pipeline is + how long each step took.
-        await timed(t('logMessages.stepPipeline1'), () => ebsdApi.backgroundRemoval('static'));
+        await timed(t('logMessages.stepPipeline1'), () => withProgress((rid) => ebsdApi.backgroundRemoval('static', null, null, rid), { phase: 'scan_average' }));
         await timed(t('logMessages.stepPipeline2'), () => ebsdApi.backgroundRemoval('dynamic'));
-        await timed(t('logMessages.stepPipeline3', { kernel: claheKernel }), () => claheWithProgress(claheKernel));
+        await timed(t('logMessages.stepPipeline3', { kernel: claheKernel }), () => withProgress((rid) => ebsdApi.clahe(claheKernel, rid)));
       }
       log(t('logMessages.opComplete', { label }));
       await fetchDatasets();
@@ -3175,8 +3177,15 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           {(() => {
             const pp = procProgress;
             const frac = typeof pp?.fraction === 'number' ? Math.max(0, Math.min(1, pp.fraction)) : null;
+            const scanAvgLine = pp?.phase === 'scan_average' ? (
+              <div style={{ fontSize: '9pt', color: colors.textSecondary, textAlign: 'center', maxWidth: 360 }}>
+                {pp.nPatterns
+                  ? t('processingOverlay.scanAverage', { count: pp.nPatterns })
+                  : t('processingOverlay.scanAverageNoCount')}
+              </div>
+            ) : null;
             if (frac === null) {
-              return <div style={{ fontSize: '9pt', color: colors.textSecondary }}>{t('processingOverlay.subtitle')}</div>;
+              return scanAvgLine || <div style={{ fontSize: '9pt', color: colors.textSecondary }}>{t('processingOverlay.subtitle')}</div>;
             }
             const pct = Math.round(frac * 100);
             const el = typeof pp.elapsed === 'number' ? pp.elapsed : 0;
@@ -3196,6 +3205,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             }
             return (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, width: 320, maxWidth: '70%' }}>
+                {scanAvgLine}
                 <div style={{ width: '100%', height: 8, borderRadius: 4, background: alpha(colors.accent, 20), overflow: 'hidden' }}>
                   <div style={{ width: `${pct}%`, height: '100%', background: colors.accent, transition: 'width 0.3s ease' }} />
                 </div>

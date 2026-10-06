@@ -301,7 +301,9 @@
     "stats": "{{elapsed}}秒経過",
     "statsRate": "{{elapsed}}秒経過 · {{rate}} チャンク/秒",
     "statsEta": "{{elapsed}}秒経過 · 残り ~{{eta}}秒",
-    "statsRateEta": "{{elapsed}}秒経過 · {{rate}} チャンク/秒 · 残り ~{{eta}}秒"
+    "statsRateEta": "{{elapsed}}秒経過 · {{rate}} チャンク/秒 · 残り ~{{eta}}秒",
+    "scanAverage": "{{count}} 枚のパターンのスキャン平均を計算中 – 各パターンを1回ずつ読み込みます",
+    "scanAverageNoCount": "スキャン平均を計算中 – 各パターンを1回ずつ読み込みます"
   },
   "infoBar": {
     "gridTooltip": "{{rows}} 行 × {{cols}} 列 = {{pixels}} ピクセル",

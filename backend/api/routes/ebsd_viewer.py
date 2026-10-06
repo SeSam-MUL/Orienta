@@ -24,6 +24,7 @@ from backend.api.services.image_utils import array_to_base64_raw, array_to_base6
 from backend.api.services.calibration_store import calibration_store
 from backend.api.services import crop_window as crop_window_service
 from backend.api.services import state_version
+from backend.api.services import static_background
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -412,6 +413,9 @@ class BackgroundRemovalRequest(BaseModel):
     # (mean of all patterns); set both to use that single pattern instead.
     static_bg_row: Optional[int] = None
     static_bg_col: Optional[int] = None
+    # Optional client-supplied UUID4: the scan average (reads every pattern
+    # once) reports block-level progress to _processing_progress[request_id].
+    request_id: Optional[str] = None
 
 
 class SelectDatasetRequest(BaseModel):
@@ -634,6 +638,7 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
     _dirty_datasets.clear()
     _signal_masks.clear()
     _overview_cache.clear()
+    static_background.clear_cache()
     crop_window_service.clear_all()
     _active_dataset = None
     calibration_store.clear()
@@ -799,6 +804,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     _dirty_datasets.clear()
     _signal_masks.clear()
     _overview_cache.clear()
+    static_background.clear_cache()
     crop_window_service.clear_all()
     # The per-pixel EDS chemistry service warns once per cause so that a
     # systematic problem (a window it cannot price, a grid mismatch) does not
@@ -1947,6 +1953,7 @@ async def crop_dataset(req: CropRequest):
     # overview cache, so a recycled name can still find a stale entry here.
     for key in [k for k in _overview_cache if k[0] == new_name]:
         _overview_cache.pop(key, None)
+    static_background.clear_cache()
 
     logger.info(
         "Cropped '%s' -> '%s': %dx%d px (%d selected), %.1f MB, materialised=%s",
@@ -2162,6 +2169,7 @@ async def background_removal(req: BackgroundRemovalRequest):
 
     import time
     t0 = time.perf_counter()
+    started_at = time.time()
     n_patterns = int(np.prod(signal.axes_manager.navigation_shape))
     logger.info("BG-%s start: %d patterns", req.method, n_patterns)
 
@@ -2226,8 +2234,15 @@ async def background_removal(req: BackgroundRemovalRequest):
                 # raw detector background) does not apply to them; the scan
                 # average is the reference kikuchipy recommends when no usable
                 # one exists.
-                from backend.api.services.static_background import scan_average
-                static_bg = scan_average(signal)
+                def _avg_progress(done, total):
+                    _set_processing_progress(
+                        req.request_id, done=done, total=total,
+                        fraction=(done / total) if total else 0.0,
+                        stage="running", started_at=started_at,
+                        phase="scan_average", n_patterns=n_patterns)
+                static_bg = static_background.scan_average(
+                    signal, progress=_avg_progress if req.request_id else None,
+                    source_path=_ebsd_file_path)
             else:
                 static_bg = signal.data[req.static_bg_row, req.static_bg_col].astype(signal.data.dtype)
             signal.remove_static_background(
@@ -2248,6 +2263,9 @@ async def background_removal(req: BackgroundRemovalRequest):
         rate = n_patterns / max(elapsed, 1e-6)
         logger.info("BG-%s done: %d patterns in %.1fs (%.0f patterns/s)",
                     req.method, n_patterns, elapsed, rate)
+        _set_processing_progress(req.request_id, fraction=1.0, stage="complete",
+                                 started_at=started_at,
+                                 elapsed_seconds=round(elapsed, 2))
         result = {"success": True, "method": req.method,
                   "elapsed_seconds": round(elapsed, 2),
                   "n_patterns": n_patterns}
@@ -2257,6 +2275,8 @@ async def background_removal(req: BackgroundRemovalRequest):
     except Exception as e:
         logger.exception("Background removal failed after %.1fs",
                          time.perf_counter() - t0)
+        _set_processing_progress(req.request_id, stage="error", error=str(e),
+                                 started_at=started_at)
         raise HTTPException(status_code=500, detail=str(e))
 
 

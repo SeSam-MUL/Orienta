@@ -471,12 +471,13 @@ export const ebsdApi = {
   // Static removal without a reference pattern subtracts the scan average.
   // Pass BOTH staticBgRow and staticBgCol to subtract one named pattern
   // instead; never default them to 0 (that imprints pattern (0,0) on the map).
-  backgroundRemoval: (method = 'dynamic', staticBgRow = null, staticBgCol = null) =>
+  backgroundRemoval: (method = 'dynamic', staticBgRow = null, staticBgCol = null, requestId = null) =>
     api.post('/api/ebsd/background-removal', {
       method,
       ...(method === 'static' && staticBgRow != null && staticBgCol != null
         ? { static_bg_row: staticBgRow, static_bg_col: staticBgCol }
         : {}),
+      ...(requestId ? { request_id: requestId } : {}),
     }),
   autocontrast: () => api.post('/api/ebsd/autocontrast'),
   clahe: (kernelSize = 8, requestId = null) =>
