@@ -117,7 +117,26 @@
     "addManually": "+ Datei manuell hinzufügen…",
     "tagCif": "CIF",
     "tagMaster": "Master",
-    "tagDict": "Dict"
+    "tagDict": "Dict",
+    "pathPlaceholderHough": "…oder den Pfad einer .cif-Datei einfügen",
+    "pathPlaceholderDictionary": "…oder den Pfad einer Master-Pattern-.h5-Datei einfügen",
+    "pathPlaceholderSpherical": "…oder den Pfad einer .sht-Datei einfügen",
+    "pathAdd": "Hinzufügen",
+    "pathChecking": "Prüfe…",
+    "pathBrowse": "Durchsuchen…",
+    "pathAdded": "{{name}} hinzugefügt",
+    "pathAlready": "{{name}} ist bereits in der Liste",
+    "pathError": {
+      "empty": "Pfad einer Phasendatei eingeben.",
+      "not_absolute": "Den vollständigen Pfad angeben, beginnend beim Laufwerk bzw. Stammverzeichnis.",
+      "not_found": "Keine Datei unter {{path}}.",
+      "not_a_file": "{{path}} ist ein Ordner, keine Datei.",
+      "wrong_extension": "Diese Indizierungsmethode braucht eine {{expected}}-Datei (erhalten: {{got}}).",
+      "unreadable": "Die Datei lässt sich nicht als Phase lesen: {{reason}}",
+      "not_a_phase": "Diese HDF5-Datei ist kein EMsoft-Master-Pattern.",
+      "unknown_method": "Unbekannte Indizierungsmethode.",
+      "generic": "Die Datei konnte nicht hinzugefügt werden."
+    }
   },
   "dictCard": {
     "masterCount": "{{masters}} Master · {{dicts}} Dict",
@@ -748,7 +767,10 @@
     "reflectorNoSymmetry": "Die CIF ist in Raumgruppe P 1 gespeichert: alle Atome einzeln aufgelistet, keine Symmetrie eingetragen. PyEBSDIndex behandelt dann jede Reflektorfamilie als einzelnen Pol, wodurch die Zahl verschiedener Polwinkel - und mit ihr die Bandtriplett-Bibliothek - explodiert. Ein Neuexport der Phase in ihrer echten Raumgruppe macht das klein und ist die bessere Lösung; die Reflektorzahl hier zu senken ist der Notbehelf.",
     "batchPickSht": "Master-Pattern (.sht) aus der Datenbank wählen (für Spherical)",
     "batchShtInput": "Pfad zum Master-Pattern (.sht). Spherical braucht eines.",
-    "adoptCollection": "Füllt die Phasenliste aus der Gruppe „{{name}}“ für die aktuelle Methode. Siehe den Leitfaden „Phase Library“."
+    "adoptCollection": "Füllt die Phasenliste aus der Gruppe „{{name}}“ für die aktuelle Methode. Siehe den Leitfaden „Phase Library“.",
+    "phasePathInput": "Vollständiger Pfad einer Phasendatei, die nicht in der Bibliothek liegt — einfügen oder eingeben, dann Enter drücken.",
+    "phasePathAdd": "Datei prüfen und zur Phasenliste hinzufügen",
+    "phasePathBrowse": "Datei mit dem System-Dateidialog auswählen"
   },
   "reflectors": {
     "label": "Reflektoren:",

@@ -117,7 +117,26 @@
     "addManually": "+ Add file manually…",
     "tagCif": "CIF",
     "tagMaster": "Master",
-    "tagDict": "Dict"
+    "tagDict": "Dict",
+    "pathPlaceholderHough": "…or paste the path of a .cif file",
+    "pathPlaceholderDictionary": "…or paste the path of a master pattern .h5 file",
+    "pathPlaceholderSpherical": "…or paste the path of a .sht file",
+    "pathAdd": "Add",
+    "pathChecking": "Checking…",
+    "pathBrowse": "Browse…",
+    "pathAdded": "Added {{name}}",
+    "pathAlready": "{{name}} is already in the list",
+    "pathError": {
+      "empty": "Enter the path of a phase file.",
+      "not_absolute": "Give the complete path, starting at the drive or root folder.",
+      "not_found": "No file at {{path}}.",
+      "not_a_file": "{{path}} is a folder, not a file.",
+      "wrong_extension": "This indexing method needs a {{expected}} file (got {{got}}).",
+      "unreadable": "The file could not be read as a phase: {{reason}}",
+      "not_a_phase": "This HDF5 file is not an EMsoft master pattern.",
+      "unknown_method": "Unknown indexing method.",
+      "generic": "The file could not be added."
+    }
   },
   "dictCard": {
     "masterCount": "{{masters}} Master · {{dicts}} Dict",
@@ -748,7 +767,10 @@
     "reflectorNoSymmetry": "The CIF is stored in space group P 1: every atom listed, no symmetry recorded. PyEBSDIndex then treats each reflector family as a single pole, so the number of distinct inter-pole angles - and with it the band-triplet library - explodes. Re-exporting the phase in its real space group makes this small and is the better fix; lowering the reflector count here is the workaround.",
     "batchPickSht": "Pick a master pattern (.sht) from the database for spherical indexing",
     "batchShtInput": "Path to the master pattern (.sht). Spherical indexing needs one.",
-    "adoptCollection": "Fill the phase list from the “{{name}}” group for the current method. See the “Phase Library” guide."
+    "adoptCollection": "Fill the phase list from the “{{name}}” group for the current method. See the “Phase Library” guide.",
+    "phasePathInput": "Full path of a phase file that is not in the library — paste it or type it, then press Enter.",
+    "phasePathAdd": "Check the file and add it to the phase list",
+    "phasePathBrowse": "Pick the file with the system file dialog"
   },
   "reflectors": {
     "label": "Reflectors:",

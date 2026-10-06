@@ -27,6 +27,7 @@ import {
 } from '../PhaseCollections/collectionFilter';
 import { planCollectionAdoption, formatMissingLogMessage, resolveAllowedPaths } from '../PhaseCollections/collectionAdopt';
 import { createPhaseDiscovery, phaseListBlocksRun } from './phaseDiscovery';
+import { addPhaseFromPath, mergeUserAdded, samePath } from './phasePath';
 import { estimateCpuSphericalSeconds, estimateGpuSphericalSeconds, formatRoughDuration, hasNoCudaDevice, isSphericalCpuFallback } from './cpuEstimate';
 import NavigationCanvas from './NavigationCanvas';
 import EdsOverlayPanel from './EdsOverlayPanel';
@@ -1579,7 +1580,14 @@ export default function IndexingPage({ isActive }) {
   // selection the user already made.
   const phaseFilesRef = useRef(phaseFiles);
   phaseFilesRef.current = phaseFiles;
-  const [fileStatus, setFileStatus]     = useState(t('phases.noFileLoaded'));
+  // Phase files the user added by path ({method, file}). A listing replaces the
+  // file list every time it is fetched, so these are merged back in each time
+  // (see `onLoaded`) -- otherwise a method switch or a retry would drop them.
+  // `methodRef` is for the same closure: the discovery helper is built once.
+  const userAddedRef = useRef([]);
+  const methodRef = useRef(method);
+  methodRef.current = method;
+  const [fileStatus, setFileStatus]    = useState(t('phases.noFileLoaded'));
   const [fileStatusColor, setFileStatusColor] = useState(C.red);
   const [canPreview, setCanPreview]     = useState(false);
   const [dictSection, setDictSection]   = useState(false);
@@ -2152,7 +2160,10 @@ export default function IndexingPage({ isActive }) {
         return { files: r.data?.files || [], groups: r.data?.groups || [] };
       },
       onLoaded: (files, groups) => {
-        setDiscoveredFiles(files);
+        setDiscoveredFiles(mergeUserAdded(
+          files,
+          userAddedRef.current.filter((u) => u.method === methodRef.current).map((u) => u.file),
+        ));
         setDiscoveredGroups(groups);
         // `&& !fileInput` is new and deliberate. The old inline closure saw
         // the PRE-clear `phaseFiles` on the method-change path, so it skipped
@@ -2245,6 +2256,33 @@ export default function IndexingPage({ isActive }) {
         }
       }
     }
+  }
+
+  // Add a phase file the user typed, pasted or browsed to. The server checks it
+  // (exists, right extension, readable as a phase); a good one joins the list
+  // like a library phase and is selected. Resolves `{ok, name, already}` or
+  // `{ok: false, error: {code, message, params}}` for the picker to show.
+  //
+  // It runs after an await, so it must read the page's CURRENT state, not the
+  // render it was created in: `latest` is refreshed every render.
+  const latestPhaseState = useRef(null);
+  latestPhaseState.current = {
+    select: handleTogglePath, discoveredFiles, phaseFiles, method,
+  };
+  function handleAddPhasePath(rawPath) {
+    return addPhaseFromPath({
+      method,
+      rawPath,
+      check: indexApi.phaseFromPath,
+      latest: () => latestPhaseState.current,
+      remember: (record) => {
+        userAddedRef.current = [
+          ...userAddedRef.current.filter((u) => !samePath(u.file.path, record.path)),
+          { method, file: record },
+        ];
+        setDiscoveredFiles((prev) => mergeUserAdded(prev, [record]));
+      },
+    });
   }
 
   function handleSetAllPaths(paths) {
@@ -3946,6 +3984,7 @@ export default function IndexingPage({ isActive }) {
           onShowAll={() => setOverrideAll(true)}
           overriddenCollectionName={overriddenCollectionName}
           onReapplyCollection={() => setOverrideAll(false)}
+          onAddPath={handleAddPhasePath}
         />
       </FloatingPhasePanel>
 

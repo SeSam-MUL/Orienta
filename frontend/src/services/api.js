@@ -482,6 +482,9 @@ export const pcApi = {
   addPattern: (row, col) => api.post('/api/pc/pattern/add', { row, col }),
   removePattern: (idx) => api.post(`/api/pc/pattern/remove?idx=${idx}`),
   loadPhase: (cifPath) => api.post('/api/pc/phase/load', { cif_path: cifPath }),
+  // Several phases at once: add one to those loaded / remove one by name.
+  addPhase: (cifPath) => api.post('/api/pc/phase/add', { cif_path: cifPath }),
+  removePhase: (phaseName) => api.post('/api/pc/phase/remove', { phase_name: phaseName }),
   setDetector: (shape, pc, options = {}) => {
     const {
       sampleTilt = 70,
@@ -649,6 +652,10 @@ export const indexApi = {
         current_pc: currentPc ? currentPc.join(',') : '',
       },
     }),
+  // One phase file given by path (typed, pasted or picked): the server checks it
+  // and answers with a library-style record, or a 400 `{code, message, params}`.
+  phaseFromPath: (method, path) =>
+    api.post('/api/indexing/files/from-path', { method, path }),
   exportUrl: (format = 'h5', includeEds = true, includeDetector = true) =>
     `${API_BASE}/api/indexing/export?format=${format}&include_eds=${includeEds}&include_detector=${includeDetector}`,
   exportResult: (format = 'h5', includeEds = true, includeDetector = true) =>

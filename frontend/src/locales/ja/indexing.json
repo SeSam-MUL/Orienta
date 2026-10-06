@@ -117,7 +117,26 @@
     "addManually": "+ ファイルを手動で追加…",
     "tagCif": "CIF",
     "tagMaster": "マスター",
-    "tagDict": "Dict"
+    "tagDict": "Dict",
+    "pathPlaceholderHough": "…または .cif ファイルのパスを貼り付け",
+    "pathPlaceholderDictionary": "…またはマスターパターン .h5 ファイルのパスを貼り付け",
+    "pathPlaceholderSpherical": "…または .sht ファイルのパスを貼り付け",
+    "pathAdd": "追加",
+    "pathChecking": "確認中…",
+    "pathBrowse": "参照…",
+    "pathAdded": "{{name}} を追加しました",
+    "pathAlready": "{{name}} はすでにリストにあります",
+    "pathError": {
+      "empty": "相ファイルのパスを入力してください。",
+      "not_absolute": "ドライブまたはルートフォルダから始まる完全なパスを入力してください。",
+      "not_found": "{{path}} にファイルがありません。",
+      "not_a_file": "{{path}} はフォルダであり、ファイルではありません。",
+      "wrong_extension": "この指数付け手法には {{expected}} ファイルが必要です（指定: {{got}}）。",
+      "unreadable": "このファイルは相として読み取れません: {{reason}}",
+      "not_a_phase": "この HDF5 ファイルは EMsoft のマスターパターンではありません。",
+      "unknown_method": "不明な指数付け手法です。",
+      "generic": "ファイルを追加できませんでした。"
+    }
   },
   "dictCard": {
     "masterCount": "{{masters}} マスター · {{dicts}} Dict",
@@ -748,7 +767,10 @@
     "reflectorNoSymmetry": "この CIF は空間群 P 1 で保存されています。つまり全原子が個別に並び、対称性が記録されていません。PyEBSDIndex は各反射面ファミリーを単一の極として扱うため、極間角度の種類が増え、バンド三重項ライブラリが爆発的に大きくなります。本来の空間群で書き出し直せば小さくなり、それが良い解決です。ここで反射面の数を下げるのは回避策です。",
     "batchPickSht": "球面インデックス用のマスターパターン (.sht) をデータベースから選択",
     "batchShtInput": "マスターパターン (.sht) のパス。球面インデックスに必要です。",
-    "adoptCollection": "現在の手法について、グループ「{{name}}」から相リストを埋めます。ガイド「Phase Library」を参照してください。"
+    "adoptCollection": "現在の手法について、グループ「{{name}}」から相リストを埋めます。ガイド「Phase Library」を参照してください。",
+    "phasePathInput": "ライブラリにない相ファイルの完全なパス — 貼り付けるか入力して Enter キーを押します。",
+    "phasePathAdd": "ファイルを確認して相リストに追加します",
+    "phasePathBrowse": "システムのファイルダイアログでファイルを選択します"
   },
   "reflectors": {
     "label": "反射面:",

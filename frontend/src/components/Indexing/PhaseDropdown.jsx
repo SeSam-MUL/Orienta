@@ -23,6 +23,12 @@
  *     toolbar could still read "Collection: Matrix" while this picker
  *     silently offered the whole library with nothing saying so.
  *   onReapplyCollection: () => void — undoes onShowAll for this picker.
+ *   onAddPath: (path: string) => Promise<{ok, name?, already?, error?}> — when
+ *     given, the footer offers a path field (and, in Electron, a Browse button)
+ *     for a phase file outside the library, instead of the "+ Add file
+ *     manually…" link. `error` is `{code, message, params}`. Files the caller
+ *     adds this way carry `user_added: true` and are never hidden by a group
+ *     filter: the user just put them there.
  */
 
 import { useRef, useEffect, useState, useMemo } from 'react';
@@ -57,6 +63,7 @@ export default function PhaseDropdown({
   onShowAll,
   overriddenCollectionName = null,
   onReapplyCollection,
+  onAddPath = null,
 }) {
   const { t } = useTranslation(['indexing', 'collections']);
   const containerRef = useRef(null);
@@ -111,8 +118,8 @@ export default function PhaseDropdown({
     let files = discoveredFiles;
     if (collectionKeys) {
       files = method === 'hough'
-        ? files.filter(f => collectionKeys.has(keyForPath(f.path)))
-        : files.filter(f => allowedPaths?.has(f.path));
+        ? files.filter(f => f.user_added || collectionKeys.has(keyForPath(f.path)))
+        : files.filter(f => f.user_added || allowedPaths?.has(f.path));
     }
     // For dictionary: hide pure dict files
     if (method === 'dictionary') files = files.filter(f => f.file_type !== 'dictionary');
@@ -367,23 +374,151 @@ export default function PhaseDropdown({
         </div>
       )}
 
-      {/* Manual file picker link */}
-      <div style={{
-        padding: '5px 10px', borderTop: `1px solid ${C.border}`,
-        backgroundColor: C.bgSecondary, flexShrink: 0,
-      }}>
-        <button
-          onClick={() => { onTogglePath?.(null); /* signals manual picker */ }}
-          title={t('hoverTips.phaseAddManually')}
+      {/* Phase file outside the library */}
+      {onAddPath ? (
+        <PhasePathRow method={method} onAddPath={onAddPath} t={t} />
+      ) : (
+        <div style={{
+          padding: '5px 10px', borderTop: `1px solid ${C.border}`,
+          backgroundColor: C.bgSecondary, flexShrink: 0,
+        }}>
+          <button
+            onClick={() => { onTogglePath?.(null); /* signals manual picker */ }}
+            title={t('hoverTips.phaseAddManually')}
+            style={{
+              background: 'none', border: 'none', color: C.cyan,
+              fontSize: '9pt', cursor: 'pointer', padding: 0,
+              textDecoration: 'underline',
+            }}
+          >
+            {t('phaseDropdown.addManually')}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// What a native file dialog should offer, per indexing method.
+const BROWSE_FILTERS = {
+  hough: [{ name: 'CIF Files', extensions: ['cif'] }],
+  dictionary: [{ name: 'Master Pattern', extensions: ['h5', 'hdf5'] }],
+  spherical: [{ name: 'SHT Files', extensions: ['sht'] }],
+};
+
+const METHOD_KEY = { hough: 'Hough', dictionary: 'Dictionary', spherical: 'Spherical' };
+
+/** The server's `{code, message, params}` in the user's language. */
+function describePathError(error, t) {
+  const code = error?.code || 'generic';
+  return t(`phaseDropdown.pathError.${code}`, {
+    ...(error?.params || {}),
+    // A code this build has no wording for still gets the server's sentence.
+    defaultValue: error?.message || t('phaseDropdown.pathError.generic'),
+  });
+}
+
+/**
+ * Path field for a phase file that is not in the library.
+ *
+ * Typing or pasting a path is the only way in a plain browser (start_app.py),
+ * where there is no native dialog; Electron adds a Browse button on top.
+ * What was typed stays in the field after a refusal so it can be corrected.
+ */
+function PhasePathRow({ method, onAddPath, t }) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState(null);       // { error: bool, text }
+  const canBrowse = typeof window !== 'undefined' && !!window.electronAPI?.openFile;
+
+  async function submit(value) {
+    const path = String(value ?? text).trim();
+    if (!path || busy) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      const res = await onAddPath(path);
+      if (res?.ok) {
+        setText('');
+        setNote({
+          error: false,
+          text: t(res.already ? 'phaseDropdown.pathAlready' : 'phaseDropdown.pathAdded',
+                  { name: res.name }),
+        });
+      } else {
+        setNote({ error: true, text: describePathError(res?.error, t) });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function browse() {
+    const picked = await window.electronAPI.openFile({ filters: BROWSE_FILTERS[method] || [] });
+    if (picked) {
+      setText(picked);
+      submit(picked);
+    }
+  }
+
+  return (
+    <div style={{
+      padding: '6px 10px', borderTop: `1px solid ${C.border}`,
+      backgroundColor: C.bgSecondary, flexShrink: 0,
+    }}>
+      <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <input
+          type="text"
+          value={text}
+          onChange={e => { setText(e.target.value); setNote(null); }}
+          onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+          placeholder={t(`phaseDropdown.pathPlaceholder${METHOD_KEY[method] || 'Hough'}`)}
+          title={t('hoverTips.phasePathInput')}
+          disabled={busy}
           style={{
-            background: 'none', border: 'none', color: C.cyan,
-            fontSize: '9pt', cursor: 'pointer', padding: 0,
-            textDecoration: 'underline',
+            flex: 1, minWidth: 0, padding: '4px 6px', fontSize: '9pt',
+            background: C.bg, color: C.text, border: `1px solid ${C.border}`,
+            borderRadius: 3, outline: 'none', boxSizing: 'border-box',
+          }}
+          onFocus={e => e.target.style.borderColor = C.cyan}
+          onBlur={e => e.target.style.borderColor = C.border}
+        />
+        <button
+          onClick={() => submit()}
+          disabled={busy || !text.trim()}
+          title={t('hoverTips.phasePathAdd')}
+          style={{
+            padding: '3px 10px', fontSize: '9pt', fontWeight: 600,
+            background: C.cyan, color: C.bg, border: 'none', borderRadius: 3,
+            cursor: busy || !text.trim() ? 'default' : 'pointer',
+            opacity: busy || !text.trim() ? 0.5 : 1,
           }}
         >
-          {t('phaseDropdown.addManually')}
+          {busy ? t('phaseDropdown.pathChecking') : t('phaseDropdown.pathAdd')}
         </button>
+        {canBrowse && (
+          <button
+            onClick={browse}
+            disabled={busy}
+            title={t('hoverTips.phasePathBrowse')}
+            style={{
+              padding: '3px 8px', fontSize: '9pt', background: 'none',
+              color: C.textSecondary, border: `1px solid ${C.border}`,
+              borderRadius: 3, cursor: 'pointer',
+            }}
+          >
+            {t('phaseDropdown.pathBrowse')}
+          </button>
+        )}
       </div>
+      {note && (
+        <div style={{
+          marginTop: 4, fontSize: '9pt', wordBreak: 'break-word',
+          color: note.error ? C.red : C.green,
+        }}>
+          {note.text}
+        </div>
+      )}
     </div>
   );
 }
