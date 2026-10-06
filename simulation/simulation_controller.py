@@ -244,8 +244,16 @@ class SimulationController:
                     self._needs_initial_setup = True
                 except Exception as e:
                     logger.error(f"Failed to copy config template: {e}")
-            else:
+            elif sys.platform == "win32":
                 logger.warning(f"Config file not found at {self.config_path}")
+            else:
+                # The file configures the EMsoft/EMSphInx automation that runs
+                # inside WSL, which exists on Windows only. Its absence on
+                # macOS/Linux is the normal state, not something to warn about.
+                logger.info(
+                    "EMsoft/EMSphInx simulation through WSL is Windows-only; "
+                    "no emsphinx_config.ini is used on this platform."
+                )
 
     def _load_config(self):
         """Load configuration from emsphinx_config.ini"""
