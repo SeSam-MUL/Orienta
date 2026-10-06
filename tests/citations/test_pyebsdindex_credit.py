@@ -51,15 +51,71 @@ def test_non_hough_steps_do_not_claim_pyebsdindex():
         assert "pyebsdindex" not in STEP_REGISTRY[key].citation_ids
 
 
-def test_pseudosymmetry_step_credits_the_hough_anchor():
-    """The spherical runs that resolve pseudo-symmetry take their anchor
-    orientation from PyEBSDIndex, so that step cites it and says so."""
+def test_pseudosymmetry_step_does_not_claim_pyebsdindex():
+    """Render-based arbitration runs no Hough (the manual /pseudosym/unify
+    route records this step too), so it must not cite PyEBSDIndex."""
     step = STEP_REGISTRY["pseudosym.resolver"]
-    assert "pyebsdindex" in step.citation_ids
-    assert "orix" in step.citation_ids
+    assert "pyebsdindex" not in step.citation_ids
     out = render_methods([{"key": "pseudosym.resolver", "params": {}}])
+    assert "PyEBSDIndex" not in out
+
+
+def test_hough_anchor_step_cites_pyebsdindex_and_says_what_it_did():
+    step = STEP_REGISTRY["indexing.hough_anchor"]
+    assert step.citation_ids == ("pyebsdindex",)
+    out = render_methods([{"key": "indexing.hough_anchor", "params": {}}])
+    assert "anchor orientations" in out
     assert "Hough indexing with PyEBSDIndex (Rowenhorst et al., 2024)" in out
-    assert "anchor" in out
+
+
+class _Result:
+    metadata = None
+
+
+def _keys(result):
+    from backend.api.services.citations.provenance import get_steps
+    return [s["key"] for s in get_steps(result)]
+
+
+def test_anchor_step_is_recorded_when_the_hough_anchor_ran():
+    import numpy as np
+    from indexing_controller import _record_hough_anchor_if_ran
+
+    r = _Result()
+    _record_hough_anchor_if_ran(r, np.zeros((3, 3)))
+    assert _keys(r) == ["indexing.hough_anchor"]
+
+
+def test_anchor_step_is_absent_when_no_phase_was_resolved():
+    from indexing_controller import _record_hough_anchor_if_ran
+
+    r = _Result()
+    _record_hough_anchor_if_ran(r, None)
+    assert _keys(r) == []
+
+
+def _call_site_text(src: str) -> str:
+    start = src.index("def spherical_gpu_index_patterns")
+    return src[start:src.index("\ndef ", start + 1)]
+
+
+def test_spherical_run_hands_the_resolver_output_to_the_recorder():
+    """The call site passes what resolve_eulers_multiphase produced, not a
+    flag that is set merely because the resolver was enabled."""
+    src = (ROOT / "indexing_controller.py").read_text(encoding="utf-8")
+    body = _call_site_text(src)
+    assert "_record_hough_anchor_if_ran(indexing_result, _resolved_eulers)" in body
+    assert "_resolved_eulers = _res_eul" in body
+
+
+def test_only_the_spherical_run_records_the_anchor_step():
+    """The manual /pseudosym/unify route (and every other recorder) runs no
+    Hough indexer, so none of them may record the anchor step."""
+    names = ("indexing_controller.py", "backend/api/routes/indexing.py")
+    sources = {n: (ROOT / n).read_text(encoding="utf-8") for n in names}
+    # the helper in indexing_controller passes the key on a separate line
+    assert "indexing.hough_anchor" in sources["indexing_controller.py"]
+    assert "indexing.hough_anchor" not in sources["backend/api/routes/indexing.py"]
 
 
 def test_library_entry_is_complete():

@@ -33,8 +33,15 @@ matching method.
 Which keys are WIRED (i.e. some code path calls ``record_step`` with them):
 ``indexing.hough``, ``indexing.dictionary``, ``indexing.spherical``,
 ``indexing.spherical_emsphinx``, ``eds.chemistry_prior``,
-``eds.particle_rescue``, ``pseudosym.resolver`` and
-``refinement.orientation``.
+``eds.particle_rescue``, ``pseudosym.resolver``, ``indexing.hough_anchor``
+and ``refinement.orientation``.
+
+``indexing.hough_anchor`` is recorded by ``spherical_gpu_index_patterns`` only
+when the pseudo-symmetry resolver really ran PyEBSDIndex and substituted its
+orientations, whether or not the later variant unification changed anything.
+It is a separate key from ``pseudosym.resolver`` (render-based arbitration,
+also recorded by the manual ``/pseudosym/unify`` route, which runs no Hough)
+so that a methods paragraph never credits software that did not run.
 
 ``preprocessing.background`` is DECLARED BUT DELIBERATELY NEVER RECORDED.
 Background removal happens in the EBSD viewer, in place on the loaded signal,
@@ -139,13 +146,21 @@ _STEPS = (
     StepCitation(
         key="pseudosym.resolver",
         label="Pseudo-symmetry resolution",
-        citation_ids=("orienta", "pyebsdindex", "orix"),
+        citation_ids=("orienta", "orix"),
         sentence=(
             "Pseudo-symmetric orientation variants were resolved by "
             "render-based arbitration against the candidate classes of the "
-            "phase point group, relative to an anchor orientation taken from "
-            "Hough indexing with PyEBSDIndex (Rowenhorst et al., 2024) where "
-            "the spherical correlation is not reliable for that point group."
+            "phase point group."
+        ),
+    ),
+    StepCitation(
+        key="indexing.hough_anchor",
+        label="Hough anchor for spherical indexing",
+        citation_ids=("pyebsdindex",),
+        sentence=(
+            "For point groups where the spherical correlation is unreliable, "
+            "anchor orientations were obtained by Hough indexing with "
+            "PyEBSDIndex (Rowenhorst et al., 2024)."
         ),
     ),
     StepCitation(

@@ -2955,12 +2955,28 @@ def spherical_gpu_index_patterns(
         "orienta_version": get_version_info().get("version"),
         "bandwidth": int(config.bandwidth),
     })
+    _record_hough_anchor_if_ran(indexing_result, _resolved_eulers)
     if _pseudosym_variants_unified:
         # No params: the sentence template has no slots to fill, and the
         # fact that render-based arbitration ran against the phase's
         # candidate classes is the whole citable fact.
         record_step(indexing_result, "pseudosym.resolver")
     return indexing_result
+
+
+def _record_hough_anchor_if_ran(indexing_result, resolved_eulers) -> None:
+    """Cite PyEBSDIndex when its Hough indexer supplied orientations.
+
+    ``resolved_eulers`` is what ``resolve_eulers_multiphase`` returned: ``None``
+    when no phase was resolved (high-symmetry phases only, or Hough produced
+    nothing usable), an array once Hough orientations replaced the spherical
+    ones for at least one phase. Independent of whether the later variant
+    unification changed anything.
+    """
+    if resolved_eulers is None:
+        return
+    from backend.api.services.citations.provenance import record_step
+    record_step(indexing_result, "indexing.hough_anchor")
 
 
 def _sweep_stale_preproc_temps(temp_dir: Path) -> None:
