@@ -262,3 +262,24 @@ def test_current_and_binning_1_exports_are_untouched(tmp_path, caplog, dg):
         out = _restore_render_geometry(p)["detector_geometry"]
     assert out == dg
     assert not caplog.records
+
+
+# ---- EMSphInx: delta is the pixel of the stored pattern ----------------------
+@pytest.mark.parametrize("binning, px_size, expected_delta", [
+    (1, 1.0, DEFAULT_PIXEL_SIZE_UM),   # placeholder: default, whatever the camera says
+    (8, 1.0, DEFAULT_PIXEL_SIZE_UM),
+    (2, 55.0, 110.0),                  # file value: unbinned size x binning
+])
+def test_emsphinx_nml_delta_is_the_stored_pixel_size(
+        tmp_path, binning, px_size, expected_delta):
+    import re
+    from pathlib import Path
+    from indexing_controller import IndexingConfig, generate_emsphinx_nml
+    dp = build_spherical_det_params(
+        _stub_signal(), _stub_detector(binning, px_size=px_size), "")
+    nml = generate_emsphinx_nml(
+        IndexingConfig(sht_file=str(tmp_path / "m.sht")),
+        str(tmp_path / "absent.h5oina"), dp, Path(tmp_path))
+    delta = float(re.search(r"delta\s*=\s*([0-9.eE+-]+)",
+                            nml.read_text(encoding="utf-8")).group(1))
+    assert delta == expected_delta
