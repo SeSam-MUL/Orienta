@@ -62,7 +62,13 @@ Typical entry points:
 3. In **Phase Selection**, click **+ Add** to open the floating phase picker. Only
    files matching the current method are offered (CIF for Hough, master `.h5` for
    Dictionary, `.sht` for Spherical). Selected phases appear in the list; remove
-   one with its × button.
+   one with its × button. A phase file that is not in the library can be added
+   with the path field at the bottom of the picker: paste or type its full path
+   and press **Add** (the desktop app also has a **Browse…** button). The app
+   checks that the file exists, has the extension the method needs and can be
+   read as a phase, and says what is wrong if not. This is the only way to add
+   a phase of your own when the app runs in a normal browser (`start_app.py`),
+   which has no native file dialog.
 4. If the app flags **degenerate** phases (entries EBSD cannot tell apart), use
    **Reduce phases** to trim the list — fewer near-identical candidates means a
    cleaner result.

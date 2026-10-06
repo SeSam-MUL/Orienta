@@ -11,8 +11,8 @@ indexing is wrong.
 
 The page lets you:
 
-- Load a single crystal **phase** (from a CIF) to provide reflectors for
-  indexing.
+- Load one or more crystal **phases** (from CIFs) to provide reflectors for
+  indexing — for example austenite and ferrite of a duplex steel.
 - **Index** the calibration patterns you collected in the EBSD Viewer and read
   back the Confidence Index (CI) for each, with the simulated Kikuchi bands drawn
   over the experimental pattern.
@@ -51,10 +51,20 @@ the experimental pattern.
    appear in the **Selected Patterns** list on the left here. Click a pattern (or
    use the slider) to preview it; the PC crosshair and indexed Kikuchi bands are
    drawn over it. **Remove** deletes the selected pattern.
-2. **Load a phase** — click **Load Phase** to open the crystal-library picker
-   (the same picker as the Indexing page) and choose one phase, or type/browse a
-   CIF path in the manual field. The phase name and space group are shown once
-   loaded.
+2. **Load the phase(s)** — click **Load Phase(s) from CIF** to open the
+   crystal-library picker (the same tick-box picker as the Indexing page). Tick
+   every phase that can occur in your calibration patterns; untick one to remove
+   it. A phase that is not in the library can be added with the path field at the
+   bottom of the picker (paste or type its full path; in the desktop app there
+   is also a **Browse…** button). The field next to the picker button loads a
+   CIF as the *only* phase. With several phases loaded they are listed with a ×
+   each, and every calibration pattern is Hough-indexed against all of them: the
+   best-fitting phase wins **per pattern**. The pattern list shows which phase
+   each pattern was indexed as, and after **Global PC Refine** the results show
+   how the patterns split between the phases. The forward-simulation preview
+   uses the master pattern of the phase the selected pattern was indexed as. Up
+   to 8 phases can be used together; every extra phase adds a Hough pass to
+   each step of the optimiser, so keep the list to the phases that really occur.
 3. **Check the detector** — in **Detector Settings**, the PC (`PCx/PCy/PCz`),
    sample tilt, detector tilt, and azimuthal angle are pre-filled from the file
    metadata. Adjust any value; edits apply reactively (debounced) and re-index
@@ -112,7 +122,7 @@ the experimental pattern.
 - **Inputs:**
   - The loaded EBSD signal and its detector metadata (from the EBSD Viewer).
   - Calibration patterns added from the EBSD Viewer.
-  - One crystal phase from a CIF.
+  - One or more crystal phases from CIFs.
   - Optional SHT master pattern(s) for the forward-sim preview.
   - User-set geometry (PC, tilts, pixel size, binning) and indexing/optimiser
     parameters.
