@@ -252,3 +252,33 @@ def test_diagnostics_export_survives_broken_gpu_probe(client, monkeypatch):
     assert r.status_code == 200
     info = json.loads(zipfile.ZipFile(io.BytesIO(r.content)).read("info.json"))
     assert info["gpu"]["available"] is False
+
+
+def test_log_info_reports_the_directory_the_backend_really_writes_to(client, monkeypatch, tmp_path):
+    """Settings shows this path, so it must be the live log's folder, not a guess."""
+    from backend.api import file_log
+
+    live = tmp_path / "somewhere" / "logs"
+    live.mkdir(parents=True)
+    (live / "orienta.log").write_text("x" * 10)
+    (live / "orienta.log.1").write_text("y" * 20)
+    (live / "backend-console.log").write_text("z" * 30)
+    (live / "unrelated.txt").write_text("not a log of ours")
+    monkeypatch.setattr(file_log, "_installed_path", live / "orienta.log")
+
+    body = client.get("/api/system/log-info").json()
+    assert body["log_dir"] == str(live)
+    assert body["exists"] is True
+    sizes = {f["name"]: f["size_bytes"] for f in body["files"]}
+    assert sizes == {"orienta.log": 10, "orienta.log.1": 20, "backend-console.log": 30}
+
+
+def test_log_info_before_file_logging_is_installed_names_the_default_folder(client, monkeypatch, tmp_path):
+    from backend.api import file_log
+
+    monkeypatch.setattr(file_log, "_installed_path", None)
+    monkeypatch.setattr(file_log, "DEFAULT_LOG_DIR", tmp_path / "logs")
+    body = client.get("/api/system/log-info").json()
+    assert body["log_dir"] == str(tmp_path / "logs")
+    assert body["exists"] is False
+    assert body["files"] == []

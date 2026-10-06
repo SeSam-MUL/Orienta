@@ -169,3 +169,8 @@ def get_log_paths() -> list[Path]:
         base = _installed_path
     paths = [base] + [base.with_name(f"{base.name}.{i}") for i in range(1, _BACKUP_COUNT + 1)]
     return [p for p in paths if p.exists()]
+
+
+def get_log_dir() -> Path:
+    """The folder the live log is written to (and where backend-console.log sits)."""
+    return (_installed_path.parent if _installed_path is not None else DEFAULT_LOG_DIR)

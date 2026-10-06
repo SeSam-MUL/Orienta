@@ -79,6 +79,31 @@ def app_version() -> dict:
     return info
 
 
+# The files a user may be asked to look at, in the order they are shown.
+_LOG_FILE_PREFIXES = ("orienta.log", "backend-console.log")
+
+
+@router.get("/log-info", summary="Where the log files are")
+def log_info() -> dict:
+    """The folder holding the logs, as the backend itself sees it.
+
+    The Settings page shows this path (and the desktop app opens it), so it is
+    taken from the live file handler rather than rebuilt by the caller: an
+    installed copy keeps its logs inside the runtime folder, a source checkout
+    in the project root, and neither is a path the page could guess.
+    """
+    directory = file_log.get_log_dir()
+    files = []
+    if directory.is_dir():
+        for p in sorted(directory.iterdir()):
+            if p.is_file() and p.name.startswith(_LOG_FILE_PREFIXES):
+                try:
+                    files.append({"name": p.name, "size_bytes": p.stat().st_size})
+                except OSError:
+                    continue
+    return {"log_dir": str(directory), "exists": directory.is_dir(), "files": files}
+
+
 @router.get("/update/check", summary="Is a newer released version available?")
 def update_check(force: bool = False) -> dict:
     """Never raises and never blocks the UI: an offline machine, a missing
