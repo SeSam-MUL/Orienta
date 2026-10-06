@@ -71,6 +71,8 @@ class _PCSession:
     """
     ctrl: "object"                  # pc_controller.PCController
     sim_cache: dict = _dc_field(default_factory=dict)
+    #: Version of the per-phase reflector registry the sim cache was filled under.
+    spec_version: int = -1
 
 
 # Per-dataset sessions. Key = dataset name (matches ``_active_dataset``
@@ -103,9 +105,15 @@ def _get_session() -> _PCSession:
         from pc_controller import PCController
         _sessions[key] = _PCSession(ctrl=PCController())
     sess = _sessions[key]
-    # A change of a phase's reflector selection (either page, or a run) makes
-    # this file's indexer and everything simulated with it out of date.
-    if sess.ctrl.reflector_specs_changed():
+    # A change of a phase's reflector selection (either page, or a run) makes the
+    # bands simulated with the old one out of date. The indexer itself is rebuilt
+    # where it is used, under _state_lock (`_index_and_simulate`, the optimiser,
+    # `PCController._ensure_indexer`), never from here: this runs on every request,
+    # including while another one is indexing.
+    from hough_reflectors import registry_version
+    version = registry_version()
+    if sess.spec_version != version:
+        sess.spec_version = version
         sess.sim_cache.clear()
     return sess
 
@@ -316,6 +324,10 @@ def _index_and_simulate(ctrl, pattern_idx):
     from kikuchipy.signals import EBSD
     from ebsd_utils import create_indexer
     from hough_reflectors import prepare_reflectors
+
+    # The reflector selection of a phase may have changed since the indexer was
+    # built: drop it (and what was indexed with it) so it is rebuilt below.
+    ctrl.reflector_specs_changed()
 
     # Ensure indexer
     if ctrl.indexer is None:
@@ -1274,6 +1286,7 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
         from ebsd_utils import optimize_pc, compute_ci
 
         with _state_lock:
+            ctrl.reflector_specs_changed()
             if ctrl.indexer is None:
                 if ctrl.reflectors is None:
                     from hough_reflectors import prepare_reflectors

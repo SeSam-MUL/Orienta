@@ -204,6 +204,7 @@ class PCController:
             raise RuntimeError("No detector set.")
         if self.phase_list is None:
             raise RuntimeError("No phase loaded.")
+        self.reflector_specs_changed()
         if self.indexer is None:
             self.indexer = create_indexer(
                 self.detector, self.phase_list, self.reflectors,

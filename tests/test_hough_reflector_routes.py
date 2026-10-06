@@ -438,8 +438,7 @@ def test_index_and_simulate_draws_the_chosen_families(client, cifs):
     full = _index_and_simulate(ctrl, 0)
     pcr._sim_cache.clear()
     hr.set_spec("Al", {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]})
-    ctrl.reflector_specs_changed()
-    few = _index_and_simulate(ctrl, 0)
+    few = _index_and_simulate(ctrl, 0)          # notices the change by itself
     pcr._sim_cache.clear()
     assert few["n_bands"] < full["n_bands"]
     assert few["n_bands"] > 0
@@ -449,11 +448,12 @@ def test_the_pc_page_indexer_is_built_from_the_choice_for_two_phases(cifs):
     ctrl = _controller(cifs["Al"])
     ctrl.add_phase(cifs["Ni"])
     hr.set_spec("Ni", {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]})
-    ctrl.reflector_specs_changed()
-    ix = ctrl._ensure_indexer()
+    ctrl._ensure_indexer()                      # built before the change ...
+    hr.set_spec("Ni", {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0], [2, 2, 0]]})
+    ix = ctrl._ensure_indexer()                 # ... and rebuilt by itself
     n_al = len(np.asarray(ix.phaselist[0].polefamilies).reshape(-1, 3))
     n_ni = len(np.asarray(ix.phaselist[1].polefamilies).reshape(-1, 3))
-    assert n_al == 4 and n_ni == 2
+    assert n_al == 4 and n_ni == 3
 
 
 def test_a_stale_choice_does_not_stop_the_phase_from_loading(cifs, tmp_path):
@@ -469,6 +469,39 @@ def test_a_stale_choice_does_not_stop_the_phase_from_loading(cifs, tmp_path):
     with pytest.raises(hr.SpecError) as e:
         ctrl._ensure_indexer()
     assert e.value.code == "stale_spec"
+
+
+def test_the_optimiser_uses_an_indexer_built_from_the_current_choice(cifs, monkeypatch):
+    """A refine started after the choice changed must not run on the indexer that
+    was cached under the old one."""
+    import kikuchipy as kp
+    import backend.api.routes.pcrefinement as pcr
+    from backend.api.routes import ebsd_viewer
+
+    ctrl = _controller(cifs["Al"])
+    nickel = kp.data.nickel_ebsd_small()
+    pat = np.asarray(nickel.data[0, 0]).copy()
+    ctrl.add_pattern((0, 0), pat)
+    ctrl._ensure_indexer()                      # cached under the default list
+    hr.set_spec("Al", {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]})
+
+    seen = []
+
+    def fake_optimize_pc(detector, indexer, pattern, method, search_limit, batch):
+        seen.append(indexer)
+        return (0.5, 0.5, 0.5), None
+
+    monkeypatch.setattr(eu, "optimize_pc", fake_optimize_pc)
+    monkeypatch.setattr(pcr, "_get_controller", lambda: ctrl)
+    monkeypatch.setattr(pcr, "_writeback_refined_pc", lambda *a, **k: None)
+    monkeypatch.setattr(ebsd_viewer, "_active_dataset", "unit", raising=False)
+    pcr._optimization_tasks["t"] = {"status": "running", "progress": 0.0, "result": None,
+                                    "error": None}
+    pcr._run_optimization("t", [pat], "Nelder-Mead", 0.05)
+    pcr._optimization_tasks.pop("t")
+    poles = {tuple(int(x) for x in r)
+             for r in np.asarray(seen[0].phaselist[0].polefamilies).reshape(-1, 3)}
+    assert poles == {(1, 1, 1), (2, 0, 0)}
 
 
 def test_n_bands_reaches_the_indexer(cifs):
