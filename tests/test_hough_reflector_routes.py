@@ -663,23 +663,17 @@ def test_start_indexing_submits_through_the_guard():
     assert "_submit_run_guarded(run_indexing)" in src
 
 
-def test_a_batch_marks_itself_active_and_always_unmarks(tmp_path):
-    from unittest.mock import patch
+def test_a_batch_marks_itself_active_and_always_unmarks(tmp_path, monkeypatch):
     from backend.api.services.batch_manager import BatchManager
     seen = []
     bm = BatchManager(db_path=str(tmp_path / "t.db"))
-    f = tmp_path / "a.h5oina"
-    f.write_bytes(b"x")
-    sht = tmp_path / "Al.sht"
-    sht.write_bytes(b"x")
-    batch_id, _ = bm.create_batch([str(f)], [{"name": "Al", "path": str(sht), "method": "spherical"}], {})
 
-    def fake_job(*a, **k):
+    def impl(self, batch_id, progress_callback=None):
         seen.append(hr.active_runs())
         raise RuntimeError("Simulated crash")
 
-    with patch("backend.api.services.batch_manager.run_single_indexing_job", fake_job):
-        bm.run_batch_sync(batch_id)
-    assert any("batch" in x for x in seen) or seen == []   # the job may not be reached with a stub file
-    assert hr.active_runs() == []
-
+    monkeypatch.setattr(BatchManager, "_run_batch_sync_impl", impl)
+    with pytest.raises(RuntimeError):
+        bm.run_batch_sync("any")
+    assert seen == [["batch"]]
+    assert hr.active_runs() == []                      # unmarked although it crashed
