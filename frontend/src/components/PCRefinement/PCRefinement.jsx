@@ -35,7 +35,7 @@ import {
   MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync, loadedPhaseFor, sameNameOtherFile,
   summarisePatternPhases, previewPhaseName, createSerialQueue, shortSpaceGroup,
 } from './phaseSet';
-import { phaseStem, pathErrorFrom, samePath } from '../Indexing/phasePath';
+import { phaseStem, pathErrorFrom, samePath, libraryEntryForPath } from '../Indexing/phasePath';
 import ReflectorFamilies from '../Indexing/ReflectorFamilies';
 import { loadedPhaseAdapter } from '../Indexing/reflectorSpec';
 import {
@@ -1769,7 +1769,13 @@ function ControlsPanel({
 
   // The path field of the picker: a phase that is not in the library.
   const addPhaseByPath = (path) => runPhaseJob(async () => {
-    const res = await addPhaseCore(path);
+    // A path that is a library file (possibly spelled differently from the
+    // listing) selects the library's entry instead of adding a second one.
+    const entry = await libraryEntryForPath({
+      method: 'hough', rawPath: path, files: discoveredFiles, check: indexApi.phaseFromPath,
+    });
+    const res = await addPhaseCore(entry ? entry.path : path);
+    if (entry && res.ok) res.inLibrary = true;
     if (res.ok && !res.already) {
       setPhaseMsg(t('pcrefinement:controls.phaseAdded', { name: res.name, count: res.count }));
       setPhaseError(false);

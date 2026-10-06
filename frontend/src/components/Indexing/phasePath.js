@@ -77,6 +77,25 @@ export function phaseStem(path) {
 }
 
 /**
+ * The library listing entry that `rawPath` is, or null.
+ *
+ * For a page that adds the path itself (PC Refinement) and only wants to know
+ * whether it is a file of the library, so it can use the library's entry rather
+ * than a second one under another spelling. Any refusal or failure of the check
+ * gives null: the caller then goes on with the path as typed and reports what
+ * its own request says.
+ */
+export async function libraryEntryForPath({ method, rawPath, files, check }) {
+  try {
+    const record = (await check(method, rawPath)).data?.file;
+    if (!record?.in_library) return null;
+    return findByPath(files, record.library_path) || findByPath(files, record.path) || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Check a phase path with the server and, if it is good, select that phase.
  *
  * The page's logic for "add by path", kept out of the 4000-line page so it can
@@ -91,7 +110,7 @@ export function phaseStem(path) {
  *                select: (file: object) => void}} o.latest
  * @param {(record: object) => void} o.remember  keep a file that is not in the
  *        library, so a later listing does not drop it
- * @returns {Promise<{ok: true, name: string, already?: true}
+ * @returns {Promise<{ok: true, name: string, already?: true, inLibrary?: true}
  *                 | {ok: false, error: {code: string, message: string, params: object}}>}
  */
 export async function addPhaseFromPath({ method, rawPath, check, latest, remember }) {
@@ -108,11 +127,18 @@ export async function addPhaseFromPath({ method, rawPath, check, latest, remembe
     return { ok: false, error: { code: 'generic', message: '', params: {} } };
   }
   // The same file may already be in the library: use that entry, not a twin.
-  const inLibrary = findByPath(now.discoveredFiles, record.path);
+  // The listing may spell the library folder differently from the pasted path
+  // (a link, a `..`), so the server names the listing's entry (`library_path`)
+  // when the file is the library's; plain path equality covers the rest.
+  const inLibrary = findByPath(now.discoveredFiles, record.library_path)
+    || findByPath(now.discoveredFiles, record.path);
   const file = inLibrary || record;
   const name = file.display_label || file.formula || file.filename;
+  // Only a file the listing really has is "in the library": the page can then
+  // say it selected the library's entry.
+  const flags = inLibrary && record.in_library ? { inLibrary: true } : {};
   if (now.phaseFiles.some((p) => samePath(p, file.path))) {
-    return { ok: true, already: true, name };
+    return { ok: true, already: true, ...flags, name };
   }
   // Another FILE with the same name is already selected. A phase is identified by
   // its file name (a reflector selection is stored under it as well), so the two
@@ -128,5 +154,5 @@ export async function addPhaseFromPath({ method, rawPath, check, latest, remembe
   }
   if (!inLibrary) remember(record);
   now.select(file);
-  return { ok: true, name };
+  return { ok: true, ...flags, name };
 }

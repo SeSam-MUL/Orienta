@@ -163,7 +163,7 @@ def inspect_phase_path(method: str, raw_path: str) -> Dict:
     """Validate ``raw_path`` as a phase file for ``method``; return its record.
 
     Raises :class:`PhasePathError`. The record has the keys of a library
-    listing entry plus ``user_added`` and ``in_library``.
+    listing entry plus ``user_added``, ``in_library`` and ``library_path`` (the listing's spelling of the file, when it is the library's).
     """
     method = str(method or "").lower()
     if method not in METHOD_EXTENSIONS:
@@ -207,8 +207,18 @@ def inspect_phase_path(method: str, raw_path: str) -> Dict:
     enrich_phase_entries([entry], db_root)
     entry["path"] = str(path)
     entry["user_added"] = True
+    # A library file may be spelled differently here and in the library listing
+    # (the library folder behind a link, a `..`, another case or 8.3 name). When
+    # it is the library's file, give the listing's own spelling so that the page
+    # can select the existing entry instead of adding a second one.
+    entry["in_library"] = False
+    entry["library_path"] = None
     try:
-        entry["in_library"] = Path(db_root).resolve() in path.resolve().parents
-    except OSError:
+        root = Path(db_root)
+        entry["in_library"] = root.resolve() in path.resolve().parents
+        if entry["in_library"]:
+            entry["library_path"] = str(root / path.resolve().relative_to(root.resolve()))
+    except (OSError, ValueError):
         entry["in_library"] = False
+        entry["library_path"] = None
     return entry

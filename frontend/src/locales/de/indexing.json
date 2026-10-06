@@ -126,6 +126,7 @@
     "pathBrowse": "Durchsuchen…",
     "pathAdded": "{{name}} hinzugefügt",
     "pathAlready": "{{name}} ist bereits in der Liste",
+    "pathInLibrary": "{{name}} ist in der Bibliothek — ausgewählt",
     "pathError": {
       "empty": "Pfad einer Phasendatei eingeben.",
       "not_absolute": "Den vollständigen Pfad angeben, beginnend beim Laufwerk bzw. Stammverzeichnis.",

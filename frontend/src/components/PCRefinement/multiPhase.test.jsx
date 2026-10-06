@@ -8,7 +8,7 @@ import React from 'react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 
-const backend = vi.hoisted(() => ({ phases: [], paths: {}, calls: [], previews: [], failAdd: null }));
+const backend = vi.hoisted(() => ({ phases: [], paths: {}, calls: [], previews: [], failAdd: null, fromPath: {} }));
 
 vi.mock('../../services/api', async (importOriginal) => {
   const orig = await importOriginal();
@@ -75,6 +75,9 @@ vi.mock('../../services/api', async (importOriginal) => {
   }, { get: (t, k) => (k in t ? t[k] : () => ok({})) });
 
   const indexApi = new Proxy({
+    // The server's answer for a path, keyed by the path as typed; an unknown path
+    // is answered as the server would not be asked (no record).
+    phaseFromPath: (method, path) => ok(backend.fromPath[path] ? { file: backend.fromPath[path] } : {}),
     discoverFiles: () => ok({
       files: [
         { path: 'C:/lib/austenite.cif', filename: 'austenite.cif', formula: 'austenite', element_group: 'Fe' },
@@ -106,6 +109,7 @@ beforeEach(() => {
   backend.calls = [];
   backend.previews = [];
   backend.failAdd = null;
+  backend.fromPath = {};
   const sht = (n, p) => ({ path: `/sht/${n} (${n}) [${p}] {20kV}.sht`, filename: `${n} (${n}) [${p}] {20kV}.sht` });
   globalThis.fetch = vi.fn(() => Promise.resolve({
     json: () => Promise.resolve({ files: [sht('austenite', 'cF4'), sht('ferrite', 'cI2')] }),
@@ -170,6 +174,23 @@ describe('PC refinement with several phases', () => {
     fireEvent.click(screen.getByText('Add'));
     await waitFor(() => expect(backend.calls).toEqual([['add', 'D:\\mine\\sigma.cif']]));
     await waitFor(() => expect(screen.getByText('Added sigma')).toBeTruthy());
+  });
+
+  it('a path that is a library file selects the library entry, not a second one', async () => {
+    // The listing names the library under C:/lib; the pasted path is the same
+    // file under its real folder. The server says which listing entry it is.
+    backend.fromPath['D:/real/lib/ferrite.cif'] = {
+      path: 'D:/real/lib/ferrite.cif', in_library: true, library_path: 'C:/lib/ferrite.cif',
+    };
+    render(<PCRefinement />);
+    const input = await openPicker();
+    fireEvent.change(input, { target: { value: 'D:/real/lib/ferrite.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await screen.findByText('ferrite is in the library — selected');
+    expect(backend.calls).toEqual([['add', 'C:/lib/ferrite.cif']]);        // the library's own path
+    const row = await screen.findByTitle('ferrite');
+    expect(row.parentElement.querySelector('input[type="checkbox"]').checked).toBe(true);
+    expect(screen.getAllByTitle('ferrite')).toHaveLength(1);              // no twin row
   });
 
   it('a refusal from the backend is shown, and nothing is listed', async () => {

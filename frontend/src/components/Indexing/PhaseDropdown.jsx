@@ -447,7 +447,8 @@ function PhasePathRow({ method, onAddPath, t }) {
         setText('');
         setNote({
           error: false,
-          text: t(res.already ? 'phaseDropdown.pathAlready' : 'phaseDropdown.pathAdded',
+          text: t(res.inLibrary ? 'phaseDropdown.pathInLibrary'
+                  : res.already ? 'phaseDropdown.pathAlready' : 'phaseDropdown.pathAdded',
                   { name: res.name }),
         });
       } else {

@@ -126,6 +126,7 @@
     "pathBrowse": "浏览…",
     "pathAdded": "已添加 {{name}}",
     "pathAlready": "{{name}} 已在列表中",
+    "pathInLibrary": "{{name}} 在库中 — 已选中",
     "pathError": {
       "empty": "请输入相文件的路径。",
       "not_absolute": "请输入完整路径，从盘符或根目录开始。",

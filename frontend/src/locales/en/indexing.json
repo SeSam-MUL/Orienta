@@ -126,6 +126,7 @@
     "pathBrowse": "Browse…",
     "pathAdded": "Added {{name}}",
     "pathAlready": "{{name}} is already in the list",
+    "pathInLibrary": "{{name}} is in the library — selected",
     "pathError": {
       "empty": "Enter the path of a phase file.",
       "not_absolute": "Give the complete path, starting at the drive or root folder.",

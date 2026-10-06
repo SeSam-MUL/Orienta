@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
-  samePath, findByPath, mergeUserAdded, pathErrorFrom, phaseStem, addPhaseFromPath, cleanPastedPath,
+  samePath, findByPath, mergeUserAdded, pathErrorFrom, phaseStem, addPhaseFromPath, cleanPastedPath, libraryEntryForPath,
 } from './phasePath';
 
 describe('samePath', () => {
@@ -101,6 +101,40 @@ describe('addPhaseFromPath', () => {
     expect(remember).not.toHaveBeenCalled();
   });
 
+  it('selects the library entry, not a twin, when the pasted path is the library file spelled another way', async () => {
+    // The listing names the library through a link; the pasted path is the real
+    // one. The server says which listing entry the file is (`library_path`).
+    const lib = { path: 'D:/work/Database/CIF_Library/Al.cif', filename: 'Al.cif', formula: 'Al' };
+    const pasted = {
+      path: 'D:/main/Database/CIF_Library/Al.cif', filename: 'Al.cif', formula: 'Al',
+      user_added: true, in_library: true, library_path: 'D:/work/Database/CIF_Library/Al.cif',
+    };
+    const { args, select, remember } = mk({ discoveredFiles: [lib] });
+    args.check = vi.fn().mockResolvedValue({ data: { file: pasted } });
+    args.rawPath = pasted.path;
+    expect(await addPhaseFromPath(args)).toEqual({ ok: true, name: 'Al', inLibrary: true });
+    expect(select).toHaveBeenCalledWith(lib);
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('says "in the library" also when that library entry is already selected', async () => {
+    const lib = { path: 'D:/work/Database/CIF_Library/Al.cif', filename: 'Al.cif', formula: 'Al' };
+    const pasted = {
+      path: 'D:/main/Database/CIF_Library/Al.cif', filename: 'Al.cif', formula: 'Al',
+      in_library: true, library_path: lib.path,
+    };
+    const { args, select } = mk({ discoveredFiles: [lib], phaseFiles: [lib.path] });
+    args.check = vi.fn().mockResolvedValue({ data: { file: pasted } });
+    expect(await addPhaseFromPath(args))
+      .toEqual({ ok: true, already: true, inLibrary: true, name: 'Al' });
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('a file outside the library is not called a library file', async () => {
+    const { args } = mk();
+    expect((await addPhaseFromPath(args)).inLibrary).toBeUndefined();
+  });
+
   it('does not select a phase that is already selected', async () => {
     const { args, select } = mk({ phaseFiles: ['/mine/X.cif'] });
     expect(await addPhaseFromPath(args)).toEqual({ ok: true, already: true, name: 'X' });
@@ -168,5 +202,30 @@ describe('cleanPastedPath', () => {
   });
   it('does not strip a quote that has no partner', () => {
     expect(cleanPastedPath('"/x/Al.cif')).toBe('"/x/Al.cif');
+  });
+});
+
+
+describe('libraryEntryForPath', () => {
+  const lib = { path: 'D:/work/Database/CIF_Library/Al.cif', filename: 'Al.cif' };
+  const rec = { path: 'D:/main/Database/CIF_Library/Al.cif', in_library: true, library_path: lib.path };
+  const ask = (data, files = [lib]) => libraryEntryForPath({
+    method: 'hough', rawPath: rec.path, files,
+    check: vi.fn().mockResolvedValue({ data }),
+  });
+
+  it('returns the listing entry the file is, whatever the spelling', async () => {
+    expect(await ask({ file: rec })).toBe(lib);
+  });
+  it('returns null for a file that is not in the library', async () => {
+    expect(await ask({ file: { ...rec, in_library: false, library_path: null } })).toBeNull();
+  });
+  it('returns null when the library file is not in the listing', async () => {
+    expect(await ask({ file: rec }, [])).toBeNull();
+  });
+  it('returns null when the check is refused or fails, so the caller reports its own error', async () => {
+    const check = vi.fn().mockRejectedValue({ response: { status: 400 } });
+    expect(await libraryEntryForPath({ method: 'hough', rawPath: 'x', files: [lib], check })).toBeNull();
+    expect(await ask({})).toBeNull();
   });
 });

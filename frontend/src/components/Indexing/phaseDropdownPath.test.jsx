@@ -183,6 +183,14 @@ describe('with onAddPath', () => {
     await waitFor(() => expect(screen.getByText('Al is already in the list')).toBeTruthy());
   });
 
+  it('says the library entry was selected when the path was a library file', async () => {
+    const onAddPath = vi.fn().mockResolvedValue({ ok: true, inLibrary: true, name: 'Al' });
+    mount({ onAddPath });
+    fireEvent.change(pathInput(), { target: { value: '/a/Al.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await waitFor(() => expect(screen.getByText('Al is in the library — selected')).toBeTruthy());
+  });
+
   it('offers Browse only where there is a native dialog, and sends its pick', async () => {
     const onAddPath = vi.fn().mockResolvedValue({ ok: true, name: 'P' });
     mount({ onAddPath });

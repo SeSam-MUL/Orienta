@@ -254,3 +254,40 @@ def test_a_path_inside_the_library_is_marked_as_such():
         pytest.skip("library Al.cif not present")
     rec = inspect_phase_path("hough", str(lib))
     assert rec["in_library"] is True
+
+
+def _spelled_differently(tmp_path):
+    """A library root whose spelling differs from its resolved form.
+
+    `<tmp>/a/../lib` and `<tmp>/lib` are one folder; the first is how a listing
+    names the library when it sits behind a link or a `..`, the second is what
+    `Path.resolve()` (and so a pasted path) gives. Works on every platform.
+    """
+    (tmp_path / "a").mkdir()
+    lib = tmp_path / "lib"
+    (lib / "CIF_Library").mkdir(parents=True)
+    (lib / "CIF_Library" / "Al.cif").write_text(AL_CIF, encoding="utf-8")
+    return tmp_path / "a" / ".." / "lib", lib.resolve() / "CIF_Library" / "Al.cif"
+
+
+def test_a_library_file_names_its_entry_in_the_listing_spelling(tmp_path, monkeypatch):
+    """The listing and a pasted path may spell the same library file differently.
+
+    The record must say which listing entry it is (`library_path`, in the
+    listing's own spelling), otherwise the page cannot tell that the file is the
+    library's and adds it a second time.
+    """
+    import path_utils
+
+    db_spelling, pasted = _spelled_differently(tmp_path)
+    monkeypatch.setattr(path_utils, "get_local_database_path", lambda: db_spelling)
+    rec = inspect_phase_path("hough", str(pasted))
+    assert rec["in_library"] is True
+    assert rec["path"] == str(pasted)
+    assert rec["library_path"] == str(db_spelling / "CIF_Library" / "Al.cif")
+    assert rec["library_path"] != rec["path"]
+
+
+def test_a_file_outside_the_library_has_no_library_path(al_cif):
+    rec = inspect_phase_path("hough", str(al_cif))
+    assert rec["library_path"] is None

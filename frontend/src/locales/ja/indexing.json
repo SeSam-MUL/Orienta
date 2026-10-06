@@ -126,6 +126,7 @@
     "pathBrowse": "参照…",
     "pathAdded": "{{name}} を追加しました",
     "pathAlready": "{{name}} はすでにリストにあります",
+    "pathInLibrary": "{{name}} はライブラリにあります — 選択しました",
     "pathError": {
       "empty": "相ファイルのパスを入力してください。",
       "not_absolute": "ドライブまたはルートフォルダから始まる完全なパスを入力してください。",
