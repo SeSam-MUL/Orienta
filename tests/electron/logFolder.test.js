@@ -57,8 +57,9 @@ describe('wiring', () => {
   it('main.js answers app:openLogFolder from its own project root and takes no path', () => {
     const at = MAIN.indexOf("ipcMain.handle('app:openLogFolder'");
     expect(at).toBeGreaterThan(-1);
-    const handler = MAIN.slice(at, at + 400);
-    expect(handler).toMatch(/\(\)\s*=>/);                   // no arguments from the renderer
+    const handler = MAIN.slice(at, at + 200);
+    // No parameters at all: nothing the page sends can reach the handler.
+    expect(handler).toMatch(/^ipcMain\.handle\('app:openLogFolder',\s*\(\)\s*=>/);
     expect(handler).toMatch(/lastProjectRoot \|\| resolveProjectRoot\(\)/);
     expect(handler).toMatch(/openLogFolder\(/);
   });
