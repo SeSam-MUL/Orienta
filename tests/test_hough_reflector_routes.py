@@ -240,6 +240,45 @@ def test_cost_reports_a_size_and_follows_the_choice(client, cifs):
     assert small["n_rows"] == 14
 
 
+def test_cost_of_a_phase_that_does_not_fit_and_of_a_selection_that_does(client, tmp_path,
+                                                                   monkeypatch):
+    """The symmetry-less test phase asks 44.7 GiB for its default list (measured,
+    see tests/synthetic_cif); a handful of families is small."""
+    from tests.synthetic_cif import SYNTHETIC_P1_CIF
+    monkeypatch.setenv("ORIENTA_HOUGH_LIBRARY_BUDGET_MB", "2048")
+    c, _ = client
+    p1 = tmp_path / "synthetic_P1.cif"
+    p1.write_text(SYNTHETIC_P1_CIF, encoding="utf-8")
+    big = c.get("/api/indexing/hough/reflectors/cost", params={"cif_path": str(p1)}).json()
+    assert big["fits"] is False and big["bytes"] > 40 * 1024 ** 3 and big["n_rows"] == 70
+    table = c.get("/api/indexing/hough/reflectors", params={"cif_path": str(p1)}).json()
+    few = [f["hkl"] for f in table["families"] if f["selected"]][:6]
+    put = c.put("/api/indexing/hough/reflectors",
+                json={"cif_path": str(p1), "spec": {"mode": "custom", "families": few}})
+    assert put.status_code == 200, put.text
+    small = c.get("/api/indexing/hough/reflectors/cost", params={"cif_path": str(p1)}).json()
+    assert small["fits"] is True and small["bytes"] < 2 * 1024 ** 3
+
+
+def test_checking_a_selection_does_not_build_a_whole_indexer(client, cifs, monkeypatch):
+    """A click checks the selection and asks its cost. Building an EBSDIndexer
+    for that opens an OpenCL context on a machine with a GPU, and after a few
+    dozen clicks the next real indexing failed with "Context failed:
+    OUT_OF_HOST_MEMORY" (measured). Only the band-triplet library is built."""
+    import kikuchipy as kp
+
+    def boom(*a, **k):
+        raise AssertionError("an EBSDIndexer must not be built to check a selection")
+
+    monkeypatch.setattr(kp.detectors.EBSDDetector, "get_indexer", boom)
+    c, _ = client
+    spec = {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0], [2, 2, 0]]}
+    assert c.put("/api/indexing/hough/reflectors",
+                 json={"cif_path": cifs["Al"], "spec": spec}).status_code == 200
+    assert c.get("/api/indexing/hough/reflectors/cost",
+                 params={"cif_path": cifs["Al"]}).status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # the indexing request carries the choice
 # ---------------------------------------------------------------------------

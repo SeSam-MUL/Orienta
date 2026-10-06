@@ -124,6 +124,35 @@ def change(phase, key, spec):
     return table(phase, key)
 
 
+def _library_rows(phase, rows):
+    """Rows the band-triplet library of this reflector list needs; 0 when it is
+    smaller than the probe cap (negligible). Raises whatever PyEBSDIndex raises
+    for a list it cannot build.
+
+    Builds the BandIndexer of the phase only - the same call kikuchipy's
+    ``get_indexer`` makes first - and not a whole EBSDIndexer, which on a machine
+    with OpenCL also opens a GPU context for its Radon plan: one per call, and
+    this is called on every click.
+    """
+    import re
+
+    import ebsd_utils as eu
+    from kikuchipy.indexing._hough_indexing import _get_pyebsdindex_phaselist
+    from orix.crystal_map import PhaseList
+
+    p = phase.deepcopy()
+    fixed = eu._standard_setting_phase_list(PhaseList(p))
+    try:
+        with eu._capped_triplet_library(eu._PREDICT_PROBE_ROWS):
+            _get_pyebsdindex_phaselist(fixed, [rows])
+    except MemoryError as exc:
+        m = re.search(r"need ([0-9,]+) rows", str(exc))
+        if m:
+            return int(m.group(1).replace(",", ""))
+        raise
+    return 0
+
+
 def _probe_library(phase, spec):
     """Build the band-triplet library of a selection once, under the probe cap.
 
@@ -132,18 +161,9 @@ def _probe_library(phase, spec):
     selection is made than when a run starts. Too big for the probe is not a
     failure here - the cost line says how big.
     """
-    import ebsd_utils as eu
-    import kikuchipy as kp
-    from orix.crystal_map import PhaseList
-
-    p = phase.deepcopy()
-    rows = hr.spec_rows(p, spec)[0].tolist()
-    det = kp.detectors.EBSDDetector(shape=(60, 60), pc=(0.5, 0.5, 0.5),
-                                    sample_tilt=70.0)
-    fixed = eu._standard_setting_phase_list(PhaseList(p))
+    rows = hr.spec_rows(phase.deepcopy(), spec)[0].tolist()
     try:
-        with eu._capped_triplet_library(eu._PREDICT_PROBE_ROWS):
-            det.get_indexer(fixed, rows, nBands=12)
+        _library_rows(phase, rows)
     except MemoryError:
         return
     except Exception as exc:  # noqa: BLE001 - PyEBSDIndex raises unrelated types
@@ -171,28 +191,23 @@ def cost(phase, key, n_bands=12):
     """What the library of the stored choice would cost (nothing is built).
 
     The sizes come from the REFUSED request of PyEBSDIndex's table allocation
-    (see ``ebsd_utils.predict_triplet_library``); the detector is nominal
-    because the library is sized from the poles and the lattice alone.
+    (see ``ebsd_utils.predict_triplet_library``); the library is sized from the
+    poles and the lattice alone, so no detector is involved. ``n_bands`` does not
+    change it either; it is accepted so both pages can pass what they show.
     """
     import ebsd_utils as eu
-    import kikuchipy as kp
     from orix.crystal_map import PhaseList
 
     p = phase.deepcopy()
-    p.name = phase.name
-    pl = PhaseList(p)
-    refl = hr.prepare_reflectors(pl)
-    n_rows = len(refl.hkl)
-    det = kp.detectors.EBSDDetector(shape=(60, 60), pc=(0.5, 0.5, 0.5),
-                                    sample_tilt=70.0)
+    refl = hr.prepare_reflectors(PhaseList(p))
+    rows = refl.hkl.tolist()
     budget = eu._triplet_library_budget_bytes()
-    rows_bytes = eu.predict_triplet_library(det, pl, refl, counts=(n_rows,),
-                                            nBands=int(n_bands))
-    nbytes = rows_bytes[0][2] if rows_bytes else None
+    needed = _library_rows(phase, rows)
+    nbytes = needed * eu._TRIPLET_ROW_BYTES
     return {
-        "bytes": None if nbytes is None else int(nbytes),
-        "rows": None if not rows_bytes else int(rows_bytes[0][1]),
-        "fits": None if nbytes is None else bool((nbytes or 0) <= budget),
+        "bytes": int(nbytes),
+        "rows": int(needed),
+        "fits": bool(nbytes <= budget),
         "budget_bytes": int(budget),
-        "n_rows": int(n_rows),
+        "n_rows": int(len(rows)),
     }
