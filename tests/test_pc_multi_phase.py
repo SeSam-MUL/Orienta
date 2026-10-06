@@ -191,6 +191,84 @@ def test_single_phase_result_has_no_phase_index(duplex_cifs, nickel):
 
 
 # --------------------------------------------------------------------------
+# A PyEBSDIndex indexer fixes its PC when it is built
+# --------------------------------------------------------------------------
+
+REFINED_PC = (0.44, 0.19, 0.55)
+
+
+def _cis(rows):
+    return [None if r["ci"] is None else round(r["ci"], 6) for r in rows]
+
+
+def test_phases_of_patterns_follows_a_changed_detector_pc(duplex_cifs, nickel):
+    """What the page shows as "phase per pattern" after a refine must come from the
+    refined PC, not from an indexer built at the old one."""
+    pats = [np.asarray(nickel.data[i, i]).copy() for i in range(3)]
+
+    ctrl = _ctrl_with_detector(nickel)
+    for p in duplex_cifs:
+        ctrl.add_phase(p)
+    before = ctrl.phases_of_patterns(pats)           # builds the indexer at NICKEL_PC
+    ctrl.detector.pc = REFINED_PC                    # what a refine does
+    stale_or_not = ctrl.phases_of_patterns(pats)
+
+    fresh = _ctrl_with_detector(nickel)
+    fresh.detector.pc = REFINED_PC
+    for p in duplex_cifs:
+        fresh.add_phase(p)
+    expected = fresh.phases_of_patterns(pats)
+
+    assert _cis(before) != _cis(expected), "the PCs must differ for this to mean anything"
+    assert _cis(stale_or_not) == _cis(expected)
+
+
+def test_a_detector_pc_that_did_not_change_keeps_the_indexer(duplex_cifs, nickel):
+    ctrl = _ctrl_with_detector(nickel)
+    ctrl.add_phase(duplex_cifs[0])
+    first = ctrl._ensure_indexer()
+    assert ctrl._ensure_indexer() is first
+
+
+def test_two_phase_refine_reports_phase_and_ci_at_the_refined_pc(monkeypatch, duplex_cifs, nickel):
+    """The route path: the optimiser result carries phase per pattern and its CI,
+    both indexed at the refined PC."""
+    pats = [np.asarray(nickel.data[i, i]).copy() for i in range(3)]
+    ctrl = _ctrl_with_detector(nickel)
+    for p in duplex_cifs:
+        ctrl.add_phase(p)
+    for i, p in enumerate(pats):
+        ctrl.add_pattern((i, i), p)
+    task, _ = _run(monkeypatch, ctrl, pats, [REFINED_PC] * 3)
+    assert task["status"] == "completed", task.get("error")
+    shown = [e["ci"] for e in task["result"]["pattern_phases"]]
+
+    fresh = _ctrl_with_detector(nickel)
+    fresh.detector.pc = REFINED_PC
+    for p in duplex_cifs:
+        fresh.add_phase(p)
+    expected = [r["ci"] for r in fresh.phases_of_patterns(pats)]
+    assert shown == pytest.approx(expected, abs=1e-9)
+
+
+def test_single_phase_ci_after_a_refine_comes_from_the_refined_pc(monkeypatch, duplex_cifs, nickel):
+    """The CI the page shows after Global PC Refine, one phase."""
+    ctrl = _ctrl_with_detector(nickel)
+    ctrl.add_phase(duplex_cifs[0])
+    pat = np.asarray(nickel.data[0, 0]).copy()
+    ctrl.add_pattern((0, 0), pat)
+    task, _ = _run(monkeypatch, ctrl, [pat], [REFINED_PC])
+    assert task["status"] == "completed", task.get("error")
+    shown = task["result"]["ci"]
+
+    fresh = _ctrl_with_detector(nickel)
+    fresh.detector.pc = REFINED_PC
+    fresh.add_phase(duplex_cifs[0])
+    fresh.add_pattern((0, 0), pat)
+    expected, _xmap, _bands = fresh.index_pattern(0)
+    assert shown == pytest.approx(expected, abs=1e-9)
+
+# --------------------------------------------------------------------------
 # The optimisation run
 # --------------------------------------------------------------------------
 

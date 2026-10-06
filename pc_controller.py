@@ -198,6 +198,20 @@ class PCController:
             self.indexer = None
             self.clear_cache()
 
+    def _indexer_pc_is_stale(self):
+        """True when the cached indexer was built for another PC than the detector's.
+
+        A PyEBSDIndex indexer copies the PC when it is created; assigning
+        ``detector.pc`` afterwards (a refine, a typed value) does not reach it, so
+        whatever it indexes is indexed at the OLD PC.
+        """
+        try:
+            built = np.asarray(self.indexer.PC, dtype=float).ravel()
+            now = np.asarray(self.detector.pc_flattened, dtype=float).ravel()
+            return built.shape != now.shape or not np.allclose(built, now, rtol=0, atol=1e-12)
+        except Exception:  # noqa: BLE001 - cannot tell: rebuilding is always safe
+            return True
+
     def _ensure_indexer(self):
         """Create indexer if not already cached. Validates prerequisites."""
         if self.detector is None:
@@ -205,6 +219,8 @@ class PCController:
         if self.phase_list is None:
             raise RuntimeError("No phase loaded.")
         self.reflector_specs_changed()
+        if self.indexer is not None and self._indexer_pc_is_stale():
+            self.indexer = None
         if self.indexer is None:
             self.indexer = create_indexer(
                 self.detector, self.phase_list, self.reflectors,
