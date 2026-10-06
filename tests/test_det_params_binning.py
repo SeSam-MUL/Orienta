@@ -213,11 +213,14 @@ def test_pc_detector_info_matches_the_display_dict(monkeypatch):
 
 
 # ---- exports written before the fold carry the doubled geometry --------------
-def _write_geometry(path, dg):
+def _write_geometry(path, dg, source_vendor=None):
     import json
     import h5py
     with h5py.File(path, "w") as f:
-        f.create_group("Indexing").attrs["detector_geometry"] = json.dumps(dg)
+        g = f.create_group("Indexing")
+        g.attrs["detector_geometry"] = json.dumps(dg)
+        if source_vendor is not None:
+            g.attrs["source_vendor"] = source_vendor
 
 
 def _legacy(**over):
@@ -228,15 +231,35 @@ def _legacy(**over):
     return dg
 
 
-def test_legacy_export_with_default_pixel_size_is_corrected(tmp_path, caplog):
+@pytest.mark.parametrize("vendor", ["oxford", "edax", "Oxford"])
+def test_legacy_export_with_default_pixel_size_is_corrected(tmp_path, caplog, vendor):
+    """Oxford and EDAX files carry only the placeholder pixel size, so a 70 um in
+    their export IS the app's substitute."""
     from backend.api.routes.indexing import _restore_render_geometry
     p = tmp_path / "old.h5"
-    _write_geometry(p, _legacy())
+    _write_geometry(p, _legacy(), source_vendor=vendor)
     with caplog.at_level("WARNING"):
         dg = _restore_render_geometry(p)["detector_geometry"]
     assert dg["binning"] == 1 and dg["file_binning"] == 8
     assert dg["pixel_size"] == DEFAULT_PIXEL_SIZE_UM
     assert any("corrected" in r.getMessage().lower() for r in caplog.records)
+
+
+@pytest.mark.parametrize("vendor", ["bruker", "unknown", None, ""])
+def test_a_70_um_that_may_be_the_files_own_is_not_corrected(tmp_path, caplog, vendor):
+    """A reader that supplied a real pixel size of exactly 70 um (Bruker files do)
+    looks identical to the substitute in the export. Only vendors whose files never
+    carry a pixel size (Oxford, EDAX) justify the correction; for the rest it is a
+    warning, and the geometry is used as stored."""
+    from backend.api.routes.indexing import _restore_render_geometry
+    p = tmp_path / "old.h5"
+    _write_geometry(p, _legacy(), source_vendor=vendor)
+    with caplog.at_level("WARNING"):
+        dg = _restore_render_geometry(p)["detector_geometry"]
+    assert dg["binning"] == 8 and "file_binning" not in dg
+    msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert msgs and not any("corrected" in m.lower() and "not corrected" not in m.lower() for m in msgs)
+    assert any("could be the file's own" in m or "cannot tell" in m for m in msgs)
 
 
 def test_legacy_export_with_other_pixel_size_is_only_warned_about(tmp_path, caplog):

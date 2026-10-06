@@ -9764,7 +9764,13 @@ def _write_render_geometry_attrs(idx_group, md, xmap=None) -> None:
             logger.debug("export: could not serialise sht_paths_by_phase", exc_info=True)
 
 
-def _fix_legacy_binning(dg: dict, source) -> dict:
+#: Vendors whose files never carry a pixel size: kikuchipy reads the placeholder
+#: 1.0 from them, and the app then substituted its own default. For any other
+#: vendor a pixel size equal to that default may be the file's own.
+_VENDORS_WITHOUT_PIXEL_SIZE = ("oxford", "edax")
+
+
+def _fix_legacy_binning(dg: dict, source, source_vendor=None) -> dict:
     """Undo the doubled binning in a detector geometry exported before the fix.
 
     Earlier versions stored the substituted default pixel size (a stored-pixel
@@ -9772,9 +9778,12 @@ def _fix_legacy_binning(dg: dict, source) -> dict:
     binning in a second time (detector distance 8x too large for an Oxford
     Speed-2 file under kikuchipy >= 0.12). Current exports carry
     ``file_binning`` and always ``binning == 1``. A geometry without
-    ``file_binning`` and with ``binning > 1`` is corrected when the pixel size
-    is exactly the app default, and only reported otherwise, because a pixel
-    size from the file or the auto-scaled one cannot be told apart here.
+    ``file_binning`` and with ``binning > 1`` is corrected only when the pixel
+    size is exactly the app default AND the export says the source was an Oxford
+    or EDAX file (``source_vendor``): those files carry no pixel size, so the
+    default IS the substitute. For any other source an identical number may be a
+    pixel size the file really had, and is only reported; a pixel size from the
+    file or the auto-scaled one cannot be told apart either.
     """
     from backend.spherical_gpu.pipeline.detector import DEFAULT_PIXEL_SIZE_UM
     if not isinstance(dg, dict) or "file_binning" in dg:
@@ -9785,6 +9794,15 @@ def _fix_legacy_binning(dg: dict, source) -> dict:
     except (TypeError, ValueError):
         return dg
     if binning <= 1:
+        return dg
+    vendor = str(source_vendor or "").strip().lower()
+    if pixel_size == DEFAULT_PIXEL_SIZE_UM and vendor not in _VENDORS_WITHOUT_PIXEL_SIZE:
+        logger.warning(
+            "import: %s stores detector binning %d with a pixel size of %.1f um "
+            "that could be the file's own (source vendor: %s); binning may have "
+            "been applied twice, but this cannot tell, so the geometry is used "
+            "as stored (not corrected).",
+            source, binning, pixel_size, vendor or "not recorded")
         return dg
     if pixel_size == DEFAULT_PIXEL_SIZE_UM:
         fixed = dict(dg, binning=1, file_binning=binning)
@@ -9816,8 +9834,11 @@ def _restore_render_geometry(h5_path) -> dict:
                 return out
             dg = idxg.attrs.get("detector_geometry")
             if dg is not None:
+                _vendor = idxg.attrs.get("source_vendor")
+                if isinstance(_vendor, bytes):
+                    _vendor = _vendor.decode("utf-8", "replace")
                 out["detector_geometry"] = _fix_legacy_binning(
-                    json.loads(dg), h5_path)
+                    json.loads(dg), h5_path, _vendor)
             sht = idxg.attrs.get("sht_paths_by_phase")
             if sht is not None:
                 out["sht_paths_by_phase"] = {int(k): v for k, v in json.loads(sht).items()}
