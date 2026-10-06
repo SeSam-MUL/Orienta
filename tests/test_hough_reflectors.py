@@ -159,6 +159,28 @@ def test_without_a_spec_the_rows_are_exactly_what_prepare_reflectors_made(tmp_pa
             assert sent == refl.hkl.tolist()
 
 
+def test_real_indexing_without_a_spec_is_what_it_was_before_this_feature(tmp_path):
+    """Nine real (nickel demo) patterns indexed against Ni + Al.
+
+    The reference numbers were produced by the code BEFORE reflector specs
+    existed (same script, the tree of the parent commit): the rotations, the
+    phase of every pattern and the pole families PyEBSDIndex held for each phase.
+    Nothing in the registry or in `create_indexer` may move them.
+    """
+    import kikuchipy as kp
+    gold = np.load(Path(__file__).parent / "data" / "hough_default_nickel_two_phase.npz")
+    s = kp.data.nickel_ebsd_small()
+    ni, _ = _phase(tmp_path, NI_CIF, "Ni")
+    al, _ = _phase(tmp_path, AL_CIF, "Al")
+    pl = _plist(ni, al)
+    ix = eu.create_indexer(s.detector, pl, eu.prepare_reflectors(pl), nBands=12)
+    xmap, _idx = s.hough_indexing(pl, ix, return_index_data=True, verbose=0)
+    assert np.array_equal(xmap.phase_id, gold["pid"])
+    assert np.array_equal(np.asarray(ix.phaselist[0].polefamilies).reshape(-1, 3), gold["poles0"])
+    assert np.array_equal(np.asarray(ix.phaselist[1].polefamilies).reshape(-1, 3), gold["poles1"])
+    np.testing.assert_allclose(xmap.rotations.data, gold["rot"], atol=1e-6)
+
+
 def test_the_default_list_is_the_effective_default_of_pyebsdindex(tmp_path):
     """Al: six families before PyEBSDIndex, {200} {220} {111} {311} after it."""
     al, _ = _phase(tmp_path, AL_CIF, "Al")
