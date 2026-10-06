@@ -737,6 +737,7 @@ from backend.api.routes import citations
 from backend.api.routes import addons
 from backend.api.routes import phase_collections
 from backend.api.routes import phase_library
+from backend.api.routes import hough_reflectors as hough_reflector_routes
 
 app.include_router(h5_viewer.router, prefix="/api/h5", tags=["HDF5 Viewer"])
 app.include_router(ebsd_viewer.router, prefix="/api/ebsd", tags=["EBSD Viewer"])
@@ -772,6 +773,7 @@ app.include_router(citations.router, prefix="/api/citations", tags=["Citations"]
 app.include_router(addons.router, prefix="/api/addons", tags=["Add-ons"])
 app.include_router(phase_collections.router, prefix="/api/phase-collections", tags=["Phase Collections"])
 app.include_router(phase_library.router, prefix="/api/phase-library", tags=["Phase Library"])
+app.include_router(hough_reflector_routes.router, prefix="/api/indexing/hough", tags=["Hough reflectors"])
 
 FRONTEND_DIST = Path(PROJECT_ROOT) / "frontend" / "dist"
 

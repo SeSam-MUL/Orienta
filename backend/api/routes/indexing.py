@@ -1438,6 +1438,19 @@ def _build_phase_configs(req):
     except Exception:  # noqa: BLE001 — registering is an optimisation, not the run
         logger.debug("could not register reflector limits", exc_info=True)
 
+    # The reflector-family choice goes into the same per-phase registry: every
+    # Hough build of the phase reads it there (`ebsd_utils.create_indexer`),
+    # the run, the resolver after a spherical run, the phase check. A request
+    # without the field changes nothing.
+    specs = getattr(req, "reflector_specs", None)
+    if specs is not None and req.method == 'hough':
+        import hough_reflectors
+        for _i, _p in enumerate(paths):
+            try:
+                hough_reflectors.set_spec(_p, specs[_i] if _i < len(specs) else None)
+            except hough_reflectors.SpecError as exc:
+                raise ValueError(f"Reflector selection for {_stem(_p)}: {exc}") from exc
+
     for _i, p in enumerate(paths):
         try:
             meta = get_phase_metadata(Path(p), cif_library_dir=cif_dir)
@@ -2118,6 +2131,11 @@ class IndexingParams(BaseModel):
     # Hough only. See GET /api/indexing/hough/reflector-cost for what each
     # choice costs, and ebsd_utils.create_indexer for why it is not automatic.
     max_reflectors: Optional[List[Optional[int]]] = None
+    # Which reflector FAMILIES each phase uses, aligned with `cif_paths`
+    # (hough_reflectors: {"mode": "auto", "rule": {...}} or {"mode": "custom",
+    # "families": [[h, k, l], ...]}). An entry of null means the default list
+    # for that phase; the field absent leaves the registry as it is.
+    reflector_specs: Optional[List[Optional[dict]]] = None
 
     # Dictionary params
     metric: str = "ncc"

@@ -7,6 +7,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 from kikuchipy.signals import EBSD
 from ebsd_utils import create_indexer, optimize_pc, prepare_reflectors
+import hough_reflectors
 
 class PCController:
     """
@@ -27,6 +28,10 @@ class PCController:
         self.f_threshold = 0.1
         self.max_reflectors = 70
         self.nBands = 12
+        # Version of the per-phase reflector registry (`hough_reflectors`) this
+        # controller last looked at: when it moves, the indexer and everything
+        # computed with it are out of date.
+        self._spec_version = hough_reflectors.registry_version()
 
     def attach_detector(self, detector):
         """Set the global detector and invalidate cache/indexer."""
@@ -47,15 +52,43 @@ class PCController:
         self.phase = phase
         self.phase_list = PhaseList(phase)
         # Compute reflectors with current GUI parameters
-        self.reflectors = prepare_reflectors(
-            self.phase_list,
-            min_d=self.min_d,
-            f_threshold=self.f_threshold,
-            max_reflectors=self.max_reflectors
-        )
+        self.reflectors = self._compute_reflectors()
         self.indexer = None
         self.clear_cache()
         return phase
+
+    def _compute_reflectors(self):
+        """The reflectors of the loaded phases: the default list, or - for a
+        phase with a reflector selection of its own - that selection.
+
+        Used for the Kikuchi-line overlay; the indexer reads the same registry
+        inside ``create_indexer``, so the bands drawn are the bands used. A
+        selection that no longer fits its phase is reported when the indexer is
+        built (loudly); here the default list stands in so the phase can still be
+        loaded and the selection reset.
+        """
+        try:
+            return hough_reflectors.prepare_reflectors(
+                self.phase_list, min_d=self.min_d, f_threshold=self.f_threshold,
+                max_reflectors=self.max_reflectors)
+        except hough_reflectors.SpecError as exc:
+            logger.warning("reflector selection not applied to the overlay: %s", exc)
+            return prepare_reflectors(
+                self.phase_list, min_d=self.min_d, f_threshold=self.f_threshold,
+                max_reflectors=self.max_reflectors)
+
+    def reflector_specs_changed(self):
+        """True (once) when the per-phase reflector registry changed since this
+        controller last looked; the indexer, the results computed with it and
+        the overlay's reflectors are then rebuilt."""
+        version = hough_reflectors.registry_version()
+        if version == self._spec_version:
+            return False
+        self._spec_version = version
+        if self.phase_list is not None:
+            self.reflectors = self._compute_reflectors()
+        self.clear_cache()           # also drops the indexer
+        return True
 
     def clear_cache(self):
         """Clears the pattern index cache."""
@@ -85,12 +118,7 @@ class PCController:
         from orix.crystal_map import PhaseList
         self.phase = phases[0]
         self.phase_list = PhaseList(phases=list(phases))
-        self.reflectors = prepare_reflectors(
-            self.phase_list,
-            min_d=self.min_d,
-            f_threshold=self.f_threshold,
-            max_reflectors=self.max_reflectors
-        )
+        self.reflectors = self._compute_reflectors()
         self.indexer = None
         self.clear_cache()
 
@@ -159,18 +187,14 @@ class PCController:
             changed = True
         if nBands is not None and nBands != self.nBands:
             self.nBands = nBands
-            # nBands only affects indexer, not reflectors
-            self.indexer = None
+            # nBands only affects indexer, not reflectors; what was indexed with
+            # the old number is stale
+            self.clear_cache()
 
         if changed:
             # Recalculate reflectors with current parameters
             if self.phase_list is not None:
-                self.reflectors = prepare_reflectors(
-                    self.phase_list,
-                    min_d=self.min_d,
-                    f_threshold=self.f_threshold,
-                    max_reflectors=self.max_reflectors
-                )
+                self.reflectors = self._compute_reflectors()
             self.indexer = None
             self.clear_cache()
 

@@ -264,6 +264,22 @@ def test_a_phase_with_a_spec_is_not_cut_by_the_row_limit(tmp_path):
     assert len(det2.calls[0][1]) == 8
 
 
+def test_a_selection_the_library_builder_cannot_use_says_so(tmp_path):
+    """Mg {0002} + {2-1-11} is an IndexError inside PyEBSDIndex; one family alone
+    is a ValueError there. For a phase with a selection the run says what it
+    means instead of surfacing the array error."""
+    mg, _ = _phase(tmp_path, MG_CIF, "Mg")
+    pl = _plist(mg)
+    for fams in ([[0, 0, 2], [2, -1, 1]], [[0, 0, 2]]):
+        hr.set_spec("Mg", {"mode": "custom", "families": fams})
+        with pytest.raises(ValueError, match="reflector selection of Mg") as e:
+            eu.create_indexer(_detector(), pl, eu.prepare_reflectors(pl))
+        assert not isinstance(e.value, hr.SpecError)
+        assert e.value.__cause__ is not None
+    hr.set_spec("Mg", None)
+    assert eu.create_indexer(_detector(), pl, eu.prepare_reflectors(pl)) is not None
+
+
 def test_with_two_phases_only_the_one_with_a_spec_changes(tmp_path):
     al, _ = _phase(tmp_path, AL_CIF, "Al")
     ni, _ = _phase(tmp_path, NI_CIF, "Ni")

@@ -653,6 +653,19 @@ def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma
                 fixed_phases, _trim_reflectors(ref_hkl, keep),
                 nBands=nBands, tSigma=tSigma, rSigma=rSigma
             )
+    except (IndexError, ValueError) as e:
+        # PyEBSDIndex cannot build a library from every list of families: one
+        # family alone, or some pairs, end in an array error deep inside
+        # `build_trip_lib`. For a phase with a reflector selection of its own say
+        # what that means; a default list keeps the error it always had.
+        if not any(spec_phases):
+            raise
+        chosen = ", ".join(str(p.name) for (_, p), f in zip(phase_list, spec_phases) if f)
+        raise ValueError(
+            f"PyEBSDIndex could not build its band-triplet library from the reflector "
+            f"selection of {chosen}: {type(e).__name__}: {e}. Add or remove a family, "
+            f"or reset the selection to the default."
+        ) from e
     except MemoryError as e:
         names = ", ".join(
             f"{p.name} ({p.point_group.name if p.point_group else 'unknown symmetry'})"

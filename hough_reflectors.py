@@ -57,6 +57,10 @@ MIN_D_ADDED = 0.3
 #: More families than this make no sense for a band-triplet library.
 MAX_FAMILIES = 120
 
+#: PyEBSDIndex builds no library from a single pole family (its angle tables
+#: need at least two).
+MIN_FAMILIES = 2
+
 #: Families sent to the UI at most (all selected ones are always sent).
 LIST_LIMIT = 400
 
@@ -944,8 +948,9 @@ def expand_top_n(phase, n, rule=None):
     of the ``n``).
     """
     n = int(n)
-    if n < 1:
-        raise SpecError("bad_spec", "N must be at least 1.", field="n")
+    if n < MIN_FAMILIES:
+        raise SpecError("too_few", f"Hough indexing needs at least {MIN_FAMILIES} "
+                        "distinct reflector families.", minimum=MIN_FAMILIES)
     rule = dict(DEFAULT_RULE) if rule is None else rule
     table = candidate_table(phase, rule["min_d"])
     order = sorted(range(len(table.reps)), key=lambda i: (-table.f[i], -table.d[i]))

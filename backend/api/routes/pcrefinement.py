@@ -12,7 +12,7 @@ import asyncio
 import logging
 import threading
 import uuid
-from typing import Optional, List
+from typing import Optional, List, Union
 
 import numpy as np
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -102,7 +102,12 @@ def _get_session() -> _PCSession:
     if key not in _sessions:
         from pc_controller import PCController
         _sessions[key] = _PCSession(ctrl=PCController())
-    return _sessions[key]
+    sess = _sessions[key]
+    # A change of a phase's reflector selection (either page, or a run) makes
+    # this file's indexer and everything simulated with it out of date.
+    if sess.ctrl.reflector_specs_changed():
+        sess.sim_cache.clear()
+    return sess
 
 
 def _get_controller():
@@ -309,7 +314,8 @@ def _index_and_simulate(ctrl, pattern_idx):
     """
     import kikuchipy as kp
     from kikuchipy.signals import EBSD
-    from ebsd_utils import prepare_reflectors, create_indexer
+    from ebsd_utils import create_indexer
+    from hough_reflectors import prepare_reflectors
 
     # Ensure indexer
     if ctrl.indexer is None:
@@ -1135,6 +1141,128 @@ async def remove_phase(req: RemovePhaseRequest):
             "phase_name": phases[0]["name"] if phases else None}
 
 
+# ---------------------------------------------------------------------------
+# Reflector families of the loaded phases
+#
+# The same four calls as `/api/indexing/hough/reflectors`, for a phase that is
+# already loaded here (named, since this page has no CIF path to give). Both
+# pages read and write one registry (`hough_reflectors`), so what is chosen here
+# is what a run on the Indexing page uses, and the other way round.
+# ---------------------------------------------------------------------------
+
+class PhaseReflectorChange(BaseModel):
+    phase_name: str = ""
+    spec: Optional[dict] = None
+
+
+class PhaseReflectorValidate(BaseModel):
+    phase_name: str = ""
+    hkl: Union[str, List[float]]
+    spec: Optional[dict] = None
+
+
+def _loaded_phase(ctrl, phase_name):
+    """The loaded phase called ``phase_name`` (the only one when blank)."""
+    from backend.api.services.hough_reflector_service import ReflectorError
+    if ctrl.phase_list is None:
+        raise ReflectorError("no_phase", "No phase is loaded.", status=404)
+    phases = [ctrl.phase_list[pid] for pid in ctrl.phase_list.ids]
+    if not phase_name:
+        if len(phases) == 1:
+            return phases[0]
+        raise ReflectorError("phase_name_required",
+                             "Several phases are loaded; say which one.")
+    for p in phases:
+        if str(p.name) == str(phase_name):
+            return p
+    raise ReflectorError("no_phase", f"Phase '{phase_name}' is not loaded.",
+                         status=404, phase=str(phase_name))
+
+
+def _reflector_http(exc):
+    from backend.api.routes.hough_reflectors import raise_http
+    raise_http(exc)
+
+
+@router.get("/phase/reflectors")
+async def pc_phase_reflectors(phase_name: str = ""):
+    """Family table of a loaded phase (see ``GET /api/indexing/hough/reflectors``)."""
+    from backend.api.services import hough_reflector_service as svc
+    ctrl = _get_controller()
+
+    def work():
+        phase = _loaded_phase(ctrl, phase_name)
+        return svc.table(phase, phase.name)
+
+    try:
+        return await asyncio.to_thread(work)
+    except svc.ReflectorError as exc:
+        _reflector_http(exc)
+
+
+@router.put("/phase/reflectors")
+async def pc_put_phase_reflectors(req: PhaseReflectorChange):
+    """Change which families a loaded phase is indexed with (null = default).
+
+    The next indexing step on this page rebuilds the indexer; the simulated
+    bands are drawn from the same list.
+    """
+    from backend.api.services import hough_reflector_service as svc
+    if _optimization_active:
+        raise HTTPException(
+            status_code=409,
+            detail="A PC optimization is running. Wait for it to finish "
+                   "before changing the reflectors.",
+        )
+    ctrl = _get_controller()
+
+    def work():
+        phase = _loaded_phase(ctrl, req.phase_name)
+        return svc.change(phase, phase.name, req.spec)
+
+    try:
+        out = await asyncio.to_thread(work)
+    except svc.ReflectorError as exc:
+        _reflector_http(exc)
+    _get_controller()     # notice the change now: indexer and simulated bands are dropped
+    return out
+
+
+@router.post("/phase/reflectors/validate")
+async def pc_validate_phase_reflector(req: PhaseReflectorValidate):
+    from backend.api.services import hough_reflector_service as svc
+    ctrl = _get_controller()
+
+    def work():
+        phase = _loaded_phase(ctrl, req.phase_name)
+        return svc.check_family(phase, phase.name, req.hkl, req.spec)
+
+    try:
+        return await asyncio.to_thread(work)
+    except svc.ReflectorError as exc:
+        _reflector_http(exc)
+
+
+@router.get("/phase/reflectors/cost")
+async def pc_phase_reflector_cost(phase_name: str = "", n_bands: int = 12):
+    from backend.api.services import hough_reflector_service as svc
+    ctrl = _get_controller()
+
+    def work():
+        phase = _loaded_phase(ctrl, phase_name)
+        return svc.cost(phase, phase.name, n_bands)
+
+    try:
+        return await asyncio.to_thread(work)
+    except svc.ReflectorError as exc:
+        _reflector_http(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("reflector cost failed", exc_info=True)
+        code = getattr(exc, "code", "cost_failed")
+        raise HTTPException(status_code=400, detail={
+            "code": code, "message": str(exc), "params": getattr(exc, "params", {})})
+
+
 def _run_optimization(task_id: str, patterns_data, method: str, search_limit: float):
     """Background task for PC optimization.
 
@@ -1148,7 +1276,7 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
         with _state_lock:
             if ctrl.indexer is None:
                 if ctrl.reflectors is None:
-                    from ebsd_utils import prepare_reflectors
+                    from hough_reflectors import prepare_reflectors
                     ctrl.reflectors = prepare_reflectors(ctrl.phase_list)
                 from ebsd_utils import create_indexer
                 ctrl.indexer = create_indexer(
