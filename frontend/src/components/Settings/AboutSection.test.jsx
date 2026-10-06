@@ -66,6 +66,13 @@ describe('AboutSection', () => {
     expect(getByText(/keep backups of your original data/)).toBeTruthy();
   });
 
+  it('credits PyEBSDIndex for the Hough indexing and the rest of the stack', () => {
+    const { getByText } = render(<AboutSection />);
+    const note = getByText(/PyEBSDIndex/);
+    expect(note.textContent).toMatch(/Rowenhorst, Callahan & Ånes, J\. Appl\. Cryst\. 57, 3–19, 2024/);
+    expect(note.textContent).toMatch(/kikuchipy, orix, diffsims and EMsoft/);
+  });
+
   it('shows the app version fetched from the backend', async () => {
     const { getByText } = render(<AboutSection />);
     await waitFor(() => {

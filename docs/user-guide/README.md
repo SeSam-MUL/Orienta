@@ -2,7 +2,9 @@
 
 This is the end-user documentation for **Orienta**, an EBSD (Electron Backscatter
 Diffraction) pattern-analysis desktop application built on the kikuchipy / orix /
-diffsims scientific stack. Each page below documents one module of the
+diffsims scientific stack; Hough indexing is performed by PyEBSDIndex (see
+[How to cite](../../README.md#how-to-cite) for the references to give when you
+publish results). Each page below documents one module of the
 application: what it does, the controls it offers, and how it fits into the
 overall workflow.
 

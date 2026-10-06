@@ -2,7 +2,7 @@
 
 This directory holds the Python backend of **Orienta**, an EBSD (Electron
 Backscatter Diffraction) pattern-analysis desktop application. The backend
-exposes the scientific stack (kikuchipy / orix / diffsims plus Orienta's own
+exposes the scientific stack (kikuchipy / orix / diffsims / PyEBSDIndex plus Orienta's own
 GPU pipelines) over a REST + WebSocket API that the React/Electron frontend
 talks to. It is a thin web layer on top of the heavier numerical packages that
 live both here (`spherical_gpu/`, `dict_gpu/`, `dictionary_gpu/`, `forward_sim/`)

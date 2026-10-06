@@ -79,8 +79,10 @@ _STEPS = (
         label="Hough indexing",
         citation_ids=("orienta", "pyebsdindex", "kikuchipy", "orix"),
         sentence=(
-            "Orientations were determined by Hough/Radon indexing "
-            "(PyEBSDIndex) as implemented in Orienta {orienta_version}."
+            "Orientations were determined by Hough/Radon indexing with "
+            "PyEBSDIndex (Rowenhorst et al., 2024), which performs the "
+            "Radon-transform band detection and the band indexing by triplet "
+            "voting, called from Orienta {orienta_version}."
         ),
     ),
     StepCitation(

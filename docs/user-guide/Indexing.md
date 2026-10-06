@@ -11,7 +11,13 @@ and EBSD Analysis tools.
 Three indexing methods are available:
 
 - **Hough indexing** — the standard band-detection approach. Needs a **CIF** file
-  per phase. Fast, good for cubic/well-resolved patterns.
+  per phase. Fast, good for cubic/well-resolved patterns. The Radon-transform band
+  detection and the band indexing are done by
+  [PyEBSDIndex](https://github.com/USNavalResearchLaboratory/PyEBSDIndex)
+  (Rowenhorst, Callahan & Ånes, *J. Appl. Cryst.* **57**, 3–19, 2024,
+  [doi:10.1107/S1600576723010221](https://doi.org/10.1107/S1600576723010221));
+  cite it when you report Hough-indexed results. The *Citations for this result*
+  panel on the Phase Map page lists it automatically for a Hough run.
 - **Dictionary indexing** — correlates each experimental pattern against a
   dictionary of simulated patterns built from an EMsoft **master `.h5`** file.
   Robust, supports a GPU path.

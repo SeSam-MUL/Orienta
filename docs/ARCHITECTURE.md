@@ -4,7 +4,8 @@ Orienta is a desktop application for analysing EBSD (Electron Backscatter
 Diffraction) patterns. It indexes Kikuchi patterns, identifies crystal phases,
 refines the pattern centre, and produces phase / orientation maps. It is built
 on the [kikuchipy](https://kikuchipy.org/), [orix](https://orix.readthedocs.io/)
-and [diffsims](https://diffsims.readthedocs.io/) scientific Python stack.
+and [diffsims](https://diffsims.readthedocs.io/) scientific Python stack;
+Hough indexing is done by [PyEBSDIndex](https://github.com/USNavalResearchLaboratory/PyEBSDIndex).
 
 This document is a developer-oriented map of the whole system: the layers, how a
 typical action flows through them, what each root-level Python module does, and a
@@ -102,8 +103,8 @@ touches every layer:
    The Indexing page selects which pixels to index (whole image, a region, or an
    EDS-chemistry mask) and a method (Hough, Dictionary, or Spherical), then POSTs
    to `/api/indexing/...`. [`indexing_controller.py`](../indexing_controller.py)
-   runs the chosen engine: Hough/Dictionary via kikuchipy (CPU) or the GPU
-   pipelines in `backend/dict_gpu/` and `backend/spherical_gpu/`; Spherical can
+   runs the chosen engine: Hough via PyEBSDIndex, Dictionary via kikuchipy (CPU)
+   or the GPU pipelines in `backend/dict_gpu/` and `backend/spherical_gpu/`; Spherical can
    also call EMSphInx through WSL. Progress streams over the `/ws` WebSocket.
    Results — including correct **back-mapping of partial selections to original
    grid positions** — are stored in an in-memory result registry keyed by a

@@ -105,6 +105,9 @@ export default function AboutSection() {
         <Label secondary style={{ fontSize: '11px' }}>
           {t('settings:about.dataNote')}
         </Label>
+        <Label secondary style={{ fontSize: '11px' }}>
+          {t('settings:about.thirdParty')}
+        </Label>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
           <a
             href={LICENSE_URL}

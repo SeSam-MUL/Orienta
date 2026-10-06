@@ -2,8 +2,8 @@
 
 This directory holds the documentation for Orienta, an EBSD (electron backscatter
 diffraction) pattern-analysis desktop application built on the kikuchipy / orix /
-diffsims scientific stack with an Electron + React front end and a FastAPI back
-end. It covers two audiences: **end users** (the per-module user guide) and
+diffsims scientific stack (Hough indexing is performed by PyEBSDIndex) with an
+Electron + React front end and a FastAPI back end. It covers two audiences: **end users** (the per-module user guide) and
 **developers/contributors** (the architecture overview and the on-disk
 data-format reports). For day-to-day code orientation, the project root
 `README.md` is a good first stop; this folder goes one level deeper.
@@ -44,7 +44,7 @@ and how it is organised:
 
 Orienta's runtime is layered: an Electron shell hosts a React front end that talks
 over HTTP/WebSocket to a FastAPI back end, which in turn drives the scientific
-layer (kikuchipy, orix, diffsims). The two **format reports** in this directory
+layer (kikuchipy, orix, diffsims, PyEBSDIndex). The two **format reports** in this directory
 document the boundary data formats that cross those layers and the boundary to the
 outside world:
 
