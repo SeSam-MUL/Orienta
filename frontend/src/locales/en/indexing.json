@@ -853,6 +853,12 @@
       "no_phase": "No such phase is loaded.",
       "phase_name_required": "Several phases are loaded; choose one.",
       "no_cif": "No CIF file given."
-    }
+    },
+    "loadingExtended": "Computing the weaker and finer families (down to 0.7 Å)...",
+    "elapsed": "{{seconds}} s",
+    "working": "Working...",
+    "showWeaker": "Show weaker families",
+    "hideWeaker": "Hide weaker families",
+    "tipWeaker": "Also list the families that are weaker than the default threshold or finer than 1 Å, down to a spacing of 0.7 Å. This is a calculation of its own and takes a while for a large unit cell."
   }
 }

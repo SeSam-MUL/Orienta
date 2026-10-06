@@ -26,6 +26,9 @@ class ReflectorChangeRequest(BaseModel):
     cif_path: str
     # null = back to the default construction.
     spec: Optional[dict] = None
+    # also list the weaker and finer families (down to 0.7 A): a computation of
+    # its own, so only on demand
+    extended: bool = False
 
 
 class ReflectorValidateRequest(BaseModel):
@@ -50,12 +53,12 @@ async def get_reflector_specs():
 
 
 @router.get("/reflectors")
-async def get_reflectors(cif_path: str):
+async def get_reflectors(cif_path: str, extended: bool = False):
     """The families of this phase: which the default list holds, which the
     current choice holds, which PyEBSDIndex keeps."""
     def work():
         phase = svc.phase_for_path(cif_path)
-        return svc.table(phase, cif_path)
+        return svc.table(phase, cif_path, extended)
 
     try:
         return await asyncio.to_thread(work)
@@ -68,7 +71,7 @@ async def put_reflectors(req: ReflectorChangeRequest):
     """Change the choice for this phase; every Hough build of it follows."""
     def work():
         phase = svc.phase_for_path(req.cif_path)
-        return svc.change(phase, req.cif_path, req.spec)
+        return svc.change(phase, req.cif_path, req.spec, req.extended)
 
     try:
         return await asyncio.to_thread(work)

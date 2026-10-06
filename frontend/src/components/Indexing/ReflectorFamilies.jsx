@@ -46,6 +46,8 @@ export default function ReflectorFamilies({
   const [open, setOpen] = useState(defaultOpen);
   const [table, setTable] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [extended, setExtended] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [note, setNote] = useState(null);
@@ -97,7 +99,10 @@ export default function ReflectorFamilies({
   // unit cell it takes seconds), and again at every opening: the choice is shared
   // with the other page, which may have changed it since.
   const haveTable = useRef(false);
-  haveTable.current = !!table;
+  // 'have' = a table of the kind asked for; a different kind is a computation, not a refresh
+  haveTable.current = !!table && !!table.extended === extended;
+  const extendedRef = useRef(false);
+  extendedRef.current = extended;
   useEffect(() => {
     if (!open) return undefined;
     let cancelled = false;
@@ -105,7 +110,7 @@ export default function ReflectorFamilies({
     setError(null);
     (async () => {
       try {
-        const res = await apiRef.current.load();
+        const res = await apiRef.current.load(extendedRef.current);
         if (cancelled) return;
         showTable(res.data);
         loadCost();
@@ -117,14 +122,23 @@ export default function ReflectorFamilies({
     })();
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, subject]);
+  }, [open, subject, extended]);
+
+  // Seconds since the table was asked for: for a large unit cell it takes a minute,
+  // and a number that moves says the page is working.
+  useEffect(() => {
+    if (!loading) { setElapsed(0); return undefined; }
+    const t0 = Date.now();
+    const id = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [loading]);
 
   const change = useCallback(async (spec, after) => {
     setBusy(true);
     setError(null);
     setNote(null);
     try {
-      const res = await apiRef.current.change(spec);
+      const res = await apiRef.current.change(spec, extendedRef.current);
       showTable(res.data);
       onChanged?.(res.data);
       loadCost();
@@ -202,7 +216,13 @@ export default function ReflectorFamilies({
 
       {open && (
         <div style={{ marginTop: 4 }}>
-          {loading && <div style={small}>{t('reflectorFamilies.loading')}</div>}
+          {loading && (
+            <div role="status" aria-live="polite" style={{ ...small, display: 'flex', gap: 6, alignItems: 'center' }}>
+              <Spinner />
+              <span>{extended ? t('reflectorFamilies.loadingExtended') : t('reflectorFamilies.loading')}</span>
+              <span style={{ fontFamily: 'monospace' }}>{t('reflectorFamilies.elapsed', { seconds: elapsed })}</span>
+            </div>
+          )}
           {!loading && !table && error && (
             <div role="alert" style={{ ...small, color: C.red }}>{error}</div>
           )}
@@ -266,6 +286,11 @@ export default function ReflectorFamilies({
                   </tbody>
                 </table>
               </div>
+              {busy && (
+                <div role="status" aria-live="polite" style={{ ...small, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <Spinner /><span>{t('reflectorFamilies.working')}</span>
+                </div>
+              )}
               <div style={{ ...small, marginTop: 2 }}>
                 {t('reflectorFamilies.counts', { selected: table.n_selected, used: table.n_effective })}
                 {table.truncated && (
@@ -290,6 +315,14 @@ export default function ReflectorFamilies({
                   style={btnStyle(busy || !(topN >= 2))}
                 >
                   {t('reflectorFamilies.topNButton')}
+                </button>
+                <button
+                  type="button" disabled={busy || loading}
+                  onClick={() => setExtended((v) => !v)}
+                  title={t('reflectorFamilies.tipWeaker')}
+                  style={btnStyle(busy || loading)}
+                >
+                  {table.extended ? t('reflectorFamilies.hideWeaker') : t('reflectorFamilies.showWeaker')}
                 </button>
                 <button
                   type="button" disabled={busy || mode === 'default'}
@@ -371,6 +404,19 @@ export default function ReflectorFamilies({
         </div>
       )}
     </div>
+  );
+}
+
+/** A small turning ring: the page is working. */
+function Spinner() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true" data-testid="rf-spinner">
+      <circle cx="12" cy="12" r="9" fill="none" stroke={C.border} strokeWidth="3" />
+      <path d="M12 3 a9 9 0 0 1 9 9" fill="none" stroke={C.accent} strokeWidth="3" strokeLinecap="round">
+        <animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12"
+          dur="0.9s" repeatCount="indefinite" />
+      </path>
+    </svg>
   );
 }
 

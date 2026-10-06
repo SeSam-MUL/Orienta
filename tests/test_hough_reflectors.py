@@ -424,6 +424,73 @@ def test_the_orbits_of_a_polar_group_are_not_merged_with_their_inversion(tmp_pat
     assert list(ref.symmetrise(return_multiplicity=True)[1]) == t.mult
 
 
+class _CountReflectorBuilds:
+    """Counts how often the reflectors of a phase are generated from scratch."""
+
+    def __init__(self, monkeypatch):
+        from diffsims.crystallography import ReciprocalLatticeVector as R
+        self.n = 0
+        real = R.from_min_dspacing.__func__
+
+        def counting(cls, phase, min_dspacing=0.7, **kw):
+            self.n += 1
+            return real(cls, phase, min_dspacing, **kw)
+
+        monkeypatch.setattr(R, "from_min_dspacing", classmethod(counting))
+
+
+def test_opening_the_table_does_not_compute_the_default_list_a_second_time(tmp_path, monkeypatch):
+    """The table shows the default list's families from the very computation the
+    indexer uses (cached), so the first opening costs one, not two, of them."""
+    al, _ = _phase(tmp_path, AL_CIF.replace("4.0495", "4.0511"), "AlShared")   # a cell no other test uses: cold cache
+    count = _CountReflectorBuilds(monkeypatch)
+    eu._reflectors_for_phase(al)                 # what a run does
+    assert count.n == 1
+    d = hr.describe(al)                          # what opening the table does
+    assert count.n == 1, "the table recomputed the default reflectors"
+    assert d["n_selected"] == 6 and d["n_total"] == 6
+    # ... and the other way round: table first, then the run
+    ni, _ = _phase(tmp_path, NI_CIF.replace("3.5238", "3.5277"), "NiShared")
+    count.n = 0
+    hr.describe(ni)
+    assert count.n == 1
+    eu._reflectors_for_phase(ni)
+    assert count.n == 1
+
+
+def test_weaker_families_are_computed_only_on_demand(tmp_path, monkeypatch):
+    al, _ = _phase(tmp_path, AL_CIF.replace("4.0495", "4.0522"), "AlLazy")
+    d = hr.describe(al)
+    assert not d["extended"] and all(f["rel_f"] >= 0.1 for f in d["families"])
+    count = _CountReflectorBuilds(monkeypatch)
+    ext = hr.describe(al, extended=True)
+    assert count.n == 1                          # the extended list, once
+    assert ext["extended"] and ext["n_total"] > d["n_total"]
+    assert min(f["d"] for f in ext["families"]) < 0.8       # reaches down to 0.7 A
+    assert any(f["rel_f"] < 0.1 or f["d"] < 1.0 for f in ext["families"])
+    # what is ticked does not depend on how much is shown
+    assert {f["label"] for f in ext["families"] if f["selected"]} ==         {f["label"] for f in d["families"] if f["selected"]}
+
+
+def test_adding_a_family_does_not_need_the_extended_list(tmp_path, monkeypatch):
+    al, _ = _phase(tmp_path, AL_CIF, "AlAdd")
+    hr.describe(al)
+    count = _CountReflectorBuilds(monkeypatch)
+    info = hr.validate_family(al, [4, 2, 2], {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]})
+    assert info["label"] == "{422}"
+    assert count.n == 0
+
+
+def test_the_cached_default_list_is_not_shared_mutably(tmp_path):
+    al, _ = _phase(tmp_path, AL_CIF, "AlMut")
+    first = eu._reflectors_for_phase(al)
+    n = first.hkl.shape[0]
+    first.hkl  # read
+    second = eu._reflectors_for_phase(al)
+    assert second is not first
+    assert np.array_equal(second.hkl, first.hkl) and second.hkl.shape[0] == n
+
+
 def test_the_cache_key_of_a_phase_does_not_change_when_its_labels_are_cleaned(tmp_path):
     """A mixed-occupancy site ("0.8Fe + 0.2Mn") is rewritten to one symbol the first
     time reflectors are computed; a key taken before and one taken after must be the
@@ -485,7 +552,6 @@ def test_a_valid_family_reports_its_numbers(tmp_path):
     info = hr.validate_family(al, "4 2 2")
     assert info["label"] == "{422}" and info["mult"] == 24
     assert info["d"] == pytest.approx(0.8267, abs=2e-3)
-    assert info["in_candidates"] is False
     # the representative is the same whatever member was typed
     assert hr.validate_family(al, [-2, 2, 4])["hkl"] == info["hkl"]
 

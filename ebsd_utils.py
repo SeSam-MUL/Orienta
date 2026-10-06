@@ -57,16 +57,35 @@ def _normalize_element_labels(phase):
     return phase
 
 
-def _reflectors_for_phase(phase, min_d=1.0, f_threshold=0.1, max_reflectors=70):
-    """Compute filtered reflectors for a single phase."""
+_FILTERED_CACHE = {}
+_FILTERED_CACHE_ORDER = []
+_FILTERED_CACHE_LOCK = threading.Lock()
+_FILTERED_CACHE_MAX = 8
+
+
+def _filtered_reflectors(phase, min_d, f_threshold):
+    """The expensive part of the default reflector list: every symmetry-equivalent
+    row with ``d >= min_d`` and ``|F| > f_threshold * |F|max``, before the cut to
+    the strongest rows. Cached per crystal and rule, so the Indexing run, the PC
+    page and the reflector-family table share ONE computation (for a large cell it
+    takes tens of seconds). The returned object is shared: do not change it.
+    """
+    from hough_reflectors import _structure_hash
+
+    key = (_structure_hash(phase), float(min_d), float(f_threshold))
+    with _FILTERED_CACHE_LOCK:
+        if key in _FILTERED_CACHE:
+            _FILTERED_CACHE_ORDER.remove(key)
+            _FILTERED_CACHE_ORDER.append(key)
+            return _FILTERED_CACHE[key]
     _normalize_element_labels(phase)
     # `sanitise_phase()` below expands the structure IN PLACE, and expanding an
     # already expanded structure is not idempotent: the same pi-Al8FeMg3Si6 phase
     # object went 26 -> 128 -> 104 -> 86 atoms over three calls and gave a
     # different reflector list each time. Work on a copy, so the list depends on
     # the crystal and not on how often the phase object was used before.
-    phase = phase.deepcopy()
-    ref = ReciprocalLatticeVector.from_min_dspacing(phase, min_d)
+    work = phase.deepcopy()
+    ref = ReciprocalLatticeVector.from_min_dspacing(work, min_d)
     # ``allowed`` (systematic-absence filter) raises NotImplementedError for
     # primitive-hexagonal space groups in diffsims. Those absent reflections
     # have F≈0 anyway, so the structure-factor threshold below removes them —
@@ -76,21 +95,34 @@ def _reflectors_for_phase(phase, min_d=1.0, f_threshold=0.1, max_reflectors=70):
     except NotImplementedError:
         logger.debug("phase %s: .allowed not implemented for this space group; "
                      "relying on the structure-factor filter",
-                     getattr(phase, 'name', '?'))
+                     getattr(work, 'name', '?'))
     ref = ref.unique(use_symmetry=True).symmetrise()
     ref.sanitise_phase()
     ref.calculate_structure_factor()
     F = np.abs(ref.structure_factor)
     filt = ref[F > f_threshold * F.max()]
+    with _FILTERED_CACHE_LOCK:
+        _FILTERED_CACHE[key] = filt
+        if key in _FILTERED_CACHE_ORDER:
+            _FILTERED_CACHE_ORDER.remove(key)
+        _FILTERED_CACHE_ORDER.append(key)
+        while len(_FILTERED_CACHE_ORDER) > _FILTERED_CACHE_MAX:
+            _FILTERED_CACHE.pop(_FILTERED_CACHE_ORDER.pop(0), None)
+    return filt
 
-    # Limit to strongest max_reflectors
+
+def _reflectors_for_phase(phase, min_d=1.0, f_threshold=0.1, max_reflectors=70):
+    """Compute filtered reflectors for a single phase."""
+    filt = _filtered_reflectors(phase, min_d, f_threshold)
+
+    # Limit to strongest max_reflectors. Either way a NEW object is returned: the
+    # filtered list behind it is cached and shared.
     n_ref = filt.hkl.shape[0]
     if n_ref > max_reflectors:
         sf = np.abs(filt.structure_factor)
         strongest = np.argsort(-sf)[:max_reflectors]
-        filt = filt[strongest.tolist()]
-
-    return filt
+        return filt[strongest.tolist()]
+    return filt[list(range(n_ref))]
 
 
 def prepare_reflectors(phase_list, min_d=1.0, f_threshold=0.1, max_reflectors=70):

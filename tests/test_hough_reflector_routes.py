@@ -80,6 +80,61 @@ def test_the_stored_choices_can_be_read_without_computing_a_table(client, cifs):
     assert body["version"] == hr.registry_version()
 
 
+def test_the_weaker_families_are_listed_only_when_asked(client, cifs):
+    c, _ = client
+    base = c.get("/api/indexing/hough/reflectors", params={"cif_path": cifs["Al"]}).json()
+    ext = c.get("/api/indexing/hough/reflectors",
+                params={"cif_path": cifs["Al"], "extended": True}).json()
+    assert base["extended"] is False and ext["extended"] is True
+    assert ext["n_total"] > base["n_total"]
+    put = c.put("/api/indexing/hough/reflectors",
+                json={"cif_path": cifs["Al"], "extended": True,
+                      "spec": {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]}}).json()
+    assert put["extended"] is True and put["n_total"] == ext["n_total"]
+    pc = c.post("/api/pc/phase/add", json={"cif_path": cifs["Al"]})
+    assert pc.status_code == 200
+    assert c.get("/api/pc/phase/reflectors", params={"extended": True}).json()["extended"] is True
+
+
+def test_a_slow_table_does_not_stall_the_event_loop(cifs, monkeypatch):
+    """A big cell takes a minute to tabulate. Everything else the app does (the
+    health poll, progress polling) must keep answering meanwhile: the work runs in
+    a worker thread, never on the loop."""
+    import asyncio
+    import time
+
+    import httpx
+    from fastapi import FastAPI
+    from backend.api.routes import hough_reflectors as routes
+    from backend.api.services import hough_reflector_service as svc
+
+    def slow_table(phase, key, extended=False):
+        time.sleep(1.5)                    # stands in for tens of seconds of numpy
+        return {"slow": True}
+
+    monkeypatch.setattr(svc, "table", slow_table)
+    app = FastAPI()
+    app.include_router(routes.router, prefix="/api/indexing/hough")
+
+    async def scenario():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as cl:
+            slow = asyncio.create_task(
+                cl.get("/api/indexing/hough/reflectors", params={"cif_path": cifs["Al"]}))
+            await asyncio.sleep(0.2)
+            worst = 0.0
+            while not slow.done():
+                t0 = time.perf_counter()
+                r = await cl.get("/api/indexing/hough/reflector-specs")
+                worst = max(worst, time.perf_counter() - t0)
+                assert r.status_code == 200
+                await asyncio.sleep(0.05)
+            assert (await slow).json() == {"slow": True}
+            return worst
+
+    assert asyncio.run(scenario()) < 0.5
+
+
 def test_put_changes_the_choice_and_every_build_follows(client, cifs):
     c, _ = client
     r = c.put("/api/indexing/hough/reflectors",

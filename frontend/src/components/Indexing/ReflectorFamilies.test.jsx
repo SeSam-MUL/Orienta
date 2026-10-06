@@ -30,7 +30,7 @@ const DEFAULT = ['{111}', '{200}', '{220}', '{311}', '{222}', '{400}'];
 function makeBackend() {
   const b = {
     ticked: [...DEFAULT], mode: 'default', rule: { min_d: 1.0, f_threshold: 0.1, max_rows: 70 },
-    calls: [], loads: 0, failNext: null, stored: {}, version: 0,
+    calls: [], loads: 0, extLoads: [], failNext: null, stored: {}, version: 0,
   };
   b.table = () => {
     const sel = new Set(b.ticked);
@@ -59,18 +59,19 @@ function makeBackend() {
   };
   b.api = {
     key: 'al',
-    load: () => { b.loads += 1; return Promise.resolve({ data: b.table() }); },
+    load: (ext = false) => { b.loads += 1; b.extLoads.push(ext); return Promise.resolve({ data: { ...b.table(), extended: !!ext } }); },
     stored: () => Promise.resolve({ data: { specs: b.stored } }),
     cost: () => Promise.resolve({ data: { bytes: 3 * 1024 ** 2, fits: true, n_rows: 64 } }),
-    change: (spec) => {
+    change: (spec, ext = false) => {
       b.calls.push(['change', spec]);
+      b.lastChangeExt = ext;
       const f = fail();
       if (f) return f;
       if (spec === null) { b.ticked = [...DEFAULT]; b.mode = 'default'; }
       else if (spec.mode === 'custom') { b.ticked = spec.families.map(labelOf); b.mode = 'custom'; }
       else if (spec.mode === 'top_n') { b.ticked = ['{111}', '{200}', '{220}', '{311}'].slice(0, spec.n); b.mode = 'custom'; }
       else if (spec.mode === 'auto') { b.rule = { ...b.rule, ...spec.rule }; b.mode = 'auto'; }
-      return Promise.resolve({ data: b.table() });
+      return Promise.resolve({ data: { ...b.table(), extended: !!ext } });
     },
     validate: (hkl, spec) => {
       b.calls.push(['validate', hkl, spec]);
@@ -277,5 +278,46 @@ describe('hover texts', () => {
     render(<ReflectorFamilies api={b.api} />);
     await open();
     await screen.findByText(/Library memory: 3 MiB - fits/);
+  });
+});
+
+describe('large cells', () => {
+  it('shows a spinner with a status text and a running clock while the table is computed', async () => {
+    let release;
+    b.api.load = () => new Promise((res) => { release = () => res({ data: b.table() }); });
+    render(<ReflectorFamilies api={b.api} />);
+    fireEvent.click(screen.getByRole('button', { name: /Reflector families/ }));
+    const status = await screen.findByRole('status');
+    expect(status.textContent).toMatch(/Computing the reflector families/);
+    expect(within(status).getByTestId('rf-spinner')).toBeTruthy();
+    expect(status.textContent).toMatch(/\d+ s/);
+    release();
+    await screen.findByTestId('family-{111}');
+    expect(screen.queryByTestId('rf-spinner')).toBeNull();
+  });
+
+  it('weaker families are asked for only when the user asks, and the choice keeps that view', async () => {
+    render(<ReflectorFamilies api={b.api} />);
+    await open();
+    expect(b.extLoads).toEqual([false]);
+    fireEvent.click(screen.getByRole('button', { name: 'Show weaker families' }));
+    await waitFor(() => expect(b.extLoads).toEqual([false, true]));
+    await screen.findByRole('button', { name: 'Hide weaker families' });
+    fireEvent.click(box('{311}'));
+    await waitFor(() => expect(b.calls.length).toBe(1));
+    expect(b.lastChangeExt).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide weaker families' }));
+    await waitFor(() => expect(b.extLoads.at(-1)).toBe(false));
+  });
+
+  it('says what it is doing while a change is stored', async () => {
+    render(<ReflectorFamilies api={b.api} />);
+    await open();
+    let release;
+    b.api.change = () => new Promise((res) => { release = () => res({ data: b.table() }); });
+    fireEvent.click(box('{311}'));
+    expect((await screen.findByText('Working...'))).toBeTruthy();
+    release();
+    await waitFor(() => expect(screen.queryByText('Working...')).toBeNull());
   });
 });

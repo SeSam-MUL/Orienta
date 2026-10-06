@@ -19,8 +19,8 @@ export function specKey(pathOrName) {
 export function pathAdapter(cifPath, nBands = 12) {
   return {
     key: specKey(cifPath),
-    load: () => indexApi.houghReflectors(cifPath),
-    change: (spec) => indexApi.setHoughReflectors(cifPath, spec),
+    load: (extended = false) => indexApi.houghReflectors(cifPath, extended),
+    change: (spec, extended = false) => indexApi.setHoughReflectors(cifPath, spec, extended),
     validate: (hkl, spec) => indexApi.validateHoughReflector(cifPath, hkl, spec),
     cost: () => indexApi.houghReflectorsCost(cifPath, nBands),
     stored: () => indexApi.houghReflectorSpecs(),
@@ -31,8 +31,8 @@ export function pathAdapter(cifPath, nBands = 12) {
 export function loadedPhaseAdapter(phaseName, nBands = 12) {
   return {
     key: specKey(phaseName),
-    load: () => pcApi.phaseReflectors(phaseName),
-    change: (spec) => pcApi.setPhaseReflectors(phaseName, spec),
+    load: (extended = false) => pcApi.phaseReflectors(phaseName, extended),
+    change: (spec, extended = false) => pcApi.setPhaseReflectors(phaseName, spec, extended),
     validate: (hkl, spec) => pcApi.validatePhaseReflector(phaseName, hkl, spec),
     cost: () => pcApi.phaseReflectorCost(phaseName, nBands),
     stored: () => indexApi.houghReflectorSpecs(),

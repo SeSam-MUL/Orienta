@@ -853,6 +853,12 @@
       "no_phase": "Diese Phase ist nicht geladen.",
       "phase_name_required": "Mehrere Phasen sind geladen; eine auswählen.",
       "no_cif": "Keine CIF-Datei angegeben."
-    }
+    },
+    "loadingExtended": "Schwächere und feinere Familien werden berechnet (bis 0,7 Å)...",
+    "elapsed": "{{seconds}} s",
+    "working": "Wird bearbeitet...",
+    "showWeaker": "Schwächere Familien anzeigen",
+    "hideWeaker": "Schwächere Familien ausblenden",
+    "tipWeaker": "Zusätzlich die Familien auflisten, die schwächer als die Standardschwelle oder feiner als 1 Å sind, bis zu einem Abstand von 0,7 Å. Das ist eine eigene Rechnung und dauert bei einer großen Elementarzelle eine Weile."
   }
 }

@@ -73,7 +73,7 @@ def phase_for_path(cif_path):
     return phase
 
 
-def table(phase, key):
+def table(phase, key, extended=False):
     """The family table under the choice stored for ``key``.
 
     A stored choice that no longer fits the crystal is reported in
@@ -82,9 +82,9 @@ def table(phase, key):
     """
     stored = hr.get_spec(key)
     try:
-        out = hr.describe(phase, stored)
+        out = hr.describe(phase, stored, extended=extended)
     except hr.SpecError as exc:
-        out = hr.describe(phase, None)
+        out = hr.describe(phase, None, extended=extended)
         out["spec"] = stored
         out["mode"] = stored["mode"] if stored else "default"
         out["spec_error"] = {"code": exc.code, "message": str(exc),
@@ -93,7 +93,7 @@ def table(phase, key):
     return out
 
 
-def change(phase, key, spec):
+def change(phase, key, spec, extended=False):
     """Store a new choice (``None`` = back to the default) and return the table.
 
     ``{"mode": "top_n", "n": N}`` is expanded here to the N strongest families
@@ -103,7 +103,7 @@ def change(phase, key, spec):
     try:
         if spec is None:
             hr.set_spec(key, None)
-            return table(phase, key)
+            return table(phase, key, extended)
         if isinstance(spec, dict) and spec.get("mode") == "top_n":
             rule = (hr.get_spec(key) or {}).get("rule") or None
             new = hr.expand_top_n(phase, spec.get("n"), rule)
@@ -121,7 +121,7 @@ def change(phase, key, spec):
         hr.set_spec(key, new)
     except hr.SpecError as exc:
         raise _from_spec_error(exc) from exc
-    return table(phase, key)
+    return table(phase, key, extended)
 
 
 def _library_rows(phase, rows):

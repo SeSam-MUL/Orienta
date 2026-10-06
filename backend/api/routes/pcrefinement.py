@@ -1165,6 +1165,7 @@ async def remove_phase(req: RemovePhaseRequest):
 class PhaseReflectorChange(BaseModel):
     phase_name: str = ""
     spec: Optional[dict] = None
+    extended: bool = False
 
 
 class PhaseReflectorValidate(BaseModel):
@@ -1197,14 +1198,14 @@ def _reflector_http(exc):
 
 
 @router.get("/phase/reflectors")
-async def pc_phase_reflectors(phase_name: str = ""):
+async def pc_phase_reflectors(phase_name: str = "", extended: bool = False):
     """Family table of a loaded phase (see ``GET /api/indexing/hough/reflectors``)."""
     from backend.api.services import hough_reflector_service as svc
     ctrl = _get_controller()
 
     def work():
         phase = _loaded_phase(ctrl, phase_name)
-        return svc.table(phase, phase.name)
+        return svc.table(phase, phase.name, extended)
 
     try:
         return await asyncio.to_thread(work)
@@ -1230,7 +1231,7 @@ async def pc_put_phase_reflectors(req: PhaseReflectorChange):
 
     def work():
         phase = _loaded_phase(ctrl, req.phase_name)
-        return svc.change(phase, phase.name, req.spec)
+        return svc.change(phase, phase.name, req.spec, req.extended)
 
     try:
         out = await asyncio.to_thread(work)

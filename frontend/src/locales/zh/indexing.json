@@ -853,6 +853,12 @@
       "no_phase": "未加载该物相。",
       "phase_name_required": "已加载多个物相，请选择其中一个。",
       "no_cif": "未提供 CIF 文件。"
-    }
+    },
+    "loadingExtended": "正在计算较弱和较细的族 (最小 0.7 Å)...",
+    "elapsed": "{{seconds}} 秒",
+    "working": "处理中...",
+    "showWeaker": "显示较弱的族",
+    "hideWeaker": "隐藏较弱的族",
+    "tipWeaker": "同时列出弱于默认阈值或细于 1 Å 的族，最小间距到 0.7 Å。这是单独的计算，大晶胞需要一些时间。"
   }
 }

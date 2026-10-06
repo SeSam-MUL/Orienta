@@ -51,6 +51,9 @@ DEFAULT_RULE = {"min_d": 1.0, "f_threshold": 0.1, "max_rows": 70}
 #: accepted.
 EXTINCT_REL_F = 1e-3
 
+#: How far down the "show weaker families" list reaches (Angstrom).
+EXTENDED_MIN_D = 0.7
+
 #: Smallest d spacing (A) accepted for a hand-added family.
 MIN_D_ADDED = 0.3
 
@@ -547,6 +550,40 @@ def _orbit_rows_of(phase, rlv):
     return both[:, 1:], both[:, 0]
 
 
+def _build_stage_table(phase, rule):
+    """The families of the DEFAULT construction (``d >= min_d`` and ``|F|`` above the
+    threshold, before the cut to 70 rows), taken from the very computation the
+    indexer uses (``ebsd_utils._filtered_reflectors``, cached): opening the table
+    does not compute the reflectors a second time."""
+    eu = _eu()
+    filt = eu._filtered_reflectors(phase, rule["min_d"], rule["f_threshold"])
+    u = filt.unique(use_symmetry=True)             # one representative per family
+    table = _Table()
+    table.min_d = float(rule["min_d"])
+    f_all = np.abs(np.asarray(u.structure_factor)).ravel()
+    if f_all.size == 0:
+        return table
+    table.fmax = float(f_all.max())
+    rows, idx = _orbit_rows_of(phase, u)
+    d = np.asarray(u.dspacing).ravel()
+    for i in range(len(f_all)):
+        fam_rows = rows[idx == i]
+        table.reps.append(_lexmax_rep(fam_rows))
+        table.d.append(float(d[i]))
+        table.f.append(float(f_all[i]))
+        table.mult.append(int(len(fam_rows)))
+        for r in fam_rows:
+            table.row_to_family[tuple(int(x) for x in r)] = i
+    return table
+
+
+def stage_table(phase, rule=None):
+    """Families of the default construction for ``rule`` (cached)."""
+    rule = dict(DEFAULT_RULE) if rule is None else rule
+    key = ("stage", _structure_hash(phase), rule["min_d"], rule["f_threshold"])
+    return _cached(key, lambda: _build_stage_table(phase, rule))
+
+
 def candidate_table(phase, min_d=None):
     """The candidate families of ``phase`` with ``d >= min_d`` (cached)."""
     min_d = DEFAULT_RULE["min_d"] if min_d is None else float(min_d)
@@ -802,8 +839,12 @@ def _row_key(row):
     return tuple(int(x) for x in row)
 
 
-def describe(phase, spec=None, limit=LIST_LIMIT):
+def describe(phase, spec=None, limit=LIST_LIMIT, extended=False):
     """The family table of ``phase`` under ``spec`` (None = the default).
+
+    Lists the families of the default construction (strong enough, ``d >= min_d``);
+    with ``extended`` also the weaker and finer ones down to ``EXTENDED_MIN_D``,
+    which costs a computation of its own and is only done on demand.
 
     Every candidate family gets ``selected`` (is in the current choice),
     ``effective`` (PyEBSDIndex keeps it) and, when it is a multiple of another
@@ -814,7 +855,10 @@ def describe(phase, spec=None, limit=LIST_LIMIT):
         _check_fingerprint(phase, spec)
     hex4 = _is_hexagonal(phase)
     rule = spec["rule"] if spec and spec["mode"] == "auto" else dict(DEFAULT_RULE)
-    table = candidate_table(phase, rule["min_d"])
+    if extended:
+        table = candidate_table(phase, min(rule["min_d"], EXTENDED_MIN_D))
+    else:
+        table = stage_table(phase, rule)
 
     fam = []            # dicts, index = candidate index (+ extras appended)
     for i, rep in enumerate(table.reps):
@@ -904,6 +948,7 @@ def describe(phase, spec=None, limit=LIST_LIMIT):
         "rule": rule,
         "default_rule": dict(DEFAULT_RULE),
         "families": out,
+        "extended": bool(extended),
         "n_total": total,
         "truncated": truncated,
         "n_selected": len(selected),
@@ -927,33 +972,25 @@ def validate_family(phase, value, spec=None):
     Returns the family's properties; ``SpecError`` (codes ``bad_hkl``,
     ``zero_vector``, ``forbidden``, ``too_fine``, ``duplicate``) when it cannot
     be used.  ``duplicate`` carries the label of the family it equals.  A family
-    parallel to a listed one is NOT an error: ``parallel_with`` says which, the
-    caller decides (PyEBSDIndex will drop the later of the two).
+    parallel to one the choice already holds is NOT an error: ``parallel_with``
+    says which, the caller decides (PyEBSDIndex will keep only one of the two).
+    Only this family and those already chosen are looked at - no table of the
+    phase is needed.
     """
     rep = parse_hkl(value, phase)
     info = _check_allowed(phase, rep)
     hex4 = _is_hexagonal(phase)
-    table = candidate_table(phase, (normalise_spec(spec) or {}).get("rule", DEFAULT_RULE)["min_d"]
-                            if spec and spec.get("mode") == "auto" else DEFAULT_RULE["min_d"])
-    row_to_family = table.row_to_family
-    known = None
-    for r in info["rows"]:
-        if _row_key(r) in row_to_family:
-            known = row_to_family[_row_key(r)]
-            break
     rep_canon = info["rep"]
     label = family_label(rep_canon, hex4)
+    orbit = {_row_key(r) for r in info["rows"]}
     cur = normalise_spec(spec)
     current = []
     if cur is not None and cur["mode"] == "custom":
         current = [tuple(x) for x in cur["families"]]
-    in_spec = False
     for c in current:
-        if c == tuple(rep_canon) or (known is not None and row_to_family.get(c) == known):
-            in_spec = True
-    if in_spec:
-        raise SpecError("duplicate", f"{label} is already in the list.",
-                        label=label, hkl=list(rep_canon))
+        if c == tuple(rep_canon) or (orbit & {_row_key(r) for r in _extra_family(phase, c)["rows"]}):
+            raise SpecError("duplicate", f"{label} is already in the list.",
+                            label=label, hkl=list(rep_canon))
     # Parallel to a family the choice already holds: PyEBSDIndex will keep one of
     # the two. (Families that are only candidates do not count: they are not used.)
     mates = []
@@ -962,16 +999,16 @@ def validate_family(phase, value, spec=None):
             lab = family_label(c, hex4)
             if lab != label and lab not in mates:
                 mates.append(lab)
+    fmax = stage_table(phase).fmax or info["f"] or 1.0
     return {
         "hkl": [int(x) for x in rep_canon],
         "hkl4": hkl4(rep_canon) if hex4 else None,
         "label": label,
         "d": round(info["d"], 4),
         "f": round(info["f"], 4),
-        "rel_f": round(info["f"] / (table.fmax or info["f"] or 1.0), 4),
+        "rel_f": round(info["f"] / fmax, 4),
         "mult": info["mult"],
         "parallel_with": mates,
-        "in_candidates": known is not None,
     }
 
 
@@ -987,7 +1024,7 @@ def expand_top_n(phase, n, rule=None):
         raise SpecError("too_few", f"Hough indexing needs at least {MIN_FAMILIES} "
                         "distinct reflector families.", minimum=MIN_FAMILIES)
     rule = dict(DEFAULT_RULE) if rule is None else rule
-    table = candidate_table(phase, rule["min_d"])
+    table = stage_table(phase, rule)
     order = sorted(range(len(table.reps)), key=lambda i: (-table.f[i], -table.d[i]))
     picked, dirs = [], set()
     for i in order:

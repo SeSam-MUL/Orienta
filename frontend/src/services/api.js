@@ -585,10 +585,10 @@ export const pcApi = {
   updateParams: (params) => api.post('/api/pc/params/update', params),
   // Reflector families of a phase that is loaded on this page (see
   // indexApi.houghReflectors; the same registry).
-  phaseReflectors: (phaseName) =>
-    api.get('/api/pc/phase/reflectors', { params: { phase_name: phaseName } }),
-  setPhaseReflectors: (phaseName, spec) =>
-    api.put('/api/pc/phase/reflectors', { phase_name: phaseName, spec }),
+  phaseReflectors: (phaseName, extended = false) =>
+    api.get('/api/pc/phase/reflectors', { params: { phase_name: phaseName, extended } }),
+  setPhaseReflectors: (phaseName, spec, extended = false) =>
+    api.put('/api/pc/phase/reflectors', { phase_name: phaseName, spec, extended }),
   validatePhaseReflector: (phaseName, hkl, spec = null) =>
     api.post('/api/pc/phase/reflectors/validate', { phase_name: phaseName, hkl, spec }),
   phaseReflectorCost: (phaseName, nBands = 12) =>
@@ -681,10 +681,10 @@ export const indexApi = {
   // { mode: 'top_n', n }. The choice is stored per phase on the backend, so it
   // reaches every Hough build of that phase (the run, the PC Refinement page,
   // the resolver, the phase check) without being sent with each of them.
-  houghReflectors: (cifPath) =>
-    api.get('/api/indexing/hough/reflectors', { params: { cif_path: cifPath } }),
-  setHoughReflectors: (cifPath, spec) =>
-    api.put('/api/indexing/hough/reflectors', { cif_path: cifPath, spec }),
+  houghReflectors: (cifPath, extended = false) =>
+    api.get('/api/indexing/hough/reflectors', { params: { cif_path: cifPath, extended } }),
+  setHoughReflectors: (cifPath, spec, extended = false) =>
+    api.put('/api/indexing/hough/reflectors', { cif_path: cifPath, spec, extended }),
   validateHoughReflector: (cifPath, hkl, spec = null) =>
     api.post('/api/indexing/hough/reflectors/validate', { cif_path: cifPath, hkl, spec }),
   houghReflectorsCost: (cifPath, nBands = 12) =>
