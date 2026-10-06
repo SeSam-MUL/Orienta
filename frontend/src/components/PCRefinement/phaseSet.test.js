@@ -90,3 +90,17 @@ describe('MAX_PC_PHASES', () => {
     expect(MAX_PC_PHASES).toBe(8);   // PCController.MAX_PHASES
   });
 });
+
+import { shortSpaceGroup } from './phaseSet';
+
+describe('shortSpaceGroup', () => {
+  it('takes the symbol out of the long description', () => {
+    expect(shortSpaceGroup('SpaceGroup #225 (Fm-3m, Cubic). Symmetry matrices: 192, point sym. matr.: 48'))
+      .toBe('Fm-3m');
+  });
+  it('leaves anything else alone', () => {
+    expect(shortSpaceGroup('Fm-3m')).toBe('Fm-3m');
+    expect(shortSpaceGroup('')).toBe('');
+    expect(shortSpaceGroup(undefined)).toBe('');
+  });
+});

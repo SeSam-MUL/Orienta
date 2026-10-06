@@ -83,3 +83,13 @@ export function createSerialQueue() {
     return run;
   };
 }
+
+/**
+ * A space group for the phase list: "Fm-3m" out of orix's long description
+ * ("SpaceGroup #225 (Fm-3m, Cubic). Symmetry matrices: 192, ..."). A string
+ * that does not look like that is returned as it is.
+ */
+export function shortSpaceGroup(text) {
+  const m = /\(([^,)]+)[,)]/.exec(String(text || ''));
+  return m ? m[1].trim() : String(text || '');
+}

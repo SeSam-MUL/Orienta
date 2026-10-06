@@ -33,7 +33,7 @@ import {
 import { pickShtForPhase } from './previewSht';
 import {
   MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync,
-  summarisePatternPhases, previewPhaseName, createSerialQueue,
+  summarisePatternPhases, previewPhaseName, createSerialQueue, shortSpaceGroup,
 } from './phaseSet';
 import { phaseStem, pathErrorFrom, samePath } from '../Indexing/phasePath';
 import {
@@ -2095,7 +2095,7 @@ function ControlsPanel({
                   {p.name}
                 </span>
                 {p.space_group && (
-                  <span style={{ color: colors.textSecondary }}>{p.space_group}</span>
+                  <span style={{ color: colors.textSecondary }}>{shortSpaceGroup(p.space_group)}</span>
                 )}
                 <button
                   type="button"

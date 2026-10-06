@@ -340,3 +340,31 @@ def test_phases_cannot_change_while_an_optimisation_runs(pc_client, duplex_cifs,
     assert r.status_code == 409
     r = c.post("/api/pc/phase/remove", json={"phase_name": "austenite"})
     assert r.status_code == 409
+
+
+def test_several_phases_do_not_recompute_reflectors_for_every_pattern(
+        monkeypatch, duplex_cifs, nickel):
+    """Index All walks every calibration pattern. Reflectors of a big cell take
+    seconds; with several phases they must come from the controller, built
+    once, not be recomputed for each pattern."""
+    import ebsd_utils
+    from backend.api.routes.pcrefinement import _index_and_simulate, _sim_cache
+
+    calls = []
+    real = ebsd_utils.prepare_reflectors
+
+    def counting(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    monkeypatch.setattr(ebsd_utils, "prepare_reflectors", counting)
+    ctrl = _ctrl_with_detector(nickel)
+    for p in duplex_cifs:
+        ctrl.add_phase(p)
+    calls.clear()                       # only what indexing itself does counts
+    for i in range(3):
+        ctrl.add_pattern((i, i), np.asarray(nickel.data[i, i]).copy())
+    for i in range(3):
+        _index_and_simulate(ctrl, i)
+    _sim_cache.clear()
+    assert len(calls) <= 1, f"reflectors recomputed {len(calls)} times for 3 patterns"

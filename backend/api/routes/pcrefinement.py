@@ -377,18 +377,23 @@ def _index_and_simulate(ctrl, pattern_idx):
     # Simulate Kikuchi lines
     segments = []
     try:
-        reflectors = prepare_reflectors(
-            ctrl.phase_list,
-            min_d=getattr(ctrl, 'min_d', 1.0),
-            f_threshold=getattr(ctrl, 'f_threshold', 0.1),
-            max_reflectors=getattr(ctrl, 'max_reflectors', 70),
-        )
         if multi_phase:
             # One reflector set per phase: simulate the lines of the phase this
-            # pattern was indexed as, not of a phase it did not match.
+            # pattern was indexed as, not of a phase it did not match. The
+            # controller keeps its reflectors current (phase changes and
+            # indexing-parameter changes rebuild them, and the indexer built
+            # above sets them), so they are not computed again per pattern: for
+            # a large cell that costs seconds each.
             if phase_index is None:
                 raise RuntimeError("no phase fitted this pattern")
-            reflectors = reflectors[phase_index]
+            reflectors = ctrl.reflectors[phase_index]
+        else:
+            reflectors = prepare_reflectors(
+                ctrl.phase_list,
+                min_d=getattr(ctrl, 'min_d', 1.0),
+                f_threshold=getattr(ctrl, 'f_threshold', 0.1),
+                max_reflectors=getattr(ctrl, 'max_reflectors', 70),
+            )
         simulator = kp.simulations.KikuchiPatternSimulator(reflectors)
         rots = xmap.rotations[0:1]
         sim = simulator.on_detector(ctrl.detector, rots)
