@@ -60,6 +60,12 @@ def _normalize_element_labels(phase):
 def _reflectors_for_phase(phase, min_d=1.0, f_threshold=0.1, max_reflectors=70):
     """Compute filtered reflectors for a single phase."""
     _normalize_element_labels(phase)
+    # `sanitise_phase()` below expands the structure IN PLACE, and expanding an
+    # already expanded structure is not idempotent: the same pi-Al8FeMg3Si6 phase
+    # object went 26 -> 128 -> 104 -> 86 atoms over three calls and gave a
+    # different reflector list each time. Work on a copy, so the list depends on
+    # the crystal and not on how often the phase object was used before.
+    phase = phase.deepcopy()
     ref = ReciprocalLatticeVector.from_min_dspacing(phase, min_d)
     # ``allowed`` (systematic-absence filter) raises NotImplementedError for
     # primitive-hexagonal space groups in diffsims. Those absent reflections
@@ -533,6 +539,12 @@ def _normalise_max_reflectors(max_reflectors, ref_hkl, n_full):
     return max(1, min(int(max_reflectors), n_full)) if max_reflectors else n_full
 
 
+def _hough_reflectors():
+    """The per-phase reflector-spec module (imported late: it imports this one)."""
+    import hough_reflectors
+    return hough_reflectors
+
+
 def predict_triplet_library(detector, phase_list, reflectors, counts=None, nBands=12):
     """What the band-triplet library WOULD cost, per reflector-family count.
 
@@ -540,12 +552,18 @@ def predict_triplet_library(detector, phase_list, reflectors, counts=None, nBand
     allocating one: the cap raises on the request, and the request carries the
     size. Feeds the message below and, through it, the user's choice.
     """
-    if isinstance(reflectors, list):
+    multi = isinstance(reflectors, list)
+    if multi:
         ref_hkl = [r.hkl.tolist() for r in reflectors]
         n_full = max((len(r) for r in ref_hkl), default=0)
     else:
         ref_hkl = reflectors.hkl.tolist()
         n_full = len(ref_hkl)
+    # The same resolution as `create_indexer`, so the cost is that of the list
+    # that would really be built.
+    ref_hkl, spec_phases = _hough_reflectors().apply_specs(phase_list, ref_hkl, multi)
+    if any(spec_phases):
+        n_full = (max((len(r) for r in ref_hkl), default=0) if multi else len(ref_hkl))
     if counts is None:
         counts = (n_full, *(k for k in _REFLECTOR_LADDER if k < n_full))
     fixed = _standard_setting_phase_list(phase_list)
@@ -559,7 +577,11 @@ def predict_triplet_library(detector, phase_list, reflectors, counts=None, nBand
             # is 48 MiB — above every one of those and far below any library
             # worth warning about.
             with _capped_triplet_library(_PREDICT_PROBE_ROWS):
-                detector.get_indexer(fixed, _trim_reflectors(ref_hkl, keep), nBands=nBands)
+                detector.get_indexer(
+                    fixed,
+                    _trim_reflectors(ref_hkl, _hough_reflectors().keep_without_spec_phases(
+                        keep, ref_hkl, spec_phases, multi)),
+                    nBands=nBands)
             rows = 0                      # built under the probe: negligible
         except MemoryError as e:
             m = re.search(r"need ([0-9,]+) rows", str(e))
@@ -597,18 +619,28 @@ def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma
     unrelated OpenCL call fail with OUT_OF_HOST_MEMORY and, on a weaker
     machine, would simply have taken it down.
     """
-    if isinstance(reflectors, list):
+    multi = isinstance(reflectors, list)
+    if multi:
         ref_hkl = [r.hkl.tolist() for r in reflectors]
         n_full = max((len(r) for r in ref_hkl), default=0)
     else:
         ref_hkl = reflectors.hkl.tolist()
         n_full = len(ref_hkl)
 
+    # A phase with a registered reflector SPEC (`hough_reflectors`) brings its
+    # own family list in place of the default rows. This is the one place that
+    # happens, so every Hough build honours it; with no spec it changes nothing.
+    ref_hkl, spec_phases = _hough_reflectors().apply_specs(phase_list, ref_hkl, multi)
+    if any(spec_phases):
+        n_full = (max((len(r) for r in ref_hkl), default=0) if multi else len(ref_hkl))
+
     # An explicit argument wins; otherwise the phase's registered limit applies,
     # which is how the eight builders that know nothing about the indexing
     # request still honour what the user set in the phase list.
     limits = max_reflectors if max_reflectors is not None else _registered_limits_for(phase_list)
     keep = _normalise_max_reflectors(limits, ref_hkl, n_full)
+    # The row limit does not cut a phase whose families were chosen explicitly.
+    keep = _hough_reflectors().keep_without_spec_phases(keep, ref_hkl, spec_phases, multi)
     budget = _triplet_library_budget_bytes()
     fixed_phases = _standard_setting_phase_list(phase_list)
 
@@ -642,6 +674,9 @@ def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma
             pass
         advice = ("  Reflector families vs. memory: " + ", ".join(table) + "."
                   if table else "")
+        if any(spec_phases):
+            advice += ("  A phase here uses a reflector selection of its own; remove "
+                       "families from it or reset it to the default.")
         raise MemoryError(
             f"Hough indexing needs more memory than this machine can spare for "
             f"{names}: {e}. About {_available_memory_bytes() / 2**30:.1f} GiB is free "
