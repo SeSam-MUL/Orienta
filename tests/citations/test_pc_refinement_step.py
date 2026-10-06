@@ -187,3 +187,68 @@ def test_a_run_after_loading_another_file_records_nothing(active, monkeypatch):
         assert KEY not in _keys(result)
     finally:
         calibration_store.remove(other)
+
+
+# ------------------------------------------- the routes that move a refined PC
+
+@pytest.fixture
+def api():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from backend.api.routes import batch_v2, calibration
+
+    app = FastAPI()
+    app.include_router(calibration.router, prefix="/api/calibration")
+    app.include_router(batch_v2.router, prefix="/api/batch-v2")
+    names = ["pcr_route_raw", "pcr_route_copy", "pcr_route_other"]
+    yield TestClient(app), names
+    for n in names:
+        calibration_store.remove(n)
+
+
+def test_propagating_to_the_parent_carries_the_origin(api):
+    client, (raw, copy, _) = api
+    calibration_store.register(raw, _Sig())
+    calibration_store.register_derived(copy, raw)
+    calibration_store.update_pc(copy, [0.52, 0.32, 0.82], source="refined",
+                                refinement=REFINED)
+    assert calibration_store.get_entry(raw).pc_refinement is None
+    assert client.post(f"/api/calibration/{copy}/propagate-to-parent").status_code == 200
+    assert calibration_store.get_entry(raw).pc_refinement == REFINED
+
+
+def test_propagating_a_typed_pc_does_not_claim_a_refinement(api):
+    client, (raw, copy, _) = api
+    calibration_store.register(raw, _Sig())
+    calibration_store.register_derived(copy, raw)
+    calibration_store.update_pc(copy, [0.52, 0.32, 0.82], source="manual")
+    client.post(f"/api/calibration/{copy}/propagate-to-parent")
+    assert calibration_store.get_entry(raw).pc_refinement is None
+
+
+def test_copying_a_pc_to_other_files_carries_the_origin_only_if_it_has_one(api):
+    client, (raw, _, other) = api
+    calibration_store.register(raw, _Sig())
+    calibration_store.register(other, _Sig())
+    body = {"source_dataset": raw, "target_datasets": [other]}
+    client.post("/api/batch-v2/copy-pc", json=body)
+    assert calibration_store.get_entry(other).pc_refinement is None
+    calibration_store.update_pc(raw, [0.52, 0.32, 0.82], source="refined",
+                                refinement=REFINED)
+    client.post("/api/batch-v2/copy-pc", json=body)
+    assert calibration_store.get_entry(other).pc_refinement == REFINED
+
+
+def test_the_refine_routes_hand_their_origin_to_the_store():
+    """`_run_optimization` and the grid calibration cannot be run here (they need
+    a detector and Hough indexing of real patterns); this pins the two calls that
+    carry the origin to the store, which every test above depends on."""
+    import re
+    from pathlib import Path
+    from backend.api.routes import pcrefinement
+
+    src = Path(pcrefinement.__file__).read_text(encoding="utf-8")
+    assert re.search(r"_writeback_refined_pc\(\s*_active_dataset,\s*mean_pc,\s*"
+                     r"refinement=_refinement_record\(", src)
+    assert re.search(r"update_pc_map\(\s*_grid_ds,.{0,120}refinement=_refinement_record\(",
+                     src, re.S)
