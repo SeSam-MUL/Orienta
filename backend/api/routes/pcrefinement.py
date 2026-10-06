@@ -286,6 +286,21 @@ def _auto_attach_detector(ctrl):
     logger.info("Auto-attached detector from signal (fallback): PC=%s", list(mean_pc))
 
 
+def _winning_phase_position(ctrl, xmap):
+    """Position in ``ctrl.phase_list`` of the phase that won ``xmap``'s pixel 0.
+
+    The crystal map carries the winner's phase id; the reflector sets of a
+    multi-phase list are in phase-list order. ``None`` when no phase fitted
+    (id -1) or the id is not one of the list's.
+    """
+    try:
+        pid = int(np.asarray(xmap.phase_id).ravel()[0])
+    except Exception:
+        return None
+    ids = [int(i) for i in ctrl.phase_list.ids]
+    return ids.index(pid) if pid in ids else None
+
+
 def _index_and_simulate(ctrl, pattern_idx):
     """Index a single calibration pattern and simulate Kikuchi line segments.
 
@@ -345,7 +360,16 @@ def _index_and_simulate(ctrl, pattern_idx):
     except Exception:
         ci = float(index_data['cm'].flat[0])
 
-    phase_name = str(xmap.phases_in_data[0].name) if hasattr(xmap, 'phases_in_data') else ""
+    # `phases_in_data` is a PhaseList and `[0]` on it looks up phase ID 0, which
+    # raises as soon as the winner is any other phase of a multi-phase list.
+    phase_name = ""
+    if hasattr(xmap, 'phases_in_data'):
+        _won = list(xmap.phases_in_data.names)
+        phase_name = str(_won[0]) if _won else ""
+    # With several phases loaded, which one won this pattern (position in the
+    # phase list; None when no phase fitted). Not set for a single phase.
+    multi_phase = len(ctrl.phase_list.ids) > 1
+    phase_index = _winning_phase_position(ctrl, xmap) if multi_phase else None
 
     # Cache in controller too
     ctrl.cache[pattern_idx] = {'ci': ci, 'xmap': xmap, 'band_data': band_data}
@@ -359,6 +383,12 @@ def _index_and_simulate(ctrl, pattern_idx):
             f_threshold=getattr(ctrl, 'f_threshold', 0.1),
             max_reflectors=getattr(ctrl, 'max_reflectors', 70),
         )
+        if multi_phase:
+            # One reflector set per phase: simulate the lines of the phase this
+            # pattern was indexed as, not of a phase it did not match.
+            if phase_index is None:
+                raise RuntimeError("no phase fitted this pattern")
+            reflectors = reflectors[phase_index]
         simulator = kp.simulations.KikuchiPatternSimulator(reflectors)
         rots = xmap.rotations[0:1]
         sim = simulator.on_detector(ctrl.detector, rots)
@@ -378,6 +408,8 @@ def _index_and_simulate(ctrl, pattern_idx):
         "segments": segments,
         "n_bands": len(segments),
     }
+    if multi_phase:
+        result["phase_index"] = phase_index
     _sim_cache[pattern_idx] = result
     return result
 
@@ -999,12 +1031,106 @@ async def pc_status():
         "has_detector": ctrl.detector is not None,
         "has_phase": ctrl.phase is not None,
         "phase_name": str(ctrl.phase.name) if ctrl.phase else None,
+        "phase_names": ctrl.phase_names(),
         "has_indexer": ctrl.indexer is not None,
         "n_patterns": len(ctrl.patterns),
         "pc": [float(v) for v in ctrl.detector.pc.flatten()] if ctrl.detector is not None else [],
         "patterns": pattern_list,
         "global_ci": global_ci,
     }
+
+
+def _phase_summary(phase) -> dict:
+    """The part of a phase the page shows: name, space group, lattice."""
+    out = {"name": str(phase.name),
+           "space_group": str(phase.space_group) if hasattr(phase, 'space_group') else ""}
+    try:
+        out["lattice"] = {
+            "a": float(phase.structure.lattice.a),
+            "b": float(phase.structure.lattice.b),
+            "c": float(phase.structure.lattice.c),
+        }
+    except Exception:
+        out["lattice"] = {}
+    return out
+
+
+def _loaded_phases(ctrl) -> list:
+    if ctrl.phase_list is None:
+        return []
+    return [_phase_summary(ctrl.phase_list[pid]) for pid in ctrl.phase_list.ids]
+
+
+class RemovePhaseRequest(BaseModel):
+    phase_name: str
+
+
+@router.post("/phase/add")
+async def add_phase(req: LoadPhaseRequest):
+    """Add a crystal phase (CIF) to the ones already loaded.
+
+    PC refinement can use several phases at once (e.g. austenite and ferrite of
+    a duplex steel): every calibration pattern is Hough-indexed against all of
+    them and the best-fitting phase wins, per pattern. With nothing loaded this
+    is the same as ``/phase/load``.
+    """
+    if _optimization_active:
+        raise HTTPException(
+            status_code=409,
+            detail="A PC optimization is running. Wait for it to finish "
+                   "before changing the phases.",
+        )
+    ctrl = _get_controller()
+
+    # Off the event loop (reading the CIF and its reflectors takes a moment) and
+    # under the state lock, as the other controller-changing endpoints do.
+    def _add_locked():
+        with _state_lock:
+            phase = ctrl.add_phase(req.cif_path)
+            _sim_cache.clear()          # simulated lines belong to the old phase set
+            return phase
+
+    try:
+        phase = await asyncio.to_thread(_add_locked)
+    except Exception as e:
+        logger.exception("Failed to add phase")
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "phase_name": str(phase.name),
+        **{k: v for k, v in _phase_summary(phase).items() if k != "name"},
+        "phases": _loaded_phases(ctrl),
+        "n_phases": len(_loaded_phases(ctrl)),
+    }
+
+
+@router.post("/phase/remove")
+async def remove_phase(req: RemovePhaseRequest):
+    """Remove one loaded phase by name; the rest stay loaded."""
+    if _optimization_active:
+        raise HTTPException(
+            status_code=409,
+            detail="A PC optimization is running. Wait for it to finish "
+                   "before changing the phases.",
+        )
+    ctrl = _get_controller()
+
+    def _remove_locked():
+        with _state_lock:
+            ctrl.remove_phase(req.phase_name)
+            _sim_cache.clear()          # simulated lines belong to the old phase set
+
+    try:
+        await asyncio.to_thread(_remove_locked)
+    except KeyError:
+        raise HTTPException(status_code=404,
+                            detail=f"Phase '{req.phase_name}' is not loaded.")
+    except Exception as e:
+        logger.exception("Failed to remove phase")
+        raise HTTPException(status_code=400, detail=str(e))
+    phases = _loaded_phases(ctrl)
+    return {"success": True, "phases": phases, "n_phases": len(phases),
+            "phase_name": phases[0]["name"] if phases else None}
 
 
 def _run_optimization(task_id: str, patterns_data, method: str, search_limit: float):
@@ -1123,6 +1249,21 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
                     except Exception as e:
                         logger.warning("Re-index after optimization attempt %d failed: %s", attempt + 1, e)
 
+            # Several phases: say which one each optimised pattern is indexed
+            # as at the refined PC. A one-phase refine reports nothing extra.
+            _multi = {}
+            if ctrl.phase_list is not None and len(ctrl.phase_list.ids) > 1:
+                _multi = {"phase_names": ctrl.phase_names()}
+                try:
+                    _per_pattern = ctrl.phases_of_patterns(patterns_data)
+                    _multi["pattern_phases"] = [{"index": i, **e}
+                                                for i, e in enumerate(_per_pattern)]
+                except Exception:
+                    # The PC is already refined and applied; failing to label
+                    # the patterns must not discard it.
+                    logger.warning("per-pattern phase lookup failed after PC refine",
+                                   exc_info=True)
+
             _optimization_tasks[task_id]["status"] = "completed"
             _optimization_tasks[task_id]["result"] = {
                 "pc_values": results,
@@ -1133,6 +1274,7 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
                 "pc_warning_codes": _warn_codes,
                 "pc_deviation": _pc_dev,
                 "pattern_size": [int(_ph), int(_pw)] if _ph is not None else None,
+                **_multi,
             }
     except Exception as e:
         _optimization_tasks[task_id]["status"] = "failed"
@@ -1472,6 +1614,7 @@ def _render_preview_sync(req: "RenderPreviewRequest"):
     rot_obj = None
     orientation_euler_deg = None
     orientation_source = None
+    indexed_phase = None      # several phases loaded: the one Hough picked here
 
     if req.orientation_euler_deg is not None and len(req.orientation_euler_deg) == 3:
         from orix.quaternion import Rotation
@@ -1502,6 +1645,9 @@ def _render_preview_sync(req: "RenderPreviewRequest"):
                 float(x) for x in _np.rad2deg(rot_obj.to_euler()[0])
             ]
             orientation_source = "hough"
+            if len(ctrl.phase_list.ids) > 1:
+                _won = list(xmap.phases_in_data.names)
+                indexed_phase = str(_won[0]) if _won else None
         except Exception as e:
             logger.warning("Hough at trial geometry failed: %s — falling back to identity", e)
             from orix.quaternion import Rotation
@@ -1611,6 +1757,8 @@ def _render_preview_sync(req: "RenderPreviewRequest"):
             "pixel_size": req.pixel_size,
             "max_bandwidth": req.max_bandwidth,
         },
+        # Only with several phases loaded; a one-phase reply is unchanged.
+        **({"indexed_phase": indexed_phase} if indexed_phase is not None else {}),
     }
 
 

@@ -62,6 +62,84 @@ class PCController:
         self.cache = {}
         self.indexer = None
 
+    # --- Several phases (e.g. austenite + ferrite of a duplex steel) -------
+    #
+    # PyEBSDIndex indexes each pattern against every phase of the list and keeps
+    # the best-fitting one; its PC optimiser scores a trial PC on that
+    # best-of-phases result. So holding several phases here is enough for
+    # ``index_pattern`` / ``refine_global_pc`` to work with them. ``load_phase``
+    # stays "replace everything with this one phase".
+
+    #: Upper bound on phases held at once. Every phase adds a full Hough pass
+    #: (and its own band-triplet library) to every optimiser evaluation.
+    MAX_PHASES = 8
+
+    def phase_names(self) -> List[str]:
+        """Names of the loaded phases, in list order (empty when none)."""
+        if self.phase_list is None:
+            return []
+        return [str(self.phase_list[pid].name) for pid in self.phase_list.ids]
+
+    def _set_phases(self, phases):
+        """Make ``phases`` (a non-empty list of orix Phase) the loaded set."""
+        from orix.crystal_map import PhaseList
+        self.phase = phases[0]
+        self.phase_list = PhaseList(phases=list(phases))
+        self.reflectors = prepare_reflectors(
+            self.phase_list,
+            min_d=self.min_d,
+            f_threshold=self.f_threshold,
+            max_reflectors=self.max_reflectors
+        )
+        self.indexer = None
+        self.clear_cache()
+
+    def add_phase(self, path):
+        """Add one more phase to those already loaded and return it.
+
+        With nothing loaded this is ``load_phase``. A phase whose name (the CIF
+        stem) is already loaded is refused, and a CIF that cannot be read leaves
+        the loaded phases exactly as they were.
+        """
+        if self.phase_list is None:
+            return self.load_phase(path)
+        previous = [self.phase_list[pid] for pid in self.phase_list.ids]
+        if len(previous) >= self.MAX_PHASES:
+            raise ValueError(
+                f"At most {self.MAX_PHASES} phases can be used together; "
+                "remove one first.")
+        saved = (self.phase, self.phase_list, self.reflectors)
+        try:
+            # ``load_phase`` is the one place a CIF is read into a Phase.
+            new_phase = self.load_phase(path)
+            if str(new_phase.name) in {str(p.name) for p in previous}:
+                raise ValueError(
+                    f"A phase named '{new_phase.name}' is already loaded.")
+            self._set_phases(previous + [new_phase])
+        except Exception:
+            self.phase, self.phase_list, self.reflectors = saved
+            self.indexer = None
+            self.clear_cache()
+            raise
+        return new_phase
+
+    def remove_phase(self, name):
+        """Remove the loaded phase called ``name`` (KeyError if not loaded)."""
+        if self.phase_list is None:
+            raise KeyError(name)
+        phases = [self.phase_list[pid] for pid in self.phase_list.ids]
+        keep = [p for p in phases if str(p.name) != str(name)]
+        if len(keep) == len(phases):
+            raise KeyError(name)
+        if not keep:
+            self.phase = None
+            self.phase_list = None
+            self.reflectors = None
+            self.indexer = None
+            self.clear_cache()
+            return
+        self._set_phases(keep)
+
     def update_indexing_params(self, min_d=None, f_threshold=None,
                                max_reflectors=None, nBands=None):
         """
@@ -135,6 +213,37 @@ class PCController:
         
         self.cache[idx] = {'ci': ci, 'xmap': xmap, 'band_data': band_data}
         return ci, xmap, band_data
+
+    def phases_of_patterns(self, patterns):
+        """Which phase indexes each pattern best, at the current detector.
+
+        ``patterns`` are 2D arrays. Returns one dict per pattern with
+        ``phase_name``, ``phase_index`` (position in the phase list) and ``ci``;
+        a pattern that no phase fitted (or that failed to index) has ``None``
+        for the first two. Does not touch the per-pattern result cache.
+        """
+        self._ensure_indexer()
+        ids = [int(i) for i in self.phase_list.ids]
+        out = []
+        for pat in patterns:
+            try:
+                ebsd = EBSD(np.asarray(pat)[np.newaxis, np.newaxis], detector=self.detector)
+                xmap, index_data = ebsd.hough_indexing(
+                    self.phase_list, self.indexer,
+                    return_index_data=True, verbose=0
+                )
+                pid = int(np.asarray(xmap.phase_id).ravel()[0])
+                ci = float(index_data['cm'].mean())
+            except Exception as exc:  # one failing pattern must not hide the rest
+                logger.warning("phase lookup failed for a calibration pattern: %s", exc)
+                out.append({"phase_name": None, "phase_index": None, "ci": None})
+                continue
+            if pid in ids:
+                out.append({"phase_name": str(self.phase_list[pid].name),
+                            "phase_index": ids.index(pid), "ci": ci})
+            else:
+                out.append({"phase_name": None, "phase_index": None, "ci": ci})
+        return out
 
     def index_all_patterns(self):
         """Index all loaded patterns and cache all results."""
