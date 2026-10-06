@@ -860,7 +860,8 @@
       "unreadable": "The CIF file could not be read.",
       "no_phase": "No such phase is loaded.",
       "phase_name_required": "Several phases are loaded; choose one.",
-      "no_cif": "No CIF file given."
+      "no_cif": "No CIF file given.",
+      "run_in_progress": "An indexing run is going and uses the reflector selection of its phases. Change it when the run has finished."
     },
     "loadingExtended": "Computing the weaker and finer families (down to 0.7 Å)...",
     "elapsed": "{{seconds}} s",

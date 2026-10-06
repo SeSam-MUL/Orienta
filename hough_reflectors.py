@@ -768,8 +768,31 @@ def prepare_reflectors(phase_list, min_d=1.0, f_threshold=0.1, max_reflectors=70
     return out[0] if len(out) == 1 else out
 
 
+_BUILD = threading.local()
+
+
+def specs_snapshot():
+    """The registry as it is at this instant: {"version": n, "specs": {key: spec}}."""
+    with _LOCK:
+        _load_locked()
+        return {"version": _VERSION, "specs": json.loads(json.dumps(_SPECS))}
+
+
+def last_build_snapshot():
+    """The snapshot the most recent ``apply_specs`` of THIS thread built from.
+
+    A result records which families its indexer was built with; it must read that
+    from here, not from the registry at the end of the run, because a selection
+    can be changed while the run is going.
+    """
+    return getattr(_BUILD, "snapshot", None)
+
+
 def apply_specs(phase_list, ref_hkl, multi):
     """Replace the reflector rows of every phase that has a spec.
+
+    The specs are read ONCE, as a snapshot (kept for ``last_build_snapshot``), so
+    all phases of one build see the same registry.
 
     ``ref_hkl`` is what ``create_indexer`` builds: one list of hkl rows (single
     phase) or one list per phase (``multi``).  Returns ``(ref_hkl, flags)`` with
@@ -777,7 +800,9 @@ def apply_specs(phase_list, ref_hkl, multi):
     unchanged (same object) when no phase has one.
     """
     names = [getattr(p, "name", "") for _pid, p in phase_list]
-    specs = [get_spec(n) for n in names]
+    snap = specs_snapshot()
+    _BUILD.snapshot = snap
+    specs = [snap["specs"].get(phase_key(n)) for n in names]
     if not any(s is not None for s in specs):
         return ref_hkl, [False] * len(names)
     phases = [p for _pid, p in phase_list]
@@ -1038,16 +1063,21 @@ def expand_top_n(phase, n, rule=None):
     return spec_with_fingerprint(phase, {"mode": "custom", "families": picked})
 
 
-def selection_provenance(phase_list):
+def selection_provenance(phase_list, snapshot=None):
     """What a result has to say about the reflector families it was indexed with.
 
     One entry per phase that has a selection of its own (empty list when none):
     the families PyEBSDIndex used, the ones ticked, the spec, and a short phrase
-    for where the list came from. Nothing for a phase on the default list.
+    for a phase on the default list.
+
+    ``snapshot`` (``last_build_snapshot()``) is the registry the indexer was built
+    from; without it the registry as it is now is read.
     """
     out = []
     for _pid, phase in phase_list:
-        spec = get_spec(getattr(phase, "name", ""))
+        key = getattr(phase, "name", "")
+        spec = (snapshot["specs"].get(phase_key(key)) if snapshot is not None
+                else get_spec(key))
         if spec is None:
             continue
         shown = describe(phase, spec)
@@ -1066,3 +1096,37 @@ def selection_provenance(phase_list):
             "spec": spec,
         })
     return out
+
+
+# ---------------------------------------------------------------------------
+# Runs that build Hough indexers
+# ---------------------------------------------------------------------------
+
+_RUNS = {}
+_RUNS_LOCK = threading.Lock()
+_RUN_SEQ = [0]
+
+
+def begin_run(kind):
+    """Mark a run ("indexing", "batch") as active; returns its token.
+
+    While any run is active the reflector selection of a phase cannot be changed
+    (``service.change`` answers 409): a run builds its indexers over minutes, and a
+    selection changed under it would make later builds differ from the first.
+    """
+    with _RUNS_LOCK:
+        _RUN_SEQ[0] += 1
+        token = _RUN_SEQ[0]
+        _RUNS[token] = str(kind)
+        return token
+
+
+def end_run(token):
+    with _RUNS_LOCK:
+        _RUNS.pop(token, None)
+
+
+def active_runs():
+    """The kinds of the runs active now (one entry per run)."""
+    with _RUNS_LOCK:
+        return [k for _t, k in sorted(_RUNS.items())]

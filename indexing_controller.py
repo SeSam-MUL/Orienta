@@ -792,7 +792,9 @@ def hough_index_patterns(
     # (below) in the result: the families are part of what the result means.
     try:
         import hough_reflectors
-        _selections = hough_reflectors.selection_provenance(phase_list)
+        # from what THE INDEXER was built with, not the registry as it is now
+        _selections = hough_reflectors.selection_provenance(
+            phase_list, hough_reflectors.last_build_snapshot())
         for _sel in _selections:
             _progress(
                 f"Hough: {_sel['phase']} uses its own reflector selection "

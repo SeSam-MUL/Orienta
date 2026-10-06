@@ -860,7 +860,8 @@
       "unreadable": "无法读取 CIF 文件。",
       "no_phase": "未加载该物相。",
       "phase_name_required": "已加载多个物相，请选择其中一个。",
-      "no_cif": "未提供 CIF 文件。"
+      "no_cif": "未提供 CIF 文件。",
+      "run_in_progress": "标定正在运行，并使用着其物相的衍射面选择。请在运行结束后再更改。"
     },
     "loadingExtended": "正在计算较弱和较细的族 (最小 0.7 Å)...",
     "elapsed": "{{seconds}} 秒",

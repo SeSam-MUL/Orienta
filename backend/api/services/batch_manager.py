@@ -535,6 +535,23 @@ class BatchManager:
     ):
         """Run batch synchronously (called from executor thread).
 
+        Marks a run as active while it goes (reflector selections of Hough phases
+        cannot be changed meanwhile), whatever way it ends.
+        """
+        import hough_reflectors
+        token = hough_reflectors.begin_run("batch")
+        try:
+            return self._run_batch_sync_impl(batch_id, progress_callback)
+        finally:
+            hough_reflectors.end_run(token)
+
+    def _run_batch_sync_impl(
+        self,
+        batch_id: str,
+        progress_callback: Optional[Callable] = None,
+    ):
+        """The batch itself (see ``run_batch_sync``).
+
         Processes all pending jobs, grouped by file for efficiency:
         - Load file once
         - Apply preprocessing once

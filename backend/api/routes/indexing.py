@@ -39,6 +39,30 @@ MAX_TRACKED_TASKS = 50
 _indexing_tasks: OrderedDict = OrderedDict()
 
 
+def _submit_run_guarded(fn, kind="indexing"):
+    """Run ``fn`` in the executor and mark a run as active from NOW until it ends.
+
+    The mark is made before the thread starts and removed in a ``finally``, so a
+    reflector selection cannot be changed in between or after a crash.
+    """
+    import asyncio
+    import hough_reflectors
+
+    token = hough_reflectors.begin_run(kind)
+
+    def guarded():
+        try:
+            return fn()
+        finally:
+            hough_reflectors.end_run(token)
+
+    try:
+        return asyncio.get_event_loop().run_in_executor(None, guarded)
+    except BaseException:
+        hough_reflectors.end_run(token)
+        raise
+
+
 def _track_task(task_id: str, initial_state: dict) -> None:
     """Insert a new task while enforcing MAX_TRACKED_TASKS LRU cap."""
     _indexing_tasks[task_id] = initial_state
@@ -4443,8 +4467,7 @@ async def start_indexing(req: IndexingStartRequest):
             except Exception:
                 pass
 
-    import asyncio
-    asyncio.get_event_loop().run_in_executor(None, run_indexing)
+    _submit_run_guarded(run_indexing)
     return {"task_id": task_id, "status": "running"}
 
 
@@ -11191,7 +11214,7 @@ async def start_batch_indexing(req: BatchRequest):
             _batch_state["current_dataset"] = ""
 
     import asyncio
-    asyncio.get_event_loop().run_in_executor(None, run_batch_safely)
+    _submit_run_guarded(run_batch_safely, kind="batch")
     return {"job_id": job_id, "status": "started", "total": len(req.datasets)}
 
 

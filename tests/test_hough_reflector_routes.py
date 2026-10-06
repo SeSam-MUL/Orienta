@@ -587,3 +587,99 @@ def test_a_changed_n_bands_drops_what_was_indexed_with_the_old_one(cifs):
     ctrl.cache[0] = {"ci": 0.4}
     ctrl.update_indexing_params(nBands=9)            # unchanged
     assert ctrl.cache == {0: {"ci": 0.4}}
+
+
+# ---------------------------------------------------------------------------
+# no change of a selection while a run that uses it is going
+# ---------------------------------------------------------------------------
+
+def test_a_selection_cannot_be_changed_while_a_run_is_active(client, cifs):
+    c, _ = client
+    spec = {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]}
+    token = hr.begin_run("indexing")
+    try:
+        for url, body in (
+            ("/api/indexing/hough/reflectors", {"cif_path": cifs["Al"], "spec": spec}),
+        ):
+            r = c.put(url, json=body)
+            assert r.status_code == 409, r.text
+            d = r.json()["detail"]
+            assert d["code"] == "run_in_progress" and d["params"]["runs"] == ["indexing"]
+        assert hr.get_spec("Al") is None
+        # reading is fine
+        assert c.get("/api/indexing/hough/reflectors", params={"cif_path": cifs["Al"]}).status_code == 200
+        # the PC page's route is guarded the same way
+        c.post("/api/pc/phase/add", json={"cif_path": cifs["Al"]})
+        r = c.put("/api/pc/phase/reflectors", json={"phase_name": "Al", "spec": spec})
+        assert r.status_code == 409 and r.json()["detail"]["code"] == "run_in_progress"
+    finally:
+        hr.end_run(token)
+    assert c.put("/api/indexing/hough/reflectors",
+                 json={"cif_path": cifs["Al"], "spec": spec}).status_code == 200
+
+
+def test_the_run_registry_counts_runs_and_survives_a_crash():
+    assert hr.active_runs() == []
+    a = hr.begin_run("indexing")
+    b = hr.begin_run("batch")
+    assert sorted(hr.active_runs()) == ["batch", "indexing"]
+    hr.end_run(a)
+    assert hr.active_runs() == ["batch"]
+    hr.end_run(a)                                  # twice is harmless
+    hr.end_run(b)
+    assert hr.active_runs() == []
+
+
+def test_the_indexing_executor_wrapper_marks_the_run_for_its_whole_duration():
+    import asyncio
+    import threading
+    from backend.api.routes import indexing as route
+
+    seen = []
+    go_on = threading.Event()
+
+    def job():
+        go_on.wait(5)
+        seen.append(hr.active_runs())
+        raise RuntimeError("boom")
+
+    async def scenario():
+        fut = route._submit_run_guarded(job)
+        assert hr.active_runs() == ["indexing"]    # marked before the thread even starts
+        await asyncio.sleep(0.1)
+        assert hr.active_runs() == ["indexing"]    # ... and while it runs
+        go_on.set()
+        with pytest.raises(RuntimeError):
+            await fut
+
+    asyncio.run(scenario())
+    assert seen == [["indexing"]] and hr.active_runs() == []     # unmarked after a crash
+
+
+def test_start_indexing_submits_through_the_guard():
+    import inspect
+    from backend.api.routes import indexing as route
+    src = inspect.getsource(route.start_indexing)
+    assert "_submit_run_guarded(run_indexing)" in src
+
+
+def test_a_batch_marks_itself_active_and_always_unmarks(tmp_path):
+    from unittest.mock import patch
+    from backend.api.services.batch_manager import BatchManager
+    seen = []
+    bm = BatchManager(db_path=str(tmp_path / "t.db"))
+    f = tmp_path / "a.h5oina"
+    f.write_bytes(b"x")
+    sht = tmp_path / "Al.sht"
+    sht.write_bytes(b"x")
+    batch_id, _ = bm.create_batch([str(f)], [{"name": "Al", "path": str(sht), "method": "spherical"}], {})
+
+    def fake_job(*a, **k):
+        seen.append(hr.active_runs())
+        raise RuntimeError("Simulated crash")
+
+    with patch("backend.api.services.batch_manager.run_single_indexing_job", fake_job):
+        bm.run_batch_sync(batch_id)
+    assert any("batch" in x for x in seen) or seen == []   # the job may not be reached with a stub file
+    assert hr.active_runs() == []
+

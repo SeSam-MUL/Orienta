@@ -100,6 +100,12 @@ def change(phase, key, spec, extended=False):
     the indexer would keep.  Everything is checked BEFORE it is stored: a bad
     choice leaves the old one in place.
     """
+    runs = hr.active_runs()
+    if runs:
+        raise ReflectorError(
+            "run_in_progress",
+            "An indexing run is going and uses the reflector selection of its phases; "
+            "change it when the run has finished.", status=409, runs=runs)
     try:
         if spec is None:
             hr.set_spec(key, None)

@@ -233,6 +233,15 @@ describe('errors', () => {
     expect(box('{311}').checked).toBe(true);
   });
 
+  it('a change refused because a run is going is explained, and the table keeps its state', async () => {
+    render(<ReflectorFamilies api={b.api} />);
+    await open();
+    b.failNext = { code: 'run_in_progress', message: 'x', params: { runs: ['indexing'] } };
+    fireEvent.click(box('{311}'));
+    await screen.findByText(/An indexing run is going and uses the reflector selection/);
+    expect(box('{311}').checked).toBe(true);
+  });
+
   it('a stored choice that no longer fits the crystal is shown, not applied', async () => {
     const t = b.table();
     b.api.load = () => Promise.resolve({ data: {

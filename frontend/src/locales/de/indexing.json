@@ -860,7 +860,8 @@
       "unreadable": "Die CIF-Datei konnte nicht gelesen werden.",
       "no_phase": "Diese Phase ist nicht geladen.",
       "phase_name_required": "Mehrere Phasen sind geladen; eine auswählen.",
-      "no_cif": "Keine CIF-Datei angegeben."
+      "no_cif": "Keine CIF-Datei angegeben.",
+      "run_in_progress": "Eine Indizierung läuft und verwendet die Reflektorauswahl ihrer Phasen. Erst nach dem Ende des Laufs ändern."
     },
     "loadingExtended": "Schwächere und feinere Familien werden berechnet (bis 0,7 Å)...",
     "elapsed": "{{seconds}} s",

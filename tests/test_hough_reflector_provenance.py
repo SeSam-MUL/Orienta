@@ -90,3 +90,48 @@ def test_the_step_is_declared_with_a_citation_and_survives_the_trail_round_trip(
     text = render_methods([{"key": "indexing.hough_reflectors", "params": {
         "phase": "Al", "families": ["{200}"], "source": "user selection"}}])
     assert text == "Hough indexing of Al used the reflector families {200} (user selection)."
+
+
+def test_the_provenance_is_that_of_the_indexer_that_was_built_not_of_the_registry_now(tmp_path):
+    """A selection changed while a run is going must not change what the finished
+    result says it was indexed with: the families come from the snapshot taken when
+    the indexer was built."""
+    import kikuchipy as kp
+    from indexing_controller import IndexingConfig, IndexingMethod, hough_index_patterns
+    s = kp.data.nickel_ebsd_small()
+    ni, _ = _phase(tmp_path, NI_CIF, "Ni")
+    mask = np.ones(s.axes_manager.navigation_shape[::-1], dtype=bool)
+    hr.set_spec("Ni", {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0], [2, 2, 0]]})
+
+    def change_midway(message, *a):
+        if str(message).startswith("Hough: indexing"):          # after the indexer exists
+            hr.set_spec("Ni", {"mode": "custom", "families": [[1, 1, 1], [3, 1, 1]]})
+
+    result = hough_index_patterns(s, _plist(ni), s.detector.deepcopy(),
+                                  IndexingConfig(method=IndexingMethod.HOUGH), mask,
+                                  progress_callback=change_midway)
+    assert hr.get_spec("Ni")["families"] == [[1, 1, 1], [3, 1, 1]]      # it did change
+    step = get_steps(result)[1]["params"]
+    assert step["families"] == ["{111}", "{200}", "{220}"]               # what was built
+    meta = result.metadata["hough_reflectors"]["Ni"]
+    assert meta["spec"]["families"] == [[1, 1, 1], [2, 0, 0], [2, 2, 0]]
+    assert "{311}" not in render_methods(get_steps(result))
+
+
+def test_a_selection_added_during_a_default_run_is_not_claimed_by_it(tmp_path):
+    import kikuchipy as kp
+    from indexing_controller import IndexingConfig, IndexingMethod, hough_index_patterns
+    s = kp.data.nickel_ebsd_small()
+    ni, _ = _phase(tmp_path, NI_CIF, "Ni")
+    mask = np.ones(s.axes_manager.navigation_shape[::-1], dtype=bool)
+
+    def change_midway(message, *a):
+        if str(message).startswith("Hough: indexing"):
+            hr.set_spec("Ni", {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]})
+
+    result = hough_index_patterns(s, _plist(ni), s.detector.deepcopy(),
+                                  IndexingConfig(method=IndexingMethod.HOUGH), mask,
+                                  progress_callback=change_midway)
+    assert [x["key"] for x in get_steps(result)] == ["indexing.hough"]
+    assert "hough_reflectors" not in result.metadata
+
