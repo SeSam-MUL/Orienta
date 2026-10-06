@@ -9480,6 +9480,31 @@ async def discover_files(method: str, material_hint: str = "", current_pc: str =
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class PhasePathRequest(BaseModel):
+    method: str
+    path: str
+
+
+@router.post("/files/from-path")
+async def phase_file_from_path(req: PhasePathRequest):
+    """Check one phase file given by path and return it as a library-style record.
+
+    This is how a phase outside the library reaches the Indexing page: typed or
+    pasted (the only way in a browser, where there is no file dialog) or picked
+    with the native dialog. The file must exist, carry the extension the method
+    runs on (.cif / master .h5 / .sht) and be readable as that kind of phase.
+    A problem is a 400 whose ``detail`` is ``{code, message, params}``.
+    """
+    from backend.api.services.phase_path import PhasePathError, inspect_phase_path
+
+    try:
+        # Reading a CIF with diffpy takes a moment: keep it off the event loop.
+        record = await asyncio.to_thread(inspect_phase_path, req.method, req.path)
+    except PhasePathError as exc:
+        raise HTTPException(status_code=400, detail=exc.as_detail())
+    return {"file": record}
+
+
 class ExportRequest(BaseModel):
     format: str = "ang"  # "ang", "ctf", "h5", "h5_light"
     filename: Optional[str] = None  # auto-generated if not provided

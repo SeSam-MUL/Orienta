@@ -209,6 +209,58 @@ class ComparisonResult:
     n_eds_adjusted: int = 0  # pixels whose winner flipped due to EDS phase_weights
 
 
+def enrich_phase_entries(results: List[Dict], db_root: Path) -> None:
+    """Add phase metadata (formula, space group, lattice, element group) to
+    each ``{"path", "filename", ...}`` entry, in place.
+
+    Shared by library discovery and by a single phase file the user points
+    at by path, so both kinds of entry carry the same fields.
+    """
+    from path_utils import DATABASE_SUBFOLDERS
+
+    # Enrich results with phase metadata (chemical formula, space group, etc.)
+    try:
+        from phase_metadata import (
+            get_phase_metadata, extract_elements, compute_element_group,
+            get_crystal_system, composition_for_cif,
+        )
+        cif_dir = db_root / DATABASE_SUBFOLDERS["cif_library"]
+        for entry in results:
+            meta = get_phase_metadata(entry["path"], cif_library_dir=cif_dir)
+            # display_label = the Crystal-Database composition (pymatgen
+            # reduced_formula + subscripts, cached) so every picker shows the
+            # SAME nice formula as the Crystal Database table. Crystal system is
+            # sent separately and shown alongside.
+            comp = composition_for_cif(meta.cif_path) if meta.cif_path else ""
+            entry["display_label"] = comp or meta.display_label
+            entry["formula"] = meta.formula
+            entry["space_group"] = meta.space_group
+            entry["pearson"] = meta.pearson
+            entry["phase_name"] = meta.phase_name
+            entry["metadata_source"] = meta.source
+            entry["crystal_system"] = get_crystal_system(meta.space_group) if meta.space_group else ""
+            # Degeneracy-detection fields (consumed by the frontend
+            # phase-degeneracy detector).
+            entry["lattice_a"] = meta.lattice_a
+            entry["lattice_b"] = meta.lattice_b
+            entry["lattice_c"] = meta.lattice_c
+            entry["lattice_alpha"] = meta.lattice_alpha
+            entry["lattice_beta"] = meta.lattice_beta
+            entry["lattice_gamma"] = meta.lattice_gamma
+            entry["space_group_number"] = meta.space_group_number
+            entry["laue_class"] = meta.laue_class
+            entry["centering"] = meta.centering
+            # Element grouping
+            elements = extract_elements(meta.formula)
+            entry["elements"] = elements
+            entry["element_group"] = compute_element_group(elements)
+    except Exception:
+        for entry in results:
+            if "display_label" not in entry:
+                entry["display_label"] = entry["filename"]
+            entry.setdefault("element_group", "Sonstiges")
+
+
 def discover_files_for_method(
     method: IndexingMethod,
     material_hint: str = "",
@@ -362,46 +414,7 @@ def discover_files_for_method(
                     entry["pc_match"] = "unknown"
 
     # Enrich results with phase metadata (chemical formula, space group, etc.)
-    try:
-        from phase_metadata import (
-            get_phase_metadata, extract_elements, compute_element_group,
-            get_crystal_system, composition_for_cif,
-        )
-        cif_dir = db_root / DATABASE_SUBFOLDERS["cif_library"]
-        for entry in results:
-            meta = get_phase_metadata(entry["path"], cif_library_dir=cif_dir)
-            # display_label = the Crystal-Database composition (pymatgen
-            # reduced_formula + subscripts, cached) so every picker shows the
-            # SAME nice formula as the Crystal Database table. Crystal system is
-            # sent separately and shown alongside.
-            comp = composition_for_cif(meta.cif_path) if meta.cif_path else ""
-            entry["display_label"] = comp or meta.display_label
-            entry["formula"] = meta.formula
-            entry["space_group"] = meta.space_group
-            entry["pearson"] = meta.pearson
-            entry["phase_name"] = meta.phase_name
-            entry["metadata_source"] = meta.source
-            entry["crystal_system"] = get_crystal_system(meta.space_group) if meta.space_group else ""
-            # Degeneracy-detection fields (consumed by the frontend
-            # phase-degeneracy detector).
-            entry["lattice_a"] = meta.lattice_a
-            entry["lattice_b"] = meta.lattice_b
-            entry["lattice_c"] = meta.lattice_c
-            entry["lattice_alpha"] = meta.lattice_alpha
-            entry["lattice_beta"] = meta.lattice_beta
-            entry["lattice_gamma"] = meta.lattice_gamma
-            entry["space_group_number"] = meta.space_group_number
-            entry["laue_class"] = meta.laue_class
-            entry["centering"] = meta.centering
-            # Element grouping
-            elements = extract_elements(meta.formula)
-            entry["elements"] = elements
-            entry["element_group"] = compute_element_group(elements)
-    except Exception:
-        for entry in results:
-            if "display_label" not in entry:
-                entry["display_label"] = entry["filename"]
-            entry.setdefault("element_group", "Sonstiges")
+    enrich_phase_entries(results, db_root)
 
     # Build sorted group list for frontend
     groups_seen = []
