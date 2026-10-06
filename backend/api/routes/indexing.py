@@ -9532,8 +9532,11 @@ async def discover_files(method: str, material_hint: str = "", current_pc: str =
         files = result["files"] if isinstance(result, dict) else result
         groups = result.get("groups", []) if isinstance(result, dict) else []
         # Convert Path objects to strings
+        from backend.api.services.phase_path import real_path_of
         for f in files:
             f["path"] = str(f["path"])
+            # What identifies the file: the library may be reached through a link.
+            f["real_path"] = real_path_of(f["path"])
         return {"files": files, "groups": groups}
     except HTTPException:
         # Preserve original status — without this, the "Unknown method"

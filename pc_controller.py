@@ -27,9 +27,10 @@ class PhaseSetError(ValueError):
 
 
 def _same_file(a, b):
-    """Two paths name the same file (spelling, case on Windows, slashes)."""
+    """Two paths name the same file: spelling, case on Windows, slashes, and a
+    link or junction on the way (the library is often reached through one)."""
     import os
-    return os.path.normcase(os.path.abspath(str(a))) == os.path.normcase(os.path.abspath(str(b)))
+    return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
 
 
 class PCController:

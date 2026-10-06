@@ -10,6 +10,7 @@ Wraps PCController for:
 
 import asyncio
 import logging
+import os
 import threading
 import uuid
 from typing import Optional, List, Union
@@ -1110,6 +1111,8 @@ def _phase_summary(phase) -> dict:
     out = {"name": str(phase.name),
            "space_group": str(phase.space_group) if hasattr(phase, 'space_group') else ""}
     out["path"] = _phase_path_of(phase)
+    # What identifies the file (a link on the way does not make it another one).
+    out["real_path"] = os.path.realpath(out["path"]) if out["path"] else None
     try:
         out["lattice"] = {
             "a": float(phase.structure.lattice.a),

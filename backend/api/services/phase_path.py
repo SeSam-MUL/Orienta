@@ -159,11 +159,22 @@ def _check_master(path: Path) -> None:
 _CHECKS = {"hough": _check_cif, "spherical": _check_sht, "dictionary": _check_master}
 
 
+def real_path_of(path) -> str:
+    """The resolved location of a phase file: links, junctions, ``..`` and case
+    spelling removed. Phase files are identified by this, not by how a path is
+    spelled, because the library folder is often reached through a link."""
+    try:
+        return os.path.realpath(str(path))
+    except (OSError, ValueError):
+        return os.path.abspath(str(path))
+
+
 def inspect_phase_path(method: str, raw_path: str) -> Dict:
     """Validate ``raw_path`` as a phase file for ``method``; return its record.
 
     Raises :class:`PhasePathError`. The record has the keys of a library
-    listing entry plus ``user_added``, ``in_library`` and ``library_path`` (the listing's spelling of the file, when it is the library's).
+    listing entry plus ``user_added``, ``real_path`` (the resolved location: what identifies the
+    file), ``in_library`` and ``library_path`` (the listing's spelling of the file, when it is the library's).
     """
     method = str(method or "").lower()
     if method not in METHOD_EXTENSIONS:
@@ -206,6 +217,7 @@ def inspect_phase_path(method: str, raw_path: str) -> Dict:
     db_root = get_local_database_path()
     enrich_phase_entries([entry], db_root)
     entry["path"] = str(path)
+    entry["real_path"] = real_path_of(path)
     entry["user_added"] = True
     # A library file may be spelled differently here and in the library listing
     # (the library folder behind a link, a `..`, another case or 8.3 name). When
