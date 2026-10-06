@@ -49,6 +49,22 @@ def port_in_use(port, host="127.0.0.1") -> bool:
         return False
 
 
+def port_in_use_message(port, platform=None) -> str:
+    """What to tell the user when the backend port is already taken."""
+    platform = platform or sys.platform
+    finder = f"netstat -ano | findstr :{port}" if platform == "win32" else f"lsof -i :{port}"
+    lines = [
+        f"ERROR: Port {port} is already in use.",
+        "       Another Orienta is probably still running - the desktop app, an earlier",
+        "       start_app.py, or a backend left behind. If it is a running Orienta, it is",
+        f"       already available at http://127.0.0.1:{port} - open that address in your",
+        "       browser. Otherwise quit it and start again; connecting to it would give you",
+        "       a backend this launcher neither started nor can stop.",
+        f"       To find what holds the port, run:  {finder}",
+    ]
+    return "\n".join(lines)
+
+
 def wait_for_server(port, timeout=BACKEND_START_TIMEOUT_S, progress=print, proc=None):
     """Wait for a server to respond on the given port.
 
@@ -179,11 +195,7 @@ def main():
     #                         a renderer freeze used to kill the backend with it
     #                         and wipe an in-flight 12 h job.
     if port_in_use(BACKEND_PORT):
-        print(f"ERROR: Port {BACKEND_PORT} is already in use.")
-        print("       Another Orienta is probably still running - the desktop app, an earlier")
-        print("       start_app.py, or a backend left behind. Quit it and start again;")
-        print("       connecting to it would give you a backend this launcher neither started")
-        print("       nor can stop.")
+        print(port_in_use_message(BACKEND_PORT))
         sys.exit(1)
 
     print("[1/3] Starting FastAPI backend...")
