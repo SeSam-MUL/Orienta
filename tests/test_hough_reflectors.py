@@ -181,6 +181,30 @@ def test_real_indexing_without_a_spec_is_what_it_was_before_this_feature(tmp_pat
     np.testing.assert_allclose(xmap.rotations.data, gold["rot"], atol=1e-6)
 
 
+def test_a_run_says_in_its_log_which_phase_uses_its_own_families(tmp_path):
+    """The families are part of what a result means; a run that used a selection
+    names it, a run that did not says nothing about it."""
+    import kikuchipy as kp
+    from indexing_controller import IndexingConfig, IndexingMethod, hough_index_patterns
+    s = kp.data.nickel_ebsd_small()
+    ni, _ = _phase(tmp_path, NI_CIF, "Ni")
+    mask = np.ones(s.axes_manager.navigation_shape[::-1], dtype=bool)
+
+    def run():
+        log = []
+        hough_index_patterns(s, _plist(ni), s.detector.deepcopy(),
+                             IndexingConfig(method=IndexingMethod.HOUGH), mask,
+                             progress_callback=lambda *a: log.append(str(a[0])))
+        return [m for m in log if "own reflector selection" in m]
+
+    assert run() == []
+    hr.set_spec("Ni", {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0], [2, 2, 0]]})
+    lines = run()
+    assert len(lines) == 1
+    assert "Ni uses its own reflector selection (custom)" in lines[0]
+    assert "{111}" in lines[0] and "{200}" in lines[0] and "{311}" not in lines[0]
+
+
 def test_the_default_list_is_the_effective_default_of_pyebsdindex(tmp_path):
     """Al: six families before PyEBSDIndex, {200} {220} {111} {311} after it."""
     al, _ = _phase(tmp_path, AL_CIF, "Al")

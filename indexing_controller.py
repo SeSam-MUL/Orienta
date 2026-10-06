@@ -788,6 +788,21 @@ def hough_index_patterns(
             rSigma=config.r_sigma,
             max_reflectors=config.max_reflectors,
         )
+    # A phase with a reflector selection of its own says so in the run's log: the
+    # families are part of what the result means.
+    try:
+        import hough_reflectors
+        for _pid, _ph in phase_list:
+            _sp = hough_reflectors.get_spec(getattr(_ph, "name", ""))
+            if _sp is not None:
+                _used = hough_reflectors.describe(_ph, _sp)
+                _progress(
+                    f"Hough: {_ph.name} uses its own reflector selection "
+                    f"({_sp['mode']}): "
+                    + " ".join(f["label"] for f in _used["families"] if f["effective"]),
+                    0.31)
+    except Exception:  # noqa: BLE001 - a log line must never fail the run
+        logger.debug("could not describe the reflector selection", exc_info=True)
     _check_cancel()
 
     # --- Step 3: Extract patterns (35% -> 40%) ---
