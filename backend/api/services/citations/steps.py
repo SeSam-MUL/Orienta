@@ -139,11 +139,13 @@ _STEPS = (
     StepCitation(
         key="pseudosym.resolver",
         label="Pseudo-symmetry resolution",
-        citation_ids=("orienta", "orix"),
+        citation_ids=("orienta", "pyebsdindex", "orix"),
         sentence=(
             "Pseudo-symmetric orientation variants were resolved by "
             "render-based arbitration against the candidate classes of the "
-            "phase point group."
+            "phase point group, relative to an anchor orientation taken from "
+            "Hough indexing with PyEBSDIndex (Rowenhorst et al., 2024) where "
+            "the spherical correlation is not reliable for that point group."
         ),
     ),
     StepCitation(

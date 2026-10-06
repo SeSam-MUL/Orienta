@@ -51,6 +51,17 @@ def test_non_hough_steps_do_not_claim_pyebsdindex():
         assert "pyebsdindex" not in STEP_REGISTRY[key].citation_ids
 
 
+def test_pseudosymmetry_step_credits_the_hough_anchor():
+    """The spherical runs that resolve pseudo-symmetry take their anchor
+    orientation from PyEBSDIndex, so that step cites it and says so."""
+    step = STEP_REGISTRY["pseudosym.resolver"]
+    assert "pyebsdindex" in step.citation_ids
+    assert "orix" in step.citation_ids
+    out = render_methods([{"key": "pseudosym.resolver", "params": {}}])
+    assert "Hough indexing with PyEBSDIndex (Rowenhorst et al., 2024)" in out
+    assert "anchor" in out
+
+
 def test_library_entry_is_complete():
     entry = load_library()["pyebsdindex"]
     assert entry["DOI"] == DOI
