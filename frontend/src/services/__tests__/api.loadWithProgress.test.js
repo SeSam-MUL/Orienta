@@ -103,6 +103,32 @@ describe('ebsdApi.loadWithProgress', () => {
     expect(onProgressCalls.at(-1).stage).toBeDefined();
   });
 
+  // The load registers its request id on the server only once the POST has been
+  // handled and its worker thread has written the first stage. A poll sent in the
+  // same tick as the POST races that and answers 404 ("Unknown request_id"):
+  // harmless to the app, but the browser prints it as a failed request. Measured
+  // against the real backend, a poll 10 ms after the POST is always answered.
+  it('does not poll in the same tick as the POST, only after one interval', async () => {
+    vi.useFakeTimers();
+    let resolvePost;
+    mockPost.mockImplementation(() => new Promise((r) => { resolvePost = r; }));
+    mockGet.mockResolvedValue({
+      data: { stage: 'reading_metadata', stage_idx: 1, stage_total: 4, elapsed_seconds: 0.1, message: 'x' },
+    });
+
+    const loadPromise = ebsdApi.loadWithProgress('/p.h5oina', { pollIntervalMs: 100 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    expect(mockGet).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(99);
+    expect(mockGet).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockGet).toHaveBeenCalledTimes(1);
+
+    resolvePost({ data: { success: true } });
+    await loadPromise;
+  });
+
   it('resolves with the POST response on success', async () => {
     mockPost.mockResolvedValue({ data: { success: true, dataset_name: 'X' } });
     mockGet.mockResolvedValue({

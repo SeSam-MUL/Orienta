@@ -307,9 +307,9 @@ export const ebsdApi = {
     // a cold start. The wall-clock approach tolerates that, while still
     // catching a genuinely dead backend within 10 s.
     //
-    // Note: 404 from the progress endpoint is normal at the very start
-    // (load hasn't written its first stage yet) AND proves the backend is
-    // up and routing requests, so it counts as a successful contact.
+    // Note: a 404 from the progress endpoint (the load has not written its first
+    // stage yet) is tolerated and proves the backend is up and routing requests,
+    // so it counts as a successful contact.
     const STALE_THRESHOLD_MS = 10000;
     // Initialise to "just contacted" so the threshold starts ticking from
     // the moment loadWithProgress is invoked, not from epoch 0.
@@ -376,9 +376,12 @@ export const ebsdApi = {
       }
     };
 
-    // Kick off the first poll on the next tick so the POST has a chance to
-    // register the first stage. setTimeout(...,0) is enough.
-    pollTimer = setTimeout(poll, 0);
+    // First poll one interval after the POST. The server registers the request
+    // id only when it has handled the POST and its worker has written the first
+    // stage; a poll sent in the same tick races that and answers 404, which the
+    // browser prints as a failed request (the app itself ignores it). Measured
+    // against the real backend: a poll 10 ms after the POST is always answered.
+    pollTimer = setTimeout(poll, pollIntervalMs);
 
     const postPromise = api.post(
       '/api/ebsd/load',
