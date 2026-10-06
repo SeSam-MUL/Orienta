@@ -39,17 +39,39 @@ NPM = "npm.cmd" if sys.platform == "win32" else "npm"
 BACKEND_START_TIMEOUT_S = 180
 
 
-def wait_for_server(port, timeout=BACKEND_START_TIMEOUT_S, progress=print):
+def port_in_use(port, host="127.0.0.1") -> bool:
+    """True when something already accepts connections on host:port."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def wait_for_server(port, timeout=BACKEND_START_TIMEOUT_S, progress=print, proc=None):
     """Wait for a server to respond on the given port.
 
     Prints a reassurance every 10 s so a slow first start does not look like
     a hang.
+
+    `proc` is the backend process this launcher started. When it has already
+    ended (the port was taken, an import failed) the wait stops at once and
+    returns False: waiting out the timeout helps nobody, and an OLDER server
+    that happens to answer on the same port must not be taken for ours - the
+    launcher would then open a window onto a backend it did not start and
+    cannot stop.
     """
     import urllib.request
     url = f"http://127.0.0.1:{port}/api/health" if port == BACKEND_PORT else f"http://127.0.0.1:{port}"
     start = time.time()
     last_note = start
     while time.time() - start < timeout:
+        if proc is not None and proc.poll() is not None:
+            if progress is not None:
+                progress(f"  The backend process exited with code {proc.poll()} "
+                         f"before it answered.")
+            return False
         try:
             urllib.request.urlopen(url, timeout=2)
             return True
@@ -156,6 +178,14 @@ def main():
     #                         Required for multi-hour batches and simulations —
     #                         a renderer freeze used to kill the backend with it
     #                         and wipe an in-flight 12 h job.
+    if port_in_use(BACKEND_PORT):
+        print(f"ERROR: Port {BACKEND_PORT} is already in use.")
+        print("       Another Orienta is probably still running - the desktop app, an earlier")
+        print("       start_app.py, or a backend left behind. Quit it and start again;")
+        print("       connecting to it would give you a backend this launcher neither started")
+        print("       nor can stop.")
+        sys.exit(1)
+
     print("[1/3] Starting FastAPI backend...")
     backend_env = _backend_env(headless)
     backend_log = _open_backend_console_log()
@@ -170,11 +200,15 @@ def main():
     )
     _tee_backend_output(backend_proc, backend_log)
 
-    if not wait_for_server(BACKEND_PORT):
-        print(f"ERROR: Backend did not answer within {BACKEND_START_TIMEOUT_S} s.")
+    if not wait_for_server(BACKEND_PORT, proc=backend_proc):
+        if backend_proc.poll() is None:
+            print(f"ERROR: Backend did not answer within {BACKEND_START_TIMEOUT_S} s.")
+        else:
+            print("ERROR: The backend stopped during start-up.")
         print("       See logs/backend-console.log for the reason (a missing package,")
         print("       a port already in use, or an import error).")
-        backend_proc.kill()
+        if backend_proc.poll() is None:
+            backend_proc.kill()
         sys.exit(1)
     print(f"  Backend ready at http://127.0.0.1:{BACKEND_PORT}")
     print(f"  API docs at http://127.0.0.1:{BACKEND_PORT}/docs")
