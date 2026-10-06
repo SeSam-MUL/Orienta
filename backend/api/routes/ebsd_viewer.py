@@ -2221,18 +2221,13 @@ async def background_removal(req: BackgroundRemovalRequest):
                     signal.data[..., exclude] = 0
         else:  # static — reference validated above
             if static_reference == "scan_average":
-                # Mean over every navigation axis, accumulated in float64
-                # (streams chunk by chunk on a lazy signal). The loaded
-                # patterns are the vendor's already-processed patterns, so the
-                # static background stored in the file (the raw detector
-                # background) does not apply to them; the scan average is the
-                # reference kikuchipy recommends when no usable one exists.
-                nav_axes = tuple(range(signal.data.ndim - 2))
-                mean_bg = np.asarray(signal.data.mean(axis=nav_axes, dtype=np.float64))
-                dtype = signal.data.dtype
-                if np.issubdtype(dtype, np.integer):
-                    mean_bg = np.rint(mean_bg)
-                static_bg = mean_bg.astype(dtype)
+                # The loaded patterns are the vendor's already-processed
+                # patterns, so the static background stored in the file (the
+                # raw detector background) does not apply to them; the scan
+                # average is the reference kikuchipy recommends when no usable
+                # one exists.
+                from backend.api.services.static_background import scan_average
+                static_bg = scan_average(signal)
             else:
                 static_bg = signal.data[req.static_bg_row, req.static_bg_col].astype(signal.data.dtype)
             signal.remove_static_background(

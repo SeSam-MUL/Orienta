@@ -48,8 +48,8 @@ import { create } from 'zustand';
  * @property {number} frame_averaging_window
  * @property {boolean} background_removal
  * @property {'dynamic' | 'static'} background_method
- * @property {number} static_bg_row
- * @property {number} static_bg_col
+ * @property {number|null} static_bg_row  reference pattern for 'static' removal; null (with col) = mean of all patterns
+ * @property {number|null} static_bg_col
  * @property {boolean} gauss_background
  * @property {number} circular_mask
  * @property {number} nregions_ahe
@@ -88,8 +88,10 @@ const defaultConfig = () => ({
   frame_averaging_window: 3,
   background_removal: false,
   background_method: 'dynamic',
-  static_bg_row: 0,
-  static_bg_col: 0,
+  // null = no reference pattern: 'static' removal subtracts the mean of all
+  // patterns of each file. Never default to 0 (that is pattern (0,0)).
+  static_bg_row: null,
+  static_bg_col: null,
   gauss_background: true,
   circular_mask: 0,
   nregions_ahe: 10,

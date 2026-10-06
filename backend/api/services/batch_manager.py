@@ -90,8 +90,8 @@ def _apply_preprocessing(signal, config: Dict):
         frame_averaging_window: int (3, 5, 7)
         background_removal: bool
         background_method: 'dynamic' | 'static'
-        static_bg_row: int
-        static_bg_col: int
+        static_bg_row: int | None  (with static_bg_col: one reference pattern;
+        static_bg_col: int | None   both unset: mean of all patterns of the file)
         gauss_background: bool (for spherical)
         nregions_ahe: int (for spherical AHE)
     """
@@ -134,15 +134,32 @@ def _apply_preprocessing(signal, config: Dict):
                 logger.info("Applied dynamic background removal (spatial)")
                 applied["background_removal"] = "dynamic-spatial"
             elif method == "static":
-                row = config.get("static_bg_row", 0)
-                col = config.get("static_bg_col", 0)
-                try:
-                    bg = signal.inav[col, row].data.squeeze()
-                except Exception:
-                    bg = signal.data.reshape(-1, *signal.axes_manager.signal_shape).mean(axis=0)
+                # No reference named -> the mean of all patterns of THIS file;
+                # row AND col named -> that one pattern; one of them -> error.
+                # (Defaulting to pattern (0,0) imprints that pattern's bands,
+                # inverted, on every pattern of the map.)
+                from backend.api.services.static_background import (
+                    scan_average, validate_reference,
+                )
+                ref = validate_reference(
+                    config.get("static_bg_row"), config.get("static_bg_col"))
+                if ref is None:
+                    bg = scan_average(signal)
+                    label = "scan_average"
+                else:
+                    row, col = ref
+                    nav = signal.axes_manager.navigation_shape  # (n_cols, n_rows)
+                    n_cols = int(nav[0]) if len(nav) >= 1 else 1
+                    n_rows = int(nav[1]) if len(nav) >= 2 else 1
+                    if not (0 <= row < n_rows and 0 <= col < n_cols):
+                        raise ValueError(
+                            f"Static-background reference pattern ({row},{col}) "
+                            f"is outside the scan {n_rows}x{n_cols}.")
+                    bg = np.asarray(signal.inav[col, row].data).squeeze()
+                    label = f"{row},{col}"
                 signal.remove_static_background(operation="subtract", static_bg=bg)
-                logger.info("Applied static background removal (ref: %d,%d)", row, col)
-                applied["background_removal"] = f"static@{row},{col}"
+                logger.info("Applied static background removal (reference: %s)", label)
+                applied["background_removal"] = f"static@{label}"
         except Exception as e:
             logger.warning("Background removal failed: %s", e)
             applied["background_removal"] = f"FAILED: {e}"
