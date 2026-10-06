@@ -238,8 +238,10 @@ def _osc_grid_is_hex(raw: bytes, k: int, xstep: Optional[float]) -> bool:
 
     On a square grid every row starts at the same x; on a hexagonal one the
     rows alternate, the odd ones starting half a step to the right. So the
-    start x of the first rows decides it. Anything that cannot be read (no
-    point block, fewer than two rows, non-finite positions) is "not hex": the
+    start x of the first rows decides it, provided the records are laid out as
+    assumed (spacing along a row equal to the stated step). Anything that cannot
+    be read or trusted (no point block, fewer than two rows, a one-point row,
+    non-finite positions, a spacing that does not match) is "not hex": the
     square path is the existing behaviour, and a guess here would refuse files
     that load correctly.
     """
@@ -260,8 +262,15 @@ def _osc_grid_is_hex(raw: bytes, k: int, xstep: Optional[float]) -> bool:
     first = np.concatenate(([0], breaks))
     if first.size < 2:
         return False
-    # Only rows that are complete inside the probe window have a trustworthy
-    # start; the start of every row we have is its first record, so use them all.
+    # Trust the decode only if the records are laid out as assumed: along the
+    # first row the x spacing is the step the file states. A row of one point, or
+    # a spacing that does not match, means the layout is not understood: not hex.
+    first_row = x[: first[1]]
+    if first_row.size < 2:
+        return False
+    spacing = float(np.median(np.abs(np.diff(first_row))))
+    if abs(spacing - abs(xstep)) > 0.1 * abs(xstep):
+        return False
     starts = x[first]
     return bool(np.max(np.abs(starts - starts[0])) > 0.01 * abs(xstep))
 
@@ -294,7 +303,9 @@ def resolve_up1_geometry(up1_path: str) -> Up1Geometry:
     """Resolve nav_shape + step for a UP1/UP2 file, using its ``.osc`` sidecar.
 
     * A hexagonal grid (v3 header flag, or staggered .osc rows) raises
-      :class:`EdaxHexUpError`.
+      :class:`EdaxHexUpError`. A v1 file has no grid in its header, so without
+      an ``.osc`` a hexagonal scan whose pattern count is a perfect square
+      cannot be told from a square one and is read as the square map.
     * v1 (flat header): nav_shape MUST come from the .osc grid; falls back to a
       perfect-square guess only if the pattern count is a square and no .osc is
       present. Otherwise nav_shape is None and the caller should fail loudly.

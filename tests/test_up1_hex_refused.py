@@ -125,6 +125,30 @@ def test_the_load_route_answers_400_with_the_code_and_the_prose(tmp_path, monkey
     assert "hexagonal grid" in r.json()["detail"]
 
 
+def test_only_the_hexagonal_refusal_sets_the_code_header(tmp_path, monkeypatch):
+    """Any exception with a `code` attribute used to be turned into a coded
+    response; an unrelated error that happens to carry one must not be."""
+    monkeypatch.setenv("ORIENTA_ALLOWED_HOSTS", "testserver")
+    from fastapi.testclient import TestClient
+
+    from backend.api.main import app
+    from backend.api.problem import CODE_HEADER
+    from backend.api.routes import ebsd_viewer
+
+    class _Other(Exception):
+        code = "somethingElse"
+
+    def boom(*a, **k):
+        raise _Other("unrelated failure")
+
+    monkeypatch.setattr(ebsd_viewer, "_load_ebsd_blocking", boom)
+    r = TestClient(app, raise_server_exceptions=False).post(
+        "/api/ebsd/load", json={"path": str(tmp_path / "x.up1")})
+    assert r.status_code == 400
+    assert CODE_HEADER.lower() not in r.headers
+    assert r.json()["detail"] == "unrelated failure"
+
+
 # --------------------------------------------------- square files as before
 
 def test_a_square_v1_file_with_real_records_still_resolves(tmp_path):
@@ -143,6 +167,37 @@ def test_a_square_v3_file_still_resolves(tmp_path):
     g = resolve_up1_geometry(str(up))
     assert g.version == 3 and g.nav_shape is None
     assert g.step_yx == pytest.approx((0.7, 0.7))
+
+
+def test_a_layout_that_does_not_match_the_stated_step_is_not_trusted(tmp_path):
+    """Staggered row starts only mean "hexagonal" if the records are laid out as
+    assumed: x spacing along a row equal to the step the file states. Otherwise
+    the decode is not trusted and the file is treated as before (square)."""
+    buf = bytearray(64)
+    struct.pack_into("<3I", buf, 16, 5, 5, 36)
+    buf += b"\x00" * 3 + OSC_MAGIC + struct.pack("<2I", 0, 0) + struct.pack("<2f", 1.0, 0.866)
+    rec = np.zeros((36, 14), dtype="<f4")
+    for r in range(6):
+        for c in range(6):
+            rec[r * 6 + c, 3] = c * 7.0 + (3.5 if r % 2 else 0.0)   # spacing 7, step says 1
+            rec[r * 6 + c, 4] = r * 0.866
+    buf += rec.tobytes()
+    p = tmp_path / "odd.osc"
+    p.write_bytes(bytes(buf))
+    assert read_osc_metadata(str(p)).is_hex is False
+
+
+def test_an_osc_whose_first_row_has_one_point_cannot_be_told(tmp_path):
+    buf = bytearray(64)
+    struct.pack_into("<3I", buf, 16, 0, 5, 6)
+    buf += b"\x00" * 3 + OSC_MAGIC + struct.pack("<2I", 0, 0) + struct.pack("<2f", 1.0, 0.866)
+    rec = np.zeros((6, 14), dtype="<f4")
+    rec[:, 3] = [0, 0.5, 0, 0.5, 0, 0.5]
+    rec[:, 4] = np.arange(6) * 0.866
+    buf += rec.tobytes()
+    p = tmp_path / "one.osc"
+    p.write_bytes(bytes(buf))
+    assert read_osc_metadata(str(p)).is_hex is False
 
 
 def test_the_osc_reader_says_square_for_a_square_grid_and_hex_for_a_staggered_one(tmp_path):
