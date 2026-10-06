@@ -51,6 +51,15 @@ describe('ebsdApi.backgroundRemoval wire format', () => {
     expect(post.mock.calls.at(-1)[1]).toEqual({ method: 'static', request_id: 'rid-1' });
   });
 
+  it('passes a half-specified reference through so the backend can reject it', async () => {
+    const { ebsdApi, post } = await load();
+    post.mockClear();
+    await ebsdApi.backgroundRemoval('static', 2, null);
+    expect(post.mock.calls.at(-1)[1]).toEqual({ method: 'static', static_bg_row: 2 });
+    await ebsdApi.backgroundRemoval('static', null, 3);
+    expect(post.mock.calls.at(-1)[1]).toEqual({ method: 'static', static_bg_col: 3 });
+  });
+
   it('static with an explicit reference pattern sends both coordinates', async () => {
     const { ebsdApi, post } = await load();
     post.mockClear();

@@ -99,6 +99,36 @@ def test_pristine_h5_graph_is_read_in_slabs_not_per_pattern(monkeypatch):
     assert all(k.start % 4 == 0 for k in ds.calls)
 
 
+def test_4d_memmap_source_is_read_in_row_blocks_within_the_byte_bound(monkeypatch, tmp_path):
+    """A 4D (ny, nx, h, w) source (kikuchipy's lazy up1/up2 reader wraps a memmap)
+    slices ROWS of patterns along axis 0: the block size has to count a row, not a
+    pattern, or one block swallows the whole file and progress never advances."""
+    import kikuchipy as kp
+
+    ny, nx = 40, 6
+    a = _patterns(n=ny * nx).reshape(ny, nx, H, W)
+    path = tmp_path / "patterns.dat"
+    mm = np.memmap(path, dtype=np.uint8, mode="w+", shape=a.shape)
+    mm[...] = a
+    mm.flush()
+    ds = CountingDataset(np.memmap(path, dtype=np.uint8, mode="r", shape=a.shape), chunks0=1)
+
+    row_bytes = nx * H * W
+    bound = row_bytes * 5                                    # five rows per block
+    monkeypatch.setattr(sb, "BLOCK_TARGET_BYTES", bound)
+    arr = da.from_array(ds, chunks=(1, nx, H, W))
+    sig = kp.signals.LazyEBSD(arr)
+    assert sb._pristine_source(sig.data) is ds, "4D memmap source must take the slab path"
+
+    seen = []
+    out = sb.scan_average(sig, progress=lambda d, t: seen.append((d, t)))
+
+    assert np.array_equal(out, _old_average(a.reshape(-1, H, W)))
+    assert len(ds.calls) == ny // 5, ds.calls
+    assert all((k.stop - k.start) * row_bytes <= bound for k in ds.calls)
+    assert seen[-1] == (ny // 5, ny // 5) and len(seen) > 2
+
+
 def test_processed_lazy_data_is_not_mistaken_for_the_file(monkeypatch):
     """After a processing step the mean must be of the PROCESSED data."""
     a = _patterns()

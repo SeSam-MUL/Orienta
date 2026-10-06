@@ -2253,11 +2253,11 @@ async def background_removal(req: BackgroundRemovalRequest):
                     signal.data[..., exclude] = 0
         else:  # static — reference validated above
             if static_reference == "scan_average":
-                # The loaded patterns are the vendor's already-processed
-                # patterns, so the static background stored in the file (the
-                # raw detector background) does not apply to them; the scan
-                # average is the reference kikuchipy recommends when no usable
-                # one exists.
+                # No reference named: subtract the mean of all patterns, the
+                # usual choice when no static background is stored and what one
+                # would compute by hand. The static background stored in the
+                # file (if any) is not used: the loaded Oxford patterns are the
+                # vendor-processed ones, which already had it applied.
                 def _avg_progress(done, total):
                     _set_processing_progress(
                         req.request_id, done=done, total=total,

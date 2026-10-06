@@ -474,9 +474,10 @@ export const ebsdApi = {
   backgroundRemoval: (method = 'dynamic', staticBgRow = null, staticBgCol = null, requestId = null) =>
     api.post('/api/ebsd/background-removal', {
       method,
-      ...(method === 'static' && staticBgRow != null && staticBgCol != null
-        ? { static_bg_row: staticBgRow, static_bg_col: staticBgCol }
-        : {}),
+      // Pass through whatever the caller gave: a half-specified reference
+      // must reach the backend (HTTP 400), not silently become the scan average.
+      ...(method === 'static' && staticBgRow != null ? { static_bg_row: staticBgRow } : {}),
+      ...(method === 'static' && staticBgCol != null ? { static_bg_col: staticBgCol } : {}),
       ...(requestId ? { request_id: requestId } : {}),
     }),
   autocontrast: () => api.post('/api/ebsd/autocontrast'),

@@ -182,7 +182,10 @@ def scan_average(
             how = "sequential slabs from the file"
             align = int(src.chunks[0]) if getattr(src, "chunks", None) else 1
             logger.info("Static background: averaging %d patterns (%s) ...", n_patterns, how)
-            total = _sum_blocks(lambda i, j: src[i:j], int(src.shape[0]), item_bytes, align, progress)
+            # One step along axis 0 is a pattern for an (N, h, w) dataset but a
+            # whole row of patterns for a 4D (ny, nx, h, w) one (e.g. a memmap).
+            row_items = int(np.prod(src.shape[1:-2])) if len(src.shape) > 3 else 1
+            total = _sum_blocks(lambda i, j: src[i:j], int(src.shape[0]), item_bytes * row_items, align, progress)
         else:
             how = "block-wise through the dask graph"
             logger.info("Static background: averaging %d patterns (%s) ...", n_patterns, how)
