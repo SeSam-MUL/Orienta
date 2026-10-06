@@ -391,6 +391,50 @@ def test_a_hexagonal_phase_is_shown_in_four_indices(tmp_path):
     assert by["{2-1-10}"]["hkl"] == [2, -1, 0] and by["{2-1-10}"]["hkl4"] == [2, -1, -1, 0]
 
 
+@pytest.mark.parametrize("text,name", [(AL_CIF, "Al"), (MG_CIF, "Mg")])
+def test_the_fast_orbits_are_the_orbits_diffsims_gives(tmp_path, text, name):
+    """The table computes symmetry orbits on plain vectors (orix indexes a Miller
+    once per vector and deep-copies the phase each time). They must be the same
+    orbits: same multiplicity, same rows."""
+    from diffsims.crystallography import ReciprocalLatticeVector as R
+    ph, _ = _phase(tmp_path, text, name)
+    table = hr.candidate_table(ph, 0.9)
+    ref = R(ph.deepcopy(), hkl=np.array(table.reps, dtype=float))
+    sym, mult, idx = ref.symmetrise(return_multiplicity=True, return_index=True)
+    rows = np.rint(np.asarray(sym.hkl)).astype(int)
+    idx = np.asarray(idx).ravel()
+    assert list(mult) == table.mult
+    for i in range(len(table.reps)):
+        assert {tuple(r) for r in rows[idx == i]} ==             {k for k, v in table.row_to_family.items() if v == i}
+
+
+def test_the_orbits_of_a_polar_group_are_not_merged_with_their_inversion(tmp_path):
+    """6mm has no inversion: (102) and (-10-2) are two families, each of 6 rows."""
+    cif = LIB / "ZnO_sd_1400158.cif"
+    if not cif.exists():
+        pytest.skip("crystal library file not present")
+    from diffsims.crystallography import ReciprocalLatticeVector as R
+    ph = hr.phase_from_cif(cif)
+    t = hr.candidate_table(ph, 1.0)
+    assert (1, 0, 2) in t.reps and (1, 0, -2) in t.reps
+    assert t.mult[t.reps.index((1, 0, 2))] == 6
+    # every family: the multiplicity diffsims reports (the table's input vectors
+    # carry rounding noise, which must not split an orbit)
+    ref = R(ph.deepcopy(), hkl=np.array(t.reps, dtype=float))
+    assert list(ref.symmetrise(return_multiplicity=True)[1]) == t.mult
+
+
+def test_the_cache_key_of_a_phase_does_not_change_when_its_labels_are_cleaned(tmp_path):
+    """A mixed-occupancy site ("0.8Fe + 0.2Mn") is rewritten to one symbol the first
+    time reflectors are computed; a key taken before and one taken after must be the
+    same, or the second ask repeats the (minutes long) first."""
+    text = AL_CIF.replace("Al1  Al  0.0  0.0  0.0  1.0", "Al1  '0.8Al + 0.2Si'  0.0  0.0  0.0  1.0")
+    ph, _ = _phase(tmp_path, text, "AlSi")
+    before = hr._structure_hash(ph.deepcopy())
+    hr.candidate_table(ph, 1.0)             # normalises the labels of `ph` in place
+    assert hr._structure_hash(ph) == before
+
+
 def test_the_table_follows_a_custom_spec(tmp_path):
     al, _ = _phase(tmp_path, AL_CIF, "Al")
     d = hr.describe(al, {"mode": "custom", "families": [[1, 1, 1], [2, 2, 0]]})

@@ -223,7 +223,12 @@ def phase_fingerprint(phase):
 
 
 def _structure_hash(phase):
-    """Hashable identity of the crystal (cache key)."""
+    """Hashable identity of the crystal (cache key).
+
+    Element labels are normalised first: the reflector code does that in place on
+    its first use, and a key taken before it would not match the one taken after.
+    """
+    _eu()._normalize_element_labels(phase)
     atoms = []
     try:
         for a in phase.structure:
@@ -499,9 +504,7 @@ def _build_table(phase, min_d):
     keep = f_all >= EXTINCT_REL_F * table.fmax
     ref = ref[keep]
     f_all = f_all[keep]
-    sym, mult, idx = ref.symmetrise(return_multiplicity=True, return_index=True)
-    rows = np.rint(np.asarray(sym.hkl)).astype(int)
-    idx = np.asarray(idx).ravel()
+    rows, idx = _orbit_rows_of(phase, ref)
     d = np.asarray(ref.dspacing).ravel()
     for i in range(len(f_all)):
         fam_rows = rows[idx == i]
@@ -512,6 +515,36 @@ def _build_table(phase, min_d):
         for r in fam_rows:
             table.row_to_family[tuple(int(x) for x in r)] = i
     return table
+
+
+def _orbit_rows_of(phase, rlv):
+    """Every symmetry-equivalent row of each vector of ``rlv``, as integer hkl,
+    and which vector each row belongs to.
+
+    The same orbits as ``ReciprocalLatticeVector.symmetrise(return_index=True)``
+    (the point group applied to the vector, duplicates removed), computed on plain
+    vectors: diffsims/orix index a ``Miller`` once per vector and every index
+    deep-copies the phase with its whole structure, which made the table of a
+    large cell take minutes (gamma-Al3FeSi: 56 s of 83 s).
+    """
+    from orix.vector import Vector3d
+    R = _diffsims()
+    ops = phase.point_group
+    xyz = np.asarray(rlv.data, dtype=float).reshape(-1, 3)
+    v2 = ops.outer(Vector3d(xyz))
+    chunks, owner = [], []
+    for i in range(xyz.shape[0]):
+        vi = v2[:, i].unique()
+        chunks.append(np.asarray(vi.data, dtype=float).reshape(-1, 3))
+        owner.append(np.full(chunks[-1].shape[0], i, dtype=int))
+    data = np.concatenate(chunks, axis=0)
+    hkl = np.rint(np.asarray(R(phase, xyz=data).hkl)).astype(int)
+    owner = np.concatenate(owner)
+    # `unique()` compares floating point vectors: a vector that carries rounding
+    # noise from an earlier change of basis is kept next to its twin. After
+    # rounding to indices the twins are equal rows: drop them.
+    both = np.unique(np.column_stack([owner, hkl]), axis=0)
+    return both[:, 1:], both[:, 0]
 
 
 def candidate_table(phase, min_d=None):
@@ -546,20 +579,28 @@ def _rule_rows(phase, rule):
 
 
 def _extra_family(phase, rep):
-    """Properties of a family that is not in the candidate table (``d`` below
-    ``min_d``, or typed in by the user)."""
-    R = _diffsims()
-    _eu()._normalize_element_labels(phase)
-    phase = phase.deepcopy()      # sanitise_phase() expands in place
-    r = R(phase, hkl=np.array([rep], dtype=float))
-    r.sanitise_phase()
-    r.calculate_structure_factor()
-    f = float(np.abs(np.asarray(r.structure_factor)).ravel()[0])
-    d = float(np.asarray(r.dspacing).ravel()[0])
-    sym, mult = r.symmetrise(return_multiplicity=True)
-    rows = np.rint(np.asarray(sym.hkl)).astype(int)
-    return {"rep": _lexmax_rep(rows), "f": f, "d": d, "mult": int(len(rows)),
-            "rows": rows}
+    """Properties of one family given by a representative: structure factor,
+    spacing, multiplicity and the rows of its orbit. Cached: a selection asks for
+    it again at every click, and the structure of a large cell is expanded each
+    time."""
+    rep = tuple(int(x) for x in rep)
+    key = ("family", _structure_hash(phase), rep)
+
+    def build():
+        R = _diffsims()
+        _eu()._normalize_element_labels(phase)
+        p = phase.deepcopy()      # sanitise_phase() expands in place
+        r = R(p, hkl=np.array([rep], dtype=float))
+        r.sanitise_phase()
+        r.calculate_structure_factor()
+        f = float(np.abs(np.asarray(r.structure_factor)).ravel()[0])
+        d = float(np.asarray(r.dspacing).ravel()[0])
+        # the orbit on the unexpanded phase: only the point group matters
+        rows, _owner = _orbit_rows_of(phase, R(phase, hkl=np.array([rep], dtype=float)))
+        return {"rep": _lexmax_rep(rows), "f": f, "d": d, "mult": int(len(rows)),
+                "rows": rows}
+
+    return _cached(key, build)
 
 
 def _check_allowed(phase, rep):
@@ -617,39 +658,34 @@ def spec_rows(phase, spec):
     if spec["mode"] == "auto":
         return _rule_rows(phase, spec["rule"])
     _check_fingerprint(phase, spec)
+    orbits = []
     for rep in spec["families"]:
-        _check_allowed(phase, rep)
-    table = candidate_table(phase, DEFAULT_RULE["min_d"])
+        info = _check_allowed(phase, rep)
+        orbits.append(info["rows"])
     d_hkl, d_rows = _rule_rows(phase, DEFAULT_RULE)
-    d_fam = np.array([table.row_to_family.get(_row_key(r), -1) for r in d_rows],
-                     dtype=int)
-    wanted, extra = set(), []
-    for rep in spec["families"]:
-        i = table.row_to_family.get(tuple(rep))
-        if i is not None:
-            wanted.add(i)
+    d_keys = [_row_key(r) for r in d_rows]
+    keep = np.zeros(len(d_keys), dtype=bool)
+    covered = set()
+    extra = []
+    for rows in orbits:
+        orbit = {_row_key(r) for r in rows}
+        hit = [i for i, k in enumerate(d_keys) if k in orbit]
+        if hit:
+            keep[hit] = True
         else:
-            extra.append(rep)
-    keep = np.isin(d_fam, list(wanted)) if wanted else np.zeros(len(d_fam), bool)
+            extra.append(rows)
     hkl_parts = [d_hkl[keep]] if keep.any() else []
     rows_parts = [d_rows[keep]] if keep.any() else []
-    # families the default list does not hold (weak, below the cut, or finer
-    # than min_d): whole orbit, once even if two reps name the same one
-    covered = {_row_key(r) for r in (d_rows[keep] if keep.any() else [])}
-    R = _diffsims()
-    # families of the table that the default list leaves out entirely
-    for i in sorted(wanted):
-        if not (d_fam == i).any():
-            extra.append(list(table.reps[i]))
-    for rep in extra:
-        r = R(phase, hkl=np.array([rep], dtype=float)).symmetrise()
-        hk = np.asarray(r.hkl, dtype=float)
-        rw = np.rint(hk).astype(int)
-        fresh = np.array([_row_key(x) not in covered for x in rw], dtype=bool)
+    covered.update(d_keys[i] for i in np.nonzero(keep)[0])
+    # families the default list does not hold at all (weak, below the cut, finer
+    # than min_d, or typed in): the whole orbit, once even if two reps name the
+    # same family
+    for rows in extra:
+        fresh = np.array([_row_key(x) not in covered for x in rows], dtype=bool)
         if fresh.any():
-            hkl_parts.append(hk[fresh])
-            rows_parts.append(rw[fresh])
-            covered.update(_row_key(x) for x in rw[fresh])
+            hkl_parts.append(np.asarray(rows, dtype=float)[fresh])
+            rows_parts.append(np.asarray(rows)[fresh])
+            covered.update(_row_key(x) for x in rows[fresh])
     return np.concatenate(hkl_parts, axis=0), np.concatenate(rows_parts, axis=0)
 
 
