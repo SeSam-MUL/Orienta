@@ -12,8 +12,11 @@
  *   - a heartbeat: a socket can be half-open (the peer vanished without a close
  *     frame) and then neither delivers nor closes. Every `heartbeatMs` we send
  *     {"type":"ping"}; if nothing at all arrives within `pongTimeoutMs`, the
- *     socket is replaced. The backend answers a ping with {"type":"pong"};
- *     any inbound frame counts as proof of life;
+ *     socket is suspect. The backend answers a ping with {"type":"pong"};
+ *     any inbound frame counts as proof of life. A suspect socket is replaced
+ *     unless the optional `probe` (an HTTP request) says the backend is merely
+ *     busy: HTTP timing out too means the event loop is blocked, not that the
+ *     peer is gone, so the socket is kept and asked again;
  *   - an immediate retry when the tab becomes visible again or the network
  *     comes back, because timers in a background tab are throttled to a crawl
  *     and a backoff that has grown to 15 s would otherwise be paid in full;
@@ -26,7 +29,11 @@
 export const BACKOFF_BASE_MS = 1000;
 export const BACKOFF_MAX_MS = 15000;
 export const HEARTBEAT_MS = 25000;
-export const PONG_TIMEOUT_MS = 10000;
+// Generous on purpose. The backend answers a ping from its event loop, and that
+// loop is blocked for tens of seconds by GIL-bound work (cold imports, a long
+// Hough or spherical run, averaging a big scan). A healthy socket must survive
+// that; a truly dead one is still replaced a minute later.
+export const PONG_TIMEOUT_MS = 60000;
 
 /** Delay before reconnect attempt number `attempt` (0 = first retry). */
 export function backoffDelayMs(attempt, { baseMs = BACKOFF_BASE_MS, maxMs = BACKOFF_MAX_MS } = {}) {
@@ -38,6 +45,9 @@ export function backoffDelayMs(attempt, { baseMs = BACKOFF_BASE_MS, maxMs = BACK
  * @param {() => string} opts.url        evaluated on every attempt
  * @param {(msg: object) => void} [opts.onMessage]  parsed JSON frames only
  * @param {(status: string) => void} [opts.onStatus]
+ * @param {() => Promise<'ok'|'timeout'|'error'>} [opts.probe]  asked when a pong
+ *   is overdue: 'timeout' = backend busy (keep the socket), anything else =
+ *   the socket is dead (replace it)
  * @returns {{ close: () => void, reconnectNow: () => void }}
  */
 export function openReconnectingSocket({
@@ -48,6 +58,7 @@ export function openReconnectingSocket({
   maxMs = BACKOFF_MAX_MS,
   heartbeatMs = HEARTBEAT_MS,
   pongTimeoutMs = PONG_TIMEOUT_MS,
+  probe = null,
 }) {
   let ws = null;
   let attempt = 0;
@@ -56,6 +67,9 @@ export function openReconnectingSocket({
   let pingTimer = null;
   let pongTimer = null;
   let lastStatus = null;
+  // Bumped whenever the heartbeat is reset, so a probe answer that arrives after
+  // proof of life (or after the socket changed) is ignored.
+  let epoch = 0;
 
   const emit = (status) => {
     if (stopped || status === lastStatus) return;
@@ -64,6 +78,7 @@ export function openReconnectingSocket({
   };
 
   const clearHeartbeat = () => {
+    epoch += 1;
     if (pingTimer) { clearTimeout(pingTimer); pingTimer = null; }
     if (pongTimer) { clearTimeout(pongTimer); pongTimer = null; }
   };
@@ -92,10 +107,27 @@ export function openReconnectingSocket({
     pingTimer = setTimeout(() => {
       pingTimer = null;
       if (stopped || ws !== socket || socket.readyState !== WebSocket.OPEN) return;
-      try { socket.send(JSON.stringify({ type: 'ping' })); } catch { abandon(socket); return; }
-      pongTimer = setTimeout(() => { pongTimer = null; if (ws === socket) abandon(socket); },
-        pongTimeoutMs);
+      sendPing(socket);
     }, heartbeatMs);
+  };
+
+  const sendPing = (socket) => {
+    try { socket.send(JSON.stringify({ type: 'ping' })); } catch { abandon(socket); return; }
+    pongTimer = setTimeout(() => { pongTimer = null; pongOverdue(socket); }, pongTimeoutMs);
+  };
+
+  const pongOverdue = (socket) => {
+    if (stopped || ws !== socket) return;
+    if (!probe) { abandon(socket); return; }
+    const mine = epoch;
+    Promise.resolve()
+      .then(probe)
+      .catch(() => 'error')
+      .then((verdict) => {
+        if (stopped || ws !== socket || epoch !== mine) return;   // moved on meanwhile
+        if (verdict === 'timeout') sendPing(socket);              // busy, not gone: ask again
+        else abandon(socket);
+      });
   };
 
   function connect() {
@@ -125,7 +157,11 @@ export function openReconnectingSocket({
     socket.onerror = () => {};
 
     socket.onclose = () => {
-      if (ws === socket) ws = null;
+      // A socket that was replaced while it was still closing says nothing about
+      // the connection now in use: no status, no retry, and above all no reset
+      // of the new socket's heartbeat.
+      if (ws !== socket) return;
+      ws = null;
       clearHeartbeat();
       if (stopped) return;
       emit('reconnecting');

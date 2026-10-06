@@ -1676,6 +1676,23 @@ export const crystalHintApi = {
  * visible again (see reconnectingSocket.js). `onStatus` receives 'connecting' |
  * 'open' | 'reconnecting'. Returns `{ close, reconnectNow }`.
  */
+/**
+ * Is the backend busy or gone? Asked by the socket heartbeat when a pong is
+ * overdue. 'ok' = something answered over HTTP; 'timeout' = nothing came back in
+ * time (a blocked event loop answers neither pings nor requests, but the peer is
+ * still there); 'error' = the connection failed outright.
+ */
+export const probeBackend = async () => {
+  try {
+    await healthCheck();
+    return 'ok';
+  } catch (e) {
+    if (e?.response) return 'ok';
+    if (e?.code === 'ECONNABORTED' || e?.code === 'ETIMEDOUT') return 'timeout';
+    return 'error';
+  }
+};
+
 export const openBackendSocket = ({ onMessage, onStatus } = {}) => {
   const url = () => {
     const wsBase = API_BASE
@@ -1685,6 +1702,7 @@ export const openBackendSocket = ({ onMessage, onStatus } = {}) => {
   return openReconnectingSocket({
     url,
     onMessage,
+    probe: probeBackend,
     // A drop leaves a trace in the problem-report trail: when the socket went
     // away is exactly what a later bug report needs and cannot reconstruct.
     onStatus: (status) => {

@@ -27,4 +27,10 @@ describe('App socket wiring', () => {
     const status = block.slice(block.indexOf('onStatus'), block.indexOf('onStatus') + 400);
     expect(status).toMatch(/syncFromBackend\(\)/);
   });
+
+  it('hands the heartbeat the HTTP probe, so a busy backend keeps its socket', () => {
+    const api = readFileSync(new URL('./services/api.js', import.meta.url), 'utf8');
+    const block = api.slice(api.indexOf('export const openBackendSocket'));
+    expect(block).toMatch(/probe:\s*probeBackend/);
+  });
 });
