@@ -75,7 +75,12 @@ Typical entry points:
 
 ### 3. Set method parameters
 
-5. **Hough:** set *Bands*, *t-sigma*, *r-sigma* (band-detection sensitivity).
+5. **Hough:** set *Bands* (how many of the strongest Radon peaks of each pattern
+   are used), *t-sigma* and *r-sigma* (the widths, in Radon bins, of the band
+   detector along theta and across the band). Hover a label for what it does and
+   its default; Orienta's defaults (12, 2, 2) differ from PyEBSDIndex's own
+   (9, 1, 1.2). Each phase card also has a **Reflector families** table (see
+   below).
 6. **Dictionary:** set *Metric* (NCC/…), *Keep N* (top matches retained),
    *Resolution* (dictionary angular step, degrees) and *Energy* (kV). Use
    **Generate Dictionary…** if you need to build the dictionary first. Pick the
@@ -202,9 +207,50 @@ half of what the machine actually has free (never a fixed number, so it adapts
 to the computer you are on), and the refusal names the phase, its symmetry, and
 what each reflector count would cost.
 
-### The Reflectors control
+### Reflector families: which planes a phase is indexed with
 
-Each phase card in a **Hough** run carries a **Reflectors** dropdown listing
+Hough indexing matches the detected bands against the angles between a short
+list of plane **families**. The default list is built by a rule (spacing
+*d* ≥ 1 Å, |F| above a tenth of the strongest, at most 70 rows) and PyEBSDIndex
+then drops any family whose pole is a multiple of an earlier one: for aluminium
+the six families {111} {200} {220} {311} {222} {400} become four, because {222}
+repeats {111} and {400} repeats {200}.
+
+Each phase card of a Hough run (and each loaded phase on the **PC Refinement**
+page) has a **Reflector families** card. Open it to see every candidate family
+with its spacing, relative |F| and multiplicity, and which ones are used.
+
+- **Untick** a family to leave it out, or tick one back in. Unticking {111}
+  while {222} is still ticked changes nothing, because {222} is the same pole
+  and takes its place; the table shows that.
+- **Strongest N** keeps the N families with the largest structure factor.
+- **Add family** takes `hkl` (or `hkil` for hexagonal and trigonal phases) and
+  refuses a reflection the crystal forbids.
+- **Rule for the default list** changes *min d* and the |F| threshold.
+- **Reset to default** removes your selection.
+
+A phase without a selection is indexed exactly as before. Hough indexing needs
+at least two distinct families, and PyEBSDIndex cannot build its library from
+every pair; such a selection is refused when you make it, with the reason. The
+choice is stored per phase on the backend, so it applies to every Hough build of
+that phase, on both pages and in batch runs, until you reset it. A selection made
+for a different crystal (another space group or cell) is never applied; the card
+says so and offers the reset. The run log names a phase that used its own
+selection and lists the families it used.
+
+Measured on SampleB (Al, 600 patterns, 20x30 region): the default list written
+out as a selection gives the **identical** result; unticking {111} and {222}
+changes the CI of every pixel, leaves one pixel unindexed, and moves the
+orientation of 52 of the other 599 by more than 5 degrees. Compare the map against the default before relying on a
+reduced list, exactly as for the row count below.
+
+### The reflector rows control
+
+Each phase card in a **Hough** run carries a **Reflector rows** dropdown. It
+counts **rows** of the reflector list (every symmetry equivalent and both signs
+of a reflector is one row), not families: aluminium's 64 rows are six families,
+and the first 24 rows leave out {111}. It is a memory guard for runs without a
+family selection, and is not used for a phase that has one. It lists
 every option with its price, e.g. `all 70 — 44.73 GiB (too big)`, `40 — 1.45
 GiB`, `32 — 0.32 GiB`. Options that do not fit stay selectable and are marked;
 hiding them would read as "this was never possible" and the run would then fail

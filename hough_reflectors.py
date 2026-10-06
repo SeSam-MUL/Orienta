@@ -918,14 +918,13 @@ def validate_family(phase, value, spec=None):
     if in_spec:
         raise SpecError("duplicate", f"{label} is already in the list.",
                         label=label, hkl=list(rep_canon))
+    # Parallel to a family the choice already holds: PyEBSDIndex will keep one of
+    # the two. (Families that are only candidates do not count: they are not used.)
     mates = []
-    for j, other in enumerate(table.reps):
-        if _direction(other) == _direction(rep_canon) and (known is None or j != known):
-            mates.append(family_label(other, hex4))
     for c in current:
         if _direction(c) == _direction(rep_canon):
             lab = family_label(c, hex4)
-            if lab not in mates and lab != label:
+            if lab != label and lab not in mates:
                 mates.append(lab)
     return {
         "hkl": [int(x) for x in rep_canon],
@@ -936,7 +935,7 @@ def validate_family(phase, value, spec=None):
         "rel_f": round(info["f"] / (table.fmax or info["f"] or 1.0), 4),
         "mult": info["mult"],
         "parallel_with": mates,
-        "in_default_list": known is not None,
+        "in_candidates": known is not None,
     }
 
 

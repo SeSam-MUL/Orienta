@@ -441,7 +441,7 @@ def test_a_valid_family_reports_its_numbers(tmp_path):
     info = hr.validate_family(al, "4 2 2")
     assert info["label"] == "{422}" and info["mult"] == 24
     assert info["d"] == pytest.approx(0.8267, abs=2e-3)
-    assert info["in_default_list"] is False
+    assert info["in_candidates"] is False
     # the representative is the same whatever member was typed
     assert hr.validate_family(al, [-2, 2, 4])["hkl"] == info["hkl"]
 
@@ -458,6 +458,14 @@ def test_a_parallel_family_is_allowed_but_named(tmp_path):
     al, _ = _phase(tmp_path, AL_CIF, "Al")
     info = hr.validate_family(al, [4, 0, 0], {"mode": "custom", "families": [[2, 0, 0]]})
     assert info["parallel_with"] == ["{200}"]
+
+
+def test_a_candidate_that_is_not_used_is_not_named_as_a_parallel_family(tmp_path):
+    """{200} is in the table but not in this choice: adding {400} repeats nothing
+    that PyEBSDIndex would use."""
+    al, _ = _phase(tmp_path, AL_CIF, "Al")
+    info = hr.validate_family(al, [4, 0, 0], {"mode": "custom", "families": [[1, 1, 1]]})
+    assert info["parallel_with"] == []
 
 
 def test_four_index_input_is_converted_and_checked(tmp_path):
