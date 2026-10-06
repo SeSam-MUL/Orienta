@@ -80,7 +80,8 @@ async def propagate_pc_to_parent(dataset: str):
             detail=f"Parent '{entry.parent_name}' is no longer loaded",
         )
 
-    calibration_store.update_pc(entry.parent_name, entry.pc_single, source="propagated")
+    calibration_store.update_pc(entry.parent_name, entry.pc_single, source="propagated",
+                                refinement=entry.pc_refinement)
     pc_list = list(float(v) for v in entry.pc_single)
     logger.info("Propagated PC %s from '%s' to parent '%s'", pc_list, dataset, entry.parent_name)
 

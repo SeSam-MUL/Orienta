@@ -47,6 +47,13 @@ class CalibrationEntry:
     tilt: float = 0.0
     azimuthal: float = 0.0
     parent_name: Optional[str] = None
+    #: Set when the PC (or PC map) of this entry came out of PC refinement, which
+    #: runs PyEBSDIndex's PC optimiser: ``{"n_patterns": int, "method": "PSO"|"NM"}``.
+    #: ``None`` for every other origin (file, typed, imported map). Read when a run
+    #: is indexed, so its citation trail credits the software that produced the PC.
+    #: Every write of the PC replaces it, so it can only describe the PC that is
+    #: stored now.
+    pc_refinement: Optional[dict] = None
 
     def to_dict(self) -> dict:
         """JSON-serialisable summary for API responses.
@@ -68,6 +75,10 @@ class CalibrationEntry:
             "azimuthal": float(self.azimuthal),
             "parent_name": self.parent_name,
         }
+
+
+def _copy_refinement(refinement: Optional[dict]) -> Optional[dict]:
+    return dict(refinement) if refinement else None
 
 
 class CalibrationStore:
@@ -173,6 +184,7 @@ class CalibrationStore:
                 tilt=parent.tilt,
                 azimuthal=parent.azimuthal,
                 parent_name=parent_name,
+                pc_refinement=_copy_refinement(parent.pc_refinement),
             )
             self._entries[name] = entry
 
@@ -214,6 +226,7 @@ class CalibrationStore:
                 tilt=parent.tilt,
                 azimuthal=parent.azimuthal,
                 parent_name=parent_name,
+                pc_refinement=_copy_refinement(parent.pc_refinement),
             )
             self._entries[name] = entry
 
@@ -231,7 +244,8 @@ class CalibrationStore:
     # ------------------------------------------------------------------
 
     def update_pc(
-        self, name: str, pc, source: str = "refined"
+        self, name: str, pc, source: str = "refined",
+        refinement: Optional[dict] = None,
     ) -> bool:
         """Update the single-PC value for a dataset.
 
@@ -240,6 +254,10 @@ class CalibrationStore:
         pc : array-like, shape (3,)
         source : str
             Origin of this PC value ("refined", "manual", etc.).
+        refinement : dict, optional
+            ``{"n_patterns", "method"}`` when this PC was produced by PC
+            refinement. Anything else (the default) clears the record: the PC
+            stored now no longer comes from a refinement.
 
         Returns True if the entry existed and was updated.
         """
@@ -279,20 +297,24 @@ class CalibrationStore:
                 entry.pc_map = entry.pc_map + delta
                 entry.pc_single = pc_arr
                 entry.pc_source = source
+                entry.pc_refinement = _copy_refinement(refinement)
                 action = "rigid-shift"
             else:
                 # No map: plain single-PC update (original behaviour).
                 entry.pc_single = pc_arr
                 entry.pc_source = source
+                entry.pc_refinement = _copy_refinement(refinement)
                 action = "single"
         logger.info("update_pc(%r): [%.4f, %.4f, %.4f] source=%s (%s)",
                     name, *pc_arr, source, action)
         return True
 
-    def update_pc_map(self, name: str, pc_map: np.ndarray) -> bool:
+    def update_pc_map(self, name: str, pc_map: np.ndarray,
+                      refinement: Optional[dict] = None) -> bool:
         """Set per-pixel PC map for a dataset.
 
-        Also updates pc_single to the mean of the map.
+        Also updates pc_single to the mean of the map. ``refinement`` is as for
+        :meth:`update_pc`: given only when the map was fitted from refined PCs.
         """
         pc_map = np.asarray(pc_map, dtype=float)
         with self._lock:
@@ -303,6 +325,7 @@ class CalibrationStore:
             entry.pc_map = pc_map.copy()
             entry.pc_single = pc_map.reshape(-1, 3).mean(axis=0)
             entry.pc_source = "refined_map"
+            entry.pc_refinement = _copy_refinement(refinement)
         logger.info(
             "update_pc_map(%r): shape %s, mean [%.4f, %.4f, %.4f]",
             name, pc_map.shape, *entry.pc_single,

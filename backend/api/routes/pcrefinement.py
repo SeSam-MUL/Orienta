@@ -42,7 +42,17 @@ def _track_task(task_id: str, initial_state: dict) -> None:
         _optimization_tasks.popitem(last=False)
 
 
-def _writeback_refined_pc(dataset_name: str, pc, store=None, source: str = "refined") -> None:
+def _refinement_record(n_patterns: int, method) -> dict:
+    """What the calibration store keeps about a PC that came from refinement.
+
+    ``method`` is what the page sent to the optimiser: "PSO" or "Nelder-Mead".
+    """
+    name = "PSO" if str(method).strip().upper() == "PSO" else "Nelder-Mead"
+    return {"n_patterns": int(n_patterns), "method": name}
+
+
+def _writeback_refined_pc(dataset_name: str, pc, store=None, source: str = "refined",
+                          refinement: Optional[dict] = None) -> None:
     """Write a single PC to the dataset AND its parent (F2).
 
     A Global PC Refine almost always runs on a *derived* copy (e.g.
@@ -53,12 +63,17 @@ def _writeback_refined_pc(dataset_name: str, pc, store=None, source: str = "refi
     through the F1-gated ``update_pc`` (a header/inherited per-pixel map is
     rigid-shifted; a genuine ``refined_map`` is preserved), so this is safe to
     call unconditionally. ``store`` is injectable for testing.
+
+    ``refinement`` (``{"n_patterns", "method"}``) is given by the refine routes
+    and recorded with the PC on both entries, so a run indexed at it can credit
+    the software that refined it; a manual PC passes none and clears it.
     """
     store = store or calibration_store
-    store.update_pc(dataset_name, pc, source=source)
+    store.update_pc(dataset_name, pc, source=source, refinement=refinement)
     entry = store.get_entry(dataset_name)
     if entry is not None and entry.parent_name:
-        store.update_pc(entry.parent_name, pc, source="propagated")
+        store.update_pc(entry.parent_name, pc, source="propagated",
+                        refinement=refinement)
 
 
 @dataclass
@@ -1405,7 +1420,9 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
             # PC — on the active dataset AND its parent (F2), so a refine on a
             # derived copy reaches the raw dataset the user phase-tests/indexes/exports.
             from backend.api.routes.ebsd_viewer import _active_dataset
-            _writeback_refined_pc(_active_dataset, mean_pc)
+            _writeback_refined_pc(
+                _active_dataset, mean_pc,
+                refinement=_refinement_record(len(patterns_data), method))
 
             # Re-index first pattern with new PC to get updated segments
             ci = None
@@ -1630,7 +1647,9 @@ async def calibrate_grid(req: GridCalibrationRequest, background_tasks: Backgrou
             # and was invisible to every store consumer.
             try:
                 from backend.api.routes.ebsd_viewer import _active_dataset as _grid_ds
-                calibration_store.update_pc_map(_grid_ds, _np.asarray(new_det.pc).reshape(nr, nc, 3))
+                calibration_store.update_pc_map(
+                    _grid_ds, _np.asarray(new_det.pc).reshape(nr, nc, 3),
+                    refinement=_refinement_record(n_pts, req.method))
             except Exception:
                 logger.warning("grid-calibration store write-back skipped", exc_info=True)
 

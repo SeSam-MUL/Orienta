@@ -723,6 +723,32 @@ def _attach_indexing_metadata(
         # Store a defensive copy so later mutations of det_params don't
         # leak into the registered result.
         md["detector_geometry"] = dict(det_params)
+    _record_pc_refinement_step(result)
+
+
+def _record_pc_refinement_step(result) -> None:
+    """Credit PyEBSDIndex when the run's pattern centre came from PC refinement.
+
+    Every method indexes at the active dataset's stored PC. The calibration
+    store entry records whether that PC (or PC map) was produced by Orienta's PC
+    refinement, which runs PyEBSDIndex's optimiser; a PC that was typed, read
+    from the file or imported records nothing. ``replace`` keeps the call
+    idempotent.
+    """
+    try:
+        from backend.api.routes.ebsd_viewer import _active_dataset
+        from backend.api.services.calibration_store import calibration_store
+        from backend.api.services.citations.provenance import record_step
+
+        entry = calibration_store.get_entry(_active_dataset)
+        refinement = getattr(entry, "pc_refinement", None)
+        if refinement:
+            record_step(result, "calibration.pc_refinement", dict(refinement),
+                        replace=True)
+    except Exception:
+        # Bookkeeping must never abort or fail an indexing run.
+        logger.warning("could not record the PC-refinement citation step",
+                       exc_info=True)
 
 
 import re as _re

@@ -34,8 +34,14 @@ Which keys are WIRED (i.e. some code path calls ``record_step`` with them):
 ``indexing.hough``, ``indexing.hough_reflectors`` (only for a phase indexed with its
 own reflector selection), ``indexing.dictionary``, ``indexing.spherical``,
 ``indexing.spherical_emsphinx``, ``eds.chemistry_prior``,
-``eds.particle_rescue``, ``pseudosym.resolver``, ``indexing.hough_anchor``
-and ``refinement.orientation``.
+``eds.particle_rescue``, ``pseudosym.resolver``, ``indexing.hough_anchor``,
+``calibration.pc_refinement`` and ``refinement.orientation``.
+
+``calibration.pc_refinement`` is recorded on a result only when the pattern
+centre the run was indexed at really came out of PC refinement (global refine
+or grid calibration, both PyEBSDIndex's optimiser): the calibration store entry
+carries that origin and every other way of setting the PC clears it, so a
+typed PC, the file's PC, or a newly loaded file records nothing.
 
 ``indexing.hough_anchor`` is recorded by ``spherical_gpu_index_patterns`` only
 when the pseudo-symmetry resolver really ran PyEBSDIndex and substituted its
@@ -91,6 +97,16 @@ _STEPS = (
             "PyEBSDIndex (Rowenhorst et al., 2024), which performs the "
             "Radon-transform band detection and the band indexing by triplet "
             "voting, called from Orienta {orienta_version}."
+        ),
+    ),
+    StepCitation(
+        key="calibration.pc_refinement",
+        label="Pattern-centre refinement",
+        citation_ids=("pyebsdindex", "kikuchipy"),
+        sentence=(
+            "The pattern centre was refined with PyEBSDIndex's PC "
+            "optimisation (Rowenhorst et al., 2024) on {n_patterns} "
+            "calibration patterns ({method})."
         ),
     ),
     StepCitation(

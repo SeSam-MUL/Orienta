@@ -185,6 +185,7 @@ async def copy_pc(req: CopyPCRequest):
     """
     source_key = _resolve_dataset_name(req.source_dataset)
     source_pc = calibration_store.get_pc(source_key)
+    source_entry = calibration_store.get_entry(source_key)
     if source_pc is None:
         raise HTTPException(
             404,
@@ -204,7 +205,9 @@ async def copy_pc(req: CopyPCRequest):
                 "error": f"not in store (need quick-load for key={target_key!r})",
             })
             continue
-        calibration_store.update_pc(target_key, source_pc, source="inherited")
+        calibration_store.update_pc(
+            target_key, source_pc, source="inherited",
+            refinement=(source_entry.pc_refinement if source_entry else None))
         entry = calibration_store.get_entry(target_key)
         entry.parent_name = source_key
         results.append({
