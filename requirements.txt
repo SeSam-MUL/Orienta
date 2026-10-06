@@ -1,12 +1,13 @@
 # Core scientific libraries
-# Upper bounds until the newer releases are validated on real data.
-# orix 0.15 changes the order in which misorientation reduction applies symmetry, which the
-# pseudo-symmetry code depends on; kikuchipy 0.12.1 excludes pyebsdindex 0.3.10 over a PC bug.
-kikuchipy>=0.11.3,<0.12
-orix>=0.14,<0.15
+# Upper bounds stop at the next minor release after the newest versions checked on real
+# data: kikuchipy 0.13.1, orix 0.15.0, pyebsdindex 0.3.10.1 (and the older 0.11.3 / 0.14.1 /
+# 0.3.9.1). pyebsdindex 0.3.10 is excluded, as kikuchipy 0.12.1 and later do, over a pattern
+# centre bug fixed in 0.3.10.1.
+kikuchipy>=0.11.3,<0.14
+orix>=0.14,<0.16
 diffsims>=0.7
 diffpy.structure>=3.3  # space-group symmetry orbits for forward_sim U_g table
-pyebsdindex>=0.3,<0.3.10
+pyebsdindex>=0.3,!=0.3.10,<0.4
 hyperspy>=2.4
 numpy
 scipy
