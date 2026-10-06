@@ -6,7 +6,7 @@
  */
 
 import { create } from 'zustand';
-import { ebsdApi } from '../services/api';
+import { ebsdApi, isFileLoadInFlight } from '../services/api';
 
 const useDataStore = create((set, get) => ({
   // --- File State ---
@@ -188,9 +188,15 @@ const useDataStore = create((set, get) => ({
    * Returns true if a file was synced, false if backend has nothing.
    */
   syncFromBackend: async () => {
+    // A load or switch in flight is about to set this state itself; reading the
+    // backend half-way through would race it.
+    if (isFileLoadInFlight()) return false;
     try {
+      // A FAILED info request is not an answer: it rejects into the catch below
+      // and leaves the store as it is. Only a reply that says loaded:false may
+      // clear an open file.
       const [infoRes, metaRes] = await Promise.all([
-        ebsdApi.info().catch(() => ({ data: { loaded: false } })),
+        ebsdApi.info(),
         ebsdApi.getMetadata().catch(() => ({ data: {} })),
       ]);
       const info = infoRes.data || {};

@@ -25,8 +25,30 @@ const api = axios.create({
 //
 // The error object is re-rejected UNCHANGED: call sites read
 // `err.response?.data?.detail` and must keep working exactly as before.
+// Requests that change which file the backend has loaded, and how many are
+// pending. A store resync that runs in the middle of one reads half-changed
+// state, so it asks isFileLoadInFlight() first. Counted here because every
+// request passes these interceptors, whichever page issued it.
+let fileLoadsInFlight = 0;
+const changesLoadedFile = (config) =>
+  String(config?.method || '').toLowerCase() === 'post'
+  && FILE_SETTING_PATHS.some((p) => String(config?.url || '').includes(p));
+const fileLoadSettled = (config) => {
+  if (config?.metadata?.fileLoad) {
+    config.metadata.fileLoad = false;
+    fileLoadsInFlight = Math.max(0, fileLoadsInFlight - 1);
+  }
+};
+
+/** True while a load / switch-file / open request is pending. */
+export const isFileLoadInFlight = () => fileLoadsInFlight > 0;
+
 api.interceptors.request.use((config) => {
   config.metadata = { start: Date.now() };
+  if (changesLoadedFile(config)) {
+    config.metadata.fileLoad = true;
+    fileLoadsInFlight += 1;
+  }
   return config;
 });
 
@@ -54,6 +76,7 @@ function noteLoadedFile(config) {
 
 api.interceptors.response.use(
   (response) => {
+    fileLoadSettled(response.config);
     addHttpBreadcrumb({
       method: response.config?.method,
       url: response.config?.url,
@@ -64,6 +87,7 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
+    fileLoadSettled(error?.config);
     try {
       if (!axios.isCancel?.(error)) {
         const cfg = error.config || {};
