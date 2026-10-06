@@ -442,6 +442,10 @@ def test_index_and_simulate_draws_the_chosen_families(client, cifs):
     pcr._sim_cache.clear()
     assert few["n_bands"] < full["n_bands"]
     assert few["n_bands"] > 0
+    # and the pattern was indexed with an indexer built from the new list
+    poles = {tuple(int(x) for x in r)
+             for r in np.asarray(ctrl.indexer.phaselist[0].polefamilies).reshape(-1, 3)}
+    assert poles == {(1, 1, 1), (2, 0, 0)}
 
 
 def test_the_pc_page_indexer_is_built_from_the_choice_for_two_phases(cifs):
