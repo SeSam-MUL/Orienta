@@ -36,6 +36,7 @@ import { useTranslation } from 'react-i18next';
 import { colors as C } from '../../theme/tokens';
 import { keyForPath } from '../PhaseCollections/collectionFilter';
 import { cleanPastedPath } from './phasePath';
+import { groupLabel } from './phaseGroups';
 
 function fileTypeTag(fileType, t) {
   switch (fileType) {
@@ -131,11 +132,12 @@ export default function PhaseDropdown({
         (f.formula || '').toLowerCase().includes(q) ||
         (f.phase_name || '').toLowerCase().includes(q) ||
         (f.filename || '').toLowerCase().includes(q) ||
-        (f.element_group || '').toLowerCase().includes(q)
+        (f.element_group || '').toLowerCase().includes(q) ||
+        groupLabel(f.element_group, t).toLowerCase().includes(q)
       );
     }
     return files;
-  }, [discoveredFiles, collectionKeys, allowedPaths, method, search]);
+  }, [discoveredFiles, collectionKeys, allowedPaths, method, search, t]);
 
   // Group files
   const grouped = useMemo(() => {
@@ -206,7 +208,7 @@ export default function PhaseDropdown({
               fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
               userSelect: 'none',
             }}>
-              {groupName}
+              {groupLabel(groupName, t)}
             </div>
             {files.map(file => (
               <CheckboxEntry

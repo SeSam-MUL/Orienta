@@ -103,6 +103,8 @@
   "phaseDropdown": {
     "search": "搜索相...",
     "more": "其他",
+    "groupPureElements": "纯元素",
+    "groupOther": "其他",
     "noMatch": "无匹配",
     "noPhases": "未找到相",
     "loading": "正在加载相…",

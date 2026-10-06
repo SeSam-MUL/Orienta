@@ -103,6 +103,8 @@
   "phaseDropdown": {
     "search": "Phase suchen...",
     "more": "Weitere",
+    "groupPureElements": "Reine Elemente",
+    "groupOther": "Sonstiges",
     "noMatch": "Keine Treffer",
     "noPhases": "Keine Phasen gefunden",
     "loading": "Phasen werden geladen…",

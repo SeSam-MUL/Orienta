@@ -103,6 +103,8 @@
   "phaseDropdown": {
     "search": "相を検索...",
     "more": "その他",
+    "groupPureElements": "純元素",
+    "groupOther": "その他",
     "noMatch": "一致なし",
     "noPhases": "相が見つかりません",
     "loading": "相を読み込み中…",
