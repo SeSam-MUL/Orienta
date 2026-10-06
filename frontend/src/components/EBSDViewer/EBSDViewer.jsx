@@ -16,6 +16,7 @@ import { formatTime } from '../../i18n/formatDateTime';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ebsdApi, edsApi, pcApi } from '../../services/api';
+import { problemText } from '../../services/problemText';
 import useDataStore from '../../stores/useDataStore';
 import useEdsColorStore from '../../stores/useEdsColorStore';
 import useLoadedFilesStore from '../../stores/useLoadedFilesStore';
@@ -755,7 +756,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       // Modal stays open in error state — user clicks Close to dismiss.
       // loadProgressState was set to {stage:'error', message: detail} by
       // loadWithProgress's rejection path.
-      const msg = err.response?.data?.detail || err.message || t('load.loadFailed');
+      // problemText: a coded refusal reads in the language of the page, anything
+      // else is the server's prose, as before.
+      const msg = problemText(err, t, 'ebsdviewer') || t('load.loadFailed');
       setLoadError(msg);
       log(t('logMessages.errorPrefix', { error: msg }));
       toast.error(t('logMessages.loadFailedToast', { error: msg }));

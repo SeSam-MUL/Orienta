@@ -381,5 +381,8 @@
     "exportedImageTo": "图像已导出到 {{path}}",
     "exportedImage": "图像已导出为 {{name}}",
     "edsOnlyLoaded": "{{name}} 不含衍射花样 — 仅有 EDS 元素分布（{{elements}} 种元素）和 {{images}} 幅 SE/BSE 图像。花样与标定视图将保持为空；请打开 EDS 页面。"
+  },
+  "errors": {
+    "edaxHexUpUnsupported": "此 EDAX UP1/UP2 扫描是在六方网格上采集的。重新采样为方形网格目前仅支持 EDAX H5 文件——请在 OIM 中将该扫描导出为 H5，然后加载该文件。"
   }
 }

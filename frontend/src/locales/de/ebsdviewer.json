@@ -381,5 +381,8 @@
     "exportedImageTo": "Bild exportiert nach {{path}}",
     "exportedImage": "Bild exportiert als {{name}}",
     "edsOnlyLoaded": "{{name}} enthält keine Beugungsmuster — nur EDS-Mapping ({{elements}} Elemente) und {{images}} SE-/BSE-Bilder. Muster- und Indizierungsansichten bleiben leer; öffne die EDS-Seite."
+  },
+  "errors": {
+    "edaxHexUpUnsupported": "Dieser EDAX-UP1/UP2-Scan wurde auf einem hexagonalen Raster aufgenommen. Das Umrechnen auf ein quadratisches Raster gibt es nur für EDAX-H5-Dateien - exportieren Sie den Scan in OIM als H5 und laden Sie diese Datei."
   }
 }

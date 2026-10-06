@@ -180,6 +180,22 @@ describe('ebsdApi.loadWithProgress', () => {
     expect(config.signal).toBeDefined();     // still cancellable
   });
 
+  it('passes the error code of a refusal on to the progress event', async () => {
+    const error = Object.assign(new Error('400'), {
+      response: { status: 400, data: { detail: 'hex' }, headers: { 'x-orienta-code': 'edaxHexUpUnsupported' } },
+    });
+    mockPost.mockRejectedValue(error);
+    mockGet.mockResolvedValue({ data: { stage: 'reading_metadata', stage_idx: 1, stage_total: 4, elapsed_seconds: 0, message: '' } });
+    const onProgress = (state) => onProgressCalls.push(state);
+    await expect(ebsdApi.loadWithProgress('/h.up1', { onProgress })).rejects.toBe(error);
+    expect(onProgressCalls.at(-1).code).toBe('edaxHexUpUnsupported');
+    // and none when there is none
+    onProgressCalls = [];
+    mockPost.mockRejectedValue(Object.assign(new Error('x'), { response: { status: 400, data: { detail: 'plain' } } }));
+    await expect(ebsdApi.loadWithProgress('/h.up1', { onProgress })).rejects.toBeDefined();
+    expect(onProgressCalls.at(-1).code).toBeNull();
+  });
+
   it('reports the backend elapsed time on failure, not 0', async () => {
     const error = Object.assign(new Error('boom'), {
       response: { status: 500, data: { detail: 'disk exploded' } },

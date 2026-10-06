@@ -195,4 +195,29 @@ describe('LoadProgressModal', () => {
     act(() => hide.click());
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  // A refusal with a stable code (a hexagonal EDAX UP1/UP2 scan) is shown in the
+  // language of the page; the server's prose is the fallback.
+  describe('coded errors', () => {
+    const err = (extra) => ({
+      stage: 'error', stage_idx: 0, stage_total: 4, elapsed_seconds: 0.1,
+      message: 'hex.up1 was acquired on a hexagonal grid; server prose', error: 'server prose', ...extra,
+    });
+
+    it('shows the translated text for a known code', () => {
+      render(<LoadProgressModal isOpen progressState={err({ code: 'edaxHexUpUnsupported' })} onClose={() => {}} />);
+      const text = screen.getByTestId('progress-error').textContent;
+      expect(text).toMatch(/hexagonal grid/);
+      expect(text).toMatch(/export the scan as H5 from OIM/);
+      expect(text).not.toMatch(/server prose/);
+    });
+    it('falls back to the server prose for a code this build has no text for', () => {
+      render(<LoadProgressModal isOpen progressState={err({ code: 'someFutureCode' })} onClose={() => {}} />);
+      expect(screen.getByTestId('progress-error').textContent).toBe('server prose');
+    });
+    it('without a code the prose is shown as before', () => {
+      render(<LoadProgressModal isOpen progressState={err({})} onClose={() => {}} />);
+      expect(screen.getByTestId('progress-error').textContent).toBe('server prose');
+    });
+  });
 });

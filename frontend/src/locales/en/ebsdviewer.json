@@ -381,5 +381,8 @@
     "exportedImageTo": "Image exported to {{path}}",
     "exportedImage": "Image exported as {{name}}",
     "edsOnlyLoaded": "{{name}} contains no diffraction patterns — only EDS mapping ({{elements}} elements) and {{images}} SE/BSE images. Pattern and indexing views stay empty; open the EDS page."
+  },
+  "errors": {
+    "edaxHexUpUnsupported": "This EDAX UP1/UP2 scan was acquired on a hexagonal grid. Resampling is implemented for EDAX H5 only - export the scan as H5 from OIM and load that file."
   }
 }

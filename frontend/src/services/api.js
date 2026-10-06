@@ -8,6 +8,7 @@
 import axios from 'axios';
 import { addBreadcrumb, addHttpBreadcrumb, formatBreadcrumbs } from './breadcrumbs';
 import { reportError } from './errorReporter';
+import { problemCode } from './problemText';
 import { normalizeRect } from './rect';
 import { openReconnectingSocket } from './reconnectingSocket';
 
@@ -429,6 +430,9 @@ export const ebsdApi = {
             elapsed_seconds: lastElapsedSeconds,
             message: detail,
             error: detail,
+            // The refusal's stable code (X-Orienta-Code), so the dialog can say
+            // it in the language of the page; null when there is none.
+            code: problemCode(error),
           });
         }
         throw error;

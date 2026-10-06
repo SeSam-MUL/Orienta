@@ -381,5 +381,8 @@
     "exportedImageTo": "画像を {{path}} にエクスポートしました",
     "exportedImage": "画像を {{name}} としてエクスポートしました",
     "edsOnlyLoaded": "{{name}} に回折パターンはありません — EDS マッピング（{{elements}} 元素）と SE/BSE 画像 {{images}} 枚のみです。パターン表示と指数付けは空のままです。EDS ページを開いてください。"
+  },
+  "errors": {
+    "edaxHexUpUnsupported": "この EDAX UP1/UP2 スキャンは六方格子で取得されています。正方格子への再サンプリングは EDAX H5 ファイルにのみ実装されています。OIM でスキャンを H5 としてエクスポートし、そのファイルを読み込んでください。"
   }
 }
