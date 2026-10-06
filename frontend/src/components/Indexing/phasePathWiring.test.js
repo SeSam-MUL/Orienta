@@ -36,4 +36,12 @@ describe('add-by-path is wired into the Indexing page', () => {
     expect(body).toMatch(/mergeUserAdded\(/);
     expect(body).toMatch(/userAddedRef\.current/);
   });
+
+  it('an own file that is a library file collapses into the entry and the selection moves with it', () => {
+    const i = SRC.indexOf('onLoaded: (files, groups) =>');
+    const body = SRC.slice(i, i + 1400);
+    expect(body).toMatch(/collapseUserAdded\(/);
+    expect(body).toMatch(/remapCollapsed\(/);
+    expect(body).toMatch(/setPhaseFiles\(moved\.phaseFiles\)/);
+  });
 });

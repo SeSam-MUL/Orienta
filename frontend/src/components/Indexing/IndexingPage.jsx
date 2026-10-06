@@ -27,7 +27,9 @@ import {
 } from '../PhaseCollections/collectionFilter';
 import { planCollectionAdoption, formatMissingLogMessage, resolveAllowedPaths } from '../PhaseCollections/collectionAdopt';
 import { createPhaseDiscovery, phaseListBlocksRun } from './phaseDiscovery';
-import { addPhaseFromPath, mergeUserAdded, samePath } from './phasePath';
+import {
+  addPhaseFromPath, mergeUserAdded, collapseUserAdded, remapCollapsed, sameFile,
+} from './phasePath';
 import { estimateCpuSphericalSeconds, estimateGpuSphericalSeconds, formatRoughDuration, hasNoCudaDevice, isSphericalCpuFallback } from './cpuEstimate';
 import NavigationCanvas from './NavigationCanvas';
 import EdsOverlayPanel from './EdsOverlayPanel';
@@ -1587,6 +1589,8 @@ export default function IndexingPage({ isActive }) {
   // selection the user already made.
   const phaseFilesRef = useRef(phaseFiles);
   phaseFilesRef.current = phaseFiles;
+  const phasesRef = useRef(phases);
+  phasesRef.current = phases;
   // Phase files the user added by path ({method, file}). A listing replaces the
   // file list every time it is fetched, so these are merged back in each time
   // (see `onLoaded`) -- otherwise a method switch or a retry would drop them.
@@ -2167,10 +2171,19 @@ export default function IndexingPage({ isActive }) {
         return { files: r.data?.files || [], groups: r.data?.groups || [] };
       },
       onLoaded: (files, groups) => {
-        setDiscoveredFiles(mergeUserAdded(
-          files,
-          userAddedRef.current.filter((u) => u.method === methodRef.current).map((u) => u.file),
-        ));
+        const own = userAddedRef.current.filter((u) => u.method === methodRef.current).map((u) => u.file);
+        setDiscoveredFiles(mergeUserAdded(files, own));
+        // An own file that really is a library file (the same file under another
+        // spelling, e.g. through a link) collapses into the library entry, and a
+        // selection that holds it moves with it.
+        const collapses = collapseUserAdded(files, own);
+        if (collapses.length) {
+          userAddedRef.current = userAddedRef.current.filter(
+            (u) => !collapses.some((c) => sameFile(c.from, u.file)));
+          const moved = remapCollapsed(phaseFilesRef.current, phasesRef.current, collapses);
+          setPhaseFiles(moved.phaseFiles);
+          setPhases(moved.phases);
+        }
         setDiscoveredGroups(groups);
         // `&& !fileInput` is new and deliberate. The old inline closure saw
         // the PRE-clear `phaseFiles` on the method-change path, so it skipped
@@ -2284,7 +2297,7 @@ export default function IndexingPage({ isActive }) {
       latest: () => latestPhaseState.current,
       remember: (record) => {
         userAddedRef.current = [
-          ...userAddedRef.current.filter((u) => !samePath(u.file.path, record.path)),
+          ...userAddedRef.current.filter((u) => !sameFile(u.file, record)),
           { method, file: record },
         ];
         setDiscoveredFiles((prev) => mergeUserAdded(prev, [record]));

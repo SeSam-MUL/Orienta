@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   samePath, findByPath, mergeUserAdded, pathErrorFrom, phaseStem, addPhaseFromPath, cleanPastedPath, libraryEntryForPath,
+  sameFile, collapseUserAdded, remapCollapsed,
 } from './phasePath';
 
 describe('samePath', () => {
@@ -227,5 +228,87 @@ describe('libraryEntryForPath', () => {
     const check = vi.fn().mockRejectedValue({ response: { status: 400 } });
     expect(await libraryEntryForPath({ method: 'hough', rawPath: 'x', files: [lib], check })).toBeNull();
     expect(await ask({})).toBeNull();
+  });
+});
+
+
+// A phase file is identified by where it really is (`real_path`, from the server),
+// not by how its path is spelled: the library is often reached through a link, so
+// the listing says `<link>/CIF_Library/Al.cif` and a pasted or stored path says
+// the real folder.
+describe('files identified by their resolved path', () => {
+  const lib = { path: 'D:/work/Database/CIF_Library/Al.cif', real_path: 'D:/main/Database/CIF_Library/Al.cif',
+                filename: 'Al.cif', formula: 'Al' };
+  const added = { path: 'D:/main/Database/CIF_Library/Al.cif', real_path: 'D:/main/Database/CIF_Library/Al.cif',
+                  filename: 'Al.cif', formula: 'Al', user_added: true };
+
+  it('sameFile: one real file under two spellings is one file; strings fall back to the spelling', () => {
+    expect(sameFile(lib, added)).toBe(true);
+    expect(sameFile(lib, { path: 'D:/main/Database/CIF_Library/Si.cif', real_path: 'D:/main/Database/CIF_Library/Si.cif' })).toBe(false);
+    expect(sameFile('c:\\a\\X.cif', 'C:/a/x.cif')).toBe(true);
+    expect(sameFile('/a/X.cif', '/a/Y.cif')).toBe(false);
+  });
+
+  it('mergeUserAdded drops an own file that is really a library file, and collapseUserAdded says which', () => {
+    expect(mergeUserAdded([lib], [added])).toEqual([lib]);
+    expect(collapseUserAdded([lib], [added])).toEqual([{ from: added.path, to: lib }]);
+    const other = { path: '/mine/X.cif', real_path: '/mine/X.cif', user_added: true };
+    expect(mergeUserAdded([lib], [other])).toEqual([lib, other]);
+    expect(collapseUserAdded([lib], [other])).toEqual([]);
+  });
+
+  const mk = (over = {}) => {
+    const select = vi.fn();
+    const remember = vi.fn();
+    const state = { method: 'hough', discoveredFiles: [lib], phaseFiles: [], select, ...over };
+    return { select, remember, args: {
+      method: 'hough', rawPath: added.path,
+      check: vi.fn().mockResolvedValue({ data: { file: added } }),   // an OLD server: no library_path
+      latest: () => state, remember } };
+  };
+
+  it('finds the library entry by the resolved path alone', async () => {
+    const { args, select, remember } = mk();
+    expect(await addPhaseFromPath(args)).toEqual({ ok: true, name: 'Al' });
+    expect(select).toHaveBeenCalledWith(lib);
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('an own entry of the same real file that is already selected is "already", not "a different file"', async () => {
+    // State as it can be left by an older page: both spellings in the list.
+    const { args, select } = mk({ phaseFiles: [added.path], discoveredFiles: [lib, added] });
+    const res = await addPhaseFromPath(args);
+    expect(res.ok).toBe(true);
+    expect(res.already).toBe(true);
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it('the same-name refusal still holds for another real file', async () => {
+    const other = '/elsewhere/Al.cif';
+    const { args } = mk({ phaseFiles: [other] });
+    const res = await addPhaseFromPath(args);
+    expect(res.ok).toBe(false);
+    expect(res.error.code).toBe('phase_same_name');
+  });
+});
+
+describe('remapCollapsed', () => {
+  const lib = { path: 'D:/work/Al.cif', real_path: 'D:/main/Al.cif', filename: 'Al.cif' };
+  const old = { path: 'D:/main/Al.cif', real_path: 'D:/main/Al.cif', filename: 'Al.cif', user_added: true };
+  const si = { path: 'D:/work/Si.cif', filename: 'Si.cif' };
+
+  it('moves a selected collapsed own file onto its library entry, without a twin', () => {
+    const out = remapCollapsed([old.path, si.path], [old, si], [{ from: old.path, to: lib }]);
+    expect(out.phaseFiles).toEqual([lib.path, si.path]);
+    expect(out.phases).toEqual([lib, si]);
+    const both = remapCollapsed([lib.path, old.path], [lib, old], [{ from: old.path, to: lib }]);
+    expect(both.phaseFiles).toEqual([lib.path]);
+    expect(both.phases).toEqual([lib]);
+  });
+  it('returns the same arrays when nothing collapsed', () => {
+    const files = [si.path]; const ph = [si];
+    const out = remapCollapsed(files, ph, []);
+    expect(out.phaseFiles).toBe(files);
+    expect(out.phases).toBe(ph);
   });
 });

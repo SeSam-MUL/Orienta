@@ -35,7 +35,9 @@ import {
   MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync, loadedPhaseFor, sameNameOtherFile,
   summarisePatternPhases, previewPhaseName, createSerialQueue, shortSpaceGroup,
 } from './phaseSet';
-import { phaseStem, pathErrorFrom, samePath, libraryEntryForPath } from '../Indexing/phasePath';
+import {
+  phaseStem, pathErrorFrom, samePath, asRecord, resolvePhasePath,
+} from '../Indexing/phasePath';
 import ReflectorFamilies from '../Indexing/ReflectorFamilies';
 import { loadedPhaseAdapter } from '../Indexing/reflectorSpec';
 import {
@@ -1507,6 +1509,8 @@ function ControlsPanel({
   // Phase library picker (reuses the Hough indexing CIF picker)
   const [phasePickerOpen, setPhasePickerOpen] = useState(false);
   const [discoveredFiles, setDiscoveredFiles] = useState([]);
+  const discoveredFilesRef = useRef([]);
+  discoveredFilesRef.current = discoveredFiles;
   const [discoveredGroups, setDiscoveredGroups] = useState([]);
 
   // Several phases (e.g. austenite + ferrite of a duplex steel). The picker
@@ -1682,13 +1686,17 @@ function ControlsPanel({
   // list in step; they return a result instead of showing it, so the picker's
   // path field (which shows its own message) and the tick boxes (which show
   // the status line) can both use them.
-  const addPhaseCore = async (path) => {
+  // `target` is a path or a record ({path, real_path}): the resolved path is what
+  // says that two spellings are one file.
+  const addPhaseCore = async (target) => {
+    const rec = typeof target === 'string' ? asRecord(target, discoveredFilesRef.current) : target;
+    const path = rec.path;
     const stem = phaseStem(path);
-    const same = loadedPhaseFor(phasesRef.current, path);
+    const same = loadedPhaseFor(phasesRef.current, rec);
     if (same) return { ok: true, already: true, name: same.name };
     // Another FILE with the same name: refused (the backend would too), and said
     // so, instead of looking like success or silently swapping the phase.
-    const clash = sameNameOtherFile(phasesRef.current, path);
+    const clash = sameNameOtherFile(phasesRef.current, rec);
     if (clash) {
       return {
         ok: false,
@@ -1757,12 +1765,12 @@ function ControlsPanel({
   const togglePhase = (file) => runPhaseJob(async () => {
     // Ticked means THIS file is loaded; unticking removes exactly that phase and
     // never one that only shares its name.
-    const loaded = loadedPhaseFor(phasesRef.current, file.path);
+    const loaded = loadedPhaseFor(phasesRef.current, file);
     if (loaded) {
       reportPhaseOp(await removePhaseCore(loaded.name),
                     t('pcrefinement:controls.phaseRemoved', { name: loaded.name }));
     } else {
-      const res = await addPhaseCore(file.path);
+      const res = await addPhaseCore(file);
       reportPhaseOp(res, t('pcrefinement:controls.phaseAdded', { name: res.name, count: res.count }));
     }
   });
@@ -1771,10 +1779,11 @@ function ControlsPanel({
   const addPhaseByPath = (path) => runPhaseJob(async () => {
     // A path that is a library file (possibly spelled differently from the
     // listing) selects the library's entry instead of adding a second one.
-    const entry = await libraryEntryForPath({
-      method: 'hough', rawPath: path, files: discoveredFiles, check: indexApi.phaseFromPath,
+    const { record, entry } = await resolvePhasePath({
+      method: 'hough', rawPath: path, files: discoveredFilesRef.current,
+      check: indexApi.phaseFromPath,
     });
-    const res = await addPhaseCore(entry ? entry.path : path);
+    const res = await addPhaseCore(entry || record || path);
     if (entry && res.ok) res.inLibrary = true;
     if (res.ok && !res.already) {
       setPhaseMsg(t('pcrefinement:controls.phaseAdded', { name: res.name, count: res.count }));
@@ -1792,7 +1801,7 @@ function ControlsPanel({
 
   // The picker's All / None buttons hand over the whole wanted set at once.
   const handleSetAllPhases = (paths) => {
-    const plan = planPhaseSync(phasesRef.current, paths);
+    const plan = planPhaseSync(phasesRef.current, paths, discoveredFilesRef.current);
     const resulting = phaseNamesRef.current.length - plan.remove.length + plan.add.length;
     if (resulting > MAX_PC_PHASES) {
       setPhaseMsg(t('pcrefinement:controls.phaseLimit', { max: MAX_PC_PHASES }));

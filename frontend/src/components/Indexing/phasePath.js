@@ -43,6 +43,56 @@ export function findByPath(files, path) {
 }
 
 /**
+ * Do two phase files name the same file on disk?
+ *
+ * Each is a record `{path, real_path?}` or a bare path. `real_path` is the
+ * resolved location the server reports: the library is often reached through a
+ * link, so the listing's spelling and a pasted or stored path can differ for one
+ * file. When both sides have it, it decides; otherwise the spelling does.
+ */
+export function sameFile(a, b) {
+  const ra = typeof a === 'string' ? { path: a } : (a || {});
+  const rb = typeof b === 'string' ? { path: b } : (b || {});
+  if (ra.real_path && rb.real_path) return normKey(ra.real_path) === normKey(rb.real_path);
+  return samePath(ra.path, rb.path);
+}
+
+/** The entry of `files` that is the same file as `file` (a record or a path). */
+export function findByFile(files, file) {
+  return (files || []).find((f) => sameFile(f, file));
+}
+
+/** A path as a record, with its resolved location when `files` knows it. */
+export function asRecord(path, files) {
+  return findByPath(files, path) || { path };
+}
+
+/**
+ * Move a selection from the own files that collapsed into library entries onto
+ * those entries: `{phaseFiles, phases}` with each collapsed path replaced by the
+ * library entry's path / record, nothing selected twice.
+ */
+export function remapCollapsed(phaseFiles, phases, collapses) {
+  if (!collapses.length) return { phaseFiles, phases };
+  const to = new Map(collapses.map((c) => [normKey(c.from), c.to]));
+  const seen = new Set();
+  const outPaths = [];
+  for (const p of phaseFiles) {
+    const lib = to.get(normKey(p));
+    const next = lib ? lib.path : p;
+    if (!seen.has(normKey(next))) { seen.add(normKey(next)); outPaths.push(next); }
+  }
+  const seenRec = new Set();
+  const outPhases = [];
+  for (const f of phases) {
+    const lib = to.get(normKey(f.path));
+    const next = lib || f;
+    if (!seenRec.has(normKey(next.path))) { seenRec.add(normKey(next.path)); outPhases.push(next); }
+  }
+  return { phaseFiles: outPaths, phases: outPhases };
+}
+
+/**
  * The library listing plus the phase files the user added by path.
  *
  * A listing replaces the page's file list every time it is fetched (method
@@ -51,8 +101,25 @@ export function findByPath(files, path) {
  * itself when there is nothing to add.
  */
 export function mergeUserAdded(files, extra) {
-  const add = (extra || []).filter((e) => !findByPath(files, e.path));
+  const add = (extra || []).filter((e) => !findByFile(files, e));
   return add.length ? [...files, ...add] : files;
+}
+
+/**
+ * The own files that turned out to be library files: `[{from: path, to: entry}]`.
+ *
+ * A file added by path before the listing knew it (or before the server reported
+ * resolved paths) can be the very file of a library entry under another spelling.
+ * `mergeUserAdded` drops it; this says what it collapsed into, so a selection
+ * that holds the old path can be moved onto the library entry.
+ */
+export function collapseUserAdded(files, extra) {
+  const out = [];
+  for (const e of extra || []) {
+    const lib = findByFile(files, e);
+    if (lib && !samePath(lib.path, e.path)) out.push({ from: e.path, to: lib });
+  }
+  return out;
 }
 
 /**
@@ -77,22 +144,30 @@ export function phaseStem(path) {
 }
 
 /**
- * The library listing entry that `rawPath` is, or null.
+ * Ask the server about `rawPath`: `{record, entry}` where `record` is what it says
+ * about the file and `entry` the library listing entry that is the same file (by
+ * resolved path, or the `library_path` the server names), or null.
  *
- * For a page that adds the path itself (PC Refinement) and only wants to know
- * whether it is a file of the library, so it can use the library's entry rather
- * than a second one under another spelling. Any refusal or failure of the check
- * gives null: the caller then goes on with the path as typed and reports what
- * its own request says.
+ * For a page that adds the path itself (PC Refinement) and wants to use the
+ * library's entry rather than a second one under another spelling. Any refusal or
+ * failure of the check gives `{record: null, entry: null}`: the caller then goes
+ * on with the path as typed and reports what its own request says.
  */
-export async function libraryEntryForPath({ method, rawPath, files, check }) {
+export async function resolvePhasePath({ method, rawPath, files, check }) {
   try {
     const record = (await check(method, rawPath)).data?.file;
-    if (!record?.in_library) return null;
-    return findByPath(files, record.library_path) || findByPath(files, record.path) || null;
+    if (!record) return { record: null, entry: null };
+    const entry = findByPath(files, record.library_path) || findByFile(files, record) || null;
+    return { record, entry };
   } catch {
-    return null;
+    return { record: null, entry: null };
   }
+}
+
+/** The library listing entry that `rawPath` is, or null (see `resolvePhasePath`). */
+export async function libraryEntryForPath(args) {
+  const { record, entry } = await resolvePhasePath(args);
+  return record?.in_library || entry ? entry : null;
 }
 
 /**
@@ -131,20 +206,21 @@ export async function addPhaseFromPath({ method, rawPath, check, latest, remembe
   // (a link, a `..`), so the server names the listing's entry (`library_path`)
   // when the file is the library's; plain path equality covers the rest.
   const inLibrary = findByPath(now.discoveredFiles, record.library_path)
-    || findByPath(now.discoveredFiles, record.path);
+    || findByFile(now.discoveredFiles, record);
   const file = inLibrary || record;
   const name = file.display_label || file.formula || file.filename;
   // Only a file the listing really has is "in the library": the page can then
   // say it selected the library's entry.
   const flags = inLibrary && record.in_library ? { inLibrary: true } : {};
-  if (now.phaseFiles.some((p) => samePath(p, file.path))) {
+  if (now.phaseFiles.some((p) => sameFile(asRecord(p, now.discoveredFiles), file))) {
     return { ok: true, already: true, ...flags, name };
   }
   // Another FILE with the same name is already selected. A phase is identified by
   // its file name (a reflector selection is stored under it as well), so the two
   // would be one phase to the app: say so instead of adding it.
   const stem = phaseStem(file.path).toLowerCase();
-  const clash = now.phaseFiles.find((p) => phaseStem(p).toLowerCase() === stem);
+  const clash = now.phaseFiles.find((p) => phaseStem(p).toLowerCase() === stem
+    && !sameFile(asRecord(p, now.discoveredFiles), file));
   if (clash) {
     return {
       ok: false,

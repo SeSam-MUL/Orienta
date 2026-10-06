@@ -2,7 +2,7 @@
  * Pure helpers for PC Refinement with SEVERAL phases (duplex steel: austenite
  * and ferrite). Kept out of the 2800-line page so they can be tested.
  */
-import { phaseStem, samePath } from '../Indexing/phasePath';
+import { phaseStem, samePath, sameFile, asRecord } from '../Indexing/phasePath';
 
 /** Mirrors `PCController.MAX_PHASES` on the backend (which is what enforces it). */
 export const MAX_PC_PHASES = 8;
@@ -14,29 +14,34 @@ export function phaseLabelFor(names, fallback) {
 }
 
 /**
- * The loaded phase that IS the file at `path`, if there is one.
+ * The loaded phase that IS the given file, if there is one.
  *
- * Phases are identified by FILE, not by name: two different files called Al.cif
- * are two files. A phase whose file is not known (loaded through the single-phase
- * path before the page knew files) falls back to the file's name.
+ * ``target`` is a record ``{path, real_path?}`` or a bare path (looked up in
+ * ``files`` for its resolved location when given). Phases are identified by FILE,
+ * not by name: two different files called Al.cif are two files, and one file
+ * reached through a link and directly is one. A phase whose file is not known
+ * (loaded through the single-phase path before the page knew files) falls back
+ * to the file's name.
  *
- * @param {{name: string, path?: string}[]} phases
+ * @param {{name: string, path?: string, real_path?: string}[]} phases
  */
-export function loadedPhaseFor(phases, path) {
-  const stem = phaseStem(path).toLowerCase();
+export function loadedPhaseFor(phases, target, files = []) {
+  const rec = typeof target === 'string' ? asRecord(target, files) : target;
+  const stem = phaseStem(rec.path).toLowerCase();
   return (phases || []).find((p) => (p.path
-    ? samePath(p.path, path)
+    ? sameFile(p, rec)
     : String(p.name).toLowerCase() === stem));
 }
 
 /**
- * A loaded phase with the same NAME as the file at `path` but another file.
+ * A loaded phase with the same NAME as the given file but another file.
  * The backend refuses it (a name is how a phase, and a reflector selection, is
  * kept), so the page can say so before asking.
  */
-export function sameNameOtherFile(phases, path) {
-  const stem = phaseStem(path).toLowerCase();
-  const mine = loadedPhaseFor(phases, path);
+export function sameNameOtherFile(phases, target, files = []) {
+  const rec = typeof target === 'string' ? asRecord(target, files) : target;
+  const stem = phaseStem(rec.path).toLowerCase();
+  const mine = loadedPhaseFor(phases, rec);
   return (phases || []).find((p) => p !== mine && String(p.name).toLowerCase() === stem);
 }
 
@@ -47,8 +52,9 @@ export function sameNameOtherFile(phases, path) {
  */
 export function loadedPaths(files, phases, added = []) {
   const out = [];
-  for (const p of [...(files || []).map((f) => f.path), ...added]) {
-    if (loadedPhaseFor(phases, p) && !out.some((q) => samePath(q, p))) out.push(p);
+  const entries = [...(files || []), ...added.map((p) => ({ path: p }))];
+  for (const e of entries) {
+    if (loadedPhaseFor(phases, e) && !out.some((q) => samePath(q, e.path))) out.push(e.path);
   }
   return out;
 }
@@ -58,11 +64,11 @@ export function loadedPaths(files, phases, added = []) {
  * remove: names to remove}`. The picker's All / None buttons hand over the whole
  * desired set at once.
  */
-export function planPhaseSync(phases, wanted) {
+export function planPhaseSync(phases, wanted, files = []) {
   const list = phases || [];
-  const add = (wanted || []).filter((p) => !loadedPhaseFor(list, p));
+  const add = (wanted || []).filter((p) => !loadedPhaseFor(list, p, files));
   const remove = list
-    .filter((ph) => !(wanted || []).some((p) => loadedPhaseFor([ph], p)))
+    .filter((ph) => !(wanted || []).some((p) => loadedPhaseFor([ph], p, files)))
     .map((ph) => ph.name);
   return { add, remove };
 }

@@ -133,3 +133,32 @@ describe('shortSpaceGroup', () => {
     expect(shortSpaceGroup(undefined)).toBe('');
   });
 });
+
+
+describe('files identified by their resolved path', () => {
+  // The listing reaches the library through a link; the phase was loaded from the
+  // real folder (or the other way round).
+  const files = [{ path: 'D:/work/Database/Al.cif', real_path: 'D:/main/Database/Al.cif' },
+                 { path: 'D:/work/Database/Si.cif', real_path: 'D:/main/Database/Si.cif' }];
+  const phases = [{ name: 'Al', path: 'D:/main/Database/Al.cif', real_path: 'D:/main/Database/Al.cif' }];
+
+  it('loadedPhaseFor finds a phase by the real file of a record', () => {
+    expect(loadedPhaseFor(phases, files[0])).toBe(phases[0]);
+    expect(loadedPhaseFor(phases, files[1])).toBeUndefined();
+  });
+  it('a bare path is resolved through the files it can be looked up in', () => {
+    expect(loadedPhaseFor(phases, files[0].path, files)).toBe(phases[0]);
+  });
+  it('sameNameOtherFile does not call the same real file "another file"', () => {
+    expect(sameNameOtherFile(phases, files[0])).toBeUndefined();
+    const other = { path: 'E:/mine/Al.cif', real_path: 'E:/mine/Al.cif' };
+    expect(sameNameOtherFile(phases, other)).toBe(phases[0]);
+  });
+  it('loadedPaths marks the library entry whose real file is loaded', () => {
+    expect(loadedPaths(files, phases)).toEqual([files[0].path]);
+  });
+  it('planPhaseSync keeps a loaded phase that the wanted library path names', () => {
+    expect(planPhaseSync(phases, [files[0].path], files)).toEqual({ add: [], remove: [] });
+    expect(planPhaseSync(phases, [files[1].path], files)).toEqual({ add: [files[1].path], remove: ['Al'] });
+  });
+});

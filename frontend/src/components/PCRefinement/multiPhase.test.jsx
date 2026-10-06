@@ -8,13 +8,14 @@ import React from 'react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 
-const backend = vi.hoisted(() => ({ phases: [], paths: {}, calls: [], previews: [], failAdd: null, fromPath: {} }));
+const backend = vi.hoisted(() => ({ phases: [], paths: {}, calls: [], previews: [], failAdd: null, fromPath: {}, real: {} }));
 
 vi.mock('../../services/api', async (importOriginal) => {
   const orig = await importOriginal();
   const ok = (data = {}) => Promise.resolve({ data });
   const stem = (p) => p.split(/[\\/]/).pop().replace(/\.cif$/i, '');
-  const summary = (name) => ({ name, path: backend.paths[name], space_group: 'Fm-3m', lattice: { a: 3.6, b: 3.6, c: 3.6 } });
+  const realOf = (p) => (p ? (backend.real[p] ?? p) : p);
+  const summary = (name) => ({ name, path: backend.paths[name], real_path: realOf(backend.paths[name]), space_group: 'Fm-3m', lattice: { a: 3.6, b: 3.6, c: 3.6 } });
   const list = () => backend.phases.map(summary);
   const pcApi = new Proxy({
     status: () => ok({
@@ -80,8 +81,8 @@ vi.mock('../../services/api', async (importOriginal) => {
     phaseFromPath: (method, path) => ok(backend.fromPath[path] ? { file: backend.fromPath[path] } : {}),
     discoverFiles: () => ok({
       files: [
-        { path: 'C:/lib/austenite.cif', filename: 'austenite.cif', formula: 'austenite', element_group: 'Fe' },
-        { path: 'C:/lib/ferrite.cif', filename: 'ferrite.cif', formula: 'ferrite', element_group: 'Fe' },
+        { path: 'C:/lib/austenite.cif', real_path: realOf('C:/lib/austenite.cif'), filename: 'austenite.cif', formula: 'austenite', element_group: 'Fe' },
+        { path: 'C:/lib/ferrite.cif', real_path: realOf('C:/lib/ferrite.cif'), filename: 'ferrite.cif', formula: 'ferrite', element_group: 'Fe' },
       ],
       groups: ['Fe'],
     }),
@@ -110,6 +111,7 @@ beforeEach(() => {
   backend.previews = [];
   backend.failAdd = null;
   backend.fromPath = {};
+  backend.real = {};
   const sht = (n, p) => ({ path: `/sht/${n} (${n}) [${p}] {20kV}.sht`, filename: `${n} (${n}) [${p}] {20kV}.sht` });
   globalThis.fetch = vi.fn(() => Promise.resolve({
     json: () => Promise.resolve({ files: [sht('austenite', 'cF4'), sht('ferrite', 'cI2')] }),
@@ -191,6 +193,50 @@ describe('PC refinement with several phases', () => {
     const row = await screen.findByTitle('ferrite');
     expect(row.parentElement.querySelector('input[type="checkbox"]').checked).toBe(true);
     expect(screen.getAllByTitle('ferrite')).toHaveLength(1);              // no twin row
+  });
+
+  it('a library file reached through a link is one phase: ticked, then pasted by its real path', async () => {
+    // The listing names the library through a link (C:/lib), the real folder is
+    // D:/real/lib. The phase is loaded through the listing; pasting the real path
+    // must say "already", not "a different file named ferrite".
+    backend.real['C:/lib/ferrite.cif'] = 'D:/real/lib/ferrite.cif';
+    render(<PCRefinement />);
+    const input = await openPicker();
+    fireEvent.click(await screen.findByTitle('ferrite'));
+    await waitFor(() => expect(backend.phases).toEqual(['ferrite']));
+    backend.calls = [];
+    // An OLD server answer: only the resolved path, no library_path.
+    backend.fromPath['D:/real/lib/ferrite.cif'] = {
+      path: 'D:/real/lib/ferrite.cif', real_path: 'D:/real/lib/ferrite.cif', in_library: true,
+    };
+    fireEvent.change(input, { target: { value: 'D:/real/lib/ferrite.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await screen.findByText('ferrite is in the library — selected');
+    expect(screen.queryByText(/A different file named ferrite/)).toBeNull();
+    expect(backend.calls).toEqual([]);                                    // nothing asked, nothing added
+    expect(backend.phases).toEqual(['ferrite']);
+  });
+
+  it('a file outside the library is identified by its resolved path too', async () => {
+    // Added once by a path with a link in it, pasted again by the real path.
+    backend.real['D:/link/mine/sigma.cif'] = 'D:/real/mine/sigma.cif';
+    backend.fromPath['D:/link/mine/sigma.cif'] = {
+      path: 'D:/link/mine/sigma.cif', real_path: 'D:/real/mine/sigma.cif', in_library: false,
+    };
+    backend.fromPath['D:/real/mine/sigma.cif'] = {
+      path: 'D:/real/mine/sigma.cif', real_path: 'D:/real/mine/sigma.cif', in_library: false,
+    };
+    render(<PCRefinement />);
+    const input = await openPicker();
+    fireEvent.change(input, { target: { value: 'D:/link/mine/sigma.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await waitFor(() => expect(backend.phases).toEqual(['sigma']));
+    backend.calls = [];
+    fireEvent.change(input, { target: { value: 'D:/real/mine/sigma.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await screen.findByText('sigma is already in the list');
+    expect(screen.queryByText(/A different file named sigma/)).toBeNull();
+    expect(backend.calls).toEqual([]);
   });
 
   it('a refusal from the backend is shown, and nothing is listed', async () => {
