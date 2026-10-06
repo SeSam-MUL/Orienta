@@ -1033,6 +1033,12 @@ async def load_ebsd(req: LoadEBSDRequest):
                 err_kwargs["started_at"] = time.time()
             _update_progress(req.request_id, **err_kwargs)
         logger.exception("Failed to load EBSD: %s", req.path)
+        # A loader refusal that has a stable code (e.g. a hexagonal UP1/UP2
+        # scan) travels with it in the header; the prose stays the detail.
+        code = getattr(e, "code", None)
+        if isinstance(code, str) and code:
+            from backend.api.problem import problem
+            raise problem(400, code, str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
 

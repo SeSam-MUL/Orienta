@@ -29,6 +29,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
+
 logger = logging.getLogger(__name__)
 
 # The 8-byte marker that precedes the OSC point-data block. The block is NOT
@@ -42,6 +44,33 @@ _OSC_MAGIC = bytes([0xB9, 0x0B, 0xEF, 0xFF, 0x02, 0x00, 0x00, 0x00])
 _OSC_PC_OFFSET = 1860
 
 _UP_DTYPE_NBYTES = {"up1": 1, "up2": 2}
+
+# OSC point records: 14 float32 each, x and y (micrometres) at fields 3 and 4.
+_OSC_RECORD_FLOATS = 14
+_OSC_X, _OSC_Y = 3, 4
+# How many leading records are looked at to tell a hexagonal grid from a square
+# one: enough for the first few rows of any scan, cheap for a 10 MB file.
+_OSC_HEX_PROBE_RECORDS = 4096
+
+
+class EdaxHexUpError(ValueError):
+    """An EDAX UP1/UP2 scan was acquired on a hexagonal grid.
+
+    Hexagonal EDAX scans are resampled onto a square grid for the H5 format
+    only (``edax_hex``). A UP file stores the patterns in acquisition order with
+    no positions, so there is nothing to resample from and reading it as a
+    rectangular map would put every pixel at the wrong place. ``code`` is the
+    stable identifier the interface translates on.
+    """
+
+    code = "edaxHexUpUnsupported"
+
+    def __init__(self, path: str):
+        self.path = path
+        super().__init__(
+            f"{Path(path).name} was acquired on a hexagonal grid; resampling is "
+            "implemented for EDAX H5 only - export the scan as H5 from OIM."
+        )
 
 
 @dataclass
@@ -64,6 +93,9 @@ class OscMetadata:
     xstep: Optional[float]  # µm, column (x) step
     ystep: Optional[float]  # µm, row (y) step
     pc: Optional[tuple]     # (xstar, ystar, zstar) EDAX/TSL pattern centre, or None
+    #: True when the point records show a hexagonal grid (rows start at
+    #: different x). False for a square grid AND when it cannot be told.
+    is_hex: bool = False
 
 
 @dataclass
@@ -197,7 +229,41 @@ def read_osc_metadata(osc_path: str) -> OscMetadata:
             logger.warning(
                 ".osc PC values implausible %s in %s — ignoring PC", vals, osc_path)
 
-    return OscMetadata(ncols, nrows, npoints, xstep, ystep, pc)
+    return OscMetadata(ncols, nrows, npoints, xstep, ystep, pc,
+                       is_hex=_osc_grid_is_hex(raw, k, xstep))
+
+
+def _osc_grid_is_hex(raw: bytes, k: int, xstep: Optional[float]) -> bool:
+    """Do the point records of an ``.osc`` lie on a hexagonal grid?
+
+    On a square grid every row starts at the same x; on a hexagonal one the
+    rows alternate, the odd ones starting half a step to the right. So the
+    start x of the first rows decides it. Anything that cannot be read (no
+    point block, fewer than two rows, non-finite positions) is "not hex": the
+    square path is the existing behaviour, and a guess here would refuse files
+    that load correctly.
+    """
+    if k < 0 or not xstep:
+        return False
+    start = k + 24
+    rec_bytes = 4 * _OSC_RECORD_FLOATS
+    n = min(_OSC_HEX_PROBE_RECORDS, (len(raw) - start) // rec_bytes)
+    if n < 2:
+        return False
+    rec = np.frombuffer(raw, dtype="<f4", count=n * _OSC_RECORD_FLOATS,
+                        offset=start).reshape(n, _OSC_RECORD_FLOATS)
+    x, y = rec[:, _OSC_X], rec[:, _OSC_Y]
+    if not (np.all(np.isfinite(x)) and np.all(np.isfinite(y))):
+        return False
+    # Rows: a new row begins where y changes.
+    breaks = np.flatnonzero(np.abs(np.diff(y)) > 1e-3 * abs(xstep)) + 1
+    first = np.concatenate(([0], breaks))
+    if first.size < 2:
+        return False
+    # Only rows that are complete inside the probe window have a trustworthy
+    # start; the start of every row we have is its first record, so use them all.
+    starts = x[first]
+    return bool(np.max(np.abs(starts - starts[0])) > 0.01 * abs(xstep))
 
 
 def _plausible_step(v: float) -> bool:
@@ -227,6 +293,8 @@ def _find_osc_sidecar(up1_path: str) -> Optional[str]:
 def resolve_up1_geometry(up1_path: str) -> Up1Geometry:
     """Resolve nav_shape + step for a UP1/UP2 file, using its ``.osc`` sidecar.
 
+    * A hexagonal grid (v3 header flag, or staggered .osc rows) raises
+      :class:`EdaxHexUpError`.
     * v1 (flat header): nav_shape MUST come from the .osc grid; falls back to a
       perfect-square guess only if the pattern count is a square and no .osc is
       present. Otherwise nav_shape is None and the caller should fail loudly.
@@ -239,6 +307,12 @@ def resolve_up1_geometry(up1_path: str) -> Up1Geometry:
     osc_path = _find_osc_sidecar(up1_path)
     osc = (read_osc_metadata(osc_path) if osc_path
            else OscMetadata(None, None, None, None, None, None))
+
+    # A hexagonal scan is neither resampled nor read as the rectangle its
+    # pattern count may happen to fit. The v3 header carries the flag; a v1
+    # header has no grid, so the .osc decides.
+    if header.is_hex or osc.is_hex:
+        raise EdaxHexUpError(up1_path)
 
     step_yx = None
     if osc.ystep is not None and osc.xstep is not None:
