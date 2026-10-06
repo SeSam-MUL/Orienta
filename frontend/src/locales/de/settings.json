@@ -269,6 +269,17 @@
     "exportDiagnosticsFailed": "Export fehlgeschlagen — läuft das Backend?",
     "exportDiagnosticsHint": "Der Diagnosebericht ist ein Zip mit App-Version, Umgebungsinformationen und Logdateien. Hängen Sie ihn an Fehlermeldungen an — er enthält keine Messdaten."
   },
+  "logs": {
+    "showFiles": "Logdateien anzeigen",
+    "tooltip": "Öffnet den Ordner mit den Logdateien von Orienta (orienta.log und backend-console.log).",
+    "folderLabel": "Log-Ordner",
+    "copyPath": "Pfad kopieren",
+    "copied": "Kopiert",
+    "openFailed": "Der Ordner konnte nicht geöffnet werden ({{error}}). Den Pfad sehen Sie oben.",
+    "unavailable": "Das Backend antwortet nicht, daher ist der Log-Ordner noch nicht bekannt.",
+    "hint": "orienta.log ist das Anwendungsprotokoll; backend-console.log ist die rohe Ausgabe des Backend-Prozesses, einschließlich Startfehlern. Hängen Sie beide an Fehlermeldungen an.",
+    "browserHint": "Öffnen Sie diesen Ordner in Ihrem Dateimanager."
+  },
   "report": {
     "open": "Problem melden…",
     "title": "Problem melden",

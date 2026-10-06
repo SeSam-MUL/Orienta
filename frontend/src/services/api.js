@@ -128,6 +128,17 @@ export async function getAppVersion() {
   return r.data;
 }
 
+/**
+ * Where the log files are, as the running backend sees it:
+ * {log_dir, exists, files: [{name, size_bytes}]}. The Settings page shows this
+ * path instead of rebuilding it, because an installed copy and a source
+ * checkout keep their logs in different places.
+ */
+export async function getLogInfo() {
+  const r = await api.get('/api/system/log-info', { timeout: 8000 });
+  return r.data;
+}
+
 /** Is a newer released version available? Never throws for the caller's sake. */
 export async function checkForUpdate({ force = false } = {}) {
   const r = await api.get('/api/system/update/check', { params: { force } });

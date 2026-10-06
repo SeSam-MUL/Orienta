@@ -269,6 +269,17 @@
       "exportDiagnosticsFailed": "导出失败——后端是否在运行？",
       "exportDiagnosticsHint": "诊断报告是一个 Zip 文件，包含应用版本、环境信息和日志文件。请将其附在错误报告中——不包含任何测量数据。"
     },
+  "logs": {
+    "showFiles": "显示日志文件",
+    "tooltip": "打开存放 Orienta 日志文件（orienta.log 和 backend-console.log）的文件夹。",
+    "folderLabel": "日志文件夹",
+    "copyPath": "复制路径",
+    "copied": "已复制",
+    "openFailed": "无法打开该文件夹（{{error}}）。其路径已显示在上方。",
+    "unavailable": "后端没有响应，因此暂时无法确定日志文件夹。",
+    "hint": "orienta.log 是应用程序日志；backend-console.log 是后端进程的原始输出，包括启动时的错误。请将它们附在问题报告中。",
+    "browserHint": "请在文件管理器中打开此文件夹。"
+  },
   "report": {
     "open": "报告问题…",
     "title": "报告问题",

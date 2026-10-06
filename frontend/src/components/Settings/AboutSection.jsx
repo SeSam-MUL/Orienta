@@ -9,6 +9,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, spacing, GroupBox, Label } from '../../theme/components';
 import DiagnosticsExportButton from '../common/DiagnosticsExportButton';
+import LogFilesRow from './LogFilesRow';
 import UpdateDialog from '../common/UpdateDialog';
 import useUpdateCheck, { isCheckEnabled, setCheckEnabled } from '../../hooks/useUpdateCheck';
 import useAppVersion from '../../hooks/useAppVersion';
@@ -152,6 +153,7 @@ export default function AboutSection() {
           )}
           <DiagnosticsExportButton />
         </div>
+        <LogFilesRow />
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '11px' }}>
           <input
             type="checkbox"

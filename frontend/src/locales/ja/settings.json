@@ -269,6 +269,17 @@
       "exportDiagnosticsFailed": "エクスポートに失敗しました — バックエンドは起動していますか？",
       "exportDiagnosticsHint": "診断レポートは、アプリのバージョン・環境情報・ログファイルを含む Zip です。バグ報告に添付してください — 測定データは含まれません。"
     },
+  "logs": {
+    "showFiles": "ログファイルを表示",
+    "tooltip": "Orientaのログファイル（orienta.log と backend-console.log）があるフォルダーを開きます。",
+    "folderLabel": "ログフォルダー",
+    "copyPath": "パスをコピー",
+    "copied": "コピーしました",
+    "openFailed": "フォルダーを開けませんでした（{{error}}）。パスは上に表示されています。",
+    "unavailable": "バックエンドが応答しないため、ログフォルダーはまだ分かりません。",
+    "hint": "orienta.log はアプリケーションのログ、backend-console.log は起動時のエラーを含むバックエンドプロセスの生の出力です。不具合報告に添付してください。",
+    "browserHint": "このフォルダーをファイルマネージャーで開いてください。"
+  },
   "report": {
     "open": "問題を報告…",
     "title": "問題を報告",

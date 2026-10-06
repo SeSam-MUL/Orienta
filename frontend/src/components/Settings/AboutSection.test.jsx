@@ -18,6 +18,7 @@ vi.mock('../../services/api', () => ({
   getAppVersion: (...a) => mockGetAppVersion(...a),
   exportDiagnostics: (...a) => mockExportDiagnostics(...a),
   checkForUpdate: (...a) => mockCheckForUpdate(...a),
+  getLogInfo: () => Promise.resolve({ log_dir: '/x/logs', exists: true, files: [] }),
 }));
 
 const mockDownloadBlob = vi.fn();
@@ -45,6 +46,11 @@ afterEach(() => {
 import AboutSection from './AboutSection';
 
 describe('AboutSection', () => {
+  it('offers the log folder next to the problem report', () => {
+    const { getByText } = render(<AboutSection />);
+    expect(getByText('Show log files')).toBeTruthy();
+  });
+
   it('shows the GPL appropriate legal notices: copyright, no-warranty, license', () => {
     const { getByText } = render(<AboutSection />);
     expect(getByText(/Copyright © 2026/)).toBeTruthy();

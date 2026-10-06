@@ -269,6 +269,17 @@
       "exportDiagnosticsFailed": "Export failed — is the backend running?",
       "exportDiagnosticsHint": "The diagnostics report is a zip with the app version, environment info and log files. Attach it to bug reports — it contains no measurement data."
     },
+  "logs": {
+    "showFiles": "Show log files",
+    "tooltip": "Open the folder with Orienta's log files (orienta.log and backend-console.log).",
+    "folderLabel": "Log folder",
+    "copyPath": "Copy path",
+    "copied": "Copied",
+    "openFailed": "The folder could not be opened ({{error}}). Its path is shown above.",
+    "unavailable": "The backend is not answering, so the log folder is not known yet.",
+    "hint": "orienta.log is the application log; backend-console.log is the raw output of the backend process, including start-up errors. Attach them to bug reports.",
+    "browserHint": "Open this folder in your file manager."
+  },
   "report": {
     "open": "Report a problem…",
     "title": "Report a problem",

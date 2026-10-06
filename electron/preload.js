@@ -38,6 +38,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setLanguage: (lang) => ipcRenderer.invoke('app:setLanguage', lang),
   // Base64 PNG of the app window, for problem reports.
   captureScreen: () => ipcRenderer.invoke('app:captureScreen'),
+  // Opens the folder holding orienta.log / backend-console.log in the file
+  // manager. Takes no argument: the main process knows the folder.
+  openLogFolder: () => ipcRenderer.invoke('app:openLogFolder'),
 });
 
 /**

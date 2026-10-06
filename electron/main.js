@@ -9,6 +9,7 @@ const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const platformInfo = require('./platform.js');
 const removeDataModule = require('./remove_data.js');
 const saveDialogs = require('./save_dialogs.js');
+const { openLogFolder } = require('./log_folder.js');
 const { spawn, execSync } = require('child_process');
 const path = require('path');
 const http = require('http');
@@ -1204,6 +1205,12 @@ ipcMain.handle('dialog:saveText', async (event, options) => {
                               String(options?.text ?? ''), 'utf8');
   return result.filePath;
 });
+
+// Settings > About > "Show log files". The folder is worked out HERE, from the
+// project root the backend log is written under; the renderer sends nothing, so
+// this channel cannot be used to open any other folder.
+ipcMain.handle('app:openLogFolder', () =>
+  openLogFolder({ shell, projectRoot: lastProjectRoot || resolveProjectRoot() }));
 
 // Picture of the window for a problem report. Taken before the report dialog
 // opens, so the report shows the screen the user is complaining about rather
