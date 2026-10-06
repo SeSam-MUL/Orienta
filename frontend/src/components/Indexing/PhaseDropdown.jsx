@@ -411,6 +411,10 @@ const METHOD_KEY = { hough: 'Hough', dictionary: 'Dictionary', spherical: 'Spher
 /** The server's `{code, message, params}` in the user's language. */
 function describePathError(error, t) {
   const code = error?.code || 'generic';
+  // "generic" is a failure the server described in its own words (PC
+  // Refinement's loader answers with the reason as plain text): show that, not
+  // a fixed sentence that says less.
+  if (code === 'generic' && error?.message) return error.message;
   return t(`phaseDropdown.pathError.${code}`, {
     ...(error?.params || {}),
     // A code this build has no wording for still gets the server's sentence.

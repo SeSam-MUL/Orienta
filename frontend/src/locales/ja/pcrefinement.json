@@ -6,15 +6,15 @@
   },
   "controls": {
     "cancel": "キャンセル",
-    "loadPhase": "📁 CIF から相を読み込む",
+    "loadPhase": "📁 CIF から相を読み込む（複数可）",
     "loadPhaseLoading": "読み込み中...",
-    "loadPhaseTooltip": "CIF ライブラリから結晶相を選択します — Hough 指数付けと同じ選択ツールです。\nバンド照合に使用する結晶構造を定義します。",
+    "loadPhaseTooltip": "CIF ライブラリから結晶相を 1 つ以上選択します — Hough 指数付けと同じ選択ツールです。複数の相（例：二相ステンレス鋼のオーステナイトとフェライト）を選ぶと、各キャリブレーションパターンはすべての相に対して指数付けされ、最もよく合う相が採用されます。\nバンド照合に使用する結晶構造を定義します。",
     "cifPathPlaceholder": "…または .cif パスを入力",
     "browse": "...",
     "browseTooltip": "ディスク上の .cif ファイルを参照します",
     "phaseLoaded": "相を読み込みました: {{name}}",
     "phaseLoadFailed": "相の読み込みに失敗しました",
-    "phasePickerTitle": "CIF から相を読み込む",
+    "phasePickerTitle": "キャリブレーションに使う相を選択",
     "phaseInfoUnknown": "不明な相",
     "indexPattern": "パターンを指数付け",
     "indexPatternTooltip": "現在のパターンに対して Hough 指数付けを実行します。\n検出した Kikuchi バンドを読み込んだ相と照合します。",
@@ -70,7 +70,15 @@
     "globalRefineStarted": "全体精密化タスクを開始しました ({{count}} 個のパターン)",
     "globalRefineComplete": "全体精密化が完了しました",
     "globalRefineFailed": "全体精密化に失敗しました",
-    "sourceDriftFetchFailed": "PC ドリフトの取得に失敗しました。先に Analysis ページでデータセットを読み込んでください。"
+    "sourceDriftFetchFailed": "PC ドリフトの取得に失敗しました。先に Analysis ページでデータセットを読み込んでください。",
+    "phasesHeader": "読み込み済みの相（{{count}}）",
+    "phasesMultiNote": "各キャリブレーションパターンはすべての相に対して指数付けされ、パターンごとに最もよく合う相が採用されます。",
+    "removePhaseTooltip": "{{name}} をキャリブレーションに使う相から外します",
+    "phaseAdded": "{{name}} を追加しました — {{count}} 個の相を読み込み済み",
+    "phaseRemoved": "{{name}} を外しました",
+    "phaseLimit": "同時に使用できる相は最大 {{max}} 個です。",
+    "phasePerPattern": "パターンごとの相:",
+    "phaseNone": "なし"
   },
   "detector": {
     "title": "検出器設定",
@@ -107,7 +115,7 @@
     "detectorRepr": "kikuchipy EBSDDetector 構成の読み取り専用出力。",
     "axesRepr": "読み込んだ信号の HyperSpy 軸マネージャーの読み取り専用出力。",
     "cancelRun": "実行中の PC 最適化 / グリッド較正タスクをキャンセルします。",
-    "cifPathInput": ".cif ファイルのパスを入力または貼り付け、Enter キーで相を読み込みます。",
+    "cifPathInput": ".cif ファイルのパスを入力または貼り付け、Enter キーで唯一の相として読み込みます。複数の相を使う場合は選択ツールを開いて追加します。",
     "copyPcValues": "精密化された PCx / PCy / PCz 値をクリップボードにコピーします。",
     "driftAnalysisShort": "較正パターン間で PC がどう変化するかを解析します (2 個以上必要)。"
   },
@@ -217,7 +225,9 @@
     "patternItemTooltipCi": "行 {{row}}、列 {{col}} のパターン — CI: {{ci}}",
     "patternItemLabel": "pat {{row}},{{col}}",
     "patternItemCi": "CI {{ci}}",
-    "removeTooltip": "選択したパターンを較正セットから削除します"
+    "removeTooltip": "選択したパターンを較正セットから削除します",
+    "patternItemTooltipPhase": "行 {{row}}、列 {{col}} のパターン — CI: {{ci}} — {{phase}} として指数付け",
+    "indexedPhase": "相 {{name}}"
   },
   "prompt": {
     "loadCifTitle": "CIF ファイルを読み込む",

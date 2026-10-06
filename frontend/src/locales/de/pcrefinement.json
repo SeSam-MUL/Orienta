@@ -6,15 +6,15 @@
   },
   "controls": {
     "cancel": "Abbrechen",
-    "loadPhase": "📁 Phase aus CIF laden",
+    "loadPhase": "📁 Phase(n) aus CIF laden",
     "loadPhaseLoading": "Lädt...",
-    "loadPhaseTooltip": "Wählt eine Kristallphase aus der CIF-Bibliothek — derselbe Auswähler wie bei der Hough-Indizierung.\nDefiniert die Kristallstruktur für den Band-Abgleich.",
+    "loadPhaseTooltip": "Wählt eine oder mehrere Kristallphasen aus der CIF-Bibliothek — derselbe Auswähler wie bei der Hough-Indizierung. Bei mehreren Phasen (z. B. Austenit und Ferrit eines Duplexstahls) wird jedes Kalibriermuster gegen alle indiziert und behält die am besten passende.\nDefiniert die Kristallstruktur(en) für den Band-Abgleich.",
     "cifPathPlaceholder": "…oder einen .cif-Pfad eingeben",
     "browse": "...",
     "browseTooltip": "Nach einer .cif-Datei auf der Festplatte suchen",
     "phaseLoaded": "Phase geladen: {{name}}",
     "phaseLoadFailed": "Phase konnte nicht geladen werden",
-    "phasePickerTitle": "Phase aus CIF laden",
+    "phasePickerTitle": "Phasen für die Kalibrierung wählen",
     "phaseInfoUnknown": "Unbekannte Phase",
     "indexPattern": "Muster indizieren",
     "indexPatternTooltip": "Führt Hough-Indizierung am aktuellen Muster aus.\nGleicht erkannte Kikuchi-Bänder mit der geladenen Phase ab.",
@@ -70,7 +70,15 @@
     "globalRefineStarted": "Globaler Verfeinerungs-Task gestartet ({{count}} Muster)",
     "globalRefineComplete": "Globale Verfeinerung abgeschlossen",
     "globalRefineFailed": "Globale Verfeinerung fehlgeschlagen",
-    "sourceDriftFetchFailed": "Abruf der PC-Drift fehlgeschlagen. Zuerst einen Datensatz auf der Analyse-Seite laden."
+    "sourceDriftFetchFailed": "Abruf der PC-Drift fehlgeschlagen. Zuerst einen Datensatz auf der Analyse-Seite laden.",
+    "phasesHeader": "Geladene Phasen ({{count}})",
+    "phasesMultiNote": "Jedes Kalibriermuster wird gegen alle indiziert; je Muster gewinnt die am besten passende Phase.",
+    "removePhaseTooltip": "{{name}} aus den Kalibrierphasen entfernen",
+    "phaseAdded": "{{name}} hinzugefügt — {{count}} Phasen geladen",
+    "phaseRemoved": "{{name}} entfernt",
+    "phaseLimit": "Es können höchstens {{max}} Phasen gemeinsam verwendet werden.",
+    "phasePerPattern": "Phase je Muster:",
+    "phaseNone": "keine"
   },
   "detector": {
     "title": "Detektor-Einstellungen",
@@ -107,7 +115,7 @@
     "detectorRepr": "Schreibgeschützte Ausgabe der kikuchipy-EBSDDetector-Konfiguration.",
     "axesRepr": "Schreibgeschützte Ausgabe des HyperSpy-Achsen-Managers für das geladene Signal.",
     "cancelRun": "Bricht die laufende PC-Optimierung / Gitter-Kalibrierung ab.",
-    "cifPathInput": "Einen .cif-Pfad eingeben oder einfügen, dann Enter drücken, um die Phase zu laden.",
+    "cifPathInput": "Einen .cif-Pfad eingeben oder einfügen, dann Enter drücken, um sie als einzige Phase zu laden. Für mehrere Phasen den Auswähler öffnen und weitere hinzufügen.",
     "copyPcValues": "Kopiert die verfeinerten PCx- / PCy- / PCz-Werte in die Zwischenablage.",
     "driftAnalysisShort": "Analysiert, wie das PC über die Kalibrier-Muster variiert (mind. 2 nötig)."
   },
@@ -217,7 +225,9 @@
     "patternItemTooltipCi": "Muster bei Zeile {{row}}, Spalte {{col}} — CI: {{ci}}",
     "patternItemLabel": "Mst {{row}},{{col}}",
     "patternItemCi": "CI {{ci}}",
-    "removeTooltip": "Entfernt das ausgewählte Muster aus dem Kalibrier-Satz"
+    "removeTooltip": "Entfernt das ausgewählte Muster aus dem Kalibrier-Satz",
+    "patternItemTooltipPhase": "Muster bei Zeile {{row}}, Spalte {{col}} — CI: {{ci}} — indiziert als {{phase}}",
+    "indexedPhase": "Phase {{name}}"
   },
   "prompt": {
     "loadCifTitle": "CIF-Datei laden",

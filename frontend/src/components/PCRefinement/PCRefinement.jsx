@@ -32,6 +32,11 @@ import {
 } from './pixelSizeCheck';
 import { pickShtForPhase } from './previewSht';
 import {
+  MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync,
+  summarisePatternPhases, previewPhaseName, createSerialQueue,
+} from './phaseSet';
+import { phaseStem, pathErrorFrom, samePath } from '../Indexing/phasePath';
+import {
   colors,
   alpha,
   spacing,
@@ -304,6 +309,9 @@ function PreviewPanel({
   onShtPathChange = null,
   previewBandwidth = 128,
   onPreviewBandwidthChange = null,
+  // --- Several phases ---
+  multiPhase = false,
+  simulatedIndexedPhase = null,
 }) {
   const { t } = useTranslation(['pcrefinement', 'common']);
   const [hideLines, setHideLines] = useState(false);
@@ -575,6 +583,9 @@ function PreviewPanel({
                   {simulatedOrientationSource === 'identity' ? ' ⚠' : ''}
                 </span>
               )}
+              {multiPhase && simulatedIndexedPhase && (
+                <span>· {t('pcrefinement:preview.indexedPhase', { name: simulatedIndexedPhase })}</span>
+              )}
             </div>
           )}
         </div>
@@ -647,9 +658,11 @@ function PreviewPanel({
               key={i}
               className="list-item-interactive"
               onClick={() => onSelectIdx(i === selectedIdx ? null : i)}
-              title={p.ci != null
-                ? t('pcrefinement:preview.patternItemTooltipCi', { row: p.row, col: p.col, ci: p.ci.toFixed(3) })
-                : t('pcrefinement:preview.patternItemTooltip', { row: p.row, col: p.col })}
+              title={multiPhase && p.ci != null && p.phase
+                ? t('pcrefinement:preview.patternItemTooltipPhase', { row: p.row, col: p.col, ci: p.ci.toFixed(3), phase: p.phase })
+                : p.ci != null
+                  ? t('pcrefinement:preview.patternItemTooltipCi', { row: p.row, col: p.col, ci: p.ci.toFixed(3) })
+                  : t('pcrefinement:preview.patternItemTooltip', { row: p.row, col: p.col })}
               style={{
                 padding: '4px 8px',
                 fontSize: '9pt',
@@ -665,7 +678,18 @@ function PreviewPanel({
                 transition: 'background 0.1s, border-left-color 0.15s',
               }}
             >
-              <span>{t('pcrefinement:preview.patternItemLabel', { row: p.row, col: p.col })}</span>
+              <span>
+                {t('pcrefinement:preview.patternItemLabel', { row: p.row, col: p.col })}
+                {/* Several phases: which one this pattern was indexed as. */}
+                {multiPhase && p.phase && (
+                  <span
+                    data-testid="pattern-phase"
+                    style={{ marginLeft: 8, fontSize: '8pt', color: colors.accent, fontWeight: 600 }}
+                  >
+                    {p.phase}
+                  </span>
+                )}
+              </span>
               {p.ci != null && (
                 <span style={{
                   color: ciColor(p.ci),
@@ -1402,6 +1426,8 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
 // ---------------------------------------------------------------------------
 function ControlsPanel({
   phaseLoaded,
+  phases = [],
+  onPhasesChanged,
   detectorReady,
   patterns,
   currentPatternIdx,
@@ -1445,6 +1471,18 @@ function ControlsPanel({
   const [phasePickerOpen, setPhasePickerOpen] = useState(false);
   const [discoveredFiles, setDiscoveredFiles] = useState([]);
   const [discoveredGroups, setDiscoveredGroups] = useState([]);
+
+  // Several phases (e.g. austenite + ferrite of a duplex steel). The picker
+  // ticks and unticks phases; each change is one request, and requests run one
+  // after another so a quick second click does not race the first.
+  const phaseNames = phases.map((p) => p.name);
+  const phaseNamesRef = useRef(phaseNames);
+  phaseNamesRef.current = phaseNames;
+  const [addedPaths, setAddedPaths] = useState([]);   // typed-in paths we loaded
+  const phaseQueueRef = useRef(null);
+  if (phaseQueueRef.current === null) phaseQueueRef.current = createSerialQueue();
+  const patternsRef = useRef(patterns);
+  patternsRef.current = patterns;
 
   // Index pattern state
   const [indexMsg, setIndexMsg] = useState(null);
@@ -1501,6 +1539,16 @@ function ControlsPanel({
           // Update segments + detector PC spinboxes with optimized values
           if (d.result?.segments && onSegmentsUpdate) onSegmentsUpdate(d.result.segments);
           if (d.result?.mean_pc?.length === 3 && onOptimizedPc) onOptimizedPc(d.result.mean_pc);
+          // Several phases: which one each refined pattern is indexed as. The
+          // result lists them in the order the patterns were sent.
+          if (Array.isArray(d.result?.pattern_phases) && onPatternsIndexed) {
+            onPatternsIndexed(d.result.pattern_phases.flatMap((e) => {
+              const index = patternsRef.current[e.index]?.index;
+              return index == null ? [] : [{
+                index, phase_name: e.phase_name, ...(e.ci != null ? { ci: e.ci } : {}),
+              }];
+            }));
+          }
         } else if (d.status === 'error' || d.status === 'failed') {
           stopPolling();
           setIsRunning(false);
@@ -1585,20 +1633,107 @@ function ControlsPanel({
     }
   }, []);
 
-  // PC Refinement loads exactly ONE phase, so a click loads that CIF and
-  // closes the picker. `null` is PhaseDropdown's "+ Add file manually…" signal.
-  const handlePickPhase = (file) => {
-    setPhasePickerOpen(false);
-    if (!file) { handleLoadPhase(); return; }   // manual native/prompt fallback
-    setCifPath(file.path);
-    handleLoadPhase(file.path);
+  // ── Several phases ──
+  // The core operations below talk to the backend and keep the page's phase
+  // list in step; they return a result instead of showing it, so the picker's
+  // path field (which shows its own message) and the tick boxes (which show
+  // the status line) can both use them.
+  const addPhaseCore = async (path) => {
+    const stem = phaseStem(path);
+    if (phaseNamesRef.current.includes(stem)) return { ok: true, already: true, name: stem };
+    if (phaseNamesRef.current.length >= MAX_PC_PHASES) {
+      return {
+        ok: false,
+        error: { code: 'limit', message: t('pcrefinement:controls.phaseLimit', { max: MAX_PC_PHASES }), params: {} },
+      };
+    }
+    try {
+      const res = await pcApi.addPhase(path);
+      phaseNamesRef.current = res.data.phases.map((p) => p.name);
+      setAddedPaths((prev) => (prev.some((p) => samePath(p, path)) ? prev : [...prev, path]));
+      setPhaseInfo(res.data);
+      onPhasesChanged(res.data.phases);
+      return { ok: true, name: res.data.phase_name, count: res.data.phases.length };
+    } catch (err) {
+      return { ok: false, error: pathErrorFrom(err) };
+    }
   };
 
-  // The shared picker's "All" button is multi-select; collapse to single-load.
+  const removePhaseCore = async (name) => {
+    try {
+      const res = await pcApi.removePhase(name);
+      phaseNamesRef.current = res.data.phases.map((p) => p.name);
+      setAddedPaths((prev) => prev.filter((p) => phaseStem(p) !== name));
+      setPhaseInfo(res.data.phases[0] ? { phase_name: res.data.phases[0].name, ...res.data.phases[0] } : null);
+      onPhasesChanged(res.data.phases);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: pathErrorFrom(err) };
+    }
+  };
+
+  // Show the outcome of a tick / untick / remove in the status line.
+  const reportPhaseOp = (res, okText) => {
+    if (res.ok) {
+      setPhaseMsg(okText);
+      setPhaseError(false);
+    } else {
+      setPhaseMsg(res.error?.message || t('pcrefinement:controls.phaseLoadFailed'));
+      setPhaseError(true);
+    }
+  };
+
+  const runPhaseJob = (job) => phaseQueueRef.current(async () => {
+    setPhaseLoading(true);
+    try { return await job(); } finally { setPhaseLoading(false); }
+  });
+
+  // Tick or untick one phase of the picker.
+  const togglePhase = (file) => runPhaseJob(async () => {
+    const stem = phaseStem(file.path);
+    if (phaseNamesRef.current.includes(stem)) {
+      reportPhaseOp(await removePhaseCore(stem), t('pcrefinement:controls.phaseRemoved', { name: stem }));
+    } else {
+      const res = await addPhaseCore(file.path);
+      reportPhaseOp(res, t('pcrefinement:controls.phaseAdded', { name: res.name, count: res.count }));
+    }
+  });
+
+  // The path field of the picker: a phase that is not in the library.
+  const addPhaseByPath = (path) => runPhaseJob(async () => {
+    const res = await addPhaseCore(path);
+    if (res.ok && !res.already) {
+      setPhaseMsg(t('pcrefinement:controls.phaseAdded', { name: res.name, count: res.count }));
+      setPhaseError(false);
+    }
+    return res;
+  });
+
+  // `null` is PhaseDropdown's "+ Add file manually…" signal (the picker below
+  // has a path field, so it no longer sends it; kept for any other caller).
+  const handlePickPhase = (file) => {
+    if (!file) { setPhasePickerOpen(false); handleLoadPhase(); return; }
+    togglePhase(file);
+  };
+
+  // The picker's All / None buttons hand over the whole wanted set at once.
   const handleSetAllPhases = (paths) => {
-    if (!paths || paths.length === 0) return;
-    const p = paths[paths.length - 1];
-    handlePickPhase(discoveredFiles.find((d) => d.path === p) || { path: p });
+    const plan = planPhaseSync(phaseNamesRef.current, paths);
+    const resulting = phaseNamesRef.current.length - plan.remove.length + plan.add.length;
+    if (resulting > MAX_PC_PHASES) {
+      setPhaseMsg(t('pcrefinement:controls.phaseLimit', { max: MAX_PC_PHASES }));
+      setPhaseError(true);
+      return;
+    }
+    runPhaseJob(async () => {
+      let last = { ok: true };
+      for (const name of plan.remove) last = await removePhaseCore(name);
+      for (const path of plan.add) {
+        last = await addPhaseCore(path);
+        if (!last.ok) break;
+      }
+      reportPhaseOp(last, t('pcrefinement:controls.phasesHeader', { count: phaseNamesRef.current.length }));
+    });
   };
 
   // Index All Patterns (Hough index all calibration patterns — mirrors PyQt5 IndexAllWorker)
@@ -1692,7 +1827,7 @@ function ControlsPanel({
 
       // Update CI in the pattern list (mirrors handlePatternsIndexed for Index All)
       if (d.ci != null && currentPatternIdx != null && onPatternsIndexed) {
-        onPatternsIndexed([{ index: patterns[currentPatternIdx].index, ci: d.ci }]);
+        onPatternsIndexed([{ index: patterns[currentPatternIdx].index, ci: d.ci, phase_name: d.phase_name }]);
       }
     } catch (err) {
       setIsRunning(false);
@@ -1927,16 +2062,66 @@ function ControlsPanel({
           <PhaseDropdown
             discoveredFiles={discoveredFiles}
             groups={discoveredGroups}
-            selectedPaths={cifPath ? [cifPath] : []}
+            selectedPaths={loadedPaths(discoveredFiles, phaseNames, addedPaths)}
             onTogglePath={handlePickPhase}
             onSetAll={handleSetAllPhases}
+            onAddPath={addPhaseByPath}
             method="hough"
             open={true}
             onClose={() => setPhasePickerOpen(false)}
           />
         </FloatingPhasePanel>
 
-        {phaseInfo && (
+        {/* Several phases: the list, each removable, and what it means. */}
+        {phaseNames.length > 1 && (
+          <div
+            data-testid="pc-phase-list"
+            style={{
+              marginTop: 4,
+              padding: '4px 6px',
+              background: colors.bgSecondary,
+              border: `1px solid ${colors.border}`,
+              borderRadius: 3,
+              fontSize: '9pt',
+              animation: 'fadeSlideIn 0.2s ease-out',
+            }}
+          >
+            <div style={{ color: colors.textSecondary, marginBottom: 2 }}>
+              {t('pcrefinement:controls.phasesHeader', { count: phaseNames.length })}
+            </div>
+            {phases.map((p) => (
+              <div key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '1px 0' }}>
+                <span style={{ color: colors.accent, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {p.name}
+                </span>
+                {p.space_group && (
+                  <span style={{ color: colors.textSecondary }}>{p.space_group}</span>
+                )}
+                <button
+                  type="button"
+                  disabled={phaseLoading}
+                  title={t('pcrefinement:controls.removePhaseTooltip', { name: p.name })}
+                  aria-label={t('pcrefinement:controls.removePhaseTooltip', { name: p.name })}
+                  onClick={() => runPhaseJob(async () => {
+                    reportPhaseOp(await removePhaseCore(p.name),
+                                  t('pcrefinement:controls.phaseRemoved', { name: p.name }));
+                  })}
+                  style={{
+                    background: 'none', border: 'none', color: colors.textSecondary,
+                    cursor: 'pointer', fontSize: '11pt', lineHeight: 1, padding: '0 2px',
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            <div style={{ color: colors.textSecondary, fontSize: '8pt', marginTop: 2 }}>
+              {t('pcrefinement:controls.phasesMultiNote')}
+            </div>
+          </div>
+        )}
+
+        {phaseNames.length <= 1 && phaseInfo && (
           <div
             style={{
               marginTop: 4,
@@ -2119,6 +2304,17 @@ function ControlsPanel({
               </Label>
             </FormRow>
           )}
+          {/* Several phases: how the calibration patterns split between them. */}
+          {Array.isArray(result.pattern_phases) && result.pattern_phases.length > 0 && (
+            <FormRow label={t('pcrefinement:controls.phasePerPattern')}>
+              <Label style={{ color: colors.accent, fontSize: '9pt' }}>
+                <span data-testid="pc-phase-summary">
+                  {summarisePatternPhases(result.pattern_phases, t('pcrefinement:controls.phaseNone'))
+                    .map((s) => `${s.name} ×${s.count}`).join(', ')}
+                </span>
+              </Label>
+            </FormRow>
+          )}
           {/* Reliability guard: Hough-based PC refine is unreliable on small
               (low-res) patterns and can drift far from the vendor/.osc PC. */}
           {result.pc_warning && (
@@ -2257,6 +2453,11 @@ export default function PCRefinement({ onNavigate }) {
   // Readiness flags
   const [detectorReady, setDetectorReady] = useState(false);
   const [phaseLoaded, setPhaseLoaded] = useState(false);
+  // The loaded phases ({name, space_group?, lattice?}); several when calibrating
+  // a multi-phase sample. `phaseLabel` is their joined name for the header.
+  const [phases, setPhases] = useState([]);
+  const phaseNames = phases.map((p) => p.name);
+  const multiPhase = phaseNames.length > 1;
 
   // Current PC (for crosshair in canvas)
   const [currentPcx, setCurrentPcx] = useState(0.5);
@@ -2287,6 +2488,7 @@ export default function PCRefinement({ onNavigate }) {
   const [simulatedError, setSimulatedError] = useState(null);
   const [simulatedOrientation, setSimulatedOrientation] = useState(null);
   const [simulatedOrientationSource, setSimulatedOrientationSource] = useState(null);
+  const [simulatedIndexedPhase, setSimulatedIndexedPhase] = useState(null);
   const [previewBandwidth, setPreviewBandwidth] = useState(128);
 
   // Optimized PC values (passed to DetectorSettingsGroup to update spinboxes)
@@ -2307,7 +2509,7 @@ export default function PCRefinement({ onNavigate }) {
       if (d?.has_detector || d?.detector_set) setDetectorReady(true);
       if (d?.has_phase || d?.phase_loaded) {
         setPhaseLoaded(true);
-        if (d?.phase_name) setPhaseLabel(d.phase_name);
+        applyStatusPhases(d);
       }
       // Sync patterns from backend
       if (d?.patterns && d.patterns.length > 0) {
@@ -2355,7 +2557,7 @@ export default function PCRefinement({ onNavigate }) {
       if (d?.has_detector) setDetectorReady(true);
       if (d?.has_phase) {
         setPhaseLoaded(true);
-        if (d?.phase_name) setPhaseLabel(d.phase_name);
+        applyStatusPhases(d);
       }
       if (d?.global_ci != null) setGlobalCi(d.global_ci);
       if (d?.pc?.length === 3) {
@@ -2394,10 +2596,39 @@ export default function PCRefinement({ onNavigate }) {
     setSelectedPatternIdx(null);
   };
 
+  // The names a status reply carries: with several phases the header shows them
+  // all; with one it is the single `phase_name`, exactly as before.
+  function applyStatusPhases(d) {
+    const names = Array.isArray(d?.phase_names) ? d.phase_names : [];
+    setPhases(names.map((name) => ({ name })));
+    if (names.length > 1) setPhaseLabel(phaseLabelFor(names, ''));
+    else if (d?.phase_name) setPhaseLabel(d.phase_name);
+  }
+
+  // Phases added or removed in the picker: `list` is the backend's loaded set.
+  // Everything computed for the old set (CI, per-pattern phase, overlay) is
+  // stale — the backend dropped its caches — so clear it here too.
+  const handlePhasesChanged = (list) => {
+    setPhases(list);
+    setPhaseLoaded(list.length > 0);
+    setPhaseLabel(phaseLabelFor(list.map((p) => p.name), t('pcrefinement:header.noPhaseLoaded')));
+    setPhaseInfoText(list.map((p) => [
+      t('pcrefinement:phaseInfo.nameLine', { name: p.name }),
+      p.space_group ? t('pcrefinement:phaseInfo.spaceGroupLine', { spaceGroup: p.space_group }) : '',
+      p.lattice?.a != null ? `a=${p.lattice.a.toFixed(3)} b=${p.lattice.b.toFixed(3)} c=${p.lattice.c.toFixed(3)}` : '',
+    ].filter(Boolean).join(' · ')).join('\n'));
+    setPatterns((prev) => prev.map((p) => ({ ...p, ci: null, phase: null })));
+    setKikuchiSegments([]);
+    setCiValue(null);
+    setGlobalCi(null);
+  };
+
   const handlePhaseLoaded = (info) => {
     setPhaseLoaded(true);
     const name = info.phase_name || info.name || t('pcrefinement:phaseInfo.unknown');
     setPhaseLabel(name);
+    setPhases([{ name, space_group: info.space_group, lattice: info.lattice }]);
+    setPatterns((prev) => prev.map((p) => ({ ...p, phase: null })));
     const lines = [
       t('pcrefinement:phaseInfo.nameLine', { name }),
       info.space_group ? t('pcrefinement:phaseInfo.spaceGroupLine', { spaceGroup: info.space_group }) : '',
@@ -2432,7 +2663,13 @@ export default function PCRefinement({ onNavigate }) {
     setPatterns((prev) =>
       prev.map((p) => {
         const r = results.find((res) => res.index === p.index);
-        if (r) return { ...p, ci: r.ci };
+        if (r) {
+          return {
+            ...p,
+            ci: 'ci' in r ? r.ci : p.ci,
+            phase: r.phase_name || r.phase || p.phase,
+          };
+        }
         return p;
       })
     );
@@ -2485,6 +2722,14 @@ export default function PCRefinement({ onNavigate }) {
     }
   }, [selectedPatternIdx, setCiValue, handleTrialTiltChanged]);
 
+  // Which phase's master the preview uses: the loaded phase, or with several
+  // phases the one the selected pattern was indexed as (see phaseSet.js).
+  const previewPhase = previewPhaseName({
+    phaseNames, phaseLabel, patterns, selectedIdx: selectedPatternIdx,
+  });
+  const previewPhaseRef = useRef(previewPhase);
+  previewPhaseRef.current = previewPhase;
+
   // --- Auto-discover SHT files when phase is loaded ---
   // The forward-sim preview needs an SHT master pattern. We list all
   // available SHT files from the spherical-indexing files endpoint
@@ -2507,11 +2752,19 @@ export default function PCRefinement({ onNavigate }) {
         setShtChoices(files);
         // The master of the LOADED phase: the first file was Al while Ni was
         // being calibrated, and the preview reported a good PC as NCC 0.03.
-        setShtPath(pickShtForPhase(files, phaseLabel));
+        setShtPath(pickShtForPhase(files, previewPhaseRef.current));
       })
       .catch(() => { if (!stale) setShtChoices([]); });
     return () => { stale = true; };
   }, [phaseLoaded, phaseLabel]);
+
+  // Several phases: the master must be the one of the phase the SELECTED
+  // pattern was indexed as, so follow the selection. (With one phase the effect
+  // above is the only one that sets it, exactly as before.)
+  useEffect(() => {
+    if (!multiPhase || shtChoices.length === 0) return;
+    setShtPath(pickShtForPhase(shtChoices, previewPhaseRef.current));
+  }, [multiPhase, shtChoices, previewPhase]);
 
   // --- Debounced fetch of the simulated preview ---
   // Watches the trial geometry + selected pattern + SHT + bandwidth and
@@ -2547,6 +2800,7 @@ export default function PCRefinement({ onNavigate }) {
           setSimulatedNcc(typeof r.data?.ncc === 'number' ? r.data.ncc : null);
           setSimulatedOrientation(r.data?.orientation_euler_deg || null);
           setSimulatedOrientationSource(r.data?.orientation_source || null);
+          setSimulatedIndexedPhase(r.data?.indexed_phase || null);
         })
         .catch(err => {
           if (cancelled) return;
@@ -2591,6 +2845,11 @@ export default function PCRefinement({ onNavigate }) {
           if (d?.success && d.segments) {
             setKikuchiSegments(d.segments);
             if (d.ci != null) setCiValue(d.ci);
+            // Several phases: remember which one this pattern was indexed as
+            // (the list shows it, and the preview picks its master by it).
+            if (multiPhase && d.phase_name) {
+              handlePatternsIndexed([{ index: pat.index, phase_name: d.phase_name }]);
+            }
           } else {
             setKikuchiSegments([]);
             // Fall back to local CI when backend cache is lost
@@ -2764,6 +3023,8 @@ export default function PCRefinement({ onNavigate }) {
               simulatedError={simulatedError}
               simulatedOrientation={simulatedOrientation}
               simulatedOrientationSource={simulatedOrientationSource}
+              multiPhase={multiPhase}
+              simulatedIndexedPhase={simulatedIndexedPhase}
               shtChoices={shtChoices}
               shtPath={shtPath}
               onShtPathChange={setShtPath}
@@ -2774,6 +3035,8 @@ export default function PCRefinement({ onNavigate }) {
           right={
             <ControlsPanel
               phaseLoaded={phaseLoaded}
+              phases={phases}
+              onPhasesChanged={handlePhasesChanged}
               detectorReady={detectorReady}
               patterns={patterns}
               currentPatternIdx={selectedPatternIdx}

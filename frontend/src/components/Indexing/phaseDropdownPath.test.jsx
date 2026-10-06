@@ -123,6 +123,17 @@ describe('with onAddPath', () => {
     await waitFor(() => expect(screen.getByText('The server says no.')).toBeTruthy());
   });
 
+  it('shows the words of the server for a generic failure, not a fixed sentence', async () => {
+    const onAddPath = vi.fn().mockResolvedValue({
+      ok: false, error: { code: 'generic', message: "A phase named 'x' is already loaded.", params: {} },
+    });
+    mount({ onAddPath });
+    fireEvent.change(pathInput(), { target: { value: '/a/x.cif' } });
+    fireEvent.click(screen.getByText('Add'));
+    await waitFor(() => expect(screen.getByText("A phase named 'x' is already loaded.")).toBeTruthy());
+    expect(screen.queryByText('The file could not be added.')).toBeNull();
+  });
+
   it('says when the phase was already in the list', async () => {
     const onAddPath = vi.fn().mockResolvedValue({ ok: true, already: true, name: 'Al' });
     mount({ onAddPath });

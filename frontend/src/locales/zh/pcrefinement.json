@@ -6,15 +6,15 @@
   },
   "controls": {
     "cancel": "取消",
-    "loadPhase": "📁 从 CIF 加载相",
+    "loadPhase": "📁 从 CIF 加载相（可多选）",
     "loadPhaseLoading": "加载中...",
-    "loadPhaseTooltip": "从 CIF 库中选择一个晶体相 — 与 Hough 标定使用的选择器相同。\n定义用于带匹配的晶体结构。",
+    "loadPhaseTooltip": "从 CIF 库中选择一个或多个晶体相 — 与 Hough 标定使用的选择器相同。选择多个相（例如双相钢的奥氏体和铁素体）时，每个标定花样都会针对所有相进行标定，并保留拟合最好的相。\n定义用于带匹配的晶体结构。",
     "cifPathPlaceholder": "…或输入 .cif 路径",
     "browse": "...",
     "browseTooltip": "浏览磁盘上的 .cif 文件",
     "phaseLoaded": "相已加载: {{name}}",
     "phaseLoadFailed": "加载相失败",
-    "phasePickerTitle": "从 CIF 加载相",
+    "phasePickerTitle": "选择用于标定的相",
     "phaseInfoUnknown": "未知相",
     "indexPattern": "标定花样",
     "indexPatternTooltip": "对当前花样运行 Hough 标定。\n将检测到的 Kikuchi 带与已加载的相匹配。",
@@ -70,7 +70,15 @@
     "globalRefineStarted": "全局精修任务已启动 ({{count}} 个花样)",
     "globalRefineComplete": "全局精修完成",
     "globalRefineFailed": "全局精修失败",
-    "sourceDriftFetchFailed": "获取 PC 漂移失败。请先在 Analysis 页面加载数据集。"
+    "sourceDriftFetchFailed": "获取 PC 漂移失败。请先在 Analysis 页面加载数据集。",
+    "phasesHeader": "已加载的相（{{count}}）",
+    "phasesMultiNote": "每个标定花样都会针对所有相进行标定，每个花样取拟合最好的相。",
+    "removePhaseTooltip": "将 {{name}} 从标定使用的相中移除",
+    "phaseAdded": "已添加 {{name}} — 已加载 {{count}} 个相",
+    "phaseRemoved": "已移除 {{name}}",
+    "phaseLimit": "最多可同时使用 {{max}} 个相。",
+    "phasePerPattern": "各花样的相:",
+    "phaseNone": "无"
   },
   "detector": {
     "title": "探测器设置",
@@ -107,7 +115,7 @@
     "detectorRepr": "kikuchipy EBSDDetector 配置的只读输出。",
     "axesRepr": "已加载信号的 HyperSpy 坐标轴管理器只读输出。",
     "cancelRun": "取消正在运行的 PC 优化 / 网格校准任务。",
-    "cifPathInput": "输入或粘贴 .cif 文件路径，然后按 Enter 加载相。",
+    "cifPathInput": "输入或粘贴 .cif 文件路径，然后按 Enter 将其作为唯一的相加载。要使用多个相，请打开选择器继续添加。",
     "copyPcValues": "将精修的 PCx / PCy / PCz 值复制到剪贴板。",
     "driftAnalysisShort": "分析 PC 在各校准花样间如何变化 (需要 >= 2 个)。"
   },
@@ -217,7 +225,9 @@
     "patternItemTooltipCi": "位于第 {{row}} 行、第 {{col}} 列的花样 — CI: {{ci}}",
     "patternItemLabel": "pat {{row}},{{col}}",
     "patternItemCi": "CI {{ci}}",
-    "removeTooltip": "从校准集中移除所选花样"
+    "removeTooltip": "从校准集中移除所选花样",
+    "patternItemTooltipPhase": "位于第 {{row}} 行、第 {{col}} 列的花样 — CI: {{ci}} — 标定为 {{phase}}",
+    "indexedPhase": "相 {{name}}"
   },
   "prompt": {
     "loadCifTitle": "加载 CIF 文件",

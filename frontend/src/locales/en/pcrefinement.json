@@ -6,15 +6,15 @@
   },
   "controls": {
     "cancel": "Cancel",
-    "loadPhase": "📁 Load Phase from CIF",
+    "loadPhase": "📁 Load Phase(s) from CIF",
     "loadPhaseLoading": "Loading...",
-    "loadPhaseTooltip": "Pick a crystal phase from the CIF library — the same picker used in Hough indexing.\nDefines the crystal structure used for band matching.",
+    "loadPhaseTooltip": "Pick one or more crystal phases from the CIF library — the same picker used in Hough indexing. With several phases (e.g. austenite and ferrite of a duplex steel) every calibration pattern is indexed against all of them and keeps the best-fitting one.\nDefines the crystal structure(s) used for band matching.",
     "cifPathPlaceholder": "…or type a .cif path",
     "browse": "...",
     "browseTooltip": "Browse for a .cif file on disk",
     "phaseLoaded": "Phase loaded: {{name}}",
     "phaseLoadFailed": "Failed to load phase",
-    "phasePickerTitle": "Load Phase from CIF",
+    "phasePickerTitle": "Choose phases for calibration",
     "phaseInfoUnknown": "Unknown phase",
     "indexPattern": "Index Pattern",
     "indexPatternTooltip": "Run Hough indexing on the current pattern.\nMatches detected Kikuchi bands to the loaded phase.",
@@ -70,7 +70,15 @@
     "globalRefineStarted": "Global refine task started ({{count}} patterns)",
     "globalRefineComplete": "Global refinement complete",
     "globalRefineFailed": "Global refine failed",
-    "sourceDriftFetchFailed": "PC drift fetch failed. Load a dataset in the Analysis page first."
+    "sourceDriftFetchFailed": "PC drift fetch failed. Load a dataset in the Analysis page first.",
+    "phasesHeader": "Loaded phases ({{count}})",
+    "phasesMultiNote": "Each calibration pattern is indexed against all of them; the best-fitting phase wins per pattern.",
+    "removePhaseTooltip": "Remove {{name}} from the phases used for calibration",
+    "phaseAdded": "Added {{name}} — {{count}} phases loaded",
+    "phaseRemoved": "Removed {{name}}",
+    "phaseLimit": "At most {{max}} phases can be used together.",
+    "phasePerPattern": "Phase per pattern:",
+    "phaseNone": "none"
   },
   "detector": {
     "title": "Detector Settings",
@@ -107,7 +115,7 @@
     "detectorRepr": "Read-only kikuchipy EBSDDetector configuration output.",
     "axesRepr": "Read-only HyperSpy axes manager output for the loaded signal.",
     "cancelRun": "Cancel the running PC optimization / grid calibration task.",
-    "cifPathInput": "Type or paste a .cif file path, then press Enter to load the phase.",
+    "cifPathInput": "Type or paste a .cif file path, then press Enter to load it as the only phase. To use several phases, open the picker and add more.",
     "copyPcValues": "Copy the refined PCx / PCy / PCz values to the clipboard.",
     "driftAnalysisShort": "Analyze how the PC varies across the calibration patterns (needs >= 2)."
   },
@@ -217,7 +225,9 @@
     "patternItemTooltipCi": "Pattern at row {{row}}, col {{col}} — CI: {{ci}}",
     "patternItemLabel": "pat {{row}},{{col}}",
     "patternItemCi": "CI {{ci}}",
-    "removeTooltip": "Remove the selected pattern from the calibration set"
+    "removeTooltip": "Remove the selected pattern from the calibration set",
+    "patternItemTooltipPhase": "Pattern at row {{row}}, col {{col}} — CI: {{ci}} — indexed as {{phase}}",
+    "indexedPhase": "phase {{name}}"
   },
   "prompt": {
     "loadCifTitle": "Load CIF File",
