@@ -121,19 +121,16 @@
   },
   "indexingSettings": {
     "title": "Indizierungs-Einstellungen",
-    "minDLabel": "min_d (A):",
-    "minDTooltip": "Minimaler Netzebenenabstand (A) für die Reflektor-Erzeugung.\nGrößer = weniger, gröbere Bänder. Al: 1.0-1.5 | Ni/Fe: 1.5-2.0",
-    "fThresholdLabel": "f_threshold:",
-    "fThresholdTooltip": "Kinematische Intensitätsschwelle zum Einbeziehen von Reflektoren.\nGrößer = weniger Reflektoren (nur starke Bänder). Standard 0.1.",
-    "maxReflectorsLabel": "max_reflectors:",
-    "maxReflectorsTooltip": "Maximale Anzahl zu simulierender Reflektoren.\n65 ist ein guter Kompromiss für die meisten FCC/BCC-Metalle.",
     "nBandsLabel": "nBands:",
-    "nBandsTooltip": "Anzahl der per Hough-Transformation zu detektierenden Kikuchi-Bänder.\n8-12 typisch für saubere Muster, 6-8 für verrauschte Daten.",
+    "nBandsTooltip": "Anzahl der Bänder (die stärksten Maxima der Radon-Transformation), die aus jedem Muster genommen und im Triplett-Voting verwendet werden. Mehr Bänder helfen bei schwachen oder mehrphasigen Mustern, bringen aber falsche Bänder und mehr Rechenzeit. Standard 12; PyEBSDIndex selbst verwendet 9.",
     "methodLabel": "Methode:",
-    "methodTooltip": "PC-Optimierungsalgorithmus.\nNelder-Mead: schneller lokaler Optimierer (Sekunden).\nPSO: globale Suche (Minuten). Verwenden, wenn Nelder-Mead feststeckt.",
+    "methodTooltip": "PC-Optimierungsalgorithmus.\nNelder-Mead: lokale Simplex-Suche ab dem aktuellen PC; endet, wenn sich die Anpassung um weniger als 1e-5 verbessert.\nPSO: Partikelschwarm (30 Partikel, bis zu 50 Iterationen) innerhalb der Suchgrenze; langsamer, bleibt seltener hängen.",
     "psoWarn": "PSO ohne GPU ist sehr langsam (2-5 Min)",
     "searchLimitLabel": "search_limit:",
-    "searchLimitTooltip": "Suchradius für die PC-Optimierung (Bruchteil des Detektors).\n0.05 ist für die meisten Fälle sicher. Auf 0.1-0.2 erhöhen, wenn das PC weit daneben liegt."
+    "searchLimitTooltip": "Der Optimierer sucht PCx, PCy und PCz innerhalb von +/- diesem Wert um den Start (Bruchteile des Detektors). Nur für PSO; Nelder-Mead ignoriert ihn. Standard 0.05.",
+    "reflectorsLabel": "Reflektoren:",
+    "reflectorsTooltip": "Welche Reflektorfamilien die Hough-Indizierung für jede geladene Phase verwendet. Eine Phase aufklappen, um sie zu sehen, einzelne wegzulassen oder weitere hinzuzufügen. Dieselbe Auswahl gilt für die Indizierungsseite.",
+    "reflectorsNoPhase": "Eine Phase laden, um ihre Reflektorfamilien zu wählen."
   },
   "page": {
     "title": "Musterzentrum-Verfeinerung",

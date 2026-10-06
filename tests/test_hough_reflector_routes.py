@@ -69,6 +69,17 @@ def test_get_returns_the_family_table(client, cifs):
     assert body["n_selected"] == 6 and body["n_effective"] == 4
 
 
+def test_the_stored_choices_can_be_read_without_computing_a_table(client, cifs):
+    c, _ = client
+    assert c.get("/api/indexing/hough/reflector-specs").json()["specs"] == {}
+    c.put("/api/indexing/hough/reflectors",
+          json={"cif_path": cifs["Al"],
+                "spec": {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]}})
+    body = c.get("/api/indexing/hough/reflector-specs").json()
+    assert list(body["specs"]) == ["al"] and body["specs"]["al"]["mode"] == "custom"
+    assert body["version"] == hr.registry_version()
+
+
 def test_put_changes_the_choice_and_every_build_follows(client, cifs):
     c, _ = client
     r = c.put("/api/indexing/hough/reflectors",

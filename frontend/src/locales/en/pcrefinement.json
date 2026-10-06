@@ -121,19 +121,16 @@
   },
   "indexingSettings": {
     "title": "Indexing Settings",
-    "minDLabel": "min_d (A):",
-    "minDTooltip": "Minimum lattice plane d-spacing (A) for reflector generation.\nHigher = fewer, coarser bands. Al: 1.0-1.5 | Ni/Fe: 1.5-2.0",
-    "fThresholdLabel": "f_threshold:",
-    "fThresholdTooltip": "Kinematical intensity threshold for including reflectors.\nHigher = fewer reflectors (only strong bands). Default 0.1.",
-    "maxReflectorsLabel": "max_reflectors:",
-    "maxReflectorsTooltip": "Maximum number of reflectors to simulate.\n65 is a good balance for most FCC/BCC metals.",
     "nBandsLabel": "nBands:",
-    "nBandsTooltip": "Number of Kikuchi bands to detect via Hough transform.\n8-12 typical for clean patterns, 6-8 for noisy data.",
+    "nBandsTooltip": "Number of bands (the strongest peaks of the Radon transform) taken from each pattern and used in triplet voting. More bands help weak or multi-phase patterns but add false bands and time. Default 12; PyEBSDIndex itself defaults to 9.",
     "methodLabel": "method:",
-    "methodTooltip": "PC optimization algorithm.\nNelder-Mead: fast local optimizer (seconds).\nPSO: global search (minutes). Use when Nelder-Mead gets stuck.",
+    "methodTooltip": "PC optimization algorithm.\nNelder-Mead: local simplex search from the current PC; stops when the fit improves by less than 1e-5.\nPSO: particle swarm (30 particles, up to 50 iterations) inside the search limit; slower, less likely to get stuck.",
     "psoWarn": "PSO without GPU is very slow (2-5 min)",
     "searchLimitLabel": "search_limit:",
-    "searchLimitTooltip": "Search radius for PC optimization (fraction of detector).\n0.05 is safe for most cases. Increase to 0.1-0.2 if PC is far off."
+    "searchLimitTooltip": "The optimizer searches PCx, PCy and PCz within +/- this value of the start (fractions of the detector). Used by PSO only; Nelder-Mead ignores it. Default 0.05.",
+    "reflectorsLabel": "Reflectors:",
+    "reflectorsTooltip": "Which reflector families Hough indexing uses for each loaded phase. Open a phase to see them, leave some out or add others. The same choice is used by the Indexing page.",
+    "reflectorsNoPhase": "Load a phase to choose its reflector families."
   },
   "page": {
     "title": "Pattern Center Refinement",

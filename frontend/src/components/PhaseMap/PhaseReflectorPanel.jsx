@@ -97,6 +97,7 @@ export default function PhaseReflectorPanel({ resultId = null }) {
               </div>
               <ReflectorBudget
                 cifPath={p.cif_path}
+                showFamilies={false}
                 value={limits[p.cif_path] ?? null}
                 onChange={(n) => {
                   setLimits((prev) => {

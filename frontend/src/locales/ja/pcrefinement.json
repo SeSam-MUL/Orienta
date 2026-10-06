@@ -121,19 +121,16 @@
   },
   "indexingSettings": {
     "title": "指数付け設定",
-    "minDLabel": "min_d (A):",
-    "minDTooltip": "反射体生成のための最小格子面 d 間隔 (A)。\n大きい = バンドが少なく粗い。Al: 1.0-1.5 | Ni/Fe: 1.5-2.0",
-    "fThresholdLabel": "f_threshold:",
-    "fThresholdTooltip": "反射体を含めるための運動学的強度しきい値。\n大きい = 反射体が少ない (強いバンドのみ)。既定値 0.1。",
-    "maxReflectorsLabel": "max_reflectors:",
-    "maxReflectorsTooltip": "シミュレーションする反射体の最大数。\n65 はほとんどの FCC/BCC 金属に適したバランスです。",
     "nBandsLabel": "nBands:",
-    "nBandsTooltip": "Hough 変換で検出する Kikuchi バンドの数。\nクリーンなパターンでは 8-12、ノイズの多いデータでは 6-8 が一般的。",
+    "nBandsTooltip": "各パターンのラドン変換から取り出し (強いピーク順)、三重項投票に使うバンドの数。増やすと弱いパターンや多相のパターンに有利ですが、誤ったバンドと計算時間が増えます。既定値 12、PyEBSDIndex 本来の既定値は 9 です。",
     "methodLabel": "手法:",
-    "methodTooltip": "PC 最適化アルゴリズム。\nNelder-Mead: 高速な局所最適化 (秒)。\nPSO: 大域探索 (分)。Nelder-Mead が行き詰まる場合に使用します。",
+    "methodTooltip": "PC 最適化アルゴリズム。\nNelder-Mead: 現在の PC からの局所的な単体探索。フィットの改善が 1e-5 未満になると終了します。\nPSO: 探索範囲内の粒子群 (30 粒子、最大 50 反復)。遅いものの、行き詰まりにくい手法です。",
     "psoWarn": "GPU なしの PSO は非常に低速です (2-5 分)",
     "searchLimitLabel": "search_limit:",
-    "searchLimitTooltip": "PC 最適化の探索半径 (検出器に対する割合)。\nほとんどの場合 0.05 で安全。PC が大きくずれている場合は 0.1-0.2 に増やします。"
+    "searchLimitTooltip": "オプティマイザは開始値の ±この値の範囲 (検出器に対する割合) で PCx、PCy、PCz を探索します。PSO のみが使い、Nelder-Mead は無視します。既定値 0.05。",
+    "reflectorsLabel": "反射面:",
+    "reflectorsTooltip": "読み込んだ各相について Hough 指数付けが使う反射面ファミリー。相を開くと内容を確認でき、一部を除外したり追加したりできます。指数付けページでも同じ選択が使われます。",
+    "reflectorsNoPhase": "相を読み込むと、その反射面ファミリーを選べます。"
   },
   "page": {
     "title": "パターン中心の精密化",

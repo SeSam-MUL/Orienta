@@ -102,9 +102,16 @@ function Row({ children, gap = 8, style = {} }) {
 }
 
 /** Compact label (matches PyQt5 QLabel inline) */
-function InlineLabel({ children, style = {} }) {
+function InlineLabel({ children, style = {}, tip }) {
   return (
-    <span style={{ color: C.text, fontSize: '10pt', whiteSpace: 'nowrap', ...style }}>
+    <span
+      title={tip}
+      style={{
+        color: C.text, fontSize: '10pt', whiteSpace: 'nowrap',
+        ...(tip ? { cursor: 'help' } : null),
+        ...style,
+      }}
+    >
       {children}
     </span>
   );
@@ -3258,7 +3265,7 @@ export default function IndexingPage({ isActive }) {
       {showHough && (
         <GroupBox title={t('hough.groupTitle')}>
           <Row gap={8} style={{ flexWrap: 'wrap' }}>
-            <InlineLabel>{t('hough.bands')}</InlineLabel>
+            <InlineLabel tip={t('hough.bandsTip')}>{t('hough.bands')}</InlineLabel>
             <NumberInput
               value={bands}
               onChange={e => setBands(Number(e.target.value))}
@@ -3266,7 +3273,7 @@ export default function IndexingPage({ isActive }) {
               style={{ width: 64 }}
               title={t('hough.bandsTip')}
             />
-            <InlineLabel>{t('hough.tSigma')}</InlineLabel>
+            <InlineLabel tip={t('hough.tSigmaTip')}>{t('hough.tSigma')}</InlineLabel>
             <NumberInput
               value={tSigma}
               onChange={e => setTSigma(Number(e.target.value))}
@@ -3274,7 +3281,7 @@ export default function IndexingPage({ isActive }) {
               style={{ width: 64 }}
               title={t('hough.tSigmaTip')}
             />
-            <InlineLabel>{t('hough.rSigma')}</InlineLabel>
+            <InlineLabel tip={t('hough.rSigmaTip')}>{t('hough.rSigma')}</InlineLabel>
             <NumberInput
               value={rSigma}
               onChange={e => setRSigma(Number(e.target.value))}

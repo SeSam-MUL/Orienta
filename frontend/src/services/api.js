@@ -583,6 +583,18 @@ export const pcApi = {
     }),
   detectorInfo: () => api.get('/api/pc/detector/info'),
   updateParams: (params) => api.post('/api/pc/params/update', params),
+  // Reflector families of a phase that is loaded on this page (see
+  // indexApi.houghReflectors; the same registry).
+  phaseReflectors: (phaseName) =>
+    api.get('/api/pc/phase/reflectors', { params: { phase_name: phaseName } }),
+  setPhaseReflectors: (phaseName, spec) =>
+    api.put('/api/pc/phase/reflectors', { phase_name: phaseName, spec }),
+  validatePhaseReflector: (phaseName, hkl, spec = null) =>
+    api.post('/api/pc/phase/reflectors/validate', { phase_name: phaseName, hkl, spec }),
+  phaseReflectorCost: (phaseName, nBands = 12) =>
+    api.get('/api/pc/phase/reflectors/cost', {
+      params: { phase_name: phaseName, n_bands: nBands },
+    }),
   status: () => api.get('/api/pc/status'),
   optimize: (patterns, method = 'PSO', searchLimit = 0.05) =>
     api.post('/api/pc/optimize', { patterns, method, search_limit: searchLimit }),
@@ -664,6 +676,23 @@ export const indexApi = {
       cif_path: cifPath, max_reflectors: maxReflectors,
     }),
   getHoughReflectorLimits: () => api.get('/api/indexing/hough/reflector-limit'),
+  // Which reflector FAMILIES a Hough phase uses. `spec` is null (default list),
+  // { mode: 'custom', families: [[h, k, l], ...] }, { mode: 'auto', rule } or
+  // { mode: 'top_n', n }. The choice is stored per phase on the backend, so it
+  // reaches every Hough build of that phase (the run, the PC Refinement page,
+  // the resolver, the phase check) without being sent with each of them.
+  houghReflectors: (cifPath) =>
+    api.get('/api/indexing/hough/reflectors', { params: { cif_path: cifPath } }),
+  setHoughReflectors: (cifPath, spec) =>
+    api.put('/api/indexing/hough/reflectors', { cif_path: cifPath, spec }),
+  validateHoughReflector: (cifPath, hkl, spec = null) =>
+    api.post('/api/indexing/hough/reflectors/validate', { cif_path: cifPath, hkl, spec }),
+  houghReflectorsCost: (cifPath, nBands = 12) =>
+    api.get('/api/indexing/hough/reflectors/cost', {
+      params: { cif_path: cifPath, n_bands: nBands },
+    }),
+  // Every stored choice, keyed by phase (lower-case CIF stem); instant.
+  houghReflectorSpecs: () => api.get('/api/indexing/hough/reflector-specs'),
   // The result's phases with the CIF each would be Hough-indexed from — what
   // the Phase Maps page needs to offer the reflector control where the
   // failure actually appears.

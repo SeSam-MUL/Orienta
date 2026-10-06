@@ -648,7 +648,11 @@ export function ScrollPanel({ children, style: extra = {} }) {
 // ---------------------------------------------------------------------------
 // FormRow — horizontal label + input pair
 // ---------------------------------------------------------------------------
-export function FormRow({ label, children, style: extra = {} }) {
+// `tip` is the hover text of the PARAMETER: it goes on the label and on the
+// control's cell, so it appears wherever the pointer rests on the row, not only
+// on a control narrow enough to hit. A control that carries its own `title`
+// keeps it (the nearest title wins).
+export function FormRow({ label, children, tip, style: extra = {} }) {
   return (
     <div style={{
       display: 'flex',
@@ -658,16 +662,20 @@ export function FormRow({ label, children, style: extra = {} }) {
       ...extra,
     }}>
       {label && (
-        <span style={{
-          color: colors.textSecondary,
-          fontSize: '9pt',
-          minWidth: 80,
-          flexShrink: 0,
-        }}>
+        <span
+          title={tip}
+          style={{
+            color: colors.textSecondary,
+            fontSize: '9pt',
+            minWidth: 80,
+            flexShrink: 0,
+            ...(tip ? { cursor: 'help' } : null),
+          }}
+        >
           {label}
         </span>
       )}
-      <div style={{ flex: 1 }}>
+      <div style={{ flex: 1 }} title={tip}>
         {children}
       </div>
     </div>

@@ -121,19 +121,16 @@
   },
   "indexingSettings": {
     "title": "标定设置",
-    "minDLabel": "min_d (A):",
-    "minDTooltip": "用于反射体生成的最小晶面 d 间距 (A)。\n越大 = 带越少、越粗。Al: 1.0-1.5 | Ni/Fe: 1.5-2.0",
-    "fThresholdLabel": "f_threshold:",
-    "fThresholdTooltip": "纳入反射体的运动学强度阈值。\n越大 = 反射体越少 (仅强带)。默认 0.1。",
-    "maxReflectorsLabel": "max_reflectors:",
-    "maxReflectorsTooltip": "要模拟的反射体最大数量。\n65 对大多数 FCC/BCC 金属是良好的平衡。",
     "nBandsLabel": "nBands:",
-    "nBandsTooltip": "通过 Hough 变换检测的 Kikuchi 带数量。\n干净花样通常为 8-12，噪声数据为 6-8。",
+    "nBandsTooltip": "从每个花样的 Radon 变换中取出 (最强的峰) 并用于三元组投票的条带数。增加条带有利于弱花样或多相花样，但会带来假条带并增加耗时。默认 12；PyEBSDIndex 自身默认 9。",
     "methodLabel": "方法:",
-    "methodTooltip": "PC 优化算法。\nNelder-Mead: 快速局部优化器 (秒级)。\nPSO: 全局搜索 (分钟级)。当 Nelder-Mead 卡住时使用。",
+    "methodTooltip": "PC 优化算法。\nNelder-Mead: 从当前 PC 出发的局部单纯形搜索；拟合改进小于 1e-5 时停止。\nPSO: 在搜索范围内的粒子群 (30 个粒子，最多 50 次迭代)；较慢，但不易卡住。",
     "psoWarn": "无 GPU 的 PSO 非常慢 (2-5 分钟)",
     "searchLimitLabel": "search_limit:",
-    "searchLimitTooltip": "PC 优化的搜索半径 (探测器的比例)。\n大多数情况下 0.05 是安全的。若 PC 偏离较远，增至 0.1-0.2。"
+    "searchLimitTooltip": "优化器在起点 +/- 该值 (探测器的比例) 范围内搜索 PCx、PCy、PCz。仅 PSO 使用，Nelder-Mead 忽略。默认 0.05。",
+    "reflectorsLabel": "衍射面:",
+    "reflectorsTooltip": "Hough 标定对每个已加载物相所用的衍射面族。展开某个物相可查看、排除其中一些或添加其他族。标定页面使用同一选择。",
+    "reflectorsNoPhase": "加载物相后即可选择其衍射面族。"
   },
   "page": {
     "title": "花样中心精修",

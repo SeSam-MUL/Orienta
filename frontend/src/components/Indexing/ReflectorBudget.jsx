@@ -24,6 +24,8 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors as C } from '../../theme/tokens';
 import { indexApi } from '../../services/api';
+import ReflectorFamilies from './ReflectorFamilies';
+import { pathAdapter } from './reflectorSpec';
 
 const GiB = 1024 ** 3;
 
@@ -34,7 +36,26 @@ function formatBytes(bytes, t) {
   return `${Math.round(bytes / 1024 ** 2)} MiB`;
 }
 
-export default function ReflectorBudget({ cifPath, value = null, onChange, nBands = 12 }) {
+/**
+ * The reflector controls of one Hough phase: the family table (which families
+ * are used - the precise control) above the row count (the memory guard, which
+ * counts rows, and is not used while the phase has its own family selection).
+ * `showFamilies={false}` leaves out the table where only the row count is wanted.
+ */
+export default function ReflectorBudget({
+  cifPath, value = null, onChange, nBands = 12, showFamilies = true,
+}) {
+  return (
+    <>
+      {showFamilies && cifPath ? (
+        <ReflectorFamilies key={cifPath} api={pathAdapter(cifPath, nBands)} />
+      ) : null}
+      <RowLimit cifPath={cifPath} value={value} onChange={onChange} nBands={nBands} />
+    </>
+  );
+}
+
+function RowLimit({ cifPath, value = null, onChange, nBands = 12 }) {
   const { t } = useTranslation('indexing');
   const [info, setInfo] = useState(null);
   const [error, setError] = useState(null);

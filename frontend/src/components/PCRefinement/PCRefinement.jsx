@@ -36,6 +36,8 @@ import {
   summarisePatternPhases, previewPhaseName, createSerialQueue, shortSpaceGroup,
 } from './phaseSet';
 import { phaseStem, pathErrorFrom, samePath } from '../Indexing/phasePath';
+import ReflectorFamilies from '../Indexing/ReflectorFamilies';
+import { loadedPhaseAdapter } from '../Indexing/reflectorSpec';
 import {
   colors,
   alpha,
@@ -961,60 +963,50 @@ function PixelwisePCGroup({ canRun }) {
 // ---------------------------------------------------------------------------
 // Indexing Settings group — matches _create_indexing_settings_group()
 // ---------------------------------------------------------------------------
-function IndexingSettingsGroup({ onParamsChange }) {
+function IndexingSettingsGroup({
+  onParamsChange, phases = [], datasetKey = '', onIndexingChanged,
+}) {
   const { t } = useTranslation('pcrefinement');
-  const [minD, setMinD] = useState(1.0);
-  const [fThreshold, setFThreshold] = useState(0.1);
-  const [maxReflectors, setMaxReflectors] = useState(65);
   const [nBands, setNBands] = useState(12);
   const [method, setMethod] = useState('Nelder-Mead');
   const [searchLimit, setSearchLimit] = useState(0.05);
 
+  // The numbers the page itself uses for a run.
   const notify = useCallback(() => {
-    onParamsChange({ minD, fThreshold, maxReflectors, nBands, method, searchLimit });
-  }, [minD, fThreshold, maxReflectors, nBands, method, searchLimit, onParamsChange]);
+    onParamsChange({ nBands, method, searchLimit });
+  }, [nBands, method, searchLimit, onParamsChange]);
 
   useEffect(() => { notify(); }, [notify]);
 
+  // nBands is the one parameter of the Hough indexer that lives on the backend
+  // controller (per file), so it has to be sent. It is sent only after the user
+  // changed it, and again when another file's session is shown: an untouched
+  // page leaves the backend at its own default and nothing changes.
+  const nBandsTouched = useRef(false);
+  const lastSent = useRef(null);
+  useEffect(() => {
+    if (!nBandsTouched.current) return;
+    if (!Number.isFinite(nBands) || nBands < 1) return;
+    const sig = `${datasetKey}|${nBands}`;
+    if (lastSent.current === sig) return;
+    lastSent.current = sig;
+    pcApi.updateParams({ n_bands: nBands })
+      .then(() => onIndexingChanged?.())
+      .catch(() => {});
+  }, [nBands, datasetKey, onIndexingChanged]);
+
   return (
     <GroupBox title={t('pcrefinement:indexingSettings.title')}>
-      <FormRow label={t('pcrefinement:indexingSettings.minDLabel')}>
+      <FormRow
+        label={t('pcrefinement:indexingSettings.nBandsLabel')}
+        tip={t('pcrefinement:indexingSettings.nBandsTooltip')}
+      >
         <NumberInput
-          value={minD}
-          onChange={(e) => setMinD(parseFloat(e.target.value))}
-          min={0.1}
-          max={10.0}
-          step={0.1}
-          title={t('pcrefinement:indexingSettings.minDTooltip')}
-        />
-      </FormRow>
-
-      <FormRow label={t('pcrefinement:indexingSettings.fThresholdLabel')}>
-        <NumberInput
-          value={fThreshold}
-          onChange={(e) => setFThreshold(parseFloat(e.target.value))}
-          min={0.0}
-          max={1.0}
-          step={0.05}
-          title={t('pcrefinement:indexingSettings.fThresholdTooltip')}
-        />
-      </FormRow>
-
-      <FormRow label={t('pcrefinement:indexingSettings.maxReflectorsLabel')}>
-        <NumberInput
-          value={maxReflectors}
-          onChange={(e) => setMaxReflectors(parseInt(e.target.value, 10))}
-          min={1}
-          max={100}
-          step={1}
-          title={t('pcrefinement:indexingSettings.maxReflectorsTooltip')}
-        />
-      </FormRow>
-
-      <FormRow label={t('pcrefinement:indexingSettings.nBandsLabel')}>
-        <NumberInput
-          value={nBands}
-          onChange={(e) => setNBands(parseInt(e.target.value, 10))}
+          value={Number.isFinite(nBands) ? nBands : ''}
+          onChange={(e) => {
+            nBandsTouched.current = true;
+            setNBands(parseInt(e.target.value, 10));
+          }}
           min={1}
           max={50}
           step={1}
@@ -1022,9 +1014,41 @@ function IndexingSettingsGroup({ onParamsChange }) {
         />
       </FormRow>
 
+      {/* Which reflector families Hough uses, per loaded phase. Replaces the
+          three numbers (min_d, f_threshold, max_reflectors) that were shown here
+          but never reached the backend: their meaning now lives in the rule of
+          each phase's table. */}
+      <FormRow
+        label={t('pcrefinement:indexingSettings.reflectorsLabel')}
+        tip={t('pcrefinement:indexingSettings.reflectorsTooltip')}
+      >
+        <div data-testid="pc-reflectors">
+          {phases.length === 0 && (
+            <span style={{ fontSize: '8.5pt', color: colors.textSecondary }}>
+              {t('pcrefinement:indexingSettings.reflectorsNoPhase')}
+            </span>
+          )}
+          {phases.map((p) => (
+            <div key={p.name} style={{ marginBottom: 4 }}>
+              {phases.length > 1 && (
+                <div style={{ fontSize: '8.5pt', color: colors.text, fontWeight: 600 }}>{p.name}</div>
+              )}
+              <ReflectorFamilies
+                key={p.name}
+                api={loadedPhaseAdapter(p.name, nBands)}
+                onChanged={onIndexingChanged}
+              />
+            </div>
+          ))}
+        </div>
+      </FormRow>
+
       <Separator />
 
-      <FormRow label={t('pcrefinement:indexingSettings.methodLabel')}>
+      <FormRow
+        label={t('pcrefinement:indexingSettings.methodLabel')}
+        tip={t('pcrefinement:indexingSettings.methodTooltip')}
+      >
         <Select
           value={method}
           onChange={(e) => setMethod(e.target.value)}
@@ -1037,7 +1061,10 @@ function IndexingSettingsGroup({ onParamsChange }) {
         <WarnLabel>{t('pcrefinement:indexingSettings.psoWarn')}</WarnLabel>
       )}
 
-      <FormRow label={t('pcrefinement:indexingSettings.searchLimitLabel')}>
+      <FormRow
+        label={t('pcrefinement:indexingSettings.searchLimitLabel')}
+        tip={t('pcrefinement:indexingSettings.searchLimitTooltip')}
+      >
         <NumberInput
           value={searchLimit}
           onChange={(e) => setSearchLimit(parseFloat(e.target.value))}
@@ -1838,6 +1865,15 @@ function ControlsPanel({
     }
   };
 
+  // The Hough indexer was rebuilt (other reflector families, other nBands): the
+  // bands and the CI shown for the selected pattern belong to the old one, so
+  // index it again. Stable identity; reads the latest page state when called.
+  const indexingChangedRef = useRef(null);
+  indexingChangedRef.current = () => {
+    if (currentPatternIdx != null && patterns[currentPatternIdx]) handleIndexPattern();
+  };
+  const handleIndexingChanged = useCallback(() => indexingChangedRef.current?.(), []);
+
   // Global PC Refine
   const handleGlobalRefine = async () => {
     if (patterns.length === 0) {
@@ -2399,7 +2435,14 @@ function ControlsPanel({
       <PixelwisePCGroup canRun={canRun} />
 
       {/* Indexing Settings */}
-      <IndexingSettingsGroup onParamsChange={handleParamsChange} />
+      <IndexingSettingsGroup
+        onParamsChange={handleParamsChange}
+        phases={phases}
+        datasetKey={activeDatasetName || ''}
+        // A change of the Hough indexer (reflector families, nBands) makes the
+        // bands of the shown pattern stale: index it again with the new one.
+        onIndexingChanged={handleIndexingChanged}
+      />
 
       {/* Detector Settings */}
       <DetectorSettingsGroup

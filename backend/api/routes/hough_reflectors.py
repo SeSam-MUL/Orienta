@@ -39,6 +39,16 @@ def raise_http(exc: svc.ReflectorError):
     raise HTTPException(status_code=exc.status, detail=exc.as_detail())
 
 
+@router.get("/reflector-specs")
+async def get_reflector_specs():
+    """Every stored choice, keyed by phase (lower-case CIF stem). Instant: it
+    reads the registry only, so a page can mark the phases that have a choice
+    of their own without computing any family table."""
+    import hough_reflectors
+    return {"specs": hough_reflectors.all_specs(),
+            "version": hough_reflectors.registry_version()}
+
+
 @router.get("/reflectors")
 async def get_reflectors(cif_path: str):
     """The families of this phase: which the default list holds, which the
