@@ -762,3 +762,26 @@ def test_index_all_and_status_give_the_same_global_ci(monkeypatch, duplex_cifs, 
     st = asyncio.run(pcr.pc_status())
     assert st["global_ci"] == pytest.approx(out["global_ci"])
     pcr._sim_cache.clear()
+
+
+def test_a_pattern_is_indexed_at_the_detectors_pc_not_at_the_one_its_indexer_was_built_for(
+        monkeypatch, duplex_cifs, nickel):
+    import backend.api.routes.pcrefinement as pcr
+    pat = np.asarray(nickel.data[0, 0]).copy()
+    ctrl = _ctrl_with_detector(nickel)
+    ctrl.add_phase(duplex_cifs[0])
+    ctrl.add_pattern((0, 0), pat)
+    monkeypatch.setattr(pcr, "_get_controller", lambda: ctrl)
+    pcr._sim_cache.clear()
+    before = pcr._index_and_simulate(ctrl, 0)["ci"]       # builds the indexer at NICKEL_PC
+    ctrl.detector.pc = REFINED_PC                         # no cache clear, as a refine could leave it
+    after = pcr._index_and_simulate(ctrl, 0)["ci"]
+    pcr._sim_cache.clear()
+
+    fresh = _ctrl_with_detector(nickel)
+    fresh.detector.pc = REFINED_PC
+    fresh.add_phase(duplex_cifs[0])
+    fresh.add_pattern((0, 0), pat)
+    expected = fresh.index_pattern(0)[0]
+    assert before != pytest.approx(expected, abs=1e-6), "the PCs must differ for this to mean anything"
+    assert after == pytest.approx(expected, abs=1e-9)
