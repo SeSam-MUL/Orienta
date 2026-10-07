@@ -884,12 +884,24 @@ async def get_pattern_image(idx: int):
     if idx < 0 or idx >= len(ctrl.patterns):
         raise HTTPException(status_code=400, detail=f"Pattern index {idx} out of range")
     coords, pat = ctrl.patterns[idx]
-    # Convert pattern to base64 PNG (function was renamed at some point;
-    # the old ``array_to_base64`` name was a pre-existing ImportError —
-    # any caller of GET /pattern/{idx}/image returned 500 silently).
-    from backend.api.services.image_utils import array_to_base64_png
-    image_b64 = array_to_base64_png(pat)
-    return {"success": True, "image": image_b64, "row": coords[0], "col": coords[1]}
+    # One image pixel per pattern pixel. The Kikuchi lines of /index-pattern,
+    # /index-all and /pattern/{idx}/result are in detector pixels and the page
+    # draws them on this image unscaled, so the image must have the pattern's
+    # own size (the matplotlib renderer enlarges it to a figure size, which
+    # left the lines in the top-left corner of the picture).
+    pat = np.asarray(pat)
+    # Stretched to the full grey range, as the enlarged picture was.
+    lo, hi = float(np.nanmin(pat)), float(np.nanmax(pat))
+    shown = (np.zeros(pat.shape, dtype=np.uint8) if not hi > lo else
+             ((pat.astype(np.float64) - lo) / (hi - lo) * 255).astype(np.uint8))
+    image_b64 = array_to_base64_raw(shown)
+    return {
+        "success": True,
+        "image": image_b64,
+        "row": coords[0],
+        "col": coords[1],
+        "shape": [int(v) for v in pat.shape[:2]],
+    }
 
 
 @router.get("/pattern/{idx}/result")
