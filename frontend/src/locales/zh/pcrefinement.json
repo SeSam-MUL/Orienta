@@ -108,6 +108,8 @@
     "unknownPhase": "未知相",
     "ci": "CI:",
     "globalCi": "全局 CI:",
+    "ciTooltip": "列表中所选花样（其获胜相）在当前 PC 下的 CI。",
+    "globalCiTooltip": "所有校准花样（各取其获胜相）在当前 PC 下的平均 CI。由“全部标定”和“全局 PC 精修”设定；手动更改 PC 或倾角后不显示，直到再次运行其中之一。",
     "notAvailable": "N/A"
   },
   "hoverTips": {

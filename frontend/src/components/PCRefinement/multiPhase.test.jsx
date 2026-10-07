@@ -8,7 +8,7 @@ import React from 'react';
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 
-const backend = vi.hoisted(() => ({ phases: [], paths: {}, calls: [], previews: [], failAdd: null, fromPath: {}, real: {} }));
+const backend = vi.hoisted(() => ({ phases: [], paths: {}, calls: [], previews: [], failAdd: null, fromPath: {}, real: {}, winners: ['ferrite', 'austenite'] }));
 
 vi.mock('../../services/api', async (importOriginal) => {
   const orig = await importOriginal();
@@ -49,12 +49,17 @@ vi.mock('../../services/api', async (importOriginal) => {
       backend.phases = backend.phases.filter((n) => n !== name);
       return ok({ success: true, phases: list(), n_phases: backend.phases.length });
     },
+    updatePC: () => ok({ success: true, ci: 0.2, segments: [] }),
     optimize: () => ok({ task_id: 'task-1' }),
     getOptimizeStatus: () => ok({
       status: 'completed', progress: 1,
       result: {
         mean_pc: [0.51, 0.3, 0.8], pc_values: [[0.5, 0.3, 0.8], [0.52, 0.3, 0.8]],
-        ci: 0.4, segments: [], phase_names: ['austenite', 'ferrite'],
+        ci: 0.4, global_ci: 0.43, segments: [], phase_names: ['austenite', 'ferrite'],
+        pattern_results: [
+          { index: 0, ci: 0.55, phase_name: 'ferrite', phase_index: 1 },
+          { index: 1, ci: 0.31, phase_name: 'austenite', phase_index: 0 },
+        ],
         pattern_phases: [
           { index: 0, phase_name: 'ferrite', phase_index: 1, ci: 0.55 },
           { index: 1, phase_name: 'austenite', phase_index: 0, ci: 0.31 },
@@ -69,12 +74,12 @@ vi.mock('../../services/api', async (importOriginal) => {
     indexAll: () => ok({
       success: true, global_ci: 0.4, n_indexed: 2,
       results: [
-        { index: 0, row: 1, col: 2, ci: 0.5, phase_name: 'ferrite', segments: [], n_bands: 0,
+        { index: 0, row: 1, col: 2, ci: 0.5, phase_name: backend.winners[0], segments: [], n_bands: 0,
           phase_fits: [
             { name: 'austenite', ci: 0.62, fit: 1.2, n_bands: 5, score: 9.0 },
             { name: 'ferrite', ci: 0.5, fit: 0.6, n_bands: 7, score: 16.8 },
           ] },
-        { index: 1, row: 3, col: 4, ci: 0.3, phase_name: 'austenite', segments: [], n_bands: 0,
+        { index: 1, row: 3, col: 4, ci: 0.3, phase_name: backend.winners[1], segments: [], n_bands: 0,
           phase_fits: [
             { name: 'austenite', ci: 0.3, fit: 0.9, n_bands: 6, score: 12.6 },
             { name: 'ferrite', ci: null, fit: null, n_bands: 2, score: null },
@@ -120,6 +125,7 @@ beforeEach(() => {
   backend.failAdd = null;
   backend.fromPath = {};
   backend.real = {};
+  backend.winners = ['ferrite', 'austenite'];
   const sht = (n, p) => ({ path: `/sht/${n} (${n}) [${p}] {20kV}.sht`, filename: `${n} (${n}) [${p}] {20kV}.sht` });
   globalThis.fetch = vi.fn(() => Promise.resolve({
     json: () => Promise.resolve({ files: [sht('austenite', 'cF4'), sht('ferrite', 'cI2')] }),
@@ -336,8 +342,7 @@ describe('PC refinement with several phases', () => {
     fireEvent.click(await screen.findByText(/Index All/));
     await waitFor(() => expect(screen.getAllByTestId('pattern-phase')).toHaveLength(2));
 
-    // pattern 0 is ferrite, pattern 1 is austenite
-    fireEvent.click(screen.getByText(/pat 1,2/));
+    // pattern 0 is ferrite, pattern 1 is austenite; Index All selected pattern 0
     await waitFor(
       () => expect(backend.previews.at(-1)?.shtPath).toMatch(/ferrite/),
       { timeout: 4000 },
@@ -436,5 +441,67 @@ describe('PC refinement with several phases', () => {
     fireEvent.click(screen.getByText('Add'));
     await waitFor(() => expect(backend.phases).toHaveLength(3));
     await waitFor(() => expect(screen.queryByTestId('pc-phase-summary')).toBeNull());
+  }, 15000);
+
+  // ---- the header's Global CI --------------------------------------------------
+
+  async function twoPhasesAndIndexAll() {
+    render(<PCRefinement />);
+    await openPicker();
+    fireEvent.click(await screen.findByTitle('austenite'));
+    await waitFor(() => expect(backend.phases).toHaveLength(1));
+    fireEvent.click(await screen.findByTitle('ferrite'));
+    await waitFor(() => expect(backend.phases).toHaveLength(2));
+    fireEvent.click(await screen.findByText(/Index All/));
+    await waitFor(() => expect(screen.getAllByTestId('pattern-phase')).toHaveLength(2));
+  }
+
+  it('Index All: the badge is the mean over the patterns, the status line says the same number', async () => {
+    await twoPhasesAndIndexAll();
+    // pattern CIs 0.5 and 0.3; the selected (first) pattern shows 0.5
+    expect(screen.getByTestId('pc-global-ci').textContent).toBe('Global CI: 0.4000');
+    expect(screen.getByText(/Indexed 2 patterns — Global CI: 0\.4000/)).toBeTruthy();
+    expect(screen.getByTestId('pc-ci').textContent).toBe('CI: 0.5000');
+  });
+
+  it('after Global PC Refine the badge is the global value of the refine, not the CI of the first pattern', async () => {
+    await twoPhasesAndIndexAll();
+    fireEvent.click(await screen.findByText(/Global PC Refine/));
+    await screen.findByTestId('pc-phase-summary', {}, { timeout: 4000 });
+    // the refine answers ci 0.4 (first pattern) and global_ci 0.43
+    await waitFor(() => expect(screen.getByTestId('pc-global-ci').textContent).toBe('Global CI: 0.4300'));
+    // the list shows every pattern's CI at the refined PC
+    expect(screen.getByText('CI 0.550')).toBeTruthy();
+    expect(screen.getByText('CI 0.310')).toBeTruthy();
+    // and the old status line, which belongs to the old PC, is gone
+    expect(screen.queryByText(/Indexed 2 patterns/)).toBeNull();
+  }, 15000);
+
+  it('a typed PC re-indexes one pattern only: the badge says N/A instead of keeping an old mean', async () => {
+    await twoPhasesAndIndexAll();
+    expect(screen.getByTestId('pc-global-ci').textContent).toBe('Global CI: 0.4000');
+    const pcx = screen.getByTitle(/Pattern Center X/);
+    fireEvent.change(pcx, { target: { value: '0.51' } });
+    await waitFor(() => expect(screen.getByTestId('pc-global-ci').textContent).toBe('Global CI: N/A'),
+      { timeout: 4000 });
+  }, 15000);
+
+  it('the badge tooltip says what the number is', async () => {
+    await twoPhasesAndIndexAll();
+    expect(screen.getByTestId('pc-global-ci').getAttribute('title'))
+      .toMatch(/mean CI over all calibration patterns/i);
+  });
+
+  // ---- the preview follows the winner from the first render --------------------
+
+  it('after Index All the preview already shows the master of the winning phase of the selected pattern', async () => {
+    // nothing was selected before Index All; it selects the first pattern, whose
+    // winner (ferrite) is NOT the first loaded phase (austenite)
+    await twoPhasesAndIndexAll();
+    await waitFor(
+      () => expect(backend.previews.at(-1)?.shtPath).toMatch(/ferrite/),
+      { timeout: 4000 },
+    );
+    expect(await screen.findByText('· phase ferrite')).toBeTruthy();
   }, 15000);
 });

@@ -108,6 +108,8 @@
     "unknownPhase": "不明な相",
     "ci": "CI:",
     "globalCi": "全体 CI:",
+    "ciTooltip": "リストで選択したパターン（その勝者相）の、現在の PC における CI。",
+    "globalCiTooltip": "すべての較正パターン（それぞれの勝者相）の、現在の PC における平均 CI。「すべて指数付け」と「全体 PC 精密化」で設定され、PC や傾斜を手動で変更した後は、どちらかを再実行するまで表示されません。",
     "notAvailable": "N/A"
   },
   "hoverTips": {

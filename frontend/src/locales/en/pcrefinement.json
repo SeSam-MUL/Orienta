@@ -108,6 +108,8 @@
     "unknownPhase": "Unknown phase",
     "ci": "CI:",
     "globalCi": "Global CI:",
+    "ciTooltip": "CI of the pattern selected in the list (its winning phase), at the current PC.",
+    "globalCiTooltip": "Mean CI over all calibration patterns, each with its winning phase, at the current PC. Set by Index All and by Global PC Refine; N/A after a manual PC or tilt change until one of them is run again.",
     "notAvailable": "N/A"
   },
   "hoverTips": {

@@ -108,6 +108,8 @@
     "unknownPhase": "Unbekannte Phase",
     "ci": "CI:",
     "globalCi": "Globales CI:",
+    "ciTooltip": "CI des in der Liste gewählten Musters (seiner Gewinnerphase) beim aktuellen PC.",
+    "globalCiTooltip": "Mittleres CI über alle Kalibriermuster, jeweils mit ihrer Gewinnerphase, beim aktuellen PC. Wird von „Alle indizieren“ und „Globale PC-Verfeinerung“ gesetzt; nach einer manuellen PC- oder Kippwinkeländerung steht hier „k. A.“, bis eines von beiden erneut läuft.",
     "notAvailable": "k. A."
   },
   "hoverTips": {

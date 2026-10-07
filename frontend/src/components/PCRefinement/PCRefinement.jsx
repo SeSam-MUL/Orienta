@@ -1482,6 +1482,7 @@ function ControlsPanel({
   setGlobalCi,
   onSegmentsUpdate,
   onPatternsIndexed,
+  onSelectPattern,
   onPcChanged,
   onTiltChanged,
   externalPc,
@@ -1561,6 +1562,15 @@ function ControlsPanel({
     onIndexingParamsChange(p);
   }, [onIndexingParamsChange]);
 
+  // A refine indexed every calibration pattern at the refined PC: the Global
+  // CI, and the CI and phase of each pattern, are the ones at that PC. An
+  // answer without them (an older backend) leaves no stale number behind.
+  const applyRefinedCis = (r) => {
+    setGlobalCi(r?.global_ci ?? null);
+    setIndexMsg(null);  // "Indexed N patterns — Global CI: x" belongs to the old PC
+    if (Array.isArray(r?.pattern_results) && onPatternsIndexed) onPatternsIndexed(r.pattern_results);
+  };
+
   const stopPolling = () => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   };
@@ -1582,7 +1592,7 @@ function ControlsPanel({
           setProgress(100);
           setResult(d.result || d);
           setResultMsg(t('pcrefinement:controls.optimizationComplete'));
-          if (d.result?.ci !== undefined) { setCiValue(d.result.ci); setGlobalCi(d.result.ci); }
+          if (d.result?.ci != null) setCiValue(d.result.ci);
           // Update segments + detector PC spinboxes with optimized values
           if (d.result?.segments && onSegmentsUpdate) onSegmentsUpdate(d.result.segments);
           if (d.result?.mean_pc?.length === 3 && onOptimizedPc) onOptimizedPc(d.result.mean_pc);
@@ -1597,6 +1607,7 @@ function ControlsPanel({
               }];
             }));
           }
+          applyRefinedCis(d.result);
         } else if (d.status === 'error' || d.status === 'failed') {
           stopPolling();
           setIsRunning(false);
@@ -1859,6 +1870,13 @@ function ControlsPanel({
         if (currentResult.segments && onSegmentsUpdate) {
           onSegmentsUpdate(currentResult.segments);
         }
+        // Nothing was selected: the overlay shown is the first pattern's, so
+        // select it. The picture, the CI and the forward-sim preview (which needs
+        // a selected pattern, and follows its winning phase) belong to it.
+        if (currentPatternIdx == null && onSelectPattern) {
+          const pos = patterns.findIndex((p) => p.index === currentResult.index);
+          if (pos >= 0) onSelectPattern(pos);
+        }
       }
 
       const nFailed = (d.results?.length || 0) - (d.n_indexed || 0);
@@ -1959,9 +1977,10 @@ function ControlsPanel({
         setProgress(100);
         setResult(d.result || d);
         setGlobalMsg(t('pcrefinement:controls.globalRefineComplete'));
-        if (d.result?.ci !== undefined) { setCiValue(d.result.ci); setGlobalCi(d.result.ci); }
-        // Update segments + detector PC spinboxes with optimized values
         const r = d.result || d;
+        if (r?.ci != null) setCiValue(r.ci);
+        applyRefinedCis(r);
+        // Update segments + detector PC spinboxes with optimized values
         if (r?.segments && onSegmentsUpdate) onSegmentsUpdate(r.segments);
         if (r?.mean_pc?.length === 3 && onOptimizedPc) onOptimizedPc(r.mean_pc);
       }
@@ -2661,7 +2680,7 @@ export default function PCRefinement({ onNavigate }) {
         setPhaseLoaded(true);
         applyStatusPhases(d);
       }
-      if (d?.global_ci != null) setGlobalCi(d.global_ci);
+      setGlobalCi(d?.global_ci ?? null);
       if (d?.pc?.length === 3) {
         setCurrentPcx(d.pc[0]);
         setCurrentPcy(d.pc[1]);
@@ -2792,7 +2811,9 @@ export default function PCRefinement({ onNavigate }) {
       const res = await pcApi.updatePC(pcx, pcy, pcz, selectedPatternIdx);
       const d = res.data;
       if (d?.ci != null) setCiValue(d.ci);
-      if (d?.global_ci != null) setGlobalCi(d.global_ci);
+      // Only the selected pattern was indexed at the new PC: no global value
+      // until all of them are (Index All, Global PC Refine).
+      setGlobalCi(d?.global_ci ?? null);
       if (d?.segments) setKikuchiSegments(d.segments);
     } catch {
       // Ignore errors during reactive update
@@ -2821,11 +2842,12 @@ export default function PCRefinement({ onNavigate }) {
       const res = await pcApi.updateTilt(sampleTilt, detTilt, azimuthal, selectedPatternIdx);
       const d = res.data;
       if (d?.ci != null) setCiValue(d.ci);
+      setGlobalCi(d?.global_ci ?? null);  // other patterns were not re-indexed
       if (d?.segments) setKikuchiSegments(d.segments);
     } catch {
       // Ignore errors during reactive update
     }
-  }, [selectedPatternIdx, setCiValue, handleTrialTiltChanged]);
+  }, [selectedPatternIdx, setCiValue, setGlobalCi, handleTrialTiltChanged]);
 
   // Which phase's master the preview uses: the loaded phase, or with several
   // phases the one the selected pattern was indexed as (see phaseSet.js).
@@ -3069,6 +3091,8 @@ export default function PCRefinement({ onNavigate }) {
 
         {/* CI label */}
         <span
+          data-testid="pc-ci"
+          title={t('pcrefinement:header.ciTooltip')}
           style={{
             fontSize: '10pt',
             color: ciValue !== null ? colors.cyan : colors.textSecondary,
@@ -3084,6 +3108,8 @@ export default function PCRefinement({ onNavigate }) {
 
         {/* Global CI label */}
         <span
+          data-testid="pc-global-ci"
+          title={t('pcrefinement:header.globalCiTooltip')}
           style={{
             fontSize: '10pt',
             color: globalCi !== null ? colors.green : colors.textSecondary,
@@ -3154,6 +3180,7 @@ export default function PCRefinement({ onNavigate }) {
               setGlobalCi={setGlobalCi}
               onSegmentsUpdate={setKikuchiSegments}
               onPatternsIndexed={handlePatternsIndexed}
+              onSelectPattern={handleSelectPatternIdx}
               onPcChanged={handlePcChanged}
               onTiltChanged={handleTiltChanged}
               externalPc={optimizedPc}
