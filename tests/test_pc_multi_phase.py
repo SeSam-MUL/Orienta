@@ -551,3 +551,78 @@ def test_changing_phases_during_a_refine_is_a_coded_409(pc_client, duplex_cifs, 
     assert r.status_code == 409 and _detail(r)["code"] == "optimization_running"
     r = c.post("/api/pc/phase/remove", json={"phase_name": "x"})
     assert r.status_code == 409 and _detail(r)["code"] == "optimization_running"
+
+
+# --------------------------------------------------------------------------
+# Why a phase won: every phase's own fit, and the rule that picks the winner
+# --------------------------------------------------------------------------
+
+def _fake_index_data(rows):
+    """index_data as PyEBSDIndex returns it: one row per phase, then the winner.
+    ``rows`` are (phase, cm, fit, nmatch) per phase; the last row is the winner."""
+    dt = np.dtype([("phase", "i4"), ("cm", "f4"), ("fit", "f4"), ("nmatch", "i4")])
+    return np.array([[r] for r in rows], dtype=dt)
+
+
+class _Names:
+    def __init__(self, names):
+        self.names = names
+        self.ids = list(range(len(names)))
+
+
+def test_phase_fits_reports_each_phase_in_list_order():
+    from pc_controller import phase_fits
+    data = _fake_index_data([(0, 0.28, 1.0, 6), (1, 0.23, 0.78, 7), (1, 0.23, 0.78, 7)])
+    fits = phase_fits(data, _Names(["Al", "sd"]))
+    assert [f["name"] for f in fits] == ["Al", "sd"]
+    assert fits[0]["ci"] == pytest.approx(0.28, abs=1e-6)
+    assert fits[0]["fit"] == pytest.approx(1.0, abs=1e-6)
+    assert fits[0]["n_bands"] == 6
+    # the number PyEBSDIndex picks the winner by: (3 - fit) * matched bands
+    assert fits[0]["score"] == pytest.approx((3.0 - 1.0) * 6)
+    assert fits[1]["score"] == pytest.approx((3.0 - 0.78) * 7, abs=1e-5)
+    assert fits[1]["score"] > fits[0]["score"]
+
+
+def test_a_phase_with_fewer_than_three_matched_bands_has_no_fit():
+    from pc_controller import phase_fits
+    data = _fake_index_data([(0, 0.4, 0.7, 6), (-1, 0.0, 180.0, 0), (0, 0.4, 0.7, 6)])
+    fits = phase_fits(data, _Names(["Al", "sd"]))
+    assert fits[1] == {"name": "sd", "ci": None, "fit": None, "n_bands": 0, "score": None}
+    assert fits[0]["ci"] is not None
+
+
+def test_ci_of_several_phases_is_the_winners_not_a_mean_over_phases():
+    from pc_controller import index_data_ci
+    data = _fake_index_data([(0, 0.28, 1.0, 6), (1, 0.23, 0.78, 7), (1, 0.23, 0.78, 7)])
+    assert index_data_ci(data, 2) == pytest.approx(0.23, abs=1e-6)
+    # one phase: unchanged, the mean of its (identical) rows
+    one = _fake_index_data([(0, 0.41, 0.7, 6), (0, 0.41, 0.7, 6)])
+    assert index_data_ci(one, 1) == pytest.approx(0.41, abs=1e-6)
+
+
+def test_index_and_simulate_gives_every_phases_fit_and_the_winner_follows_the_rule(
+        duplex_cifs, nickel):
+    from backend.api.routes.pcrefinement import _index_and_simulate, _sim_cache
+    ctrl = _ctrl_with_detector(nickel)
+    for p in duplex_cifs:
+        ctrl.add_phase(p)
+    ctrl.add_pattern((0, 0), np.asarray(nickel.data[0, 0]).copy())
+    r = _index_and_simulate(ctrl, 0)
+
+    fits = r["phase_fits"]
+    assert [f["name"] for f in fits] == list(ctrl.phase_names())
+    scored = [f for f in fits if f["score"] is not None]
+    assert scored, "at least the winning phase fitted this pattern"
+    best = max(scored, key=lambda f: f["score"])
+    assert best["name"] == r["phase_name"], "the winner is the best (3 - fit) * bands"
+    assert r["ci"] == pytest.approx(best["ci"], abs=1e-6), "the shown CI is the winner's"
+    _sim_cache.clear()
+
+
+def test_phases_of_patterns_carries_the_fits_too(duplex_cifs, nickel):
+    ctrl = _ctrl_with_detector(nickel)
+    for p in duplex_cifs:
+        ctrl.add_phase(p)
+    out = ctrl.phases_of_patterns([np.asarray(nickel.data[0, 0]).copy()])
+    assert [f["name"] for f in out[0]["phase_fits"]] == list(ctrl.phase_names())

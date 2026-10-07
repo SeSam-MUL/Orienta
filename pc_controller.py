@@ -33,6 +33,57 @@ def _same_file(a, b):
     return os.path.normcase(os.path.realpath(str(a))) == os.path.normcase(os.path.realpath(str(b)))
 
 
+# How PyEBSDIndex picks the phase of a pattern (``_indexbandsphase``): every
+# phase of the list indexes the pattern on its own and fills one row of the
+# index data; the last row is the winner. A phase has fitted the pattern when
+# at least ``MIN_MATCHED_BANDS`` bands matched. The winner is the phase with the
+# largest ``(PHASE_FIT_CEILING_DEG - fit) * nmatch`` (fit = mean angular
+# deviation of the matched bands in degrees); on a tie the phase earlier in the
+# list stays. The confidence index (``cm``) is reported for every phase but is
+# not what decides.
+PHASE_FIT_CEILING_DEG = 3.0
+MIN_MATCHED_BANDS = 3
+
+
+def phase_fits(index_data, phase_list):
+    """What each phase of ``phase_list`` made of the (first) indexed pattern.
+
+    ``index_data`` is the array ``hough_indexing(..., return_index_data=True)``
+    returns: one row per phase, in phase-list order, then the winner. Returns
+    one dict per phase: ``name``, ``ci`` (the phase's own confidence index),
+    ``fit`` (degrees), ``n_bands`` (matched bands) and ``score`` (the number the
+    winner is chosen by). A phase that matched fewer than three bands did not fit
+    the pattern: its ``ci``, ``fit`` and ``score`` are ``None``.
+    """
+    names = [str(n) for n in phase_list.names]
+    out = []
+    for j, name in enumerate(names):
+        row = np.asarray(index_data[j]).ravel()[0]
+        n_bands = int(row["nmatch"])
+        if int(row["phase"]) < 0 or n_bands < MIN_MATCHED_BANDS:
+            out.append({"name": name, "ci": None, "fit": None,
+                        "n_bands": n_bands, "score": None})
+            continue
+        fit = float(row["fit"])
+        out.append({"name": name, "ci": float(row["cm"]), "fit": fit,
+                    "n_bands": n_bands,
+                    "score": (PHASE_FIT_CEILING_DEG - fit) * n_bands})
+    return out
+
+
+def index_data_ci(index_data, n_phases):
+    """The confidence index of the indexed pattern(s).
+
+    One phase: the mean of ``index_data['cm']``, as it always was (its rows are
+    the phase and its copy). Several phases: the rows are the phases and the
+    winner, and the mean over them mixes in phases that did not win; the CI of
+    the result is the winner's, the last row.
+    """
+    if n_phases > 1:
+        return float(np.mean(index_data[-1]["cm"]))
+    return float(index_data["cm"].mean())
+
+
 class PCController:
     """
     Controller for EBSD workflows: load phases, manage patterns,
@@ -313,8 +364,8 @@ class PCController:
             return_index_data=True, return_band_data=True,
             verbose=0
         )
-        ci = float(index_data['cm'].mean())
-        
+        ci = index_data_ci(index_data, len(self.phase_list.ids))
+
         self.cache[idx] = {'ci': ci, 'xmap': xmap, 'band_data': band_data}
         return ci, xmap, band_data
 
@@ -337,16 +388,20 @@ class PCController:
                     return_index_data=True, verbose=0
                 )
                 pid = int(np.asarray(xmap.phase_id).ravel()[0])
-                ci = float(index_data['cm'].mean())
+                ci = index_data_ci(index_data, len(ids))
+                fits = phase_fits(index_data, self.phase_list)
             except Exception as exc:  # one failing pattern must not hide the rest
                 logger.warning("phase lookup failed for a calibration pattern: %s", exc)
-                out.append({"phase_name": None, "phase_index": None, "ci": None})
+                out.append({"phase_name": None, "phase_index": None, "ci": None,
+                            "phase_fits": None})
                 continue
             if pid in ids:
                 out.append({"phase_name": str(self.phase_list[pid].name),
-                            "phase_index": ids.index(pid), "ci": ci})
+                            "phase_index": ids.index(pid), "ci": ci,
+                            "phase_fits": fits})
             else:
-                out.append({"phase_name": None, "phase_index": None, "ci": ci})
+                out.append({"phase_name": None, "phase_index": None, "ci": ci,
+                            "phase_fits": fits})
         return out
 
     def index_all_patterns(self):

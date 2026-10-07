@@ -69,8 +69,16 @@ vi.mock('../../services/api', async (importOriginal) => {
     indexAll: () => ok({
       success: true, global_ci: 0.4, n_indexed: 2,
       results: [
-        { index: 0, row: 1, col: 2, ci: 0.5, phase_name: 'ferrite', segments: [], n_bands: 0 },
-        { index: 1, row: 3, col: 4, ci: 0.3, phase_name: 'austenite', segments: [], n_bands: 0 },
+        { index: 0, row: 1, col: 2, ci: 0.5, phase_name: 'ferrite', segments: [], n_bands: 0,
+          phase_fits: [
+            { name: 'austenite', ci: 0.62, fit: 1.2, n_bands: 5, score: 9.0 },
+            { name: 'ferrite', ci: 0.5, fit: 0.6, n_bands: 7, score: 16.8 },
+          ] },
+        { index: 1, row: 3, col: 4, ci: 0.3, phase_name: 'austenite', segments: [], n_bands: 0,
+          phase_fits: [
+            { name: 'austenite', ci: 0.3, fit: 0.9, n_bands: 6, score: 12.6 },
+            { name: 'ferrite', ci: null, fit: null, n_bands: 2, score: null },
+          ] },
       ],
     }),
   }, { get: (t, k) => (k in t ? t[k] : () => ok({})) });
@@ -260,6 +268,33 @@ describe('PC refinement with several phases', () => {
     await waitFor(() => expect(screen.getAllByTestId('pattern-phase')).toHaveLength(2));
     expect(screen.getAllByTestId('pattern-phase').map((n) => n.textContent))
       .toEqual(['ferrite', 'austenite']);
+  });
+
+  it('the phase tag says why the phase won: every phase, and that score decides, not CI', async () => {
+    render(<PCRefinement />);
+    await openPicker();
+    fireEvent.click(await screen.findByTitle('austenite'));
+    await waitFor(() => expect(backend.phases).toHaveLength(1));
+    fireEvent.click(await screen.findByTitle('ferrite'));
+    await waitFor(() => expect(backend.phases).toHaveLength(2));
+
+    // The rule, once, under "Loaded phases".
+    expect((await screen.findByTestId('pc-phase-list')).textContent)
+      .toMatch(/largest \(3° − fit\) × matched bands wins that pattern, not the one with the highest CI/);
+
+    fireEvent.click(await screen.findByText(/Index All/));
+    await waitFor(() => expect(screen.getAllByTestId('pattern-phase')).toHaveLength(2));
+    const [first, second] = screen.getAllByTestId('pattern-phase');
+
+    // Pattern 1: austenite has the higher CI (0.62) but ferrite wins on its score.
+    const t1 = first.getAttribute('title');
+    expect(t1).toContain('austenite: CI 0.620 · fit 1.20° · 5 bands · score 9.0');
+    expect(t1).toContain('ferrite: CI 0.500 · fit 0.60° · 7 bands · score 16.8 — winner');
+    expect(t1).not.toContain('austenite: CI 0.620 · fit 1.20° · 5 bands · score 9.0 — winner');
+    expect(t1).toContain('not the highest CI');
+
+    // Pattern 2: a phase that matched fewer than three bands says so.
+    expect(second.getAttribute('title')).toContain('ferrite: no fit (only 2 matched bands, at least 3 needed)');
   });
 
   it('with ONE phase the pattern list shows no phase tags (unchanged page)', async () => {

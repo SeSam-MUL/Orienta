@@ -72,7 +72,7 @@
     "globalRefineFailed": "Globale Verfeinerung fehlgeschlagen",
     "sourceDriftFetchFailed": "Abruf der PC-Drift fehlgeschlagen. Zuerst einen Datensatz auf der Analyse-Seite laden.",
     "phasesHeader": "Geladene Phasen ({{count}})",
-    "phasesMultiNote": "Jedes Kalibriermuster wird gegen alle indiziert; je Muster gewinnt die am besten passende Phase.",
+    "phasesMultiNote": "Jedes Kalibriermuster wird gegen alle indiziert. Das Muster gewinnt die Phase mit dem größten (3° − Fit) × Anzahl passender Bänder, nicht die mit dem höchsten CI; das angezeigte CI ist das der Gewinnerphase. Mit der Maus über das Phasenkürzel unter „Ausgewählte Muster“ fahren zeigt die Werte jeder Phase.",
     "removePhaseTooltip": "{{name}} aus den Kalibrierphasen entfernen",
     "phaseAdded": "{{name}} hinzugefügt — {{count}} Phasen geladen",
     "phaseRemoved": "{{name}} entfernt",
@@ -224,7 +224,12 @@
     "patternItemCi": "CI {{ci}}",
     "removeTooltip": "Entfernt das ausgewählte Muster aus dem Kalibrier-Satz",
     "patternItemTooltipPhase": "Muster bei Zeile {{row}}, Spalte {{col}} — CI: {{ci}} — indiziert als {{phase}}",
-    "indexedPhase": "Phase {{name}}"
+    "indexedPhase": "Phase {{name}}",
+    "phaseFitsTitle": "Alle geladenen Phasen an diesem Muster",
+    "phaseFitsRow": "{{name}}: CI {{ci}} · Fit {{fit}}° · {{bands}} Bänder · Score {{score}}",
+    "phaseFitsNone": "{{name}}: kein Fit (nur {{bands}} passende Bänder, mindestens 3 nötig)",
+    "phaseFitsWinner": " — Gewinner",
+    "phaseFitsRule": "Gewinner: der höchste Score = (3° − Fit) × Anzahl passender Bänder. Das ist nicht das höchste CI."
   },
   "prompt": {
     "loadCifTitle": "CIF-Datei laden",

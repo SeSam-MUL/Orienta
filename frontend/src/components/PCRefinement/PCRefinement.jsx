@@ -31,6 +31,7 @@ import {
   checkPixelSize, plausibleWidthMm, TYPICAL_MIN_UM, TYPICAL_MAX_UM,
 } from './pixelSizeCheck';
 import { pickShtForPhase } from './previewSht';
+import { phaseFitsTooltip } from './phaseFits';
 import {
   MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync, loadedPhaseFor, sameNameOtherFile,
   summarisePatternPhases, previewPhaseName, createSerialQueue, shortSpaceGroup,
@@ -688,6 +689,7 @@ function PreviewPanel({
                 {multiPhase && p.phase && (
                   <span
                     data-testid="pattern-phase"
+                    title={phaseFitsTooltip(p.phaseFits, p.phase, t) || undefined}
                     style={{ marginLeft: 8, fontSize: '8pt', color: colors.accent, fontWeight: 600 }}
                   >
                     {p.phase}
@@ -1590,7 +1592,8 @@ function ControlsPanel({
             onPatternsIndexed(d.result.pattern_phases.flatMap((e) => {
               const index = patternsRef.current[e.index]?.index;
               return index == null ? [] : [{
-                index, phase_name: e.phase_name, ...(e.ci != null ? { ci: e.ci } : {}),
+                index, phase_name: e.phase_name, phase_fits: e.phase_fits,
+                ...(e.ci != null ? { ci: e.ci } : {}),
               }];
             }));
           }
@@ -1910,7 +1913,7 @@ function ControlsPanel({
 
       // Update CI in the pattern list (mirrors handlePatternsIndexed for Index All)
       if (d.ci != null && currentPatternIdx != null && onPatternsIndexed) {
-        onPatternsIndexed([{ index: patterns[currentPatternIdx].index, ci: d.ci, phase_name: d.phase_name }]);
+        onPatternsIndexed([{ index: patterns[currentPatternIdx].index, ci: d.ci, phase_name: d.phase_name, phase_fits: d.phase_fits }]);
       }
     } catch (err) {
       setIsRunning(false);
@@ -2716,7 +2719,7 @@ export default function PCRefinement({ onNavigate }) {
       p.space_group ? t('pcrefinement:phaseInfo.spaceGroupLine', { spaceGroup: p.space_group }) : '',
       p.lattice?.a != null ? `a=${p.lattice.a.toFixed(3)} b=${p.lattice.b.toFixed(3)} c=${p.lattice.c.toFixed(3)}` : '',
     ].filter(Boolean).join(' · ')).join('\n'));
-    setPatterns((prev) => prev.map((p) => ({ ...p, ci: null, phase: null })));
+    setPatterns((prev) => prev.map((p) => ({ ...p, ci: null, phase: null, phaseFits: null })));
     setKikuchiSegments([]);
     setCiValue(null);
     setGlobalCi(null);
@@ -2727,7 +2730,7 @@ export default function PCRefinement({ onNavigate }) {
     const name = info.phase_name || info.name || t('pcrefinement:phaseInfo.unknown');
     setPhaseLabel(name);
     setPhases([{ name, space_group: info.space_group, lattice: info.lattice, path: info.path }]);
-    setPatterns((prev) => prev.map((p) => ({ ...p, phase: null })));
+    setPatterns((prev) => prev.map((p) => ({ ...p, phase: null, phaseFits: null })));
     const lines = [
       t('pcrefinement:phaseInfo.nameLine', { name }),
       info.space_group ? t('pcrefinement:phaseInfo.spaceGroupLine', { spaceGroup: info.space_group }) : '',
@@ -2767,6 +2770,9 @@ export default function PCRefinement({ onNavigate }) {
             ...p,
             ci: 'ci' in r ? r.ci : p.ci,
             phase: r.phase_name || r.phase || p.phase,
+            // What every phase made of this pattern (why the winner won);
+            // a result that carries none leaves the earlier one alone.
+            phaseFits: 'phase_fits' in r ? r.phase_fits : p.phaseFits,
           };
         }
         return p;
@@ -2947,7 +2953,7 @@ export default function PCRefinement({ onNavigate }) {
             // Several phases: remember which one this pattern was indexed as
             // (the list shows it, and the preview picks its master by it).
             if (multiPhase && d.phase_name) {
-              handlePatternsIndexed([{ index: pat.index, phase_name: d.phase_name }]);
+              handlePatternsIndexed([{ index: pat.index, phase_name: d.phase_name, phase_fits: d.phase_fits }]);
             }
           } else {
             setKikuchiSegments([]);

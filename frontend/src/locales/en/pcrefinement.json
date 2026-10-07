@@ -72,7 +72,7 @@
     "globalRefineFailed": "Global refine failed",
     "sourceDriftFetchFailed": "PC drift fetch failed. Load a dataset in the Analysis page first.",
     "phasesHeader": "Loaded phases ({{count}})",
-    "phasesMultiNote": "Each calibration pattern is indexed against all of them; the best-fitting phase wins per pattern.",
+    "phasesMultiNote": "Each calibration pattern is indexed against all of them. The phase with the largest (3° − fit) × matched bands wins that pattern, not the one with the highest CI; the CI shown is the winner's. Hover a phase tag in Selected Patterns for every phase's numbers.",
     "removePhaseTooltip": "Remove {{name}} from the phases used for calibration",
     "phaseAdded": "Added {{name}} — {{count}} phases loaded",
     "phaseRemoved": "Removed {{name}}",
@@ -224,7 +224,12 @@
     "patternItemCi": "CI {{ci}}",
     "removeTooltip": "Remove the selected pattern from the calibration set",
     "patternItemTooltipPhase": "Pattern at row {{row}}, col {{col}} — CI: {{ci}} — indexed as {{phase}}",
-    "indexedPhase": "phase {{name}}"
+    "indexedPhase": "phase {{name}}",
+    "phaseFitsTitle": "Every loaded phase on this pattern",
+    "phaseFitsRow": "{{name}}: CI {{ci}} · fit {{fit}}° · {{bands}} bands · score {{score}}",
+    "phaseFitsNone": "{{name}}: no fit (only {{bands}} matched bands, at least 3 needed)",
+    "phaseFitsWinner": " — winner",
+    "phaseFitsRule": "Winner: the highest score = (3° − fit) × matched bands. This is not the highest CI."
   },
   "prompt": {
     "loadCifTitle": "Load CIF File",

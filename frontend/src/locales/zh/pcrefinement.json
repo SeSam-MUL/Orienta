@@ -72,7 +72,7 @@
     "globalRefineFailed": "全局精修失败",
     "sourceDriftFetchFailed": "获取 PC 漂移失败。请先在 Analysis 页面加载数据集。",
     "phasesHeader": "已加载的相（{{count}}）",
-    "phasesMultiNote": "每个标定花样都会针对所有相进行标定，每个花样取拟合最好的相。",
+    "phasesMultiNote": "每个标定花样都会针对所有相进行标定。每个花样由 (3° − 拟合偏差) × 匹配带数 最大的相胜出，而不是 CI 最高的相；显示的 CI 是胜出相的 CI。将鼠标悬停在“已选花样”中的相标签上可查看每个相的数值。",
     "removePhaseTooltip": "将 {{name}} 从标定使用的相中移除",
     "phaseAdded": "已添加 {{name}} — 已加载 {{count}} 个相",
     "phaseRemoved": "已移除 {{name}}",
@@ -224,7 +224,12 @@
     "patternItemCi": "CI {{ci}}",
     "removeTooltip": "从校准集中移除所选花样",
     "patternItemTooltipPhase": "位于第 {{row}} 行、第 {{col}} 列的花样 — CI: {{ci}} — 标定为 {{phase}}",
-    "indexedPhase": "相 {{name}}"
+    "indexedPhase": "相 {{name}}",
+    "phaseFitsTitle": "已加载的各个相在此花样上的结果",
+    "phaseFitsRow": "{{name}}: CI {{ci}} · 拟合偏差 {{fit}}° · {{bands}} 条带 · 得分 {{score}}",
+    "phaseFitsNone": "{{name}}: 未拟合（仅匹配 {{bands}} 条带，至少需要 3 条）",
+    "phaseFitsWinner": " — 胜出",
+    "phaseFitsRule": "胜出规则：得分 = (3° − 拟合偏差) × 匹配带数 最高者胜出，而不是 CI 最高。"
   },
   "prompt": {
     "loadCifTitle": "加载 CIF 文件",

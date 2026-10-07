@@ -398,8 +398,10 @@ def _index_and_simulate(ctrl, pattern_idx):
         verbose=0,
     )
 
+    from pc_controller import index_data_ci, phase_fits
+    n_phases = len(ctrl.phase_list.ids)
     try:
-        ci = float(index_data['cm'].mean())
+        ci = index_data_ci(index_data, n_phases)
     except Exception:
         ci = float(index_data['cm'].flat[0])
 
@@ -458,6 +460,13 @@ def _index_and_simulate(ctrl, pattern_idx):
     }
     if multi_phase:
         result["phase_index"] = phase_index
+        # What every loaded phase made of this pattern (the winner is chosen by
+        # fit and matched bands, see pc_controller.phase_fits).
+        try:
+            result["phase_fits"] = phase_fits(index_data, ctrl.phase_list)
+        except Exception:
+            logger.warning("per-phase fits unavailable for pattern %d", pattern_idx,
+                           exc_info=True)
     _sim_cache[pattern_idx] = result
     return result
 

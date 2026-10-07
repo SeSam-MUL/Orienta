@@ -72,7 +72,7 @@
     "globalRefineFailed": "全体精密化に失敗しました",
     "sourceDriftFetchFailed": "PC ドリフトの取得に失敗しました。先に Analysis ページでデータセットを読み込んでください。",
     "phasesHeader": "読み込み済みの相（{{count}}）",
-    "phasesMultiNote": "各キャリブレーションパターンはすべての相に対して指数付けされ、パターンごとに最もよく合う相が採用されます。",
+    "phasesMultiNote": "各キャリブレーションパターンはすべての相に対して指数付けされます。パターンごとに、CI が最も高い相ではなく、(3° − フィット) × 一致バンド数 が最大の相が採用され、表示される CI は採用された相のものです。「選択したパターン」の相の表示にマウスを載せると、各相の値が表示されます。",
     "removePhaseTooltip": "{{name}} をキャリブレーションに使う相から外します",
     "phaseAdded": "{{name}} を追加しました — {{count}} 個の相を読み込み済み",
     "phaseRemoved": "{{name}} を外しました",
@@ -224,7 +224,12 @@
     "patternItemCi": "CI {{ci}}",
     "removeTooltip": "選択したパターンを較正セットから削除します",
     "patternItemTooltipPhase": "行 {{row}}、列 {{col}} のパターン — CI: {{ci}} — {{phase}} として指数付け",
-    "indexedPhase": "相 {{name}}"
+    "indexedPhase": "相 {{name}}",
+    "phaseFitsTitle": "このパターンに対する、読み込み済みの全相",
+    "phaseFitsRow": "{{name}}: CI {{ci}} · フィット {{fit}}° · {{bands}} バンド · スコア {{score}}",
+    "phaseFitsNone": "{{name}}: フィットなし（一致バンドは {{bands}} 本のみ、3 本以上必要）",
+    "phaseFitsWinner": " — 採用",
+    "phaseFitsRule": "採用される相: スコア = (3° − フィット) × 一致バンド数 が最大の相。CI が最も高い相ではありません。"
   },
   "prompt": {
     "loadCifTitle": "CIF ファイルを読み込む",
