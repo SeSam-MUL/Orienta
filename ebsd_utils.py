@@ -676,8 +676,11 @@ def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma
     budget = _triplet_library_budget_bytes()
     fixed_phases = _standard_setting_phase_list(phase_list)
 
-    from pyebsdindex_mode import force_cpu_band_detection
+    from pyebsdindex_mode import force_cpu_band_detection, share_opencl_context
     force_cpu_band_detection()
+    # Every `index_pats` of this indexer would otherwise build its own OpenCL
+    # context and leak it (see pyebsdindex_mode).
+    share_opencl_context()
 
     try:
         with _capped_triplet_library(max(1, budget // _TRIPLET_ROW_BYTES)):
