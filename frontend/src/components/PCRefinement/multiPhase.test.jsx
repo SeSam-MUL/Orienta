@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 //
 // PC Refinement with several phases, through the real page and a fake backend.
-// The tester's duplex steel: austenite and ferrite ticked in the picker, every
+// A duplex steel: austenite and ferrite ticked in the picker, every
 // calibration pattern indexed against both, and the page says which phase each
 // pattern is.
 import React from 'react';
