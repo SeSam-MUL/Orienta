@@ -94,25 +94,31 @@ def _share_clparams(original, make_params):
     once per ``gpu_id`` and the result is reused by every later call.
     """
     import functools
+    import inspect
     import threading
 
+    # Bind against the installed signature instead of restating it: the
+    # defaults differ between releases (``chunksize`` is 528 in 0.3.9.1 and
+    # -2 in 0.3.10.1), and an omitted argument must keep the installed meaning.
+    signature = inspect.signature(original)
     lock = threading.RLock()
     shared: dict = {}
 
     @functools.wraps(original)
-    def find_bands(self, patternsIn, verbose=0, clparams=None, chunksize=528,
-                   useCPU=None, gpu_id=None, **kwargs):
-        cpu = self.useCPU if useCPU is None else useCPU
-        if clparams is not None or cpu:
-            return original(self, patternsIn, verbose=verbose, clparams=clparams,
-                            chunksize=chunksize, useCPU=useCPU, gpu_id=gpu_id,
-                            **kwargs)
+    def find_bands(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        arguments = bound.arguments
+        detector = next(iter(arguments.values()))
+        use_cpu = arguments.get("useCPU")
+        cpu = detector.useCPU if use_cpu is None else use_cpu
+        if arguments.get("clparams") is not None or cpu:
+            return original(*args, **kwargs)
+        gpu_id = arguments.get("gpu_id")
         with lock:
             if gpu_id not in shared:
                 shared[gpu_id] = make_params(gpu_id)
-            return original(self, patternsIn, verbose=verbose,
-                            clparams=shared[gpu_id], chunksize=chunksize,
-                            useCPU=useCPU, gpu_id=gpu_id, **kwargs)
+            arguments["clparams"] = shared[gpu_id]
+            return original(*bound.args, **bound.kwargs)
 
     setattr(find_bands, _SHARED_MARK, True)
     return find_bands

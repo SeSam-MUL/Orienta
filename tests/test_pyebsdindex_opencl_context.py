@@ -106,6 +106,32 @@ def test_arguments_reach_the_original_unchanged():
         2, 64, False, 3, {"extra": 7})
 
 
+def test_the_originals_own_defaults_are_kept():
+    """PyEBSDIndex 0.3.9.1 defaults ``chunksize`` to 528, 0.3.10.1 to -2. The
+    wrapper must not impose either; whatever the installed version declares
+    is what an omitted argument means."""
+    calls = []
+
+    def original(self, patternsIn, verbose=0, clparams=None, chunksize=-2,
+                 useCPU=None, gpu_id=None, **kwargs):
+        calls.append({"clparams": clparams, "chunksize": chunksize})
+        return "bands"
+
+    find_bands = pyebsdindex_mode._share_clparams(original, _Params)
+    find_bands(_Detector(), None)
+    assert calls[0]["chunksize"] == -2
+    assert calls[0]["clparams"] is not None
+
+
+def test_a_positional_parameter_set_is_passed_through_untouched():
+    _Params.made = 0
+    find_bands, calls = _wrapped()
+    mine = object()
+    find_bands(_Detector(), None, 0, mine)
+    assert calls[0]["clparams"] is mine
+    assert _Params.made == 0
+
+
 def test_shared_calls_are_serialised():
     """One shared kernel set must never be driven by two threads at once."""
     active = []
