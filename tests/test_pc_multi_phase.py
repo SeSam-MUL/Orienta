@@ -314,8 +314,9 @@ def test_single_phase_optimisation_payload_is_unchanged(monkeypatch, duplex_cifs
 
     assert task["status"] == "completed", task.get("error")
     res = task["result"]
-    assert set(res) == {"pc_values", "mean_pc", "ci", "segments", "pc_warning",
-                        "pc_warning_codes", "pc_deviation", "pattern_size"}
+    assert set(res) == {"pc_values", "mean_pc", "ci", "global_ci", "pattern_results",
+                        "segments", "pc_warning", "pc_warning_codes", "pc_deviation",
+                        "pattern_size"}
     assert res["pc_values"] == [list(p) for p in pcs]
     np.testing.assert_allclose(res["mean_pc"], [0.4251, 0.2131, 0.5002])
     # one optimiser call per pattern, all on the SAME single-phase indexer
@@ -626,3 +627,138 @@ def test_phases_of_patterns_carries_the_fits_too(duplex_cifs, nickel):
         ctrl.add_phase(p)
     out = ctrl.phases_of_patterns([np.asarray(nickel.data[0, 0]).copy()])
     assert [f["name"] for f in out[0]["phase_fits"]] == list(ctrl.phase_names())
+
+
+# --------------------------------------------------------------------------
+# The "Global CI" of the page: the mean CI over ALL calibration patterns, each
+# with its winning phase, at the PC that is current. It used to be the CI of the
+# one pattern that was re-indexed after a refine / a typed PC.
+# --------------------------------------------------------------------------
+
+def _fresh_cis(ctrl_factory, pats, pc):
+    """CI of every pattern at ``pc``, from a controller that never saw another PC."""
+    fresh = ctrl_factory()
+    fresh.detector.pc = pc
+    out = []
+    for i, p in enumerate(pats):
+        fresh.add_pattern((i, i), p)
+    for i in range(len(pats)):
+        out.append(fresh.index_pattern(i)[0])
+    return out
+
+
+def test_one_phase_refine_reports_the_mean_ci_over_all_patterns_at_the_refined_pc(
+        monkeypatch, duplex_cifs, nickel):
+    pats = [np.asarray(nickel.data[i, i]).copy() for i in range(3)]
+
+    def make():
+        c = _ctrl_with_detector(nickel)
+        c.add_phase(duplex_cifs[0])
+        return c
+
+    ctrl = make()
+    for i, p in enumerate(pats):
+        ctrl.add_pattern((i, i), p)
+    task, _ = _run(monkeypatch, ctrl, pats, [REFINED_PC] * 3)
+    assert task["status"] == "completed", task.get("error")
+    res = task["result"]
+
+    expected = _fresh_cis(make, pats, REFINED_PC)
+    assert len(set(round(c, 6) for c in expected)) > 1, "patterns must differ for this to mean anything"
+    assert [e["ci"] for e in res["pattern_results"]] == pytest.approx(expected, abs=1e-9)
+    assert [e["index"] for e in res["pattern_results"]] == [0, 1, 2]
+    assert res["global_ci"] == pytest.approx(sum(expected) / 3, abs=1e-9)
+    # not the CI of the first pattern, which is what the page used to show
+    assert res["global_ci"] != pytest.approx(res["ci"], abs=1e-6)
+
+
+def test_two_phase_refine_global_ci_uses_each_patterns_winner(monkeypatch, duplex_cifs, nickel):
+    pats = [np.asarray(nickel.data[i, i]).copy() for i in range(3)]
+    ctrl = _ctrl_with_detector(nickel)
+    for p in duplex_cifs:
+        ctrl.add_phase(p)
+    for i, p in enumerate(pats):
+        ctrl.add_pattern((i, i), p)
+    task, _ = _run(monkeypatch, ctrl, pats, [REFINED_PC] * 3)
+    assert task["status"] == "completed", task.get("error")
+    res = task["result"]
+
+    fresh = _ctrl_with_detector(nickel)
+    fresh.detector.pc = REFINED_PC
+    for p in duplex_cifs:
+        fresh.add_phase(p)
+    expected = [r["ci"] for r in fresh.phases_of_patterns(pats)]
+    assert res["global_ci"] == pytest.approx(sum(expected) / 3, abs=1e-9)
+    # the per-pattern phases are the same answer, not a second indexing
+    assert [e["ci"] for e in res["pattern_phases"]] == pytest.approx(expected, abs=1e-9)
+    assert [e["ci"] for e in res["pattern_results"]] == pytest.approx(expected, abs=1e-9)
+    assert [e["phase_name"] for e in res["pattern_results"]] == ["austenite"] * 3
+
+
+def test_refine_fills_the_caches_so_status_agrees_with_the_refine(monkeypatch, duplex_cifs, nickel):
+    import backend.api.routes.pcrefinement as pcr
+    pats = [np.asarray(nickel.data[i, i]).copy() for i in range(3)]
+    ctrl = _ctrl_with_detector(nickel)
+    ctrl.add_phase(duplex_cifs[0])
+    for i, p in enumerate(pats):
+        ctrl.add_pattern((i, i), p)
+    task, _ = _run(monkeypatch, ctrl, pats, [REFINED_PC] * 3)
+    import asyncio
+    st = asyncio.run(pcr.pc_status())
+    assert st["global_ci"] == pytest.approx(task["result"]["global_ci"], abs=1e-9)
+    assert [p["ci"] for p in st["patterns"]] == pytest.approx(
+        [e["ci"] for e in task["result"]["pattern_results"]], abs=1e-9)
+
+
+def test_status_has_a_global_ci_only_when_every_pattern_has_a_ci(monkeypatch, duplex_cifs, nickel):
+    import asyncio
+    import backend.api.routes.pcrefinement as pcr
+    ctrl = _ctrl_with_detector(nickel)
+    ctrl.add_phase(duplex_cifs[0])
+    for i in range(3):
+        ctrl.add_pattern((i, i), np.asarray(nickel.data[i, i]).copy())
+    monkeypatch.setattr(pcr, "_get_controller", lambda: ctrl)
+    pcr._sim_cache.clear()
+    pcr._sim_cache[0] = {"ci": 0.9}
+    st = asyncio.run(pcr.pc_status())
+    assert st["global_ci"] is None                       # a mean of one of three is not global
+    pcr._sim_cache[1] = {"ci": 0.5}
+    pcr._sim_cache[2] = {"ci": 0.1}
+    st = asyncio.run(pcr.pc_status())
+    assert st["global_ci"] == pytest.approx(0.5)
+    pcr._sim_cache.clear()
+
+
+def test_a_typed_pc_does_not_report_one_pattern_as_the_global_ci(monkeypatch, duplex_cifs, nickel):
+    """Re-indexing the selected pattern alone cannot give a mean over all of them."""
+    import asyncio
+    import backend.api.routes.pcrefinement as pcr
+    ctrl = _ctrl_with_detector(nickel)
+    ctrl.add_phase(duplex_cifs[0])
+    for i in range(3):
+        ctrl.add_pattern((i, i), np.asarray(nickel.data[i, i]).copy())
+    monkeypatch.setattr(pcr, "_get_controller", lambda: ctrl)
+    monkeypatch.setattr(pcr, "_writeback_refined_pc", lambda *a, **k: None)
+    pcr._sim_cache.clear()
+    out = asyncio.run(pcr.update_pc(pcr.UpdatePCRequest(
+        pcx=REFINED_PC[0], pcy=REFINED_PC[1], pcz=REFINED_PC[2], current_pattern_idx=1)))
+    assert out["ci"] is not None                          # the selected pattern's own CI
+    assert out.get("global_ci") is None
+    pcr._sim_cache.clear()
+
+
+def test_index_all_and_status_give_the_same_global_ci(monkeypatch, duplex_cifs, nickel):
+    import asyncio
+    import backend.api.routes.pcrefinement as pcr
+    ctrl = _ctrl_with_detector(nickel)
+    ctrl.add_phase(duplex_cifs[0])
+    for i in range(3):
+        ctrl.add_pattern((i, i), np.asarray(nickel.data[i, i]).copy())
+    monkeypatch.setattr(pcr, "_get_controller", lambda: ctrl)
+    pcr._sim_cache.clear()
+    out = asyncio.run(pcr.index_all_patterns())
+    cis = [r["ci"] for r in out["results"]]
+    assert out["global_ci"] == pytest.approx(sum(cis) / 3)
+    st = asyncio.run(pcr.pc_status())
+    assert st["global_ci"] == pytest.approx(out["global_ci"])
+    pcr._sim_cache.clear()

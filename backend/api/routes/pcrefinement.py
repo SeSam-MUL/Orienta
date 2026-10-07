@@ -339,6 +339,30 @@ def _winning_phase_position(ctrl, xmap):
     return ids.index(pid) if pid in ids else None
 
 
+def _global_ci(cis):
+    """The page's "Global CI": the mean CI over ALL calibration patterns.
+
+    Every pattern counts with the CI of its winning phase (``index_data_ci``),
+    indexed at the detector's current PC. ``None`` when ``cis`` is empty or a
+    pattern has no CI yet: a mean over some of the patterns is not a global value.
+    """
+    cis = list(cis)
+    if not cis or any(c is None for c in cis):
+        return None
+    return float(sum(cis) / len(cis))
+
+
+def _same_patterns(ctrl, patterns_data) -> bool:
+    """True when ``patterns_data`` are, in order, the calibration patterns' arrays."""
+    if len(patterns_data) != len(ctrl.patterns):
+        return False
+    try:
+        return all(np.array_equal(np.asarray(p), np.asarray(c[1]))
+                   for p, c in zip(patterns_data, ctrl.patterns))
+    except Exception:
+        return False
+
+
 def _index_and_simulate(ctrl, pattern_idx):
     """Index a single calibration pattern and simulate Kikuchi line segments.
 
@@ -353,6 +377,11 @@ def _index_and_simulate(ctrl, pattern_idx):
     # The reflector selection of a phase may have changed since the indexer was
     # built: drop it (and what was indexed with it) so it is rebuilt below.
     ctrl.reflector_specs_changed()
+
+    # An indexer copies the PC it was built at; a refine or a typed PC that came
+    # after it must not be indexed with it.
+    if ctrl.indexer is not None and ctrl._indexer_pc_is_stale():
+        ctrl.indexer = None
 
     # Ensure indexer
     if ctrl.indexer is None:
@@ -860,7 +889,8 @@ async def index_all_patterns():
                             "error": str(pat_err),
                         })
 
-            # Compute global CI (only from successfully indexed patterns)
+            # Global CI: the mean over the patterns that were indexed (a pattern
+            # that failed twice has no CI and is not counted).
             ci_vals = [r["ci"] for r in results if "error" not in r]
             global_ci = sum(ci_vals) / len(ci_vals) if ci_vals else 0.0
 
@@ -990,11 +1020,9 @@ async def update_pc(req: UpdatePCRequest):
                 result["segments"] = sim_result["segments"]
                 result["n_bands"] = sim_result["n_bands"]
                 result["phase_name"] = sim_result["phase_name"]
-
-                # Compute global CI from all cached patterns
-                ci_vals = [entry['ci'] for entry in ctrl.cache.values()]
-                if ci_vals:
-                    result["global_ci"] = sum(ci_vals) / len(ci_vals)
+                # No "global_ci": only the selected pattern was indexed at the new
+                # PC, and a mean over all patterns needs all of them (Index All or
+                # Global PC Refine give it).
             except Exception as e:
                 logger.warning("Re-index after PC update failed: %s", e)
                 result["index_error"] = str(e)
@@ -1089,9 +1117,8 @@ async def pc_status():
             entry["ci"] = ctrl.cache[i].get("ci")
         pattern_list.append(entry)
 
-    # Compute global CI
-    ci_vals = [p["ci"] for p in pattern_list if p.get("ci") is not None]
-    global_ci = sum(ci_vals) / len(ci_vals) if ci_vals else None
+    # Global CI: a mean over ALL patterns, only when every one has a CI.
+    global_ci = _global_ci([p.get("ci") for p in pattern_list])
 
     return {
         "has_detector": ctrl.detector is not None,
@@ -1448,20 +1475,40 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
                 _active_dataset, mean_pc,
                 refinement=_refinement_record(len(patterns_data), method))
 
-            # Re-index first pattern with new PC to get updated segments
+            # Index every calibration pattern at the refined PC (the same code
+            # as Index All): the CI and the winning phase of each, and from them
+            # the Global CI. The first pattern's segments redraw the overlay.
             ci = None
             segments = []
+            pattern_results = []
+            global_ci = None
             if len(ctrl.patterns) > 0 and ctrl.phase is not None:
-                for attempt in range(2):
-                    try:
-                        if attempt > 0:
-                            ctrl.indexer = None
-                        sim_result = _index_and_simulate(ctrl, 0)
+                for idx in range(len(ctrl.patterns)):
+                    sim_result = None
+                    for attempt in range(2):
+                        try:
+                            if attempt > 0:
+                                ctrl.indexer = None
+                            sim_result = _index_and_simulate(ctrl, idx)
+                            break
+                        except Exception as e:
+                            logger.warning("Re-index of pattern %d after optimization attempt %d failed: %s",
+                                           idx, attempt + 1, e)
+                    if sim_result is None:
+                        continue
+                    if idx == 0:
                         ci = sim_result.get("ci")
                         segments = sim_result.get("segments", [])
-                        break
-                    except Exception as e:
-                        logger.warning("Re-index after optimization attempt %d failed: %s", attempt + 1, e)
+                    entry = {"index": idx, "ci": sim_result.get("ci"),
+                             "phase_name": sim_result.get("phase_name")}
+                    if "phase_index" in sim_result:
+                        entry["phase_index"] = sim_result["phase_index"]
+                    if "phase_fits" in sim_result:
+                        entry["phase_fits"] = sim_result["phase_fits"]
+                    pattern_results.append(entry)
+                # Over the patterns that could be indexed, as Index All does.
+                global_ci = _global_ci([e["ci"] for e in pattern_results]
+                                       if pattern_results else [])
 
             # Several phases: say which one each optimised pattern is indexed
             # as at the refined PC. A one-phase refine reports nothing extra.
@@ -1469,7 +1516,16 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
             if ctrl.phase_list is not None and len(ctrl.phase_list.ids) > 1:
                 _multi = {"phase_names": ctrl.phase_names()}
                 try:
-                    _per_pattern = ctrl.phases_of_patterns(patterns_data)
+                    if _same_patterns(ctrl, patterns_data) and len(pattern_results) == len(patterns_data):
+                        # The optimised patterns ARE the calibration patterns, just
+                        # indexed above at the refined PC: one answer, not two.
+                        _per_pattern = [
+                            {"phase_name": (e["phase_name"] or None) if e.get("phase_index") is not None else None,
+                             "phase_index": e.get("phase_index"), "ci": e["ci"],
+                             "phase_fits": e.get("phase_fits")}
+                            for e in pattern_results]
+                    else:
+                        _per_pattern = ctrl.phases_of_patterns(patterns_data)
                     _multi["pattern_phases"] = [{"index": i, **e}
                                                 for i, e in enumerate(_per_pattern)]
                 except Exception:
@@ -1483,6 +1539,8 @@ def _run_optimization(task_id: str, patterns_data, method: str, search_limit: fl
                 "pc_values": results,
                 "mean_pc": mean_pc,
                 "ci": ci,
+                "global_ci": global_ci,
+                "pattern_results": pattern_results,
                 "segments": segments,
                 "pc_warning": _pc_warning,
                 "pc_warning_codes": _warn_codes,
