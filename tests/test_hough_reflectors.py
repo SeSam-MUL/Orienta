@@ -159,6 +159,16 @@ def test_without_a_spec_the_rows_are_exactly_what_prepare_reflectors_made(tmp_pa
             assert sent == refl.hkl.tolist()
 
 
+# The gold file below was made with this PyEBSDIndex and is not regenerated for
+# newer releases (the stack with this version reproduces it exactly).
+GOLD_PYEBSDINDEX = "0.3.9.1"
+
+
+def _pyebsdindex_version() -> str:
+    from importlib.metadata import version
+    return version("pyebsdindex")
+
+
 def test_real_indexing_without_a_spec_is_what_it_was_before_this_feature(tmp_path):
     """Nine real (nickel demo) patterns indexed against Ni + Al.
 
@@ -178,7 +188,25 @@ def test_real_indexing_without_a_spec_is_what_it_was_before_this_feature(tmp_pat
     assert np.array_equal(xmap.phase_id, gold["pid"])
     assert np.array_equal(np.asarray(ix.phaselist[0].polefamilies).reshape(-1, 3), gold["poles0"])
     assert np.array_equal(np.asarray(ix.phaselist[1].polefamilies).reshape(-1, 3), gold["poles1"])
-    np.testing.assert_allclose(xmap.rotations.data, gold["rot"], atol=1e-6)
+    if _pyebsdindex_version() == GOLD_PYEBSDINDEX:
+        # The stack the gold file was made with: nothing may move at all.
+        np.testing.assert_allclose(xmap.rotations.data, gold["rot"], atol=1e-6)
+    else:
+        # PyEBSDIndex changed its own numbers between releases (0.3.10: up to
+        # 0.034 deg on these nine patterns, and two of them come out as another,
+        # symmetry-equivalent member of the same orientation). That is not this
+        # feature moving anything, so compare ORIENTATIONS: the quaternion sign
+        # and the crystal symmetry are not part of what an orientation is.
+        # 0.1 deg is about three times the change measured on 0.3.10.1 and far
+        # below the degrees a different reflector selection would move them.
+        from orix.quaternion import Orientation, Rotation
+        worst = 0.0
+        for i, pid in enumerate(np.asarray(gold["pid"])):
+            sym = xmap.phases[int(pid)].point_group
+            new = Orientation(Rotation(np.asarray(xmap.rotations.data)[i:i + 1]), symmetry=sym)
+            old = Orientation(Rotation(np.asarray(gold["rot"])[i:i + 1]), symmetry=sym)
+            worst = max(worst, float(np.degrees(new.angle_with(old))[0]))
+        assert worst < 0.1, f"orientations moved by {worst:.4f} deg against the gold file"
 
 
 def test_a_run_says_in_its_log_which_phase_uses_its_own_families(tmp_path):
