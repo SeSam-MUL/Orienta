@@ -134,6 +134,12 @@ about the same scientific value for ~0.1 % of the disk footprint.
 | `phase_assignment` | str | the same fact in a sentence, with the prior's strengths and the number of pixels it changed (≥ 1.4) |
 | `crystal_reference_frame` | str | the crystal frame the Euler angles refer to; see below (≥ 1.4) |
 
+Per-pixel `/Indexing/X` and `/Indexing/Y` (µm) datasets are present from
+format_version ≥ 1.2 in **both** layouts. They are the most foolproof way to
+place the map on a grid in MTEX (no need to know the step or reshape by hand).
+Before 1.2 the interactive *Save as… → Light .h5* path wrote neither the
+coordinates nor `step_size_um`, so MTEX couldn't reconstruct the grid.
+
 ### Position in the original scan (`scan_*`)
 
 The three `scan_*` attributes are written on `/Indexing` in both layouts and
@@ -157,12 +163,6 @@ read a missing attribute as "not cropped / not recorded".
   `.h5oina`, read its per-pixel arrays reshaped to `scan_shape` and take
   `[scan_row_offset : scan_row_offset + R, scan_col_offset : scan_col_offset + C]`.
   `/SourceReference` names the source file.
-
-Per-pixel `/Indexing/X` and `/Indexing/Y` (µm) datasets are present from
-format_version ≥ 1.2 in **both** layouts. They are the most foolproof way to
-place the map on a grid in MTEX (no need to know the step or reshape by hand).
-Before 1.2 the interactive *Save as… → Light .h5* path wrote neither the
-coordinates nor `step_size_um`, so MTEX couldn't reconstruct the grid.
 
 ### `phase_id` convention (important for downstream)
 

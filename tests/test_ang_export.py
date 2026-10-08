@@ -637,6 +637,13 @@ def test_a_current_light_file_imports_again(monkeypatch, tmp_path, fake_h5oina):
 
 def test_the_documentation_describes_the_scan_provenance_attributes():
     doc = _DOC.read_text(encoding="utf-8")
-    for needle in ("scan_row_offset", "scan_col_offset", "scan_shape",
-                   "0-based", "first row", "first column"):
-        assert needle in doc, needle
+    # each attribute has its own row in the /Indexing attribute table ...
+    for name in ("scan_row_offset", "scan_col_offset", "scan_shape"):
+        assert f"| `{name}` |" in doc, name
+    # ... and the section says which axis, which origin, which unit
+    section = doc[doc.index("### Position in the original scan"):]
+    section = re.split(r"^### ", section[10:], maxsplit=1, flags=re.M)[0]
+    section = " ".join(section.split())
+    for needle in ("0-based", "first array axis", "second axis", "relative to this",
+                   "x_original", "not micrometres"):
+        assert needle in section, needle
