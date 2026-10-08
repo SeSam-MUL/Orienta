@@ -117,6 +117,15 @@ def test_store_result_gives_every_stored_xmap_the_real_axis():
         indexing._result_registry.pop(rid, None)
 
 
+@pytest.mark.parametrize("direction", ["X", "Y", "Z"])
+def test_one_grain_is_one_ipf_colour_across_the_two_fold(direction):
+    from tools.phase_map_generator import compute_ipf_colors
+
+    xmap = _twin_map(_plain_monoclinic_phase())          # a plain orix Phase
+    rgb = np.asarray(compute_ipf_colors(xmap, direction)).reshape(8, 8, 3)
+    assert np.abs(rgb[:, :4] - rgb[:, 4:]).max() < 1e-6
+
+
 def test_pseudosym_reduces_with_the_b_axis_group():
     from backend.spherical_gpu.pseudosym import _sym_quats, same_orientation_angle_deg
 
