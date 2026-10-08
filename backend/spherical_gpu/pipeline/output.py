@@ -22,7 +22,8 @@ def to_crystal_map(
     Layout matches the Classic-WSL output structure: rotations stored as
     Bunge ZYZ Euler angles, score in ``prop['ci']``, 1-indexed phase ids.
     """
-    from orix.crystal_map import CrystalMap, Phase, PhaseList
+    from orix.crystal_map import CrystalMap, PhaseList
+    from crystal_symmetry import FramePhase as Phase
     from orix.quaternion import Rotation
 
     if result.euler_xyz.shape[0] != n_rows * n_cols:

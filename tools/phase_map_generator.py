@@ -138,12 +138,13 @@ def compute_ipf_colors(xmap, direction_str: str = "Z", r_user=None,
         if phase_id == -1:
             continue
         phase = xmap.phases[phase_id]
-        pg = phase.point_group
+        from crystal_symmetry import phase_point_group
+        pg = phase_point_group(phase)
 
         # Fallback: derive point_group from space_group if available
         if pg is None and phase.space_group is not None:
             try:
-                from orix.crystal_map import Phase as _Phase
+                from crystal_symmetry import FramePhase as _Phase
                 _tmp = _Phase(space_group=phase.space_group)
                 pg = _tmp.point_group
                 logger.info(
@@ -337,7 +338,8 @@ def compute_ipf_colors_grain_consistent(
         if phase_id == -1:
             continue
         try:
-            pg = xmap.phases[int(phase_id)].point_group
+            from crystal_symmetry import phase_point_group
+            pg = phase_point_group(xmap.phases[int(phase_id)])
             pg_name = pg.name
             laue = pg.laue
             sector = laue.fundamental_sector

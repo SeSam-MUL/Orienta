@@ -246,6 +246,24 @@ def frame_symmetry(point_group=None, *, space_group=None, lattice=None):
     return _TABLE[axis][cls]
 
 
+def phase_point_group(phase):
+    """The frame-aware point group of any orix phase (None if it has none).
+
+    The same answer :class:`FramePhase` gives, for a phase that is not one:
+    the space group decides, the cell angles and the indexers' convention
+    follow. Use it where a plain orix phase from outside (a kikuchipy master
+    pattern, say) is about to be reduced or sampled.
+    """
+    if phase is None:
+        return None
+    structure = getattr(phase, "structure", None)
+    lattice = getattr(structure, "lattice", None) if structure is not None else None
+    sg = getattr(phase, "space_group", None)
+    if sg is not None:
+        return frame_symmetry(space_group=sg.number, lattice=lattice)
+    return frame_symmetry(getattr(phase, "_point_group", None), lattice=lattice)
+
+
 class FramePhase(Phase):
     """An orix ``Phase`` whose point group is decided by :func:`frame_symmetry`.
 
@@ -258,14 +276,7 @@ class FramePhase(Phase):
 
     @property
     def point_group(self):
-        sg = self.space_group
-        lattice = None
-        structure = getattr(self, "structure", None)
-        if structure is not None:
-            lattice = getattr(structure, "lattice", None)
-        if sg is not None:
-            return frame_symmetry(space_group=sg.number, lattice=lattice)
-        return frame_symmetry(self._point_group, lattice=lattice)
+        return phase_point_group(self)
 
     @point_group.setter
     def point_group(self, value) -> None:
@@ -324,5 +335,6 @@ __all__ = [
     "frame_xmap",
     "monoclinic_class_of_space_group",
     "phase_from_cif",
+    "phase_point_group",
     "unique_axis",
 ]

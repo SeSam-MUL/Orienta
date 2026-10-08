@@ -92,6 +92,8 @@ def compute_pole_figure(xmap, phase_id, hkl_families, r_user, plot_cfg,
         raise ValueError(f"hkl_families must have 1..{MAX_PANEL} entries")
     if phase_id not in set(np.unique(xmap.phase_id).tolist()):
         raise ValueError(f"phase_id {phase_id} not present in this result")
+    from crystal_symmetry import frame_xmap
+    frame_xmap(xmap)          # monoclinic: the group with the real unique axis
     phase = xmap.phases[phase_id]
     if phase.point_group is None:
         raise ValueError(f"phase {phase.name!r} has no point group — cannot build pole figure")

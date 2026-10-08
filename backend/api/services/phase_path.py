@@ -89,7 +89,7 @@ def check_cif_size(path: Path) -> None:
 def _check_cif(path: Path) -> None:
     check_cif_size(path)
     from ebsd_utils import sanitize_cif
-    from orix.crystal_map import Phase
+    from crystal_symmetry import FramePhase as Phase
 
     try:
         phase = Phase.from_cif(sanitize_cif(str(path)))

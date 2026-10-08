@@ -250,9 +250,12 @@ def generate_dictionary(
     # --- Sample orientations ---
     _emit(f"Sampling orientations: {point_group_name} @ {resolution}\u00b0")
 
+    # The master's phase comes from kikuchipy in orix's unique-axis-c setting;
+    # the dictionary has to cover the fundamental zone of the real group.
+    from crystal_symmetry import phase_point_group
     rotations = get_sample_fundamental(
         resolution=resolution,
-        point_group=phase.point_group,
+        point_group=phase_point_group(phase),
     )
     n_ori = rotations.size
     _emit(f"Sampled {n_ori} orientations for {point_group_name}")

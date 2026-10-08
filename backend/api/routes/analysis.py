@@ -130,7 +130,8 @@ def _load_kikuchipy_rich_h5(path: str):
     """
     import h5py
     import numpy as np
-    from orix.crystal_map import CrystalMap, Phase, PhaseList
+    from orix.crystal_map import CrystalMap, PhaseList
+    from crystal_symmetry import FramePhase as Phase
     from orix.quaternion import Rotation
 
     with h5py.File(path, "r") as f:
@@ -760,7 +761,8 @@ def aztec_comparison():
                 first_phase = next(iter(_dataset.xmap.phases))
                 if isinstance(first_phase, tuple):
                     first_phase = first_phase[1]
-                pg = getattr(first_phase, "point_group", None)
+                from crystal_symmetry import phase_point_group
+                pg = phase_point_group(first_phase)
                 if pg is not None:
                     mo = Misorientation(mis, symmetry=(pg, pg))
                     mo = mo.map_into_symmetry_reduced_zone()

@@ -2306,7 +2306,8 @@ def spherical_gpu_index_patterns(
     from backend.spherical_gpu.backend import (
         BackendConfig, PhaseConfig, SphericalGPUBackend,
     )
-    from orix.crystal_map import CrystalMap, Phase, PhaseList
+    from orix.crystal_map import CrystalMap, PhaseList
+    from crystal_symmetry import FramePhase as Phase
     from orix.quaternion import Rotation
     import time as _time
 
@@ -4414,7 +4415,8 @@ def build_consensus_xmap(comparison: ComparisonResult):
     if comparison.consensus_map is None or not comparison.results:
         return None
 
-    from orix.crystal_map import CrystalMap, Phase, PhaseList
+    from orix.crystal_map import CrystalMap, PhaseList
+    from crystal_symmetry import FramePhase as Phase
     from orix.quaternion import Rotation
 
     n_rows, n_cols = comparison.original_shape

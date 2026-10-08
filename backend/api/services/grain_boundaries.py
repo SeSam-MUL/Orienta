@@ -26,6 +26,8 @@ from typing import Any
 
 import numpy as np
 
+from crystal_symmetry import phase_point_group
+
 logger = logging.getLogger(__name__)
 
 # Scan-step subdivisions in the overlay. 4 gives quarter-step line widths,
@@ -45,8 +47,10 @@ def _phase_symmetries(xmap) -> dict[int, Any]:
         return out
     for pid in getattr(phases, "ids", []):
         try:
-            phase = phases[pid]
-            pg = getattr(phase, "point_group", None)
+            # The group with the phase's real unique axis: a b-unique
+            # monoclinic phase reduced by orix's z-axis 2/m would report two
+            # orientations related by its true two-fold axis as 180 deg apart.
+            pg = phase_point_group(phases[pid])
             if pg is not None:
                 out[int(pid)] = pg
         except Exception:  # noqa: BLE001 — a phase without a point group is skipped

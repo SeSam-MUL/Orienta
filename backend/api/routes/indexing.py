@@ -305,6 +305,16 @@ def _store_result(result, method_name: str) -> str:
     result whose file isn't loaded.
     """
     global _active_result_id
+    # Every consumer of a stored result (grains, boundaries, KAM, IPF, pole
+    # figures, exports) reduces orientations with ``xmap.phases[...].point_group``.
+    # Whatever built the phases -- an indexer, a saved file, kikuchipy -- the
+    # monoclinic ones must carry their real unique axis from here on.
+    try:
+        from crystal_symmetry import frame_xmap
+        frame_xmap(getattr(result, "xmap", None))
+    except Exception:
+        logger.warning("could not give the result's phases their frame "
+                       "symmetry", exc_info=True)
     result_id = f"{method_name}_{int(_time.time())}_{uuid.uuid4().hex[:8]}"
     _result_registry[result_id] = result
     _result_registry.move_to_end(result_id)
@@ -1705,7 +1715,7 @@ def _phase_point_group_and_name(xmap, pid: int, path: str) -> tuple:
             return str(read_sht_master(path).point_group), name
         if suffix == ".cif":
             from ebsd_utils import sanitize_cif
-            from orix.crystal_map import Phase as _Phase
+            from crystal_symmetry import FramePhase as _Phase
             pg = _Phase.from_cif(sanitize_cif(path)).point_group
             return (str(pg.name) if pg is not None else None), name
         if suffix in (".h5", ".hdf5"):
@@ -1729,7 +1739,8 @@ def _ensure_phases_in_list(xmap, needed_ids, names, point_groups) -> None:
     "Phase 2"). The list is rebuilt with the missing phases appended, in id
     order, keeping the existing Phase objects.
     """
-    from orix.crystal_map import Phase, PhaseList
+    from orix.crystal_map import PhaseList
+    from crystal_symmetry import FramePhase as Phase
     # Walk the list itself, NOT the >= 0 helper: orix keeps "not_indexed"
     # under id -1 whenever a pixel is unindexed (every consensus map), and
     # a rebuild that drops it breaks the map the same way C1 did.
@@ -1807,7 +1818,7 @@ def _apply_particle_rescue(result, req, selection_mask, progress=None):
             point_groups[pid] = pg_name
             names[pid] = name
             if pg_name:
-                from orix.crystal_map import Phase as _Phase
+                from crystal_symmetry import FramePhase as _Phase
                 symmetries[pid] = _Phase(point_group=pg_name).point_group
         pairs = select_rescue_pairs(ids, expected, point_groups, names)
         if not pairs:
@@ -6432,7 +6443,7 @@ def _describe_hough_failure(exc, cif_path) -> str:
         return f"Hough failed for {name}: {text}"
     sym = None
     try:
-        from orix.crystal_map import Phase
+        from crystal_symmetry import FramePhase as Phase
         from ebsd_utils import sanitize_cif
         ph = Phase.from_cif(sanitize_cif(str(cif_path)))
         sym = ph.point_group.name if ph.point_group is not None else None
@@ -7195,7 +7206,8 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
                        "reconstruct it for assignment")
         try:
             from ebsd_utils import sanitize_cif
-            from orix.crystal_map import Phase, PhaseList
+            from orix.crystal_map import PhaseList
+            from crystal_symmetry import FramePhase as Phase
             ph = Phase.from_cif(sanitize_cif(str(cif)))
             try:
                 ph.name = _stem(cif)

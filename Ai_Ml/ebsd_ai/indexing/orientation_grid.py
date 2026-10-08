@@ -34,6 +34,7 @@ def sample_orientations(
     """
     from orix.quaternion import Rotation, symmetry as sym_module
     from orix.sampling import get_sample_fundamental
+    from crystal_symmetry import frame_symmetry
 
     # Map common symmetry strings to orix symmetry objects
     sym_map = {
@@ -43,7 +44,10 @@ def sample_orientations(
         "mmm": sym_module.D2h,
         "-3m": sym_module.D3d,
         "m-3": sym_module.Th,
-        "2/m": sym_module.C2h,
+        # b-unique 2/m (two-fold along Y): the orientations the indexers
+        # produce live in the X||a, Z||c* frame; orix's own C2h has its axis
+        # along Z. See crystal_symmetry.
+        "2/m": frame_symmetry("2/m"),
         "-1": sym_module.Ci,
         "1": sym_module.C1,
     }

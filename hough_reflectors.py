@@ -112,7 +112,7 @@ def phase_from_cif(path):
     if builder is not None:
         phase = builder(str(path))
     else:
-        from orix.crystal_map import Phase
+        from crystal_symmetry import FramePhase as Phase
         phase = Phase.from_cif(eu.sanitize_cif(str(path)))
     stem = Path(str(path)).stem
     if phase.name != stem:

@@ -488,7 +488,7 @@ class H5OINADataExtractor:
         from orix.quaternion import Rotation
         from orix.vector import Vector3d
         from orix.plot import IPFColorKeyTSL
-        from orix.crystal_map import Phase
+        from crystal_symmetry import FramePhase as Phase
 
         eulers = self.h5file[euler_path][:]  # (N, 3) radians per Aztec convention
         phase_ids = self.h5file[phase_path][:]

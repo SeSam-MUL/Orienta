@@ -11,6 +11,8 @@ from orix.sampling import get_sample_fundamental
 from orix.quaternion import Rotation
 from orix.quaternion import symmetry as _orix_sym
 
+from crystal_symmetry import frame_symmetry
+
 
 def sample_orientations(
     point_group: Union[str, object],
@@ -27,6 +29,13 @@ def sample_orientations(
     # Resolve string → orix symmetry. orix accepts a `point_group=` kwarg
     # that takes either form, but we normalise here so the call site is uniform.
     if isinstance(point_group, str):
+        # A monoclinic name needs its real unique axis (orix's "2/m" has the
+        # two-fold axis along Z, the crystal frame's b-unique axis is Y).
+        framed = frame_symmetry(point_group)
+        if framed is not point_group:
+            return get_sample_fundamental(
+                resolution=angular_step_deg, point_group=framed
+            )
         sym = getattr(_orix_sym, _schoenflies_to_orix_attr(point_group), None)
         if sym is None:
             # orix's get_sample_fundamental can also take a string directly via

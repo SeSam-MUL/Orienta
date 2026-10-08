@@ -22,7 +22,12 @@ import numpy as np
 def _sym_quats(point_group: str) -> np.ndarray:
     """(M, 4) array of the crystal symmetry quaternions (w,x,y,z) for a point group."""
     from orix.quaternion.symmetry import _groups
-    g = next((gr for gr in _groups if gr.name == point_group), None)
+    from crystal_symmetry import frame_symmetry
+    # A monoclinic name ("2/m") is ambiguous in orix, which only has the group
+    # with its two-fold axis along Z; the crystal frame wants the real axis.
+    g = frame_symmetry(point_group)
+    if isinstance(g, str):
+        g = next((gr for gr in _groups if gr.name == point_group), None)
     if g is None:
         raise ValueError(f"Unknown point group {point_group!r}")
     return np.asarray(g.data, dtype=np.float64)
@@ -168,6 +173,8 @@ def spherical_unreliable(z_rot=None, point_group=None) -> bool:
 _SYSTEM_HOLOHEDRY: dict[str, str] = {
     "1": "-1", "-1": "-1",
     "2": "2/m", "m": "2/m", "2/m": "2/m",
+    "121": "2/m", "1m1": "2/m", "112": "2/m", "11m": "2/m",
+    "211": "2/m", "m11": "2/m",
     "222": "mmm", "mm2": "mmm", "mmm": "mmm",
     "4": "4/mmm", "-4": "4/mmm", "4/m": "4/mmm", "422": "4/mmm",
     "4mm": "4/mmm", "-42m": "4/mmm", "-4m2": "4/mmm", "4/mmm": "4/mmm",

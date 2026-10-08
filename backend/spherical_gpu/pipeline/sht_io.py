@@ -54,9 +54,12 @@ def _build_sg_to_pg_table() -> dict[int, str]:
     table[1] = "1"
     table[2] = "-1"
     # Monoclinic
-    for sg in range(3, 6):    table[sg] = "2"      # P2, P2_1, C2
-    for sg in range(6, 10):   table[sg] = "m"      # Pm, Pc, Cm, Cc
-    for sg in range(10, 16):  table[sg] = "2/m"    # P2/m..C2/c
+    # The unique axis is part of the answer: a b-unique crystal's two-fold axis
+    # is Y in the X||a, Z||c* frame the master and every orientation live in,
+    # while orix's own "2" / "m" / "2/m" have it along Z. crystal_symmetry
+    # decides ("121", "1m1", "2/m" with the axis in the generators).
+    from crystal_symmetry import frame_symmetry
+    for sg in range(3, 16):   table[sg] = frame_symmetry(space_group=sg).name
     # Orthorhombic
     for sg in range(16, 25):  table[sg] = "222"
     for sg in range(25, 47):  table[sg] = "mm2"

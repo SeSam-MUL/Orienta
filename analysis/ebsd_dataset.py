@@ -185,7 +185,10 @@ class EBSDDataset:
         if rpp > 1:
             xmap = _reduce_to_best_match(xmap, rpp)
 
-        self.xmap = xmap
+        # Monoclinic phases must reduce their orientations with the group whose
+        # two-fold axis is the crystal's own (see crystal_symmetry).
+        from crystal_symmetry import frame_xmap
+        self.xmap = frame_xmap(xmap)
         self.step_size = step_size
         self.source = source
         self.grains: Optional[GrainSet] = None
@@ -319,7 +322,8 @@ class EBSDDataset:
         valid_ids = phase_ids[phase_ids >= 0]
         if len(valid_ids) == 0:
             raise ValueError("No indexed phases found in xmap")
-        return self.xmap.phases[int(valid_ids[0])]
+        from crystal_symmetry import frame_phase
+        return frame_phase(self.xmap.phases[int(valid_ids[0])])
 
     @property
     def indexed_mask(self) -> np.ndarray:

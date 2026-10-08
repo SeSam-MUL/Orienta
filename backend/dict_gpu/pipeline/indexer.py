@@ -25,6 +25,7 @@ from backend.dict_gpu.pipeline.master_loader import (
     MasterPayload,
 )
 from backend.dict_gpu.pipeline.grid import sample_orientations
+from crystal_symmetry import phase_point_group
 from backend.dict_gpu.pipeline.tiling import (
     compute_tile_size,
     compute_stream_tile_size,
@@ -368,7 +369,7 @@ def _run_dictionary_index(
     # ---- 2. Sample orientations ----------------------------------------------
     if payload.kind == "master":
         rotations = sample_orientations(
-            payload.master.phase.point_group, angular_step_deg
+            phase_point_group(payload.master.phase), angular_step_deg
         )
         _p(f"Dict-GPU: sampled {rotations.size} rotations at {angular_step_deg} deg")
     else:
@@ -872,7 +873,8 @@ def _run_dictionary_index(
     # build_crystal_map consumes best_indices / best_scores (it converts
     # them to CPU numpy internally) so it must run BEFORE the VRAM
     # cleanup block below. Earlier versions del'd these first → crash.
-    from orix.crystal_map import Phase, PhaseList
+    from orix.crystal_map import PhaseList
+    from crystal_symmetry import FramePhase as Phase
     src_phase = payload.phase
     if src_phase is None or getattr(src_phase, "point_group", None) is None:
         raise GpuDictError(

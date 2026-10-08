@@ -94,7 +94,8 @@ class ChunkedDictionaryWriter:
         # may still materialize the array internally during save — that's outside
         # our control, but at least we don't add an unnecessary extra copy.
         import kikuchipy as kp
-        from orix.crystal_map import CrystalMap, Phase, PhaseList
+        from orix.crystal_map import CrystalMap, PhaseList
+        from crystal_symmetry import FramePhase as Phase
 
         data = np.asarray(self._mmap)
         sig = kp.signals.EBSD(data)

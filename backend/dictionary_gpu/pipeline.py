@@ -96,7 +96,11 @@ def generate_dictionary_gpu(
     import kikuchipy as kp
     mp = kp.load(master_path, projection="lambert", hemisphere="both")
     phase: Phase = mp.phase
-    point_group = phase.point_group
+    # kikuchipy derives the point group from the space group in orix's
+    # unique-axis-c setting; the orientations here live in the X||a, Z||c*
+    # frame, so a monoclinic master needs the group with its real axis.
+    from crystal_symmetry import phase_point_group
+    point_group = phase_point_group(phase)
     from display_names import display_stem
     # master_path arrives in the request; Path.stem would keep a Windows path
     # whole on a POSIX backend. See display_names.

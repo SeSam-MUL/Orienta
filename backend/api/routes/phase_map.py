@@ -217,7 +217,8 @@ def _group_phases_by_symmetry(xmap, only_phase_id: int | None = None):
         name = getattr(phase_obj, "name", "") or ""
         if _is_unindexed_phase(name):
             continue
-        pg = getattr(phase_obj, "point_group", None)
+        from crystal_symmetry import phase_point_group
+        pg = phase_point_group(phase_obj)
         if pg is None:
             continue
         # Collapse to the Laue class (adds inversion centre) so the IPF key
