@@ -9976,6 +9976,66 @@ def _read_citations(h5_path) -> list:
     return steps
 
 
+def _export_context(active, source_path, vendor: str) -> dict:
+    """The facts every export states about a result, gathered once.
+
+    ``geometry`` is the source scan's own acquisition header (Scanning Rotation
+    Angle, sample tilt, ...), ``provenance`` says whether the EDS influenced the
+    phase assignment, and the detector facts come from the live signal when one
+    is loaded. Each part is best effort: a missing one is left out of the file,
+    it never fails the export.
+    """
+    from backend.api.services import ang_export
+    from backend.api.services.citations.provenance import get_steps
+
+    ctx = {
+        "geometry": ang_export.read_source_geometry(source_path),
+        "provenance": ang_export.assignment_provenance(get_steps(active)),
+        "vendor": vendor,
+        "detector_tilt_deg": None,
+        "pc_bruker": None,
+        "detector_shape": None,
+    }
+    try:
+        from backend.api.routes.ebsd_viewer import _active_dataset, _get_active_signal
+        from backend.api.services.calibration_store import calibration_store
+
+        signal = _get_active_signal()
+        det = getattr(signal, "detector", None) if signal is not None else None
+        if det is not None:
+            ctx["detector_shape"] = tuple(int(v) for v in det.shape)
+            tilt = getattr(det, "tilt", None)
+            if tilt is not None:
+                ctx["detector_tilt_deg"] = float(tilt)
+            store_pc = calibration_store.get_pc(_active_dataset)
+            pc = store_pc if store_pc is not None else np.array(det.pc).flatten()[:3]
+            ctx["pc_bruker"] = [float(v) for v in np.asarray(pc, dtype=float).flatten()[:3]]
+            if "sample_tilt_deg" not in ctx["geometry"]:
+                ctx["geometry"]["sample_tilt_deg"] = float(det.sample_tilt)
+    except Exception:
+        logger.debug("export: detector facts unavailable", exc_info=True)
+    return ctx
+
+
+def _stated_in_every_export(f, idx, active, source_path, vendor: str) -> None:
+    """The facts an export has to state, written the same way into both .h5s.
+
+    ``/Acquisition`` -- the source scan's own geometry (Scanning Rotation
+    Angle, sample and detector tilt, ...); ``/Indexing`` attrs
+    ``eds_chemistry_prior`` and ``phase_assignment`` -- whether the EDS decided
+    any phase. Best effort for the geometry (a source without a header simply
+    contributes nothing), always written for the assignment.
+    """
+    from backend.api.services.result_exporter import (
+        write_acquisition_group, write_assignment_provenance)
+
+    ctx = _export_context(active, source_path, vendor)
+    write_assignment_provenance(idx, ctx["provenance"])
+    write_acquisition_group(
+        f, ctx["geometry"], detector_tilt_deg=ctx["detector_tilt_deg"],
+        source="h5oina /1/EBSD/Header" if ctx["geometry"] else "")
+
+
 @router.post("/export")
 async def export_indexing_result(req: ExportRequest):
     """Export indexing result as .ang, rich .h5, or light .h5.
@@ -10037,9 +10097,7 @@ async def export_indexing_result(req: ExportRequest):
 
     try:
         if fmt == "ang":
-            # Standard orix export — MTEX compatible
-            from indexing_controller import export_results
-
+            # EDAX TSL .ang -- MTEX / orix compatible
             # KNOWN LIMITATION (loud, not silent): the orix .ang writer is
             # called directly and does NOT compose the per-file coordinate-
             # system rotation (_r_user). Only the .h5 / Light .h5 paths thread
@@ -10081,7 +10139,57 @@ async def export_indexing_result(req: ExportRequest):
                     active.xmap.prop['ci'] = ci_arr[:n_xmap].astype(np.float32)
                     logger.info("Injected ci into xmap.prop before .ang export (size=%d)", n_xmap)
 
-            export_results(active.xmap, str(out_path))
+            # The map is rebuilt for the file (micrometre coordinates on the
+            # full grid, real lattices) instead of being handed to orix as the
+            # indexer left it -- see backend/api/services/ang_export.py.
+            from backend.api.services import ang_export
+
+            _step_um = _resolve_step_size_um(active)
+            if _step_um is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Cannot determine the scan step size for export. "
+                        "Load the source EBSD data (so its calibration is "
+                        "available) and try again."
+                    ),
+                )
+            try:
+                from backend.api.routes.ebsd_viewer import _ebsd_file_path as _src_ang
+            except Exception:
+                _src_ang = None
+            _vendor_ang = _resolve_source_vendor(active, str(_src_ang) if _src_ang else None)
+            _ctx = _export_context(active, _src_ang, _vendor_ang)
+            _md = getattr(active, "metadata", None) or {}
+            try:
+                _export_xmap = ang_export.build_export_xmap(
+                    active.xmap, active.original_shape, active.selection_mask,
+                    _step_um, active.confidence_scores,
+                    phase_files={int(k): v for k, v in
+                                 (_md.get("sht_paths_by_phase") or {}).items()},
+                )
+            except ang_export.LatticeUnknown as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            _scan = _stored_scan_provenance(active)
+            _pc_tsl = ang_export.pc_tsl_from_bruker(
+                _ctx["pc_bruker"], _ctx["detector_shape"])
+            ang_export.write_ang(
+                str(out_path), _export_xmap,
+                replace=ang_export.header_replacements(
+                    geometry=_ctx["geometry"], pc_tsl=_pc_tsl),
+                comments=ang_export.header_comments(
+                    method=active.method.value, vendor=_vendor_ang,
+                    provenance=_ctx["provenance"],
+                    scan_offset=(_scan["scan_row_offset"], _scan["scan_col_offset"]),
+                    scan_shape=_scan["scan_shape"], step_um=_step_um,
+                    geometry=_ctx["geometry"],
+                    detector_tilt_deg=_ctx["detector_tilt_deg"],
+                    pc_bruker=_ctx["pc_bruker"],
+                    notes=["IQ column is 0: no band contrast is exported to .ang."]
+                    + (["x-star, y-star, z-star are zero: the pattern centre of "
+                        "this result is not known here."] if _pc_tsl is None else []),
+                ),
+            )
 
         elif fmt == "h5":
             # Rich H5 export: original data + per-phase indexing results
@@ -10183,6 +10291,7 @@ async def export_indexing_result(req: ExportRequest):
                     if float(_export_frame_offset(_export_vendor).angle.max()) > 1e-6
                     else "native (EMsoft/kikuchipy common)"
                 )
+                _stated_in_every_export(f, idx, active, source_path, _export_vendor)
 
                 n_rows, n_cols = active.original_shape
                 per_phase_data = active.metadata.get('per_phase_data', {})
@@ -10505,6 +10614,7 @@ async def export_indexing_result(req: ExportRequest):
                     "vendor_stored (Aztec/MTEX default import)"
                     if _frame_converted else "native (EMsoft/kikuchipy common)"
                 )
+                _stated_in_every_export(f, idx, active, src_path_str, _export_vendor)
 
                 per_phase_data = active.metadata.get('per_phase_data', {})
 

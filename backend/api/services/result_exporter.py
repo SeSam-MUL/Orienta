@@ -287,6 +287,41 @@ def _write_scan_provenance(group, scan_provenance: Optional[Dict]) -> None:
             group.attrs[key] = value
 
 
+def write_acquisition_group(f, geometry: Optional[Dict], *,
+                            detector_tilt_deg: Optional[float] = None,
+                            source: str = "") -> None:
+    """``/Acquisition``: what the source scan recorded about its own geometry.
+
+    ``geometry`` is :func:`ang_export.read_source_geometry` (degrees, mm, kV).
+    The Scanning Rotation Angle in particular is not recoverable from anything
+    else in an exported file. Nothing is written when there is nothing to say,
+    and keys the source does not have are absent rather than zero.
+    """
+    g = dict(geometry or {})
+    if detector_tilt_deg is not None:
+        g["detector_tilt_deg"] = float(detector_tilt_deg)
+    if not g:
+        return
+    grp = f["Acquisition"] if "Acquisition" in f else f.create_group("Acquisition")
+    grp.attrs["description"] = (
+        "Acquisition geometry of the source scan, copied from its header. "
+        "Angles in degrees, working distance in mm, beam voltage in kV.")
+    if source:
+        grp.attrs["source"] = source
+    for key, value in g.items():
+        grp.attrs[key] = np.asarray(value, dtype=float) if isinstance(value, (list, tuple)) else float(value)
+
+
+def write_assignment_provenance(idx_group, provenance: Dict) -> None:
+    """State on ``/Indexing`` whether the EDS decided any phase.
+
+    Written as an explicit 0 / 1 and a sentence, so that "no prior" is a
+    recorded fact and not the absence of a field.
+    """
+    idx_group.attrs["eds_chemistry_prior"] = 1 if provenance.get("eds_prior") else 0
+    idx_group.attrs["phase_assignment"] = str(provenance["text"])
+
+
 def _write_citations(group, steps: Optional[List[dict]]) -> None:
     """Stamp what to cite for this result.
 
