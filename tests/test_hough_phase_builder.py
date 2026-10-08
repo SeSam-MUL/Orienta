@@ -20,6 +20,7 @@ cells that run anywhere, and on every site that builds a Hough phase.
 from __future__ import annotations
 
 import ast
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -283,20 +284,23 @@ def test_the_cached_hough_indexer_has_both_properties(monoclinic_cif, monkeypatc
 
 _MACHINERY = {"create_indexer", "prepare_reflectors", "get_indexer"}
 
-#: Directories (first path component) that hold no shipped Hough code.
-_SKIP = {"tests", "tasks", "research", "docs", "scripts", "node_modules", "Database",
-         "frontend", "electron", ".claude", "crystal-structures-for-ebsd-main",
-         "Test_data", "dxa", "Linux_Maker", "branding", "logs", "licenses",
-         "diagnostic_runs", "examples", "images_for_presentation", "screenshots"}
+#: Folders that hold application code, next to the modules in the repository root.
+_APPLICATION_DIRS = ("backend", "simulation", "analysis", "tools", "Ai_Ml")
 
 
 def _source_trees():
-    for path in ROOT.rglob("*.py"):
-        rel = path.relative_to(ROOT)
-        if rel.parts and rel.parts[0] in _SKIP:
+    """Every tracked application module (root modules and ``_APPLICATION_DIRS``), parsed."""
+    listing = subprocess.run(["git", "ls-files", "*.py"], cwd=ROOT, check=True,
+                             capture_output=True, text=True).stdout.splitlines()
+    assert len(listing) > 100, "git ls-files found no project: is this a checkout?"
+    for rel in listing:
+        if "/" in rel and rel.split("/", 1)[0] not in _APPLICATION_DIRS:
+            continue
+        path = ROOT / rel
+        if not path.is_file():
             continue
         try:
-            yield rel.as_posix(), ast.parse(path.read_text(encoding="utf-8"))
+            yield rel, ast.parse(path.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError):
             continue
 
@@ -323,11 +327,24 @@ def _functions(tree):
 #: is not a phase for Hough. Empty: every such function goes through the builder.
 _MAY_READ_A_CIF_THEMSELVES: dict[str, str] = {}
 
+#: Functions that set up Hough machinery and construct a ``Phase`` / ``FramePhase``
+#: object themselves, with the reason that object is not a CIF phase built around
+#: the builder. Key: ``path::function``. Empty: no application function does.
+_MAY_CONSTRUCT_A_PHASE_THEMSELVES: dict[str, str] = {}
 
-def test_no_function_that_sets_up_hough_builds_its_phase_with_from_cif():
-    """A function that calls create_indexer / prepare_reflectors / get_indexer AND
-    ``from_cif`` builds a Hough phase around ``hough_phase_from_cif``: it would
-    bring back the 16-atom silicon or the Z-axis monoclinic group."""
+_PHASE_CONSTRUCTORS = {"Phase", "FramePhase"}
+
+
+def test_no_function_that_sets_up_hough_builds_its_phase_around_the_builder():
+    """A function that calls create_indexer / prepare_reflectors / get_indexer must
+    not make its phase itself, which would bring back the 16-atom silicon or the
+    Z-axis monoclinic group. It is flagged when it also calls ``from_cif`` (reads a
+    CIF without ``hough_phase_from_cif``) or constructs ``Phase(...)`` /
+    ``FramePhase(...)`` directly, unless it is listed with a reason. It guards the
+    functions that name the machinery in their own body (nested functions count for
+    themselves and for the function around them); a phase made in one function and
+    handed to another that sets up the indexer is covered by the call-site count in
+    ``test_every_hough_site_calls_the_builder``."""
     offenders, with_machinery = [], 0
     for rel, tree in _source_trees():
         for fn in _functions(tree):
@@ -335,8 +352,11 @@ def test_no_function_that_sets_up_hough_builds_its_phase_with_from_cif():
             if not names & _MACHINERY:
                 continue
             with_machinery += 1
-            if "from_cif" in names and f"{rel}::{fn.name}" not in _MAY_READ_A_CIF_THEMSELVES:
-                offenders.append(f"{rel}:{fn.lineno} {fn.name}")
+            where = f"{rel}::{fn.name}"
+            if "from_cif" in names and where not in _MAY_READ_A_CIF_THEMSELVES:
+                offenders.append(f"{rel}:{fn.lineno} {fn.name} calls from_cif")
+            if names & _PHASE_CONSTRUCTORS and where not in _MAY_CONSTRUCT_A_PHASE_THEMSELVES:
+                offenders.append(f"{rel}:{fn.lineno} {fn.name} constructs a Phase")
     assert offenders == []
     # A positive anchor: the scan found the Hough machinery at all.
     assert with_machinery >= 8, with_machinery
@@ -360,8 +380,20 @@ def test_hough_reflectors_has_no_second_way_to_build_the_phase():
     assert "from_cif" not in names and "sanitize_cif" not in names
 
 
+def _builder_uses(tree) -> int:
+    """Occurrences of ``hough_phase_from_cif`` as a call or handed on (as in
+    ``asyncio.to_thread(hough_phase_from_cif, path)``), anywhere in the file: a
+    nested function does not count twice, and an ``import`` is not a use."""
+    return sum(
+        (isinstance(n, ast.Name) and n.id == "hough_phase_from_cif")
+        or (isinstance(n, ast.Attribute) and n.attr == "hough_phase_from_cif")
+        for n in ast.walk(tree))
+
+
 def test_every_hough_site_calls_the_builder():
-    """The sites the origin fix named, counted by call (or hand-over to a thread)."""
+    """The sites the origin fix named: at least this many uses of the builder per
+    file, each use counted once. Replacing one by a direct ``Phase.from_cif`` call
+    lowers the count."""
     sites = {
         "backend/api/routes/indexing.py": 8,
         "backend/api/services/batch_manager.py": 1,
@@ -371,9 +403,5 @@ def test_every_hough_site_calls_the_builder():
     }
     for rel, minimum in sites.items():
         tree = ast.parse((ROOT / rel).read_text(encoding="utf-8"))
-        uses = 0
-        for fn in _functions(tree):
-            if "hough_phase_from_cif" in _called_names(fn):
-                uses += 1
+        uses = _builder_uses(tree)
         assert uses >= minimum, (rel, uses)
-
