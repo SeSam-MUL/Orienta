@@ -8,6 +8,7 @@ pseudo-symmetry helpers, the dictionary grid and the Hough reflector orbits.
 """
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
@@ -229,3 +230,75 @@ def test_no_module_imports_orix_phase_without_a_reason():
         "These modules import orix's Phase, whose point group for a monoclinic "
         "phase has its two-fold axis along Z. Import crystal_symmetry.FramePhase "
         "instead (or add the file to _ALLOWED with the reason): %s" % offenders)
+
+
+# ----- the library: real CIF, real master, real indexer --------------------
+
+_DB = Path(__file__).resolve().parents[1] / "Database"
+
+
+def _library(*parts):
+    base = Path(os.environ.get("ORIENTA_TEST_DB", str(_DB)))
+    path = base.joinpath(*parts)
+    if not path.is_file():
+        pytest.skip(f"library file not available: {path}")
+    return path
+
+
+def test_library_cif_of_a_b_unique_phase_gets_the_y_axis():
+    from ebsd_utils import sanitize_cif
+
+    cif = _library("CIF_Library", "Al13Fe4.cif")
+    phase = FramePhase.from_cif(sanitize_cif(str(cif)))
+    assert phase.space_group.number == 12
+    assert phase.point_group.proper_subgroup.name == "121"
+    assert Phase.from_cif(sanitize_cif(str(cif))).point_group.proper_subgroup.name == "112"
+
+
+def test_library_master_header_names_the_b_unique_group():
+    from backend.spherical_gpu.pipeline.sht_io import read_sht_master
+
+    found = sorted((_DB / "EBSD_SHT_Database" / "Al13Fe4").glob("*.sht"))
+    if not found:
+        pytest.skip("Al13Fe4 master not available")
+    master = read_sht_master(str(found[0]), device="cpu")
+    assert master.space_group == 12 and master.z_rot == 1
+    assert master.point_group == "2/m"
+    assert cs.unique_axis(frame_symmetry(master.point_group)) == "b"
+
+
+def test_the_spherical_indexer_answers_in_the_b_unique_frame():
+    """The premise of this whole module, measured: a rendered Al13Fe4 pattern
+    comes back as the true orientation or as its image under the two-fold along
+    Y -- not along Z. Sixteen random orientations through the real renderer and
+    the real GPU indexer."""
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("needs CUDA")
+    found = sorted((_DB / "EBSD_SHT_Database" / "Al13Fe4").glob("*.sht"))
+    if not found:
+        pytest.skip("Al13Fe4 master not available")
+    from orix.quaternion import Orientation
+    from tests.test_spherical_gpu.test_m3_variant_selection import DET, _render
+    from backend.spherical_gpu.backend import (BackendConfig, PhaseConfig,
+                                               SphericalGPUBackend)
+
+    rng = np.random.default_rng(7)
+    quats = rng.normal(size=(16, 4))
+    quats /= np.linalg.norm(quats, axis=1, keepdims=True)
+    pats = np.stack([_render(str(found[0]), q) for q in quats])
+    backend = SphericalGPUBackend(BackendConfig(phases=[
+        PhaseConfig(sht_file=str(found[0]), bandwidth=88, refine=True)]))
+    res = backend.index_array(np.ascontiguousarray(pats, dtype=np.float32), DET)
+    got = Rotation.from_euler(np.asarray(res.euler_xyz.numpy(), dtype=np.float64).reshape(-1, 3))
+    truth = Rotation(quats)
+
+    def within_2deg(sym):
+        ang = Orientation(got, symmetry=sym).angle_with(Orientation(truth, symmetry=sym), degrees=True)
+        return int((np.asarray(ang).ravel() < 2.0).sum())
+
+    right, orix_group = within_2deg(frame_symmetry("2/m")), within_2deg(C2h)
+    assert right >= 13, f"only {right}/16 match under the Y-axis group"
+    assert orix_group <= right - 3, (
+        f"Z-axis group matches {orix_group}/16, Y-axis group {right}/16: the "
+        "indexer would no longer be answering in the b-unique frame")
