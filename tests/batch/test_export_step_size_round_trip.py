@@ -16,6 +16,7 @@ step. The fix wires step_size_um through:
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import h5py
@@ -73,12 +74,14 @@ def cubic_checkpoint(tmp_path: Path):
     cw.write_phase_result(
         "Al", ci_a, ori_a,
         {"phase_file": "Al.cif", "ci_mean": 0.75, "duration_sec": 1.0,
-         "space_group": 225, "point_group": "m-3m"},
+         "space_group": 225, "point_group": "m-3m",
+         "lattice_constants": [4.049, 4.049, 4.049, 90.0, 90.0, 90.0]},
     )
     cw.write_phase_result(
         "Cu", ci_b, ori_b,
         {"phase_file": "Cu.cif", "ci_mean": 0.45, "duration_sec": 1.0,
-         "space_group": 225, "point_group": "m-3m"},
+         "space_group": 225, "point_group": "m-3m",
+         "lattice_constants": [4.049, 4.049, 4.049, 90.0, 90.0, 90.0]},
     )
     cw.compute_auto_assignment(confidence_threshold=0.0)
     return source, cw
@@ -249,8 +252,12 @@ def test_ctf_no_native_bc_writes_zeros_and_provenance(cubic_checkpoint, tmp_path
 
 
 def test_ctf_native_bc_prj_line_has_no_note(cubic_checkpoint, tmp_path):
-    """When native BC IS present the Prj header stays byte-identical
-    (no provenance note) so native round-trip behaviour is unchanged."""
+    """When native BC IS present the Prj line carries no Band-Contrast note.
+
+    It starts with the original text and goes on with the facts every export
+    states (Euler frame, scan origin, phase assignment); only the BC note is
+    absent.
+    """
     source, cw = cubic_checkpoint
     out = tmp_path / "out"
     out.mkdir()
@@ -261,10 +268,10 @@ def test_ctf_native_bc_prj_line_has_no_note(cubic_checkpoint, tmp_path):
     )
     assert ctf is not None
     text = Path(ctf).read_text(encoding="utf-8")
-    assert "Prj\tOrienta multi-phase batch\n" in text, (
-        "native-BC Prj line must remain exactly the original text"
-    )
+    prj = next(ln for ln in text.splitlines() if ln.startswith("Prj\t"))
+    assert prj.startswith("Prj\tOrienta multi-phase batch | "), prj
     assert "no native Band Contrast" not in text
+    assert "EDS chemistry prior: no" in prj
 
 
 def test_ang_no_native_bc_header_note(cubic_checkpoint, tmp_path):
@@ -374,7 +381,12 @@ def test_ctf_uses_caller_supplied_tilt(cubic_checkpoint, tmp_path):
 
 def test_ang_carries_calibrated_tilt_and_pc(cubic_checkpoint, tmp_path):
     """Post-edited .ang header must contain calibrated TILT + x/y/z-star
-    lines — orix.io.save itself doesn't take detector geometry."""
+    lines -- orix.io.save itself doesn't take detector geometry.
+
+    kikuchipy's pattern centre is Bruker; EDAX's x/y/z-star are not the same
+    numbers (y* = 1 - y_B; z* is rescaled by the aspect ratio of a tall
+    detector), so they are written only when the detector shape is known.
+    """
     source, cw = cubic_checkpoint
     out = tmp_path / "out"
     out.mkdir()
@@ -384,13 +396,36 @@ def test_ang_carries_calibrated_tilt_and_pc(cubic_checkpoint, tmp_path):
         source_h5_path=str(source),
         sample_tilt=71.5,
         pc=[0.512, 0.488, 0.673],
+        detector_shape=(60, 80),
     )
     assert ang is not None
     text = Path(ang).read_text(encoding="utf-8")
     assert "# TILT" in text and "71.5" in text, f"ANG missing TILT:\n{text[:600]}"
-    assert "# x-star" in text and "0.512" in text
-    assert "# y-star" in text and "0.488" in text
-    assert "# z-star" in text and "0.673" in text
+    star = {k: float(re.search(rf"^# {k}\s+(\S+)", text, re.M).group(1))
+            for k in ("x-star", "y-star", "z-star")}
+    assert star["x-star"] == pytest.approx(0.512, abs=1e-6)
+    assert star["y-star"] == pytest.approx(1 - 0.488, abs=1e-6)
+    assert star["z-star"] == pytest.approx(0.673, abs=1e-6)   # wide detector
+    # the Bruker values stay available, labelled with their convention
+    assert ("ORIENTA_PATTERN_CENTRE_BRUKER: x=0.512000 y=0.488000 z=0.673000"
+            in text)
+
+
+def test_ang_without_detector_shape_does_not_invent_tsl_star(
+        cubic_checkpoint, tmp_path):
+    source, cw = cubic_checkpoint
+    out = tmp_path / "out"
+    out.mkdir()
+    ang, _ = export_ang_ctf(
+        cw.checkpoint_path, str(out),
+        write_ang=True, write_ctf=False,
+        source_h5_path=str(source),
+        pc=[0.512, 0.488, 0.673],
+    )
+    text = Path(ang).read_text(encoding="utf-8")
+    assert re.search(r"^# x-star\s+0\.000000", text, re.M)
+    assert "ORIENTA_PATTERN_CENTRE_BRUKER" in text
+    assert "need the detector shape" in text
 
 
 def test_ang_iq_column_holds_real_bc(cubic_checkpoint, tmp_path):
@@ -450,7 +485,8 @@ def test_light_contains_full_eds_payload(tmp_path: Path):
         "Al", np.full((3, 4), 0.7, dtype=np.float32),
         np.zeros((3, 4, 3), dtype=np.float32),
         {"phase_file": "Al.cif", "ci_mean": 0.7, "duration_sec": 1.0,
-         "space_group": 225, "point_group": "m-3m"},
+         "space_group": 225, "point_group": "m-3m",
+         "lattice_constants": [4.049, 4.049, 4.049, 90.0, 90.0, 90.0]},
     )
     cw.compute_auto_assignment(confidence_threshold=0.0)
 
@@ -500,7 +536,8 @@ def test_export_refuses_zero_step(tmp_path):
         rng.uniform(size=(2, 2)).astype(np.float32),
         rng.uniform(size=(2, 2, 3)).astype(np.float32),
         {"phase_file": "Al.cif", "ci_mean": 0.5, "duration_sec": 0.1,
-         "space_group": 225, "point_group": "m-3m"},
+         "space_group": 225, "point_group": "m-3m",
+         "lattice_constants": [4.049, 4.049, 4.049, 90.0, 90.0, 90.0]},
     )
     cw.compute_auto_assignment(confidence_threshold=0.0)
     with pytest.raises(ValueError, match="step_size_um"):

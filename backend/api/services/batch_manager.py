@@ -471,6 +471,15 @@ def run_single_indexing_job(
                         metadata["point_group"] = str(p.point_group.name)
                     except Exception:
                         pass
+                # The lattice, from the phase itself or the file it came from.
+                # Not finding one is not an error here: the exporter looks again
+                # and refuses to write a placeholder if it still cannot.
+                try:
+                    from backend.api.services import ang_export
+                    metadata["lattice_constants"] = list(
+                        ang_export.resolve_phase_lattice(p, phase_file=phase_path)[0])
+                except Exception as e:
+                    logger.debug("no lattice for %s: %s", phase_name, e)
                 break
     except Exception as e:
         logger.debug("Could not extract symmetry from xmap for %s: %s", phase_name, e)

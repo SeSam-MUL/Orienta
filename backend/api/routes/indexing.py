@@ -10180,8 +10180,7 @@ async def export_indexing_result(req: ExportRequest):
                 comments=ang_export.header_comments(
                     method=active.method.value, vendor=_vendor_ang,
                     provenance=_ctx["provenance"],
-                    scan_offset=(_scan["scan_row_offset"], _scan["scan_col_offset"]),
-                    scan_shape=_scan["scan_shape"], step_um=_step_um,
+                    scan=_scan, step_um=_step_um,
                     geometry=_ctx["geometry"],
                     detector_tilt_deg=_ctx["detector_tilt_deg"],
                     pc_bruker=_ctx["pc_bruker"],

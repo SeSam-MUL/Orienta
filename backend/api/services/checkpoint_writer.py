@@ -139,7 +139,8 @@ class CheckpointWriter:
         ci_map : ndarray, float32, shape (rows, cols)
         orientation_map : ndarray, float32, shape (rows, cols, 3) — Euler angles
         metadata : dict with keys: phase_file, ci_mean, duration_sec,
-            space_group (int), point_group (str, e.g. "m-3m"), etc.
+            space_group (int), point_group (str, e.g. "m-3m"),
+            lattice_constants (6 floats, angstrom / degrees), etc.
 
         The crystallographic symmetry attrs are critical for IPF colouring
         on export: without them orix treats the phase as triclinic and the
@@ -167,6 +168,12 @@ class CheckpointWriter:
                 except Exception: pass
             if pg is not None:
                 grp.attrs["point_group"] = str(pg)
+            # a, b, c in angstrom and alpha, beta, gamma in degrees, so that the
+            # .ang / .ctf written later carry a lattice that was measured or
+            # read from the phase file, never orix's 1 1 1 90 90 90 placeholder.
+            lattice = metadata.get("lattice_constants")
+            if lattice is not None:
+                grp.attrs["lattice_constants"] = np.asarray(lattice, dtype=float)
             if "indexing_params" in metadata:
                 grp.attrs["indexing_params"] = json.dumps(metadata["indexing_params"])
 

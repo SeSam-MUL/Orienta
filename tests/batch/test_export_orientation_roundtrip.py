@@ -78,6 +78,7 @@ def asymmetric_checkpoint(tmp_path: Path):
             "duration_sec": 1.0,
             "space_group": 225,
             "point_group": "m-3m",
+            "lattice_constants": [4.049, 4.049, 4.049, 90.0, 90.0, 90.0],
         },
     )
     cw.compute_auto_assignment(confidence_threshold=0.0)

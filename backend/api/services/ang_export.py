@@ -310,22 +310,24 @@ def assignment_provenance(steps: Optional[Sequence[dict]]) -> Dict[str, object]:
     return {"eds_used": bool(eds), "eds_prior": prior is not None, "text": text}
 
 
-def euler_frame_text(vendor: str) -> List[str]:
-    """Plain-words statement of the Euler frame of the ``.ang``."""
+def euler_frame_text(vendor: str, *, unit: str = "radians",
+                     angles: str = "phi1, Phi, phi2",
+                     first: str = "phi1") -> List[str]:
+    """Plain-words statement of the Euler frame of a ``.ang`` / ``.ctf``."""
     v = (vendor or "").lower()
     lines = [
-        "phi1, Phi, phi2 are Bunge Euler angles in radians in the EDAX TSL sample "
-        "frame, the frame orix and kikuchipy use; orix reads this file without any "
-        "conversion."
+        f"{angles} are Bunge Euler angles in {unit} in the EDAX TSL sample "
+        "frame, the frame orix and kikuchipy use; orix reads this file without "
+        "any conversion."
     ]
     if v in ("oxford", "bruker"):
         lines.append(
             "The scan came from an Oxford Instruments / Bruker system. The .h5 "
             "exports of this result hold the Euler angles in the Oxford/Aztec "
             "frame, which is rotated by 90 degrees about the sample normal: "
-            "phi1(.h5) = phi1(this file) - 90 degrees (mod 360); Phi and phi2 are "
-            "identical. Subtract 90 degrees from phi1 here to compare with Aztec "
-            "or with the .h5.")
+            f"{first}(.h5) = {first}(this file) - 90 degrees (mod 360); the "
+            f"other two angles are identical. Subtract 90 degrees from {first} "
+            "here to compare with Aztec or with the .h5.")
     elif v in ("edax", "tsl", "ametek"):
         lines.append(
             "The scan came from an EDAX system, whose own frame this is: the .h5 "
@@ -334,27 +336,27 @@ def euler_frame_text(vendor: str) -> List[str]:
         lines.append(
             "The source system was not recorded; the .h5 exports of this result "
             "hold the Euler angles in the frame of the source system, which for "
-            "Oxford/Bruker differs from this file by 90 degrees in phi1.")
+            f"Oxford/Bruker differs from this file by 90 degrees in {first}.")
     return lines
 
 
 def scan_origin_text(scan_row_offset: int, scan_col_offset: int,
                      scan_shape, step_um: float) -> str:
     r0, c0 = int(scan_row_offset or 0), int(scan_col_offset or 0)
+    if r0 == 0 and c0 == 0:
+        return ("the first pixel of this file is row 0, column 0 of the scan "
+                "(not a crop).")
     shape = ""
     if scan_shape is not None:
         try:
-            shape = f" original {int(scan_shape[0])} x {int(scan_shape[1])} scan"
+            shape = f" {int(scan_shape[0])} x {int(scan_shape[1])}"
         except Exception:
             shape = ""
-    if r0 == 0 and c0 == 0 and not shape:
-        return ("the first row and column of this file are row 0, column 0 of the "
-                "scan (no crop).")
     return (
-        f"the first pixel of this file is row {r0}, column {c0} of the"
-        f"{shape or ' original scan'} (0-based). Coordinates in this file start "
-        f"at 0; the origin lies at x {c0 * step_um:.3f} um, y {r0 * step_um:.3f} um "
-        "of the original scan."
+        f"the first pixel of this file is row {r0}, column {c0} of the original"
+        f"{shape} scan (0-based). Coordinates in this file start at 0; the "
+        f"origin lies at x {c0 * step_um:.3f} um, y {r0 * step_um:.3f} um of the "
+        "original scan."
     )
 
 
@@ -366,8 +368,10 @@ def pc_tsl_from_bruker(pc, detector_shape) -> Optional[Tuple[float, float, float
     """PC in the EDAX TSL convention from a Bruker-convention PC.
 
     kikuchipy's PC is Bruker; the TSL one is NOT the same numbers:
-    ``y_T = (Ny/Nx)(1 - y_B)``, ``z_T = (Ny/Nx) z_B``. Needs the detector shape;
-    returns ``None`` without it.
+    ``y_T = 1 - y_B`` and ``z_T = z_B * nrows / min(nrows, ncols)`` (the
+    installed kikuchipy's ``EBSDDetector.pc_tsl``; its docstring writes the
+    aspect ratio the other way round, the code is what runs). Needs the
+    detector shape; returns ``None`` without it.
     """
     if pc is None or detector_shape is None:
         return None
@@ -548,8 +552,7 @@ def header_comments(
     method: Optional[str],
     vendor: str,
     provenance: Dict[str, object],
-    scan_offset: Tuple[int, int] = (0, 0),
-    scan_shape=None,
+    scan: Optional[Dict[str, object]] = None,
     step_um: float,
     geometry: Optional[Dict[str, object]] = None,
     detector_tilt_deg: Optional[float] = None,
@@ -562,8 +565,13 @@ def header_comments(
         lines.append(f"# {KEY_INDEXING}: method={method}; software=Orienta")
     for t in euler_frame_text(vendor):
         lines.append(f"# {KEY_FRAME}: {t}")
-    lines.append("# %s: %s" % (KEY_ORIGIN, scan_origin_text(
-        scan_offset[0], scan_offset[1], scan_shape, step_um)))
+    if scan is None:
+        lines.append(f"# {KEY_ORIGIN}: not recorded by this export; coordinates "
+                     "start at 0 at the first pixel of the file.")
+    else:
+        lines.append("# %s: %s" % (KEY_ORIGIN, scan_origin_text(
+            scan.get("scan_row_offset", 0), scan.get("scan_col_offset", 0),
+            scan.get("scan_shape"), step_um)))
     acq = acquisition_line(geometry or {}, detector_tilt_deg)
     if acq:
         lines.append(f"# {KEY_ACQ}: {acq}")
@@ -574,6 +582,29 @@ def header_comments(
     for n in notes:
         lines.append(f"# {KEY_NOTE}: {n}")
     return lines
+
+
+def ctf_project_note(*, vendor: str, provenance: Dict[str, object],
+                     scan: Optional[Dict[str, object]], step_um: float,
+                     geometry: Optional[Dict[str, object]] = None) -> str:
+    """The same facts as the ``.ang`` comments, as one line for the CTF ``Prj`` field.
+
+    A Channel Text File has no comment lines (parsers reject unknown ones), but
+    its project field is free text.
+    """
+    parts = ["Euler angles: " + " ".join(euler_frame_text(
+        vendor, unit="degrees", angles="Euler1, Euler2, Euler3", first="Euler1"))]
+    if scan is None:
+        parts.append("Scan origin: not recorded by this export.")
+    else:
+        parts.append("Scan origin: " + scan_origin_text(
+            scan.get("scan_row_offset", 0), scan.get("scan_col_offset", 0),
+            scan.get("scan_shape"), step_um))
+    acq = acquisition_line(geometry or {})
+    if acq:
+        parts.append("Acquisition: " + acq + ".")
+    parts.append("Phase assignment: " + str(provenance["text"]))
+    return " ".join(parts)
 
 
 def header_replacements(*, geometry: Optional[Dict[str, object]] = None,

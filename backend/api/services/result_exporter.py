@@ -764,6 +764,7 @@ def _write_ctf(
     ctf_path: str, xmap, phase_names: List[str], step_size: float,
     source_h5_path: Optional[str] = None,
     sample_tilt: Optional[float] = None,
+    prj_note: Optional[str] = None,
 ) -> None:
     """Write an MTEX-compatible Channel Text File (.ctf) from a CrystalMap.
 
@@ -950,6 +951,9 @@ def _write_ctf(
             prj += " — BC column = computed FFT image quality (no native Band Contrast)"
         else:
             prj += " — BC column = 0 (no native Band Contrast in source)"
+        if prj_note:
+            # Free text, one line, no tabs (the header is tab-separated).
+            prj += " | " + " ".join(prj_note.split())
         f.write(f"Prj\t{prj}\n")
         f.write(f"Author\tOrienta\n")
         f.write(f"JobMode\tGrid\n")
@@ -1093,6 +1097,8 @@ def export_ang_ctf(
     source_h5_path: Optional[str] = None,
     sample_tilt: Optional[float] = None,
     pc: Optional[List[float]] = None,
+    detector_shape: Optional[Tuple[int, int]] = None,
+    scan_provenance: Optional[Dict] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Export indexing results as .ang and .ctf for MTEX compatibility.
 
@@ -1116,6 +1122,15 @@ def export_ang_ctf(
         Band Contrast / MAD / Bands and the header carries real KV /
         TiltAngle / Mag instead of the previous CI surrogates and
         hardcoded defaults.
+
+    pc : list of float, optional
+        Pattern centre in the Bruker convention (kikuchipy's). Written to the
+        .ang as a labelled comment; written to the x/y/z-star fields only when
+        ``detector_shape`` is also given, because the TSL numbers differ from
+        the Bruker ones and need the detector's aspect ratio.
+    scan_provenance : dict, optional
+        ``scan_row_offset`` / ``scan_col_offset`` / ``scan_shape`` of the
+        indexed grid inside its original scan, stated in the headers.
 
     Returns
     -------
@@ -1262,6 +1277,19 @@ def export_ang_ctf(
                         "checkpoint captures point_group, or restore the "
                         "phase's CIF file at the recorded path."
                     )
+                # A phase built from a symmetry alone has orix's placeholder
+                # lattice (1 1 1 90 90 90). Take the real one from what the run
+                # recorded, or from the file the phase came from; refuse
+                # (LatticeUnknown is a ValueError) when there is none.
+                from diffpy.structure import Lattice, Structure
+                from backend.api.services import ang_export
+                recorded = None
+                if phase_grp is not None and "lattice_constants" in phase_grp.attrs:
+                    recorded = list(phase_grp.attrs["lattice_constants"])
+                lattice, _src = ang_export.resolve_phase_lattice(
+                    built, phase_file=phase_file or None, recorded=recorded)
+                if ang_export.lattice_from_structure(built) != lattice:
+                    built.structure = Structure(title=name, lattice=Lattice(*lattice))
                 phases.append(built)
         phase_list = PhaseList(phases)
 
@@ -1321,19 +1349,44 @@ def export_ang_ctf(
         # file exists and a batch re-run would fail. Pass overwrite=True.
         # Skip entirely when the caller didn't ask for it so we don't leave
         # unwanted files on disk just because ctf was requested.
+        from backend.api.services import ang_export
+
+        # What every header states about this result: where the grid sits in
+        # its scan, the source scan's own acquisition geometry, the Euler frame
+        # and whether the EDS decided any phase (a batch never uses it: each
+        # pixel gets the phase with the highest confidence index).
+        geometry = ang_export.read_source_geometry(source_h5_path)
+        vendor = _read_vendor_from_h5(source_h5_path) if source_h5_path else ""
+        provenance = ang_export.assignment_provenance(None)
+        pc_tsl = ang_export.pc_tsl_from_bruker(pc, detector_shape)
+
         ang_path = None
         if write_ang:
             ang_path = str(out_dir / f"result_{base_name}.ang")
             try:
                 from orix.io import save
                 save(ang_path, xmap, overwrite=True)
-                # Post-edit the ANG header to inject TILT and PC from
-                # the calibration store. orix's ANG writer does not take
-                # detector geometry as input — adding it as additional
-                # ``# KEY VALUE`` lines is the standard ANG convention
-                # and MTEX / EDAX OIM tolerate (and parse) extras.
+                # Post-edit the ANG header to inject TILT from the calibration
+                # store. orix's ANG writer does not take detector geometry as
+                # input -- adding it as additional ``# KEY VALUE`` lines is the
+                # standard ANG convention and MTEX / EDAX OIM tolerate (and
+                # parse) extras. The PC goes into x/y/z-star only in the TSL
+                # convention (see ang_export.pc_tsl_from_bruker).
                 _inject_ang_acquisition(
-                    ang_path, sample_tilt=sample_tilt, pc=pc, note=ang_iq_note
+                    ang_path, sample_tilt=sample_tilt, pc=None, note=ang_iq_note
+                )
+                ang_export.edit_ang_header(
+                    ang_path,
+                    replace=ang_export.header_replacements(
+                        geometry=geometry, pc_tsl=pc_tsl),
+                    comments=ang_export.header_comments(
+                        method=None, vendor=vendor, provenance=provenance,
+                        scan=scan_provenance, step_um=step_size,
+                        geometry=geometry, pc_bruker=pc,
+                        notes=([] if pc_tsl is not None or pc is None else [
+                            "x-star, y-star, z-star are zero: the TSL values "
+                            "need the detector shape, which was not given."]),
+                    ),
                 )
                 logger.info("Exported .ang: %s", ang_path)
             except Exception as e:
@@ -1351,6 +1404,10 @@ def export_ang_ctf(
                     ctf_path, xmap, phase_names, step_size,
                     source_h5_path=source_h5_path,
                     sample_tilt=sample_tilt,
+                    prj_note=ang_export.ctf_project_note(
+                        vendor=vendor, provenance=provenance,
+                        scan=scan_provenance, step_um=step_size,
+                        geometry=geometry),
                 )
                 logger.info("Exported .ctf: %s", ctf_path)
             except Exception as e:
@@ -1882,6 +1939,8 @@ def export_all(
                 # not the (often outdated) h5oina acquisition values.
                 sample_tilt=sample_tilt,
                 pc=pc,
+                detector_shape=detector_shape,
+                scan_provenance=scan_provenance,
             )
             results["ang"] = ang
             results["ctf"] = ctf
