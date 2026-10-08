@@ -30,29 +30,22 @@ def test_direction_cosines_shape_and_dtype(detector):
 
 @pytest.mark.gpu
 def test_direction_cosines_matches_kikuchipy_reference(detector):
-    """Element-wise check against kikuchipy._get_direction_cosines_for_fixed_pc."""
+    """Element-wise check against kikuchipy's own direction cosines for this detector."""
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
     from backend.dict_gpu._pcadi._projection.direction_cosines import (
         compute_direction_cosines,
     )
+    # The private per-PC function changed its signature between kikuchipy 0.11
+    # (pcx, pcy, pcz, nrows, ncols, tilt, ...) and 0.13 (gnomonic bounds and an
+    # orientation matrix), so call the wrapper that takes the detector: it has
+    # the same signature in both and picks the right function itself.
     from kikuchipy.signals.util._master_pattern import (
-        _get_direction_cosines_for_fixed_pc,
+        _get_direction_cosines_from_detector,
     )
 
     nrows, ncols = detector.shape
-    pcx = float(detector.pcx[0])
-    pcy = float(detector.pcy[0])
-    pcz = float(detector.pcz[0])
-    tilt = float(detector.tilt)
-    azimuthal = float(detector.azimuthal)
-    sample_tilt = float(detector.sample_tilt)
-
-    ref = _get_direction_cosines_for_fixed_pc(
-        pcx=pcx, pcy=pcy, pcz=pcz, nrows=nrows, ncols=ncols,
-        tilt=tilt, azimuthal=azimuthal, sample_tilt=sample_tilt,
-        signal_mask=np.ones(nrows * ncols, dtype=bool),
-    )
+    ref = _get_direction_cosines_from_detector(detector)
     if ref.ndim == 2:
         ref = ref.reshape(nrows, ncols, 3)
     ref = ref.astype(np.float32)
