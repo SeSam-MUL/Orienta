@@ -32,13 +32,14 @@ def _plain_monoclinic_phase(space_group=12):
                  structure=Structure(lattice=LATTICE_B))
 
 
-def _twin_map(phase, n=8):
-    """Left half one orientation, right half the same crystal via the Y two-fold."""
+def _twin_map(phase, n=8, extra_deg=0.0):
+    """Left half one orientation, right half the same crystal via the Y two-fold,
+    optionally tilted by ``extra_deg`` on top (a real, small misorientation)."""
     rng = np.random.default_rng(11)
     q = rng.normal(size=4)
     q /= np.linalg.norm(q)
     base = Rotation(q)
-    twin = ROT_Y * base
+    twin = ROT_Y * Rotation.from_axes_angles([1, 2, 3], np.radians(extra_deg)) * base
     quats = np.empty((n * n, 4))
     for r in range(n):
         for c in range(n):
@@ -80,13 +81,17 @@ def test_grain_reconstruction_merges_the_two_fold_twin_into_one_grain():
     assert grains.n_grains == 1
 
 
-def test_kam_is_zero_across_the_two_fold():
+def test_kam_sees_the_real_misorientation_across_the_two_fold():
     from analysis.deformation_analysis import calculate_kam
     from analysis.ebsd_dataset import EBSDDataset
 
-    ds = EBSDDataset(_twin_map(_plain_monoclinic_phase()), step_size=1.0)
+    ds = EBSDDataset(_twin_map(_plain_monoclinic_phase(), extra_deg=1.0), step_size=1.0)
     kam = np.asarray(calculate_kam(ds, order=1, threshold_deg=7.0), dtype=float)
-    assert np.nanmax(kam) < 1e-2
+    # The interface carries the 1 degree that is really there. With the Z-axis
+    # group the pair reads 180 degrees, is excluded as a boundary, and the
+    # interface pixels show no strain at all.
+    assert np.nanmax(kam[:, 3:5]) > 0.1
+    assert np.nanmax(kam[:, :2]) < 1e-2
 
 
 def test_cubic_grain_reconstruction_is_unchanged():
