@@ -2,8 +2,9 @@
 # Upper bounds stop at the next minor release after the newest versions checked on real
 # data: kikuchipy 0.13.1, orix 0.15.0, pyebsdindex 0.3.10.1 (and the older 0.11.3 / 0.14.1 /
 # 0.3.9.1). pyebsdindex 0.3.10 is excluded, as kikuchipy 0.12.1 and later do, over a pattern
-# centre bug fixed in 0.3.10.1.
-kikuchipy>=0.11.3,<0.14
+# centre bug fixed in 0.3.10.1. kikuchipy 0.12.0 is excluded because 0.12.1 inverted the sense of
+# EBSDDetector.sample_to_detector (detector projection geometry; pyxem/kikuchipy#797).
+kikuchipy>=0.11.3,!=0.12.0,<0.14
 orix>=0.14,<0.16
 diffsims>=0.7
 diffpy.structure>=3.3  # space-group symmetry orbits for forward_sim U_g table
