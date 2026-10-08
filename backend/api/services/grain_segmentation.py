@@ -35,6 +35,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from crystal_symmetry import frame_symmetry
+
 # Theoretical maximum disorientation angle per point group (degrees).
 #
 # The maximum is a property of the PROPER ROTATION SUBGROUP, not of the point
@@ -238,6 +240,9 @@ def segment_grains(euler_rad: np.ndarray, point_group_name: str = "m-3m",
 
     R, C, _ = euler_rad.shape
     sym = getattr(_sym, _ORIX_SYMMETRY[point_group_name])
+    # "2/m" names a monoclinic group; orix's C2h has its two-fold along Z, the
+    # crystal frame's b-unique axis is Y (see crystal_symmetry).
+    sym = frame_symmetry(sym) if point_group_name == "2/m" else sym
     ori = Orientation.from_euler(euler_rad.reshape(-1, 3), symmetry=sym)
 
     is_indexed = indexed.ravel()

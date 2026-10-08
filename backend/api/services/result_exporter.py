@@ -981,6 +981,13 @@ def _write_ctf(
             except Exception: pass
             laue = _LAUE_FROM_PG.get(pg_name)
             if laue is None:
+                # Axis-named monoclinic groups ("121", "1m1", ...) and any
+                # other name that is not listed: the Laue group decides.
+                try:
+                    laue = _LAUE_FROM_PG.get(p.point_group.laue.name)
+                except Exception:
+                    laue = None
+            if laue is None:
                 raise ValueError(
                     f"Phase {name!r} has no usable point_group "
                     f"(orix returned {pg_name!r}); refusing to write a "

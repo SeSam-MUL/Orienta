@@ -222,6 +222,10 @@ def load_project(path: str) -> Tuple[Dict, List[GalleryEntry]]:
                 from indexing_controller import IndexingResult, IndexingMethod
 
                 xmap = orix_load(str(results_dir / xmap_file))
+                # orix rebuilds the phases from the file with its own point
+                # group; a monoclinic one has to get its real unique axis back.
+                from crystal_symmetry import frame_xmap
+                frame_xmap(xmap)
 
                 method_str = em.get("method_enum", "hough")
                 try:

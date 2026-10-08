@@ -311,3 +311,116 @@ def test_the_spherical_indexer_answers_in_the_b_unique_frame():
     assert orix_group <= right - 3, (
         f"Z-axis group matches {orix_group}/16, Y-axis group {right}/16: the "
         "indexer would no longer be answering in the b-unique frame")
+
+
+# ----- exports: the axis-named point groups must still have a TSL / CTF code --
+
+def _checkpoint_with_phase(tmp_path, point_group, space_group, lattice):
+    import h5py
+    from backend.api.services.checkpoint_writer import CheckpointWriter
+
+    source = tmp_path / "Scan.h5oina"
+    with h5py.File(source, "w") as f:
+        f.create_dataset("Manufacturer", data=np.array([b"Oxford Instruments"]))
+        h = f.create_group("1/EBSD/Header")
+        h.create_dataset("Beam Voltage", data=np.float32(20.0))
+        h.create_dataset("Tilt Angle", data=np.float32(np.deg2rad(70.0)))
+        h.create_dataset("Scanning Rotation Angle", data=np.float32(np.pi))
+        h.create_dataset("Working Distance", data=np.float32(16.5))
+        f.create_group("1/EBSD/Data")
+    cw = CheckpointWriter(str(source))
+    cw.init_metadata(grid_shape=(3, 4), batch_id="mono", method="spherical",
+                     step_size_um=0.4)
+    meta = {"phase_file": "gone.sht", "ci_mean": 0.7, "duration_sec": 1.0,
+            "point_group": point_group, "lattice_constants": lattice}
+    if space_group is not None:
+        meta["space_group"] = space_group
+    rng = np.random.default_rng(1)
+    cw.write_phase_result("Mono", np.full((3, 4), 0.7, np.float32),
+                          rng.uniform(0, 3, (3, 4, 3)).astype(np.float32), meta)
+    cw.compute_auto_assignment(confidence_threshold=0.0)
+    return source, cw
+
+
+@pytest.mark.parametrize("point_group, space_group", [
+    ("121", None), ("1m1", None), ("2/m", None), ("2/m", 12), ("121", 5)])
+def test_batch_ctf_and_ang_export_of_axis_named_monoclinic_phases(
+        tmp_path, point_group, space_group):
+    from backend.api.services.result_exporter import export_ang_ctf
+
+    source, cw = _checkpoint_with_phase(
+        tmp_path, point_group, space_group, [15.49, 8.08, 12.48, 90, 107.67, 90])
+    ang, ctf = export_ang_ctf(cw.checkpoint_path, str(tmp_path / "o"),
+                              source_h5_path=str(source))
+    assert Path(ang).is_file() and Path(ctf).is_file()
+    rows = Path(ctf).read_text(encoding="utf-8").splitlines()
+    phase_row = rows[next(i for i, r in enumerate(rows) if r.startswith("Phases")) + 1]
+    assert phase_row.split("\t")[1] == "2" or "\t2\t" in phase_row   # Oxford Laue class 2
+
+
+def test_grain_segmentation_named_2m_uses_the_b_axis_group():
+    from backend.api.services.grain_segmentation import segment_grains
+
+    xmap = _twin_map(_plain_monoclinic_phase())
+    eul = np.asarray(xmap.rotations.to_euler()).reshape(8, 8, 3)
+    labels = segment_grains(eul, "2/m", threshold_deg=5.0)
+    assert len(np.unique(labels)) == 1
+
+
+def test_project_manager_reader_frames_loaded_xmaps(tmp_path):
+    import project_manager
+    from indexing_controller import IndexingMethod, IndexingResult
+
+    xmap = _twin_map(_plain_monoclinic_phase())
+    entry = project_manager.GalleryEntry(
+        name="mono", method="Spherical", phase_data=None,
+        indexing_result=IndexingResult(
+            xmap=xmap, selection_mask=np.ones((8, 8), bool), original_shape=(8, 8),
+            method=IndexingMethod.SPHERICAL))
+    project_manager.save_project(str(tmp_path / "proj"), [entry], {})
+    _meta, entries = project_manager.load_project(str(tmp_path / "proj"))
+    loaded = entries[0].indexing_result.xmap
+    assert loaded.phases[1].point_group.proper_subgroup.name == "121"
+
+
+# ----- the guard for name -> symmetry tables -------------------------------
+
+_Z_AXIS_ROUTES = re.compile(r"\bC2h\b|get_point_group|spacegroup2pointgroup")
+
+#: Files that may name orix's Z-axis monoclinic group, and why that is safe.
+_Z_AXIS_ALLOWED = {
+    "backend/api/services/grain_segmentation.py":
+        "name table; segment_grains swaps '2/m' for frame_symmetry()",
+    "backend/dict_gpu/pipeline/grid.py":
+        "name table; sample_orientations resolves monoclinic names with "
+        "frame_symmetry() before it looks at the table",
+}
+
+
+def _code_lines_naming_the_z_group(text: str):
+    for line in text.splitlines():
+        code = line.split("#", 1)[0]
+        if _Z_AXIS_ROUTES.search(code):
+            yield line.strip()
+
+
+def test_the_scan_for_z_axis_routes_sees_what_it_is_meant_to_see():
+    assert list(_code_lines_naming_the_z_group(
+        "from orix.quaternion.symmetry import C2h\n".replace("\n", "\n")))
+    assert list(_code_lines_naming_the_z_group("pg = get_point_group(12)"))
+    assert not list(_code_lines_naming_the_z_group("x = 1  # C2h is not code here"))
+
+
+def test_nothing_else_routes_a_monoclinic_name_to_orixs_z_axis_group():
+    offenders = {}
+    for path, rel in _source_files():
+        if rel == "crystal_symmetry.py" or rel in _Z_AXIS_ALLOWED:
+            continue
+        hits = list(_code_lines_naming_the_z_group(
+            path.read_text(encoding="utf-8", errors="replace")))
+        if hits:
+            offenders[rel] = hits
+    assert not offenders, (
+        "These modules name orix's C2h / get_point_group, whose monoclinic groups "
+        "have the two-fold axis along Z. Ask crystal_symmetry.frame_symmetry "
+        "(or add the file to _Z_AXIS_ALLOWED with the reason): %s" % offenders)

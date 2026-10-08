@@ -35,6 +35,7 @@ gets:
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
 from typing import Optional
 
 import numpy as np
@@ -79,8 +80,34 @@ _GENERATORS = {
 _TAG = "_orienta_unique_axis"
 
 
+class _MonoclinicSymmetry(Symmetry):
+    """A monoclinic group that knows its unique axis.
+
+    Two things orix gets wrong or loses for such a group. ``laue`` is rebuilt as
+    a plain ``Symmetry`` without the axis. ``fundamental_sector`` switches on
+    the name "2/m" and returns the normals {Z, Y}, which is a fundamental domain
+    for the Z and Y axes but not for X (of the images of a direction, half have
+    none inside it and half have two); the X-axis group needs {Z, X}.
+    """
+
+    @property
+    def laue(self):
+        return _TABLE[getattr(self, _TAG)]["2/m"]
+
+    @property
+    def fundamental_sector(self):
+        if getattr(self, _TAG, None) == "a" and self.name == "2/m":
+            from orix.vector import FundamentalSector, Vector3d
+
+            fs = FundamentalSector(
+                Vector3d([[0.0, 0.0, 1.0], [1.0, 0.0, 0.0]])).flatten().unique()
+            fs._center = None
+            return fs
+        return super().fundamental_sector
+
+
 def _tagged(sym: Symmetry, name: str, axis: str) -> Symmetry:
-    out = Symmetry(sym)
+    out = _MonoclinicSymmetry(sym)
     out.improper = np.asarray(sym.improper, dtype=bool).copy()
     out.name = name
     setattr(out, _TAG, axis)
@@ -139,6 +166,7 @@ def unique_axis(point_group) -> Optional[str]:
     return _EXPLICIT_AXIS.get(name, DEFAULT_UNIQUE_AXIS)
 
 
+@lru_cache(maxsize=None)
 def _space_group_axis(space_group_number: int) -> Optional[str]:
     """Unique axis of a monoclinic space group, from its own symmetry operations.
 

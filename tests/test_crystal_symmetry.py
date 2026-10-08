@@ -197,3 +197,46 @@ def test_fundamental_zone_of_the_b_group_is_the_b_unique_region():
     sym = frame_symmetry(space_group=12)
     assert sym.euler_fundamental_region == (360, 90, 360)
     assert C2h.euler_fundamental_region == (360, 180, 180)
+
+
+@pytest.mark.parametrize("axis", ["a", "b", "c"])
+def test_ipf_sector_holds_exactly_one_image_of_every_direction(axis):
+    """The Laue group's fundamental sector must be a fundamental domain: of the
+    images of a direction under the group, exactly one lies inside it."""
+    from orix.vector import Vector3d
+
+    laue = cs._TABLE[axis]["2/m"].laue
+    sector = laue.fundamental_sector
+    rng = np.random.default_rng(4)
+    v = Vector3d(rng.normal(size=(400, 3))).unit
+    images = laue.outer(v)                       # (group size, 400)
+    inside = np.array([np.asarray(sector >= images[i]).reshape(-1)
+                       for i in range(images.shape[0])])
+    count = inside.sum(axis=0)
+    assert set(np.unique(count)) == {1}, np.bincount(count)
+
+
+@pytest.mark.parametrize("axis", ["a", "b", "c"])
+@pytest.mark.parametrize("cls", ["2", "m", "2/m"])
+def test_the_laue_group_keeps_the_unique_axis(axis, cls):
+    sym = cs._TABLE[axis][cls]
+    assert unique_axis(sym) == axis
+    assert unique_axis(sym.laue) == axis
+    assert sym.laue.name == "2/m"
+
+
+def test_space_group_axis_is_cached():
+    cs._space_group_axis.cache_clear()
+    cs._space_group_axis(12)
+    cs._space_group_axis(12)
+    assert cs._space_group_axis.cache_info().hits >= 1
+
+
+@pytest.mark.parametrize("axis", ["a", "b", "c"])
+def test_ipf_colours_agree_across_every_equivalent_for_every_axis(axis):
+    sym = cs._TABLE[axis]["2/m"]
+    o = _random_orientations(sym, n=30)
+    for d in (Vector3d.xvector(), Vector3d.yvector(), Vector3d.zvector()):
+        key = IPFColorKeyTSL(sym, direction=d)
+        for eq in _equivalents(o, sym):
+            assert np.abs(key.orientation2color(o) - key.orientation2color(eq)).max() < 1e-6

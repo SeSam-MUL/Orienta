@@ -158,6 +158,8 @@ def dictionary_library_paths(
 _SYMMETRY_ORDER = {
     "m-3m": 48, "m-3": 24, "-3m": 12, "6/mmm": 24, "6/m": 12,
     "4/mmm": 16, "4/m": 8, "mmm": 8, "2/m": 4, "-1": 2, "1": 1,
+    # monoclinic point groups that name their unique axis (Laue order 4)
+    "121": 4, "1m1": 4, "112": 4, "11m": 4, "211": 4, "m11": 4,
 }
 
 
