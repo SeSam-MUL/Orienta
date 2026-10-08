@@ -102,18 +102,13 @@ def phase_key(name_or_path):
 def phase_from_cif(path):
     """The orix ``Phase`` of a CIF, built the way Hough builds its phases.
 
-    Uses ``ebsd_utils.hough_phase_from_cif`` (origin-choice aware) when this
-    tree has it, and the plain ``Phase.from_cif(sanitize_cif(path))`` otherwise,
-    so the list shown here is the list the indexer will see in either tree.
-    The name is the file stem, as everywhere else.
+    That is ``ebsd_utils.hough_phase_from_cif``: the CIF's origin choice
+    honoured and the frame-aware point group of ``crystal_symmetry``. There is
+    no second way to build it here -- a fallback to a plain
+    ``Phase.from_cif(sanitize_cif(path))`` would show a reflector list the
+    indexer will not see. The name is the file stem, as everywhere else.
     """
-    eu = _eu()
-    builder = getattr(eu, "hough_phase_from_cif", None)
-    if builder is not None:
-        phase = builder(str(path))
-    else:
-        from crystal_symmetry import FramePhase as Phase
-        phase = Phase.from_cif(eu.sanitize_cif(str(path)))
+    phase = _eu().hough_phase_from_cif(str(path))
     stem = Path(str(path)).stem
     if phase.name != stem:
         phase.name = stem

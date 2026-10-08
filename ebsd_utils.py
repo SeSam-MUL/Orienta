@@ -1107,6 +1107,10 @@ def hough_phase_from_cif(path):
     other 206 groups, and for a CIF already in choice 1, the result IS
     ``Phase.from_cif(sanitize_cif(path))``.
 
+    The phase is a ``crystal_symmetry.FramePhase``: the same orix ``Phase``,
+    except that a monoclinic phase's point group has its two-fold axis along
+    the cell's unique axis (``Y`` for b-unique) instead of orix's ``Z``.
+
     When diffpy lands on a non-standard setting of one of the 24 groups (a
     number above 230) nothing is shifted. If the CIF's own operators are the
     ones diffpy expanded with, the result is consistent; otherwise a warning
@@ -1119,7 +1123,12 @@ def hough_phase_from_cif(path):
     The first call for a two-origin file takes 2-3 s (cached per path, mtime
     and size afterwards), so async routes must run it off the event loop.
     """
-    from orix.crystal_map import Phase
+    # FramePhase IS an orix Phase (it builds `cls` in from_cif); it only decides the
+    # point group differently, so a b-unique monoclinic phase keeps its two-fold
+    # axis along Y (see crystal_symmetry). Every Hough phase comes from here, so
+    # this is the one place that gives it both the origin-correct atoms and that
+    # symmetry.
+    from crystal_symmetry import FramePhase as Phase
 
     from backend.forward_sim.crystal.origin_choice import has_two_origin_choices
 
