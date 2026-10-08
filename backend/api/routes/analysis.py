@@ -220,6 +220,7 @@ def _load_kikuchipy_rich_h5(path: str):
         phase_names = []
         phase_sgs: list = []      # int or None
         phase_pgs: list = []      # str or None
+        phase_lattices: list = []  # [a, b, c, alpha, beta, gamma] angstrom/deg or None
         if phases_grp is not None:
             # Keys are "1", "2", ... — iterate in numeric order
             for key in sorted(phases_grp.keys(), key=lambda k: int(k) if k.isdigit() else 0):
@@ -233,6 +234,11 @@ def _load_kikuchipy_rich_h5(path: str):
                     pg = pg.decode("utf-8", errors="replace")
                 phase_sgs.append(int(sg) if sg is not None else None)
                 phase_pgs.append(str(pg) if pg else None)
+                # format >= 1.4: the lattice the exporter recorded (angstrom, deg)
+                lat = phases_grp[key].attrs.get("lattice_constants", None)
+                phase_lattices.append(
+                    [float(v) for v in np.asarray(lat).ravel()]
+                    if lat is not None and np.asarray(lat).size == 6 else None)
         if not phase_names:
             # Fall back: derive from max phase_id
             n = int(phase_id.max()) if phase_id.size else 0
@@ -314,6 +320,11 @@ def _load_kikuchipy_rich_h5(path: str):
     # already uses on IndexingResult.metadata['per_phase_data'].
     try:
         xmap._per_phase_data = per_phase_data or None
+        # Re-import restores what the file recorded about its own grid and
+        # phases, so a re-exported .ang needs nothing from a loaded source.
+        xmap._step_size_um = step_size_um if step_size_um > 0 else None
+        xmap._recorded_lattices = {
+            i: lat for i, lat in enumerate(phase_lattices) if lat is not None}
     except Exception:
         pass
     return xmap

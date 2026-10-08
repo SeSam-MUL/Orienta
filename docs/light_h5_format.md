@@ -102,7 +102,7 @@ about the same scientific value for ~0.1 % of the disk footprint.
 │  │  @specimen_orientation_euler_deg, @detector_orientation_euler_deg,
 │  │  @detector_tilt_deg, @working_distance_mm, @beam_voltage_kv   (same facts in
 │  │                                          degrees / mm / kV; each only if known)
-│  └─ @source                str    "h5oina /1/EBSD/Header"
+│  └─ @source                str    "source file header /<scan>/EBSD/Header"
 │
 ├─ Detector/                                 (geometry)
 │  ├─ pc                     float64 (3,)     pattern center [PCx, PCy, PCz], Bruker convention (the one kikuchipy uses)
@@ -208,9 +208,9 @@ Three options:
    % Build the EBSD object from (X(:), Y(:), euler, pid) — no source h5oina needed.
    ```
    Orientation frame (format ≥ 1.3): `euler_angles` is written in the **source
-   vendor's stored frame** — the same convention MTEX's default
-   `loadEBSD_h5oina` uses — so a raw read lines up with the Aztec solution with
-   **no manual rotation**. For Oxford/Bruker data that means our native
+   vendor's stored frame**: the Euler angles as the source system's own
+   solution (e.g. Aztec) holds them, with none of the header corrections
+   applied (see below). For Oxford/Bruker data that means our native
    EMsoft/kikuchipy orientations have been right-multiplied by Rz(+90°) about ND
    (the documented Oxford↔EMsoft in-plane difference; verified on SampleB,
    36°→5° vs Aztec). `/Indexing.attrs['source_vendor']` records which vendor
@@ -219,11 +219,13 @@ Three options:
    the usual specimen-surface tilt step in MTEX — that is unrelated to this
    90° fix.
 
-   The `.ang` and `.ctf` of the same result are **not** in this frame: they hold
-   the native (EDAX TSL / orix / kikuchipy) sample frame, which is what orix
-   reads without conversion. For an Oxford source,
-   `phi1(.h5) = phi1(.ang) − 90°` (mod 360); `Phi` and `phi2` are identical. Each
-   file says so in its header.
+   The `.ctf` of the same result holds the same Euler angles as the `.h5`
+   (a Channel Text File is an Oxford format). The `.ang` is **not** in this
+   frame: it holds the native (EDAX TSL / orix / kikuchipy) sample frame, which
+   is what orix, kikuchipy and PyEBSDIndex read without conversion. For an
+   Oxford source, `phi1(.h5) = phi1(.ang) − 90°` (mod 360); `Phi` and `phi2`
+   are identical. Each file says so in its header; the `.ang` header also gives
+   the `EulerCorrection` that reproduces MTEX's own h5oina import of the scan.
 
    **Source-scan geometry is not applied.** From format 1.4 the file carries the
    source header's `Scanning Rotation Angle`, `Specimen Orientation Euler` and
@@ -265,7 +267,7 @@ Three options:
 | 1.1 | 2026-05-04 | added `step_size_um` attr, `band_contrast` / `pc_x` / `pc_y` / `dd` / `bands` quality fields, fail-loud on missing step |
 | 1.2 | 2026-06-05 | added per-pixel `/Indexing/X` + `/Indexing/Y` µm datasets; interactive Save as… → Light .h5 now writes `step_size_um` (was batch-helper only) and fails loud when step can't be resolved |
 | 1.3 | 2026-06-05 | `euler_angles` written in the source vendor's stored frame (Aztec/MTEX default) instead of native EMsoft/kikuchipy; `/Indexing.attrs` gains `source_vendor` + `orientation_reference_frame`; reader inverts on re-import. Fixes the 90°-about-ND offset vs Aztec (Oxford `* Rz(+90°)`). |
-| 1.4 | 2026-10-08 | additions only; readers of 1.3 keep working. `/Acquisition` (source header values under their h5oina names, none applied to `euler_angles`); `/Indexing/Phases/<k>` gains `space_group` (also written when the result carries none), `space_group_symbol`, `lattice_constants` (angstrom / degrees), `lattice_length_unit`, `lattice_source`, `crystal_reference_frame`; `/Indexing` gains `eds_chemistry_prior`, `phase_assignment`, `crystal_reference_frame`. The `scan_*` attributes (already written since 1.3) are now documented. The `.ang`/`.ctf` exporters were corrected in the same change (micrometre coordinates, lattice constants, TSL symmetry codes, header statements). |
+| 1.4 | 2026-10-08 | additions only; readers of 1.3 keep working. `/Acquisition` (source header values under their h5oina names, none applied to `euler_angles`); `/Indexing/Phases/<k>` gains `space_group` (also written when the result carries none), `space_group_symbol`, `lattice_constants` (angstrom / degrees), `lattice_length_unit`, `lattice_source`, `crystal_reference_frame`; `/Indexing` gains `eds_chemistry_prior`, `phase_assignment`, `crystal_reference_frame`. The `scan_*` attributes (already written since 1.3) are now documented. The `.ang`/`.ctf` exporters were corrected in the same change (micrometre coordinates, lattice constants, TSL symmetry codes, header statements; the `.ctf` now holds the `.h5` Euler angles). |
 
 ## Where this format is defined in code
 

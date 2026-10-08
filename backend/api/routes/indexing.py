@@ -9221,6 +9221,17 @@ async def import_h5_result(req: ImportH5Request):
     if per_phase:
         result.metadata["per_phase_data"] = per_phase
 
+    # The step size and phase lattices the file recorded: _resolve_step_size_um
+    # reads the former first (the xmap's own dx is not used: a pixel-unit map
+    # also reports scan_unit "um"), and the .ang export takes the lattices of a
+    # phase that carries no structure from the latter.
+    _file_step = getattr(xmap, "_step_size_um", None)
+    if _file_step:
+        result.metadata["step_size_um"] = float(_file_step)
+    _file_lat = getattr(xmap, "_recorded_lattices", None)
+    if _file_lat:
+        result.metadata["recorded_lattices"] = dict(_file_lat)
+
     result_id = _store_result(result, method.value)
 
     # If the file has /1/EBSD, also bring its patterns into the EBSD viewer.
@@ -10034,8 +10045,7 @@ def _stated_in_every_export(f, idx, active, source_path, vendor: str) -> None:
     write_assignment_provenance(idx, ctx["provenance"])
     write_crystal_frame(idx)
     write_acquisition_group(
-        f, ctx["geometry"], detector_tilt_deg=ctx["detector_tilt_deg"],
-        source="h5oina /1/EBSD/Header" if ctx["geometry"] else "")
+        f, ctx["geometry"], detector_tilt_deg=ctx["detector_tilt_deg"])
 
 
 @router.post("/export")
@@ -10169,6 +10179,12 @@ async def export_indexing_result(req: ExportRequest):
                     _step_um, active.confidence_scores,
                     phase_files={int(k): v for k, v in
                                  (_md.get("sht_paths_by_phase") or {}).items()},
+                    recorded_lattices={int(k): v for k, v in
+                                       (_md.get("recorded_lattices") or {}).items()},
+                    # kikuchipy keeps a master pattern's structure in nm,
+                    # a CIF read by diffpy/orix is in angstrom
+                    structure_unit=("nm" if active.method.value == "dictionary"
+                                    else "angstrom"),
                 )
             except ang_export.ExportRefused as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
@@ -10287,10 +10303,12 @@ async def export_indexing_result(req: ExportRequest):
                     active, str(source_path) if source_path else None
                 )
                 idx.attrs["source_vendor"] = _export_vendor or "unknown"
+                from backend.api.services.ang_export import (
+                    FRAME_LABEL_NATIVE, FRAME_LABEL_VENDOR)
                 idx.attrs["orientation_reference_frame"] = (
-                    "vendor_stored (Aztec/MTEX default import)"
+                    FRAME_LABEL_VENDOR
                     if float(_export_frame_offset(_export_vendor).angle.max()) > 1e-6
-                    else "native (EMsoft/kikuchipy common)"
+                    else FRAME_LABEL_NATIVE
                 )
                 _stated_in_every_export(f, idx, active, source_path, _export_vendor)
 
@@ -10441,7 +10459,10 @@ async def export_indexing_result(req: ExportRequest):
                         # space group, lattice, crystal frame (format 1.4)
                         from backend.api.services import ang_export as _ang
                         for _k, _v in _ang.phase_table_attrs(
-                                phase_obj, sht_path=sht_p).items():
+                                phase_obj, sht_path=sht_p,
+                                recorded_lattice=((getattr(active, "metadata", None) or {}).get("recorded_lattices") or {}).get(actual_id),
+                                structure_unit=("nm" if active.method.value == "dictionary"
+                                                else "angstrom")).items():
                             pg.attrs[_k] = _v
                 except Exception as e:
                     logger.warning("Export: failed to write /Indexing/Phases: %s", e)
@@ -10616,9 +10637,10 @@ async def export_indexing_result(req: ExportRequest):
                     _export_frame_offset(_export_vendor).angle.max() > 1e-6
                 )
                 idx.attrs["source_vendor"] = _export_vendor or "unknown"
+                from backend.api.services.ang_export import (
+                    FRAME_LABEL_NATIVE, FRAME_LABEL_VENDOR)
                 idx.attrs["orientation_reference_frame"] = (
-                    "vendor_stored (Aztec/MTEX default import)"
-                    if _frame_converted else "native (EMsoft/kikuchipy common)"
+                    FRAME_LABEL_VENDOR if _frame_converted else FRAME_LABEL_NATIVE
                 )
                 _stated_in_every_export(f, idx, active, src_path_str, _export_vendor)
 
@@ -10772,7 +10794,10 @@ async def export_indexing_result(req: ExportRequest):
                         # space group, lattice, crystal frame (format 1.4)
                         from backend.api.services import ang_export as _ang
                         for _k, _v in _ang.phase_table_attrs(
-                                phase_obj, sht_path=sht_p).items():
+                                phase_obj, sht_path=sht_p,
+                                recorded_lattice=((getattr(active, "metadata", None) or {}).get("recorded_lattices") or {}).get(actual_id),
+                                structure_unit=("nm" if active.method.value == "dictionary"
+                                                else "angstrom")).items():
                             pg.attrs[_k] = _v
                 except Exception as e:
                     logger.warning(

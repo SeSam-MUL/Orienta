@@ -477,7 +477,11 @@ def run_single_indexing_job(
                 try:
                     from backend.api.services import ang_export
                     metadata["lattice_constants"] = list(
-                        ang_export.resolve_phase_lattice(p, phase_file=phase_path)[0])
+                        ang_export.resolve_phase_lattice(
+                            p, phase_file=phase_path,
+                            # a kikuchipy master's structure is in nm
+                            structure_unit=("nm" if str(method).lower() == "dictionary"
+                                            else "angstrom"))[0])
                 except Exception as e:
                     logger.debug("no lattice for %s: %s", phase_name, e)
                 break

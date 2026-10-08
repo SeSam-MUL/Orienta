@@ -110,15 +110,16 @@ def test_headers_state_frame_origin_geometry_and_assignment(tmp_path):
     a = Path(ang).read_text(encoding="utf-8")
     c = Path(ctf).read_text(encoding="utf-8")
     prj = next(ln for ln in c.splitlines() if ln.startswith("Prj\t"))
+    assert "Subtract 90 degrees" in a
+    assert "Oxford/Aztec frame" in prj and "Euler1(.ang) = Euler1(this file) + 90" in prj
     for text in (a, prj):
         assert "EDAX TSL" in text
-        assert "subtract 90 degrees" in text.lower() or "Subtract 90 degrees" in text
         assert "row 43, column 194" in text and "226 x 301" in text
         assert "x 77.600 um" in text and "y 17.200 um" in text    # 194*0.4, 43*0.4
         assert "scanning_rotation_angle_deg=180.000" in text
         assert "sample_tilt_deg=70.000" in text
         assert "EDS chemistry prior: no" in text
-    assert "phi1(.h5)" in a and "Euler1(.h5)" in prj
+    assert "phi1(.h5)" in a
     assert "\t" not in prj.split("\t", 1)[1], "the Prj text must stay one tab-free field"
     wd = [ln for ln in a.splitlines() if ln.startswith("# WorkingDistance")]
     assert float(wd[0].split()[-1]) == pytest.approx(16.5)
@@ -146,12 +147,18 @@ def test_export_all_hands_scan_and_detector_shape_on(tmp_path):
         pytest.approx(1 - 0.4, abs=1e-6)
 
 
-def test_unit_rule_for_a_nanometre_lattice():
-    """kikuchipy keeps master-pattern structures in nm; the file is in angstrom."""
-    assert ang_export.to_angstrom((0.4049, 0.4049, 0.4049, 90, 90, 90))[0] == pytest.approx(4.049)
-    assert ang_export.to_angstrom((1.5488, 0.8087, 1.2477, 90, 107.7, 90))[0] == pytest.approx(15.488)
-    assert ang_export.to_angstrom((4.049, 4.049, 4.049, 90, 90, 90))[0] == pytest.approx(4.049)
-    assert ang_export.to_angstrom((15.488, 8.087, 12.477, 90, 107.7, 90))[1] == pytest.approx(8.087)
+def test_the_declared_unit_decides_not_the_size():
+    """kikuchipy keeps master-pattern structures in nm, diffpy/orix CIFs are in
+    angstrom. The unit comes from where the structure came from; a cell of
+    2.5 nm is 25 angstrom, not 2.5."""
+    nm = ang_export.to_angstrom
+    assert nm((0.4049, 0.4049, 0.4049, 90, 90, 90), "nm")[0] == pytest.approx(4.049)
+    assert nm((2.5, 3.0, 2.2, 90, 90, 90), "nm")[:3] == pytest.approx((25.0, 30.0, 22.0))
+    assert nm((4.049, 4.049, 4.049, 90, 90, 90), "angstrom")[0] == pytest.approx(4.049)
+    assert nm((15.488, 8.087, 12.477, 90, 107.7, 90), "angstrom")[1] == pytest.approx(8.087)
+    # a size no crystal has, for the unit it was declared in: refuse
+    with pytest.raises(ang_export.LatticeUnknown, match="unit"):
+        nm((0.4049, 0.4049, 0.4049, 90, 90, 90), "angstrom")
 
 
 def test_pc_conversion_is_the_kikuchipy_tsl_convention():
@@ -185,3 +192,43 @@ def test_batch_h5_exports_carry_the_same_statements(tmp_path, fmt):
         acq = f["Acquisition"].attrs
         assert float(acq["Scanning Rotation Angle"]) == pytest.approx(np.pi, abs=1e-5)
         assert int(acq["applied_to_euler_angles"]) == 0
+
+
+def _ctf_rows(path):
+    rows = [ln.split("\t") for ln in Path(path).read_text(encoding="utf-8").splitlines()
+            if ln and ln[0].isdigit() and ln.count("\t") >= 10]
+    return np.array(rows, dtype=float)
+
+
+@pytest.mark.parametrize("fmt_vendor, shifted", [(b"Oxford Instruments", True),
+                                                 (b"EDAX", False)])
+def test_ctf_holds_the_same_euler_angles_as_the_light_h5(tmp_path, fmt_vendor, shifted):
+    """A .ctf is an Oxford format: its angles are the ones the .h5 holds (the
+    source system's frame), not the TSL-frame ones of the .ang."""
+    source, cw = _make(tmp_path, lattice=[4.0495] * 3 + [90.0] * 3)
+    with h5py.File(source, "r+") as f:
+        del f["Manufacturer"]
+        f.create_dataset("Manufacturer", data=np.array([fmt_vendor]))
+    res = export_all(str(source), cw.checkpoint_path, str(tmp_path / "o"),
+                     formats=["h5_light", "ang", "ctf"])
+    with h5py.File(res["h5_light"], "r") as f:
+        e_h5 = np.degrees(np.asarray(f["Indexing/Assignment/euler_angles"])).reshape(-1, 3)
+    e_ctf = _ctf_rows(res["ctf"])[:, 5:8]
+    e_ang = np.degrees(load_ang_rows(res["ang"])[:, :3])
+    d = (e_ctf - e_h5 + 180.0) % 360.0 - 180.0
+    np.testing.assert_allclose(d, 0.0, atol=2e-2)
+    # and relative to the TSL-frame .ang: phi1 - 90 for Oxford, identical for EDAX
+    d2 = (e_ctf - e_ang + 180.0) % 360.0 - 180.0
+    np.testing.assert_allclose(d2[:, 0], -90.0 if shifted else 0.0, atol=2e-2)
+    np.testing.assert_allclose(d2[:, 1:], 0.0, atol=2e-2)
+    prj = next(ln for ln in Path(res["ctf"]).read_text(encoding="utf-8").splitlines()
+               if ln.startswith("Prj\t"))
+    if shifted:
+        assert "Oxford/Aztec frame" in prj and "same Euler angles as the .h5" in prj
+    assert "TSL" in prj
+
+
+def load_ang_rows(path):
+    rows = [ln.split() for ln in Path(path).read_text(encoding="utf-8").splitlines()
+            if ln.strip() and not ln.startswith("#")]
+    return np.array(rows, dtype=float)

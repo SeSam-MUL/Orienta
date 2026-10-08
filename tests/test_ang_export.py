@@ -481,7 +481,7 @@ def test_real_sht_lattice_agrees_with_the_cif():
 
 @pytest.mark.parametrize("point_group, code", [
     ("1", "1"), ("-1", "1"),
-    ("2/m", "2"), ("112", "2"),
+    ("2/m", "20"), ("112", "20"),
     ("222", "22"), ("mmm", "22"),
     ("4", "4"), ("4/m", "4"), ("422", "42"), ("4/mmm", "42"),
     ("3", "3"), ("-3", "3"), ("32", "32"), ("-3m", "32"),
@@ -509,7 +509,7 @@ def test_the_ang_writes_tsl_codes_not_group_names(monkeypatch, tmp_path):
     assert _export(TestClient(app), "ang", out).status_code == 200
     blocks = _phase_blocks(_header(out))
     codes = {b["MaterialName"][0]: b["Symmetry"][0] for b in blocks.values()}
-    assert codes == {"Al": "43", "Fe4Al13": "2"}
+    assert codes == {"Al": "43", "Fe4Al13": "20"}
     # and orix, which reads these codes back, recovers the Laue group
     xmap = orix_load(str(out))
     laue = {p.name: p.point_group.laue.name for _, p in xmap.phases if p.name}
@@ -647,3 +647,116 @@ def test_the_documentation_describes_the_scan_provenance_attributes():
     for needle in ("0-based", "first array axis", "second axis", "relative to this",
                    "x_original", "not micrometres"):
         assert needle in section, needle
+
+
+# ---------------------------------------------------------------------------
+# monoclinic code, units, labels, MTEX line, re-imported results
+# ---------------------------------------------------------------------------
+
+def test_monoclinic_code_follows_the_unique_axis():
+    from orix.quaternion.symmetry import _groups
+    from backend.api.services import ang_export
+    c2h = next(g for g in _groups if g.name == "2/m")
+    b_unique = (15.488, 8.087, 12.477, 90.0, 107.669, 90.0)
+    c_unique = (8.0, 9.0, 10.0, 90.0, 90.0, 100.0)
+    assert ang_export.tsl_symmetry_code(c2h) == "20"            # TSL's code
+    assert ang_export.tsl_symmetry_code(c2h, b_unique) == "20"
+    assert ang_export.tsl_symmetry_code(c2h, c_unique) == "2"
+
+
+def test_the_declared_unit_reaches_the_ang(monkeypatch, tmp_path):
+    """A dictionary result carries its phase structure in nm (kikuchipy), a
+    Hough result in angstrom; a 3 angstrom edge must not be mistaken for nm."""
+    from diffpy.structure import Lattice, Structure
+    for method, lattice, want in (
+            (IndexingMethod.DICTIONARY, (0.4049,) * 3 + (90.0,) * 3, 4.049),
+            (IndexingMethod.HOUGH, (4.049,) * 3 + (90.0,) * 3, 4.049),
+            (IndexingMethod.DICTIONARY, (2.5, 3.0, 2.2, 90.0, 90.0, 90.0), 25.0)):
+        result = _make_result(structured=True, sht_paths=False)
+        result.method = method
+        result.xmap.phases[1].structure = Structure(lattice=Lattice(*lattice))
+        result.xmap.phases[2].structure = Structure(lattice=Lattice(*lattice))
+        _activate(monkeypatch, result)
+        out = tmp_path / f"{method.value}_{want}.ang"
+        r = _export(TestClient(app), "ang", out)
+        assert r.status_code == 200, r.text
+        al = next(b for b in _phase_blocks(_header(out)).values()
+                  if b["MaterialName"][0] == "Al")
+        assert float(al["LatticeConstants"][0]) == pytest.approx(want, abs=1e-3)
+
+
+def test_acquisition_source_label_names_the_header_it_read(
+        monkeypatch, tmp_path, fake_h5oina):
+    _activate(monkeypatch, _make_result(vendor="edax"), source_path=fake_h5oina)
+    out = tmp_path / "r_light.h5"
+    assert _export(TestClient(app), "h5_light", out).status_code == 200
+    with h5py.File(out, "r") as f:
+        src = str(f["Acquisition"].attrs["source"])
+        frame = str(f["Indexing"].attrs["orientation_reference_frame"])
+    assert src == "source file header /1/EBSD/Header"
+    assert "Aztec/MTEX default import" not in frame
+
+
+def test_the_oxford_frame_label_is_factual(monkeypatch, tmp_path):
+    _activate(monkeypatch, _make_result(vendor="oxford"))
+    out = tmp_path / "r_light.h5"
+    assert _export(TestClient(app), "h5_light", out).status_code == 200
+    with h5py.File(out, "r") as f:
+        frame = str(f["Indexing"].attrs["orientation_reference_frame"])
+    assert frame.startswith("vendor_stored")
+    assert "Aztec/MTEX default import" not in frame
+    assert "/Acquisition" in frame
+
+
+def test_the_ang_tells_mtex_users_the_correction(monkeypatch, tmp_path,
+                                                 fake_h5oina):
+    _activate(monkeypatch, _make_result(vendor="oxford"), source_path=fake_h5oina)
+    out = tmp_path / "r.ang"
+    assert _export(TestClient(app), "ang", out).status_code == 200
+    text = " ".join(_kv(_header(out), "ORIENTA_MTEX"))
+    # scanning rotation 180 deg -> (180 - 90) deg
+    assert "'EulerCorrection', rotation.byAxisAngle(zvector,90*degree)" in text
+    assert "Scanning Rotation Angle of 180" in text
+    assert "orix" in text and "kikuchipy" in text and "PyEBSDIndex" in text
+    assert "not run in MATLAB" in text
+    assert "setting 2" in text
+
+
+def test_no_mtex_line_without_a_known_scanning_rotation(monkeypatch, tmp_path):
+    _activate(monkeypatch, _make_result(vendor="oxford"), source_path=None)
+    out = tmp_path / "r.ang"
+    assert _export(TestClient(app), "ang", out).status_code == 200
+    assert _kv(_header(out), "ORIENTA_MTEX") == []
+
+
+def test_a_reimported_result_exports_ang_again(monkeypatch, tmp_path, fake_h5oina):
+    """light 1.4 -> import-h5 -> .ang: step and lattices come from the file."""
+    _activate(monkeypatch, _make_result(vendor="oxford"), source_path=fake_h5oina)
+    client = TestClient(app)
+    light = tmp_path / "r_light.h5"
+    assert _export(client, "h5_light", light).status_code == 200
+    # what a file exported by a Hough run looks like: no .sht to fall back on
+    with h5py.File(light, "r+") as f:
+        for g in f["Indexing/Phases"].values():
+            for k in ("sht_path", "sht_file"):
+                if k in g.attrs:
+                    del g.attrs[k]
+        if "sht_paths_by_phase" in f["Indexing"].attrs:
+            del f["Indexing"].attrs["sht_paths_by_phase"]
+    r = client.post("/api/indexing/import-h5", json={"path": str(light)})
+    assert r.status_code == 200, r.text
+
+    out = tmp_path / "again.ang"
+    r = _export(client, "ang", out)
+    assert r.status_code == 200, r.text
+    hdr = _header(out)
+    assert float(_kv(hdr, "XSTEP")[0]) == pytest.approx(STEP_UM)
+    by_name = {b["MaterialName"][0]: b for b in _phase_blocks(hdr).values()}
+    assert [float(v) for v in by_name["Fe4Al13"]["LatticeConstants"]] == \
+        pytest.approx([15.488, 8.087, 12.477, 90, 107.669, 90], abs=2e-3)
+    # and the orientations survive the loop: ang of the import == ang of the original
+    d = _data(out)
+    got = np.degrees(Orientation(
+        Rotation.from_euler(d[:, :3]), Oh).angle_with(
+        Orientation(Rotation.from_euler(_euler_rad()), Oh)))
+    assert float(np.max(got)) < 0.05

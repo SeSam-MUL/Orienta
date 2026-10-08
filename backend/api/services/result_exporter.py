@@ -318,7 +318,10 @@ def write_acquisition_group(f, geometry: Optional[Dict], *,
         "beam_voltage_kv in kV. The values under their h5oina header names "
         "(Scanning Rotation Angle, Specimen Orientation Euler, Tilt Angle) are "
         "verbatim, in radians.")
-    if source:
+    header_path = g.pop("header_path", None)
+    if header_path:
+        grp.attrs["source"] = f"source file header {header_path}"
+    elif source:
         grp.attrs["source"] = source
     for key, value in g.items():
         grp.attrs[key] = np.asarray(value, dtype=float) if isinstance(value, (list, tuple)) else float(value)
@@ -355,7 +358,8 @@ def write_batch_phase_attrs(pg, record: Dict) -> None:
         SimpleNamespace(name=record.get("name", "")),
         phase_file=record.get("phase_file") or None,
         recorded_lattice=record.get("lattice_constants"),
-        recorded_space_group=record.get("space_group"))
+        recorded_space_group=record.get("space_group"),
+        structure_unit=record.get("structure_unit", "angstrom"))
     for key, value in attrs.items():
         pg.attrs[key] = value
 
@@ -381,8 +385,7 @@ def _stated_in_batch_export(f, idx, source_path) -> None:
     write_assignment_provenance(idx, ang_export.assignment_provenance(None))
     write_crystal_frame(idx)
     geometry = ang_export.read_source_geometry(str(source_path))
-    write_acquisition_group(
-        f, geometry, source="h5oina /1/EBSD/Header" if geometry else "")
+    write_acquisition_group(f, geometry)
 
 
 def _write_citations(group, steps: Optional[List[dict]]) -> None:
@@ -836,8 +839,15 @@ def _write_ctf(
     source_h5_path: Optional[str] = None,
     sample_tilt: Optional[float] = None,
     prj_note: Optional[str] = None,
+    vendor: str = "",
 ) -> None:
     """Write an MTEX-compatible Channel Text File (.ctf) from a CrystalMap.
+
+    The Euler angles are written in the frame of the source system
+    (``vendor``), like the ``.h5`` exports: a .ctf is an Oxford format, MTEX
+    applies one fixed correction to every .ctf, and Aztec's own .ctf holds the
+    same angles as its h5oina. For an EDAX or unknown source that is the native
+    (TSL) frame.
 
     orix doesn't write .ctf directly (``orix.io.save`` only knows .ang, .h5).
     This is a minimal but complete CTF writer: HKL-style header + phase table
@@ -874,7 +884,8 @@ def _write_ctf(
     raw_pid = np.asarray(xmap.phase_id).reshape(-1).astype(int)
     phase_id = np.where(raw_pid < 0, 0, raw_pid + 1)
     # Euler angles — Bunge convention, CTF wants degrees
-    eulers = xmap.rotations.to_euler(degrees=True)
+    from backend.api.services.orientation_frame import to_vendor_export_frame
+    eulers = to_vendor_export_frame(xmap.rotations, vendor).to_euler(degrees=True)
     eulers = np.asarray(eulers).reshape(-1, 3)
 
     # Real BC/Bands from source h5oina if available; when the source has
@@ -1475,6 +1486,7 @@ def export_ang_ctf(
                     ctf_path, xmap, phase_names, step_size,
                     source_h5_path=source_h5_path,
                     sample_tilt=sample_tilt,
+                    vendor=vendor,
                     prj_note=ang_export.ctf_project_note(
                         vendor=vendor, provenance=provenance,
                         scan=scan_provenance, step_um=step_size,
@@ -1752,10 +1764,12 @@ def export_result_h5_light(
             export_frame_offset as _exp_off,
         )
         idx.attrs["source_vendor"] = export_vendor or "unknown"
+        from backend.api.services.ang_export import (
+            FRAME_LABEL_NATIVE, FRAME_LABEL_VENDOR)
         idx.attrs["orientation_reference_frame"] = (
-            "vendor_stored (Aztec/MTEX default import)"
+            FRAME_LABEL_VENDOR
             if float(_exp_off(export_vendor).angle.max()) > 1e-6
-            else "native (EMsoft/kikuchipy common)"
+            else FRAME_LABEL_NATIVE
         )
 
         # Per-pixel X/Y µm coordinates so MTEX (and any generic HDF5 reader)

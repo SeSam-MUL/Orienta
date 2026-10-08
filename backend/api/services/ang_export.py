@@ -73,24 +73,34 @@ def is_placeholder_lattice(lattice) -> bool:
         return False
 
 
-def to_angstrom(lattice) -> Tuple[float, ...]:
+def to_angstrom(lattice, unit: str = "angstrom") -> Tuple[float, ...]:
     """``(a, b, c, alpha, beta, gamma)`` with the edges in angstrom.
 
-    kikuchipy keeps the structure of a master pattern in NANOMETRES (Al is
-    ``0.4049``), orix and diffpy read a CIF in angstrom (``4.049``). A cell edge
-    below 2 angstrom does not occur in a crystal -- the smallest primitive edges
-    are about 2.3 -- so a lattice whose smallest edge is below 2 is in
-    nanometres and is scaled by ten. The rule is unit-blind on purpose: the
-    structure of a phase does not say which unit it was written in.
+    ``unit`` is the unit the SOURCE declares for the edges, never guessed from
+    their size: a CIF read by diffpy / orix is in ``"angstrom"`` (Al is
+    ``4.049``), a structure inside a kikuchipy master pattern or dictionary is
+    in ``"nm"`` (Al is ``0.4049``). A result whose edges are implausible for
+    the declared unit (no crystal has an edge below 1 angstrom) is refused
+    instead of rescaled -- that is a unit mix-up, not a lattice.
     """
     a, b, c, al, be, ga = (float(v) for v in lattice)
-    if min(a, b, c) < 2.0:
+    if unit == "nm":
         a, b, c = a * 10.0, b * 10.0, c * 10.0
+    elif unit != "angstrom":
+        raise ValueError(f"unknown length unit {unit!r}")
+    if min(a, b, c) < 1.0:
+        raise LatticeUnknown(
+            f"lattice edges {a:.3g} {b:.3g} {c:.3g} angstrom (declared unit "
+            f"{unit!r}) are not those of a crystal: the unit of this structure "
+            "is wrong or the structure is not a real one")
     return (a, b, c, al, be, ga)
 
 
-def lattice_from_structure(phase) -> Optional[Tuple[float, ...]]:
-    """The lattice a phase carries, in angstrom; ``None`` if it carries none."""
+def lattice_from_structure(phase, unit: str = "angstrom") -> Optional[Tuple[float, ...]]:
+    """The lattice a phase carries, in angstrom; ``None`` if it carries none.
+
+    ``unit`` is the unit of the structure's edges (see :func:`to_angstrom`).
+    """
     structure = getattr(phase, "structure", None)
     lat = getattr(structure, "lattice", None)
     if lat is None:
@@ -101,7 +111,7 @@ def lattice_from_structure(phase) -> Optional[Tuple[float, ...]]:
         return None
     if is_placeholder_lattice(raw):
         return None
-    return to_angstrom(raw)
+    return to_angstrom(raw, unit)
 
 
 def lattice_from_sht(path) -> Tuple[float, ...]:
@@ -147,7 +157,8 @@ def lattice_from_master_h5(path) -> Optional[Tuple[float, ...]]:
         return None
     if not found or is_placeholder_lattice(found[0]):
         return None
-    return to_angstrom(found[0])
+    # kikuchipy writes the structure of a master / dictionary in nanometres
+    return to_angstrom(found[0], "nm")
 
 
 def lattice_from_phase_file(path) -> Optional[Tuple[float, ...]]:
@@ -168,19 +179,21 @@ def lattice_from_phase_file(path) -> Optional[Tuple[float, ...]]:
     return None
 
 
-def resolve_phase_lattice(phase, *, phase_file=None, recorded=None):
+def resolve_phase_lattice(phase, *, phase_file=None, recorded=None,
+                          structure_unit: str = "angstrom"):
     """``(lattice_angstrom, source)`` for one phase, or raise ``LatticeUnknown``.
 
     Order: what the phase itself carries (a Hough map carries the CIF
-    structure), what the run recorded, then the file the phase came from.
+    structure, in ``structure_unit``), what the run recorded (always angstrom),
+    then the file the phase came from.
     """
-    got = lattice_from_structure(phase)
+    got = lattice_from_structure(phase, structure_unit)
     if got is not None:
         return got, "phase structure"
     if recorded is not None:
         rec = tuple(float(v) for v in recorded)
         if len(rec) == 6 and not is_placeholder_lattice(rec):
-            return to_angstrom(rec), "recorded with the run"
+            return to_angstrom(rec, "angstrom"), "recorded with the run"
     got = lattice_from_phase_file(phase_file)
     if got is not None:
         return got, Path(str(phase_file)).name
@@ -218,6 +231,7 @@ def read_source_geometry(source_path) -> Dict[str, object]:
                 hdr = f.get(f"{entry}/EBSD/Header")
                 if hdr is None or not hasattr(hdr, "keys"):
                     continue
+                out["header_path"] = f"/{entry}/EBSD/Header"
 
                 def get(key):
                     if key not in hdr:
@@ -267,6 +281,12 @@ def read_source_geometry(source_path) -> Dict[str, object]:
     return out
 
 
+def source_label(geometry: Optional[Dict[str, object]]) -> str:
+    """Where the geometry came from, without claiming a vendor format."""
+    path = (geometry or {}).get("header_path")
+    return f"source file header {path}" if path else ""
+
+
 def acquisition_line(geometry: Dict[str, object],
                      detector_tilt_deg: Optional[float] = None) -> Optional[str]:
     """One ``key=value`` line of acquisition facts, or ``None`` if there are none."""
@@ -296,12 +316,13 @@ def acquisition_line(geometry: Dict[str, object],
 #: TSL "Symmetry" code per Laue group: the digits of the Laue group's rotation
 #: group (432 -> 43, 622 -> 62, 222 -> 22, ...), the eleven codes every EDAX
 #: .ang format has (see MTEX's documentation of ``TSL2pointGroup``). Monoclinic
-#: is written as 2, the code orix's reader maps to its "2/m" (unique axis along
-#: z). EDAX also has a code 20 for the unique axis along y; orix has no such
-#: Laue group, so it is not written.
+#: is 20 (what TSL writes for 2/m; MTEX's laueGroups treats 2 as an older alias
+#: of it). orix reads 20 as its rotation group 121 (2-fold axis along y, the
+#: b-unique setting of e.g. Fe4Al13) and 2 as 2/m with the axis along z, so a
+#: phase whose unique axis is c (gamma != 90, alpha = beta = 90) is written 2.
 _LAUE_TO_TSL = {
     "-1": "1",
-    "2/m": "2", "112/m": "2",
+    "2/m": "20", "112/m": "20",
     "mmm": "22",
     "4/m": "4", "4/mmm": "42",
     "-3": "3", "-3m": "32", "-3m1": "32", "-31m": "32",
@@ -323,8 +344,20 @@ CRYSTAL_FRAME = (
 )
 
 
-def tsl_symmetry_code(point_group) -> str:
-    """The TSL ``# Symmetry`` code of a phase. Raises when it has none."""
+#: ``/Indexing@orientation_reference_frame`` of the .h5 exports.
+FRAME_LABEL_VENDOR = (
+    "vendor_stored: the Euler angles as the source system's own solution holds "
+    "them; header values such as the Scanning Rotation Angle are not applied "
+    "(see /Acquisition)")
+FRAME_LABEL_NATIVE = "native (EMsoft/kikuchipy common)"
+
+
+def tsl_symmetry_code(point_group, lattice=None) -> str:
+    """The TSL ``# Symmetry`` code of a phase. Raises when it has none.
+
+    ``lattice`` (a, b, c, alpha, beta, gamma) only matters for monoclinic
+    phases: 20 (unique axis b) unless the cell is c-unique, then 2.
+    """
     if point_group is None:
         raise ValueError(
             "the phase has no point group, so no TSL symmetry code can be "
@@ -338,6 +371,10 @@ def tsl_symmetry_code(point_group) -> str:
         raise ValueError(
             f"point group {getattr(point_group, 'name', point_group)!r} (Laue "
             f"group {laue!r}) has no TSL symmetry code in this exporter's table")
+    if code == "20" and lattice is not None:
+        _a, _b, _c, al, be, ga = (float(v) for v in lattice)
+        if abs(ga - 90.0) > 1e-3 and abs(al - 90.0) < 1e-3 and abs(be - 90.0) < 1e-3:
+            code = "2"
     return code
 
 
@@ -358,7 +395,8 @@ def space_group_symbol(number) -> str:
 
 
 def phase_table_attrs(phase, *, sht_path=None, phase_file=None,
-                      recorded_lattice=None, recorded_space_group=None) -> Dict[str, object]:
+                      recorded_lattice=None, recorded_space_group=None,
+                      structure_unit: str = "angstrom") -> Dict[str, object]:
     """Attributes for ``/Indexing/Phases/<k>`` beyond name and point group.
 
     Space group (number and symbol), lattice constants (a, b, c in angstrom,
@@ -388,7 +426,8 @@ def phase_table_attrs(phase, *, sht_path=None, phase_file=None,
             out["space_group_symbol"] = sym
     try:
         lattice, source = resolve_phase_lattice(
-            phase, phase_file=phase_file or sht_path, recorded=recorded_lattice)
+            phase, phase_file=phase_file or sht_path, recorded=recorded_lattice,
+            structure_unit=structure_unit)
         out["lattice_constants"] = np.asarray(lattice, dtype=float)
         out["lattice_length_unit"] = "angstrom"
         out["lattice_source"] = source
@@ -498,9 +537,9 @@ def pc_tsl_from_bruker(pc, detector_shape) -> Optional[Tuple[float, float, float
 
     kikuchipy's PC is Bruker; the TSL one is NOT the same numbers:
     ``y_T = 1 - y_B`` and ``z_T = z_B * nrows / min(nrows, ncols)`` (the
-    installed kikuchipy's ``EBSDDetector.pc_tsl``; its docstring writes the
-    aspect ratio the other way round, the code is what runs). Needs the
-    detector shape; returns ``None`` without it.
+    installed kikuchipy's ``EBSDDetector.pc_tsl``, which agrees with
+    PyEBSDIndex's EDAX branch). Needs the detector shape; returns ``None``
+    without it.
     """
     if pc is None or detector_shape is None:
         return None
@@ -533,6 +572,7 @@ def build_export_xmap(
     *,
     phase_files: Optional[Dict[int, str]] = None,
     recorded_lattices: Optional[Dict[int, Sequence[float]]] = None,
+    structure_unit: str = "angstrom",
 ):
     """A CrystalMap on the full grid, in micrometres, with real lattices.
 
@@ -583,13 +623,14 @@ def build_export_xmap(
             phase,
             phase_file=(phase_files or {}).get(actual),
             recorded=(recorded_lattices or {}).get(actual),
+            structure_unit=structure_unit,
         )
         logger.info("ang export: phase %s lattice from %s: %s",
                     getattr(phase, "name", "?"), source, lattice)
         name = getattr(phase, "name", "") or f"phase{written_id}"
         pg = getattr(phase, "point_group", None)
         try:
-            tsl_codes[written_id] = tsl_symmetry_code(pg)
+            tsl_codes[written_id] = tsl_symmetry_code(pg, lattice)
         except ValueError as exc:
             raise SymmetryUnknown(f"phase {name!r}: {exc}") from exc
         structure = Structure(title=name, lattice=Lattice(*lattice))
@@ -720,6 +761,9 @@ def header_comments(
         lines.append("# %s: %s" % (KEY_ORIGIN, scan_origin_text(
             scan.get("scan_row_offset", 0), scan.get("scan_col_offset", 0),
             scan.get("scan_shape"), step_um)))
+    mtex = mtex_line(vendor, geometry)
+    if mtex:
+        lines.append(f"# ORIENTA_MTEX: {mtex}")
     acq = acquisition_line(geometry or {}, detector_tilt_deg)
     if acq:
         lines.append(f"# {KEY_ACQ}: {acq}")
@@ -732,6 +776,55 @@ def header_comments(
     return lines
 
 
+def ctf_frame_text(vendor: str) -> str:
+    """Plain-words statement of the Euler frame of a ``.ctf``.
+
+    A Channel Text File is an Oxford format (MTEX applies one fixed correction
+    to every .ctf), so it holds the angles the .h5 holds: the source system's
+    frame, not the TSL frame of the .ang.
+    """
+    v = (vendor or "").lower()
+    if v in ("oxford", "bruker"):
+        return ("Euler1, Euler2, Euler3 are Bunge Euler angles in degrees in the "
+                "Oxford/Aztec frame of the source scan, the same Euler angles as "
+                "the .h5 exports of this result. The .ang of this result holds the "
+                "EDAX TSL frame instead (orix / kikuchipy): Euler1(.ang) = "
+                "Euler1(this file) + 90 degrees (mod 360).")
+    if v in ("edax", "tsl", "ametek"):
+        return ("Euler1, Euler2, Euler3 are Bunge Euler angles in degrees in the "
+                "EDAX TSL frame of the source scan (the frame of orix and "
+                "kikuchipy), the same Euler angles as the .h5 and .ang exports of "
+                "this result.")
+    return ("Euler1, Euler2, Euler3 are Bunge Euler angles in degrees in the "
+            "EDAX TSL frame (orix / kikuchipy); the source system was not "
+            "recorded, so no conversion to its own frame was made.")
+
+
+def mtex_line(vendor: str, geometry: Optional[Dict[str, object]]) -> Optional[str]:
+    """The MTEX correction that reproduces MTEX's own h5oina import of the scan.
+
+    Derived from MTEX's source, not run in MATLAB: MTEX's h5oina import turns the
+    header's Scanning Rotation Angle S into an EulerCorrection (rotation about
+    the surface normal by S) on the raw Aztec angles; the Aztec angles are the
+    native (TSL-frame) ones rotated by -90 degrees about the normal, so the
+    equivalent correction for THIS file is a rotation by S - 90 degrees. Only
+    stated for an Oxford source whose header gives S.
+    """
+    if (vendor or "").lower() not in ("oxford", "bruker"):
+        return None
+    s = (geometry or {}).get("scanning_rotation_angle_deg")
+    if s is None:
+        return None
+    corr = float(s) - 90.0
+    return (
+        f"to get in MTEX the orientations MTEX gives the source h5oina (Scanning "
+        f"Rotation Angle of {float(s):g} degrees), load this file with "
+        f"'EulerCorrection', rotation.byAxisAngle(zvector,{corr:g}*degree); the "
+        "default .ang correction (setting 2) does not reproduce them. Derived "
+        "from the MTEX source (loadEBSD_h5.m, loadEBSD_ang.m), not run in MATLAB. "
+        "orix, kikuchipy and PyEBSDIndex read this file as it is.")
+
+
 def ctf_project_note(*, vendor: str, provenance: Dict[str, object],
                      scan: Optional[Dict[str, object]], step_um: float,
                      geometry: Optional[Dict[str, object]] = None) -> str:
@@ -740,8 +833,7 @@ def ctf_project_note(*, vendor: str, provenance: Dict[str, object],
     A Channel Text File has no comment lines (parsers reject unknown ones), but
     its project field is free text.
     """
-    parts = ["Euler angles: " + " ".join(euler_frame_text(
-        vendor, unit="degrees", angles="Euler1, Euler2, Euler3", first="Euler1"))]
+    parts = ["Euler angles: " + ctf_frame_text(vendor)]
     if scan is None:
         parts.append("Scan origin: not recorded by this export.")
     else:
