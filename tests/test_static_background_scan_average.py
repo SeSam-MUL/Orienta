@@ -27,6 +27,35 @@ from backend.api.services import static_background as sb  # noqa: E402
 N, H, W = 61, 12, 16          # 61 patterns: deliberately not a multiple of any block size
 
 
+@pytest.fixture(autouse=True)
+def _restore_viewer_state():
+    """These tests put a real signal into the viewer's module state. Restore it
+    afterwards so it cannot leak into the next test file: a leaked signal makes
+    a later export write its patterns and a later import keep that file open."""
+    from backend.api.routes import ebsd_viewer as ev
+    scalars = ("_ebsd_signal", "_ebsd_file_path", "_active_dataset")
+    dicts = ("_loaded_files", "_raw_signals", "_positions", "_dirty_datasets",
+             "_signal_masks", "_processing_progress", "_registry_by_file",
+             "_overview_cache")
+    saved_scalars = {n: getattr(ev, n) for n in scalars}
+    saved_dicts = {n: getattr(ev, n).copy() for n in dicts}
+    from backend.api.services.calibration_store import calibration_store
+    saved_cal = dict(calibration_store._entries)
+    yield
+    for n, v in saved_scalars.items():
+        setattr(ev, n, v)
+    for n, v in saved_dicts.items():
+        live = getattr(ev, n)
+        if isinstance(live, list):
+            live[:] = v
+        else:
+            live.clear()
+            live.update(v)
+    # /load registers a calibration entry for the fake signal it was handed.
+    calibration_store._entries.clear()
+    calibration_store._entries.update(saved_cal)
+
+
 class CountingDataset:
     """h5py-like source that records every read (and can be slow)."""
 

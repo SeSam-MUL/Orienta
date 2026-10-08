@@ -23,6 +23,30 @@ from fastapi.testclient import TestClient  # noqa: E402
 ROWS, COLS, H, W = 5, 7, 40, 48  # deliberately not square, both in map and detector
 
 
+@pytest.fixture(autouse=True)
+def _restore_viewer_state():
+    """The tests below put a real signal into the viewer's module state. Restore it
+    afterwards so it cannot leak into the next test file: a leaked signal makes
+    a later export write its patterns and a later import keep that file open."""
+    from backend.api.routes import ebsd_viewer as ev
+    scalars = ("_ebsd_signal", "_ebsd_file_path", "_active_dataset")
+    dicts = ("_loaded_files", "_raw_signals", "_positions", "_dirty_datasets",
+             "_signal_masks", "_processing_progress", "_registry_by_file",
+             "_overview_cache")
+    saved_scalars = {n: getattr(ev, n) for n in scalars}
+    saved_dicts = {n: getattr(ev, n).copy() for n in dicts}
+    yield
+    for n, v in saved_scalars.items():
+        setattr(ev, n, v)
+    for n, v in saved_dicts.items():
+        live = getattr(ev, n)
+        if isinstance(live, list):
+            live[:] = v
+        else:
+            live.clear()
+            live.update(v)
+
+
 def _make_data(seed: int = 0) -> np.ndarray:
     """Patterns = shared smooth illumination + a few bands per pattern.
 
