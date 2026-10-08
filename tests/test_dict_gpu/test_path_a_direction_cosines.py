@@ -28,8 +28,40 @@ def test_direction_cosines_shape_and_dtype(detector):
     assert torch.allclose(norms, torch.ones_like(norms), atol=1e-4)
 
 
+def _kikuchipy_flips_azimuthal() -> bool:
+    import kikuchipy
+    from packaging.version import Version
+    return Version(kikuchipy.__version__) >= Version("0.13")
+
+
+# kikuchipy 0.13 redefined the sign of the detector's azimuthal angle (0.11: our
+# convention; 0.13: "a positive angle means features on the detector appear to
+# move toward the right"). Measured on both: our grid at azimuthal=+7 matches
+# kikuchipy 0.11 at +7 and kikuchipy 0.13 at -7 (max deviation 1e-7), and is
+# 14 deg (twice the azimuthal) off kikuchipy 0.13 at +7. Production does not
+# yet follow the new sign; this case documents that and fails loudly (strict)
+# once it does, so the marker gets removed.
+_AZIMUTHAL_SIGN_OPEN = pytest.mark.xfail(
+    _kikuchipy_flips_azimuthal(), strict=True,
+    reason="kikuchipy >= 0.13 uses the opposite azimuthal sign",
+)
+
+# (shape, pc, sample_tilt, tilt, azimuthal). The centred PC on a square detector
+# cannot tell a flipped or swapped axis from the right one, so the others are
+# off-centre, non-square and tilted.
+_REFERENCE_DETECTORS = [
+    ((60, 60), (0.5, 0.5, 0.5), 70.0, 0.0, 0.0),
+    ((48, 64), (0.43, 0.61, 0.52), 70.0, 10.0, 0.0),
+    ((60, 80), (0.55, 0.40, 0.65), 68.0, 5.0, 0.0),
+    pytest.param((60, 80), (0.55, 0.40, 0.65), 68.0, 5.0, 7.0,
+                 marks=_AZIMUTHAL_SIGN_OPEN),
+]
+
+
 @pytest.mark.gpu
-def test_direction_cosines_matches_kikuchipy_reference(detector):
+@pytest.mark.parametrize("shape,pc,sample_tilt,tilt,azimuthal", _REFERENCE_DETECTORS)
+def test_direction_cosines_matches_kikuchipy_reference(
+        shape, pc, sample_tilt, tilt, azimuthal):
     """Element-wise check against kikuchipy's own direction cosines for this detector."""
     if not torch.cuda.is_available():
         pytest.skip("no CUDA")
@@ -44,6 +76,10 @@ def test_direction_cosines_matches_kikuchipy_reference(detector):
         _get_direction_cosines_from_detector,
     )
 
+    import kikuchipy as kp
+    detector = kp.detectors.EBSDDetector(
+        shape=shape, pc=pc, sample_tilt=sample_tilt, tilt=tilt, azimuthal=azimuthal
+    )
     nrows, ncols = detector.shape
     ref = _get_direction_cosines_from_detector(detector)
     if ref.ndim == 2:
