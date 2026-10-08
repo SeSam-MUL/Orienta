@@ -5,15 +5,15 @@
 # available, unless you explicitly update the lock file.
 #
 # Install this environment as "YOURENV" with:
-#     conda-lock install -n YOURENV conda-macos.lock.yml
+#     conda-lock install -n YOURENV orienta-macos-lock.yml
 # To update a single package to the latest version compatible with the version constraints in the source:
-#     conda-lock lock  --lockfile conda-macos.lock.yml --update PACKAGE
+#     conda-lock lock  --lockfile orienta-macos-lock.yml --update PACKAGE
 # To re-solve the entire environment, e.g. after changing a version constraint in the source file:
-#     conda-lock -f environment-macos.yml --lockfile conda-macos.lock.yml
+#     conda-lock -f environment-macos.yml --lockfile orienta-macos-lock.yml
 version: 1
 metadata:
   content_hash:
-    osx-arm64: b2c6f9cb1207f9d189f59647c7e5406a98b60553e099579fb6c2bd4e6837c584
+    osx-arm64: 86cbb29b652ff298ff3f31fed106933842b8f806b89c6743a9687d97effa0b2d
   channels:
   - url: conda-forge
     used_env_vars: []
@@ -1220,7 +1220,7 @@ package:
   dependencies:
     email_validator: ''
     fastapi-cli: ''
-    fastapi-core: ==0.135.1
+    fastapi-core: 0.135.1
     httpx: ''
     jinja2: ''
     pydantic-extra-types: ''
@@ -1548,8 +1548,8 @@ package:
   manager: conda
   platform: osx-arm64
   dependencies:
-    glib-tools: ==2.90.0
-    libglib: ==2.90.0
+    glib-tools: 2.90.0
+    libglib: 2.90.0
     libintl: '>=0.25.1,<1.0a0'
     libintl-devel: ''
     packaging: ''
@@ -1567,7 +1567,7 @@ package:
   dependencies:
     __osx: '>=11.0'
     libffi: ''
-    libglib: ==2.90.0
+    libglib: 2.90.0
     libintl: '>=0.25.1,<1.0a0'
   url: https://conda.anaconda.org/conda-forge/osx-arm64/glib-tools-2.90.0-h06d1d6c_0.conda
   hash:
@@ -1705,7 +1705,7 @@ package:
   platform: osx-arm64
   dependencies:
     __osx: '>=11.0'
-    gstreamer: ==1.26.11,>=1.26.11,<1.27.0a0
+    gstreamer: 1.26.11,>=1.26.11,<1.27.0a0
     libcxx: '>=19'
     libexpat: '>=2.7.5,<3.0a0'
     libglib: '>=2.86.4,<3.0a0'
@@ -2310,23 +2310,27 @@ package:
   category: main
   optional: false
 - name: kikuchipy
-  version: 0.11.3
+  version: 0.13.1
   manager: conda
   platform: osx-arm64
   dependencies:
-    kikuchipy-base: 0.11.3
+    ipython: ''
+    ipywidgets: ''
+    kikuchipy-base: 0.13.1
     nlopt: ''
-    pyebsdindex-base: '>=0.2,!=0.3.0,!=0.3.1'
+    pooch: '>=1.3.0'
+    psygnal: ''
+    pyebsdindex-base: '>=0.3.9.2,!=0.3.10'
     python: '>=3.10'
     pyvista: ''
-  url: https://conda.anaconda.org/conda-forge/noarch/kikuchipy-0.11.3-pyhd8ed1ab_0.conda
+  url: https://conda.anaconda.org/conda-forge/noarch/kikuchipy-0.13.1-pyhd8ed1ab_0.conda
   hash:
-    md5: 41ae50c9ff889d8e4d9050b3ae014f62
-    sha256: ec2f17255f98561b5cf30de52ffaebf9480a7f8976727acf2b5704a9b5494de9
+    md5: ae172075ccaeddf0cbbc63995347228d
+    sha256: f62807060c42a5ee338422e12114dde79e711c49502d88da46b8b0e15b7216d6
   category: main
   optional: false
 - name: kikuchipy-base
-  version: 0.11.3
+  version: 0.13.1
   manager: conda
   platform: osx-arm64
   dependencies:
@@ -2336,23 +2340,24 @@ package:
     h5py: '>=2.10'
     hyperspy-base: '>=2.2'
     imageio: ''
-    matplotlib-base: '>=3.5'
+    lazy_loader: ''
+    matplotlib-base: '>=3.6'
     numba: '>=0.57'
     numpy: '>=1.23.0'
     orix-base: '>=0.12.1'
-    pooch: '>=1.3.0'
+    packaging: ''
     python: '>=3.10'
     pyyaml: ''
     rosettasciio-base: '>=0.3.0'
-    ruamel.yaml.clib: '>=0.2.15'
     scikit-image: '>=0.16.2'
     scikit-learn: ''
     scipy: '>=1.7'
     tqdm: '>=0.5.2'
-  url: https://conda.anaconda.org/conda-forge/noarch/kikuchipy-base-0.11.3-pyhd8ed1ab_0.conda
+    typing-extensions: ''
+  url: https://conda.anaconda.org/conda-forge/noarch/kikuchipy-base-0.13.1-pyhd8ed1ab_0.conda
   hash:
-    md5: f9893f09e325fb6901f1bb1a4db16343
-    sha256: ea0c059ebaa7f43487f69ad1eb62a002dbc87aa408458c4deb402973fcb6baa1
+    md5: 065561becff3d54e1c2ad7df91c3d496
+    sha256: 7a94ed52380e3024284375c3aa8c83f7472fb0148f26329dc4ff5b03495c03d3
   category: main
   optional: false
 - name: kiwisolver
@@ -2409,6 +2414,19 @@ package:
   hash:
     md5: 75932da6f03a6bef32b70a51e991f6eb
     sha256: 1a88069ac61d2756ccaf26a6c206ab4d56610fb054bd2fffb5df4cd0744ab78e
+  category: main
+  optional: false
+- name: lazy_loader
+  version: '0.5'
+  manager: conda
+  platform: osx-arm64
+  dependencies:
+    lazy-loader: '0.5'
+    python: '>=3.10'
+  url: https://conda.anaconda.org/conda-forge/noarch/lazy_loader-0.5-pyhd8ed1ab_0.conda
+  hash:
+    md5: 4c8327180586e7b1cd8b6815fc8827f1
+    sha256: 42adb08ded0662114a3146627b24d2cd5eba3bfc3ed424374bac869cdc1745a9
   category: main
   optional: false
 - name: lcms2
@@ -2692,7 +2710,7 @@ package:
   platform: osx-arm64
   dependencies:
     __osx: '>=11.0'
-    libclang-cpp23.1: ==23.1.1
+    libclang-cpp23.1: 23.1.1
     libcxx: '>=23.1.1'
     libllvm23: '>=23.1.1,<23.2.0a0'
     libxml2: ''
@@ -4233,16 +4251,16 @@ package:
   category: main
   optional: false
 - name: openssl
-  version: 3.6.4
+  version: 3.6.5
   manager: conda
   platform: osx-arm64
   dependencies:
     __osx: '>=11.0'
     ca-certificates: ''
-  url: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.4-h55eecbc_0.conda
+  url: https://conda.anaconda.org/conda-forge/osx-arm64/openssl-3.6.5-h55eecbc_0.conda
   hash:
-    md5: ae71ab40048c19a389a7dcccb86c2481
-    sha256: f23239eacd75c4c50705e68fae1aa3292da473e6a3a4abe2330f1e6afa680704
+    md5: 45d9179cdf6e53d88aec034246f0dad6
+    sha256: 44fbc526456571a9fb8fa18157f6f269d4d4bd40eef20183a93b9c9296f94497
   category: main
   optional: false
 - name: opentelemetry-api
@@ -4355,22 +4373,22 @@ package:
   category: main
   optional: false
 - name: orix
-  version: 0.14.1
+  version: 0.15.0
   manager: conda
   platform: osx-arm64
   dependencies:
     matplotlib-scalebar: ''
-    orix-base: 0.14.1
+    orix-base: 0.15.0
     python: ''
     quaternion: ''
-  url: https://conda.anaconda.org/conda-forge/noarch/orix-0.14.1-pyhd8ed1ab_0.conda
+  url: https://conda.anaconda.org/conda-forge/noarch/orix-0.15.0-pyhd8ed1ab_0.conda
   hash:
-    md5: f597632cbe8b7dc9d0cdff6b1507930c
-    sha256: 7a575b29761962fb874b4e10d917b359dbd8c6d0f1f5c23361ee93fc8109497a
+    md5: cd2bba564c2fb783340836e3ce6cd442
+    sha256: db4f3b3e9c3542964ef427088eb1874f7c952d6e3242b5e7649d630767b98af7
   category: main
   optional: false
 - name: orix-base
-  version: 0.14.1
+  version: 0.15.0
   manager: conda
   platform: osx-arm64
   dependencies:
@@ -4387,10 +4405,10 @@ package:
     scipy: ''
     tqdm: ''
     typing-extensions: ''
-  url: https://conda.anaconda.org/conda-forge/noarch/orix-base-0.14.1-pyhd8ed1ab_0.conda
+  url: https://conda.anaconda.org/conda-forge/noarch/orix-base-0.15.0-pyhd8ed1ab_0.conda
   hash:
-    md5: 9199acd76aab291e74137625bb9012ed
-    sha256: 69d74dcd6ec74e2a1cea3bd3b6dbe4761aec4cec8c68f0fae482e0e17044d4c3
+    md5: bcdb3428c6f660b2c9f5ff325f755e0d
+    sha256: 7aa14bab0d6210328aba6d8827e68f1f82d6fbc247c7093a943e373a587fbf0c
   category: main
   optional: false
 - name: orjson
@@ -4833,6 +4851,20 @@ package:
     sha256: 235359bc46cfad9ea8eec2ac9b59ce30a113281e121db7ad982859e069c88dde
   category: main
   optional: false
+- name: psygnal
+  version: 0.16.1
+  manager: conda
+  platform: osx-arm64
+  dependencies:
+    python: '>=3.11'
+    typing_extensions: ''
+    wrapt: ''
+  url: https://conda.anaconda.org/conda-forge/noarch/psygnal-0.16.1-pyhd8ed1ab_0.conda
+  hash:
+    md5: 22d6b9d3bc421e98f56a33aca9a95ffd
+    sha256: 0914ef3987c3f75e1cecd73bb54486673be5939719c157e6b88cd5de09cd7ca4
+  category: main
+  optional: false
 - name: pthread-stubs
   version: '0.4'
   manager: conda
@@ -4974,7 +5006,7 @@ package:
   manager: conda
   platform: osx-arm64
   dependencies:
-    pybind11-global: ==3.0.1
+    pybind11-global: 3.0.1
     python: '>=3.8'
   url: https://conda.anaconda.org/conda-forge/noarch/pybind11-3.0.1-pyh7a1b43c_0.conda
   hash:
@@ -5111,22 +5143,22 @@ package:
   category: main
   optional: false
 - name: pyebsdindex
-  version: 0.3.9.1
+  version: 0.3.10.1
   manager: conda
   platform: osx-arm64
   dependencies:
     __osx: ''
-    pyebsdindex-base: 0.3.9.1
+    pyebsdindex-base: 0.3.10.1
     python: ''
     ray-default: '>=2.9'
-  url: https://conda.anaconda.org/conda-forge/noarch/pyebsdindex-0.3.9.1-pyhc725047_0.conda
+  url: https://conda.anaconda.org/conda-forge/noarch/pyebsdindex-0.3.10.1-pyhc725047_0.conda
   hash:
-    md5: f435107e3ef4387f0df61e7ea2d81c29
-    sha256: bf5aa9d03b3420cb0926b6e75fb6c9c4ebbb09b052b3b0e00d28f9ebf5d87732
+    md5: 4b3bbe9c1f3239826a427533bef3e587
+    sha256: 719f8d903b073f69dad89049149fb37835a664f5a66dc750a680a076f5492703
   category: main
   optional: false
 - name: pyebsdindex-base
-  version: 0.3.9.1
+  version: 0.3.10.1
   manager: conda
   platform: osx-arm64
   dependencies:
@@ -5138,12 +5170,12 @@ package:
     ocl_icd_wrapper_apple: ''
     psutil: ''
     pyopencl: ''
-    python: '>=3.10'
+    python: '>=3.11'
     scipy: ''
-  url: https://conda.anaconda.org/conda-forge/noarch/pyebsdindex-base-0.3.9.1-pyhc725047_0.conda
+  url: https://conda.anaconda.org/conda-forge/noarch/pyebsdindex-base-0.3.10.1-pyhc725047_0.conda
   hash:
-    md5: c240ff76260c9bc26ca3be205ba3b06a
-    sha256: c92182c00ed4ab412586055fba6ad01810062db5bc50ea6439e80da49e7c6fb6
+    md5: 236e5a93973cc5a84ca4320b2989afeb
+    sha256: aca19ff8dcf598e04365f350e06f4f20bc48aa1ba6a7a4a6d6c01f2286fa6a51
   category: main
   optional: false
 - name: pyface
@@ -5724,7 +5756,7 @@ package:
     pydantic: '!=2.0.*,!=2.1.*,!=2.2.*,!=2.3.*,!=2.4.*,<3'
     python: ''
     python_abi: 3.11.*
-    ray-core: ==2.55.1
+    ray-core: 2.55.1
     requests: ''
     smart_open: ''
     virtualenv: '>=20.0.24,!=20.21.1'
@@ -6536,7 +6568,7 @@ package:
   manager: conda
   platform: osx-arm64
   dependencies:
-    typing_extensions: ==4.16.0
+    typing_extensions: 4.16.0
   url: https://conda.anaconda.org/conda-forge/noarch/typing-extensions-4.16.0-h69aa097_0.conda
   hash:
     md5: c680b5747e8c4c8f23dca0bb7042a8fc
@@ -6659,7 +6691,7 @@ package:
     httptools: '>=0.6.3'
     python-dotenv: '>=0.13'
     pyyaml: '>=5.1'
-    uvicorn: ==0.42.0
+    uvicorn: 0.42.0
     uvloop: '>=0.15.1'
     watchfiles: '>=0.20'
     websockets: '>=10.4'
