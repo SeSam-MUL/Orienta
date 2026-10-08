@@ -7,11 +7,11 @@
 # time, then install the result into a throwaway interpreter before
 # shipping it.
 
-kikuchipy==0.11.3
-orix==0.14.1
+kikuchipy==0.13.1
+orix==0.15.0
 diffsims==0.7.0
 diffpy.structure==3.3.1
-pyebsdindex==0.3.9.1
+pyebsdindex==0.3.10.1
 hyperspy==2.4.0
 numpy==2.3.5
 scipy==1.17.1
@@ -35,6 +35,7 @@ dask[array]==2026.1.2
 openpyxl==3.1.5
 pyyaml==6.0.3
 scikit-learn==1.8.0
+threadpoolctl==3.6.0
 xlsxwriter==3.2.9
 beautifulsoup4==4.14.3
 seaborn==0.13.2
