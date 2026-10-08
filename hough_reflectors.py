@@ -225,6 +225,7 @@ def _structure_hash(phase):
 
     Element labels are normalised first: the reflector code does that in place on
     its first use, and a key taken before it would not match the one taken after.
+    The point group is part of the key (:func:`_point_group_key`).
     """
     _eu()._normalize_element_labels(phase)
     atoms = []
@@ -235,7 +236,38 @@ def _structure_hash(phase):
     except Exception:  # noqa: BLE001
         pass
     fp = phase_fingerprint(phase)
-    return (fp["space_group"], tuple(fp["lattice"]), hash(tuple(atoms)))
+    return (fp["space_group"], tuple(fp["lattice"]), hash(tuple(atoms)),
+            _point_group_key(phase))
+
+
+def _point_group_key(phase):
+    """Hashable identity of the phase's point group in the crystal frame.
+
+    The reflector list depends on it: a monoclinic crystal with its two-fold axis
+    along Y and the same crystal with the axis along Z (what plain orix assigns)
+    are different phases to the indexer. The group name and the unique axis do
+    not tell them apart, because orix names the centrosymmetric class "2/m" for
+    every axis and an untagged group reports the default axis, so the operations
+    themselves are part of the key (as rotations, with ``q`` and ``-q`` the same).
+    """
+    from crystal_symmetry import unique_axis
+
+    pg = getattr(phase, "point_group", None)
+    if pg is None:
+        return None
+    ops = []
+    try:
+        data = np.asarray(pg.data, dtype=float).reshape(-1, 4)
+        improper = np.asarray(pg.improper, dtype=bool).reshape(-1)
+        for q, imp in zip(data, improper):
+            q = np.round(q, 4) + 0.0                      # no -0.0
+            lead = next((x for x in q if x != 0.0), 1.0)
+            if lead < 0:
+                q = -q + 0.0
+            ops.append((tuple(float(x) for x in q), bool(imp)))
+    except Exception:  # noqa: BLE001
+        pass
+    return (str(getattr(pg, "name", "")), unique_axis(pg), tuple(sorted(set(ops))))
 
 
 # ---------------------------------------------------------------------------

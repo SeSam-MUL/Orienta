@@ -188,6 +188,43 @@ def test_a_plain_orix_phase_would_put_the_two_fold_along_z(monoclinic_cif):
     assert _two_fold_axis(plain) == "z"
 
 
+# --- the reflector cache key ----------------------------------------------------------
+
+def test_the_cache_key_tells_a_y_axis_monoclinic_phase_from_a_z_axis_one(monoclinic_cif):
+    """Same cell, same atoms, same space group: only the two-fold axis differs.
+    A cached reflector list for one must not be handed to the other."""
+    import hough_reflectors as hr
+
+    y_axis = hough_phase_from_cif(monoclinic_cif)
+    z_axis = Phase.from_cif(sanitize_cif(str(monoclinic_cif)))
+    assert _two_fold_axis(y_axis) == "y" and _two_fold_axis(z_axis) == "z"
+    # Everything the old key held is equal ...
+    assert hr.phase_fingerprint(y_axis) == hr.phase_fingerprint(z_axis)
+    assert y_axis.point_group.name == z_axis.point_group.name
+    # ... and the key still differs.
+    assert hr._structure_hash(y_axis) != hr._structure_hash(z_axis)
+    assert hash(hr._structure_hash(y_axis)) != hash(hr._structure_hash(z_axis))
+
+
+def test_the_cache_key_of_a_cubic_phase_is_stable(silicon_cif):
+    import hough_reflectors as hr
+
+    first = hough_phase_from_cif(silicon_cif)
+    key = hr._structure_hash(first)
+    assert hr._structure_hash(first) == key
+    assert hr._structure_hash(first.deepcopy()) == key
+    assert hr._structure_hash(hough_phase_from_cif(silicon_cif)) == key
+    # A cubic group has no unique axis, and the key says so.
+    assert key[3][1] is None
+
+
+def test_the_cache_key_tells_different_crystals_apart(silicon_cif, monoclinic_cif):
+    import hough_reflectors as hr
+
+    assert hr._structure_hash(hough_phase_from_cif(silicon_cif)) != hr._structure_hash(
+        hough_phase_from_cif(monoclinic_cif))
+
+
 # --- the sites ----------------------------------------------------------------------
 
 def test_hough_reflectors_phase_from_cif_is_the_combined_builder(silicon_cif, monoclinic_cif):
