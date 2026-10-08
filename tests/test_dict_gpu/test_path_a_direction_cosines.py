@@ -34,16 +34,20 @@ def _kikuchipy_flips_azimuthal() -> bool:
     return Version(kikuchipy.__version__) >= Version("0.13")
 
 
-# kikuchipy 0.13 redefined the sign of the detector's azimuthal angle (0.11: our
-# convention; 0.13: "a positive angle means features on the detector appear to
-# move toward the right"). Measured on both: our grid at azimuthal=+7 matches
-# kikuchipy 0.11 at +7 and kikuchipy 0.13 at -7 (max deviation 1e-7), and is
-# 14 deg (twice the azimuthal) off kikuchipy 0.13 at +7. Production does not
-# yet follow the new sign; this case documents that and fails loudly (strict)
-# once it does, so the marker gets removed.
+# kikuchipy 0.13 reversed the meaning of the detector's azimuthal angle (0.11: the
+# convention our projection uses; 0.13: "a positive angle means features on the
+# detector appear to move toward the right"). Measured on both: our grid at
+# azimuthal=+7 matches kikuchipy 0.11 at +7 and kikuchipy 0.13 at -7 (max
+# deviation 1e-7), and is 14 deg (twice the azimuthal) off kikuchipy 0.13 at +7.
+# Our GPU projection keeps the earlier (EMsoft) sign. Which sign matches vendor
+# headers is undecided and left for a later release; until then this case
+# documents the difference and fails loudly (strict) if the two ever agree, so
+# the marker gets removed.
 _AZIMUTHAL_SIGN_OPEN = pytest.mark.xfail(
     _kikuchipy_flips_azimuthal(), strict=True,
-    reason="kikuchipy >= 0.13 uses the opposite azimuthal sign",
+    reason=("kikuchipy >= 0.13 reversed the meaning of the azimuthal angle; "
+            "Orienta's GPU projection keeps the earlier (EMsoft) sign; which one "
+            "matches vendor headers is undecided and left for a later release"),
 )
 
 # (shape, pc, sample_tilt, tilt, azimuthal). The centred PC on a square detector
