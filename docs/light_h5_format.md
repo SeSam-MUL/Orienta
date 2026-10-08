@@ -65,11 +65,18 @@ about the same scientific value for ~0.1 % of the disk footprint.
 │  │  │   └─ confidence_index float32 (R, C)   "CI assuming THIS phase"
 │  │  └─ <other_phase>/ …
 │  │
-│  ├─ Phases/                                (phase table — name + symmetry)
+│  ├─ Phases/                                (phase table — name, symmetry, lattice)
 │  │  ├─ 1/
-│  │  │   ├─ @name          str    "Al"
-│  │  │   ├─ @space_group   int    225
-│  │  │   └─ @point_group   str    "m-3m"
+│  │  │   ├─ @name                    str      "Al"
+│  │  │   ├─ @point_group             str      "m-3m"
+│  │  │   ├─ @space_group             int      225          (≥ 1.4, if known)
+│  │  │   ├─ @space_group_symbol      str      "Fm-3m"      (≥ 1.4, if known)
+│  │  │   ├─ @lattice_constants       float[6] a, b, c, alpha, beta, gamma (≥ 1.4)
+│  │  │   ├─ @lattice_length_unit     str      "angstrom"   (a, b, c; angles in degrees)
+│  │  │   ├─ @lattice_source          str      where the lattice was read from
+│  │  │   ├─ @crystal_reference_frame str      frame of the Euler angles (≥ 1.4)
+│  │  │   ├─ @sht_file / @sht_path    str      spherical results only
+│  │  │   └─ @lattice_status          str      "unknown" if no lattice was found
 │  │  ├─ 2/                  …
 │  │  └─ N/                  …
 │  │
@@ -84,13 +91,26 @@ about the same scientific value for ~0.1 % of the disk footprint.
 │  ├─ @source_file_stem      str    basename without .h5oina
 │  └─ @source_size_mb        float  size of the source file when this light was written
 │
+├─ Acquisition/                              (≥ 1.4; only if the source header has the values)
+│  ├─ @Scanning Rotation Angle         float    radians, verbatim from the h5oina header
+│  ├─ @Specimen Orientation Euler      float[3] radians, verbatim
+│  ├─ @Tilt Angle                      float    radians, verbatim (sample tilt)
+│  ├─ @header_values_unit              str      "radians"
+│  ├─ @applied_to_euler_angles         int      0 — none of the above is applied
+│  ├─ @applied_to_euler_angles_note    str      what a reader has to do
+│  ├─ @scanning_rotation_angle_deg, @sample_tilt_deg,
+│  │  @specimen_orientation_euler_deg, @detector_orientation_euler_deg,
+│  │  @detector_tilt_deg, @working_distance_mm, @beam_voltage_kv   (same facts in
+│  │                                          degrees / mm / kV; each only if known)
+│  └─ @source                str    "h5oina /1/EBSD/Header"
+│
 ├─ Detector/                                 (geometry)
-│  ├─ pc                     float64 (3,)     pattern center [PCx, PCy, PCz], EMsoft convention
+│  ├─ pc                     float64 (3,)     pattern center [PCx, PCy, PCz], Bruker convention (the one kikuchipy uses)
 │  ├─ @sample_tilt           float64          degrees, usually 70.0
 │  └─ @shape                 int    [H, W]    detector pixel dimensions
 │
 └─ Documentation/
-   ├─ @format_version        str    "1.1"
+   ├─ @format_version        str    "1.4"
    ├─ @description           str    human-readable
    └─ README                 str    full README text
 ```
@@ -103,10 +123,40 @@ about the same scientific value for ~0.1 % of the disk footprint.
 | `software` | str | always `"Orienta"` |
 | `created` | str | ISO-8601 UTC timestamp |
 | `grid_shape` | int[2] | `[R, C]` — rows, cols |
-| `format_version` | str | currently `"1.1"` |
+| `format_version` | str | currently `"1.4"` |
 | `step_size_um` | float | µm/pixel, present if format_version ≥ 1.1 |
 | `source_vendor` | str | `oxford`/`edax`/`bruker`/`unknown` — vendor frame `euler_angles` is in (≥ 1.3) |
 | `orientation_reference_frame` | str | human label: `vendor_stored …` or `native …` (≥ 1.3) |
+| `scan_row_offset` | int | row of the **original scan** at which this file's first row lies; 0-based, counted from the first row of the original scan. 0 for an uncropped scan |
+| `scan_col_offset` | int | column of the original scan at which this file's first column lies; 0-based, counted from the first column. 0 for an uncropped scan |
+| `scan_shape` | int[2] | `[rows, columns]` of the **original** scan the result was cut from (not of this file; that is `grid_shape`) |
+| `eds_chemistry_prior` | int | `1` if the EDS chemistry prior (or another EDS step) decided any phase, `0` if not (≥ 1.4) |
+| `phase_assignment` | str | the same fact in a sentence, with the prior's strengths and the number of pixels it changed (≥ 1.4) |
+| `crystal_reference_frame` | str | the crystal frame the Euler angles refer to; see below (≥ 1.4) |
+
+### Position in the original scan (`scan_*`)
+
+The three `scan_*` attributes are written on `/Indexing` in both layouts and
+record where this file's grid sits in the scan it was cut from (a result of
+*Crop* in the viewer). They are absent from files written before they existed;
+read a missing attribute as "not cropped / not recorded".
+
+* **Axes.** *Row* is the first array axis and the sample **Y** direction
+  (downwards in the map); *column* is the second axis and the sample **X**
+  direction. `scan_row_offset` and `scan_col_offset` are indices (pixels), not
+  micrometres, and are 0-based: `0, 0` means the file starts at the first pixel
+  of the original scan. `grid_shape = [R, C]` is the size of this file; the
+  window it covers in the original scan is rows `scan_row_offset …
+  scan_row_offset + R − 1` and columns `scan_col_offset … scan_col_offset + C − 1`.
+* **Coordinates.** `/Indexing/X` and `/Indexing/Y` (µm) are **relative to this
+  file's first pixel**: they start at 0, not at the crop origin. The position
+  in the original scan is
+  `x_original = (scan_col_offset + column) · step_size_um` and
+  `y_original = (scan_row_offset + row) · step_size_um`.
+* **Matching the source.** To compare pixel for pixel with the source
+  `.h5oina`, read its per-pixel arrays reshaped to `scan_shape` and take
+  `[scan_row_offset : scan_row_offset + R, scan_col_offset : scan_col_offset + C]`.
+  `/SourceReference` names the source file.
 
 Per-pixel `/Indexing/X` and `/Indexing/Y` (µm) datasets are present from
 format_version ≥ 1.2 in **both** layouts. They are the most foolproof way to
@@ -167,8 +217,40 @@ Three options:
    frame was applied; re-importing the file into this GUI inverts it
    automatically so internal maps stay in the native frame. You may still need
    the usual specimen-surface tilt step in MTEX — that is unrelated to this
-   90° fix. The separate `.ang`/`.ctf` exporters are NOT yet frame-corrected
-   (tracked follow-up).
+   90° fix.
+
+   The `.ang` and `.ctf` of the same result are **not** in this frame: they hold
+   the native (EDAX TSL / orix / kikuchipy) sample frame, which is what orix
+   reads without conversion. For an Oxford source,
+   `phi1(.h5) = phi1(.ang) − 90°` (mod 360); `Phi` and `phi2` are identical. Each
+   file says so in its header.
+
+   **Source-scan geometry is not applied.** From format 1.4 the file carries the
+   source header's `Scanning Rotation Angle`, `Specimen Orientation Euler` and
+   `Tilt Angle` under `/Acquisition`, under their h5oina names and in radians,
+   and `/Acquisition@applied_to_euler_angles = 0` states that none of them was
+   applied to `euler_angles`. The current MTEX `loadEBSD_h5.m`
+   (`map_correction_scanRotation`) turns the Scanning Rotation Angle of an
+   h5oina into its `EulerCorrection`, a rotation about the surface normal by
+   that angle. A reader that wants the frame MTEX gives the source `.h5oina`
+   has to apply that angle itself; the `.h5` Euler angles are the vendor-stored
+   ones, as the source file holds them.
+
+   **Crystal frame of non-cubic phases (format ≥ 1.4).** Every orientation
+   Orienta computes — Hough, dictionary and spherical indexing alike — refers to
+   the crystal frame of orix and EMsoft: **X‖a, Z‖c\*** (Y completes a
+   right-handed set). Hough takes its reflectors from orix, and the dictionary
+   and spherical masters are EMsoft simulations, whose Cartesian crystal frame
+   is the same. MTEX's default crystal frame is **X‖a\*, Z‖c**, so in MTEX the
+   `crystalSymmetry` for these orientations has to be created with
+   `'X||a','Z||c*'` (see MTEX's *Crystal Reference System* page). The two
+   conventions are the same frame for cubic, tetragonal and orthorhombic phases
+   and differ for hexagonal, trigonal, monoclinic and triclinic ones — e.g.
+   Fe₄Al₁₃ (C2/m). The statement is the same for all three routes and is stored
+   in `/Indexing@crystal_reference_frame` and on every `/Indexing/Phases/<k>`.
+   It was derived from the code of these libraries, not measured against a
+   monoclinic reference sample. Euler angles that come from an Aztec solution
+   itself are not part of any Orienta result and are never converted.
 
 3. **In Python / orix:** the GUI's loader is in
    `backend/api/routes/analysis.py::_load_kikuchipy_rich_h5`. It handles
@@ -183,6 +265,7 @@ Three options:
 | 1.1 | 2026-05-04 | added `step_size_um` attr, `band_contrast` / `pc_x` / `pc_y` / `dd` / `bands` quality fields, fail-loud on missing step |
 | 1.2 | 2026-06-05 | added per-pixel `/Indexing/X` + `/Indexing/Y` µm datasets; interactive Save as… → Light .h5 now writes `step_size_um` (was batch-helper only) and fails loud when step can't be resolved |
 | 1.3 | 2026-06-05 | `euler_angles` written in the source vendor's stored frame (Aztec/MTEX default) instead of native EMsoft/kikuchipy; `/Indexing.attrs` gains `source_vendor` + `orientation_reference_frame`; reader inverts on re-import. Fixes the 90°-about-ND offset vs Aztec (Oxford `* Rz(+90°)`). |
+| 1.4 | 2026-10-08 | additions only; readers of 1.3 keep working. `/Acquisition` (source header values under their h5oina names, none applied to `euler_angles`); `/Indexing/Phases/<k>` gains `space_group` (also written when the result carries none), `space_group_symbol`, `lattice_constants` (angstrom / degrees), `lattice_length_unit`, `lattice_source`, `crystal_reference_frame`; `/Indexing` gains `eds_chemistry_prior`, `phase_assignment`, `crystal_reference_frame`. The `scan_*` attributes (already written since 1.3) are now documented. The `.ang`/`.ctf` exporters were corrected in the same change (micrometre coordinates, lattice constants, TSL symmetry codes, header statements). |
 
 ## Where this format is defined in code
 

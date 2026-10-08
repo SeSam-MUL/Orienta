@@ -162,3 +162,26 @@ def test_pc_conversion_is_the_kikuchipy_tsl_convention():
     assert ang_export.pc_tsl_from_bruker([0.4, 0.2, 0.6], (80, 60)) == \
         pytest.approx((0.4, 0.8, 0.6 * 80 / 60))
     assert ang_export.pc_tsl_from_bruker([0.4, 0.2, 0.6], None) is None
+
+
+@pytest.mark.parametrize("fmt", ["h5_light", "h5_rich"])
+def test_batch_h5_exports_carry_the_same_statements(tmp_path, fmt):
+    source, cw = _make(tmp_path, lattice=[4.0495] * 3 + [90.0] * 3)
+    res = export_all(str(source), cw.checkpoint_path, str(tmp_path / "o"),
+                     formats=[fmt])
+    path = res[fmt]
+    assert path, res.get("_errors")
+    with h5py.File(path, "r") as f:
+        idx = f["Indexing"]
+        assert str(idx.attrs["format_version"]) == "1.4"
+        assert int(idx.attrs["eds_chemistry_prior"]) == 0
+        assert "EDS chemistry prior: no" in str(idx.attrs["phase_assignment"])
+        assert "X||a" in str(idx.attrs["crystal_reference_frame"])
+        ph = idx["Phases/1"].attrs
+        assert int(ph["space_group"]) == 225
+        np.testing.assert_allclose(ph["lattice_constants"],
+                                   [4.0495] * 3 + [90.0] * 3, atol=1e-3)
+        assert str(ph["lattice_length_unit"]) == "angstrom"
+        acq = f["Acquisition"].attrs
+        assert float(acq["Scanning Rotation Angle"]) == pytest.approx(np.pi, abs=1e-5)
+        assert int(acq["applied_to_euler_angles"]) == 0

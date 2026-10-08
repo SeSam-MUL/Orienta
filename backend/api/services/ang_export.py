@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -48,8 +49,16 @@ KEY_PC = "ORIENTA_PATTERN_CENTRE_BRUKER"
 KEY_NOTE = "ORIENTA_NOTE"
 
 
-class LatticeUnknown(ValueError):
+class ExportRefused(ValueError):
+    """The result lacks something a file must not be written without."""
+
+
+class LatticeUnknown(ExportRefused):
     """A phase's lattice constants could not be found. Never a silent 1.000."""
+
+
+class SymmetryUnknown(ExportRefused):
+    """A phase has no point group, or one with no TSL symmetry code."""
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +232,16 @@ def read_source_geometry(source_path) -> Dict[str, object]:
                     v = get(key)
                     return None if v is None else np.degrees(v)
 
+                # The three values MTEX and Aztec users ask for, verbatim
+                # (radians, exactly as the h5oina header stores them).
+                raw: Dict[str, object] = {}
+                for key in ("Scanning Rotation Angle", "Specimen Orientation Euler",
+                            "Tilt Angle"):
+                    v = get(key)
+                    if v is not None:
+                        raw[key] = float(v[0]) if v.size == 1 else [float(x) for x in v]
+                if raw:
+                    out["h5oina_header"] = raw
                 scan_rot = deg("Scanning Rotation Angle")
                 if scan_rot is not None:
                     out["scanning_rotation_angle_deg"] = float(scan_rot[0])
@@ -268,6 +287,116 @@ def acquisition_line(geometry: Dict[str, object],
     if "beam_voltage_kv" in g:
         parts.append(f"beam_voltage_kv={g['beam_voltage_kv']:.1f}")
     return " ".join(parts) if parts else None
+
+
+# ---------------------------------------------------------------------------
+# symmetry, space group and crystal frame
+# ---------------------------------------------------------------------------
+
+#: TSL "Symmetry" code per Laue group: the digits of the Laue group's rotation
+#: group (432 -> 43, 622 -> 62, 222 -> 22, ...), the eleven codes every EDAX
+#: .ang format has (see MTEX's documentation of ``TSL2pointGroup``). Monoclinic
+#: is written as 2, the code orix's reader maps to its "2/m" (unique axis along
+#: z). EDAX also has a code 20 for the unique axis along y; orix has no such
+#: Laue group, so it is not written.
+_LAUE_TO_TSL = {
+    "-1": "1",
+    "2/m": "2", "112/m": "2",
+    "mmm": "22",
+    "4/m": "4", "4/mmm": "42",
+    "-3": "3", "-3m": "32", "-3m1": "32", "-31m": "32",
+    "6/m": "6", "6/mmm": "62",
+    "m-3": "23", "m-3m": "43",
+}
+
+#: Said once, used in every file that holds orientations of non-cubic phases.
+CRYSTAL_FRAME = (
+    "X||a, Z||c* (Y completes a right-handed set): the crystal frame of orix "
+    "and EMsoft, in which every orientation Orienta computes (Hough, "
+    "dictionary and spherical indexing alike) is expressed. MTEX's default "
+    "crystal frame is X||a*, Z||c, so a crystalSymmetry built for these "
+    "orientations needs 'X||a','Z||c*'. The two conventions give the same "
+    "frame for cubic, tetragonal and orthorhombic phases and differ for "
+    "hexagonal, trigonal, monoclinic and triclinic ones. Euler angles copied "
+    "from an Aztec solution are not part of any Orienta result and are never "
+    "converted."
+)
+
+
+def tsl_symmetry_code(point_group) -> str:
+    """The TSL ``# Symmetry`` code of a phase. Raises when it has none."""
+    if point_group is None:
+        raise ValueError(
+            "the phase has no point group, so no TSL symmetry code can be "
+            "written for it")
+    try:
+        laue = point_group.laue.name
+    except Exception:
+        laue = None
+    code = _LAUE_TO_TSL.get(laue)
+    if code is None:
+        raise ValueError(
+            f"point group {getattr(point_group, 'name', point_group)!r} (Laue "
+            f"group {laue!r}) has no TSL symmetry code in this exporter's table")
+    return code
+
+
+def space_group_from_sht(path) -> Optional[int]:
+    """Space-group number stored in an ``.sht``."""
+    from backend.spherical_gpu.pipeline.sht_io import read_sht_master
+
+    return int(read_sht_master(str(path), device="cpu").space_group)
+
+
+def space_group_symbol(number) -> str:
+    try:
+        from diffpy.structure.spacegroups import GetSpaceGroup
+
+        return str(GetSpaceGroup(int(number)).short_name).replace(" ", "")
+    except Exception:
+        return ""
+
+
+def phase_table_attrs(phase, *, sht_path=None, phase_file=None,
+                      recorded_lattice=None, recorded_space_group=None) -> Dict[str, object]:
+    """Attributes for ``/Indexing/Phases/<k>`` beyond name and point group.
+
+    Space group (number and symbol), lattice constants (a, b, c in angstrom,
+    alpha, beta, gamma in degrees) and the crystal frame the stored Euler
+    angles refer to. A value that cannot be found is left out and said so
+    (``lattice_status``); nothing is invented.
+    """
+    out: Dict[str, object] = {}
+    sg = None
+    try:
+        sgo = getattr(phase, "space_group", None)
+        if sgo is not None:
+            sg = int(getattr(sgo, "number", sgo))
+    except Exception:
+        sg = None
+    if sg is None and recorded_space_group is not None:
+        sg = int(recorded_space_group)
+    if sg is None and sht_path:
+        try:
+            sg = space_group_from_sht(sht_path)
+        except Exception as exc:
+            logger.warning("space group from %s failed: %s", sht_path, exc)
+    if sg is not None:
+        out["space_group"] = int(sg)
+        sym = space_group_symbol(sg)
+        if sym:
+            out["space_group_symbol"] = sym
+    try:
+        lattice, source = resolve_phase_lattice(
+            phase, phase_file=phase_file or sht_path, recorded=recorded_lattice)
+        out["lattice_constants"] = np.asarray(lattice, dtype=float)
+        out["lattice_length_unit"] = "angstrom"
+        out["lattice_source"] = source
+    except LatticeUnknown as exc:
+        logger.warning("phase table: %s", exc)
+        out["lattice_status"] = "unknown"
+    out["crystal_reference_frame"] = CRYSTAL_FRAME
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +537,9 @@ def build_export_xmap(
     """A CrystalMap on the full grid, in micrometres, with real lattices.
 
     Rotations stay in the frame the indexer produced (the EDAX TSL / kikuchipy
-    frame); only coordinates, phase table and ids are rebuilt.
+    frame); only coordinates, phase table and ids are rebuilt. Returns
+    ``(xmap, tsl_codes)`` where ``tsl_codes`` maps the phase number written in
+    the file to its TSL ``# Symmetry`` code.
     """
     from diffpy.structure import Lattice, Structure
     from orix.crystal_map import CrystalMap, Phase, PhaseList
@@ -445,6 +576,7 @@ def build_export_xmap(
 
     written_to_actual = {w: a for a, w in id_map.items()}
     phases = []
+    tsl_codes: Dict[int, str] = {}
     for written_id, phase in table:
         actual = written_to_actual.get(written_id)
         lattice, source = resolve_phase_lattice(
@@ -456,6 +588,10 @@ def build_export_xmap(
                     getattr(phase, "name", "?"), source, lattice)
         name = getattr(phase, "name", "") or f"phase{written_id}"
         pg = getattr(phase, "point_group", None)
+        try:
+            tsl_codes[written_id] = tsl_symmetry_code(pg)
+        except ValueError as exc:
+            raise SymmetryUnknown(f"phase {name!r}: {exc}") from exc
         structure = Structure(title=name, lattice=Lattice(*lattice))
         phases.append(Phase(
             name=name,
@@ -490,7 +626,7 @@ def build_export_xmap(
                 pass
             break
 
-    return CrystalMap(
+    xmap_out = CrystalMap(
         rotations=Rotation(flat_q),
         phase_id=pid,
         x=(xs.ravel() * float(step_um)).astype(float),
@@ -499,6 +635,7 @@ def build_export_xmap(
         prop=prop,
         scan_unit="um",
     )
+    return xmap_out, tsl_codes
 
 
 # ---------------------------------------------------------------------------
@@ -511,12 +648,16 @@ def _header_field(name: str, value: float) -> str:
 
 
 def edit_ang_header(path, *, replace: Optional[Dict[str, str]] = None,
-                    comments: Optional[Sequence[str]] = None) -> None:
+                    comments: Optional[Sequence[str]] = None,
+                    symmetry_codes: Optional[Dict[int, str]] = None) -> None:
     """Replace header lines by prefix and add ``# KEY: text`` comment lines.
 
     ``replace`` maps a line prefix (``"# x-star"``) to the whole new line.
     ``comments`` are inserted just above the ``# Column names`` line, i.e. at the
-    end of the header. Line endings of the file are kept.
+    end of the header. Line endings of the file are kept. ``symmetry_codes``
+    maps a phase number to the TSL code its ``# Symmetry`` line is rewritten to
+    (orix writes the name of the rotation group, e.g. ``112``, which is not a
+    TSL code).
     """
     with open(path, "r", encoding="utf-8", newline="") as fh:
         text = fh.read()
@@ -525,10 +666,17 @@ def edit_ang_header(path, *, replace: Optional[Dict[str, str]] = None,
     out: List[str] = []
     in_header = True
     insert_at = None
+    phase_no = None
     for ln in lines:
         if in_header and ln.strip() and not ln.lstrip().startswith("#"):
             in_header = False
         if in_header:
+            m = re.match(r"^#\s*Phase\s+(\d+)\s*$", ln)
+            if m:
+                phase_no = int(m.group(1))
+            elif (symmetry_codes and phase_no in symmetry_codes
+                  and re.match(r"^#\s*Symmetry", ln)):
+                ln = f"# Symmetry    {symmetry_codes[phase_no]}"
             for prefix, new in (replace or {}).items():
                 if ln.startswith(prefix):
                     ln = new
@@ -621,9 +769,11 @@ def header_replacements(*, geometry: Optional[Dict[str, object]] = None,
     return rep
 
 
-def write_ang(path, xmap, *, replace=None, comments=None) -> None:
+def write_ang(path, xmap, *, replace=None, comments=None,
+              symmetry_codes=None) -> None:
     """Write the map with orix and edit its header. Replaces an existing file."""
     from orix.io import save
 
     save(str(path), xmap, overwrite=True)
-    edit_ang_header(path, replace=replace, comments=comments)
+    edit_ang_header(path, replace=replace, comments=comments,
+                    symmetry_codes=symmetry_codes)

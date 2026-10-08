@@ -10027,10 +10027,12 @@ def _stated_in_every_export(f, idx, active, source_path, vendor: str) -> None:
     contributes nothing), always written for the assignment.
     """
     from backend.api.services.result_exporter import (
-        write_acquisition_group, write_assignment_provenance)
+        write_acquisition_group, write_assignment_provenance,
+        write_crystal_frame)
 
     ctx = _export_context(active, source_path, vendor)
     write_assignment_provenance(idx, ctx["provenance"])
+    write_crystal_frame(idx)
     write_acquisition_group(
         f, ctx["geometry"], detector_tilt_deg=ctx["detector_tilt_deg"],
         source="h5oina /1/EBSD/Header" if ctx["geometry"] else "")
@@ -10162,19 +10164,19 @@ async def export_indexing_result(req: ExportRequest):
             _ctx = _export_context(active, _src_ang, _vendor_ang)
             _md = getattr(active, "metadata", None) or {}
             try:
-                _export_xmap = ang_export.build_export_xmap(
+                _export_xmap, _tsl_codes = ang_export.build_export_xmap(
                     active.xmap, active.original_shape, active.selection_mask,
                     _step_um, active.confidence_scores,
                     phase_files={int(k): v for k, v in
                                  (_md.get("sht_paths_by_phase") or {}).items()},
                 )
-            except ang_export.LatticeUnknown as exc:
+            except ang_export.ExportRefused as exc:
                 raise HTTPException(status_code=400, detail=str(exc))
             _scan = _stored_scan_provenance(active)
             _pc_tsl = ang_export.pc_tsl_from_bruker(
                 _ctx["pc_bruker"], _ctx["detector_shape"])
             ang_export.write_ang(
-                str(out_path), _export_xmap,
+                str(out_path), _export_xmap, symmetry_codes=_tsl_codes,
                 replace=ang_export.header_replacements(
                     geometry=_ctx["geometry"], pc_tsl=_pc_tsl),
                 comments=ang_export.header_comments(
@@ -10436,6 +10438,11 @@ async def export_indexing_result(req: ExportRequest):
                         if sht_p:
                             pg.attrs["sht_file"] = Path(str(sht_p)).name
                             pg.attrs["sht_path"] = str(sht_p)
+                        # space group, lattice, crystal frame (format 1.4)
+                        from backend.api.services import ang_export as _ang
+                        for _k, _v in _ang.phase_table_attrs(
+                                phase_obj, sht_path=sht_p).items():
+                            pg.attrs[_k] = _v
                 except Exception as e:
                     logger.warning("Export: failed to write /Indexing/Phases: %s", e)
 
@@ -10762,6 +10769,11 @@ async def export_indexing_result(req: ExportRequest):
                         if sht_p:
                             pg.attrs["sht_file"] = Path(str(sht_p)).name
                             pg.attrs["sht_path"] = str(sht_p)
+                        # space group, lattice, crystal frame (format 1.4)
+                        from backend.api.services import ang_export as _ang
+                        for _k, _v in _ang.phase_table_attrs(
+                                phase_obj, sht_path=sht_p).items():
+                            pg.attrs[_k] = _v
                 except Exception as e:
                     logger.warning(
                         "Light export: /Indexing/Phases write failed: %s", e

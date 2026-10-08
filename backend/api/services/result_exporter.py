@@ -38,7 +38,15 @@ logger = logging.getLogger(__name__)
 #         a raw read matches the vendor solution. /Indexing.attrs carries
 #         source_vendor + orientation_reference_frame; the reader inverts it on
 #         re-import. (Fixes Irmi's 90deg-about-ND offset, 2026-06-05.)
-FORMAT_VERSION = "1.3"
+#   1.4 - additions only, readers of 1.3 are unaffected: /Acquisition (the
+#         source scan's Scanning Rotation Angle, Specimen Orientation Euler,
+#         Tilt Angle under their h5oina names, plus working distance, beam
+#         voltage and detector tilt; none applied to euler_angles);
+#         /Indexing/Phases/<k> gains space_group (number) + space_group_symbol,
+#         lattice_constants (a, b, c in angstrom, alpha, beta, gamma in degrees)
+#         and crystal_reference_frame; /Indexing gains eds_chemistry_prior,
+#         phase_assignment and crystal_reference_frame.
+FORMAT_VERSION = "1.4"
 
 
 def place_rows_on_grid(rows, original_shape, selection_mask=None,
@@ -303,13 +311,53 @@ def write_acquisition_group(f, geometry: Optional[Dict], *,
     if not g:
         return
     grp = f["Acquisition"] if "Acquisition" in f else f.create_group("Acquisition")
+    raw = g.pop("h5oina_header", None) or {}
     grp.attrs["description"] = (
         "Acquisition geometry of the source scan, copied from its header. "
-        "Angles in degrees, working distance in mm, beam voltage in kV.")
+        "The *_deg keys are in degrees, working_distance_mm in mm, "
+        "beam_voltage_kv in kV. The values under their h5oina header names "
+        "(Scanning Rotation Angle, Specimen Orientation Euler, Tilt Angle) are "
+        "verbatim, in radians.")
     if source:
         grp.attrs["source"] = source
     for key, value in g.items():
         grp.attrs[key] = np.asarray(value, dtype=float) if isinstance(value, (list, tuple)) else float(value)
+    if raw:
+        for key, value in raw.items():
+            grp.attrs[key] = (np.asarray(value, dtype=float)
+                              if isinstance(value, (list, tuple)) else float(value))
+        grp.attrs["header_values_unit"] = "radians"
+        grp.attrs["applied_to_euler_angles"] = 0
+        grp.attrs["applied_to_euler_angles_note"] = (
+            "None of these values was applied to euler_angles in this file. "
+            "MTEX (loadEBSD_h5.m) turns the Scanning Rotation Angle of an h5oina "
+            "into its EulerCorrection, a rotation about the surface normal, when "
+            "it loads the h5oina; a reader that wants the frame MTEX gives the "
+            "source file has to apply that correction itself."
+        )
+
+
+def write_crystal_frame(idx_group) -> None:
+    """Say which crystal frame the Euler angles of /Indexing refer to."""
+    from backend.api.services.ang_export import CRYSTAL_FRAME
+
+    idx_group.attrs["crystal_reference_frame"] = CRYSTAL_FRAME
+
+
+def write_batch_phase_attrs(pg, record: Dict) -> None:
+    """Space group, lattice and crystal frame for one ``/Indexing/Phases/<k>``
+    of a batch export, from what the checkpoint recorded for the phase."""
+    from types import SimpleNamespace
+
+    from backend.api.services import ang_export
+
+    attrs = ang_export.phase_table_attrs(
+        SimpleNamespace(name=record.get("name", "")),
+        phase_file=record.get("phase_file") or None,
+        recorded_lattice=record.get("lattice_constants"),
+        recorded_space_group=record.get("space_group"))
+    for key, value in attrs.items():
+        pg.attrs[key] = value
 
 
 def write_assignment_provenance(idx_group, provenance: Dict) -> None:
@@ -320,6 +368,21 @@ def write_assignment_provenance(idx_group, provenance: Dict) -> None:
     """
     idx_group.attrs["eds_chemistry_prior"] = 1 if provenance.get("eds_prior") else 0
     idx_group.attrs["phase_assignment"] = str(provenance["text"])
+
+
+def _stated_in_batch_export(f, idx, source_path) -> None:
+    """What every export states, for the checkpoint-based writers.
+
+    A batch gives each pixel the phase with the highest confidence index and
+    never reads the EDS, hence ``eds_chemistry_prior = 0``.
+    """
+    from backend.api.services import ang_export
+
+    write_assignment_provenance(idx, ang_export.assignment_provenance(None))
+    write_crystal_frame(idx)
+    geometry = ang_export.read_source_geometry(str(source_path))
+    write_acquisition_group(
+        f, geometry, source="h5oina /1/EBSD/Header" if geometry else "")
 
 
 def _write_citations(group, steps: Optional[List[dict]]) -> None:
@@ -471,6 +534,12 @@ def export_result_h5(
                 "ci_median": float(phases_grp[name].attrs.get("ci_median", 0.0)),
                 "phase_file": phases_grp[name].attrs.get("phase_file", ""),
                 "duration_sec": float(phases_grp[name].attrs.get("duration_sec", 0.0)),
+                "space_group": (int(phases_grp[name].attrs["space_group"])
+                                if "space_group" in phases_grp[name].attrs else None),
+                "point_group": (str(phases_grp[name].attrs["point_group"])
+                                if "point_group" in phases_grp[name].attrs else None),
+                "lattice_constants": (list(phases_grp[name].attrs["lattice_constants"])
+                                      if "lattice_constants" in phases_grp[name].attrs else None),
             }
 
         # Read auto-assignment if available. When /apply-cleanup has run,
@@ -526,6 +595,7 @@ def export_result_h5(
         idx.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(idx, scan_provenance)
         _write_citations(idx, citation_steps)
+        _stated_in_batch_export(f, idx, source_path)
 
         # --- Per-Phase Results ---
         per_phase = idx.create_group("PerPhase")
@@ -566,6 +636,7 @@ def export_result_h5(
             pg.attrs["name"] = name
             pg.attrs["phase_file"] = phase_data[name]["phase_file"]
             pg.attrs["ci_mean"] = phase_data[name]["ci_mean"]
+            write_batch_phase_attrs(pg, {"name": name, **phase_data[name]})
 
         # --- Auto-Assignment ---
         if auto_assign:
@@ -1607,6 +1678,8 @@ def export_result_h5_light(
                 "duration_sec": float(phases_grp[name].attrs.get("duration_sec", 0.0)),
                 "space_group": int(_sg) if _sg is not None else None,
                 "point_group": str(_pg) if _pg else None,
+                "lattice_constants": (list(phases_grp[name].attrs["lattice_constants"])
+                                      if "lattice_constants" in phases_grp[name].attrs else None),
             }
 
         auto_assign = {}
@@ -1667,6 +1740,7 @@ def export_result_h5_light(
         idx.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(idx, scan_provenance)
         _write_citations(idx, citation_steps)
+        _stated_in_batch_export(f, idx, source_path)
         # Store the µm step size on /Indexing AND /Detector below so any
         # reader path finds it without guessing. The reader in
         # analysis.py uses this to scale CrystalMap.x/y from pixel units
@@ -1733,6 +1807,7 @@ def export_result_h5_light(
                 pg.attrs["space_group"] = int(phase_data[name]["space_group"])
             if phase_data[name].get("point_group"):
                 pg.attrs["point_group"] = str(phase_data[name]["point_group"])
+            write_batch_phase_attrs(pg, {"name": name, **phase_data[name]})
 
         # Auto-Assignment
         if auto_assign:

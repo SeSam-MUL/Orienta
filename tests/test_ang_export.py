@@ -473,3 +473,170 @@ def test_real_sht_lattice_agrees_with_the_cif():
     from_cif = ang_export.lattice_from_cif(cif)
     assert from_sht == pytest.approx(from_cif, rel=2e-3)
     assert from_sht[0] > 10.0              # angstrom, not nanometre
+
+
+# ---------------------------------------------------------------------------
+# TSL symmetry codes
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("point_group, code", [
+    ("1", "1"), ("-1", "1"),
+    ("2/m", "2"), ("112", "2"),
+    ("222", "22"), ("mmm", "22"),
+    ("4", "4"), ("4/m", "4"), ("422", "42"), ("4/mmm", "42"),
+    ("3", "3"), ("-3", "3"), ("32", "32"), ("-3m", "32"),
+    ("6", "6"), ("6/m", "6"), ("622", "62"), ("6/mmm", "62"),
+    ("23", "23"), ("m-3", "23"),
+    ("432", "43"), ("-43m", "43"), ("m-3m", "43"),
+])
+def test_tsl_symmetry_code_is_the_digits_of_the_laue_rotation_group(
+        point_group, code):
+    from orix.quaternion.symmetry import _groups
+    from backend.api.services import ang_export
+    pg = next(g for g in _groups if g.name == point_group)
+    assert ang_export.tsl_symmetry_code(pg) == code
+
+
+def test_a_point_group_without_a_tsl_code_is_refused():
+    from backend.api.services import ang_export
+    with pytest.raises(ValueError, match="symmetry"):
+        ang_export.tsl_symmetry_code(None)
+
+
+def test_the_ang_writes_tsl_codes_not_group_names(monkeypatch, tmp_path):
+    _activate(monkeypatch, _make_result())
+    out = tmp_path / "r.ang"
+    assert _export(TestClient(app), "ang", out).status_code == 200
+    blocks = _phase_blocks(_header(out))
+    codes = {b["MaterialName"][0]: b["Symmetry"][0] for b in blocks.values()}
+    assert codes == {"Al": "43", "Fe4Al13": "2"}
+    # and orix, which reads these codes back, recovers the Laue group
+    xmap = orix_load(str(out))
+    laue = {p.name: p.point_group.laue.name for _, p in xmap.phases if p.name}
+    assert laue == {"Al": "m-3m", "Fe4Al13": "2/m"}
+
+
+def test_a_phase_without_symmetry_stops_the_ang_export(monkeypatch, tmp_path):
+    result = _make_result()
+    result.xmap.phases[2].point_group = None
+    _activate(monkeypatch, result)
+    r = _export(TestClient(app), "ang", tmp_path / "r.ang")
+    assert r.status_code == 400
+    assert "symmetry" in r.json()["detail"].lower()
+    assert "Fe4Al13" in r.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# the phase table of the .h5 files
+# ---------------------------------------------------------------------------
+
+_SG = {"al.sht": 225, "fe4al13.sht": 12}
+
+
+@pytest.fixture(autouse=True)
+def stub_sht_space_group(monkeypatch):
+    from backend.api.services import ang_export
+    monkeypatch.setattr(
+        ang_export, "space_group_from_sht",
+        lambda path: _SG[Path(str(path)).name.lower()], raising=False)
+
+
+@pytest.mark.parametrize("fmt", ["h5_light", "h5"])
+def test_phase_table_carries_space_group_lattice_and_frame(
+        monkeypatch, tmp_path, fmt, fake_h5oina):
+    _activate(monkeypatch, _make_result(), source_path=fake_h5oina)
+    out = tmp_path / f"r_{fmt}.h5"
+    assert _export(TestClient(app), fmt, out).status_code == 200
+    with h5py.File(out, "r") as f:
+        ph = {str(g.attrs["name"]): g.attrs for g in f["Indexing/Phases"].values()}
+        al, fe = ph["Al"], ph["Fe4Al13"]
+        assert int(al["space_group"]) == 225
+        assert str(al["space_group_symbol"]).replace(" ", "") == "Fm-3m"
+        assert int(fe["space_group"]) == 12
+        assert str(fe["space_group_symbol"]).replace(" ", "") == "C2/m"
+        np.testing.assert_allclose(al["lattice_constants"],
+                                   [4.049, 4.049, 4.049, 90, 90, 90], atol=1e-3)
+        np.testing.assert_allclose(fe["lattice_constants"],
+                                   [15.488, 8.087, 12.477, 90, 107.669, 90], atol=1e-3)
+        assert str(fe["lattice_length_unit"]) == "angstrom"
+        frame = str(fe["crystal_reference_frame"])
+        assert "X||a" in frame and "Z||c*" in frame
+        idx_frame = str(f["Indexing"].attrs["crystal_reference_frame"])
+        assert "X||a" in idx_frame and "Z||c*" in idx_frame
+        assert "X||a*" in idx_frame      # names what the other convention is
+
+
+def test_the_h5_frame_statement_is_the_same_for_every_route(monkeypatch, tmp_path):
+    seen = set()
+    for method in (IndexingMethod.SPHERICAL, IndexingMethod.HOUGH,
+                   IndexingMethod.DICTIONARY):
+        result = _make_result()
+        result.method = method
+        _activate(monkeypatch, result)
+        out = tmp_path / f"{method.value}.h5"
+        assert _export(TestClient(app), "h5_light", out).status_code == 200
+        with h5py.File(out, "r") as f:
+            seen.add(str(f["Indexing"].attrs["crystal_reference_frame"]))
+    assert len(seen) == 1
+
+
+# ---------------------------------------------------------------------------
+# the source header, verbatim, and not applied
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("fmt", ["h5_light", "h5"])
+def test_source_header_values_are_copied_under_their_own_names(
+        monkeypatch, tmp_path, fmt, fake_h5oina):
+    _activate(monkeypatch, _make_result(), source_path=fake_h5oina)
+    out = tmp_path / f"r_{fmt}.h5"
+    assert _export(TestClient(app), fmt, out).status_code == 200
+    with h5py.File(out, "r") as f:
+        a = f["Acquisition"].attrs
+        assert float(a["Scanning Rotation Angle"]) == pytest.approx(np.pi, abs=1e-5)
+        assert float(a["Tilt Angle"]) == pytest.approx(np.deg2rad(70.0), abs=1e-5)
+        np.testing.assert_allclose(np.ravel(a["Specimen Orientation Euler"]),
+                                   [0.0, -np.pi / 2, 0.0], atol=1e-5)
+        assert str(a["header_values_unit"]) == "radians"
+        assert int(a["applied_to_euler_angles"]) == 0
+        note = str(a["applied_to_euler_angles_note"])
+        assert "none" in note.lower() and "euler_angles" in note
+        assert "EulerCorrection" in note
+
+
+# ---------------------------------------------------------------------------
+# format version and its documentation
+# ---------------------------------------------------------------------------
+
+_DOC = Path(__file__).resolve().parents[1] / "docs" / "light_h5_format.md"
+
+
+def test_writer_and_documentation_agree_on_the_format_version(
+        monkeypatch, tmp_path):
+    from backend.api.services.result_exporter import FORMAT_VERSION
+    _activate(monkeypatch, _make_result())
+    out = tmp_path / "r_light.h5"
+    assert _export(TestClient(app), "h5_light", out).status_code == 200
+    with h5py.File(out, "r") as f:
+        assert str(f["Indexing"].attrs["format_version"]) == FORMAT_VERSION
+        assert str(f["Documentation"].attrs["format_version"]) == FORMAT_VERSION
+    doc = _DOC.read_text(encoding="utf-8")
+    assert f'| `format_version` | str | currently `"{FORMAT_VERSION}"`' in doc
+    assert f'@format_version        str    "{FORMAT_VERSION}"' in doc
+    assert re.search(rf"^\| {re.escape(FORMAT_VERSION)} \|", doc, re.M), \
+        "the version history has no row for the current version"
+
+
+def test_a_current_light_file_imports_again(monkeypatch, tmp_path, fake_h5oina):
+    _activate(monkeypatch, _make_result(), source_path=fake_h5oina)
+    out = tmp_path / "r_light.h5"
+    client = TestClient(app)
+    assert _export(client, "h5_light", out).status_code == 200
+    r = client.post("/api/indexing/import-h5", json={"path": str(out)})
+    assert r.status_code == 200, r.text
+
+
+def test_the_documentation_describes_the_scan_provenance_attributes():
+    doc = _DOC.read_text(encoding="utf-8")
+    for needle in ("scan_row_offset", "scan_col_offset", "scan_shape",
+                   "0-based", "first row", "first column"):
+        assert needle in doc, needle
