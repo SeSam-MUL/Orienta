@@ -13,6 +13,34 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+@pytest.fixture(autouse=True)
+def _restore_viewer_state():
+    """Several tests below install a MagicMock signal as the viewer's active
+    signal. Put the module state back afterwards so it cannot leak into the
+    next test file (a leaked mock reports an empty detector shape)."""
+    from backend.api.routes import ebsd_viewer as ev
+    scalars = ("_ebsd_signal", "_ebsd_file_path", "_active_dataset")
+    dicts = ("_loaded_files", "_raw_signals", "_positions",
+             "_dirty_datasets", "_signal_masks")
+    saved_scalars = {n: getattr(ev, n) for n in scalars}
+    saved_dicts = {n: getattr(ev, n).copy() for n in dicts}
+    from backend.api.services.calibration_store import calibration_store
+    saved_cal = dict(calibration_store._entries)
+    yield
+    for n, v in saved_scalars.items():
+        setattr(ev, n, v)
+    for n, v in saved_dicts.items():
+        live = getattr(ev, n)
+        if isinstance(live, list):
+            live[:] = v
+        else:
+            live.clear()
+            live.update(v)
+    # /load with a MagicMock signal registers an entry whose detector shape is ().
+    calibration_store._entries.clear()
+    calibration_store._entries.update(saved_cal)
+
+
 # Small real file shipped with the repo. Used because we want to verify the
 # actual kikuchipy lazy-load path, not a mock.
 SMALL_TEST_FILE = Path(__file__).resolve().parents[1] / "Test_data" / "LoGainNi.h5"

@@ -358,7 +358,17 @@ def pc_client(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     import backend.api.routes.pcrefinement as pcr
+    from backend.api.routes import ebsd_viewer
+    from backend.api.services.calibration_store import calibration_store
     monkeypatch.setattr(pcr, "_sessions", {})
+    # These routes attach a detector from the calibration store, or failing
+    # that from the viewer's active signal. Whatever an earlier test left in
+    # either (a MagicMock signal, say) is not this test's detector: kikuchipy
+    # 0.13 rejects the empty shape such a mock reports, so isolate both.
+    monkeypatch.setattr(ebsd_viewer, "_ebsd_signal", None, raising=False)
+    monkeypatch.setattr(ebsd_viewer, "_active_dataset", "", raising=False)
+    monkeypatch.setattr(ebsd_viewer, "_raw_signals", {}, raising=False)
+    monkeypatch.setattr(calibration_store, "_entries", {})
     app = FastAPI()
     app.include_router(pcr.router, prefix="/api/pc")
     return TestClient(app), pcr
@@ -785,3 +795,31 @@ def test_a_pattern_is_indexed_at_the_detectors_pc_not_at_the_one_its_indexer_was
     expected = fresh.index_pattern(0)[0]
     assert before != pytest.approx(expected, abs=1e-6), "the PCs must differ for this to mean anything"
     assert after == pytest.approx(expected, abs=1e-9)
+
+
+@pytest.fixture
+def leaked_viewer_signal():
+    """What another test file can leave behind: a MagicMock as the viewer's
+    active signal, reporting an empty detector shape. Restored afterwards.
+    Must come BEFORE ``pc_client`` in a test's arguments."""
+    from unittest.mock import MagicMock
+    from backend.api.routes import ebsd_viewer
+    saved = (ebsd_viewer._ebsd_signal, ebsd_viewer._active_dataset,
+             dict(ebsd_viewer._raw_signals))
+    ebsd_viewer._ebsd_signal = MagicMock()
+    ebsd_viewer._active_dataset = "leaked_by_another_test"
+    ebsd_viewer._raw_signals.clear()
+    yield
+    ebsd_viewer._ebsd_signal, ebsd_viewer._active_dataset = saved[0], saved[1]
+    ebsd_viewer._raw_signals.clear()
+    ebsd_viewer._raw_signals.update(saved[2])
+
+
+def test_pc_routes_do_not_depend_on_a_signal_an_earlier_test_left_behind(
+        leaked_viewer_signal, pc_client, duplex_cifs):
+    """Four tests above failed only in a full run on kikuchipy 0.13: an earlier
+    file left a MagicMock signal in the viewer, ``/status`` built a detector
+    from its empty shape, and 0.13 validates the shape (0.11 accepted it)."""
+    c, _ = pc_client
+    assert c.post("/api/pc/phase/add", json={"cif_path": duplex_cifs[0]}).status_code == 200
+    assert c.get("/api/pc/status").status_code == 200
