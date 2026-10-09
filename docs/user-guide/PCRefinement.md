@@ -72,6 +72,10 @@ the experimental pattern.
    **Pixel Size & Binning** sub-group lets you set binning and detector width to
    derive the physical pixel size. Warnings appear if the sample tilt is far from
    70° or the detector tilt is out of the usual range.
+   Orienta interprets the azimuthal angle with the EMsoft sign convention on all
+   paths; whether that matches the value in your vendor's file header has not
+   been verified, and a kikuchipy h5ebsd file written by kikuchipy 0.12 or newer
+   stores the angle with the opposite meaning.
 
 ### Choose the reflector families (Hough)
 
