@@ -196,6 +196,30 @@ def test_diagnostics_export_includes_log_files(client, monkeypatch, tmp_path):
     assert b"something happened" in zf.read("logs/orienta.log")
 
 
+def test_diagnostics_export_includes_the_package_sync_records(client, monkeypatch, tmp_path):
+    """Which lock the packages were last brought to, and why the last attempt to
+    bring them there failed, are what a report about 'the update did nothing'
+    needs. The in-flight marker is not in the list: it is state, not evidence."""
+    (tmp_path / ".packages_lock.json").write_text('{"sha256": "abc"}', encoding="utf-8")
+    (tmp_path / ".packages_sync_failed.json").write_text('{"reason": "network"}', encoding="utf-8")
+    (tmp_path / ".packages_sync.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(system_routes, "_orienta_home_candidates", lambda: [tmp_path])
+    r = client.get("/api/system/diagnostics/export")
+    zf = zipfile.ZipFile(io.BytesIO(r.content))
+    names = zf.namelist()
+    assert "install/.packages_lock.json" in names
+    assert "install/.packages_sync_failed.json" in names
+    assert "install/.packages_sync.json" not in names
+    assert json.loads(zf.read("install/.packages_lock.json")) == {"sha256": "abc"}
+
+
+def test_diagnostics_export_without_package_sync_records_is_unchanged(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(system_routes, "_orienta_home_candidates", lambda: [tmp_path])
+    r = client.get("/api/system/diagnostics/export")
+    names = zipfile.ZipFile(io.BytesIO(r.content)).namelist()
+    assert not [n for n in names if n.startswith("install/")]
+
+
 def test_export_with_context_writes_report_txt(client):
     """The user's own words plus the trail — the half no log can reconstruct."""
     r = client.post(

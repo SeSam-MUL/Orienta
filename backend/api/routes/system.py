@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import platform
 import sys
 import time
@@ -258,6 +259,39 @@ def _diagnostics_info() -> dict:
     }
 
 
+#: What the shell's package sync leaves in the Orienta home (electron/setup/
+#: package_sync.js): the lock the packages were last brought to, and the last
+#: failure to bring them there. Small JSON, no data of the user's.
+_PACKAGE_SYNC_FILES = (".packages_lock.json", ".packages_sync_failed.json")
+
+
+def _orienta_home_candidates() -> list[Path]:
+    """Where the install's home may be, from this process's point of view.
+
+    The shell hands the backend its environment, so an explicit ``ORIENTA_HOME``
+    is there; otherwise an installed runtime sits at ``<home>/runtime``.
+    """
+    homes: list[Path] = []
+    explicit = os.environ.get("ORIENTA_HOME", "").strip()
+    if explicit:
+        homes.append(Path(explicit))
+    if PROJECT_ROOT.name == "runtime":
+        homes.append(PROJECT_ROOT.parent)
+    return homes
+
+
+def _package_sync_files() -> list[Path]:
+    found: list[Path] = []
+    seen: set[str] = set()
+    for home in _orienta_home_candidates():
+        for name in _PACKAGE_SYNC_FILES:
+            candidate = home / name
+            if name not in seen and candidate.is_file():
+                seen.add(name)
+                found.append(candidate)
+    return found
+
+
 def _recent_sim_logs(limit: int = 3) -> list[Path]:
     sim_dir = PROJECT_ROOT / "data" / "sim_logs"
     try:
@@ -352,6 +386,12 @@ def export_diagnostics(payload: dict | None = Body(None)) -> Response:
                     zf.write(p, arcname=f"logs/{name}")
                 except Exception:
                     logger.warning("Diagnostics export: could not add %s", p)
+
+        for p in _package_sync_files():
+            try:
+                zf.write(p, arcname=f"install/{p.name}")
+            except Exception:
+                logger.warning("Diagnostics export: could not add %s", p)
 
         for p in _recent_sim_logs():
             try:
