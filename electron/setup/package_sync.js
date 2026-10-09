@@ -710,7 +710,7 @@ function tailOf(text, lines = 6) {
  *   isCancelled()                          the app is quitting
  *   log(line)
  *   freeBytes(dir)                         -> {bytes, known}
- *   onPhase('syncing')                     the waiting page's text
+ *   onPhase('syncing')                     the waiting page's text; before pip is asked
  *   notify({reason, detail})               the one dialog; awaited
  *   syncMacos(ctx)                         tests only: replaces package_sync_macos.js
  *   macos {…}                              tests and CI only: see package_sync_macos.js
@@ -869,6 +869,10 @@ async function syncPip(ctx, verdict, d, say) {
   if (!free.known) say('free space could not be measured; going on');
 
   // ---- what would change ---------------------------------------------------
+  // The page says "syncing" from here, not from the install: the question to pip
+  // takes seconds of its own, and until now the page said "Loading the analysis
+  // engine" all through it. The fast path and the skips never get here.
+  d.onPhase('syncing');
   const reportPath = path.join(home, 'setup-tmp', 'package-sync-report.json');
   try { fs.mkdirSync(path.dirname(reportPath), { recursive: true }); } catch { /* run will say */ }
   removeFile(reportPath, fs);
@@ -954,7 +958,6 @@ async function syncPip(ctx, verdict, d, say) {
     say(`repairing: ${[...target].map(([n, v]) => `${n} ${v}`).join(', ') || '(verification only)'}`);
   }
 
-  d.onPhase('syncing');
   const names = [...target.keys()];
   const specs = [...target].map(([n, v]) => specFor(n, v)).filter(Boolean);
   const expected = {};

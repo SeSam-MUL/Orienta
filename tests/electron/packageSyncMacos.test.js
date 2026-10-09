@@ -468,6 +468,27 @@ function runMac(h, fake, over = {}, ctx = {}) {
 }
 
 describe('the update of a 0.4.6 environment', () => {
+  it('the page says "syncing" before the first process runs, not in the middle of the flow', async () => {
+    const h = macHome();
+    const fake = fakeMicromamba(h);
+    const onPhase = vi.fn();
+    const seen = [];
+    const spy = async (exe, args, opts) => {
+      seen.push(onPhase.mock.calls.map((c) => c[0]));
+      return fake.run(exe, args, opts);
+    };
+    await runMac(h, fake, { run: spy, onPhase }).result;
+    expect(fake.calls[0].kind).toBe('version');
+    expect(seen[0]).toEqual(['syncing']);
+  });
+
+  it('an environment that is already as locked does not touch the page', async () => {
+    const h = macHome({ installed: NEW_LOCK });
+    const { result, onPhase } = runMac(h, fakeMicromamba(h));
+    expect(await result).toMatchObject({ action: 'noop' });
+    expect(onPhase).not.toHaveBeenCalled();
+  });
+
   it('brings the nine packages to the lock, and only those', async () => {
     const h = macHome();
     const before = metaFiles(h);

@@ -761,7 +761,7 @@ describe('syncing', () => {
     expect(exists(h.home, sync.MARKER_FILE)).toBe(false);
     expect(exists(h.home, sync.FAILURE_FILE)).toBe(false);
     expect(exists(h.home, path.join('setup-tmp', 'package-sync-report.json'))).toBe(false);
-    // the waiting page was told, once, and only after the question was answered
+    // the waiting page was told, once (and before the question: see below)
     expect(made.onPhase).toHaveBeenCalledTimes(1);
     expect(made.onPhase).toHaveBeenCalledWith('syncing');
     expect(made.notify).not.toHaveBeenCalled();
@@ -823,7 +823,40 @@ describe('syncing', () => {
     expect((await result).action).toBe('noop');
     expect(pip.kinds()).toEqual(['dry']);
     expect(readJson(h.home, sync.RECORD_FILE).how).toBe('noop');
-    expect(made.onPhase).not.toHaveBeenCalled();
+    expect(made.onPhase).toHaveBeenCalledTimes(1);   // the question itself takes seconds
+  });
+
+  it('the page says "syncing" BEFORE pip is asked, not after: the question takes seconds of its own', async () => {
+    const h = makeHome();
+    const pip = fakePip();
+    const onPhase = vi.fn();
+    const seenAtFirstProcess = [];
+    const inner = pip.run;
+    const spy = async (exe, args, opts) => {
+      seenAtFirstProcess.push(onPhase.mock.calls.map((c) => c[0]));
+      return inner(exe, args, opts);
+    };
+    await run({}, h, pip, { run: spy, onPhase }).result;
+    expect(pip.calls[0].kind).toBe('dry');
+    expect(seenAtFirstProcess[0]).toEqual(['syncing']);
+  });
+
+  it('the fast path, a skip and a refusal for room never change the page', async () => {
+    const h = makeHome();
+    sync.recordFirstInstall({
+      home: h.home, mode: 'cpu', lockName: 'requirements-lock-cpu.txt', lockText: LOCK, platformName: 'win32',
+    });
+    const fast = run({}, h, fakePip());
+    await fast.result;
+    expect(fast.made.onPhase).not.toHaveBeenCalled();
+    const skipped = run({ env: { [sync.SKIP_ENV]: '1' } }, h, fakePip());
+    await skipped.result;
+    expect(skipped.made.onPhase).not.toHaveBeenCalled();
+    const h2 = makeHome({ files: {} });
+    fs.rmSync(path.join(h2.home, '.packages_lock.json'), { force: true });
+    const tight = run({}, h2, fakePip(), { freeBytes: () => ({ bytes: 1, known: true }) });
+    await tight.result;
+    expect(tight.made.onPhase).not.toHaveBeenCalled();
   });
 
   it('never runs in a development checkout, or against a conda environment of the developer\'s', async () => {

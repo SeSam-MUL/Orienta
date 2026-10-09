@@ -573,6 +573,9 @@ async function syncMacos(ctx, d) {
   };
 
   // ---- nothing differs ----------------------------------------------------
+  // Whatever follows takes seconds at least (probes, a download, a verification):
+  // the page says so from here. A plain "nothing to change" never reaches it.
+  if (delta.length || repairing) d.onPhase('syncing');
   if (!delta.length) {
     if (!repairing) {
       S.removeFile(failureFile, fs);
@@ -656,7 +659,6 @@ async function syncMacos(ctx, d) {
   }
 
   try {
-    d.onPhase('syncing');
     const args = { root: cfg.root, prefix: cfg.prefix, lockFile, platform: cfg.condaPlatform };
 
     // ---- the network phase: nothing is linked --------------------------------
