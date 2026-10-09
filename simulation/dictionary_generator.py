@@ -11,6 +11,7 @@ The generated dictionary can be cached to disk with a JSON metadata sidecar
 so it can be re-used for future indexing runs with the same detector setup.
 """
 
+import copy
 import json
 import logging
 from dataclasses import asdict, dataclass, field
@@ -312,6 +313,12 @@ def generate_dictionary(
             dtype_out=np.float32,
             compute=True,
         )
+    # The saved file carries Orienta's value of the azimuthal angle (the EMsoft
+    # sign, as the sidecar does), not kikuchipy's reading of it: get_patterns
+    # leaves the converted copy on the signal, and the chunked branch builds a
+    # signal without any detector. Without this the header says -w on kikuchipy
+    # >= 0.12.1 (unchunked) or 0 (chunked) for a dictionary made at +w.
+    dictionary.detector = copy.deepcopy(detector)
     logger.info(f"Dictionary generated: {dictionary.data.shape}")
     _emit(f"Dictionary ready: {dictionary.data.shape}")
 
