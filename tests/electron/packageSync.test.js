@@ -740,6 +740,26 @@ describe('syncing', () => {
     expect(made.notify).not.toHaveBeenCalled();
   });
 
+  it('logs what pip says it did, not the hundred packages it found already in place', async () => {
+    const h = makeHome();
+    const pip = fakePip();
+    const inner = pip.run;
+    pip.run = async (exe, args, opts) => {
+      if (args.includes('install') && !args.includes('--dry-run') && opts.onLine) {
+        opts.onLine('Requirement already satisfied: numpy>=1.23 in c:/x');
+        opts.onLine('Collecting kikuchipy==0.13.1');
+        opts.onLine('Successfully installed kikuchipy-0.13.1');
+      }
+      return inner(exe, args, opts);
+    };
+    const { made, result } = run({}, h, pip);
+    await result;
+    const text = made.log.join('\n');
+    expect(text).toContain('pip: Collecting kikuchipy==0.13.1');
+    expect(text).toContain('pip: Successfully installed kikuchipy-0.13.1');
+    expect(text).not.toContain('already satisfied');
+  });
+
   it('the marker is on disk while pip writes, and says what it was doing', async () => {
     const h = makeHome();
     const pip = fakePip();

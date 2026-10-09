@@ -821,6 +821,14 @@ async function syncPip(ctx, verdict, d, say) {
 
   const cancelled = () => d.isCancelled();
 
+  /** pip's own words go to the log, except "Requirement already satisfied": a
+   *  full lock prints one per installed package, which would bury the dozen
+   *  lines that say what actually happened. */
+  const pipLine = (line) => {
+    if (/^Requirement already satisfied/.test(line)) return;
+    say(`  pip: ${line}`);
+  };
+
   /** Record a failure, show the one dialog, and let the start go on. */
   const fail = async (reason, detail) => {
     const rec = nextFailure(state.failure, { digest, reason, now: d.now(), detail });
@@ -851,7 +859,7 @@ async function syncPip(ctx, verdict, d, say) {
   removeFile(reportPath, fs);
   const dry = await d.run(
     python, dryRunArgs({ mode, lockPath, reportPath }),
-    { timeoutMs: TIMEOUT_MS.dryRun, onLine: (line) => say(`  pip: ${line}`) },
+    { timeoutMs: TIMEOUT_MS.dryRun, onLine: pipLine },
   );
   if (cancelled() || dry.cancelled) return { cancelled: true };
 
@@ -957,7 +965,7 @@ async function syncPip(ctx, verdict, d, say) {
     : installArgs({ mode, lockPath });
   say(`running: pip install ${repairing && specs.length ? specs.join(' ') : `-r ${lockName}`}`);
   const install = await d.run(python, installArgsList, {
-    timeoutMs: TIMEOUT_MS.install, onLine: (line) => say(`  pip: ${line}`),
+    timeoutMs: TIMEOUT_MS.install, onLine: pipLine,
   });
   if (cancelled() || install.cancelled) {
     // The marker stays: the next start re-runs and verifies.
@@ -1030,7 +1038,7 @@ async function syncPip(ctx, verdict, d, say) {
   }
 
   const again = await d.run(python, reinstallArgs({ mode, specs }), {
-    timeoutMs: TIMEOUT_MS.install, onLine: (line) => say(`  pip: ${line}`),
+    timeoutMs: TIMEOUT_MS.install, onLine: pipLine,
   });
   if (cancelled() || again.cancelled) return { cancelled: true };
   check = again.code === 0
