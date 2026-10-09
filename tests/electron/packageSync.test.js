@@ -1371,6 +1371,10 @@ describe('the shell does it, after the program files and before the backend', ()
     expect(branch).toMatch(/if\s*\(sync\.repair\)\s*\{[\s\S]*?showRepairWizard\(t\(shellLocale\(\), 'syncRepairBody'\)\);\s*return;\s*\}/);
   });
 
+  it('never lets a failure to run the sync at all stop the start', () => {
+    expect(MAIN).toMatch(/async function runPackageSync\(decision, plan\) \{\s*try \{\s*return await runPackageSyncInner\(decision, plan\);\s*\} catch \(err\) \{[\s\S]{0,300}?return \{ ok: true \};/);
+  });
+
   it('starts nothing when the app is quitting', () => {
     const branch = MAIN.slice(at('await runPackageSync('), at('startBackend(plan.python'));
     expect(branch).toMatch(/if\s*\(sync\.cancelled\)\s*return;/);

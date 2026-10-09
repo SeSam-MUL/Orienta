@@ -341,7 +341,8 @@ def export_diagnostics(payload: dict | None = Body(None)) -> Response:
     trail — the half no log can reconstruct), info.json (version,
     environment, packages, GPU, loaded files), logs/orienta.log incl.
     rotations, the Electron-captured process log (backend-console.log) if
-    present, and the newest simulation job logs.
+    present, the records of the shell's package sync (install/), and the
+    newest simulation job logs.
 
     GET works without any context (nothing but the logs); POST carries the
     description and breadcrumbs collected in the browser.

@@ -754,6 +754,17 @@ let packageSyncRunner = null;
  * Everything else -- skipped, failed, synced, nothing to do -- is "go on".
  */
 async function runPackageSync(decision, plan) {
+  try {
+    return await runPackageSyncInner(decision, plan);
+  } catch (err) {
+    // Even a sync that cannot be LOADED (a damaged installation) must not stop
+    // the start: the previous packages are supported too.
+    logShellLine(`Package sync: skipped, it could not run (${err.message})`);
+    return { ok: true };
+  }
+}
+
+async function runPackageSyncInner(decision, plan) {
   const packageSync = require('./setup/package_sync');
   const installer = require('./setup/installer');
   const lang = shellLocale();
