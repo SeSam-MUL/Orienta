@@ -1668,8 +1668,15 @@ describe('the shell does it, after the program files and before the backend', ()
 
   it('shows a failure in a dialog titled and worded for it, with the shell log\'s path', () => {
     const fn = MAIN.slice(at('async function runPackageSync('), at('function showRepairWizard('));
-    expect(fn).toMatch(/notify:\s*\(\)\s*=>\s*showUpdateProblem\(\s*t\(lang, 'syncSkippedBody', \{ path: shellLog \}\), lang, t\(lang, 'updateFailedTitle'\)\)/);
+    expect(fn).toMatch(/notify:\s*\(\{ unverified \} = \{\}\)\s*=>\s*showUpdateProblem\(\s*t\(lang, unverified \? 'syncUnverifiedBody' : 'syncSkippedBody', \{ path: shellLog \}\),\s*lang, t\(lang, 'updateFailedTitle'\)\)/);
     expect(fn).toContain("'orienta-shell.log'");
+  });
+
+  it('is told by the sync which of the two texts is true, and the sync says it only where it holds', () => {
+    // main.js only picks the string; the flag must come from the module, for
+    // exactly the cases in which the environment is not the one it started from.
+    expect(fs.readFileSync(path.join(REPO, 'electron', 'setup', 'package_sync.js'), 'utf8'))
+      .toContain('await d.notify({ reason, detail, unverified });');
   });
 
   it('puts the waiting page into the syncing phase through the sync\'s own callback', () => {
@@ -1825,7 +1832,7 @@ describe('the waiting page', () => {
 });
 
 describe('the strings', () => {
-  const KEYS = ['syncingBody', 'syncingHint', 'syncSkippedBody', 'syncRepairBody'];
+  const KEYS = ['syncingBody', 'syncingHint', 'syncSkippedBody', 'syncUnverifiedBody', 'syncRepairBody'];
   it.each(['en', 'de', 'ja', 'zh'])('%s has the sync texts, and none is the English one', (lang) => {
     for (const key of KEYS) {
       expect(STRINGS[lang][key], `${lang}.${key}`).toBeTruthy();
@@ -1837,5 +1844,42 @@ describe('the strings', () => {
     expect(STRINGS[lang].syncingBody).toMatch(/kikuchipy.*orix.*PyEBSDIndex/);
     expect(t(lang, 'syncSkippedBody', { path: 'C:/logs/x.log' })).toContain('C:/logs/x.log');
     expect(t(lang, 'syncSkippedBody', { path: 'P' })).not.toContain('{{');
+    expect(t(lang, 'syncUnverifiedBody', { path: 'C:/logs/x.log' })).toContain('C:/logs/x.log');
+    expect(t(lang, 'syncUnverifiedBody', { path: 'P' })).not.toContain('{{');
+  });
+
+  // The dialog is shown BEFORE the backend starts: nothing "has started" or "is
+  // running" yet, so a past or progressive tense is a false statement. Each
+  // pattern is that tense in one language.
+  const ALREADY_RUNNING = {
+    en: /\b(?:is|are) running\b|\bhas started\b|\bstarted\b/,
+    de: /\bläuft\b|\bgestartet\b|\bstartete\b/,
+    ja: /起動しました|起動しています|実行しています/,
+    zh: /已启动|正在运行|已经启动/,
+  };
+  const WILL_START = {
+    en: /will start/, de: /startet/, ja: /起動し(?:ます|、)/, zh: /启动/,
+  };
+  it.each(['en', 'de', 'ja', 'zh'])('%s: the skipped-update text says Orienta WILL start, not that it did', (lang) => {
+    const text = STRINGS[lang].syncSkippedBody;
+    expect(text).toMatch(WILL_START[lang]);
+    expect(text).not.toMatch(ALREADY_RUNNING[lang]);
+  });
+
+  // Where an update is still unchecked, "the current ones, which this version
+  // also supports" would be a claim nobody can make.
+  const SUPPORT_CLAIM = {
+    en: /also supports|supports them/,
+    de: /unterstützt/,
+    ja: /対応しています/,
+    zh: /支持/,
+  };
+  it.each(['en', 'de', 'ja', 'zh'])('%s: the unverified text makes no claim about the set in place, and says it will start', (lang) => {
+    const text = STRINGS[lang].syncUnverifiedBody;
+    expect(text).not.toMatch(SUPPORT_CLAIM[lang]);
+    expect(text).not.toMatch(ALREADY_RUNNING[lang]);
+    expect(text).toMatch(WILL_START[lang]);
+    // and the plain one does make it (that is what makes them different)
+    expect(STRINGS[lang].syncSkippedBody).toMatch(SUPPORT_CLAIM[lang]);
   });
 });

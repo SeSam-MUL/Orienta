@@ -42,9 +42,17 @@ const STRINGS = {
     syncingHint: 'This runs once after an update. It needs an internet connection and '
       + 'takes about a minute. Your data is not touched. If it cannot finish, Orienta '
       + 'starts with the current packages.',
-    syncSkippedBody: 'Orienta could not update its Python packages and is running with '
+    // Shown BEFORE the backend starts: "will start", not "is running".
+    syncSkippedBody: 'Orienta could not update its Python packages. It will start with '
       + 'the current ones, which this version also supports. Your data and crystal '
       + 'library are not touched. Details are in the log file:\n{{path}}',
+    // An update of the packages is still unverified (or could not be checked in
+    // time): the set in place is not "the current ones", so no claim about them.
+    syncUnverifiedBody: 'The last update of Orienta\'s Python packages could not be '
+      + 'completed or checked. Orienta will start anyway and tries to finish it at the '
+      + 'next start. If something does not work in the meantime, reinstalling Orienta '
+      + 'repairs it. Your data and crystal library are not touched. Details are in the '
+      + 'log file:\n{{path}}',
     syncRepairBody: 'The updated Python packages did not pass the check, so Orienta has '
       + 'not started the analysis engine. Reinstalling Orienta repairs it; your data '
       + 'and crystal library are not touched.',
@@ -107,8 +115,14 @@ const STRINGS = {
       + 'nötig, und es dauert etwa eine Minute. Ihre Daten werden nicht angefasst. '
       + 'Falls die Aktualisierung nicht abgeschlossen werden kann, startet Orienta mit '
       + 'den vorhandenen Paketen.',
-    syncSkippedBody: 'Orienta konnte seine Python-Pakete nicht aktualisieren und läuft '
+    syncSkippedBody: 'Orienta konnte seine Python-Pakete nicht aktualisieren. Es startet '
       + 'mit den vorhandenen, die auch diese Version unterstützt. Ihre Daten und Ihre '
+      + 'Kristallbibliothek werden nicht angefasst. Einzelheiten stehen in der '
+      + 'Log-Datei:\n{{path}}',
+    syncUnverifiedBody: 'Die letzte Aktualisierung der Python-Pakete von Orienta konnte '
+      + 'nicht abgeschlossen oder geprüft werden. Orienta startet trotzdem und versucht '
+      + 'beim nächsten Start, sie zu beenden. Sollte in der Zwischenzeit etwas nicht '
+      + 'funktionieren, behebt eine Neuinstallation das. Ihre Daten und Ihre '
       + 'Kristallbibliothek werden nicht angefasst. Einzelheiten stehen in der '
       + 'Log-Datei:\n{{path}}',
     syncRepairBody: 'Die aktualisierten Python-Pakete haben die Prüfung nicht bestanden, '
@@ -169,8 +183,12 @@ const STRINGS = {
     syncingBody: 'Python パッケージ（kikuchipy、orix、PyEBSDIndex）を更新しています…',
     syncingHint: '更新後に一度だけ実行されます。インターネット接続が必要で、1 分ほどかかります。'
       + 'データはそのままです。完了できない場合は、現在のパッケージで Orienta を起動します。',
-    syncSkippedBody: 'Python パッケージを更新できなかったため、現在のパッケージのまま'
-      + '起動しました。このバージョンは現在のパッケージにも対応しています。'
+    syncSkippedBody: 'Python パッケージを更新できませんでした。現在のパッケージで '
+      + 'Orienta を起動します。このバージョンは現在のパッケージにも対応しています。'
+      + 'データと結晶ライブラリはそのままです。詳細は次のログファイルに記録されています:\n{{path}}',
+    syncUnverifiedBody: '前回の Python パッケージの更新を完了または確認できませんでした。'
+      + 'Orienta はこのまま起動し、次回の起動時に更新の完了を再度試みます。'
+      + 'その間に不具合が出た場合は、再インストールで修復できます。'
       + 'データと結晶ライブラリはそのままです。詳細は次のログファイルに記録されています:\n{{path}}',
     syncRepairBody: '更新した Python パッケージが確認に合格しなかったため、'
       + '解析エンジンを起動していません。Orienta を再インストールすると修復できます。'
@@ -227,8 +245,12 @@ const STRINGS = {
     syncingBody: '正在更新 Python 软件包（kikuchipy、orix、PyEBSDIndex）…',
     syncingHint: '更新后只运行一次，需要联网，大约需要一分钟。您的数据不会被改动。'
       + '如果无法完成，Orienta 会使用当前的软件包启动。',
-    syncSkippedBody: 'Orienta 无法更新其 Python 软件包，将继续使用当前的软件包，'
+    syncSkippedBody: 'Orienta 无法更新其 Python 软件包，将使用当前的软件包启动，'
       + '此版本同样支持它们。您的数据和晶体库不会被改动。详细信息见日志文件：\n{{path}}',
+    syncUnverifiedBody: '上一次 Python 软件包的更新未能完成或未能通过检查。'
+      + 'Orienta 仍会启动，并在下次启动时再次尝试完成更新。'
+      + '如果期间出现问题，重新安装即可修复。您的数据和晶体库不会被改动。'
+      + '详细信息见日志文件：\n{{path}}',
     syncRepairBody: '更新后的 Python 软件包未通过检查，因此 Orienta 没有启动分析引擎。'
       + '重新安装 Orienta 可以修复；您的数据和晶体库不会被改动。',
 

@@ -780,8 +780,12 @@ async function runPackageSyncInner(decision, plan) {
         onPhase: (phase) => waitingPage.setPhase(mainWindow, phase),
         runtimeTag: () => require('./bundled_update').installedTag(home),
         // One dialog per (lock digest, reason); the module decides when.
-        notify: () => showUpdateProblem(
-          t(lang, 'syncSkippedBody', { path: shellLog }), lang, t(lang, 'updateFailedTitle')),
+        // `unverified`: an update of the packages is still unchecked, so the plain
+        // text -- "the current ones, which this version also supports" -- would be
+        // a claim about a set nobody has verified.
+        notify: ({ unverified } = {}) => showUpdateProblem(
+          t(lang, unverified ? 'syncUnverifiedBody' : 'syncSkippedBody', { path: shellLog }),
+          lang, t(lang, 'updateFailedTitle')),
       },
     );
   } finally {
