@@ -190,7 +190,6 @@ function makeDeps(pip, over = {}) {
       freeBytes: () => ({ bytes: 10 * 1024 ** 3, known: true }),
       now: () => clock.t,
       runtimeTag: () => 'v0.4.7',
-      syncMacos: vi.fn(async () => sync.NO_MACOS_YET),
       ...over,
     },
   };
@@ -1185,17 +1184,19 @@ describe('macOS', () => {
   it('calls the injected hook with everything decided, and starts no pip', async () => {
     const h = macHome();
     const pip = fakePip();
-    const syncMacos = vi.fn(async () => ({ ok: true, skipped: 'macos-not-yet' }));
+    const syncMacos = vi.fn(async () => ({ ok: true, action: 'noop' }));
     const { made, result } = run({ platformName: 'darwin' }, h, pip, { syncMacos });
     const res = await result;
-    expect(res).toMatchObject({ ok: true, action: 'macos', skipped: 'macos-not-yet' });
+    expect(res).toEqual({ ok: true, action: 'noop' });
     expect(pip.calls).toEqual([]);
     expect(syncMacos).toHaveBeenCalledTimes(1);
     const ctx = syncMacos.mock.calls[0][0];
     expect(ctx.lockName).toBe('orienta-macos-lock.yml');
     expect(ctx.digest).toBe(sync.lockDigest('version: 1\n'));
     expect(ctx.decision.action).toBe('dryrun');
-    expect(made.log.join('\n')).toMatch(/macos-not-yet/);
+    expect(ctx.python).toBe(h.python);
+    expect(ctx.env).toEqual({});
+    expect(made.log.join('\n')).toMatch(/macOS: \{"ok":true,"action":"noop"\}/);
   });
 
   it('with a record for this lock the hook is not even called: macOS gets the fast path', async () => {
@@ -1210,8 +1211,21 @@ describe('macOS', () => {
     expect(syncMacos).not.toHaveBeenCalled();
   });
 
-  it('the default hook is the stub: record-and-skip', () => {
-    expect(sync.NO_MACOS_YET).toEqual({ ok: true, skipped: 'macos-not-yet' });
+  it('without a hook the micromamba flow runs -- and a directory that is no conda environment is left alone', async () => {
+    const h = macHome();
+    const pip = fakePip();
+    const { made, result } = run({ platformName: 'darwin' }, h, pip);
+    const res = await result;
+    expect(res).toEqual({ ok: true, action: 'skip', reason: 'not-a-conda-prefix' });
+    expect(pip.calls).toEqual([]);
+    expect(made.log.join('\n')).toMatch(/not a conda environment/);
+  });
+
+  it('never runs pip on macOS, whatever the flow decides', async () => {
+    const h = macHome();
+    const pip = fakePip();
+    await run({ platformName: 'darwin' }, h, pip).result;
+    expect(pip.kinds().filter((k) => k === 'dry' || k === 'install' || k === 'reinstall')).toEqual([]);
   });
 });
 
@@ -1385,7 +1399,9 @@ describe('the shell does it, after the program files and before the backend', ()
     expect(fn).toContain('decisionMode: decision.mode');
     expect(fn).toContain('projectRootEnv: process.env.ORIENTA_PROJECT_ROOT');
     expect(fn).toContain('python: plan.python');
-    expect(fn).toMatch(/syncMacos:\s*async\s*\(\)\s*=>\s*packageSync\.NO_MACOS_YET/);
+    // macOS runs package_sync_macos.js by default: main.js passes no stub.
+    expect(fn).not.toContain('syncMacos');
+    expect(fn).not.toContain('NO_MACOS_YET');
     expect(fn).toContain('installer.measureFree');
   });
 

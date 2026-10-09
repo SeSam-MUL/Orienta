@@ -43,6 +43,7 @@ const childProcess = require('node:child_process');
  *  it in turn records through this module at the end of a first install. */
 function installer() { return require('./installer'); }
 function macosEnv() { return require('./macos_env'); }
+function macosSync() { return require('./package_sync_macos'); }
 function platformModule() { return require('../platform.js'); }
 
 // --------------------------------------------------------------------------
@@ -95,8 +96,6 @@ const TIMEOUT_MS = {
 
 /** What `import` must be able to do for the update to count as done. */
 const IMPORT_MODULES = ['kikuchipy', 'orix', 'pyebsdindex'];
-
-const NO_MACOS_YET = Object.freeze({ ok: true, skipped: 'macos-not-yet' });
 
 // --------------------------------------------------------------------------
 // small pure helpers
@@ -614,7 +613,7 @@ function createRunner({
     try { child.kill(); } catch { /* already gone */ }
   }
 
-  function run(exe, args, { timeoutMs = 0, onLine = null, cwd } = {}) {
+  function run(exe, args, { timeoutMs = 0, onLine = null, cwd, env: callEnv = null } = {}) {
     return new Promise((resolve) => {
       const result = {
         code: -1, signal: null, timedOut: false, cancelled: false,
@@ -628,7 +627,7 @@ function createRunner({
       let child;
       try {
         child = spawn(exe, args, {
-          cwd, env: env || process.env, windowsHide: true, detached: platformName !== 'win32',
+          cwd, env: callEnv || env || process.env, windowsHide: true, detached: platformName !== 'win32',
         });
       } catch (err) {
         result.error = err.message;
@@ -712,7 +711,8 @@ function tailOf(text, lines = 6) {
  *   headSize(url)                          -> bytes | null; optional
  *   onPhase('syncing')                     the waiting page's text
  *   notify({reason, detail})               the one dialog; awaited
- *   syncMacos(ctx)                         the macOS hook
+ *   syncMacos(ctx)                         tests only: replaces package_sync_macos.js
+ *   macos {…}                              tests and CI only: see package_sync_macos.js
  *   runtimeTag()                           what runtime/VERSION says
  *   now(), fs, path
  *
@@ -727,7 +727,7 @@ async function syncPackages(opts, deps) {
     log: () => {}, isCancelled: () => false,
     freeBytes: () => ({ bytes: 0, known: false }),
     headSize: null, onPhase: () => {}, notify: async () => {},
-    syncMacos: async () => NO_MACOS_YET, runtimeTag: () => null,
+    syncMacos: null, runtimeTag: () => null,
     ...deps,
   };
   const say = (line) => d.log(`Package sync: ${line}`);
@@ -798,16 +798,44 @@ async function syncInner(opts, d, say) {
   if (verdict.action === 'skip') return { ok: true, action: 'skip', reason: verdict.reason };
   if (verdict.action === 'fastpath') return { ok: true, action: 'fastpath' };
 
-  const context = { home, python, mode, lockName, lockPath, lockText, digest, state, platformName };
+  const context = {
+    home, python, mode, lockName, lockPath, lockText, digest, state, platformName, env,
+  };
 
   if (darwin) {
-    // The hook the macOS follow-up fills in: it gets everything decided above.
-    const result = await d.syncMacos({ ...context, decision: verdict, log: say });
-    say(`macOS: ${JSON.stringify(result || NO_MACOS_YET)}`);
-    return { ok: true, action: 'macos', ...(result || NO_MACOS_YET) };
+    // micromamba, not pip: `package_sync_macos.js`. It gets everything decided
+    // above and answers in the same shapes as `syncPip`. The hook is only for
+    // tests; by default the real thing runs.
+    const hook = d.syncMacos || ((ctx) => macosSync().syncMacos(ctx, d));
+    const result = await hook({ ...context, decision: verdict, log: say });
+    say(`macOS: ${JSON.stringify(result)}`);
+    return result;
   }
 
   return syncPip(context, verdict, d, say);
+}
+
+/**
+ * Record a failure, show the one dialog, and let the start go on. Shared by the
+ * pip and the micromamba flow: the rule "one dialog per (lock digest, reason),
+ * never one per start" is a property of the shell, not of the package manager.
+ */
+async function failWith({ home, digest, state, d, say }, reason, detail) {
+  const { fs, path } = d;
+  const failureFile = path.join(home, FAILURE_FILE);
+  const rec = nextFailure(state.failure, { digest, reason, now: d.now(), detail });
+  say(`could not update the packages (${reason}) — ${detail}`);
+  try { writeJsonAtomic(failureFile, rec, fs, path); } catch (err) { say(`could not write the failure record (${err.message})`); }
+  if (!rec.shown) {
+    try {
+      await d.notify({ reason, detail });
+      rec.shown = true;
+      try { writeJsonAtomic(failureFile, rec, fs, path); } catch { /* shown twice at worst */ }
+    } catch (err) {
+      say(`could not show the message (${err.message})`);
+    }
+  }
+  return { ok: true, action: 'failed', reason, detail };
 }
 
 async function syncPip(ctx, verdict, d, say) {
@@ -830,21 +858,7 @@ async function syncPip(ctx, verdict, d, say) {
   };
 
   /** Record a failure, show the one dialog, and let the start go on. */
-  const fail = async (reason, detail) => {
-    const rec = nextFailure(state.failure, { digest, reason, now: d.now(), detail });
-    say(`could not update the packages (${reason}) — ${detail}`);
-    try { writeJsonAtomic(failureFile, rec, fs, path); } catch (err) { say(`could not write the failure record (${err.message})`); }
-    if (!rec.shown) {
-      try {
-        await d.notify({ reason, detail });
-        rec.shown = true;
-        try { writeJsonAtomic(failureFile, rec, fs, path); } catch { /* shown twice at worst */ }
-      } catch (err) {
-        say(`could not show the message (${err.message})`);
-      }
-    }
-    return { ok: true, action: 'failed', reason, detail };
-  };
+  const fail = (reason, detail) => failWith({ home, digest, state, d, say }, reason, detail);
 
   // ---- room to write -------------------------------------------------------
   const free = d.freeBytes(home) || { bytes: 0, known: false };
@@ -1123,7 +1137,6 @@ module.exports = {
   BACKOFF_MS,
   TIMEOUT_MS,
   IMPORT_MODULES,
-  NO_MACOS_YET,
   canonicalName,
   lockDigest,
   optedOut,
@@ -1149,6 +1162,9 @@ module.exports = {
   preconditions,
   createRunner,
   syncPackages,
+  failWith,
+  removeFile,
+  tailOf,
   verifyInstall,
   readVersions,
 };

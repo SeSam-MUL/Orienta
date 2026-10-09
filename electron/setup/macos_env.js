@@ -72,6 +72,11 @@ const MIN_PACKAGES = 100;
 /**
  * Is this actually the lock file, or something that will quietly do nothing?
  *
+ * `minPackages` exists for one caller: the package sync writes a DELTA lock of
+ * the handful of packages an update changes (`package_sync_macos.js`), which is
+ * correct and far below the floor for a complete environment. Everything else
+ * about the shape is still required of it.
+ *
  * A shape check, NOT a YAML parse — and deliberately so. There is no YAML
  * parser available here: the shell declares no YAML dependency, and the one
  * resolvable transitively would not be in the shipped app at all, because
@@ -92,7 +97,9 @@ const MIN_PACKAGES = 100;
  *
  * Returns null when it is fine, or a sentence naming what is wrong.
  */
-function lockFileComplaint(text, { platform = 'osx-arm64', minBytes = MIN_LOCK_BYTES } = {}) {
+function lockFileComplaint(text, {
+  platform = 'osx-arm64', minBytes = MIN_LOCK_BYTES, minPackages = MIN_PACKAGES,
+} = {}) {
   const body = String(text || '');
   if (body.trim().length === 0) return 'the lock file came out empty';
   if (Buffer.byteLength(body, 'utf8') < minBytes) {
@@ -113,7 +120,7 @@ function lockFileComplaint(text, { platform = 'osx-arm64', minBytes = MIN_LOCK_B
   // check exists to prevent, only slightly less empty. The real environment
   // is 467 packages; any scientific stack is hundreds.
   const forUs = (body.match(new RegExp(`^\\s*platform:\\s*${platform}\\s*$`, 'gm')) || []).length;
-  if (forUs < MIN_PACKAGES) {
+  if (forUs < minPackages) {
     return `the lock file has only ${forUs} package(s) for ${platform}, where a `
       + `complete environment has several hundred; installing it would `
       + 'succeed and produce an unusable environment';

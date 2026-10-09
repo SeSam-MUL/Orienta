@@ -799,8 +799,6 @@ async function runPackageSyncInner(decision, plan) {
         // One dialog per (lock digest, reason); the module decides when.
         notify: () => showUpdateProblem(
           t(lang, 'syncSkippedBody', { path: shellLog }), lang, t(lang, 'updateFailedTitle')),
-        // macOS: record-and-skip until its own follow-up fills this in.
-        syncMacos: async () => packageSync.NO_MACOS_YET,
       },
     );
   } finally {
