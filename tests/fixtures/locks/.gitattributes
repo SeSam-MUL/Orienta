@@ -1,0 +1,2 @@
+# Lock files are compared byte for byte (hashes in test_lock_delta_budget.py).
+* -text

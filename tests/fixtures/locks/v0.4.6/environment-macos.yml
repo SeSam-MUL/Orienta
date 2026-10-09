@@ -1,0 +1,68 @@
+# Orienta on macOS (Apple Silicon), entirely from conda-forge.
+#
+#   conda env create -f environment-macos.yml
+#   conda activate ebsd
+#
+# Why a separate file and not `pip install -r requirements.txt`: on macOS the
+# pip wheels of torch, scikit-learn and faiss-cpu each bundle their own OpenMP
+# runtime (libomp.dylib). The backend uses torch on the CPU and scikit-learn's
+# KMeans for the EDS phase map, and the second runtime to start aborts the
+# process with "OMP: Error #15". From conda-forge all of them link the one
+# llvm-openmp of the environment. Do not pip-install any of these packages on
+# top, it brings a second copy back.
+#
+# Every version is the one in requirements-lock-cpu.txt (the stack validated on
+# Windows), except ray-core: every osx-arm64 build of conda-forge's ray-core
+# 2.54.0 needs an older libabseil than pytorch 2.11.0 and cannot sit next to
+# it (solver, 2026-09-22); 2.55.1 is the nearest release that can. Solved for osx-arm64, macOS 14, on 2026-09-22: 467 packages, one
+# OpenMP runtime (llvm-openmp; libiomp5.dylib is a symlink to libomp.dylib),
+# BLAS = Apple Accelerate. Not yet run on a Mac.
+name: ebsd
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - libblas=*=*accelerate
+  - kikuchipy=0.11.3
+  - orix=0.14.1
+  - diffsims=0.7.0
+  - diffpy.structure=3.3.1
+  - pyebsdindex=0.3.9.1
+  - hyperspy=2.4.0
+  - numpy=2.3.5
+  - scipy=1.17.1
+  - h5py=3.15.1
+  - matplotlib-base=3.10.8
+  - matplotlib-scalebar=0.9.0
+  - spglib=2.7.0
+  - pymatgen=2025.6.14
+  - pyqt=5.15.11
+  - tqdm=4.67.3
+  - fastapi=0.135.1
+  - starlette=1.0.0
+  - uvicorn-standard=0.42.0
+  - pydantic=2.12.5
+  - httpx=0.28.1
+  - requests=2.32.5
+  - websockets=16.0
+  - pillow=11.3.0
+  - pandas=3.0.1
+  - dask=2026.1.2
+  - openpyxl=3.1.5
+  - pyyaml=6.0.3
+  - scikit-learn=1.8.0
+  - threadpoolctl=3.7.0   # scripts/check_runtime_health.py gate 2 imports it
+  - xlsxwriter=3.2.9
+  - beautifulsoup4=4.14.3
+  - seaborn=0.13.2
+  - watchdog=6.0.0
+  - psutil=7.2.2
+  - ray-core=2.55.1
+  - pytorch=2.11.0
+  - torchvision=0.26.0
+  - scikit-image=0.26.0
+  - faiss-cpu=1.14.3
+  - numba=0.63.1
+  - pytest=9.0.2
+  - pytest-timeout=2.4.0
