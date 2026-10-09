@@ -22,6 +22,7 @@ from pydantic import BaseModel, model_validator
 from backend.api.services.image_utils import array_to_base64_raw
 from pc_controller import PhaseSetError
 from backend.api.services.calibration_store import calibration_store
+from backend.api.services.detector_convention import for_kikuchipy_projection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -470,7 +471,7 @@ def _index_and_simulate(ctrl, pattern_idx):
             )
         simulator = kp.simulations.KikuchiPatternSimulator(reflectors)
         rots = xmap.rotations[0:1]
-        sim = simulator.on_detector(ctrl.detector, rots)
+        sim = simulator.on_detector(for_kikuchipy_projection(ctrl.detector), rots)
         marker = sim.as_markers()[0]
         m_kwargs = marker.get_current_kwargs()
         raw_segs = m_kwargs.get('segments', [])

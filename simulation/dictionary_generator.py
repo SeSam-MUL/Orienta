@@ -264,6 +264,10 @@ def generate_dictionary(
     logger.info(f"Orientation sampling: {n_ori} rotations for {point_group_name} @ {resolution}deg")
 
     # --- Simulate dictionary ---
+    # ``detector`` is in Orienta's convention (the one the metadata below
+    # records); kikuchipy projects with its own reading of the azimuthal angle.
+    from backend.api.services.detector_convention import for_kikuchipy_projection
+    kp_detector = for_kikuchipy_projection(detector)
     det_shape = detector.shape
     _emit(f"Simulating {n_ori} patterns ({det_shape[0]}x{det_shape[1]})...")
 
@@ -280,7 +284,7 @@ def generate_dictionary(
         for start in range(0, n_ori, chunk_size):
             part = mp.get_patterns(
                 rotations=rotations[start:start + chunk_size],
-                detector=detector,
+                detector=kp_detector,
                 energy=energy,
                 dtype_out=np.float32,
                 compute=True,
@@ -303,7 +307,7 @@ def generate_dictionary(
     else:
         dictionary = mp.get_patterns(
             rotations=rotations,
-            detector=detector,
+            detector=kp_detector,
             energy=energy,
             dtype_out=np.float32,
             compute=True,

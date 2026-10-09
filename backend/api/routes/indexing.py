@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, model_validator
 from display_names import display_stem as _stem
 from backend.api.services.image_utils import array_to_base64_png, array_to_base64_raw, colormap_array_to_base64
 from backend.api.services.calibration_store import calibration_store
+from backend.api.services.detector_convention import report_azimuthal
 from backend.api.services import state_version
 from backend.api.problem import problem
 
@@ -3689,6 +3690,8 @@ async def start_indexing(req: IndexingStartRequest):
             result = None
             # Before any work: name the phases this method cannot run.
             report_phases_without_a_file(req, _progress)
+            # A non-zero azimuthal angle is read with the EMsoft sign; say so once.
+            report_azimuthal(detector, _progress)
             n_phase_files = len(req.cif_paths) + len(req.master_h5_paths) + len(req.sht_paths)
 
             # ============================================================
@@ -11144,6 +11147,8 @@ async def start_batch_indexing(req: BatchRequest):
                     from kikuchipy.detectors import EBSDDetector
                     sig_shape = signal.axes_manager.signal_shape
                     detector = EBSDDetector(shape=(sig_shape[1], sig_shape[0]))
+
+                report_azimuthal(detector, _log)
 
                 # Override PC if explicit config provides one
                 if ds_config.pc and len(ds_config.pc) == 3:

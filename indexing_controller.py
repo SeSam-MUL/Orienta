@@ -1004,7 +1004,10 @@ def _dictionary_signal_from_master(master, detector, angular_step_deg, *,
     if progress:
         progress(f"Dictionary: projecting {rotations.size} simulated patterns "
                  f"from master at {angular_step_deg}° (CPU)...")
-    return m.get_patterns(rotations=rotations, detector=detector,
+    # kikuchipy reads the azimuthal angle with its own, version-dependent sign.
+    from backend.api.services.detector_convention import for_kikuchipy_projection
+    return m.get_patterns(rotations=rotations,
+                          detector=for_kikuchipy_projection(detector),
                           energy=energy, compute=True)
 
 
@@ -1546,9 +1549,10 @@ def refine_orientations(
     except Exception:
         logger.debug("Could not fetch signal mask for refinement", exc_info=True)
 
+    from backend.api.services.detector_convention import for_kikuchipy_projection
     refine_kwargs = dict(
         xmap=use_xmap,
-        detector=detector,
+        detector=for_kikuchipy_projection(detector),
         master_pattern=master,
         energy=energy,
         navigation_mask=nav_mask,
@@ -3982,7 +3986,8 @@ def _simulate_pattern_for_orientation(detector, phase_list, rotation, phase_id):
         ref.calculate_structure_factor()
 
         sim = KikuchiPatternSimulator(ref)
-        geo = sim.on_detector(detector, rotation)
+        from backend.api.services.detector_convention import for_kikuchipy_projection
+        geo = sim.on_detector(for_kikuchipy_projection(detector), rotation)
 
         # Render to image
         pat_h, pat_w = detector.shape

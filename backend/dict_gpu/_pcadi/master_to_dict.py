@@ -102,8 +102,11 @@ def _projection_batch(pattern_dim: int, dtype, device) -> int:
 
 def _path_b(master_pattern, rotations, detector, *, energy, device, dtype):
     """Legacy MVP wrapper: CPU mp.get_patterns + upload. Kept as escape hatch."""
+    from backend.api.services.detector_convention import for_kikuchipy_projection
+
     sig = master_pattern.get_patterns(
-        rotations=rotations, detector=detector, energy=energy, compute=True
+        rotations=rotations, detector=for_kikuchipy_projection(detector),
+        energy=energy, compute=True,
     )
     arr = np.asarray(sig.data, dtype=np.float32)
     out = torch.from_numpy(arr).to(device=device, dtype=dtype)

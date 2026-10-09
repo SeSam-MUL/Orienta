@@ -60,6 +60,16 @@ def _summary_message(n: int, elapsed: float, rate: float, device: str) -> str:
     return f"Saved {n:,} patterns in {elapsed:,.1f} s · {rate:,.0f} pat/s ({device})"
 
 
+def _announce_azimuthal(azimuthal_deg: float, emit) -> None:
+    """Once per generation: a non-zero azimuthal angle is read with the EMsoft sign."""
+    from backend.api.services.detector_convention import azimuthal_angle_notice
+
+    msg = azimuthal_angle_notice(azimuthal_deg)
+    if msg is not None:
+        logger.warning("%s", msg)
+        emit(0.0, f"WARNING: {msg}")
+
+
 def generate_dictionary_gpu(
     master_path: str,
     detector_shape: Tuple[int, int],
@@ -85,6 +95,7 @@ def generate_dictionary_gpu(
     from orix.crystal_map import Phase
 
     _emit = progress_callback or (lambda f, m: None)
+    _announce_azimuthal(azimuthal_deg, _emit)
 
     device = "cuda" if has_cuda() else "cpu"
     logger.info("dictionary-gpu: device=%s", device)
@@ -209,6 +220,7 @@ def generate_dictionary_cpu(
     from simulation.dictionary_generator import generate_dictionary
 
     _emit = progress_callback or (lambda f, m: None)
+    _announce_azimuthal(azimuthal_deg, _emit)
     _emit(0.0, "Loading master pattern on cpu")
 
     detector = EBSDDetector(
