@@ -1,6 +1,6 @@
 # Translated from kikuchipy._master_pattern (Path A)
 
-**kikuchipy version pinned:** 0.11.3 (see requirements.txt)
+**kikuchipy version translated:** 0.11.3 (the line references below are to that release; requirements.txt now asks for 0.13.1 or later)
 **Reference file:** `kikuchipy/signals/util/_master_pattern.py`
 **Imported on:** 2026-05-11
 

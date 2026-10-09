@@ -49,6 +49,10 @@ def _kikuchipy_needs_binning_patch() -> bool:
     """True for kikuchipy < 0.12, the versions whose Oxford reader crashes on
     a missing ``Camera Binning Mode``.
 
+    requirements.txt asks for kikuchipy >= 0.13.1, so a source install never
+    takes this branch. It stays for an installation that still has 0.11.x, for
+    instance a packaged app whose package update did not complete.
+
     A version string without a leading ``major.minor`` answers False with a
     warning: raising here would happen inside the load and send every H5OINA
     to the eager fallback — the very failure this gate exists to prevent."""

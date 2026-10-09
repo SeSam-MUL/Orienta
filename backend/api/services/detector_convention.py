@@ -111,7 +111,7 @@ def for_kikuchipy_projection(detector):
         raise UnsupportedKikuchipyVersion(
             "kikuchipy 0.12.0 is not supported: its detector projection "
             "geometry was corrected in 0.12.1 (pyxem/kikuchipy#797). Install "
-            "kikuchipy 0.11.3 or 0.12.1 and later (requirements.txt)."
+            "the kikuchipy version listed in requirements.txt."
         )
     if getattr(detector, CONVERTED_MARK, False):
         raise DetectorAlreadyConverted(
