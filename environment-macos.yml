@@ -14,15 +14,14 @@
 # Every version is the one in requirements-lock-cpu.txt (the stack validated on
 # Windows), except ray-core: every osx-arm64 build of conda-forge's ray-core
 # 2.54.0 needs an older libabseil than pytorch 2.11.0 and cannot sit next to
-# it (solver, 2026-09-22); 2.55.1 is the nearest release that can. The other
-# exception is threadpoolctl (3.7.0 here, 3.6.0 in the Windows lock, which only
-# started to list it on 2026-10-08). Solved for osx-arm64, macOS 14, on
-# 2026-09-22: 467 packages. On 2026-10-08 kikuchipy 0.13.1, orix 0.15.0 and
-# pyebsdindex 0.3.10.1 replaced 0.11.3 / 0.14.1 / 0.3.9.1 by updating only
-# those packages in the lock (scripts/make_macos_lock.py --update): 469
-# packages, new are psygnal (a kikuchipy dependency) and lazy_loader. One
-# OpenMP runtime (llvm-openmp; libiomp5.dylib is a symlink to libomp.dylib),
-# BLAS = Apple Accelerate. Not yet run on a Mac.
+# it (solver, 2026-09-22); 2.55.1 is the nearest release that can. Solved for
+# osx-arm64, macOS 14, on 2026-09-22: 467 packages. On 2026-10-08 kikuchipy
+# 0.13.1, orix 0.15.0 and pyebsdindex 0.3.10.1 replaced 0.11.3 / 0.14.1 /
+# 0.3.9.1 by updating only those packages in the lock
+# (scripts/make_macos_lock.py --update): 469 packages, new are psygnal (a
+# kikuchipy dependency) and lazy_loader. One OpenMP runtime (llvm-openmp;
+# libiomp5.dylib is a symlink to libomp.dylib), BLAS = Apple Accelerate. Not yet
+# run on a Mac.
 name: ebsd
 channels:
   - conda-forge

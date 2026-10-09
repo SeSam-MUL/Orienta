@@ -35,7 +35,8 @@ dask[array]==2026.1.2
 openpyxl==3.1.5
 pyyaml==6.0.3
 scikit-learn==1.8.0
-threadpoolctl==3.6.0
+threadpoolctl==3.7.0
+packaging==26.3
 xlsxwriter==3.2.9
 beautifulsoup4==4.14.3
 seaborn==0.13.2
