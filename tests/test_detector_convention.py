@@ -102,6 +102,95 @@ def test_the_helper_is_the_inverse_of_the_version_change_in_the_installed_kikuch
     assert det.azimuthal == 5.0
 
 
+@pytest.mark.parametrize("zero", [0.0, -0.0])
+def test_a_zero_angle_stays_a_plain_zero_not_negative_zero(monkeypatch, zero):
+    """-0.0 would be written into saved h5 headers."""
+    monkeypatch.setattr(dc, "_installed_release", lambda: (0, 13, 1))
+    out = dc.for_kikuchipy_projection(_detector(zero))
+    assert out.azimuthal == 0.0
+    assert not np.signbit(out.azimuthal)
+    assert not np.signbit(np.float64(out.azimuthal))
+
+
+def test_a_converted_detector_is_refused_a_second_time(monkeypatch):
+    """Converting twice flips back to Orienta's sign and projects with the wrong angle."""
+    monkeypatch.setattr(dc, "_installed_release", lambda: (0, 13, 1))
+    det = _detector(5.0)
+    once = dc.for_kikuchipy_projection(det)
+    assert getattr(once, dc.CONVERTED_MARK) is True
+    assert not hasattr(det, dc.CONVERTED_MARK)         # the caller's detector is never marked
+    with pytest.raises(dc.DetectorAlreadyConverted, match="already converted"):
+        dc.for_kikuchipy_projection(once)
+    # The original still converts, as often as asked.
+    assert dc.for_kikuchipy_projection(det).azimuthal == -5.0
+
+
+def test_the_mark_survives_kikuchipys_own_deepcopy(monkeypatch):
+    """A copy of a converted detector is still a converted detector."""
+    monkeypatch.setattr(dc, "_installed_release", lambda: (0, 13, 1))
+    once = dc.for_kikuchipy_projection(_detector(5.0))
+    copied = once.deepcopy()
+    assert getattr(copied, dc.CONVERTED_MARK, False) is True
+    with pytest.raises(dc.DetectorAlreadyConverted):
+        dc.for_kikuchipy_projection(copied)
+
+
+def test_below_0_12_nothing_is_marked_and_a_second_pass_is_harmless(monkeypatch):
+    monkeypatch.setattr(dc, "_installed_release", lambda: (0, 11, 3))
+    det = _detector(5.0)
+    again = dc.for_kikuchipy_projection(dc.for_kikuchipy_projection(det))
+    assert again is det and not hasattr(det, dc.CONVERTED_MARK)
+    assert det.azimuthal == 5.0
+
+
+def test_double_wrap_on_the_installed_kikuchipy():
+    """Whatever kikuchipy is installed: a second pass either raises or changes nothing."""
+    det = _detector(5.0)
+    once = dc.for_kikuchipy_projection(det)
+    if _kikuchipy_release() < (0, 12, 0):
+        assert dc.for_kikuchipy_projection(once).azimuthal == 5.0
+    else:
+        with pytest.raises(dc.DetectorAlreadyConverted):
+            dc.for_kikuchipy_projection(once)
+
+
+@pytest.fixture
+def fresh_warning(monkeypatch):
+    monkeypatch.setattr(dc, "_warned", False)
+
+
+def _azimuthal_warnings(caplog):
+    return [r for r in caplog.records
+            if r.name == dc.logger.name and r.levelname == "WARNING"
+            and "azimuthal angle is" in r.getMessage()]
+
+
+@pytest.mark.parametrize("release", [(0, 11, 3), (0, 13, 1)])
+def test_a_non_zero_angle_is_warned_about_once_per_process(
+        monkeypatch, caplog, fresh_warning, release):
+    monkeypatch.setattr(dc, "_installed_release", lambda: release)
+    with caplog.at_level("WARNING", logger=dc.logger.name):
+        dc.for_kikuchipy_projection(_detector(4.0))
+        dc.for_kikuchipy_projection(_detector(4.0))
+        dc.for_kikuchipy_projection(_detector(-9.0))
+    found = _azimuthal_warnings(caplog)
+    assert len(found) == 1, [r.getMessage() for r in found]
+    assert found[0].getMessage() == dc.azimuthal_angle_notice(4.0)
+
+
+@pytest.mark.parametrize("release", [(0, 11, 3), (0, 13, 1)])
+def test_a_zero_angle_is_never_warned_about(monkeypatch, caplog, fresh_warning, release):
+    monkeypatch.setattr(dc, "_installed_release", lambda: release)
+    with caplog.at_level("WARNING", logger=dc.logger.name):
+        dc.for_kikuchipy_projection(_detector(0.0))
+        dc.for_kikuchipy_projection(_detector(0.0))
+    assert _azimuthal_warnings(caplog) == []
+    # A zero angle does not use up the once.
+    with caplog.at_level("WARNING", logger=dc.logger.name):
+        dc.for_kikuchipy_projection(_detector(3.0))
+    assert len(_azimuthal_warnings(caplog)) == 1
+
+
 # --------------------------------------------------------------------------- #
 # Direction cosines: Orienta's own math (EMsoft) against the installed kikuchipy
 # --------------------------------------------------------------------------- #
@@ -244,6 +333,29 @@ def test_dictionary_generation_announces_a_non_zero_angle_once():
     assert seen == []
 
 
+def _innermost_function(tree, target):
+    best = None
+    for fn in ast.walk(tree):
+        if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if any(n is target for n in ast.walk(fn)):
+                best = fn
+    return best
+
+
+#: The calls that run an indexing method over the patterns.
+_DISPATCH = {"run_per_phase_indexing", "spherical_gpu_index_patterns",
+             "hough_index_patterns", "dictionary_index_patterns",
+             "spherical_index_patterns"}
+
+
+def _call_name(node):
+    if isinstance(node.func, ast.Name):
+        return node.func.id
+    if isinstance(node.func, ast.Attribute):
+        return node.func.attr
+    return ""
+
+
 def test_the_indexing_routes_report_the_angle_before_the_work_starts():
     src = (ROOT / "backend/api/routes/indexing.py").read_text(encoding="utf-8")
     tree = ast.parse(src)
@@ -252,6 +364,34 @@ def test_the_indexing_routes_report_the_angle_before_the_work_starts():
              and n.func.id == "report_azimuthal"]
     channels = sorted(ast.unparse(c.args[1]) for c in calls)
     assert channels == ["_log", "_progress"], channels
+    for call in calls:
+        fn = _innermost_function(tree, call)
+        dispatch = [n.lineno for n in ast.walk(fn)
+                    if isinstance(n, ast.Call) and _call_name(n) in _DISPATCH]
+        assert dispatch, f"{fn.name}: no indexing dispatch found; the scan is blind"
+        assert call.lineno < min(dispatch), (
+            f"{fn.name}: report_azimuthal at line {call.lineno} comes after the first "
+            f"indexing call at line {min(dispatch)}")
+
+
+def test_the_dictionary_pipeline_announces_the_angle_on_both_backends():
+    """Delete either call and the user is not told on that backend."""
+    src = (ROOT / "backend/dictionary_gpu/pipeline.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    work = {"has_cuda", "load_master_pattern", "EBSDDetector", "generate_dictionary"}
+    announced = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and _call_name(node) == "_announce_azimuthal":
+            fn = _innermost_function(tree, node)
+            if fn.name == "_announce_azimuthal":
+                continue
+            announced[fn.name] = node.lineno
+            first_work = min(n.lineno for n in ast.walk(fn)
+                             if isinstance(n, ast.Call) and _call_name(n) in work)
+            assert node.lineno < first_work, (
+                f"{fn.name}: the angle is announced at line {node.lineno}, after the "
+                f"work starts at line {first_work}")
+    assert set(announced) == {"generate_dictionary_gpu", "generate_dictionary_cpu"}, announced
 
 
 # --------------------------------------------------------------------------- #
@@ -399,3 +539,48 @@ def test_the_helper_would_be_found_by_the_scan_if_it_were_missing():
                 and isinstance(n.func, ast.Attribute))
     scope = _enclosing_function(ok, call)
     assert _goes_through_the_helper(_detector_expression(call, scope), scope)
+
+
+# --------------------------------------------------------------------------- #
+# Saved dictionaries carry Orienta's value of the angle
+# --------------------------------------------------------------------------- #
+
+def _header_azimuth(path) -> float:
+    import h5py
+    found = []
+
+    def visit(name, obj):
+        if name.endswith("Header/azimuth_angle"):
+            found.append(float(np.ravel(obj[()])[0]))
+
+    with h5py.File(path, "r") as f:
+        f.visititems(visit)
+    assert len(found) == 1, found
+    return found[0]
+
+
+@pytest.mark.parametrize("chunk", [10_000, 5], ids=["unchunked", "chunked"])
+@pytest.mark.parametrize("azimuthal", [4.0, -4.0, 0.0])
+def test_the_saved_dictionary_header_carries_orientas_angle_not_kikuchipys(
+        tmp_path, monkeypatch, chunk, azimuthal):
+    """Header azimuth_angle == sidecar azimuthal == the angle the user gave."""
+    import json
+    import kikuchipy as kp
+    import backend.dictionary_gpu.pipeline as pipe
+
+    mp = kp.data.nickel_ebsd_master_pattern_small(projection="lambert", hemisphere="both")
+    monkeypatch.setattr(kp, "load", lambda *a, **k: mp)
+    monkeypatch.setattr(pipe, "CPU_CHUNK_SIZE", chunk)
+
+    out = tmp_path / "dict.h5"
+    result = pipe.generate_dictionary_cpu(
+        master_path=str(tmp_path / "ni_master.h5"), detector_shape=(20, 20),
+        pc=(0.5, 0.5, 0.5), sample_tilt=70.0, energy_kv=20.0, resolution_deg=30.0,
+        detector_tilt_deg=0.0, azimuthal_deg=azimuthal, output_path=str(out))
+    # The two cases really are the two branches of generate_dictionary.
+    assert (result.metadata.n_orientations > chunk) == (chunk == 5)
+    sidecar = json.loads(out.with_suffix(".json").read_text(encoding="utf-8"))
+    header = _header_azimuth(out)
+    assert sidecar["azimuthal"] == azimuthal
+    assert header == azimuthal
+    assert not (azimuthal == 0.0 and np.signbit(header))

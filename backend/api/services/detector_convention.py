@@ -21,14 +21,48 @@ from __future__ import annotations
 
 import copy
 import logging
+import threading
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+#: Attribute set on the copy that :func:`for_kikuchipy_projection` returns on
+#: kikuchipy >= 0.12.1. A converted detector run through the helper again would
+#: flip back to Orienta's sign and project with the wrong angle, silently.
+CONVERTED_MARK = "_orienta_kikuchipy_sign"
+
+_warn_lock = threading.Lock()
+_warned = False
 
 
 class UnsupportedKikuchipyVersion(RuntimeError):
     """The installed kikuchipy projects detector geometry in a way Orienta
     does not support (0.12.0 only)."""
+
+
+class DetectorAlreadyConverted(ValueError):
+    """``for_kikuchipy_projection`` received a detector it had converted."""
+
+
+def _warn_once(angle) -> None:
+    """Log the interpretation notice the first time a non-zero angle is projected.
+
+    Once per process, from here, so every caller (the indexing routes, the
+    PC-refinement overlay, the pattern-match simulation, dictionary generation)
+    is covered without a per-pattern message. The run logs keep their own,
+    per-run lines.
+    """
+    global _warned
+    if _warned:
+        return
+    msg = azimuthal_angle_notice(angle)
+    if msg is None:
+        return
+    with _warn_lock:
+        if _warned:
+            return
+        _warned = True
+    logger.warning("%s", msg)
 
 
 def _installed_release() -> tuple:
@@ -63,16 +97,27 @@ def for_kikuchipy_projection(detector):
     Use this only where the detector goes into a kikuchipy projection or
     simulation (``get_patterns``, ``KikuchiPatternSimulator.on_detector``,
     ``refine_orientation``). Do not use it before Orienta's own projection, and
-    do not use it twice on the same detector.
+    do not use it twice on the same detector: a detector converted on
+    kikuchipy >= 0.12.1 carries a mark and :class:`DetectorAlreadyConverted` is
+    raised if it comes back. (Below 0.12 nothing is converted and nothing is
+    marked, so the helper is idempotent there.) The first non-zero angle passed
+    through logs the interpretation notice once per process, on every version.
     """
     release = _installed_release()
     if release < (0, 12, 0):
+        _warn_once(getattr(detector, "azimuthal", 0.0))
         return detector
     if release == (0, 12, 0):
         raise UnsupportedKikuchipyVersion(
             "kikuchipy 0.12.0 is not supported: its detector projection "
             "geometry was corrected in 0.12.1 (pyxem/kikuchipy#797). Install "
             "kikuchipy 0.11.3 or 0.12.1 and later (requirements.txt)."
+        )
+    if getattr(detector, CONVERTED_MARK, False):
+        raise DetectorAlreadyConverted(
+            "This detector was already converted by for_kikuchipy_projection; "
+            "converting it again would flip the azimuthal angle back. Pass the "
+            "detector in Orienta's convention."
         )
     if getattr(detector, "twist", 0.0):
         # Orienta has no twist angle; one can only arrive on a detector built
@@ -81,7 +126,11 @@ def for_kikuchipy_projection(detector):
         logger.warning("Detector twist of %s deg is passed on to kikuchipy as it is.",
                        detector.twist)
     out = detector.deepcopy() if hasattr(detector, "deepcopy") else copy.deepcopy(detector)
-    out.azimuthal = -float(detector.azimuthal)
+    angle = float(detector.azimuthal)
+    _warn_once(angle)
+    # ``-0.0`` would end up in saved h5 headers; zero stays a plain zero.
+    out.azimuthal = -angle if angle else 0.0
+    setattr(out, CONVERTED_MARK, True)
     return out
 
 
