@@ -1372,7 +1372,7 @@ describe('the shell does it, after the program files and before the backend', ()
   });
 
   it('never lets a failure to run the sync at all stop the start', () => {
-    expect(MAIN).toMatch(/async function runPackageSync\(decision, plan\) \{\s*try \{\s*return await runPackageSyncInner\(decision, plan\);\s*\} catch \(err\) \{[\s\S]{0,300}?return \{ ok: true \};/);
+    expect(MAIN).toMatch(/async function runPackageSync\(decision, plan\) \{\s*try \{\s*return await runPackageSyncInner\(decision, plan\);\s*\} catch \(err\) \{(?:(?!throw)[\s\S]){0,300}?return \{ ok: true \};/);
   });
 
   it('starts nothing when the app is quitting', () => {
