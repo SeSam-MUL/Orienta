@@ -38,6 +38,9 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 NSH = REPO / "electron" / "nsis" / "uninstall.nsh"
+# electron/setup/package_sync.js: what the packages were brought to, an update in
+# flight, the last failure of one. Written at the top of the home by the shell.
+PACKAGE_SYNC_FILES = (".packages_lock.json", ".packages_sync.json", ".packages_sync_failed.json")
 LONG = "\\\\?\\"
 
 
@@ -133,6 +136,8 @@ def _home(home: Path, *, marker=True, legacy=True, user_file=True, lib_link=None
     (home / "pending.json").write_text("{}")
     (home / ".install_mode").write_text("cpu")
     (home / ".install_incomplete").write_text("{}")
+    for name in PACKAGE_SYNC_FILES:
+        (home / name).write_text("{}")
     (home / "runtime" / "backend" / "api").mkdir(parents=True)
     (home / "runtime" / "backend" / "api" / "main.py").write_text("x")
     (home / "runtime" / "MANIFEST").write_text("x")
@@ -242,7 +247,8 @@ def test_components_go_the_library_and_the_users_own_file_stay(box):
     decided = _run(box, answers=("yes", "no"), env_home=home)
     assert decided["verdict"] == "ours"
     for gone in ("python", "python.old-123", "electron", "logs", "setup-tmp", "pending",
-                 "pending.json", ".python_path", ".install_mode", ".install_incomplete"):
+                 "pending.json", ".python_path", ".install_mode", ".install_incomplete",
+                 *PACKAGE_SYNC_FILES):
         assert not (home / gone).exists(), gone
     assert sorted(p.name for p in (home / "runtime").iterdir()) == ["Database"]
     assert _library(home).read_text() == "irreplaceable"

@@ -718,6 +718,16 @@ describe('a data folder that already holds other files', () => {
     expect(installer.foreignEntries(dir)).toEqual([]);
   });
 
+  it('accepts what the package sync leaves behind: a repair after an interrupted update must not be refused', () => {
+    // The repair wizard runs in this very folder. Without these names it would
+    // answer "this folder contains files that are not Orienta's", naming three
+    // files the app wrote itself.
+    for (const name of ['.packages_lock.json', '.packages_sync.json', '.packages_sync_failed.json']) {
+      fs.writeFileSync(path.join(dir, name), '{}');
+    }
+    expect(installer.foreignEntries(dir)).toEqual([]);
+  });
+
   it('is named, entry by entry, when it is not', () => {
     // Setting up here would write the marker the uninstaller trusts, and a
     // later uninstall would then remove this user's own python\ and logs\.

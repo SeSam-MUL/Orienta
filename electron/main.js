@@ -30,6 +30,13 @@ const {
 const { releasesPageUrl, setOrientaHome, homePointerFile } = require('./update_endpoints');
 const startLanguage = require('./start_language');
 const { t, shellLanguage, preferredLocale } = require('./strings');
+const { createWaitingPage } = require('./waiting_page');
+
+// What the waiting page says, by PHASE ('starting' | 'updating' | 'syncing').
+// The one-second clock and the update steps both paint from it, so a message
+// set by a step is not overwritten a second later by the clock's own text.
+// `shellLocale` is a function declaration below and is only called at paint.
+const waitingPage = createWaitingPage({ t, shellLanguage, getLocale: () => shellLocale() });
 
 /**
  * The locale to show the user, asked of the SYSTEM rather than the bundle.
@@ -595,64 +602,13 @@ function esc(value) {
  * from a hang; the app's own backend banner counts seconds for exactly this
  * reason, and in a packaged install that banner is unreachable because the
  * React app is not loaded until the backend answers.
+ *
+ * The words come from the current PHASE (waiting_page.js), not from fixed
+ * strings: the update steps set the phase, and a clock that painted the same
+ * three strings every second erased their text almost as soon as it appeared.
  */
 function startWaitingPageClock(window) {
-  const lang = shellLocale();
-  const started = Date.now();
-
-  const paint = (seconds) => {
-    if (!window || window.isDestroyed()) return;
-    const text = {
-      lang: shellLanguage(lang),
-      title: t(lang, 'startingTitle'),
-      body: t(lang, 'startingBody'),
-      hint: t(lang, 'startingHint'),
-      elapsed: seconds === null ? '' : t(lang, 'elapsed', { seconds }),
-    };
-    window.webContents
-      .executeJavaScript(
-        `(() => { const s = ${JSON.stringify(text)};
-          document.documentElement.lang = s.lang;
-          const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-          set('title', s.title); set('body', s.body);
-          set('hint', s.hint); set('elapsed', s.elapsed);
-        })()`,
-      )
-      .catch(() => { /* the page may already be gone; nothing to do */ });
-  };
-
-  window.webContents.once('did-finish-load', () => paint(null));
-  const timer = setInterval(() => {
-    if (!window || window.isDestroyed()) { clearInterval(timer); return; }
-    paint(Math.round((Date.now() - started) / 1000));
-  }, 1000);
-  // Stopped by whenReady once the backend answers, and by the window closing.
-  window.once('closed', () => clearInterval(timer));
-  return () => clearInterval(timer);
-}
-
-/**
- * Say on the waiting page that the program files are being replaced.
- *
- * The same four elements the clock writes, so the page needs no markup of its
- * own: this step lasts seconds, and a second layout for it would be a second
- * thing to keep translated.
- */
-function paintUpdatingPage(window, lang) {
-  if (!window || window.isDestroyed()) return;
-  const text = {
-    title: t(lang, 'startingTitle'),
-    body: t(lang, 'updatingBody'),
-    hint: t(lang, 'updatingHint'),
-  };
-  window.webContents
-    .executeJavaScript(
-      `(() => { const s = ${JSON.stringify(text)};
-        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-        set('title', s.title); set('body', s.body); set('hint', s.hint);
-      })()`,
-    )
-    .catch(() => { /* the page may not be loaded yet; the log has it either way */ });
+  return waitingPage.startClock(window);
 }
 
 /**
@@ -716,7 +672,7 @@ async function applyBundledUpdate(python) {
     }
   }
 
-  paintUpdatingPage(mainWindow, lang);
+  waitingPage.setPhase(mainWindow, 'updating');
   const applier = path.join(__dirname, 'apply_update.py');
   const verdictFile = path.join(home, 'setup-tmp', 'apply-result.json');
   try {
@@ -764,6 +720,100 @@ async function applyBundledUpdate(python) {
   }
   logShellLine('Runtime update: nothing to apply');
   return { ok: true };
+}
+
+/** The size of a file at `url`, from its headers, or null. Through Electron's
+ *  network stack, which follows the system proxy settings the way the runtime
+ *  download does. Used only by the size guard of the package sync. */
+async function headSize(url) {
+  const { net } = require('electron');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await net.fetch(url, { method: 'HEAD', signal: controller.signal });
+    const n = Number(res.headers.get('content-length'));
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The package sync's runner while one exists, so `before-quit` can end its
+ *  children. Not the wizard's `runSetup.children`: that set is consulted only
+ *  while a SETUP is running. */
+let packageSyncRunner = null;
+
+/**
+ * Bring the Python packages to the lock this release shipped, before uvicorn
+ * imports them. See `setup/package_sync.js` for what it does and why.
+ *
+ * Returns the sync's own answer; the shell acts on two flags only:
+ *   cancelled   the app is quitting -- start nothing
+ *   repair      the environment fails verification -- show the repair wizard,
+ *               start no backend
+ * Everything else -- skipped, failed, synced, nothing to do -- is "go on".
+ */
+async function runPackageSync(decision, plan) {
+  const packageSync = require('./setup/package_sync');
+  const installer = require('./setup/installer');
+  const lang = shellLocale();
+  let home;
+  try {
+    home = orientaHome();
+  } catch (err) {
+    logShellLine(`Package sync: skipped, no home directory (${err.message})`);
+    return { ok: true };
+  }
+  const shellLog = path.join(home, 'logs', 'orienta-shell.log');
+  const runner = packageSync.createRunner({ platformName: process.platform });
+  packageSyncRunner = runner;
+  try {
+    return await packageSync.syncPackages(
+      {
+        home,
+        python: plan.python,
+        decisionMode: decision.mode,
+        projectRootEnv: process.env.ORIENTA_PROJECT_ROOT,
+        platformName: process.platform,
+        env: process.env,
+      },
+      {
+        run: runner.run,
+        isCancelled: () => runner.cancelled,
+        log: logShellLine,
+        freeBytes: (dir) => installer.measureFree(dir),
+        headSize,
+        onPhase: (phase) => waitingPage.setPhase(mainWindow, phase),
+        runtimeTag: () => require('./bundled_update').installedTag(home),
+        // One dialog per (lock digest, reason); the module decides when.
+        notify: () => showUpdateProblem(
+          t(lang, 'syncSkippedBody', { path: shellLog }), lang, t(lang, 'updateFailedTitle')),
+        // macOS: record-and-skip until its own follow-up fills this in.
+        syncMacos: async () => packageSync.NO_MACOS_YET,
+      },
+    );
+  } finally {
+    packageSyncRunner = null;
+  }
+}
+
+/**
+ * The repair wizard, from a window that was created to RUN.
+ *
+ * `createWindow` hands the setup channels to the window it makes for a setup or
+ * repair (a preload argument and `setupContentsId`), and to no other. Loading
+ * the wizard into the window of a normal start would render it and answer none
+ * of its buttons, so the window is replaced instead. The old one's `closed`
+ * handler is removed first: it clears `mainWindow`, which by then names the
+ * new window.
+ */
+function showRepairWizard(message) {
+  const old = mainWindow;
+  createWindow({ mode: 'repair', message });
+  if (old && !old.isDestroyed()) {
+    old.removeAllListeners('closed');
+    old.destroy();
+  }
 }
 
 /**
@@ -1689,6 +1739,16 @@ handleSetup('setup:quit', () => {
 // A setup that is still running when the window closes must not carry on
 // writing gigabytes into site-packages after the app is gone.
 app.on('before-quit', () => {
+  // The package sync's own children, not the wizard's: closing the window during
+  // the download or the install must not leave a pip writing into site-packages
+  // after the app is gone. A killed install leaves its marker, which makes the
+  // next start verify and, if need be, repair.
+  if (packageSyncRunner) {
+    try {
+      packageSyncRunner.killAll();
+      logShellLine('Package sync children killed on quit');
+    } catch { /* nothing to kill */ }
+  }
   if (!setupRunning) return;
   try {
     require('./setup/installer').runSetup.killChildren();
@@ -1831,6 +1891,22 @@ app.whenReady().then(async () => {
         app.quit();
         return;
       }
+      waitingPage.setPhase(mainWindow, 'starting');
+
+      // AFTER the program files, because the lock the packages are brought to
+      // is one of them; BEFORE the backend, because Windows holds the files of
+      // a running interpreter open and uvicorn would import half of the old
+      // packages and half of the new. It never blocks for a network problem --
+      // the previous packages are supported too -- and it returns `repair` only
+      // for an environment that failed verification twice.
+      const sync = await runPackageSync(decision, plan);
+      if (sync.cancelled) return;      // the app is quitting; start nothing
+      if (sync.repair) {
+        if (stopWaitingClock) stopWaitingClock();
+        showRepairWizard(t(shellLocale(), 'syncRepairBody'));
+        return;
+      }
+      waitingPage.setPhase(mainWindow, 'starting');
     }
 
     if (plan.spawn) startBackend(plan.python, plan.root);

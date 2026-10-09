@@ -1,0 +1,104 @@
+{
+  "_provenance": "Real output of `pip install --dry-run --report` (pip 24.0, Windows, Python 3.11) for kikuchipy==0.13.1, orix==0.15.0, pyebsdindex==0.3.10.1, threadpoolctl==3.6.0 against an environment holding kikuchipy 0.11.3, orix 0.14.1, pyebsdindex 0.3.9.1, threadpoolctl 3.7.0 (the packages of a 0.4.6 installation). metadata.description and the dependency lists are trimmed; every key the parser reads is untouched.",
+  "version": "1",
+  "pip_version": "24.0",
+  "install": [
+    {
+      "download_info": {
+        "url": "https://files.pythonhosted.org/packages/88/f4/d6c4e92bcf7da80a6b591cc54419b1e20aeea76bd3430855154eb0a69682/kikuchipy-0.13.1-py3-none-any.whl",
+        "archive_info": {
+          "hash": "sha256=f389042a3d798d376c29a0eac0a6262cea4f9f0712ab2abb586086f8d15d762c",
+          "hashes": {
+            "sha256": "f389042a3d798d376c29a0eac0a6262cea4f9f0712ab2abb586086f8d15d762c"
+          }
+        }
+      },
+      "is_direct": false,
+      "is_yanked": false,
+      "requested": true,
+      "metadata": {
+        "metadata_version": "2.5",
+        "name": "kikuchipy",
+        "version": "0.13.1",
+        "summary": "Processing, simulating, and indexing of electron backscatter diffraction (EBSD) patterns",
+        "requires_python": ">=3.10"
+      }
+    },
+    {
+      "download_info": {
+        "url": "https://files.pythonhosted.org/packages/05/31/c8f60bd853d1e71f3741d64ee4f58dfef81003eec8e3c95964f52d02d461/orix-0.15.0-py3-none-any.whl",
+        "archive_info": {
+          "hash": "sha256=6abc3cc1e55180daef755a4ccda8eb5c3f622c39baa982c8c2baa6e1563c4507",
+          "hashes": {
+            "sha256": "6abc3cc1e55180daef755a4ccda8eb5c3f622c39baa982c8c2baa6e1563c4507"
+          }
+        }
+      },
+      "is_direct": false,
+      "is_yanked": false,
+      "requested": true,
+      "metadata": {
+        "metadata_version": "2.4",
+        "name": "orix",
+        "version": "0.15.0",
+        "summary": "orix is an open-source Python library for handling crystal orientation mapping data",
+        "requires_python": ">=3.10"
+      }
+    },
+    {
+      "download_info": {
+        "url": "https://files.pythonhosted.org/packages/52/da/dd2644b3e6cc1be96abf792693c097f7aa5dbed0604ebc4c0d6743104bd2/pyebsdindex-0.3.10.1-py3-none-any.whl",
+        "archive_info": {
+          "hash": "sha256=f7236addf52c3ab630e10558f48045e196dfb4e3b13ea3414146aae248dfc681",
+          "hashes": {
+            "sha256": "f7236addf52c3ab630e10558f48045e196dfb4e3b13ea3414146aae248dfc681"
+          }
+        }
+      },
+      "is_direct": false,
+      "is_yanked": false,
+      "requested": true,
+      "metadata": {
+        "metadata_version": "2.4",
+        "name": "pyebsdindex",
+        "version": "0.3.10.1",
+        "summary": "Python based tool for Radon based EBSD indexing",
+        "requires_python": ">=3.10"
+      }
+    },
+    {
+      "download_info": {
+        "url": "https://files.pythonhosted.org/packages/32/d5/f9a850d79b0851d1d4ef6456097579a9005b31fea68726a4ae5f2d82ddd9/threadpoolctl-3.6.0-py3-none-any.whl",
+        "archive_info": {
+          "hash": "sha256=43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb",
+          "hashes": {
+            "sha256": "43a0b8fd5a2928500110039e43a5eed8480b918967083ea48dc3ab9f13c4a7fb"
+          }
+        }
+      },
+      "is_direct": false,
+      "is_yanked": false,
+      "requested": true,
+      "metadata": {
+        "metadata_version": "2.4",
+        "name": "threadpoolctl",
+        "version": "3.6.0",
+        "summary": "threadpoolctl",
+        "requires_python": ">=3.9"
+      }
+    }
+  ],
+  "environment": {
+    "implementation_name": "cpython",
+    "implementation_version": "3.11.14",
+    "os_name": "nt",
+    "platform_machine": "AMD64",
+    "platform_release": "10",
+    "platform_system": "Windows",
+    "platform_version": "10.0.26200",
+    "python_full_version": "3.11.14",
+    "platform_python_implementation": "CPython",
+    "python_version": "3.11",
+    "sys_platform": "win32"
+  }
+}

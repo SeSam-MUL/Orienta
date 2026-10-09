@@ -38,6 +38,17 @@ const STRINGS = {
       + 'previous version instead, so this window may not show the newest changes. '
       + 'Reinstalling Orienta repairs it; your data and crystal library are not touched.',
 
+    syncingBody: 'Updating the Python packages (kikuchipy, orix, PyEBSDIndex)…',
+    syncingHint: 'This runs once after an update. It needs an internet connection and '
+      + 'takes about a minute. Your data is not touched. If it cannot finish, Orienta '
+      + 'starts with the current packages.',
+    syncSkippedBody: 'Orienta could not update its Python packages and is running with '
+      + 'the current ones, which this version also supports. Your data and crystal '
+      + 'library are not touched. Details are in the log file:\n{{path}}',
+    syncRepairBody: 'The updated Python packages did not pass the check, so Orienta has '
+      + 'not started the analysis engine. Reinstalling Orienta repairs it; your data '
+      + 'and crystal library are not touched.',
+
     notSetUpTitle: 'Orienta is not set up yet',
     needsRepairTitle: 'Orienta needs repairing',
     setupMissing: 'Orienta could not open the setup assistant: part of this '
@@ -91,6 +102,19 @@ const STRINGS = {
       + 'nicht die neuesten Änderungen. Eine Neuinstallation behebt das; Ihre Daten '
       + 'und Ihre Kristallbibliothek werden nicht angefasst.',
 
+    syncingBody: 'Die Python-Pakete (kikuchipy, orix, PyEBSDIndex) werden aktualisiert…',
+    syncingHint: 'Das läuft einmal nach einem Update. Dafür ist eine Internetverbindung '
+      + 'nötig, und es dauert etwa eine Minute. Ihre Daten werden nicht angefasst. '
+      + 'Falls die Aktualisierung nicht abgeschlossen werden kann, startet Orienta mit '
+      + 'den vorhandenen Paketen.',
+    syncSkippedBody: 'Orienta konnte seine Python-Pakete nicht aktualisieren und läuft '
+      + 'mit den vorhandenen, die auch diese Version unterstützt. Ihre Daten und Ihre '
+      + 'Kristallbibliothek werden nicht angefasst. Einzelheiten stehen in der '
+      + 'Log-Datei:\n{{path}}',
+    syncRepairBody: 'Die aktualisierten Python-Pakete haben die Prüfung nicht bestanden, '
+      + 'deshalb hat Orienta die Auswertung nicht gestartet. Eine Neuinstallation '
+      + 'behebt das; Ihre Daten und Ihre Kristallbibliothek werden nicht angefasst.',
+
     notSetUpTitle: 'Orienta ist noch nicht eingerichtet',
     needsRepairTitle: 'Orienta muss repariert werden',
     setupMissing: 'Orienta konnte den Einrichtungsassistenten nicht öffnen: ein Teil '
@@ -142,6 +166,16 @@ const STRINGS = {
       + 'この画面には最新の変更が反映されていない可能性があります。'
       + '再インストールで修復します。データと結晶ライブラリはそのままです。',
 
+    syncingBody: 'Python パッケージ（kikuchipy、orix、PyEBSDIndex）を更新しています…',
+    syncingHint: '更新後に一度だけ実行されます。インターネット接続が必要で、1 分ほどかかります。'
+      + 'データはそのままです。完了できない場合は、現在のパッケージで Orienta を起動します。',
+    syncSkippedBody: 'Python パッケージを更新できなかったため、現在のパッケージのまま'
+      + '起動しました。このバージョンは現在のパッケージにも対応しています。'
+      + 'データと結晶ライブラリはそのままです。詳細は次のログファイルに記録されています:\n{{path}}',
+    syncRepairBody: '更新した Python パッケージが確認に合格しなかったため、'
+      + '解析エンジンを起動していません。Orienta を再インストールすると修復できます。'
+      + 'データと結晶ライブラリはそのままです。',
+
     notSetUpTitle: 'Orienta はまだセットアップされていません',
     needsRepairTitle: 'Orienta の修復が必要です',
     setupMissing: 'セットアップアシスタントを開けませんでした。このインストールの一部が'
@@ -189,6 +223,14 @@ const STRINGS = {
     updateSkippedBody: 'Orienta 无法更新程序文件，已启动之前的版本，'
       + '所以此窗口可能不显示最新的改动。重新安装可以修复；'
       + '您的数据和晶体库不会被改动。',
+
+    syncingBody: '正在更新 Python 软件包（kikuchipy、orix、PyEBSDIndex）…',
+    syncingHint: '更新后只运行一次，需要联网，大约需要一分钟。您的数据不会被改动。'
+      + '如果无法完成，Orienta 会使用当前的软件包启动。',
+    syncSkippedBody: 'Orienta 无法更新其 Python 软件包，将继续使用当前的软件包，'
+      + '此版本同样支持它们。您的数据和晶体库不会被改动。详细信息见日志文件：\n{{path}}',
+    syncRepairBody: '更新后的 Python 软件包未通过检查，因此 Orienta 没有启动分析引擎。'
+      + '重新安装 Orienta 可以修复；您的数据和晶体库不会被改动。',
 
     notSetUpTitle: 'Orienta 尚未完成安装',
     needsRepairTitle: 'Orienta 需要修复',

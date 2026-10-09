@@ -39,6 +39,10 @@ const platform = require('./platform.js');
 const OURS = [
   'electron', 'logs', 'setup-tmp', 'python', 'runtime', 'pending', 'pending.json',
   '.orienta-home', '.python_path', '.install_mode', '.install_incomplete',
+  // package_sync.js: what the packages were brought to, an update in flight, and
+  // the last failure of one. Left behind, "remove all data" would keep files
+  // that name a lock for packages that are no longer there.
+  '.packages_lock.json', '.packages_sync.json', '.packages_sync_failed.json',
   platform.CONDA_ROOT_DIR, platform.CONDA_ENVS_DIR,
 ];
 

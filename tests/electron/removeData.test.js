@@ -133,6 +133,24 @@ describe('what actually happens', () => {
     expect(fs.existsSync(path.join(outside, 'data.h5'))).toBe(true);
   });
 
+  it('removes what the package sync records, and does not list it among the user files', () => {
+    // .packages_lock.json / .packages_sync.json / .packages_sync_failed.json are
+    // written by the shell on an update. Missing from OURS, "remove all data"
+    // would leave them behind AND report them as files the user had put there.
+    const names = ['.packages_lock.json', '.packages_sync.json', '.packages_sync_failed.json'];
+    const home = makeHome(Object.fromEntries(names.map((n) => [n, '{}'])));
+    const plan = planRemoval(home, fs, tmp);
+    for (const n of names) {
+      expect(plan.entries).toContain(n);
+      expect(plan.foreign).not.toContain(n);
+    }
+    const result = removeData(home, { removeLibrary: false, io: fs, homedir: tmp });
+    for (const n of names) {
+      expect(fs.existsSync(path.join(home, n))).toBe(false);
+      expect(result.kept).not.toContain(n);
+    }
+  });
+
   it('removes the pointer marker last, so an interrupted run can resume', () => {
     const home = makeHome();
     const result = removeData(home, { removeLibrary: true, io: fs, homedir: tmp });

@@ -1239,6 +1239,11 @@ function logSetupLine(home, line) {
 const OURS = new Set([
   'electron', 'logs', 'setup-tmp', 'python', 'runtime', 'pending', 'pending.json',
   '.orienta-home', '.python_path', '.install_mode', '.install_incomplete',
+  // What the packages were last brought to, the marker of an update in flight,
+  // and the last failure to bring them there (package_sync.js). Missing here, a
+  // repair after an interrupted update would refuse with "this folder contains
+  // files that are not Orienta's", naming files the app wrote itself.
+  '.packages_lock.json', '.packages_sync.json', '.packages_sync_failed.json',
   // macOS writes these two itself, in step 2 and step 3. Without them the
   // SECOND run of the setup — a retry after any failure, the "install the
   // processor version instead" button, or repair mode — refuses with "this
@@ -1311,6 +1316,36 @@ function runStreaming(exe, args, { onLine, cwd, env } = {}) {
 }
 
 /**
+ * Record which lock the packages were just installed from, so that the first
+ * start after this install takes the fast path in `package_sync.js` instead of
+ * asking pip a question whose answer is "nothing".
+ *
+ * Never throws and never fails an install: a missing record costs one dry run
+ * at the next start, not a working installation.
+ *
+ * The lock is read from the unpacked runtime on Windows and Linux -- the very
+ * file step 4 installed from -- and, on macOS, from the text the environment was
+ * created from (`macosLockText`); a resumed macOS run falls back to the unpacked
+ * file, which is the same lock.
+ */
+function recordPackagesLock(home, mode, runtimeTag, macosLockText = null) {
+  try {
+    const sync = require('./package_sync');
+    const darwin = platform.current() === 'darwin';
+    const lockName = darwin ? macosEnv.MACOS_LOCK_FILE : lockFileFor(mode);
+    const lockText = darwin && macosLockText
+      ? macosLockText
+      : fs.readFileSync(path.join(home, 'runtime', lockName), 'utf8');
+    sync.recordFirstInstall({
+      home, mode, lockName, lockText, runtimeTag, platformName: platform.current(),
+    });
+  } catch (err) {
+    logSetupLine(home, `could not record the package lock (${err.message}); `
+      + 'the next start will ask pip instead');
+  }
+}
+
+/**
  * Build the Python side of the application.
  *
  * Never throws: every failure is a returned `{ok:false, code, error}` so the
@@ -1368,6 +1403,9 @@ async function runSetupInner(options, onProgress) {
   const incomplete = path.join(home, '.install_incomplete');
   let heartbeat = null;
   let cudaUnverified = '';
+  // The lock text the macOS environment was created from, kept for the record
+  // written at the end (package_sync.js); null elsewhere and on a resumed run.
+  let macosLockText = null;
   // True once the interpreter AND the program files are on disk. `resume` is a
   // property of the failure, not a constant the caller may assume: offering
   // "install the processor version instead" with resume=true after a failure
@@ -1758,6 +1796,9 @@ async function runSetupInner(options, onProgress) {
           };
         }
         touch();
+        try {
+          macosLockText = fs.readFileSync(path.join(temp, macosEnv.MACOS_LOCK_FILE), 'utf8');
+        } catch { /* the record then reads the unpacked lock, which is the same file */ }
         currentStep = 'runtime';
       }
 
@@ -1931,6 +1972,7 @@ async function runSetupInner(options, onProgress) {
     // ---- 6. record what we built -----------------------------------------
     fs.writeFileSync(path.join(home, '.python_path'), `${pythonExeIn(home)}\n`);
     fs.writeFileSync(path.join(home, '.install_mode'), `${mode}\n`);
+    recordPackagesLock(home, mode, resolvedTag, macosLockText);
     fs.mkdirSync(path.join(home, 'runtime', 'Database'), { recursive: true });
     // Only here. Removing it in `finally` would erase the record of every
     // failure the moment it happened, which is the one case it is for.
@@ -2006,6 +2048,7 @@ runSetup.killChildren = function killChildren() {
 };
 
 module.exports.logSetupLine = logSetupLine;
+module.exports.recordPackagesLock = recordPackagesLock;
 module.exports.runSetup = runSetup;
 module.exports.CODES = CODES;
 module.exports.classify = classify;

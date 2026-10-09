@@ -472,6 +472,9 @@
     !insertmacro orientaRemovePath "$oHome\.python_path"
     !insertmacro orientaRemovePath "$oHome\.install_mode"
     !insertmacro orientaRemovePath "$oHome\.install_incomplete"
+    !insertmacro orientaRemovePath "$oHome\.packages_lock.json"
+    !insertmacro orientaRemovePath "$oHome\.packages_sync.json"
+    !insertmacro orientaRemovePath "$oHome\.packages_sync_failed.json"
     ; A repair renames the old interpreter aside as python.old-<time>.
     FindFirst $oFind $oName "$oHome\python.old-*"
     ${DoWhile} $oName != ""
