@@ -1535,6 +1535,34 @@ describe('the three files', () => {
       expect(NSH).toContain(`!insertmacro orientaRemovePath "$oHome\\${f}"`);
     }
   });
+
+  it('leave nothing behind in the home when a write is killed between the temp file and the rename', () => {
+    // A crash there strands the temp file. It must not turn the repair wizard or
+    // "remove all data" against the user ("this folder contains files that are not
+    // Orienta's"), so it is written where Orienta's own scratch space is.
+    const home = path.join(tmp, 'Orienta');
+    fs.mkdirSync(path.join(home, 'runtime', 'Database'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.orienta-home'), '');
+    const dying = { ...fs, renameSync: () => { throw new Error('killed'); } };
+    for (const f of sync.OWN_FILES) {
+      expect(() => sync.writeJsonAtomic(path.join(home, f), { a: 1 }, dying)).toThrow('killed');
+    }
+    const stranded = fs.readdirSync(path.join(home, 'setup-tmp'));
+    expect(stranded).toHaveLength(3);
+    expect(stranded.every((n) => /^\.packages_.*\.json\.\d+\.tmp$/.test(n))).toBe(true);
+    expect(fs.readdirSync(home).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+    expect(installer.foreignEntries(home)).toEqual([]);
+    const plan = removeData.planRemoval(home, fs, tmp);
+    expect(plan.ok).toBe(true);
+    expect(plan.foreign).toEqual([]);
+  });
+
+  it('are still written whole: the target holds the new content and the temp name is gone', () => {
+    const home = path.join(tmp, 'Orienta');
+    sync.writeJsonAtomic(path.join(home, sync.RECORD_FILE), { a: 1 });
+    expect(readJson(home, sync.RECORD_FILE)).toEqual({ a: 1 });
+    expect(fs.readdirSync(path.join(home, 'setup-tmp'))).toEqual([]);
+  });
 });
 
 describe('the first install records the lock', () => {

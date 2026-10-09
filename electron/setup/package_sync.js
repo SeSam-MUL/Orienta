@@ -411,10 +411,17 @@ function readJsonFile(file, io) {
  * Write via a sibling temp file and a rename, so a kill leaves the old content
  * or the new, never half of one. The fast path trusts this file; a torn write
  * that parses as something else would be a wrong answer at every later start.
+ *
+ * The temp file lives in `setup-tmp/` beside the target (same volume, so the
+ * rename stays atomic), not in the home itself: a kill between the write and the
+ * rename leaves it behind, and in the home it would be a file the repair wizard
+ * and "remove all data" take for somebody else's (`homeNotEmpty`). `setup-tmp`
+ * is Orienta's on every list that matters.
  */
 function writeJsonAtomic(file, value, io = fsDefault, path = pathDefault) {
-  io.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
+  const tmpDir = path.join(path.dirname(file), 'setup-tmp');
+  io.mkdirSync(tmpDir, { recursive: true });
+  const tmp = path.join(tmpDir, `${path.basename(file)}.${process.pid}.tmp`);
   io.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
   io.renameSync(tmp, file);
 }
