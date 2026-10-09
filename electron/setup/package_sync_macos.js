@@ -422,7 +422,7 @@ async function syncMacos(ctx, d) {
   };
   const mmEnv = env.scrubbedEnv(ctx.env || process.env);
   const cancelled = () => d.isCancelled();
-  const fail = (reason, detail) => S.failWith({ home, digest, state, d: { ...d, fs, path }, say }, reason, detail);
+  const fail = (reason, detail, extra) => S.failWith({ home, digest, state, d: { ...d, fs, path }, say }, reason, detail, extra);
   const mm = (args, opts = {}) => d.run(cfg.micromamba, args, { env: mmEnv, ...opts });
   // micromamba prints a table with rules, blank lines and a standing security
   // warning; what the log needs is the package lines and the verdicts.
@@ -500,7 +500,10 @@ async function syncMacos(ctx, d) {
     if (!repairing) return fail(reason, detail);
     const probe = await probeImports();
     if (cancelled() || probe.cancelled) return { cancelled: true };
-    if (probe.code === 0) return fail(reason, `${detail} (the earlier update is still unverified)`);
+    // A probe that did not finish in time is not a failed import.
+    if (probe.code === 0 || probe.timedOut) {
+      return fail(reason, `${detail} (the earlier update is still unverified)`, { unverified: true });
+    }
     return needsRepair(`${detail}; and the libraries do not import`);
   };
 
@@ -522,13 +525,18 @@ async function syncMacos(ctx, d) {
 
     const imports = await probeImports();
     if (cancelled() || imports.cancelled) return { cancelled: true };
-    if (imports.code !== 0) {
+    if (imports.timedOut) {
+      // Slow is not broken (the first import after relinking is read by
+      // Gatekeeper and any scanner): start, keep the marker, verify next time.
       return {
         ok: false,
-        detail: imports.timedOut
-          ? `the imports did not finish within ${S.TIMEOUT_MS.imports / 1000} s`
-          : `the imports failed: ${S.tailOf(imports.output)}`,
+        unverified: true,
+        detail: `the imports did not finish within ${S.TIMEOUT_MS.imports / 1000} s; `
+          + 'the packages are in place but not verified',
       };
+    }
+    if (imports.code !== 0) {
+      return { ok: false, detail: `the imports failed: ${S.tailOf(imports.output)}` };
     }
 
     // Exactly one OpenMP runtime: the project's own gate, not a second opinion.
@@ -575,7 +583,9 @@ async function syncMacos(ctx, d) {
     if (!fs.existsSync(cfg.micromamba)) return needsRepair(`micromamba is missing at ${cfg.micromamba}`);
     const check = await verify();
     if (check.cancelled) return { cancelled: true };
-    return check.ok ? finish('repair') : needsRepair(check.detail);
+    if (check.ok) return finish('repair');
+    if (check.unverified) return fail('other', check.detail, { unverified: true });
+    return needsRepair(check.detail);
   }
 
   // ---- the guard ------------------------------------------------------------
@@ -725,6 +735,7 @@ async function syncMacos(ctx, d) {
       check = await verify();
       if (check.cancelled) return { cancelled: true };
       if (check.ok) return finish(repairing ? 'repair' : 'sync');
+      if (check.unverified) return fail('other', check.detail, { unverified: true });
     }
     say(`not right yet (${check.detail}); doing it once more`);
 
@@ -735,6 +746,7 @@ async function syncMacos(ctx, d) {
       check = await verify();
       if (check.cancelled) return { cancelled: true };
       if (check.ok) return finish('repair');
+      if (check.unverified) return fail('other', check.detail, { unverified: true });
     }
     return needsRepair(check.detail);
   } finally {

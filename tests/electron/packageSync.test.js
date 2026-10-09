@@ -88,6 +88,21 @@ const OFFLINE_TEXT = [
   'ERROR: No matching distribution found for kikuchipy==0.13.1',
 ].join('\n');
 
+// What pip prints when a transient connection warning comes first and a file
+// cannot be replaced afterwards: it READS as a network failure and IS a failure
+// while writing.
+const WRITE_PHASE_TEXT = [
+  'WARNING: Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after '
+  + "connection broken by 'ReadTimeoutError(\"HTTPSConnectionPool(host='files.pythonhosted.org', port=443): "
+  + "Read timed out.\")': /packages/orix-0.15.0-py3-none-any.whl",
+  'Installing collected packages: pyebsdindex, orix, kikuchipy',
+  '  Attempting uninstall: orix',
+  '    Found existing installation: orix 0.14.1',
+  '    Uninstalling orix-0.14.1:',
+  '      Successfully uninstalled orix-0.14.1',
+  "ERROR: Could not install packages due to an OSError: [WinError 5] Access is denied: 'C:\\x\\orix'",
+].join('\n');
+
 /**
  * A pip that is a function. `installed` is the environment; `lock` what the lock
  * wants; `calls` every invocation in order. Scenario switches break one thing at
@@ -129,6 +144,7 @@ function fakePip({ installed = { ...OLD }, want = NEW, scenario = {} } = {}) {
         return reply({ stdout: `${JSON.stringify(out)}\n` });
       }
       case 'imports':
+        if (sc.imports === 'timeout') return reply({ code: -1, timedOut: true });
         return sc.imports === 'fail'
           ? reply({ code: 1, output: 'ImportError: cannot import name x from kikuchipy' })
           : reply();
@@ -153,6 +169,26 @@ function fakePip({ installed = { ...OLD }, want = NEW, scenario = {} } = {}) {
         if (sc.install === 'space-untouched') {
           const text = 'ERROR: Could not install packages due to an OSError: [Errno 28] No space left on device';
           return reply({ code: 1, output: text, stderr: text });
+        }
+        // pip failed after it had started to write: one package is already new
+        if (sc.install === 'write-failure' || sc.install === 'write-failure-nothing-changed') {
+          if (sc.install === 'write-failure') state.installed.orix = want.orix;
+          return reply({ code: 1, output: WRITE_PHASE_TEXT, stderr: WRITE_PHASE_TEXT });
+        }
+        // the 10-minute kill, in three different places
+        if (sc.install === 'timeout-writing') {
+          state.installed.orix = want.orix;
+          const text = 'Installing collected packages: pyebsdindex, orix, kikuchipy';
+          return reply({ code: -1, timedOut: true, output: text, stdout: text });
+        }
+        if (sc.install === 'timeout-changed') {   // the text is not what tells here, the environment is
+          state.installed.orix = want.orix;
+          const text = 'Downloading kikuchipy-0.13.1';
+          return reply({ code: -1, timedOut: true, output: text, stdout: text });
+        }
+        if (sc.install === 'timeout-downloading') {
+          const text = 'Collecting orix==0.15.0\n  Downloading orix-0.15.0-py3-none-any.whl';
+          return reply({ code: -1, timedOut: true, output: text, stdout: text });
         }
         Object.assign(state.installed, want);
         if (sc.afterInstall) sc.afterInstall(state.installed);
@@ -991,14 +1027,204 @@ describe('when the network is not there', () => {
     expect(shared.notify).toHaveBeenCalledTimes(2);
   });
 
-  it('a download that fails after the question leaves everything as it was', async () => {
+  it('a download that fails after the question leaves everything as it was -- and the environment says so', async () => {
     const h = makeHome();
     const pip = fakePip({ scenario: { install: 'offline' } });
     const res = await run({}, h, pip).result;
     expect(res).toMatchObject({ action: 'failed', reason: 'network' });
     expect(pip.state.installed).toEqual(OLD);
-    expect(exists(h.home, sync.MARKER_FILE)).toBe(false);       // nothing was written, so nothing to verify
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(false);       // the probe found nothing changed
     expect(pip.kinds()).not.toContain('imports');
+    expect(pip.kinds()).not.toContain('reinstall');
+  });
+});
+
+describe('a failed install is never taken on its word that it wrote nothing', () => {
+  /** The invariant: after ANY failed install the environment is asked, while the
+   *  marker is still on disk, before the marker may go. */
+  it.each([
+    ['an unreachable index', 'offline'],
+    ['a full disk before the first file', 'space-untouched'],
+    ['a kill while still downloading', 'timeout-downloading'],
+  ])('%s: the versions are read with the marker still in place, then the marker goes', async (_label, install) => {
+    const h = makeHome();
+    const pip = fakePip({ scenario: { install } });
+    const inner = pip.run;
+    const markerAtVersions = [];
+    pip.run = async (exe, args, opts) => {
+      const r = await inner(exe, args, opts);
+      if (pip.kinds().includes('install') && pip.calls[pip.calls.length - 1].kind === 'versions') {
+        markerAtVersions.push(exists(h.home, sync.MARKER_FILE));
+      }
+      return r;
+    };
+    const res = await run({}, h, pip).result;
+    expect(res).toMatchObject({ ok: true, action: 'failed' });
+    const kinds = pip.kinds();
+    expect(kinds[kinds.indexOf('install') + 1]).toBe('versions');
+    expect(markerAtVersions).toEqual([true]);
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(false);       // unchanged: nothing to look after
+    expect(pip.state.installed).toEqual(OLD);
+  });
+
+  it('a Retrying warning in front of a failure while writing: reads as network, is checked, and is put right', async () => {
+    expect(sync.classifyPipFailure({ text: WRITE_PHASE_TEXT })).toBe('network');   // the trap
+    const h = makeHome();
+    const pip = fakePip({ scenario: { install: 'write-failure' } });
+    const inner = pip.run;
+    let markerAtReinstall = null;
+    pip.run = async (exe, args, opts) => {
+      if (args.includes('--force-reinstall')) markerAtReinstall = exists(h.home, sync.MARKER_FILE);
+      return inner(exe, args, opts);
+    };
+    const { made, result } = run({}, h, pip);
+    const res = await result;
+    expect(res).toMatchObject({ ok: true, action: 'synced', how: 'repair' });
+    expect(markerAtReinstall).toBe(true);
+    expect(pip.state.installed).toMatchObject(NEW);
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(false);
+    expect(made.notify).not.toHaveBeenCalled();
+    expect(made.log.join('\n')).toMatch(/write phase|changed packages/);
+  });
+
+  it('...and when nothing can be put back, the repair wizard -- with the marker still there, no dialog about a network', async () => {
+    const h = makeHome();
+    const pip = fakePip({ scenario: { install: 'write-failure', reinstall: 'offline' } });
+    const { made, result } = run({}, h, pip);
+    const res = await result;
+    expect(res.repair).toBe(true);
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(true);
+    expect(exists(h.home, sync.RECORD_FILE)).toBe(false);
+    expect(made.notify).not.toHaveBeenCalled();
+  });
+
+  it('pip\'s own "Installing collected packages" means verify, even when every version reads as before', async () => {
+    const h = makeHome();
+    const pip = fakePip({ scenario: { install: 'write-failure-nothing-changed' } });
+    const res = await run({}, h, pip).result;
+    // The words, not the probe, sent it to the full check: the old versions are
+    // not the lock's, so the check fails and the packages are put in place.
+    expect(res).toMatchObject({ action: 'synced', how: 'repair' });
+    expect(pip.kinds()).toContain('reinstall');
+    expect(pip.state.installed).toMatchObject(NEW);
+  });
+
+  it('a kill while pip was replacing files (its words say so): verified, put right', async () => {
+    const h = makeHome();
+    const pip = fakePip({ scenario: { install: 'timeout-writing' } });
+    const res = await run({}, h, pip).result;
+    expect(res).toMatchObject({ action: 'synced', how: 'repair' });
+    expect(pip.kinds()).toContain('reinstall');
+    expect(pip.state.installed).toMatchObject(NEW);
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(false);
+  });
+
+  it('a kill that left the environment changed but printed nothing about it: the probe catches it', async () => {
+    const h = makeHome();
+    const pip = fakePip({ scenario: { install: 'timeout-changed' } });
+    const res = await run({}, h, pip).result;
+    expect(res).toMatchObject({ action: 'synced', how: 'repair' });
+    expect(pip.kinds()).toContain('reinstall');
+    expect(pip.state.installed).toMatchObject(NEW);
+  });
+
+  it('a kill mid-write that cannot be put right is the repair wizard, with the marker', async () => {
+    const h = makeHome();
+    const pip = fakePip({ scenario: { install: 'timeout-writing', reinstall: 'offline' } });
+    const res = await run({}, h, pip).result;
+    expect(res.repair).toBe(true);
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(true);
+  });
+});
+
+describe('an import check that does not answer in time is not a broken environment', () => {
+  const python = 'py';
+  const expected = { kikuchipy: '0.13.1', orix: '0.15.0' };
+
+  it('verifyInstall calls it unverified; a non-zero exit stays broken', async () => {
+    const slow = await sync.verifyInstall(
+      { run: fakePip({ installed: { ...NEW }, scenario: { imports: 'timeout' } }).run }, python, expected, () => {});
+    expect(slow).toMatchObject({ ok: false, unverified: true });
+    expect(slow.detail).toMatch(/did not finish within 120 s/);
+
+    const broken = await sync.verifyInstall(
+      { run: fakePip({ installed: { ...NEW }, scenario: { imports: 'fail' } }).run }, python, expected, () => {});
+    expect(broken.ok).toBe(false);
+    expect(broken.unverified).toBeFalsy();
+  });
+
+  it('after an install: start with what is there, keep the marker, tell once, reinstall nothing', async () => {
+    const h = makeHome();
+    const pip = fakePip({ scenario: { imports: 'timeout' } });
+    const { made, result } = run({}, h, pip);
+    const res = await result;
+    expect(res).toMatchObject({ ok: true, action: 'failed', unverified: true });
+    expect(res.repair).toBeUndefined();
+    expect(pip.kinds()).not.toContain('reinstall');
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(true);        // the next start verifies again
+    expect(exists(h.home, sync.RECORD_FILE)).toBe(false);
+    expect(made.notify).toHaveBeenCalledTimes(1);
+    expect(made.notify).toHaveBeenCalledWith(expect.objectContaining({ unverified: true }));
+    expect(made.log.join('\n')).toMatch(/did not finish within 120 s/);
+  });
+
+  it('after a reinstall too', async () => {
+    const h = makeHome();
+    let corrupted = false;
+    const pip = fakePip({ scenario: {
+      afterInstall: (installed) => { if (!corrupted) { corrupted = true; installed.orix = '0.14.1'; } },
+    } });
+    const inner = pip.run;
+    pip.run = async (exe, args, opts) => {
+      if (args[0] === '-c' && args[1].startsWith('import kikuchipy') && pip.kinds().includes('reinstall')) {
+        pip.calls.push({ exe, args, kind: 'imports', opts });
+        return { code: -1, timedOut: true, stdout: '', stderr: '', output: '' };
+      }
+      return inner(exe, args, opts);
+    };
+    const res = await run({}, h, pip).result;
+    expect(res).toMatchObject({ action: 'failed', unverified: true });
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(true);
+  });
+});
+
+describe('an interrupted update with nothing named in its marker, and no way to ask pip', () => {
+  const marker = { [sync.MARKER_FILE]: { schema: 1 } };
+
+  it('libraries that import: start, marker kept, told once as unverified', async () => {
+    const h = makeHome({ files: marker });
+    const pip = fakePip({ installed: { ...NEW }, scenario: { dry: 'offline' } });
+    const { made, result } = run({}, h, pip);
+    const res = await result;
+    expect(res).toMatchObject({ ok: true, action: 'failed', reason: 'network', unverified: true });
+    expect(pip.kinds()).toEqual(['dry', 'imports']);            // one look, once
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(true);
+    expect(made.notify).toHaveBeenCalledWith(expect.objectContaining({ unverified: true }));
+  });
+
+  it('libraries that do not import: the repair wizard, not a backend that dies on its first import', async () => {
+    const h = makeHome({ files: marker });
+    const pip = fakePip({ installed: { ...NEW }, scenario: { dry: 'offline', imports: 'fail' } });
+    const res = await run({}, h, pip).result;
+    expect(res).toMatchObject({ ok: false, repair: true });
+    expect(pip.kinds()).toEqual(['dry', 'imports']);
+    expect(exists(h.home, sync.MARKER_FILE)).toBe(true);
+  });
+
+  it('an import check that does not answer in time is not a broken environment', async () => {
+    const h = makeHome({ files: marker });
+    const pip = fakePip({ installed: { ...NEW }, scenario: { dry: 'offline', imports: 'timeout' } });
+    const res = await run({}, h, pip).result;
+    expect(res).toMatchObject({ ok: true, action: 'failed', unverified: true });
+  });
+
+  it('without a marker the same dry-run failure asks nothing else', async () => {
+    const h = makeHome();
+    const pip = fakePip({ scenario: { dry: 'offline' } });
+    const res = await run({}, h, pip).result;
+    expect(res).toMatchObject({ action: 'failed', reason: 'network' });
+    expect(res.unverified).toBeUndefined();
+    expect(pip.kinds()).toEqual(['dry']);
   });
 });
 

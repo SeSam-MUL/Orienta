@@ -903,9 +903,55 @@ describe('when the local phase goes wrong', () => {
     const res = await runMac(h, fake).result;
     expect(res).toMatchObject({ action: 'synced', how: 'repair' });
   });
+
+  it('network words from a failed LOCAL phase are never a network failure: the marker stays, the wizard is shown', async () => {
+    // The download is the only network phase. A relink that fails is a half-changed
+    // environment whatever it printed, so it is never answered by deleting the marker.
+    const h = macHome();
+    const offlineLooking = () => reply({ code: 1, output: CONNECT_TEXT, stderr: CONNECT_TEXT });
+    const fake = fakeMicromamba(h, { install: offlineLooking });
+    const { result, notify } = runMac(h, fake);
+    const res = await result;
+    expect(res).toMatchObject({ ok: false, repair: true });
+    expect(exists(h, '.packages_sync.json')).toBe(true);
+    expect(exists(h, '.packages_sync_failed.json')).toBe(false);
+    expect(notify).not.toHaveBeenCalled();
+    expect(fake.counts.install).toBe(2);
+  });
+
+  it('imports that do not answer in time: start, marker kept, told once as unverified, no second attempt', async () => {
+    const h = macHome();
+    const fake = fakeMicromamba(h, { imports: () => reply({ code: -1, timedOut: true }) });
+    const { result, notify } = runMac(h, fake);
+    const res = await result;
+    expect(res).toMatchObject({ ok: true, action: 'failed', unverified: true });
+    expect(res.repair).toBeUndefined();
+    expect(fake.counts.install).toBe(1);
+    expect(fake.counts.remove).toBe(1);
+    expect(exists(h, '.packages_sync.json')).toBe(true);
+    expect(exists(h, '.packages_lock.json')).toBe(false);
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ unverified: true }));
+  });
 });
 
 describe('an update that was interrupted', () => {
+  it('a marker with nothing left to do and imports that do not answer in time is unverified, not broken', async () => {
+    const h = macHome({ installed: NEW_LOCK, files: { '.packages_sync.json': { schema: 1 } } });
+    const res = await runMac(h, fakeMicromamba(h, { imports: () => reply({ code: -1, timedOut: true }) })).result;
+    expect(res).toMatchObject({ ok: true, action: 'failed', unverified: true });
+    expect(exists(h, '.packages_sync.json')).toBe(true);
+  });
+
+  it('without a network and imports that do not answer in time: starts, unverified', async () => {
+    const h = macHome({ files: { '.packages_sync.json': { schema: 1 } } });
+    const fake = fakeMicromamba(h, {
+      download: () => reply({ code: 1, output: CONNECT_TEXT, stderr: CONNECT_TEXT }),
+      imports: () => reply({ code: -1, timedOut: true }),
+    });
+    const res = await runMac(h, fake).result;
+    expect(res).toMatchObject({ ok: true, action: 'failed', reason: 'network', unverified: true });
+  });
+
   it('is finished from the disk: what was unlinked is linked again, and the marker goes', async () => {
     const h = macHome({ files: { '.packages_sync.json': { schema: 1, to: { kikuchipy: '0.13.1' } } } });
     // The kill came after `remove` and before `install`.

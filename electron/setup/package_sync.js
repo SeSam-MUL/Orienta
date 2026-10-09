@@ -357,6 +357,19 @@ const RESOLVER_PATTERNS = [
   /requires a different Python/i,
 ];
 
+/** Words pip prints only once it is replacing files: from here on the
+ *  environment may differ from the one it started with, whatever else it says. */
+const WRITE_PHASE_PATTERNS = [
+  /Installing collected packages/i,
+  /Attempting uninstall/i,
+  /Successfully uninstalled/i,
+];
+
+function reachedWritePhase(text) {
+  const body = String(text || '');
+  return WRITE_PHASE_PATTERNS.some((re) => re.test(body));
+}
+
 /**
  * `network | space | resolver | other` from what pip printed.
  *
@@ -820,7 +833,7 @@ async function syncInner(opts, d, say) {
  * pip and the micromamba flow: the rule "one dialog per (lock digest, reason),
  * never one per start" is a property of the shell, not of the package manager.
  */
-async function failWith({ home, digest, state, d, say }, reason, detail) {
+async function failWith({ home, digest, state, d, say }, reason, detail, { unverified = false } = {}) {
   const { fs, path } = d;
   const failureFile = path.join(home, FAILURE_FILE);
   const rec = nextFailure(state.failure, { digest, reason, now: d.now(), detail });
@@ -828,14 +841,14 @@ async function failWith({ home, digest, state, d, say }, reason, detail) {
   try { writeJsonAtomic(failureFile, rec, fs, path); } catch (err) { say(`could not write the failure record (${err.message})`); }
   if (!rec.shown) {
     try {
-      await d.notify({ reason, detail });
+      await d.notify({ reason, detail, unverified });
       rec.shown = true;
       try { writeJsonAtomic(failureFile, rec, fs, path); } catch { /* shown twice at worst */ }
     } catch (err) {
       say(`could not show the message (${err.message})`);
     }
   }
-  return { ok: true, action: 'failed', reason, detail };
+  return { ok: true, action: 'failed', reason, detail, ...(unverified ? { unverified: true } : {}) };
 }
 
 async function syncPip(ctx, verdict, d, say) {
@@ -858,7 +871,7 @@ async function syncPip(ctx, verdict, d, say) {
   };
 
   /** Record a failure, show the one dialog, and let the start go on. */
-  const fail = (reason, detail) => failWith({ home, digest, state, d, say }, reason, detail);
+  const fail = (reason, detail, extra) => failWith({ home, digest, state, d, say }, reason, detail, extra);
 
   // ---- room to write -------------------------------------------------------
   const free = d.freeBytes(home) || { bytes: 0, known: false };
@@ -903,7 +916,22 @@ async function syncPip(ctx, verdict, d, say) {
   }
 
   if (dryFailure) {
-    if (!(repairing && markerSpecs.size)) return fail(dryFailure.reason, dryFailure.detail);
+    if (!repairing) return fail(dryFailure.reason, dryFailure.detail);
+    if (!markerSpecs.size) {
+      // An interrupted update, nothing in the marker to put back, and pip cannot
+      // be asked: the environment is unverified. Look at it once -- libraries that
+      // import mean start (the marker stays); libraries that do not mean the
+      // repair wizard, not a backend that dies on its first import.
+      say(`the question to pip failed (${dryFailure.reason}) and the interrupted update named nothing; `
+        + 'checking whether the libraries import');
+      const probe = await d.run(python, importArgs(), { timeoutMs: TIMEOUT_MS.imports });
+      if (cancelled() || probe.cancelled) return { cancelled: true };
+      if (probe.code === 0 || probe.timedOut) {
+        return fail(dryFailure.reason, `${dryFailure.detail} (the earlier update is still unverified)`,
+          { unverified: true });
+      }
+      return needsRepair(`${dryFailure.detail}; and the libraries do not import`);
+    }
     say(`the question to pip failed (${dryFailure.reason}); repairing from the interrupted update's own list`);
     delta = [];
   }
@@ -1005,11 +1033,17 @@ async function syncPip(ctx, verdict, d, say) {
     return { ok: true, action: 'synced', how, packages: Object.fromEntries(target) };
   };
 
+  /** The imports could not be judged in time. Not "broken": the packages are in
+   *  place and nobody has seen them fail. Start, keep the marker (the next start
+   *  verifies again), say so. */
+  const unverified = (detail) => fail('other', detail, { unverified: true });
+
   let check;
   if (install.code === 0) {
     check = await verifyInstall(d, python, expected, say);
     if (cancelled()) return { cancelled: true };
     if (check.ok) return finish(repairing ? 'repair' : 'sync');
+    if (check.unverified) return unverified(check.detail);
     say(`verification failed (${check.detail}); reinstalling the packages once`);
   } else {
     const reason = classifyPipFailure({
@@ -1018,35 +1052,39 @@ async function syncPip(ctx, verdict, d, say) {
     const detail = install.timedOut ? `pip did not finish within ${TIMEOUT_MS.install / 60000} min`
       : (tailOf(install.output) || `pip exited with ${install.code}`);
     say(`pip install failed (${reason}) — ${detail}`);
-    const cannotRetryNow = reason === 'network' || reason === 'resolver';
 
-    if (!repairing) {
-      if (cannotRetryNow) {
-        // pip downloads before it writes: the environment is as it was.
-        removeFile(markerFile, fs);
-        return fail(reason, detail);
-      }
-      // A failure while writing may have changed some of the packages.
+    // The classification is for the record and the dialog, NEVER for the
+    // question "did pip write anything". A `Retrying` warning in front of a
+    // `[WinError 5] Access is denied` reads as a network failure and is a failure
+    // while writing; a timeout can be the kill of a pip that was mid-write.
+    // Whether the environment is still the old one is asked of the environment.
+    let touched = reachedWritePhase(`${install.stdout}\n${install.stderr}`);
+    if (touched) say('pip reached the write phase; checking the environment');
+    if (!repairing && !touched) {
       if (await unchangedNow()) {
+        // pip downloads before it writes, and this one never got that far.
         removeFile(markerFile, fs);
         return fail(reason, detail);
       }
+      touched = true;
       say('the failed install changed packages; checking and repairing');
     }
     // Reached when pip wrote something, or when this IS the repair of an
     // earlier interruption -- where "pip changed nothing just now" says nothing
     // about the state the interruption left. Look at the environment itself.
+    const cannotRetryNow = !touched && (reason === 'network' || reason === 'resolver');
     check = await verifyInstall(d, python, expected, say);
     if (cancelled()) return { cancelled: true };
     if (check.ok) return finish('repair');
+    if (check.unverified) return unverified(check.detail);
     if (cannotRetryNow) {
       // Nothing can be reinstalled without a network. If the libraries still
       // import, the start goes ahead and the marker stays for the next try;
       // if they do not, the backend cannot start anyway.
-      const probe = await d.run(python, importArgs(), { timeoutMs: TIMEOUT_MS.imports });
-      if (cancelled() || probe.cancelled) return { cancelled: true };
-      if (probe.code === 0) return fail(reason, `${detail} (the earlier update is still unverified)`);
-      return needsRepair(`${check.detail}; and ${reason === 'network' ? 'there is no network' : 'pip cannot resolve'} to fix it`);
+      return startIfImportable(
+        reason, `${detail} (the earlier update is still unverified)`,
+        `${check.detail}; and ${reason === 'network' ? 'there is no network' : 'pip cannot resolve'} to fix it`,
+      );
     }
     say(`verification failed (${check.detail}); reinstalling the packages once`);
   }
@@ -1060,7 +1098,19 @@ async function syncPip(ctx, verdict, d, say) {
     : { ok: false, detail: `the reinstall failed (${tailOf(again.output) || `pip exited with ${again.code}`})` };
   if (cancelled()) return { cancelled: true };
   if (check.ok) return finish('repair');
+  if (check.unverified) return unverified(check.detail);
   return needsRepair(check.detail);
+
+  /** An environment nobody can fix right now and nobody has seen fail: if the
+   *  libraries import, start and leave the marker for the next try; if they do
+   *  not, the backend cannot start anyway. A probe that does not finish in time
+   *  is not a failed import. */
+  async function startIfImportable(reason, detail, brokenDetail) {
+    const probe = await d.run(python, importArgs(), { timeoutMs: TIMEOUT_MS.imports });
+    if (cancelled() || probe.cancelled) return { cancelled: true };
+    if (probe.code === 0 || probe.timedOut) return fail(reason, detail, { unverified: true });
+    return needsRepair(brokenDetail);
+  }
 
   /** Still wrong after the one retry. Nobody tested this combination: the repair
    *  wizard replaces the whole environment. The marker STAYS, so even a user who
@@ -1108,12 +1158,21 @@ async function verifyInstall(d, python, expected, say) {
     };
   }
   const imports = await d.run(python, importArgs(), { timeoutMs: TIMEOUT_MS.imports });
+  if (imports.timedOut) {
+    // A first import after an install can be slow (a virus scanner reading every
+    // new file, a cold disk). "Did not answer in time" is not "failed": nothing
+    // has been seen to be wrong, so the caller starts and verifies again later.
+    return {
+      ok: false,
+      unverified: true,
+      detail: `importing ${IMPORT_MODULES.join(', ')} did not finish within `
+        + `${TIMEOUT_MS.imports / 1000} s; the packages are in place but not verified`,
+    };
+  }
   if (imports.code !== 0) {
     return {
       ok: false,
-      detail: imports.timedOut
-        ? `importing ${IMPORT_MODULES.join(', ')} did not finish within ${TIMEOUT_MS.imports / 1000} s`
-        : `importing ${IMPORT_MODULES.join(', ')} failed: ${tailOf(imports.output)}`,
+      detail: `importing ${IMPORT_MODULES.join(', ')} failed: ${tailOf(imports.output)}`,
     };
   }
   try {
@@ -1153,6 +1212,7 @@ module.exports = {
   importArgs,
   checkArgs,
   classifyPipFailure,
+  reachedWritePhase,
   readState,
   recordFor,
   nextFailure,
