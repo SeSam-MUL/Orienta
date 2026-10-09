@@ -19,8 +19,9 @@
  * (`pip install --dry-run --report`), not what a stored list says -- that works
  * for every installation history and for the Windows locks, which pin only the
  * top-level requirements. An empty answer ends the matter. A non-empty answer
- * is checked against a guard (nothing large, nothing that is PyTorch, NumPy,
- * SciPy or CUDA), then the wizard's own `pip install -r <lock>` runs, then the
+ * is checked against a guard (nothing that is PyTorch, NumPy, SciPy or CUDA; the
+ * size of a release's delta is held by `tests/test_lock_delta_budget.py`, against
+ * the committed locks, before anything ships), then the wizard's own `pip install -r <lock>` runs, then the
  * result is VERIFIED (versions equal the lock's, the three scientific libraries
  * import), and only then is it recorded. pip downloads everything before it
  * writes, so an unreachable index leaves the environment byte-identical; the
@@ -70,9 +71,6 @@ const MB = 1024 * 1024;
 /** Below this, pip may fail while writing, which is the one place it can leave
  *  a half-changed package behind. */
 const MIN_FREE_BYTES = 500 * MB;
-/** A delta bigger than this is not "a few libraries moved"; it is a release that
- *  changed the stack, and that gets a human decision, not a silent download. */
-const MAX_DELTA_BYTES = 100 * MB;
 /** Packages whose replacement is never a silent affair: they are large, they
  *  hold native libraries a running process has locked, or they are the part of
  *  the stack where a mismatch is silent (CUDA, BLAS). */
@@ -220,13 +218,12 @@ function deltaFromReport(report) {
 /**
  * May this delta be applied without asking anybody?
  *
- * `sizes` is `{name -> bytes}` for the packages whose size could be learned; a
- * package missing from it counts as unknown, not as zero-and-therefore-fine --
- * it is reported in `unknownSize` so the log says the size check was partial.
- * The NAME rule needs no sizes and is the one that matters: a release that
- * moves torch or numpy is never a quiet affair.
+ * By NAME: a release that moves torch, numpy or the CUDA libraries is never a
+ * quiet affair. There is no size rule at run time: the size is a property of the
+ * release, and `tests/test_lock_delta_budget.py` holds it against the committed
+ * locks before the release is built, where a number can still be acted on.
  */
-function guardDelta(delta, sizes = {}) {
+function guardDelta(delta) {
   const names = delta.map((d) => d.name);
   const guarded = names.filter((n) => GUARDED_NAMES.some((g) => (
     g instanceof RegExp ? g.test(n) : g === n)));
@@ -238,22 +235,7 @@ function guardDelta(delta, sizes = {}) {
       guarded,
     };
   }
-  let bytes = 0;
-  const unknownSize = [];
-  for (const n of names) {
-    if (Number.isFinite(sizes[n])) bytes += sizes[n];
-    else unknownSize.push(n);
-  }
-  if (bytes > MAX_DELTA_BYTES) {
-    return {
-      ok: false,
-      reason: 'guard',
-      detail: `the update would download ${(bytes / MB).toFixed(0)} MB, more than the `
-        + `${MAX_DELTA_BYTES / MB} MB limit for an update nobody asked for`,
-      bytes,
-    };
-  }
-  return { ok: true, bytes, unknownSize };
+  return { ok: true };
 }
 
 // --------------------------------------------------------------------------
@@ -728,7 +710,6 @@ function tailOf(text, lines = 6) {
  *   isCancelled()                          the app is quitting
  *   log(line)
  *   freeBytes(dir)                         -> {bytes, known}
- *   headSize(url)                          -> bytes | null; optional
  *   onPhase('syncing')                     the waiting page's text
  *   notify({reason, detail})               the one dialog; awaited
  *   syncMacos(ctx)                         tests only: replaces package_sync_macos.js
@@ -746,7 +727,7 @@ async function syncPackages(opts, deps) {
     fs: fsDefault, path: pathDefault, now: () => Date.now(),
     log: () => {}, isCancelled: () => false,
     freeBytes: () => ({ bytes: 0, known: false }),
-    headSize: null, onPhase: () => {}, notify: async () => {},
+    onPhase: () => {}, notify: async () => {},
     syncMacos: null, runtimeTag: () => null,
     ...deps,
   };
@@ -965,24 +946,9 @@ async function syncPip(ctx, verdict, d, say) {
 
   // ---- the guard -----------------------------------------------------------
   if (delta.length) {
-    const sizes = {};
-    if (d.headSize) {
-      await Promise.all(delta.map(async (x) => {
-        if (!x.url) return;
-        try {
-          const n = await d.headSize(x.url);
-          if (Number.isFinite(n) && n >= 0) sizes[x.name] = n;
-        } catch { /* unknown, which the guard reports */ }
-      }));
-      if (cancelled()) return { cancelled: true };
-    }
-    const guard = guardDelta(delta, sizes);
+    const guard = guardDelta(delta);
     if (!guard.ok) return fail(guard.reason, guard.detail);
-    if (guard.unknownSize.length) {
-      say(`size check partial: no size for ${guard.unknownSize.join(', ')}`);
-    }
-    say(`delta: ${delta.map((x) => `${x.name} ${x.version}`).join(', ')} `
-      + `(${(guard.bytes / MB).toFixed(2)} MB known)`);
+    say(`delta: ${delta.map((x) => `${x.name} ${x.version}`).join(', ')}`);
   }
   if (repairing) {
     say(`repairing: ${[...target].map(([n, v]) => `${n} ${v}`).join(', ') || '(verification only)'}`);
@@ -1197,7 +1163,6 @@ module.exports = {
   OWN_FILES,
   SKIP_ENV,
   MIN_FREE_BYTES,
-  MAX_DELTA_BYTES,
   GUARDED_NAMES,
   NETWORK_FAILURES_BEFORE_BACKOFF,
   BACKOFF_MS,

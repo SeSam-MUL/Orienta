@@ -459,40 +459,32 @@ describe('the delta from pip\'s own report', () => {
 
 describe('the guard', () => {
   const pkg = (name) => ({ name, version: '1', url: null, sha256: null });
-  const MB = 1024 * 1024;
 
   it('lets the real 0.4.7 delta through', () => {
-    const delta = sync.deltaFromReport(REPORT);
-    const sizes = { kikuchipy: 1.8 * MB, orix: 0.4 * MB, pyebsdindex: 0.4 * MB, threadpoolctl: 0.02 * MB };
-    const verdict = sync.guardDelta(delta, sizes);
-    expect(verdict.ok).toBe(true);
-    expect(verdict.unknownSize).toEqual([]);
+    expect(sync.guardDelta(sync.deltaFromReport(REPORT)).ok).toBe(true);
   });
 
   it.each([
     'torch', 'torchvision', 'numpy', 'scipy', 'cupy-cuda12x', 'cupy', 'nvidia-cudnn-cu12',
     'nvidia-cublas-cu12', 'triton', 'triton-windows',
-  ])('refuses %s by name, whatever it weighs', (name) => {
-    const verdict = sync.guardDelta([pkg('kikuchipy'), pkg(name)], { [name]: 1 });
+  ])('refuses %s by name', (name) => {
+    const verdict = sync.guardDelta([pkg('kikuchipy'), pkg(name)]);
     expect(verdict.ok).toBe(false);
     expect(verdict.reason).toBe('guard');
     expect(verdict.guarded).toEqual([name]);
   });
 
-  it('refuses more than 100 MB, accepts exactly 100 MB', () => {
-    expect(sync.guardDelta([pkg('a')], { a: 100 * MB }).ok).toBe(true);
-    expect(sync.guardDelta([pkg('a')], { a: 100 * MB + 1 }).ok).toBe(false);
-    expect(sync.guardDelta([pkg('a'), pkg('b')], { a: 60 * MB, b: 60 * MB }).ok).toBe(false);
-  });
-
-  it('says so when it did not know a size, rather than counting it as zero', () => {
-    const verdict = sync.guardDelta([pkg('a'), pkg('b')], { a: 1 });
-    expect(verdict.ok).toBe(true);
-    expect(verdict.unknownSize).toEqual(['b']);
+  it('has no size rule at run time: the release\'s size is held by test_lock_delta_budget.py, not by a request at every start', () => {
+    // A size is learned from the network, at a start that has to work offline,
+    // for a decision that was already made when the release was built.
+    expect(sync.guardDelta([pkg('a'), pkg('b')], { a: 10 ** 12, b: 10 ** 12 }).ok).toBe(true);
+    expect(sync.MAX_DELTA_BYTES).toBeUndefined();
+    const source = fs.readFileSync(path.join(REPO, 'electron', 'setup', 'package_sync.js'), 'utf8');
+    expect(source).not.toMatch(/headSize|unknownSize|size check/);
   });
 
   it('does not mistake a package that merely contains the word', () => {
-    expect(sync.guardDelta([pkg('numpydoc'), pkg('scipy-stubs'), pkg('mytorch')], {}).ok).toBe(true);
+    expect(sync.guardDelta([pkg('numpydoc'), pkg('scipy-stubs'), pkg('mytorch')]).ok).toBe(true);
   });
 });
 
@@ -930,32 +922,14 @@ describe('the guard, in the flow', () => {
     expect(second.made.notify).not.toHaveBeenCalled();
   });
 
-  it('a delta over 100 MB is not applied', async () => {
+  it('makes no request of its own to learn a size: the only network use is pip\'s', async () => {
     const h = makeHome();
     const pip = fakePip();
-    const { result } = run({}, h, pip, { headSize: async () => 60 * 1024 * 1024 });
-    const res = await result;
-    expect(res).toMatchObject({ action: 'failed', reason: 'guard' });
-    expect(res.detail).toMatch(/MB/);
-    expect(pip.kinds()).toEqual(['dry']);
-  });
-
-  it('a size that cannot be learned does not stop the update, and the log says so', async () => {
-    const h = makeHome();
-    const pip = fakePip();
-    const { made, result } = run({}, h, pip, { headSize: async () => { throw new Error('offline'); } });
-    expect((await result).action).toBe('synced');
-    expect(made.log.join('\n')).toMatch(/size check partial/);
-  });
-
-  it('asks for sizes of the packages in the delta only', async () => {
-    const h = makeHome();
-    const pip = fakePip();
-    const asked = [];
-    await run({}, h, pip, { headSize: async (url) => { asked.push(url); return 1000; } }).result;
-    // threadpoolctl is already at the lock's version in this scenario
-    expect(asked).toHaveLength(3);
-    expect(asked.every((u) => /\.whl$/.test(u))).toBe(true);
+    const headSize = vi.fn(async () => 10 ** 12);
+    const res = await run({}, h, pip, { headSize }).result;
+    expect(res.action).toBe('synced');
+    expect(headSize).not.toHaveBeenCalled();
+    expect(MAIN).not.toMatch(/headSize|net\.fetch/);
   });
 });
 

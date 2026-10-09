@@ -220,10 +220,11 @@ function computeDelta(packages, installed) {
 }
 
 /**
- * May this delta be applied without asking anybody? The pip rules (large, or
- * torch/numpy/scipy/CUDA) plus the macOS ones above, plus a package count.
+ * May this delta be applied without asking anybody? The pip rules (torch, numpy,
+ * scipy, CUDA) plus the macOS ones above, plus a package count. No size rule: see
+ * `package_sync.js`.
  */
-function guardDelta(delta, sizes = {}) {
+function guardDelta(delta) {
   const names = delta.map((d) => d.name);
   const guarded = names.filter((n) => GUARDED_NAMES_MACOS.some((g) => (
     g instanceof RegExp ? g.test(n) : g === n)));
@@ -243,7 +244,7 @@ function guardDelta(delta, sizes = {}) {
         + `${MAX_DELTA_PACKAGES} that count as a few libraries moving`,
     };
   }
-  return sync().guardDelta(delta.map((d) => ({ name: d.name })), sizes);
+  return sync().guardDelta(delta.map((d) => ({ name: d.name })));
 }
 
 // --------------------------------------------------------------------------
@@ -589,24 +590,9 @@ async function syncMacos(ctx, d) {
   }
 
   // ---- the guard ------------------------------------------------------------
-  const sizes = {};
-  if (d.headSize) {
-    await Promise.all(delta.map(async (p) => {
-      if (!p.url) return;
-      try {
-        const n = await d.headSize(p.url);
-        if (Number.isFinite(n) && n >= 0) sizes[p.name] = n;
-      } catch { /* unknown, which the guard reports */ }
-    }));
-    if (cancelled()) return { cancelled: true };
-  }
-  const guard = guardDelta(delta, sizes);
+  const guard = guardDelta(delta);
   if (!guard.ok) return fail(guard.reason, guard.detail);
-  if (guard.unknownSize && guard.unknownSize.length) {
-    say(`size check partial: no size for ${guard.unknownSize.join(', ')}`);
-  }
-  say(`delta: ${delta.map((p) => `${p.name} ${p.from.map(versionFromStem).join('+') || '(new)'} -> ${p.version}`).join(', ')} `
-    + `(${(guard.bytes / MB).toFixed(2)} MB known)`);
+  say(`delta: ${delta.map((p) => `${p.name} ${p.from.map(versionFromStem).join('+') || '(new)'} -> ${p.version}`).join(', ')}`);
 
   // ---- room to write; the tools we depend on ---------------------------------
   const free = d.freeBytes(home) || { bytes: 0, known: false };

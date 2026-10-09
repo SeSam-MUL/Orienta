@@ -188,8 +188,8 @@ describe('the guard', () => {
     expect(mac.guardDelta(many(mac.MAX_DELTA_PACKAGES + 1)).reason).toBe('guard');
   });
 
-  it('refuses a download of more than 100 MB, by the pip rule', () => {
-    expect(mac.guardDelta(d('kikuchipy'), { kikuchipy: 101 * 1024 * 1024 }).ok).toBe(false);
+  it('has no size rule at run time, as on the other platforms', () => {
+    expect(mac.guardDelta(d('kikuchipy'), { kikuchipy: 10 ** 12 }).ok).toBe(true);
   });
 });
 
@@ -694,12 +694,6 @@ describe('what stops it before anything is touched', () => {
     const res = await untouched(h, fake, {}, { action: 'failed', reason: 'guard' });
     expect(res.detail).toMatch(/python/);
     expect(fake.calls).toEqual([]);
-  });
-
-  it('a download over 100 MB is refused by the guard', async () => {
-    const h = macHome();
-    const fake = fakeMicromamba(h);
-    await untouched(h, fake, { headSize: async () => 60 * 1024 * 1024 }, { action: 'failed', reason: 'guard' });
   });
 
   it('a guard refusal is not retried at every start: it waits for another lock', async () => {

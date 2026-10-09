@@ -722,22 +722,6 @@ async function applyBundledUpdate(python) {
   return { ok: true };
 }
 
-/** The size of a file at `url`, from its headers, or null. Through Electron's
- *  network stack, which follows the system proxy settings the way the runtime
- *  download does. Used only by the size guard of the package sync. */
-async function headSize(url) {
-  const { net } = require('electron');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await net.fetch(url, { method: 'HEAD', signal: controller.signal });
-    const n = Number(res.headers.get('content-length'));
-    return Number.isFinite(n) && n > 0 ? n : null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
 /** The package sync's runner while one exists, so `before-quit` can end its
  *  children. Not the wizard's `runSetup.children`: that set is consulted only
  *  while a SETUP is running. */
@@ -793,7 +777,6 @@ async function runPackageSyncInner(decision, plan) {
         isCancelled: () => runner.cancelled,
         log: logShellLine,
         freeBytes: (dir) => installer.measureFree(dir),
-        headSize,
         onPhase: (phase) => waitingPage.setPhase(mainWindow, phase),
         runtimeTag: () => require('./bundled_update').installedTag(home),
         // One dialog per (lock digest, reason); the module decides when.
