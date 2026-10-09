@@ -59,6 +59,7 @@ dependencies:
   - pyyaml=6.0.3
   - scikit-learn=1.8.0
   - threadpoolctl=3.7.0   # scripts/check_runtime_health.py gate 2 imports it
+  - packaging=26.3        # backend/api/services/detector_convention.py
   - xlsxwriter=3.2.9
   - beautifulsoup4=4.14.3
   - seaborn=0.13.2

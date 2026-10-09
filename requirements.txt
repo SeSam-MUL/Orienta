@@ -44,6 +44,7 @@ openpyxl
 PyYAML  # CITATION.cff parsing (backend/api/services/citations/self_entry.py)
 scikit-learn>=1.0
 threadpoolctl  # scripts/check_runtime_health.py gate 2: which OpenMP runtimes are loaded
+packaging  # backend/api/services/detector_convention.py: kikuchipy version parsing
 xlsxwriter
 beautifulsoup4
 seaborn
