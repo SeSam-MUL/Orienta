@@ -6,9 +6,10 @@
  * replaces the shell, and `bundled_update.js` brings `runtime/` (the program
  * files, including the lock files) to the new release. Nothing ever touched
  * `python/`: the packages stayed exactly what the first-install wizard put
- * there, for ever. Measured on 2026-10-09 against a 0.4.6 CPU install and the
- * 0.4.7 lock: kikuchipy 0.11.3 -> 0.13.1, orix 0.14.1 -> 0.15.0, PyEBSDIndex
- * 0.3.9.1 -> 0.3.10.1, threadpoolctl 3.7.0 -> 3.6.0; 2.56 MB; 14 s.
+ * there, for ever. What the 0.4.7 locks move against a 0.4.6 installation:
+ * kikuchipy 0.11.3 -> 0.13.1, orix 0.14.1 -> 0.15.0, PyEBSDIndex 0.3.9.1 ->
+ * 0.3.10.1, and nothing else (the locks carry threadpoolctl 3.7.0, which every
+ * 0.4.6 installation already has; `tests/test_lock_delta_budget.py` holds it).
  *
  * THE SHAPE is the one `bundled_update.js` set: decisions are pure functions of
  * data, every side effect goes through an injected runner, and the order in
@@ -288,12 +289,15 @@ const VERSIONS_SCRIPT = [
   'print(json.dumps(out))',
 ].join('\n');
 
+// `-I`: the probes judge the ENVIRONMENT. Without it a PYTHONPATH, a PYTHONHOME or
+// a package in the user's own site-packages (the user-site of the machine the
+// installation lives on) would decide whether "import kikuchipy" works.
 function versionsArgs(names) {
-  return ['-c', VERSIONS_SCRIPT, ...names];
+  return ['-I', '-c', VERSIONS_SCRIPT, ...names];
 }
 
 function importArgs() {
-  return ['-c', `import ${IMPORT_MODULES.join(', ')}`];
+  return ['-I', '-c', `import ${IMPORT_MODULES.join(', ')}`];
 }
 
 function checkArgs() {
@@ -847,6 +851,16 @@ async function syncPip(ctx, verdict, d, say) {
   const failureFile = path.join(home, FAILURE_FILE);
   const recordFile = path.join(home, RECORD_FILE);
   const lockVersions = parseLockVersions(lockText, platformSystemOf(platformName));
+
+  // pip reads PIP_* from the environment of the process that starts it: another
+  // index, a proxy, a constraints file. Often the reason a sync fails or installs
+  // something unexpected, and invisible in the log. Names only: an index URL can
+  // carry a token.
+  const pipEnv = Object.keys(ctx.env || {}).filter((k) => /^PIP_/i.test(k)).sort();
+  if (pipEnv.length) {
+    say(`the environment sets ${pipEnv.join(', ')}; pip will read ${pipEnv.length === 1 ? 'it' : 'them'} `
+      + '(values are not logged)');
+  }
 
   const cancelled = () => d.isCancelled();
 

@@ -391,7 +391,7 @@ function fakeMicromamba(h, scenario = {}) {
       if (args[0] === 'install') return args.includes('--download-only') ? 'download' : 'install';
       return 'mm-other';
     }
-    if (args[0] === '-c') return 'imports';
+    if (args.includes('-c')) return 'imports';
     if (String(args[0]).endsWith('check_runtime_health.py')) return 'health';
     return 'other';
   };
@@ -585,7 +585,7 @@ describe('the update of a 0.4.6 environment', () => {
       '--prefix', h.prefix, '--gate', 'files']);
     const imp = fake.calls.find((c) => c.kind === 'imports');
     expect(imp.exe).toBe(h.python);
-    expect(imp.args).toEqual(['-c', 'import kikuchipy, orix, pyebsdindex']);
+    expect(imp.args).toEqual(['-I', '-c', 'import kikuchipy, orix, pyebsdindex']);
   });
 
   it('a second start takes the fast path: no process at all', async () => {

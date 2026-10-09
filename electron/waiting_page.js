@@ -26,7 +26,10 @@ const PHASES = Object.freeze({
 /**
  * @param t              strings.t
  * @param shellLanguage  strings.shellLanguage
- * @param getLocale      () -> the locale to speak, read at each paint
+ * @param getLocale      () -> the locale to speak. Asked ONCE, at the first paint,
+ *                       and kept: the clock paints every second, and the answer
+ *                       reads the app's language file from disk. The language
+ *                       cannot change while this page is up.
  */
 function createWaitingPage({
   t, shellLanguage, getLocale,
@@ -35,11 +38,16 @@ function createWaitingPage({
   clearIntervalFn = clearInterval,
 }) {
   let phase = 'starting';
+  let locale = null;
+  const currentLocale = () => {
+    if (locale === null) locale = getLocale();
+    return locale;
+  };
 
   /** The page text for the current phase. `seconds` undefined leaves the
    *  counter alone; null clears it; a number shows it. */
   function textFor(seconds) {
-    const lang = getLocale();
+    const lang = currentLocale();
     const keys = PHASES[phase];
     const text = {
       lang: shellLanguage(lang),

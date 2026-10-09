@@ -39,7 +39,6 @@ const LOCK = [
   'kikuchipy==0.13.1',
   'orix==0.15.0',
   'pyebsdindex==0.3.10.1',
-  'threadpoolctl==3.7.0',
   'numpy==2.3.5',
   '--extra-index-url https://download.pytorch.org/whl/cpu',
   'torch==2.11.0+cpu ; platform_system != "Darwin"',
@@ -51,8 +50,8 @@ const LOCK = [
 const hostLock = (mode) => (process.platform === 'darwin'
   ? 'orienta-macos-lock.yml' : installer.lockFileFor(mode, process.platform));
 
-const OLD = { kikuchipy: '0.11.3', orix: '0.14.1', pyebsdindex: '0.3.9.1', threadpoolctl: '3.7.0' };
-const NEW = { kikuchipy: '0.13.1', orix: '0.15.0', pyebsdindex: '0.3.10.1', threadpoolctl: '3.7.0' };
+const OLD = { kikuchipy: '0.11.3', orix: '0.14.1', pyebsdindex: '0.3.9.1' };
+const NEW = { kikuchipy: '0.13.1', orix: '0.15.0', pyebsdindex: '0.3.10.1' };
 
 let tmp;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'orienta-pkgsync-')); });
@@ -140,7 +139,7 @@ function fakePip({ installed = { ...OLD }, want = NEW, scenario = {} } = {}) {
       case 'versions': {
         if (sc.versions === 'broken') return reply({ code: 1, output: 'Traceback' });
         const out = {};
-        for (const n of args.slice(2)) out[n] = state.installed[n] ?? null;
+        for (const n of args.slice(3)) out[n] = state.installed[n] ?? null;
         return reply({ stdout: `${JSON.stringify(out)}\n` });
       }
       case 'imports':
@@ -201,8 +200,8 @@ function fakePip({ installed = { ...OLD }, want = NEW, scenario = {} } = {}) {
 
   function classify(args) {
     if (args.includes('--dry-run')) return 'dry';
-    if (args[0] === '-c' && args[1].includes('metadata.version')) return 'versions';
-    if (args[0] === '-c' && args[1].startsWith('import kikuchipy')) return 'imports';
+    if (args.includes('-c') && args[args.indexOf('-c') + 1].includes('metadata.version')) return 'versions';
+    if (args.includes('-c') && args[args.indexOf('-c') + 1].startsWith('import kikuchipy')) return 'imports';
     if (args.includes('check')) return 'check';
     if (args.includes('--force-reinstall')) return 'reinstall';
     if (args.includes('install')) return 'install';
@@ -428,10 +427,10 @@ describe('the conditions that are about the machine', () => {
 // --------------------------------------------------------------------------
 
 describe('the delta from pip\'s own report', () => {
-  it('names the four packages the 0.4.6 -> 0.4.7 lock moves, with version, URL and hash', () => {
+  it('names the three packages the 0.4.6 -> 0.4.7 lock moves, with version, URL and hash', () => {
     const delta = sync.deltaFromReport(REPORT);
     expect(delta.map((d) => `${d.name} ${d.version}`)).toEqual([
-      'kikuchipy 0.13.1', 'orix 0.15.0', 'pyebsdindex 0.3.10.1', 'threadpoolctl 3.6.0',
+      'kikuchipy 0.13.1', 'orix 0.15.0', 'pyebsdindex 0.3.10.1',
     ]);
     for (const d of delta) {
       expect(d.url).toMatch(/^https:\/\/.+\.whl$/);
@@ -543,9 +542,9 @@ describe('the pip arguments', () => {
   });
 
   it('the checks run in the interpreter, not through a shell', () => {
-    expect(sync.versionsArgs(['a', 'b']).slice(2)).toEqual(['a', 'b']);
-    expect(sync.versionsArgs(['a'])[0]).toBe('-c');
-    expect(sync.importArgs()).toEqual(['-c', 'import kikuchipy, orix, pyebsdindex']);
+    expect(sync.versionsArgs(['a', 'b']).slice(3)).toEqual(['a', 'b']);
+    expect(sync.versionsArgs(['a']).slice(0, 2)).toEqual(['-I', '-c']);
+    expect(sync.importArgs()).toEqual(['-I', '-c', 'import kikuchipy, orix, pyebsdindex']);
     expect(sync.checkArgs().slice(0, 3)).toEqual(['-m', 'pip', 'check']);
   });
 });
@@ -804,6 +803,37 @@ describe('syncing', () => {
       from: { kikuchipy: '0.11.3', orix: '0.14.1', pyebsdindex: '0.3.9.1' },
       to: { kikuchipy: '0.13.1', orix: '0.15.0', pyebsdindex: '0.3.10.1' },
     });
+  });
+
+  it('every python -c probe runs isolated (-I): the environment is judged, not the user\'s PYTHONPATH or site-packages', async () => {
+    const h = makeHome();
+    const pip = fakePip();
+    await run({}, h, pip).result;
+    const probes = pip.calls.filter((c) => c.args.includes('-c'));
+    expect(probes.length).toBeGreaterThanOrEqual(3);          // versions twice, imports once
+    for (const c of probes) expect(c.args[0]).toBe('-I');
+    // the unisolated probe is not a spelling the module can still produce
+    expect(sync.versionsArgs(['x'])).toContain('-I');
+    expect(sync.importArgs()).toContain('-I');
+  });
+
+  it('says in the log which PIP_* variables are set -- by name only, never the value', async () => {
+    const h = makeHome();
+    const pip = fakePip();
+    const secret = 'https://user:s3cr3t-token@pypi.example/simple';
+    const { made, result } = run({ env: { PIP_INDEX_URL: secret, pip_constraint: 'c.txt', PATH: '/x' } }, h, pip);
+    await result;
+    const text = made.log.join('\n');
+    expect(text).toMatch(/environment sets PIP_INDEX_URL, pip_constraint; pip will read them/);
+    expect(text).not.toContain('s3cr3t-token');
+    expect(text).not.toContain('c.txt');
+  });
+
+  it('says nothing about PIP_* when none is set', async () => {
+    const h = makeHome();
+    const { made, result } = run({ env: { PATH: '/x' } }, h, fakePip());
+    await result;
+    expect(made.log.join('\n')).not.toMatch(/PIP_|environment sets/);
   });
 
   it('the second start is the fast path: no process', async () => {
@@ -1183,7 +1213,7 @@ describe('an import check that does not answer in time is not a broken environme
     } });
     const inner = pip.run;
     pip.run = async (exe, args, opts) => {
-      if (args[0] === '-c' && args[1].startsWith('import kikuchipy') && pip.kinds().includes('reinstall')) {
+      if (args.includes('-c') && args[args.indexOf('-c') + 1].startsWith('import kikuchipy') && pip.kinds().includes('reinstall')) {
         pip.calls.push({ exe, args, kind: 'imports', opts });
         return { code: -1, timedOut: true, stdout: '', stderr: '', output: '' };
       }
@@ -1806,6 +1836,26 @@ describe('the waiting page', () => {
     const win = fakeWindow();
     page.setPhase(win, 'syncing');
     expect(lastText(win)).toContain(STRINGS.de.syncingBody);
+  });
+
+  it('asks for the locale once, not at every tick: it is a file read each time', () => {
+    let asked = 0;
+    const ticks = [];
+    let clock = 0;
+    const page = createWaitingPage({
+      t, shellLanguage: (l) => String(l).slice(0, 2),
+      getLocale: () => { asked += 1; return 'de'; },
+      now: () => clock,
+      setIntervalFn: (fn) => { ticks.push(fn); return 1; },
+      clearIntervalFn: () => {},
+    });
+    const win = fakeWindow();
+    page.startClock(win);
+    page.setPhase(win, 'updating');
+    page.setPhase(win, 'syncing');
+    for (let i = 0; i < 5; i += 1) { clock += 1000; ticks[0](); }
+    expect(win.scripts.length).toBeGreaterThanOrEqual(7);
+    expect(asked).toBe(1);
   });
 
   it('an unknown phase is a programming error, not a blank page', () => {

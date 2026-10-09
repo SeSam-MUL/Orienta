@@ -63,7 +63,7 @@ async function run(exe, args, opts = {}) {
     && !args.includes('--dry-run') && !args.includes('--force-reinstall');
   calls.push({
     pip: isPip,
-    kind: !isPip ? (args[0] === '-c' ? 'python-c' : 'python')
+    kind: !isPip ? (args.includes('-c') ? 'python-c' : 'python')
       : args.includes('--dry-run') ? 'dry'
         : args.includes('--force-reinstall') ? 'reinstall'
           : args.includes('check') ? 'check' : 'install',
