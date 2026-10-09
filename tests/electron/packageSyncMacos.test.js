@@ -757,6 +757,18 @@ describe('what stops it before anything is touched', () => {
     expect(log.join('\n')).toMatch(/truncated|no `package:`|has no/);
   });
 
+  it('a lock that parses but is far too small to be an environment is not acted on', async () => {
+    const parsed = mac.parseLock(NEW_LOCK);
+    const small = parsed.header + parsed.packages.slice(0, 50).map((p) => p.text).join('');
+    const h = macHome({ lock: small });
+    const fake = fakeMicromamba(h);
+    const { result, log } = runMac(h, fake);
+    expect(await result).toMatchObject({ action: 'skip', reason: 'lock-unsafe' });
+    expect(fake.calls).toEqual([]);
+    expect(exists(h, '.packages_lock.json')).toBe(false);
+    expect(log.join('\n')).toMatch(/only 50 package/);
+  });
+
   it('a directory that is no conda environment is left alone', async () => {
     const h = macHome();
     fs.rmSync(path.join(h.prefix, 'conda-meta'), { recursive: true });
@@ -839,6 +851,28 @@ describe('when the local phase goes wrong', () => {
     expect(await b.result).toMatchObject({ action: 'synced' });
     expect(fake.kinds()).not.toContain('health');
     expect(b.log.join('\n')).toMatch(/OpenMP check skipped \(no script configured\)/);
+  });
+
+  it('a second record that micromamba list does not show is still caught (measured: list reports ONE entry for two records)', async () => {
+    const h = macHome();
+    const lockVersions = (() => {
+      const m = new Map();
+      for (const stem of stemsOf(NEW_LOCK)) m.set(nameOfStem(stem), [versionOfStem(stem)]);
+      return m;
+    })();
+    const fake = fakeMicromamba(h, {
+      install: (n) => {
+        if (n === 1) fs.writeFileSync(path.join(h.prefix, 'conda-meta', 'orix-0.14.1-pyhd8ed1ab_0.json'), '{}');
+        return undefined;
+      },
+      list: () => reply({
+        stdout: JSON.stringify({ packages: [...lockVersions].map(([name, [version]]) => ({ name, version })) }),
+      }),
+    });
+    const res = await runMac(h, fake).result;
+    expect(res).toMatchObject({ action: 'synced', how: 'repair' });
+    expect(fake.counts.install).toBe(2);
+    expect(metaFiles(h).filter((f) => /^orix-\d/.test(f))).toHaveLength(1);
   });
 
   it('a version that micromamba list does not show as the lock\'s fails the verification even if conda-meta looks right', async () => {
