@@ -8714,7 +8714,7 @@ async def get_last_result():
         try:
             xmap = active.xmap
             # Phase name of the single indexed pixel
-            if hasattr(xmap, 'phases_in_data') and len(xmap.phases_in_data) > 0:
+            if hasattr(xmap, 'phases_in_data') and len(xmap.phases_in_data.ids) > 0:
                 resp["phase_name"] = xmap.phases_in_data[0].name
             # CI / confidence
             if active.confidence_scores is not None:
@@ -8722,7 +8722,7 @@ async def get_last_result():
                 if len(valid) > 0:
                     resp["ci"] = float(valid[0])
             # Euler angles in degrees
-            if hasattr(xmap, 'rotations') and len(xmap.rotations) > 0:
+            if hasattr(xmap, 'rotations') and xmap.rotations.size > 0:
                 euler = xmap.rotations[0].to_euler(degrees=True)
                 resp["euler_deg"] = [float(e) for e in euler.flatten()[:3]]
         except Exception:
@@ -10159,7 +10159,7 @@ async def export_indexing_result(req: ExportRequest):
                 ci_arr = np.asarray(active.confidence_scores).ravel()
                 if ci_arr.ndim >= 2:
                     ci_arr = ci_arr[-1]  # consensus row for 2D cm
-                n_xmap = active.xmap.rotations.size
+                n_xmap = active.xmap.size   # map points, not rotations
                 if ci_arr.size >= n_xmap:
                     # Trim to the xmap size; sparse back-mapped xmaps
                     # need the leading n_xmap values (one per indexed pixel)

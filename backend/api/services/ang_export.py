@@ -563,6 +563,20 @@ def pc_tsl_from_bruker(pc, detector_shape) -> Optional[Tuple[float, float, float
 # building the map the file is written from
 # ---------------------------------------------------------------------------
 
+def _best_match_column(values, n_points: int) -> np.ndarray:
+    """One value per map point from a per-point property.
+
+    A property is ``(n_points,)`` for one match per point and
+    ``(n_points, k)`` when the indexer kept ``k`` matches (best first). The
+    export keeps the best match, so this returns column 0.
+    """
+    arr = np.asarray(values)
+    if arr.size == 0 or arr.size % n_points:
+        raise ValueError(
+            f"property with {arr.size} values does not fit {n_points} map points")
+    return arr.reshape(n_points, -1)[:, 0]
+
+
 def build_export_xmap(
     xmap,
     original_shape,
@@ -600,6 +614,11 @@ def build_export_xmap(
     quats = np.asarray(xmap.rotations.data, dtype=float)
     if quats.ndim == 3:                       # top-N matches: keep the best
         quats = quats[:, 0, :]
+    # Points on the map, not rotations: with several matches per point
+    # (``rotations.shape == (n_points, k)``) the rotations outnumber the points,
+    # and a ``Rotation`` has no ``len()``. Every per-point property has one row
+    # per point.
+    n_points = int(quats.shape[0])
     flat_q = np.zeros((n, 4))
     flat_q[:, 0] = 1.0
     placed_q = place_rows_on_grid(quats, original_shape, selection_mask,
@@ -651,15 +670,15 @@ def build_export_xmap(
     else:
         for key in ("ci", "scores"):
             if key in getattr(xmap, "prop", {}):
-                col = np.asarray(xmap.prop[key]).reshape(len(xmap.rotations), -1)[:, 0]
+                col = _best_match_column(xmap.prop[key], n_points)
                 prop["ci"] = np.asarray(place_rows_on_grid(
                     col, original_shape, selection_mask, fill=0.0),
                     dtype=np.float32).reshape(n)
                 break
     for key in ("fit", "patternfit"):
         if key in getattr(xmap, "prop", {}):
-            col = np.asarray(xmap.prop[key]).reshape(len(xmap.rotations), -1)[:, 0]
             try:
+                col = _best_match_column(xmap.prop[key], n_points)
                 prop["fit"] = np.asarray(place_rows_on_grid(
                     col, original_shape, selection_mask, fill=0.0),
                     dtype=np.float32).reshape(n)

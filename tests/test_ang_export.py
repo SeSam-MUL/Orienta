@@ -760,3 +760,152 @@ def test_a_reimported_result_exports_ang_again(monkeypatch, tmp_path, fake_h5oin
         Rotation.from_euler(d[:, :3]), Oh).angle_with(
         Orientation(Rotation.from_euler(_euler_rad()), Oh)))
     assert float(np.max(got)) < 0.05
+
+
+# ---------------------------------------------------------------------------
+# properties a Hough result carries (fit, nmatch, pq, ...) and several matches
+# per point -- the export must count map POINTS, not rotations
+# ---------------------------------------------------------------------------
+
+def _hough_like_xmap(*, n=N_ROWS * N_COLS, k=1, coords_um=False):
+    """The shape of a pyebsdindex result: one phase, one rotation per point and
+    per-point properties pq/cm/fit/nmatch (what the real map holds)."""
+    from diffpy.structure import Lattice, Structure
+    rng = np.random.default_rng(7)
+    euler = np.deg2rad(rng.uniform(1, 80, size=(n, k, 3)))
+    rot = Rotation.from_euler(euler if k > 1 else euler[:, 0, :])
+    ni = Phase(name="Ni", point_group="m-3m",
+               structure=Structure(lattice=Lattice(3.524, 3.524, 3.524, 90, 90, 90)))
+    fit = np.linspace(0.1, 0.9, n).astype(np.float32)
+    prop = {
+        "pq": np.linspace(10, 99, n).astype(np.float32),
+        "cm": np.linspace(0.2, 0.8, n).astype(np.float32),
+        "fit": fit,
+        "nmatch": np.full(n, 8, dtype=np.uint8),
+    }
+    if k > 1:
+        prop["scores"] = np.tile(np.linspace(0.9, 0.3, k), (n, 1)).astype(np.float32)
+    xs = np.tile(np.arange(N_COLS, dtype=float), N_ROWS)[:n]
+    ys = np.repeat(np.arange(N_ROWS, dtype=float), N_COLS)[:n]
+    xmap = CrystalMap(rotations=rot, phase_id=np.zeros(n, dtype=int), x=xs, y=ys,
+                      phase_list=PhaseList([ni]), prop=prop)
+    return xmap, fit, rot
+
+
+def test_a_full_map_with_a_fit_property_builds_and_writes(tmp_path):
+    """The failure: ``object of type 'Rotation' has no len()``."""
+    from backend.api.services import ang_export
+    xmap, fit, _ = _hough_like_xmap()
+    n = N_ROWS * N_COLS
+    out_map, codes = ang_export.build_export_xmap(
+        xmap, (N_ROWS, N_COLS), np.ones(n, dtype=bool), STEP_UM,
+        np.linspace(0.2, 0.8, n))
+    assert codes == {1: "43"}
+    np.testing.assert_allclose(out_map.prop["fit"], fit, rtol=1e-6)
+    out = tmp_path / "hough.ang"
+    ang_export.write_ang(out, out_map, symmetry_codes=codes)
+    np.testing.assert_allclose(_data(out)[:, -1], fit, atol=1e-5)
+
+
+def test_the_ci_and_fit_property_columns_are_kept_without_confidence_rows(tmp_path):
+    """No separate confidence rows: ``ci`` comes from the map's own property."""
+    from backend.api.services import ang_export
+    xmap, fit, _ = _hough_like_xmap()
+    xmap.prop["ci"] = xmap.prop["cm"].copy()
+    n = N_ROWS * N_COLS
+    out_map, codes = ang_export.build_export_xmap(
+        xmap, (N_ROWS, N_COLS), np.ones(n, dtype=bool), STEP_UM)
+    np.testing.assert_allclose(out_map.prop["ci"], xmap.prop["ci"], rtol=1e-6)
+    np.testing.assert_allclose(out_map.prop["fit"], fit, rtol=1e-6)
+
+
+def test_several_matches_per_point_export_the_best_one(tmp_path):
+    """Dictionary-style map: ``rotations.shape == (n, k)`` and ``scores (n, k)``.
+    Rotations outnumber the points; the file keeps match 0 of every point."""
+    from backend.api.services import ang_export
+    k = 3
+    xmap, fit, rot = _hough_like_xmap(k=k)
+    n = N_ROWS * N_COLS
+    assert xmap.rotations.size == n * k            # the trap
+    out_map, codes = ang_export.build_export_xmap(
+        xmap, (N_ROWS, N_COLS), np.ones(n, dtype=bool), STEP_UM)
+    np.testing.assert_allclose(out_map.prop["ci"], 0.9, rtol=1e-6)   # scores[:, 0]
+    np.testing.assert_allclose(out_map.prop["fit"], fit, rtol=1e-6)
+    np.testing.assert_allclose(out_map.rotations.data, rot.data[:, 0, :], atol=1e-12)
+    assert out_map.size == n
+
+
+def test_a_region_map_with_a_fit_property_lands_on_the_right_pixels():
+    from backend.api.services import ang_export
+    n_sel = 5
+    xmap, fit, _ = _hough_like_xmap(n=n_sel)
+    sel = np.zeros(N_ROWS * N_COLS, dtype=bool)
+    sel[[2, 3, 4, 7, 10]] = True
+    out_map, _ = ang_export.build_export_xmap(
+        xmap, (N_ROWS, N_COLS), sel, STEP_UM, np.linspace(0.2, 0.8, n_sel))
+    full = np.zeros(N_ROWS * N_COLS, dtype=np.float32)
+    full[sel] = fit
+    np.testing.assert_allclose(out_map.prop["fit"], full, rtol=1e-6)
+
+
+def test_best_match_column_takes_column_zero_and_refuses_a_misfit():
+    from backend.api.services import ang_export
+    col = ang_export._best_match_column(np.arange(12.0).reshape(4, 3), 4)
+    np.testing.assert_array_equal(col, [0.0, 3.0, 6.0, 9.0])
+    np.testing.assert_array_equal(
+        ang_export._best_match_column(np.arange(4.0), 4), np.arange(4.0))
+    with pytest.raises(ValueError, match="map points"):
+        ang_export._best_match_column(np.arange(10.0), 4)
+
+
+def _hough_result(*, k=1):
+    xmap, fit, _ = _hough_like_xmap(k=k)
+    n = N_ROWS * N_COLS
+    return IndexingResult(
+        xmap=xmap, selection_mask=np.ones(n, dtype=bool),
+        original_shape=(N_ROWS, N_COLS), method=IndexingMethod.HOUGH,
+        confidence_scores=np.linspace(0.2, 0.8, n).astype(np.float32),
+        metadata={"step_size_um": STEP_UM, "source_vendor": "oxford",
+                  "recorded_lattices": {1: [3.524, 3.524, 3.524, 90, 90, 90]}}), fit
+
+
+def test_a_full_map_hough_result_exports_ang_and_light_h5(monkeypatch, tmp_path):
+    """Route level: HTTP 500 ``'Rotation' has no len()`` before the fix."""
+    result, fit = _hough_result()
+    _activate(monkeypatch, result)
+    client = TestClient(app)
+    ang = tmp_path / "hough.ang"
+    r = _export(client, "ang", ang)
+    assert r.status_code == 200, r.text
+    d = _data(ang)
+    assert d.shape[0] == N_ROWS * N_COLS
+    np.testing.assert_allclose(d[:, 6], np.linspace(0.2, 0.8, N_ROWS * N_COLS),
+                               atol=1e-5)                  # CI
+    np.testing.assert_allclose(d[:, -1], fit, atol=1e-5)    # pattern fit
+    r = _export(client, "h5_light", tmp_path / "hough_light.h5")
+    assert r.status_code == 200, r.text
+
+
+def test_a_multi_match_result_exports_ang(monkeypatch, tmp_path):
+    result, _ = _hough_result(k=3)
+    result.method = IndexingMethod.DICTIONARY
+    _activate(monkeypatch, result)
+    ang = tmp_path / "multi.ang"
+    r = _export(TestClient(app), "ang", ang)
+    assert r.status_code == 200, r.text
+    assert _data(ang).shape[0] == N_ROWS * N_COLS
+
+
+def test_the_last_result_summary_reports_the_euler_angles_of_one_pixel(monkeypatch):
+    """``len(xmap.rotations)`` raised inside a bare ``except`` and the Euler
+    angles of a single-pixel result were silently dropped."""
+    result, _ = _hough_result()
+    sel = np.zeros(N_ROWS * N_COLS, dtype=bool)
+    sel[4] = True
+    result.xmap = result.xmap[result.xmap.id == 4]
+    result.selection_mask = sel
+    result.confidence_scores = np.array([0.5], dtype=np.float32)
+    _activate(monkeypatch, result)
+    body = TestClient(app).get("/api/indexing/result/last").json()
+    assert body["n_indexed"] == 1
+    assert len(body["euler_deg"]) == 3
