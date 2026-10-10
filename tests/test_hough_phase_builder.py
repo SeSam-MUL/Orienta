@@ -1,7 +1,7 @@
 """Every Hough phase has BOTH properties: the CIF's origin choice and the frame symmetry.
 
-Two defects were fixed on separate branches and both live in the one place that
-builds a Hough phase from a CIF:
+Two defects, fixed separately, both live in the one place that builds a Hough
+phase from a CIF:
 
 * orix reads a CIF through diffpy, and diffpy expands the 24 space groups with
   two origin choices in choice 1 whatever the file says. ``Si.cif`` came out

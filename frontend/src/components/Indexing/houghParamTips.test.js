@@ -5,7 +5,7 @@
 // (see phasePathWiring.test.js), so this reads the page; what the texts say was
 // checked against the PyEBSDIndex source (see the commit that wrote them), and
 // the four languages are held to the same keys by localeParity.
-// DELETE THIS FILE the day IndexingPage can be mounted in a test.
+// Redundant once IndexingPage can be mounted in a test.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';

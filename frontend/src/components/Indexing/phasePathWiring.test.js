@@ -13,8 +13,8 @@
 //    added vanishes from the picker.
 //
 // What the two do is tested against the real functions and component in
-// `phasePath.test.js` and `phaseDropdownPath.test.jsx`. DELETE THIS FILE the
-// day IndexingPage can be mounted in a test.
+// `phasePath.test.js` and `phaseDropdownPath.test.jsx`. This file is redundant
+// once IndexingPage can be mounted in a test.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
