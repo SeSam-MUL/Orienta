@@ -72,12 +72,10 @@ later release.*
   wrong orientations. Grain reconstruction, KAM, grain boundaries, IPF colours,
   pole figures and the dictionary orientation grid now use the real axis, and the
   default Hough reflector list of these phases is expanded with it; Hough results
-  of these phases may therefore differ slightly from earlier versions (not
-  measured). Phases with unique axis c and all other crystal systems are
-  unchanged. That the spherical indexer stores orientations in this frame was
-  checked with patterns rendered from the Al13Fe4 master; the corrected
-  calculations were checked on synthetic orientation maps. Nothing has yet been
-  compared on a measured Al13Fe4 map.
+  of these phases may differ from earlier versions, and the size of the change
+  was not measured. Phases with unique axis c and all other crystal systems are
+  unchanged. The corrected calculations were checked on synthetic orientation
+  maps. Nothing has yet been compared on a measured Al13Fe4 map.
 - **PC refinement settings had no effect.** Minimum d-spacing, structure-factor
   threshold, maximum reflectors and number of bands on the PC refinement page never
   reached the indexer. The first three are replaced by the per-phase reflector-family
@@ -152,28 +150,27 @@ later release.*
   *J. Appl. Cryst.* **57**, 3–19 (2024), doi:10.1107/S1600576723010221.
 - A source install now requires kikuchipy 0.13.1, orix 0.15.0 and PyEBSDIndex
   0.3.10.1 (each below its next minor version), and the installers ship exactly
-  these instead of 0.11.3 / 0.14.1 / 0.3.9.1. An installation updated from v0.4.6
-  brings its Python packages to these versions the first time it starts (a few
-  megabytes to download). If that cannot finish, for example without an internet
-  connection, Orienta says so once, starts with the packages it has, and tries
-  again at a later start; set `ORIENTA_SKIP_PACKAGE_SYNC=1` to keep the current
-  packages.
-  Updating a source checkout installs the new versions into the environment
-  Orienta runs in. Both sets were compared on real data: spherical indexing agreed
-  to within 3e-5° and dictionary indexing was identical. Hough indexing in the
-  installed app uses PyEBSDIndex's CPU band detection, and its results change: on
-  a nickel map the orientations moved by 0.07° (median) and 99.8 % of the pixels
-  by less than 1°; on a two-phase map of an aluminium alloy (Al and α-Al(Fe,Mn)Si,
-  10,800 pixels) 98 % of the pixels kept their phase, and of the α-Al(Fe,Mn)Si
-  pixels that kept it, 92 % moved by less than 1° and most of the others by about
-  72°, a pseudo-symmetric variant of that phase. On the nickel map the new CPU
-  band detection gives the same orientations as the OpenCL band detection of
-  source installations with pyopencl (median difference below 0.0001°; 0.085° with
-  PyEBSDIndex 0.3.9.1). On the two-phase map the two band detectors disagree for
-  about a third of the α-Al(Fe,Mn)Si pixels, with the old and the new version
-  alike.
+  these instead of 0.11.3 / 0.14.1 / 0.3.9.1. An installation updated from
+  v0.4.6 brings its Python packages to these versions the first time it starts
+  (a few megabytes to download). If that cannot finish, for example without an
+  internet connection, Orienta says so once, starts with the packages it has,
+  and tries again at a later start; set `ORIENTA_SKIP_PACKAGE_SYNC=1` to keep
+  the current packages. Updating a source checkout installs the new versions
+  into the environment Orienta runs in. Both sets were compared on real data:
+  spherical indexing agreed to within 3e-5° and dictionary indexing was
+  identical. Hough indexing in the installed app uses PyEBSDIndex's CPU band
+  detection, and its results change: on a nickel map the orientations moved by
+  0.07° (median) and 99.8 % of the pixels by less than 1°; on a two-phase map of
+  an aluminium alloy (Al and α-Al(Fe,Mn)Si, 10,800 pixels) 98 % of the pixels
+  kept their phase, and of the α-Al(Fe,Mn)Si pixels that kept it, 92 % moved by
+  less than 1° and most of the others by about 72°, a pseudo-symmetric variant
+  of that phase. On the nickel map the new CPU band detection gives the same
+  orientations as the OpenCL band detection of source installations with
+  pyopencl (median difference below 0.0001°; 0.085° with PyEBSDIndex 0.3.9.1).
+  On the two-phase map the two band detectors disagree for about a third of the
+  α-Al(Fe,Mn)Si pixels, with the old and the new version alike.
 - kikuchipy 0.12 reversed the meaning of the detector's azimuthal angle (the
-  rotation of the detector about its optical axis). Orienta keeps the earlier
+  tilt of the detector about its vertical axis). Orienta keeps the earlier
   meaning, which is also EMsoft's, on every path that uses the angle: where it
   hands a detector to kikuchipy 0.12.1 or newer, it converts the sign, so CPU and
   GPU dictionary indexing and generation agree on both kikuchipy versions. Whether
@@ -183,6 +180,11 @@ later release.*
   kikuchipy 0.11.3 neither does the Kikuchi-band overlay in PC refinement. When a
   dataset has a non-zero azimuthal angle, the run log says so.
 - `start_app.py` refuses to start when port 8000 is already in use.
+- The README listed EDAX hexagonal-grid scans as unsupported, although v0.4.6
+  already reads them: an EDAX H5 file whose header says `Grid Type = HexGrid` is
+  resampled to a square grid, each square pixel taking the pattern of the nearest
+  measured point (patterns are not interpolated). The README now describes this
+  and its limits.
 
 ---
 
