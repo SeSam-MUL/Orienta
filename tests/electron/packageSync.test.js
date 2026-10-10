@@ -27,9 +27,12 @@ const { STRINGS, t } = requireCjs('../../electron/strings.js');
 const { createWaitingPage, PHASES } = requireCjs('../../electron/waiting_page.js');
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
-const MAIN = fs.readFileSync(path.join(REPO, 'electron', 'main.js'), 'utf8');
-const INSTALLER_SRC = fs.readFileSync(path.join(REPO, 'electron', 'setup', 'installer.js'), 'utf8');
-const NSH = fs.readFileSync(path.join(REPO, 'electron', 'nsis', 'uninstall.nsh'), 'utf8');
+// A Windows checkout with core.autocrlf=true has CRLF here; the tests search
+// for LF-separated text.
+const readSource = (p) => fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+const MAIN = readSource(path.join(REPO, 'electron', 'main.js'));
+const INSTALLER_SRC = readSource(path.join(REPO, 'electron', 'setup', 'installer.js'));
+const NSH = readSource(path.join(REPO, 'electron', 'nsis', 'uninstall.nsh'));
 
 const REPORT = JSON.parse(fs.readFileSync(
   path.join(import.meta.dirname, 'fixtures', 'pip_report_delta.json'), 'utf8'));

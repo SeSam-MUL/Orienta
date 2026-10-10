@@ -26,10 +26,13 @@ const macosEnv = requireCjs('../../electron/setup/macos_env.js');
 const platform = requireCjs('../../electron/platform.js');
 
 const REPO = path.resolve(import.meta.dirname, '..', '..');
-const OLD_LOCK = fs.readFileSync(
-  path.join(REPO, 'tests', 'fixtures', 'locks', 'v0.4.6', 'orienta-macos-lock.yml'), 'utf8');
-const NEW_LOCK = fs.readFileSync(path.join(REPO, 'orienta-macos-lock.yml'), 'utf8');
-const MAC_SRC = fs.readFileSync(path.join(REPO, 'electron', 'setup', 'package_sync_macos.js'), 'utf8');
+// A Windows checkout with core.autocrlf=true has CRLF in the lock and the
+// source; the tests build LF text from them and add their own CRLF case.
+const readText = (p) => fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+const OLD_LOCK = readText(
+  path.join(REPO, 'tests', 'fixtures', 'locks', 'v0.4.6', 'orienta-macos-lock.yml'));
+const NEW_LOCK = readText(path.join(REPO, 'orienta-macos-lock.yml'));
+const MAC_SRC = readText(path.join(REPO, 'electron', 'setup', 'package_sync_macos.js'));
 
 /** What the 0.4.7 lock changes, written out (the same list as tests/test_lock_delta_budget.py). */
 const EXPECTED = {
