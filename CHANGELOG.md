@@ -37,12 +37,13 @@ later release.*
 - **Detector distance too large by the camera binning factor (8× for 156×128 px
   modes) with kikuchipy ≥ 0.12 on Oxford files.** The newer Oxford reader reports
   the binning, and Orienta applied it a second time to a pixel size that was
-  already per binned pixel. This affected Orienta's GPU spherical indexer and the
-  pattern-simulation tools; Hough and dictionary indexing were not affected. Under
-  kikuchipy 0.11.3 only Oxford files whose header contains `Camera Binning Mode`
-  could be affected. When such an exported result is imported, its detector
-  geometry is corrected for the pattern-simulation tools where this is unambiguous
-  (otherwise the log reports it). The orientations stored in it are not changed;
+  already per binned pixel. This affected spherical indexing (the built-in GPU
+  indexer and EMSphInx) and the pattern-simulation tools; Hough and dictionary
+  indexing were not affected. Under kikuchipy 0.11.3 only Oxford files whose
+  header contains `Camera Binning Mode` could be affected. When such an exported
+  result is imported, its detector geometry is corrected for the
+  pattern-simulation tools where this is unambiguous (otherwise the log reports
+  it). The orientations stored in it are not changed;
   re-index.
 - **Hough indexing read CIFs written in origin choice 2 of a two-origin space
   group with the wrong atom positions.** For the 24 space groups with two origin
@@ -54,8 +55,8 @@ later release.*
   and lacked {220} and {224}. Hough now reads these files with their origin
   choice, as the simulation path does since v0.4.6; a file whose origin choice
   cannot be decided is refused with a message (a non-standard setting named only
-  by its symbol is read with a warning). Of the 36 CIF files in the library only
-  silicon and MgCu₂ change.
+  by its symbol is read with a warning). Of the 36 CIF files we checked, only
+  silicon and MgCu₂ were affected.
 - **Monoclinic phases with unique axis b were compared with the wrong two-fold
   axis.** In Orienta's crystal frame (x ∥ a, z ∥ c*) the two-fold axis of such a
   phase (for example Al13Fe4 or β-AlFeSi) lies along y, but the symmetry used to
@@ -63,9 +64,11 @@ later release.*
   real two-fold axis were treated as 180° apart, so pixels of one grain could be
   split into different grains, boundaries could be drawn inside a grain, KAM could
   leave out neighbours, and the two forms of one orientation got different IPF
-  colours. Orientations from Hough and spherical indexing were stored correctly.
-  Dictionary indexing sampled its orientation grid for the wrong axis, which did
-  not cover every orientation of these phases, so dictionary results can hold
+  colours. Stored orientations from spherical and Hough indexing are not affected
+  (checked for spherical indexing with patterns rendered from the Al13Fe4 master;
+  for Hough this follows from the code and was not measured). Dictionary indexing
+  sampled its orientation grid for the wrong axis, which did not cover every
+  orientation of these phases, so dictionary results can hold
   wrong orientations. Grain reconstruction, KAM, grain boundaries, IPF colours,
   pole figures and the dictionary orientation grid now use the real axis, and the
   default Hough reflector list of these phases is expanded with it; Hough results
@@ -147,13 +150,14 @@ later release.*
   it: Hough indexing, the Hough anchor of spherical indexing, and a pattern centre
   from PC refinement. Reference: Rowenhorst, D. J., Callahan, P. G. & Ånes, H. W.,
   *J. Appl. Cryst.* **57**, 3–19 (2024), doi:10.1107/S1600576723010221.
-- Orienta now requires kikuchipy 0.13.1, orix 0.15.0 and PyEBSDIndex 0.3.10.1
-  (each below its next minor version), and the installers ship exactly these
-  instead of 0.11.3 / 0.14.1 / 0.3.9.1. An installation updated from v0.4.6 brings
-  its Python packages to these versions the first time it starts (about 2.5 MB to
-  download). If that cannot finish, for example without an internet connection,
-  Orienta says so once, starts with the packages it has, and tries again at a
-  later start; set `ORIENTA_SKIP_PACKAGE_SYNC=1` to keep the current packages.
+- A source install now requires kikuchipy 0.13.1, orix 0.15.0 and PyEBSDIndex
+  0.3.10.1 (each below its next minor version), and the installers ship exactly
+  these instead of 0.11.3 / 0.14.1 / 0.3.9.1. An installation updated from v0.4.6
+  brings its Python packages to these versions the first time it starts (a few
+  megabytes to download). If that cannot finish, for example without an internet
+  connection, Orienta says so once, starts with the packages it has, and tries
+  again at a later start; set `ORIENTA_SKIP_PACKAGE_SYNC=1` to keep the current
+  packages.
   Updating a source checkout installs the new versions into the environment
   Orienta runs in. Both sets were compared on real data: spherical indexing agreed
   to within 3e-5° and dictionary indexing was identical. Hough indexing in the
