@@ -17,11 +17,10 @@
 # it (solver, 2026-09-22); 2.55.1 is the nearest release that can. Solved for
 # osx-arm64, macOS 14, on 2026-09-22: 467 packages. On 2026-10-08 kikuchipy
 # 0.13.1, orix 0.15.0 and pyebsdindex 0.3.10.1 replaced 0.11.3 / 0.14.1 /
-# 0.3.9.1 by updating only those packages in the lock
-# (scripts/make_macos_lock.py --update): 469 packages, new are psygnal (a
-# kikuchipy dependency) and lazy_loader. One OpenMP runtime (llvm-openmp;
-# libiomp5.dylib is a symlink to libomp.dylib), BLAS = Apple Accelerate. Not yet
-# run on a Mac.
+# 0.3.9.1 by updating only those packages in the lock: 469 packages, new are
+# psygnal (a kikuchipy dependency) and lazy_loader. One OpenMP runtime
+# (llvm-openmp; libiomp5.dylib is a symlink to libomp.dylib), BLAS = Apple
+# Accelerate.
 name: ebsd
 channels:
   - conda-forge

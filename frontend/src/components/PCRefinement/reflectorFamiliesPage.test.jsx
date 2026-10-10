@@ -2,7 +2,7 @@
 //
 // The reflector controls of the PC Refinement page, through the real page and a
 // fake backend. This page showed min_d, f_threshold, max_reflectors and nBands
-// for months and NONE of them reached the backend (the page read only `method`
+// for months and none of them reached the backend (the page read only `method`
 // and `searchLimit` from them). What these tests pin is that what is on the
 // page is wired:
 //  * the three dead numbers are gone and each loaded phase has the family table;
