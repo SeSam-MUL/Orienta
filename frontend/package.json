@@ -1,7 +1,7 @@
 {
   "name": "kikuchipy-gui",
   "private": true,
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "EBSD Pattern Analysis GUI",
   "license": "GPL-3.0-or-later",
   "type": "module",
