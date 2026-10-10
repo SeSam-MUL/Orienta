@@ -229,7 +229,7 @@ with its spacing, relative |F| and multiplicity, and which ones are used.
 - **Rule for the default list** changes *min d* and the |F| threshold.
 - **Reset to default** removes your selection.
 
-A phase without a selection is indexed exactly as before. Hough indexing needs
+A phase without a selection uses the default list. Hough indexing needs
 at least two distinct families, and PyEBSDIndex cannot build its library from
 every pair; such a selection is refused when you make it, with the reason. The
 choice is stored per phase on the backend, so it applies to every Hough build of

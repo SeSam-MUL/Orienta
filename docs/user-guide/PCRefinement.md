@@ -86,8 +86,8 @@ PyEBSDIndex ignores because their pole is a multiple of an earlier family's
 (for aluminium {400} after {200}, {222} after {111}). You can untick a family,
 ask for the *N* strongest, add one of your own (a typed `hkl`, or `hkil` for a
 hexagonal phase, checked against the crystal) or change the rule that builds the
-default list (*min d*, *|F| threshold*). A phase you never touch is indexed
-exactly as before. The choice belongs to the phase, not to the page: the
+default list (*min d*, *|F| threshold*). A phase you never touch uses the
+default list. The choice belongs to the phase, not to the page: the
 Indexing page and every Hough build of that phase use the same one, and the
 simulated bands drawn here are the families that are used. Changing it indexes
 the selected pattern again with the new list.
