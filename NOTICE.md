@@ -204,12 +204,14 @@ directly by `frontend/index.html`, dashboard background only):
   the public domain** (17 U.S.C. §105) under a custom permissive grant whose
   conditions are: acknowledge the NRL as the original source, and mark
   derivative or modified versions as such. Orienta uses the unmodified package
-  from PyPI; the only runtime adaptation is a wrapper around its triplet
-  library builder in `ebsd_utils.py`, which is documented there. Public-domain
-  works are compatible with GPL-3.0. The NRL also states that it would
-  appreciate acknowledgment when the software is used; the academic reference
-  is given under *Algorithm / method attributions* above and in the "How to
-  cite" section of the README.
+  from PyPI and adapts it at run time in three places, each documented where it
+  is made: a wrapper around its triplet library builder (`ebsd_utils.py`), a
+  wrapper around the OpenCL band detector's `find_bands` that reuses one OpenCL
+  context per GPU, and, on macOS, the selection of the CPU band detector (both
+  in `pyebsdindex_mode.py`). Public-domain works are compatible with GPL-3.0.
+  The NRL also states that it would appreciate acknowledgment when the software
+  is used; the academic reference is given under *Algorithm / method
+  attributions* above and in the "How to cite" section of the README.
   Source: https://github.com/USNavalResearchLaboratory/PyEBSDIndex
 
 ## Optional proprietary components (NOT redistributed)
