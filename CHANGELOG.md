@@ -9,6 +9,179 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## v0.4.7 — 2026-10-10
+
+This release corrects "BG Static", which imprinted the bands of one pattern on
+every pattern of a scan; a detector-distance error with kikuchipy 0.12 and
+newer; the atom positions Hough indexing read for silicon and MgCu₂; the
+symmetry used for monoclinic phases; the step size, coordinates and lattice
+constants of `.ang` exports and the reference frame of `.ctf` exports; and
+several settings on the PC refinement page that had no effect. It adds control
+over the Hough reflector list, pattern-centre refinement with several phases,
+and adding a phase by its file path. The installers move to kikuchipy 0.13.1,
+orix 0.15.0 and PyEBSDIndex 0.3.10.1.
+
+*The open points of the Phase Library page that v0.4.6 planned for this release
+(groups, keyboard use and some panels) are not part of it; they are planned for a
+later release.*
+
+### Fixed
+- **BG Static subtracted the pattern at scan position (0, 0) from every pattern.**
+  "BG Static" and the first step of the recommended pipeline used that single
+  pattern as the background, which imprinted its bands on every pattern. They now
+  subtract the average of all patterns. A static background stored in the file is
+  not used: for Oxford files the loaded patterns are already processed by the
+  acquisition software, and the stored background belongs to the unprocessed ones.
+  Batch processing with static background removal (Hough and Dictionary) had the
+  same default and is fixed as well.
+- **Detector distance too large by the camera binning factor (8× for 156×128 px
+  modes) with kikuchipy ≥ 0.12 on Oxford files.** The newer Oxford reader reports
+  the binning, and Orienta applied it a second time to a pixel size that was
+  already per binned pixel. This affected Orienta's GPU spherical indexer and the
+  pattern-simulation tools; Hough and dictionary indexing were not affected. Under
+  kikuchipy 0.11.3 only Oxford files whose header contains `Camera Binning Mode`
+  could be affected. When such an exported result is imported, its detector
+  geometry is corrected for the pattern-simulation tools where this is unambiguous
+  (otherwise the log reports it). The orientations stored in it are not changed;
+  re-index.
+- **Hough indexing read CIFs written in origin choice 2 of a two-origin space
+  group with the wrong atom positions.** For the 24 space groups with two origin
+  choices, the CIF reader that Hough indexing uses expanded the atoms with the
+  operators of origin choice 1, whatever the file was written in. Silicon (Fd-3m,
+  written in origin choice 2) came out with 16 atoms in the cell instead of 8, and
+  MgCu₂ as Mg32Cu8 instead of Mg8Cu16. The atoms decide the structure factors that
+  select Hough's reflectors: for silicon the list held the diamond-forbidden {222}
+  and lacked {220} and {224}. Hough now reads these files with their origin
+  choice, as the simulation path does since v0.4.6; a file whose origin choice
+  cannot be decided is refused with a message (a non-standard setting named only
+  by its symbol is read with a warning). Of the 36 CIF files in the library only
+  silicon and MgCu₂ change.
+- **Monoclinic phases with unique axis b were compared with the wrong two-fold
+  axis.** In Orienta's crystal frame (x ∥ a, z ∥ c*) the two-fold axis of such a
+  phase (for example Al13Fe4 or β-AlFeSi) lies along y, but the symmetry used to
+  compare and reduce orientations had it along z. Two orientations related by the
+  real two-fold axis were treated as 180° apart, so pixels of one grain could be
+  split into different grains, boundaries could be drawn inside a grain, KAM could
+  leave out neighbours, and the two forms of one orientation got different IPF
+  colours. Orientations from Hough and spherical indexing were stored correctly.
+  Dictionary indexing sampled its orientation grid for the wrong axis, which did
+  not cover every orientation of these phases, so dictionary results can hold
+  wrong orientations. Grain reconstruction, KAM, grain boundaries, IPF colours,
+  pole figures and the dictionary orientation grid now use the real axis, and the
+  default Hough reflector list of these phases is expanded with it; Hough results
+  of these phases may therefore differ slightly from earlier versions (not
+  measured). Phases with unique axis c and all other crystal systems are
+  unchanged. That the spherical indexer stores orientations in this frame was
+  checked with patterns rendered from the Al13Fe4 master; the corrected
+  calculations were checked on synthetic orientation maps. Nothing has yet been
+  compared on a measured Al13Fe4 map.
+- **PC refinement settings had no effect.** Minimum d-spacing, structure-factor
+  threshold, maximum reflectors and number of bands on the PC refinement page never
+  reached the indexer. The first three are replaced by the per-phase reflector-family
+  table; the number of bands is now applied.
+- **PC refinement: the Kikuchi-line overlay was drawn shrunk into the top-left corner**
+  after a calibration pattern was picked from the list, because the pattern image was
+  delivered at the size of a rendered figure instead of its own pixel size.
+- **PC refinement: "Global CI" showed the CI of a single pattern** after a global
+  refinement. It is now the mean over all calibration patterns at the current pattern
+  centre, re-computed after a refinement, and shows N/A after a manual change of the
+  pattern centre until the patterns are indexed again.
+- **The PC refinement page modified a phase's structure on every call**, which
+  changed the overlay reflectors from the second pattern on (observed for MgZn2 and
+  π-Al8FeMg3Si6).
+- **EDAX UP1/UP2 files on a hexagonal grid were read as if the grid were square.**
+  They are now refused with an error when the version-3 header or the `.osc` file
+  shows a hexagonal grid (resampling is implemented for EDAX H5 only). A version-1
+  file without its `.osc` cannot be checked; keep the `.osc` next to it, or export
+  hexagonal scans as H5. Detection was tested with synthetic headers only.
+- **`.ang` export: wrong step size, coordinates, lattice constants and symmetry
+  codes.** Results whose map was kept on the pixel grid (seen for spherical
+  indexing and for Hough indexing with the EDS chemistry prior) were written with a
+  step of 1.0 and x/y in pixels, so lengths and areas came out wrong by the step
+  size and its square. Lattice constants were written as 1.000 for spherical
+  results and in batch exports, and for monoclinic phases the symmetry field held
+  112, which is not a TSL code. Step and coordinates are now in micrometres (a
+  cropped map starts at 0, with its origin in the header), lattice constants come
+  from the phase's structure, CIF or master file (the export stops with a message
+  if none is known), and monoclinic phases with unique axis b get TSL code 20.
+  Re-export affected `.ang` files.
+- **Batch `.ctf` export: Euler angles in the wrong reference frame, placeholder
+  lattice constants.** For scans from Oxford systems the Euler angles were written
+  in the EDAX TSL frame although `.ctf` is an Oxford format, so φ1 differed by 90°
+  from the source system's own angles and from the light `.h5`; lattice constants
+  were written as 1.000. The angles are now written in the frame of the source
+  file, the same as in the light `.h5`, with the lattice constants of the phase's
+  structure, CIF or master file. Scans from EDAX systems keep the EDAX frame, which
+  is their own. Re-export `.ctf` files.
+- Exporting an `.ang` over an existing file failed or kept the old file; batch `.ang`
+  files wrote Bruker pattern-centre values under the TSL names.
+- **Hough indexing from a source installation with pyopencl failed after about 55
+  calls in one session** with an OpenCL out-of-memory error, because PyEBSDIndex's
+  OpenCL kernels were rebuilt on every call and their memory was not freed (about
+  250 MB per call; measured on one GPU and driver under Windows, the number of
+  calls depends on the machine). Orienta now reuses one OpenCL context per GPU for
+  these calls. The installers use the CPU band detector and were not affected.
+- The page now detects a connection to the backend that has silently died,
+  reconnects with increasing wait times, and re-reads its state afterwards.
+- The group headings "Pure elements" and "Other" in the phase picker were shown in
+  German in every language.
+
+### Added
+- Hough reflector families per phase, editable on the Indexing and PC refinement pages.
+- PC refinement with several phases; the phase of each calibration pattern is shown.
+- Add a phase on the Indexing page by typing its file path (Hough, Spherical, Dictionary).
+- Light/rich `.h5` format 1.4: for Oxford `.h5oina` sources the scan geometry from the
+  file header (Scanning Rotation Angle,
+  Specimen Orientation Euler, Tilt Angle; not applied to the Euler angles), space
+  group, lattice parameters and crystal reference frame per phase, and whether the
+  EDS chemistry prior was used. `.ang` and `.ctf` headers state the reference frame,
+  the crop origin, the scan geometry (for Oxford sources) and the
+  phase-assignment method.
+- Updating an installed Orienta also updates its Python packages to the versions the release ships.
+- Settings → About → Show log files.
+- Tooltips for every Hough parameter.
+
+### Changed
+- PyEBSDIndex is cited in the README, CITATION.cff, NOTICE and the About page, and
+  in the methods paragraph of every result computed with this version that used
+  it: Hough indexing, the Hough anchor of spherical indexing, and a pattern centre
+  from PC refinement. Reference: Rowenhorst, D. J., Callahan, P. G. & Ånes, H. W.,
+  *J. Appl. Cryst.* **57**, 3–19 (2024), doi:10.1107/S1600576723010221.
+- Orienta now requires kikuchipy 0.13.1, orix 0.15.0 and PyEBSDIndex 0.3.10.1
+  (each below its next minor version), and the installers ship exactly these
+  instead of 0.11.3 / 0.14.1 / 0.3.9.1. An installation updated from v0.4.6 brings
+  its Python packages to these versions the first time it starts (about 2.5 MB to
+  download). If that cannot finish, for example without an internet connection,
+  Orienta says so once, starts with the packages it has, and tries again at a
+  later start; set `ORIENTA_SKIP_PACKAGE_SYNC=1` to keep the current packages.
+  Updating a source checkout installs the new versions into the environment
+  Orienta runs in. Both sets were compared on real data: spherical indexing agreed
+  to within 3e-5° and dictionary indexing was identical. Hough indexing in the
+  installed app uses PyEBSDIndex's CPU band detection, and its results change: on
+  a nickel map the orientations moved by 0.07° (median) and 99.8 % of the pixels
+  by less than 1°; on a two-phase map of an aluminium alloy (Al and α-Al(Fe,Mn)Si,
+  10,800 pixels) 98 % of the pixels kept their phase, and of the α-Al(Fe,Mn)Si
+  pixels that kept it, 92 % moved by less than 1° and most of the others by about
+  72°, a pseudo-symmetric variant of that phase. On the nickel map the new CPU
+  band detection gives the same orientations as the OpenCL band detection of
+  source installations with pyopencl (median difference below 0.0001°; 0.085° with
+  PyEBSDIndex 0.3.9.1). On the two-phase map the two band detectors disagree for
+  about a third of the α-Al(Fe,Mn)Si pixels, with the old and the new version
+  alike.
+- kikuchipy 0.12 reversed the meaning of the detector's azimuthal angle (the
+  rotation of the detector about its optical axis). Orienta keeps the earlier
+  meaning, which is also EMsoft's, on every path that uses the angle: where it
+  hands a detector to kikuchipy 0.12.1 or newer, it converts the sign, so CPU and
+  GPU dictionary indexing and generation agree on both kikuchipy versions. Whether
+  this matches the vendor's definition of the header value (the EDAX field `Camera
+  Azimuthal Angle`) is not documented and has not been measured; every file we
+  tested reads 0. Hough and spherical indexing do not use the angle, and with
+  kikuchipy 0.11.3 neither does the Kikuchi-band overlay in PC refinement. When a
+  dataset has a non-zero azimuthal angle, the run log says so.
+- `start_app.py` refuses to start when port 8000 is already in use.
+
+---
+
 ## v0.4.6 — 2026-09-27
 
 You can install Orienta now — on Windows, on a Mac and on Linux. Add-ons have

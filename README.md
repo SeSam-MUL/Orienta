@@ -10,9 +10,12 @@ crystal phases (Hough / Dictionary / Spherical), integrate EDS chemistry, and
 produce phase maps, grain/texture analyses, and publication figures.
 
 Built on the [kikuchipy](https://kikuchipy.org/), [orix](https://orix.readthedocs.io/)
-and [diffsims](https://diffsims.readthedocs.io/) scientific stack.
+and [diffsims](https://diffsims.readthedocs.io/) scientific stack. Hough indexing
+(the Radon-transform band detection and the band indexing) is performed by
+[PyEBSDIndex](https://github.com/USNavalResearchLaboratory/PyEBSDIndex), see
+[How to cite](#how-to-cite).
 
-> **Status: beta (v0.4.6).** Everything listed under *Features* is reachable in the
+> **Status: beta (v0.4.7).** Everything listed under *Features* is reachable in the
 > app, but some of it is newer than its test coverage, and a few pieces are less
 > complete than their name suggests. Read
 > [Known limitations](#known-limitations--to-be-done) before you rely on a result.
@@ -26,7 +29,7 @@ React frontend        frontend/  (Vite build, ~20 feature pages)
       │  HTTP + WebSocket
 FastAPI backend       backend/api/  (route files under backend/api/routes/)
       │
-Scientific layer      kikuchipy, orix, diffsims, numpy/scipy, PyTorch (GPU)
+Scientific layer      kikuchipy, orix, diffsims, PyEBSDIndex, numpy/scipy, PyTorch (GPU)
 ```
 
 ## Requirements
@@ -125,8 +128,9 @@ cd frontend && npm test   # Vitest (frontend)
 
 ## Features
 
-- Load & visualize EBSD patterns (Oxford H5OINA, EDAX H5 **square grids**, EDAX
-  UP1/UP2 + `.osc`; lazy load for large files)
+- Load & visualize EBSD patterns (Oxford H5OINA, EDAX H5 on square grids, EDAX H5
+  on hexagonal grids resampled to a square grid, EDAX UP1/UP2 + `.osc`; lazy load
+  for large files)
 - Pattern Center refinement (incl. pixel-wise drift correction)
 - Indexing: Hough, Dictionary (CPU + GPU), Spherical (built-in GPU indexer —
   the default — or EMSphInx via WSL)
@@ -172,10 +176,23 @@ or misleading — so you find it here rather than in your results. Items marked
 
 ### Data and results
 
-- **EDAX hexagonal-grid scans are not supported — and are not rejected.**
-  *(wrong result)* Square-grid EDAX H5, and UP1/UP2 with an `.osc` sidecar, load
-  correctly. A HexGrid scan opens as though it were a square grid, so the map comes
-  out sheared. Until this is detected and refused, do not load HexGrid data.
+- **EDAX hexagonal-grid scans are resampled to a square grid.** Orienta detects an
+  EDAX H5 file whose header says `Grid Type = HexGrid` and loads it as a square map:
+  each square pixel takes the pattern of the nearest measured point (nearest
+  neighbour; patterns are never interpolated). The square step equals the in-row
+  spacing of the hex grid and the map covers the extent of the scan. The result is a
+  resampled view of the scan, not the measured points themselves: some measured
+  points are not used, and indexing, step size, pixel counts and grain statistics
+  all refer to the resampled grid. The loader reads the row layout from the stored
+  point positions and refuses the file with an error if that layout is not the
+  alternating long/short rows of an EDAX hex scan, if the X/Y positions are missing,
+  or if the number of measured points does not match the number of stored patterns.
+  Resampling applies to EDAX H5 files only. An EDAX UP1/UP2 file is refused with an
+  error when its version-3 header or its `.osc` file shows a hexagonal grid. A
+  version-1 file without its `.osc` cannot be checked, so keep the `.osc` next to it,
+  or export hexagonal scans as H5 from OIM. This detection has been tested with
+  synthetic headers only. Square-grid EDAX H5 files, and square-grid UP1/UP2 files
+  with an `.osc` sidecar, load as usual, without resampling.
 - **The "Texture Components" map layer is empty.** The layer can be selected on
   the Analysis page but always returns a blank map. The per-component numbers in
   the texture table and the Excel export are real; only the spatial map is a stub.
@@ -223,13 +240,12 @@ or misleading — so you find it here rather than in your results. Items marked
 
 ### To be done
 
-In rough priority order: refuse EDAX HexGrid files instead of mis-reading them ·
-ship the simulation automation module, or remove the engine from the UI · fix the
-installer's OpenCL step and make failures surface as failures · wire the texture
-component map to its existing implementation and compute the two placeholder RX
-statistics · move the CUDA packages behind an optional requirements file and drop
-the Python 3.12 blocker · write the version into the release archive so downloads
-identify themselves.
+In rough priority order: ship the simulation automation module, or remove the
+engine from the UI · fix the installer's OpenCL step and make failures surface as
+failures · wire the texture component map to its existing implementation and
+compute the two placeholder RX statistics · move the CUDA packages behind an
+optional requirements file and drop the Python 3.12 blocker · write the version
+into the release archive so downloads identify themselves.
 
 If you hit something that is not on this list, please report it — *Settings →
 Report a problem* collects the logs for you; see
@@ -285,7 +301,15 @@ Machine-readable citation metadata is in [CITATION.cff](CITATION.cff); GitHub's
 - **Spherical (SHT) indexing** — Lenthe, Singh &amp; De Graef, *Ultramicroscopy* **207**,
   112841 (2019); and the [EMSphInx](https://github.com/EMsoft-org/EMSphInx) project.
   Orienta's GPU spherical indexer is an independent reimplementation of this method.
-- **Hough indexing** — [PyEBSDIndex](https://github.com/USNavalResearchLaboratory/PyEBSDIndex) (U.S. NRL).
+- **Hough indexing** — the Radon-transform band detection and the band indexing
+  are done by [PyEBSDIndex](https://github.com/USNavalResearchLaboratory/PyEBSDIndex)
+  (U.S. Naval Research Laboratory). Please cite Rowenhorst, D. J., Callahan, P. G.
+  &amp; Ånes, H. W., "Fast Radon transforms for high-precision EBSD orientation
+  determination using PyEBSDIndex", *J. Appl. Cryst.* **57**(1), 3–19 (2024),
+  [doi:10.1107/S1600576723010221](https://doi.org/10.1107/S1600576723010221).
+  Wherever kikuchipy is cited for a Hough-indexed result, cite PyEBSDIndex with it,
+  and also when the pattern centre was refined with Orienta's PC refinement, which
+  uses PyEBSDIndex's indexing and PC optimiser.
 - **Dictionary indexing, simulation &amp; projection** — [kikuchipy](https://kikuchipy.org/)
   and [EMsoft](https://github.com/EMsoft-org/EMsoft).
 

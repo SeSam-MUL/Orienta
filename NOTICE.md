@@ -78,7 +78,13 @@ be cited in any publication that uses these features:
   the patent note under *External tools*.
 - **Dictionary indexing** — follows the EMsoft / kikuchipy dictionary-indexing
   approach (S. Singh & M. De Graef; the kikuchipy project).
-- **Hough/Radon indexing** — provided via **PyEBSDIndex** (U.S. NRL; see below).
+- **Hough/Radon indexing** — the Radon-transform band detection and the band
+  indexing (triplet voting) are performed by **PyEBSDIndex** (U.S. NRL; see
+  below). Cite **D. J. Rowenhorst, P. G. Callahan & H. W. Ånes, "Fast Radon
+  transforms for high-precision EBSD orientation determination using
+  PyEBSDIndex," _J. Appl. Cryst._ 57(1), 3–19 (2024),
+  doi:10.1107/S1600576723010221**, together with kikuchipy wherever a
+  Hough-indexed result is reported.
 - **Monte-Carlo electron scattering + dynamical master patterns** — follow the
   **EMsoft** methods (M. De Graef et al.).
 
@@ -200,7 +206,10 @@ directly by `frontend/index.html`, dashboard background only):
   derivative or modified versions as such. Orienta uses the unmodified package
   from PyPI; the only runtime adaptation is a wrapper around its triplet
   library builder in `ebsd_utils.py`, which is documented there. Public-domain
-  works are compatible with GPL-3.0.
+  works are compatible with GPL-3.0. The NRL also states that it would
+  appreciate acknowledgment when the software is used; the academic reference
+  is given under *Algorithm / method attributions* above and in the "How to
+  cite" section of the README.
   Source: https://github.com/USNavalResearchLaboratory/PyEBSDIndex
 
 ## Optional proprietary components (NOT redistributed)

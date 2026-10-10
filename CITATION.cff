@@ -26,13 +26,14 @@ authors:
     family-names: "Weißensteiner"
     orcid: "https://orcid.org/0000-0002-8917-5231"
     affiliation: "Montanuniversität Leoben"
-version: "0.4.6"
-date-released: "2026-09-27"
+version: "0.4.7"
+date-released: "2026-10-10"
 license: "GPL-3.0-or-later"
 repository-code: "https://github.com/SeSam-MUL/Orienta"
 # The concept DOI always resolves to the newest archived version — that is what
-# a general "we used Orienta" citation should point at. The DOI of this exact
-# release is listed below under identifiers.
+# a general "we used Orienta" citation should point at. The DOIs of individual
+# archived versions are listed below under identifiers; Zenodo mints the DOI of
+# this version when it is published.
 url: "https://doi.org/10.5281/zenodo.22664080"
 doi: "10.5281/zenodo.22664080"
 keywords:
@@ -56,10 +57,32 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.22664081"
     description: "Zenodo archive of version 0.2.6"
-  # The version DOI for 0.4.6 is minted by Zenodo when this release is
-  # published, and belongs here as soon as it exists. It is left out rather
-  # than guessed: a DOI that resolves to nothing, or to the wrong deposit,
-  # is worse than an absent one.
+  - type: doi
+    value: "10.5281/zenodo.23006390"
+    description: "Zenodo archive of version 0.4.6"
   - type: doi
     value: "10.5281/zenodo.21021937"
     description: "Earlier archive lineage, kept for the example EBSD datasets"
+# Third-party software that does part of the work. Hough/Radon band detection
+# and indexing are performed by PyEBSDIndex; please cite it when you use
+# results from Hough indexing, the Hough anchor of spherical indexing, or a
+# pattern centre from PC refinement.
+references:
+  - type: article
+    title: "Fast Radon transforms for high-precision EBSD orientation determination using PyEBSDIndex"
+    authors:
+      - given-names: "David J."
+        family-names: "Rowenhorst"
+      - given-names: "Patrick G."
+        family-names: "Callahan"
+      - given-names: "Håkon W."
+        family-names: "Ånes"
+    journal: "Journal of Applied Crystallography"
+    volume: 57
+    issue: 1
+    start: 3
+    end: 19
+    year: 2024
+    doi: "10.1107/S1600576723010221"
+    url: "https://github.com/USNavalResearchLaboratory/PyEBSDIndex"
+    notes: "Reference for PyEBSDIndex, which performs the Hough/Radon band detection and indexing."

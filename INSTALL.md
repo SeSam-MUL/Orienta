@@ -409,6 +409,19 @@ pip install -r requirements.txt
 This installs kikuchipy, orix, diffsims, FastAPI, PyTorch, and everything else
 Orienta needs.
 
+#### Updating a checkout
+
+Updating a source checkout, with Orienta's own updater or with `git pull` and
+`pip install -r requirements.txt` (on macOS `conda env update -f
+environment-macos.yml`), installs kikuchipy 0.13.1, orix 0.15.0 and PyEBSDIndex
+0.3.10.1 into the environment Orienta runs in. `requirements.txt` asks for these
+as minimum versions, so older releases of the three are replaced. If that
+environment is also used for your own kikuchipy work: kikuchipy 0.12 reversed
+the meaning of the detector azimuthal angle, so a script written for 0.11 needs
+its azimuthal sign checked. Use a separate environment if you need both. The
+environment variable `ORIENTA_SKIP_PACKAGE_SYNC` belongs to the packaged app and
+has no effect on a source install.
+
 #### A note on PyTorch (GPU vs CPU)
 
 `requirements.txt` contains this line near the PyTorch entries:
@@ -606,6 +619,28 @@ completed phase (markers live in `~/.emsoft_install_progress` inside WSL).
 Another program (often a previous Orienta backend that didn't shut down) is using
 port 8000. Close the other instance, or find and stop the process using that port,
 then run `python start_app.py` again.
+
+**Where are the log files?**
+The quickest way is **Settings → About → Show log files**: in the desktop app it
+opens the folder, in a browser it shows the folder's path to copy. There are two
+files in it. `orienta.log` is the application log; `backend-console.log` is the
+raw output of the backend process, including errors during start-up, so look
+there first when the window opens but nothing works. Attach both to a bug report
+(or use **Report a problem**, which bundles them).
+
+The folder is `logs/` inside the installation:
+
+| How you run Orienta | Log folder |
+| --- | --- |
+| Installed package (Windows) | `%LOCALAPPDATA%\Orienta\runtime\logs` |
+| Installed package (macOS) | `~/Library/Application Support/Orienta/runtime/logs` |
+| Installed package (Linux) | `~/.local/share/Orienta/runtime/logs` |
+| From source (`python start_app.py`, `npm run electron:dev`) | `logs/` in the project folder |
+
+If you chose another data folder in the setup, or set `ORIENTA_HOME`, the
+`runtime/logs` folder is inside that one. A problem before the backend starts
+(the setup, or the app never getting as far as Python) is written to
+`logs/orienta-shell.log` in the data folder itself.
 
 **"npm not found" / "npm is not recognized"**
 Node.js isn't installed or isn't on your PATH. Install it from
