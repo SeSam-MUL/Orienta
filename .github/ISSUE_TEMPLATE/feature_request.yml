@@ -1,0 +1,33 @@
+name: Feature request
+description: Suggest a new capability, or an improvement to an existing one.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the suggestion. For an open-ended idea you would like to talk through first,
+        [Discussions → Ideas](https://github.com/SeSam-MUL/Orienta/discussions/categories/ideas) is a good place to start.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The task or analysis, and what makes it hard or impossible in Orienta today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: How you imagine it working. A sketch, or a reference to another program or a paper, is welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: How do you work around it now?
+      description: Other software, scripts, manual steps.
+  - type: textarea
+    id: context
+    attributes:
+      label: Data and context
+      description: "Instrument and data format, material system, map size: anything that shapes what a good solution looks like."

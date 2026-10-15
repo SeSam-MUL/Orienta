@@ -1,0 +1,88 @@
+name: Bug report
+description: Something fails, crashes, or gives a result that is clearly wrong.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting this. The quickest way to a fix is a **problem report** from the app itself:
+        **⚠ Report a problem** (toolbar at the top of every page, or *Settings → About Orienta*) creates a `.zip`
+        with the version, the log and what the app did just before. Its **Open a GitHub issue** button opens an
+        issue with your description, the version and the preceding events already filled in; drag the `.zip`
+        into it before submitting. You can use that instead of this form.
+        See [Reporting a problem](https://github.com/SeSam-MUL/Orienta/blob/main/docs/user-guide/ReportingProblems.md).
+
+        **Everything you attach here is public.** The report is designed not to include your measurement files,
+        but it does contain file and folder names (often with your user name and sample names), log text, and an
+        optional screenshot of the window. Check every file in the zip, especially the `logs/` folder and
+        `screenshot.png`, before you attach it, or send it by e-mail instead (address in
+        [CONTRIBUTING.md](https://github.com/SeSam-MUL/Orienta/blob/main/CONTRIBUTING.md#contact)).
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What did you do, and what happened?
+      description: Which file, which page, which action. Two sentences are usually enough.
+      placeholder: Loaded an H5OINA file, started Hough indexing on the whole map. It stopped at 40 % and the phase map stayed empty.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+      description: For a result that looks wrong rather than broken, say what you expected it to look like and why.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Orienta version
+      description: Shown under *Settings → About Orienta*.
+      placeholder: v0.4.7
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install Orienta?
+      options:
+        - Windows installer (.exe)
+        - macOS disk image (.dmg)
+        - Linux AppImage
+        - From source (git clone)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: data
+    attributes:
+      label: Which data format was involved?
+      multiple: true
+      options:
+        - Oxford H5OINA
+        - EDAX H5
+        - EDAX UP1 / UP2
+        - Not related to a data file
+        - Other
+  - type: input
+    id: system
+    attributes:
+      label: Operating system and graphics card
+      placeholder: Windows 11, NVIDIA RTX 4070
+  - type: input
+    id: error-id
+    attributes:
+      label: Error id
+      description: The short id shown in the problem-report dialog, if there is one.
+      placeholder: a1b2c3d4
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Problem report and screenshots
+      description: Drag the problem-report `.zip` or screenshots here.
+  - type: checkboxes
+    id: public
+    attributes:
+      label: Before you submit
+      options:
+        - label: I understand that this issue and everything attached to it are public.
+          required: true

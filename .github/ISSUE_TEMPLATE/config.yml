@@ -1,0 +1,12 @@
+# Blank issues stay enabled: the "Open a GitHub issue" button in Orienta's
+# problem-report dialog opens /issues/new with the description, version and
+# preceding events already filled in,
+# and that link only works while blank issues are allowed.
+blank_issues_enabled: true
+contact_links:
+  - name: Ask a question
+    url: https://github.com/SeSam-MUL/Orienta/discussions/categories/q-a
+    about: How do I do something, or does this result look right? Answers stay searchable for the next person.
+  - name: User guide
+    url: https://github.com/SeSam-MUL/Orienta/tree/main/docs/user-guide
+    about: One page per part of the app, with its inputs, outputs and known limits.
