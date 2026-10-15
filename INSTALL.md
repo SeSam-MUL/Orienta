@@ -16,17 +16,19 @@ shared. The only difference is the command you use to launch the app (Step 4).
 > **Quick reference (experienced users):**
 > ```bash
 > cd /path/to/Orienta        # <- FIRST. Must contain requirements.txt
-> conda create -n ebsd python=3.11
+> conda create -n ebsd python=3.11 --override-channels -c conda-forge
 > conda activate ebsd
-> conda install -c conda-forge "blas=*=openblas"
+> conda install --override-channels -c conda-forge "blas=*=openblas"
 > pip install -r requirements.txt
+> # macOS: replace the four lines above with
+> #   conda env create -f environment-macos.yml && conda activate ebsd
 > cd frontend && npm install && npm run build && cd ..
 > python start_app.py        # browser version
 > # or: python start_desktop.py   # desktop version
 > ```
 
 > **The single most common installation failure:** running `pip install -r
-> requirements.txt` from the wrong folder. A freshly opened Anaconda Prompt starts
+> requirements.txt` from the wrong folder. A freshly opened Miniforge or Anaconda Prompt starts
 > in your **home folder** (e.g. `C:\Users\YourName`), not in Orienta, so `pip`
 > reports that `requirements.txt` does not exist. **Step 1 below shows how to get
 > into the right folder — do not skip it.**
@@ -46,7 +48,7 @@ way that looks like a bug.
 
 [releases]: https://github.com/SeSam-MUL/Orienta/releases
 
-### macOS — `Orienta-<version>-arm64.dmg`
+### macOS — `Orienta-macOS-arm64.dmg`
 
 **Apple Silicon only** (M1 and newer), macOS 14 or newer. Intel Macs are not
 supported: PyTorch stopped publishing builds for them, and Orienta says so at
@@ -55,7 +57,7 @@ environment is built, the package cache and the finished environment are on
 disk at the same time, and the setup checks for that much before it starts.
 
 ```bash
-shasum -a 256 Orienta-<version>-arm64.dmg     # compare with the .sha256
+shasum -a 256 Orienta-macOS-arm64.dmg     # compare with the .sha256
 ```
 
 Open the disk image and drag Orienta onto the Applications shortcut beside it.
@@ -89,16 +91,16 @@ gone.
 reached through WSL, which exists only on Windows, so that engine is greyed out
 with a note; the built-in one needs neither EMsoft nor a graphics card.
 
-### Linux — `Orienta-<version>.AppImage`
+### Linux — `Orienta-Linux-x86_64.AppImage`
 
 x86-64. Built and checked on Ubuntu 24.04; other distributions are untested
 rather than unsupported. Allow about **2.5 GB** free, or **9 GB** for the
 graphics-card version.
 
 ```bash
-sha256sum Orienta-<version>.AppImage          # compare with the .sha256
-chmod +x Orienta-<version>.AppImage
-./Orienta-<version>.AppImage
+sha256sum Orienta-Linux-x86_64.AppImage          # compare with the .sha256
+chmod +x Orienta-Linux-x86_64.AppImage
+./Orienta-Linux-x86_64.AppImage
 ```
 
 **The `chmod` is not optional.** Without it a double-click in the file manager
@@ -110,14 +112,14 @@ system has FUSE 3 but not the version AppImage needs. You do not have to
 install anything:
 
 ```bash
-./Orienta-<version>.AppImage --appimage-extract-and-run
+./Orienta-Linux-x86_64.AppImage --appimage-extract-and-run
 ```
 
 **Uninstalling** is deleting the `.AppImage` file. The data folder
 (`~/.local/share/Orienta` unless you moved it) stays on purpose, for the same
 reason as on macOS.
 
-### Windows — `Orienta Setup <version>.exe`
+### Windows — `Orienta-Windows-x64-Setup.exe`
 
 Download it and run it. Everything else is set up on first start: a private Python for Orienta, all
 packages, and the GPU versions of them when the machine has a suitable NVIDIA
@@ -130,7 +132,7 @@ certificate, so a blue "Windows protected your PC" window appears. Click
 checksum with the one on the release page:
 
 ```powershell
-certutil -hashfile "Orienta Setup <version>.exe" SHA256
+certutil -hashfile "Orienta-Windows-x64-Setup.exe" SHA256
 ```
 
 The setup asks for your language, where Orienta may keep its own files (this
@@ -172,15 +174,17 @@ Install these before you begin. The first two are **required**; the last two are
 
 ### Required
 
-1. **Anaconda or Miniconda** (a Python distribution that manages isolated
-   environments). Either works; Miniconda is smaller.
-   - Download: <https://www.anaconda.com/download>
+1. **Miniforge** (a small conda distribution that manages isolated Python
+   environments and takes its packages from conda-forge). Anaconda or Miniconda
+   work too, if you point them at conda-forge as shown in
+   [Step 2](#if-you-already-have-anaconda-or-miniconda).
+   - Download: <https://conda-forge.org/download/>
    - During installation, the default options are fine. On Windows, this gives you
-     an "Anaconda Prompt" in the Start menu — use that prompt for the `conda`
-     commands below.
+     a "Miniforge Prompt" in the Start menu (with Anaconda: "Anaconda Prompt") —
+     use that prompt for the `conda` commands below.
 
-2. **Node.js 18 or newer** (used to build the user interface, and to run the
-   desktop window).
+2. **Node.js 20.19 or newer** (or 22.12 or newer; used to build the user
+   interface, and to run the desktop window).
    - Download: <https://nodejs.org/>
    - Pick the **LTS** version. The installer adds the `node` and `npm` commands to
      your system.
@@ -231,22 +235,22 @@ currently in.
 ## Step 1b — Go into the Orienta folder (do not skip)
 
 Every remaining command must be run **from the Orienta folder** — the one that
-contains `requirements.txt`, `start_app.py` and `frontend/`. When you open an
-Anaconda Prompt it starts in your **home folder**, not in Orienta, so this is
+contains `requirements.txt`, `start_app.py` and `frontend/`. When you open a
+Miniforge or Anaconda Prompt it starts in your **home folder**, not in Orienta, so this is
 almost always the first thing that goes wrong.
 
 **1. Find the full path of the folder.** In Windows Explorer, open the Orienta
 folder and click the address bar — it shows something like
 `C:\Users\YourName\Downloads\Orienta`. Copy it.
 
-**2. Change into it** (right-click pastes into the Anaconda Prompt):
+**2. Change into it** (right-click pastes into the prompt):
 
 ```bash
 cd C:\Users\YourName\Downloads\Orienta
 ```
 
 > **Windows: if Orienta is on a different drive** (D:, E: …), plain `cd` will
-> *not* switch drives in the Anaconda Prompt. Use the `/d` flag:
+> *not* switch drives in the prompt. Use the `/d` flag:
 > ```bash
 > cd /d D:\Data\Orienta
 > ```
@@ -279,10 +283,10 @@ produces (`Could not open requirements file`) does not make the cause obvious.
 ## Step 2 — Create the Python environment
 
 Orienta needs a dedicated Python 3.11 environment named **`ebsd`**. Run these
-commands in your Anaconda Prompt / terminal:
+commands in your Miniforge or Anaconda Prompt (or terminal):
 
 ```bash
-conda create -n ebsd python=3.11
+conda create -n ebsd python=3.11 --override-channels -c conda-forge
 conda activate ebsd
 ```
 
@@ -595,13 +599,13 @@ If patterns show up, your installation is working correctly.
 
 **`Could not open requirements file: ... requirements.txt` / "No such file or directory"**
 You are running `pip` from the wrong folder — almost certainly your home folder,
-where a fresh Anaconda Prompt starts. Go back to [Step 1b](#step-1b--go-into-the-orienta-folder-do-not-skip)
+where a fresh Miniforge or Anaconda Prompt starts. Go back to [Step 1b](#step-1b--go-into-the-orienta-folder-do-not-skip)
 and `cd` into the Orienta folder first. On Windows, if Orienta sits on another
 drive, use `cd /d D:\path\to\Orienta` — plain `cd` does not switch drives.
 
 **`'conda' is not recognized` / `python` opens the Microsoft Store**
-You are in a plain Command Prompt or PowerShell instead of the **Anaconda
-Prompt**. Open "Anaconda Prompt" from the Start menu and start again from
+You are in a plain Command Prompt or PowerShell instead of the **Miniforge
+Prompt** (or Anaconda Prompt). Open it from the Start menu and start again from
 Step 1b.
 
 **EMsoft build fails with a CMake error**
