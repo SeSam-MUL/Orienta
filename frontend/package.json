@@ -110,7 +110,8 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "shortcutName": "Orienta",
-      "include": "../electron/nsis/installer.nsh"
+      "include": "../electron/nsis/installer.nsh",
+      "artifactName": "Orienta-Windows-x64-Setup.exe"
     },
     "mac": {
       "target": [
@@ -128,6 +129,9 @@
       "minimumSystemVersion": "14.0",
       "category": "public.app-category.education"
     },
+    "dmg": {
+      "artifactName": "Orienta-macOS-arm64.dmg"
+    },
     "linux": {
       "target": [
         {
@@ -139,6 +143,9 @@
       ],
       "icon": "../resources/icon-1024.png",
       "category": "Science"
+    },
+    "appImage": {
+      "artifactName": "Orienta-Linux-x86_64.AppImage"
     }
   }
 }
