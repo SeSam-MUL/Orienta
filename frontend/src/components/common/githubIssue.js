@@ -20,10 +20,21 @@ export function issueTitle({ fingerprint, description, page }) {
   return (id + subject).slice(0, 200);
 }
 
+/**
+ * First line of every body. The issue form on GitHub asks the reporter to
+ * confirm that an issue is public, but this pre-filled link opens a blank
+ * issue and skips that form, so the warning has to travel in the body. It
+ * comes first so that trimming the body from the end never removes it.
+ */
+export const PUBLIC_NOTICE =
+  '> **This issue will be public.** The text below was filled in from your session ' +
+  'and can contain file and folder names. Remove anything you do not want to publish, ' +
+  'and check the report zip before you attach it.\n\n';
+
 export function issueBody({
   description, version, page, fingerprint, breadcrumbs, environment, hasScreenshot,
 }) {
-  const parts = [];
+  const parts = [PUBLIC_NOTICE];
   parts.push('### What happened\n');
   parts.push(`${(description || '').trim() || '_(no description given)_'}\n`);
   parts.push('\n### Report file\n');

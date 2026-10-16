@@ -46,6 +46,13 @@ describe('issueBody', () => {
       .not.toMatch(/screenshot of the window/i);
   });
 
+  it('opens with the notice that the issue will be public', () => {
+    // The pre-filled link opens a blank issue, which skips the issue form and
+    // its "this is public" checkbox; the body has to say it instead.
+    expect(issueBody(FIELDS).startsWith('> **This issue will be public.**')).toBe(true);
+    expect(issueBody({}).startsWith('> **This issue will be public.**')).toBe(true);
+  });
+
   it('marks an empty description rather than leaving a blank section', () => {
     expect(issueBody({ ...FIELDS, description: '' })).toContain('no description given');
   });
@@ -67,6 +74,14 @@ describe('newIssueUrl', () => {
 
   it('tolerates a trailing slash on the repo url', () => {
     expect(newIssueUrl(`${REPO}/`, FIELDS)).toContain(`${REPO}/issues/new?`);
+  });
+
+  it('keeps the public notice when the body has to be trimmed', () => {
+    const huge = { ...FIELDS, description: 'x'.repeat(20000), breadcrumbs: 'y'.repeat(20000) };
+    const url = newIssueUrl(REPO, huge);
+    expect(url.length).toBeLessThanOrEqual(6000);
+    const body = new URL(url).searchParams.get('body');
+    expect(body.startsWith('> **This issue will be public.**')).toBe(true);
   });
 
   it('drops the trail first when the URL would be too long', () => {
