@@ -12,7 +12,7 @@ Handles the case where ebsd_ai is not installed gracefully.
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -20,7 +20,12 @@ logger = logging.getLogger(__name__)
 
 # Global references to avoid re-creating on every call
 _predictor = None
+# Run ids whose lazy load failed in this process; skipped by later lazy loads.
+_unloadable_runs: set = set()
 _store = None
+# Run id (folder name under checkpoints/) of the model held by ``_predictor``;
+# None when the predictor did not come from a stored run.
+_loaded_run_id: Optional[str] = None
 
 # Default training store location (relative to project)
 _STORE_DIR = Path(__file__).parent / "ml_training_data"
@@ -82,7 +87,7 @@ def load_ml_model(model_path: str) -> List[str]:
     FileNotFoundError
         If the checkpoint file doesn't exist.
     """
-    global _predictor
+    global _predictor, _loaded_run_id
 
     import sys
     ai_ml_path = str(Path(__file__).parent / "Ai_Ml")
@@ -95,6 +100,7 @@ def load_ml_model(model_path: str) -> List[str]:
         raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
 
     _predictor = PhasePredictor(model_path=model_path)
+    _loaded_run_id = None  # load_run() sets it when the file is a stored run
     logger.info(f"ML model loaded: {_predictor.phase_names}")
     return list(_predictor.phase_names)
 
@@ -120,6 +126,123 @@ def save_ml_model(save_path: str) -> None:
 def get_predictor():
     """Return the global PhasePredictor instance (or None)."""
     return _predictor
+
+
+# ---------------------------------------------------------------------------
+# Stored training runs: checkpoints/<run_id>/{best.pt,last.pt,meta.json}
+# ---------------------------------------------------------------------------
+
+LEGACY_RUN_ID = "legacy"
+
+
+def _checkpoints_root() -> Path:
+    return _STORE_DIR / "checkpoints"
+
+
+def _new_run_id() -> str:
+    """UTC timestamp, lexicographically sortable; suffix on a same-second clash."""
+    from datetime import datetime, timezone
+
+    base = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    root = _checkpoints_root()
+    run_id, n = base, 1
+    while (root / run_id).exists():
+        n += 1
+        run_id = f"{base}-{n}"
+    return run_id
+
+
+def _run_dir(run_id: str) -> Optional[Path]:
+    """Folder of a stored run, or None. ``legacy`` is the old flat layout."""
+    root = _checkpoints_root()
+    if run_id == LEGACY_RUN_ID:
+        return root if (root / "best.pt").is_file() else None
+    # Only ids that appear in the listing are accepted (no path traversal).
+    if run_id in {r["run_id"] for r in list_runs()}:
+        return root / run_id
+    return None
+
+
+def list_runs() -> List[Dict]:
+    """Stored training runs, newest first, each with its ``meta.json`` content.
+
+    A folder counts as a run only if it holds a ``best.pt`` or ``last.pt``
+    (a training that died before its first epoch leaves an empty folder).
+    A flat ``checkpoints/best.pt`` from before run folders is listed last as
+    run id ``legacy``.
+    """
+    import json
+
+    root = _checkpoints_root()
+    runs: List[Dict] = []
+    if root.is_dir():
+        for d in sorted((x for x in root.iterdir() if x.is_dir()),
+                        key=lambda x: x.name, reverse=True):
+            if not ((d / "best.pt").is_file() or (d / "last.pt").is_file()):
+                continue
+            meta: Dict = {}
+            mp = d / "meta.json"
+            if mp.is_file():
+                try:
+                    meta = json.loads(mp.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    logger.warning("Unreadable meta.json in %s", d)
+            runs.append({"run_id": d.name, **meta})
+        if (root / "best.pt").is_file():
+            legacy = {"run_id": LEGACY_RUN_ID, "legacy": True}
+            runs.append(legacy)
+    for r in runs:
+        r["loaded"] = r["run_id"] == _loaded_run_id and _predictor is not None
+    return runs
+
+
+def load_run(run_id: str) -> List[str]:
+    """Load a stored run (its best checkpoint) as the live predictor.
+
+    Raises
+    ------
+    FileNotFoundError
+        If no such run exists.
+    """
+    global _loaded_run_id
+    d = _run_dir(run_id)
+    if d is None:
+        raise FileNotFoundError(f"Unknown ML run: {run_id}")
+    ckpt = d / "best.pt"
+    if not ckpt.is_file():
+        ckpt = d / "last.pt"
+    names = load_ml_model(str(ckpt))
+    _loaded_run_id = run_id
+    return names
+
+
+def get_loaded_run_id() -> Optional[str]:
+    """Run id of the live predictor (None if it is not a stored run)."""
+    return _loaded_run_id if _predictor is not None else None
+
+
+def ensure_predictor_loaded() -> bool:
+    """Make sure a model is live, lazily loading the newest stored run.
+
+    Called when a request needs a model and the backend was restarted since
+    training. Returns True when a model is live afterwards. Never raises: a
+    broken newest run falls through to the next older one.
+    """
+    if _predictor is not None and getattr(_predictor, "has_model", False):
+        return True
+    if not is_ml_available():
+        return False
+    for run in list_runs():
+        if run["run_id"] in _unloadable_runs:
+            continue  # failed before; /status polls must not retry it every time
+        try:
+            load_run(run["run_id"])
+            logger.info("ML model lazily loaded from run %s", run["run_id"])
+            return True
+        except Exception as e:  # noqa: BLE001 - try the next older run
+            _unloadable_runs.add(run["run_id"])
+            logger.warning("Could not load ML run %s: %s", run["run_id"], e)
+    return False
 
 
 def get_store_stats() -> Dict:
@@ -227,8 +350,11 @@ def train_model(
     batch_size: int = 64,
     learning_rate: float = 0.001,
     progress_callback=None,
+    source_file: str = "",
+    sample_indices: Optional[Sequence[int]] = None,
+    sample_sources: Optional[Dict] = None,
 ) -> dict:
-    """Train a PhaseClassifier on the current training store.
+    """Train a PhaseClassifier on the training store (or a subset of it).
 
     Parameters
     ----------
@@ -240,24 +366,35 @@ def train_model(
         Peak learning rate for OneCycleLR.
     progress_callback : callable, optional
         Called as (epoch, total_epochs, train_loss, val_loss) -> None.
+    source_file : str, optional
+        File name of the EBSD data the samples came from (recorded in the
+        run's ``meta.json``; informational only).
+    sample_indices : sequence of int, optional
+        Global store indices to train on. None means the whole store. The
+        phase list of the model is taken from these samples only, so phases
+        that exist elsewhere in the store do not leak into the run.
+    sample_sources : dict, optional
+        Where the samples came from (written verbatim to ``meta.json`` as
+        ``sample_sources``; informational only).
 
     Returns
     -------
     dict
         Training result with keys: epochs_completed, best_epoch,
         best_val_loss, early_stopped, elapsed_seconds, phase_names,
-        checkpoint_path.
+        checkpoint_path, run_id. Checkpoints and a ``meta.json`` are written
+        to ``checkpoints/<run_id>/``.
 
     Raises
     ------
     ImportError
         If torch or ebsd_ai is not available.
     ValueError
-        If training store is empty or has < 2 phases.
+        If the training store (or the selected subset) is too small.
     RuntimeError
         If training fails for any reason.
     """
-    global _predictor
+    global _predictor, _loaded_run_id
 
     # Step 1: Verify dependencies with specific error messages
     import sys
@@ -296,15 +433,25 @@ def train_model(
         )
 
     stats = store.get_dataset_stats()
-    total = stats.get("total_samples", 0)
+    if sample_indices is not None:
+        sample_indices = [int(i) for i in sample_indices]
+        total = len(sample_indices)
+        what = "this request"
+    else:
+        total = stats.get("total_samples", 0)
+        what = "store"
     if total == 0:
         raise ValueError(
-            "Training store is empty. Add indexing results first "
-            "using 'Add from Indexing Results'."
+            "No training samples. "
+            + ("No pixel of this indexing result passed the CI threshold; "
+               "lower it, or include the existing store."
+               if sample_indices is not None else
+               "Training store is empty. Add indexing results first "
+               "using 'Add from Indexing Results'.")
         )
     if total < 4:
         raise ValueError(
-            f"Need at least 4 samples to train, store has {total}. "
+            f"Need at least 4 samples to train, {what} has {total}. "
             "Index more pixels (or lower the CI threshold) and add them first."
         )
 
@@ -317,9 +464,16 @@ def train_model(
                        batch_size, _bs, total)
         batch_size = _bs
 
-    phase_names = store.get_phase_names()
+    if sample_indices is not None:
+        # Phases of the selected samples only (store.get_phase_names() would
+        # list every phase ever added, including those of other results).
+        phase_names = sorted({
+            str(store.get_metadata(i)["confirmed_phase"]) for i in sample_indices
+        })
+    else:
+        phase_names = store.get_phase_names()
     n_phases = len(phase_names)
-    logger.info(f"Training on {total} samples, {n_phases} phase(s): {phase_names}")
+    logger.info(f"Training on {total} samples ({what}), {n_phases} phase(s): {phase_names}")
 
     if n_phases < 1:
         raise ValueError(
@@ -328,7 +482,7 @@ def train_model(
         )
 
     # Step 3: Create dataset
-    dataset = EBSDPhaseDataset(store=store, phase_names=phase_names)
+    dataset = EBSDPhaseDataset(store=store, phase_names=phase_names, indices=sample_indices)
     logger.info(f"Dataset created: {len(dataset)} samples, {dataset.num_phases} phases")
 
     # Step 4: Create model
@@ -342,7 +496,8 @@ def train_model(
     logger.info(f"Training device: {device}")
 
     # Step 5: Create trainer
-    checkpoint_dir = _STORE_DIR / "checkpoints"
+    run_id = _new_run_id()
+    checkpoint_dir = _checkpoints_root() / run_id
     training_config = TrainingConfig(
         epochs=epochs,
         batch_size=batch_size,
@@ -362,8 +517,20 @@ def train_model(
 
     # Step 7: Load best checkpoint as the active predictor
     best_path = checkpoint_dir / "best.pt"
+    _write_run_meta(
+        checkpoint_dir,
+        phase_names=phase_names,
+        source_file=source_file,
+        n_samples=total,
+        epochs_requested=epochs,
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        result=result,
+        sample_sources=sample_sources,
+    )
     if best_path.exists():
         _predictor = PhasePredictor(model_path=str(best_path))
+        _loaded_run_id = run_id
         logger.info(f"Best model loaded from {best_path}")
 
     return {
@@ -374,7 +541,44 @@ def train_model(
         "elapsed_seconds": result.elapsed_seconds,
         "phase_names": phase_names,
         "checkpoint_path": str(best_path),
+        "run_id": run_id,
     }
+
+
+def _write_run_meta(run_dir: Path, *, phase_names, source_file, n_samples,
+                    epochs_requested, learning_rate, batch_size, result,
+                    sample_sources=None) -> None:
+    """Write ``meta.json`` next to the checkpoints of one run.
+
+    ``n_samples`` is the number of samples the run actually trained on;
+    ``sample_sources`` says how many came from this request and how many
+    from samples that were already in the store."""
+    import json
+    from datetime import datetime, timezone
+
+    def _last(xs):
+        return float(xs[-1]) if xs else None
+
+    meta = {
+        "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "phase_names": [str(n) for n in phase_names],
+        "source_file": str(source_file or ""),
+        "n_samples": int(n_samples),
+        "sample_sources": sample_sources,
+        "epochs_requested": int(epochs_requested),
+        "epochs_completed": int(result.epochs_completed),
+        "learning_rate": float(learning_rate),
+        "batch_size": int(batch_size),
+        "final_train_loss": _last(result.train_losses),
+        "final_val_loss": _last(result.val_losses),
+        "best_val_loss": float(result.best_val_loss),
+        "best_epoch": int(result.best_epoch),
+        "early_stopped": bool(result.early_stopped),
+        # The Trainer reports losses only; accuracy is not computed.
+        "final_train_accuracy": None,
+        "final_val_accuracy": None,
+    }
+    (run_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def extract_denoising_pairs(

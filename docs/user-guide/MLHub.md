@@ -1,5 +1,14 @@
 # ML Hub
 
+> **Internal, experimental page.** The ML Hub is not part of the normal Orienta
+> workflow and is hidden by default: its sidebar entry and dashboard card appear
+> only when the backend is started with the environment variable
+> `ORIENTA_EXPERIMENTAL_ML=1`. Without it the page is not shown and every
+> `/api/ml` route answers 404, except `/api/ml/status`, which answers 200 with
+> just `{"enabled": false}`. It needs the optional machine-learning packages
+> and may change or be removed without notice. The rest of this page describes
+> the page as it behaves when it is switched on.
+
 ## What it does
 
 The ML Hub trains and runs a **machine-learning phase classifier** for EBSD
@@ -110,7 +119,7 @@ for prediction.
   previous run will poison later models — clear the store when in doubt.
 - **Prediction needs a loaded model.** If no model is trained/loaded, prediction
   returns an explanatory error per index rather than a phase.
-- **Some advanced ML sections are not part of this build.** The page contains
+- **Some advanced ML sections are not functional.** The page contains
   additional ideas (a pattern *denoiser* and a FAISS *embedding/indexing* method)
-  that are **not wired to a backend** and are hidden in the shipped UI. Only the
-  phase-classifier train/predict workflow described above is active.
+  that are **not wired to a backend**. Only the phase-classifier train/predict
+  workflow described above is active.

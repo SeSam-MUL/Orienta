@@ -34,8 +34,7 @@ export function phaseFileField(path) {
 /**
  * `[{name?, cif?, sht?, master?}]` — one entry per phase that brings a file.
  *
- * A path no method runs on (anything but .cif/.sht/.h5/.hdf5 — the file picker
- * allows any file when the method is "embedding") yields NO record. Nothing
+ * A path no method runs on (anything but .cif/.sht/.h5/.hdf5) yields NO record. Nothing
  * indexes `phases` positionally: the backend derives the per-method list and
  * the per-phase name source from the records themselves, so an omission here
  * cannot shift anything, while an EMPTY record can only be a phase nothing can

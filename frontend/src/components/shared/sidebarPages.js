@@ -52,3 +52,16 @@ export function pageShortcuts() {
   return SIDEBAR_PAGES.filter((p) => p.shortcut && !p.sectionKey)
     .map((p) => ({ id: p.id, shortcut: p.shortcut }));
 }
+
+/** Pages that exist only when the backend switches them on. */
+const EXPERIMENTAL_PAGE_IDS = ['mlhub'];
+
+/**
+ * The list the sidebar draws. An experimental page is dropped unless its
+ * switch is on, and a section header left with no page under it goes too
+ * (the ML Hub is the only entry under "Tools").
+ */
+export function visibleSidebarPages(pages, { mlHub = false } = {}) {
+  const shown = pages.filter((p) => !(EXPERIMENTAL_PAGE_IDS.includes(p.id) && !mlHub));
+  return shown.filter((p, i) => !p.sectionKey || (shown[i + 1] && !shown[i + 1].sectionKey));
+}

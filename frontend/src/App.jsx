@@ -26,6 +26,7 @@ import UpdateDialog from './components/common/UpdateDialog';
 import ProblemReportDialog from './components/common/ProblemReportDialog';
 import { captureScreenshot } from './services/screenshot';
 import useUpdateCheck from './hooks/useUpdateCheck';
+import { useMlHubState } from './hooks/useMlHubEnabled';
 import useDataStore from './stores/useDataStore';
 import useResultStore from './stores/useResultStore';
 import { colors, layout } from './theme/tokens';
@@ -160,6 +161,13 @@ class ErrorBoundary extends Component {
 function App() {
   const { t, i18n } = useTranslation(['nav', 'shell']);
   const [currentPage, setCurrentPage] = useState('dashboard');
+  // The ML Hub is internal: the backend answers 404 unless it was started with
+  // ORIENTA_EXPERIMENTAL_ML=1. Mount the page only on a 200, and leave it if
+  // the answer turns out to be "disabled" while it is the current page.
+  const mlHubState = useMlHubState();
+  useEffect(() => {
+    if (mlHubState === 'disabled' && currentPage === 'mlhub') setCurrentPage('dashboard');
+  }, [mlHubState, currentPage]);
   const [backendStatus, setBackendStatus] = useState('checking');
   // For the banner: has this page ever reached the backend, and how long ago
   // did it load? A cold start after installation takes 30-40 s; during that
@@ -479,7 +487,7 @@ function App() {
           >
             {t('shell:toolbar.edsColors')}
           </button>
-          {/* Phase library — the entry point (spec 2.10). A button and not a
+          {/* Phase library — the entry point. A button and not a
               dialog: the library is a place you go and stay, and the pages
               that USE phases link into it. Pulled forward into M0 because
               without it the page is unreachable for the user tests. */}
@@ -616,7 +624,7 @@ function App() {
           <div data-page="simulation" style={pageStyle('simulation')}><ErrorBoundary><Suspense fallback={<PageLoader />}><SimulationPage onNavigate={handleNavigate} isActive={currentPage === 'simulation'} /></Suspense></ErrorBoundary></div>
           <div data-page="database" style={pageStyle('database')}><ErrorBoundary><Suspense fallback={<PageLoader />}><DatabasePage variant="browser" onNavigate={handleNavigate} isActive={currentPage === 'database'} /></Suspense></ErrorBoundary></div>
           <div data-page="indexing" style={pageStyle('indexing')}><ErrorBoundary><Suspense fallback={<PageLoader />}><IndexingPage onNavigate={handleNavigate} isActive={currentPage === 'indexing'} /></Suspense></ErrorBoundary></div>
-          <div data-page="mlhub" style={pageStyle('mlhub')}><ErrorBoundary><Suspense fallback={<PageLoader />}><MLHubPage onNavigate={handleNavigate} isActive={currentPage === 'mlhub'} /></Suspense></ErrorBoundary></div>
+          <div data-page="mlhub" style={pageStyle('mlhub')}><ErrorBoundary>{mlHubState === 'enabled' && <Suspense fallback={<PageLoader />}><MLHubPage onNavigate={handleNavigate} isActive={currentPage === 'mlhub'} /></Suspense>}</ErrorBoundary></div>
           <div data-page="phasemap" style={pageStyle('phasemap')}><ErrorBoundary><Suspense fallback={<PageLoader />}><PhaseMapPage onNavigate={handleNavigate} isActive={currentPage === 'phasemap'} /></Suspense></ErrorBoundary></div>
           <div data-page="pcrefinement" style={pageStyle('pcrefinement')}><ErrorBoundary><Suspense fallback={<PageLoader />}><PCRefinement key={filePath || 'no-file'} onNavigate={handleNavigate} /></Suspense></ErrorBoundary></div>
           <div data-page="eds" style={pageStyle('eds')}><ErrorBoundary><Suspense fallback={<PageLoader />}><EDSPage onNavigate={handleNavigate} isActive={currentPage === 'eds'} /></Suspense></ErrorBoundary></div>

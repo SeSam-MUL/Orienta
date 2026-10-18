@@ -22,7 +22,11 @@
     "unknownModel": "未知模型",
     "loaded": "已加载",
     "accuracy": "{{value}}% 准确率",
-    "tooltip": "选择此模型作为预测的活动模型"
+    "tooltip": "选择此模型作为预测的活动模型",
+    "legacyName": "早期检查点(无元数据)",
+    "samples": "{{count}} 个样本",
+    "valLoss": "验证损失 {{value}}",
+    "loadFailed": "无法加载模型: {{message}}"
   },
   "results": {
     "columns": {
@@ -46,6 +50,7 @@
     "failedToLoad": "加载状态失败",
     "modelLoaded": "模型已加载",
     "modelLoadedPhases": "模型已加载 — {{count}} 个相: {{names}}",
+    "loadedRun": "已加载的运行: {{id}}",
     "noModelLoaded": "未加载模型",
     "mlModule": "ML 模块",
     "available": "可用",

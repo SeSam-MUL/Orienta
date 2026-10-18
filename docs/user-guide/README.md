@@ -48,7 +48,7 @@ workflow at the bottom of this page.
 | [Phase Refinement](Refinement.md) | Interactive phase-map editor for manually overriding wrong per-pixel phase assignments after multi-phase indexing. |
 | [Pole Figure](PoleFigure.md) | Plot the crystallographic texture of an indexing result (opened from the Phase Map page). |
 | [Analysis](Analysis.md) | Post-processing of an indexed scan — grain reconstruction, grain size, deformation, texture, and recrystallization (MTEX-equivalent). |
-| [ML Hub](MLHub.md) | Train and run a machine-learning phase classifier for EBSD patterns. |
+| [ML Hub](MLHub.md) | Internal, experimental page (hidden unless switched on): train and run a machine-learning phase classifier. |
 
 ## Crystal data & simulation
 

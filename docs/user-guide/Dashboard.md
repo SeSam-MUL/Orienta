@@ -11,7 +11,7 @@ application.
 The modules are arranged in two workflow-ordered rows:
 
 - **Data & Calibration** — EBSD Viewer, EDS, PC Refinement, Crystal Database.
-- **Indexing & Analysis** — Indexing, Phase Maps, EBSD Analysis, ML Hub, Batch,
+- **Indexing & Analysis** — Indexing, Phase Maps, EBSD Analysis, Batch,
   Refinement.
 
 Each card shows a short description, and a green **Ready** badge appears when the

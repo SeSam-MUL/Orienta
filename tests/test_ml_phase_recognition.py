@@ -11,18 +11,9 @@ import numpy as np
 import pytest
 import torch
 
-# `ebsd_ai` IS in this repository (Ai_Ml/, 79 tracked files, put on sys.path by
-# tests/conftest.py) — but `.gitignore`'s `data/` rule swallows
-# Ai_Ml/ebsd_ai/data/*.py, and ebsd_ai/__init__.py imports
-# ebsd_ai.data.dataset. So the package is complete in a working tree where
-# those files happen to sit on disk, and broken in every fresh clone, which is
-# where the suite went red with ModuleNotFoundError.
-#
-# The fix is a .gitignore negation plus committing those sources; it already
-# exists as ad7ffbc2 on the unmerged branch feature/ml-sht-simulation-training
-# and is NOT this skip's job. Until that lands, a clone should say "skipped,
-# and here is why" rather than fail. Where the files are present this is a
-# no-op and the tests run as before.
+# `ebsd_ai` is in this repository (Ai_Ml/, tracked, put on sys.path by
+# tests/conftest.py), so a fresh clone imports it. This probe only skips when
+# the package genuinely cannot be imported.
 #
 # try/except rather than importorskip: a failed attempt leaves a half-built
 # `ebsd_ai` in sys.modules, and the next module's importorskip then raises
@@ -32,9 +23,9 @@ try:                                            # pragma: no cover - import prob
     import ebsd_ai.data.dataset                 # noqa: F401
 except Exception:                               # ModuleNotFoundError, KeyError
     pytest.skip(
-        "Ai_Ml/ebsd_ai/data/*.py is excluded by the 'data/' rule in "
-        ".gitignore, so a fresh clone has no ebsd_ai.data.dataset; fix "
-        "pending as ad7ffbc2 on feature/ml-sht-simulation-training",
+        "ebsd_ai.data.dataset could not be imported (Ai_Ml/ is put on "
+        "sys.path by tests/conftest.py; check that the package and its "
+        "dependencies, e.g. torch, import cleanly)",
         allow_module_level=True,
     )
 

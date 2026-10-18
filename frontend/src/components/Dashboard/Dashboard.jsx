@@ -24,6 +24,7 @@ import CrystalBackground from './CrystalBackground';
 import VantaBackground from './VantaBackground';
 import WandererOverlay from './WandererOverlay';
 import { pageShortcuts } from '../shared/sidebarPages';
+import useMlHubEnabled from '../../hooks/useMlHubEnabled';
 
 // ---------------------------------------------------------------------------
 // Module card definitions — workflow order, unified accent color
@@ -473,6 +474,9 @@ export default function Dashboard({ onNavigate, onFileOpen }) {
   const isFileOpen = useDataStore(s => s.isFileOpen);
   const analysisLoaded = useResultStore(s => s.analysisLoaded);
   const hasIndexingResult = useResultStore(s => !!s.indexingResult);
+  // The ML Hub tile is shown only while the backend has the page switched on.
+  const mlHubEnabled = useMlHubEnabled();
+  const row2 = mlHubEnabled ? ROW2 : ROW2.filter((c) => c.id !== 'mlhub');
 
   const readyMap = {
     ebsdviewer: isFileOpen,
@@ -603,7 +607,7 @@ export default function Dashboard({ onNavigate, onFileOpen }) {
           {t('dashboard:sections.indexAnalysis')}
         </div>
 
-        <CardsRow cards={ROW2} onNavigate={onNavigate} readyMap={readyMap} />
+        <CardsRow cards={row2} onNavigate={onNavigate} readyMap={readyMap} />
 
         <RecentFilesSection onFileOpen={handleFileOpen} />
 

@@ -9,11 +9,9 @@ import numpy as np
 import pytest
 import torch
 
-# Same cause as tests/test_ml_phase_recognition.py: `.gitignore`'s `data/` rule
-# excludes Ai_Ml/ebsd_ai/data/*.py, which ebsd_ai/__init__.py imports, so a
-# fresh clone cannot import any ebsd_ai submodule — 19 red tests here that say
-# nothing about the code. Fix pending as ad7ffbc2 on the unmerged branch
-# feature/ml-sht-simulation-training. No-op where the files are on disk.
+# The Ai_Ml/ebsd_ai sources (including ebsd_ai/data/) are tracked, so a fresh
+# clone imports them. This probe only skips when the package genuinely cannot
+# be imported.
 #
 # try/except, not importorskip: the FIRST ml test module to attempt this
 # import leaves a half-built `ebsd_ai` behind (the package entry is gone from
@@ -25,9 +23,9 @@ try:                                            # pragma: no cover - import prob
     import ebsd_ai.data.dataset                 # noqa: F401
 except Exception:                               # ModuleNotFoundError, KeyError
     pytest.skip(
-        "Ai_Ml/ebsd_ai/data/*.py is excluded by the 'data/' rule in "
-        ".gitignore, so a fresh clone has no ebsd_ai.data.dataset; fix "
-        "pending as ad7ffbc2 on feature/ml-sht-simulation-training",
+        "ebsd_ai.data.dataset could not be imported (Ai_Ml/ is put on "
+        "sys.path by tests/conftest.py; check that the package and its "
+        "dependencies, e.g. torch, import cleanly)",
         allow_module_level=True,
     )
 
@@ -451,19 +449,3 @@ def test_add_denoising_pairs_to_store(tmp_path):
     count = add_denoising_pairs_to_store(pairs, store=store, detector_info=det)
     assert count == 5
     assert store.count_denoising_pairs() == 5
-
-
-# ---------------------------------------------------------------------------
-# Task 7: GUI Integration
-# ---------------------------------------------------------------------------
-
-
-def test_ml_hub_gui_has_denoising_section():
-    """MLHubPage has denoising training controls."""
-    try:
-        from gui.ml_hub_gui import MLHubPage, _DenoisingTrainingWorker
-        # Just verify the classes are importable
-        assert MLHubPage is not None
-        assert _DenoisingTrainingWorker is not None
-    except ImportError:
-        pytest.skip("PyQt5 not available")

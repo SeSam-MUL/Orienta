@@ -950,12 +950,18 @@ export const analysisApi = {
 export const mlApi = {
   status: () => api.get('/api/ml/status'),
   models: () => api.get('/api/ml/models'),
+  // Make a stored training run the live predictor (404 if the run is unknown).
+  loadModel: (runId) => api.post('/api/ml/models/load', { run_id: runId }),
   predict: (patternIndices) => api.post('/api/ml/predict', { pattern_indices: patternIndices }),
   // Train a phase classifier. Pass '__last_indexing__' to pull samples from
   // the most recent indexing result, then train. Returns { task_id }.
-  train: ({ trainingDataPath = '__last_indexing__', epochs = 50, batchSize = 32, ciThreshold = 0.3 } = {}) =>
+  // A run trains on the samples it adds; includeExistingStore=true also uses
+  // everything already in the store (older results, other files, other phases).
+  train: ({ trainingDataPath = '__last_indexing__', epochs = 50, batchSize = 32, learningRate = 0.001, ciThreshold = 0.3, includeExistingStore = false } = {}) =>
     api.post('/api/ml/train', {
-      training_data_path: trainingDataPath, epochs, batch_size: batchSize, ci_threshold: ciThreshold,
+      training_data_path: trainingDataPath, epochs, batch_size: batchSize,
+      learning_rate: learningRate, ci_threshold: ciThreshold,
+      include_existing_store: includeExistingStore,
     }),
   trainStatus: (taskId) => api.get(`/api/ml/train/${taskId}`),
   clearStore: () => api.post('/api/ml/store/clear'),
@@ -1097,7 +1103,7 @@ export const dbApi = {
 // the one read that needs it. A collection may be called "Al / Si", which no
 // path segment can carry, and a `{name}` route would shadow `/state`.
 /**
- * The phase library (spec §3). One request carries the whole index -- the
+ * The phase library. One request carries the whole index -- the
  * phases AND the numbers the facets count -- because two requests would let
  * the counts arrive before the list, which is the thing §2.8 forbids.
  *

@@ -9,9 +9,7 @@
     "dictionary": "Dictionary (template matching)",
     "dictionaryTip": "High accuracy — matches patterns against a pre-simulated dictionary",
     "spherical": "Spherical (EMSphinx)",
-    "sphericalTip": "CPU-based spherical indexing via EMSphInx (harmonic transforms). Needs EMsoft: installed through WSL on Windows, natively on Linux; not available on macOS.",
-    "embedding": "Embedding (neural network)",
-    "embeddingTip": "Experimental — uses a trained neural network for fast indexing"
+    "sphericalTip": "CPU-based spherical indexing via EMSphInx (harmonic transforms). Needs EMsoft: installed through WSL on Windows, natively on Linux; not available on macOS."
   },
   "dataset": {
     "label": "Dataset:",
@@ -34,7 +32,7 @@
   },
   "method": {
     "label": "Method:",
-    "tooltip": "Hough: Fast band detection\nDictionary: Template matching\nSpherical: EMSphinx SHT indexing\nEmbedding: ML-based FAISS"
+    "tooltip": "Hough: Fast band detection\nDictionary: Template matching\nSpherical: EMSphinx SHT indexing"
   },
   "phases": {
     "groupTitle": "Selected Phases",
@@ -241,15 +239,6 @@
     "cpuConfirmBodyWithEstimate": "Spherical indexing will run on the CPU. The results are identical to the GPU path. For {{n}} patterns expect roughly {{estimate}} on this machine, against about {{gpuEstimate}} on a CUDA GPU. The estimate is rough — a laptop CPU can be several times slower. Start anyway?",
     "cpuConfirmStart": "Start anyway",
     "cpuConfirmCancel": "Cancel"
-  },
-  "embedding": {
-    "groupTitle": "Embedding Parameters (Neural Network)",
-    "description": "Uses a trained encoder + FAISS index for fast ML-based indexing. Train the encoder in the ML Hub, then build a FAISS index.",
-    "encoder": "Encoder:",
-    "faissIndex": "FAISS Index:",
-    "notLoaded": "Not loaded",
-    "kNeighbors": "k (neighbors):",
-    "kNeighborsTip": "Number of nearest neighbors to retrieve from FAISS"
   },
   "preview": {
     "pixel": "Pixel [{{row}}, {{col}}]",

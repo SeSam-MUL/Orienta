@@ -22,7 +22,11 @@
     "unknownModel": "Unknown Model",
     "loaded": "Loaded",
     "accuracy": "{{value}}% acc",
-    "tooltip": "Select this model as the active model for prediction"
+    "tooltip": "Select this model as the active model for prediction",
+    "legacyName": "Earlier checkpoint (no metadata)",
+    "samples": "{{count}} samples",
+    "valLoss": "val loss {{value}}",
+    "loadFailed": "Could not load the model: {{message}}"
   },
   "results": {
     "columns": {
@@ -46,6 +50,7 @@
     "failedToLoad": "Failed to load status",
     "modelLoaded": "Model loaded",
     "modelLoadedPhases": "Model loaded — {{count}} phase(s): {{names}}",
+    "loadedRun": "Loaded run: {{id}}",
     "noModelLoaded": "No model loaded",
     "mlModule": "ML Module",
     "available": "Available",

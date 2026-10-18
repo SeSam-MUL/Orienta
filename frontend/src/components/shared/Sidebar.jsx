@@ -10,6 +10,8 @@ import { colors, layout } from '../../theme/tokens';
 import { useTheme } from '../../theme/ThemeProvider';
 import { Wordmark, BrandMark } from '../common/Brand';
 import { setLanguage, LANGUAGES } from '../../i18n';
+import useMlHubEnabled from '../../hooks/useMlHubEnabled';
+import { visibleSidebarPages } from './sidebarPages';
 import {
   LayoutDashboard, ScanLine, Atom, Crosshair, Gem, Cpu, HardDrive,
   Grid3x3, Map, BarChart3, Brain, Database, Settings,
@@ -133,6 +135,9 @@ export default function Sidebar({
   dataReady = {},
 }) {
   const [hovered, setHovered] = useState(null);
+  // The ML Hub entry exists only while the backend has it switched on.
+  const mlHub = useMlHubEnabled();
+  const shownPages = visibleSidebarPages(pages, { mlHub });
   const { theme, setTheme } = useTheme();
   const { t, i18n } = useTranslation(['nav', 'shell']);
 
@@ -198,7 +203,7 @@ export default function Sidebar({
 
       {/* Navigation buttons — grouped by workflow section */}
       <nav className="thin-scrollbar" style={S.nav} aria-label={t('shell:hoverTips.moduleNav')}>
-        {pages.map((page, idx) => {
+        {shownPages.map((page, idx) => {
           // Section headers
           if (page.sectionKey) {
             if (collapsed) return null; // hide section labels when collapsed

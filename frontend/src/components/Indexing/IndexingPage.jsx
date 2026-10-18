@@ -8,7 +8,7 @@
  *   Right : Scrollable controls panel
  *           - Dataset selector + data status
  *           - PC & Phase status summary
- *           - Method dropdown (Hough / Dictionary / Spherical / Embedding)
+ *           - Method dropdown (Hough / Dictionary / Spherical)
  *           - Multi-Phase Comparison group (collapsible)
  *           - Required Files group (auto-discovery + browse)
  *           - Method-specific parameter groups
@@ -1472,7 +1472,6 @@ export default function IndexingPage({ isActive }) {
     { value: 'hough',      label: t('methods.hough'),      tip: t('methods.houghTip') },
     { value: 'dictionary', label: t('methods.dictionary'), tip: t('methods.dictionaryTip') },
     { value: 'spherical',  label: t('methods.spherical'),  tip: t('methods.sphericalTip') },
-    { value: 'embedding',  label: t('methods.embedding'),  tip: t('methods.embeddingTip') },
   ], [t]);
 
   // Localised circular-mask dropdown options. Stored value stays the English
@@ -1705,11 +1704,6 @@ export default function IndexingPage({ isActive }) {
   // "emsphinx" is the original WSL EMSphInx path (CPU, slower, more battle-
   // tested in older builds).
   const [sphericalBackend, setSphericalBackend] = useState('spherical_gpu');
-
-  // --- Embedding params ---
-  const [encoderPath, setEncoderPath]   = useState('');
-  const [faissPath, setFaissPath]       = useState('');
-  const [embK, setEmbK]                 = useState(5);
 
   // --- Task / progress ---
   const [taskId, setTaskId]             = useState(null);
@@ -1973,84 +1967,45 @@ export default function IndexingPage({ isActive }) {
     }
   }, [isActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // M5: phase-map handoff from EDS page. When the user clicks
-  // "→ Send to Indexing" on the phase-map panel, useDataStore flips
-  // pendingPhaseMapIndexing=true and navigates here. We then:
-  //   1) switch to Hough (the only method that consumes CIFs directly)
-  //   2) auto-select every CIF that appears in the phase map and is
-  //      visible in the discovered phase files
-  //   3) install the combined classified-pixel mask as the indexing
-  //      mask so unclassified pixels are skipped entirely
-  //   4) consume the flag so a back-and-forth navigation doesn't keep
-  //      re-applying the prefill
-  // The dependency on `discoveredFiles.length` is the wait-gate — we
-  // can't match CIF filenames against an empty discovery list.
-  useEffect(() => {
-    if (!isActive) return;
-    if (!useDataStore.getState().pendingPhaseMapIndexing) return;
-    if (discoveredFiles.length === 0) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await edsApi.phaseMapIndexingConfig();
-        if (cancelled) return;
-        const cfg = res.data;
-        if (!cfg?.loaded) {
-          log(t('messages.handoffSkipped'));
-          useDataStore.getState().setPendingPhaseMapIndexing(false);
-          return;
-        }
-
-        // Hough is the only method whose discovery list contains CIFs;
-        // other methods would silently drop the auto-selection in
-        // handleTogglePath because the extension wouldn't match.
-        if (method !== 'hough') setMethod('hough');
-
-        const cifFiles = discoveredFiles.filter(
-          f => f.file_type === 'phase' || (f.filename || '').toLowerCase().endsWith('.cif')
-        );
-        const matchedFiles = cifFiles.filter(
-          f => cfg.cif_filenames.includes(f.filename)
-        );
-
-        if (matchedFiles.length > 0) {
-          setPhaseFiles(matchedFiles.map(f => f.path));
-          setPhases(matchedFiles);
-          setPhaseInfo(t('phases.phasesFromEdsPrefix', { list: matchedFiles.map(p => p.formula || p.filename).join(', ') }));
-          setFileStatus(t('phases.preselectedFromEds', { count: matchedFiles.length }));
-          setFileStatusColor(C.green);
-        }
-        const missing = cfg.cif_filenames.filter(
-          name => !cifFiles.some(f => f.filename === name)
-        );
-        if (missing.length > 0) {
-          log(t('messages.handoffMissing', { count: missing.length, list: missing.join(', ') }));
-        }
-
-        // Install the union mask + switch selection mode.
-        chemMaskRef.current = cfg.combined_mask;
-        setMaskOverlayData({
-          mask2d: new Uint8Array(cfg.combined_mask),
-          shape: [cfg.n_rows, cfg.n_cols],
-        });
-        setMaskInfo(
-          t('mask.fromEdsMap', { classified: cfg.n_classified, total: cfg.n_total, pct: cfg.percentage, matched: matchedFiles.length, phases: cfg.cif_filenames.length })
-        );
-        setPixelCount(t('selection.pixelCount', { n: cfg.n_classified, total: cfg.n_total, pct: cfg.percentage }));
-        setSelMode('mask');
-        setPhaseMapRoutingAvailable(true);
-        setUsePhaseMapRouting(true);
-        log(t('messages.handoffApplied', { phases: matchedFiles.length, pixels: cfg.n_classified }));
-      } catch (err) {
-        log(t('messages.handoffError', { error: err.response?.data?.detail || err.message }));
-      } finally {
-        useDataStore.getState().setPendingPhaseMapIndexing(false);
+  // Phase-map handoff from EDS page ("→ Send to Indexing"). The decision
+  // which files the run gets, for the method selected NOW, and the redo when
+  // the method is changed afterwards, live in usePhaseMapHandoff (testable
+  // without mounting this page); the page supplies what to do with the result.
+  usePhaseMapHandoff({
+    isActive, filePath, method, discoveredFiles, discoveredFor,
+    routingOn: usePhaseMapRouting,
+    hasSelection: () => phaseFilesRef.current.length > 0,
+    getDictContext: () => dictContextRef.current,
+    dictContextReady: detectorContextFor !== null && detectorContextFor === filePath,
+    onSelect: (matched, { dictPaths } = {}) => {
+      // Dictionary: ship exactly the dictionary the hand-off chose for each
+      // phase, not whichever the formula-based resolver would pick (twins).
+      if (dictPaths && Object.keys(dictPaths).length > 0) {
+        setSelectedDictPaths(prev => ({ ...prev, ...dictPaths }));
       }
-    })();
-
-    return () => { cancelled = true; };
-  }, [isActive, discoveredFiles, method]); // eslint-disable-line react-hooks/exhaustive-deps
+      setPhaseFiles(matched.map(f => f.path));
+      setPhases(matched);
+      setPhaseInfo(t('phases.phasesFromEdsPrefix', { list: matched.map(p => p.formula || p.filename).join(', ') }));
+      setFileStatus(t('phases.preselectedFromEds', { count: matched.length }));
+      setFileStatusColor(C.green);
+    },
+    onInstall: (cfg, matched) => {
+      // Install the union mask + switch selection mode.
+      chemMaskRef.current = cfg.combined_mask;
+      setMaskOverlayData({
+        mask2d: new Uint8Array(cfg.combined_mask),
+        shape: [cfg.n_rows, cfg.n_cols],
+      });
+      setMaskInfo(
+        t('mask.fromEdsMap', { classified: cfg.n_classified, total: cfg.n_total, pct: cfg.percentage, matched: matched.length, phases: cfg.cif_filenames.length })
+      );
+      setPixelCount(t('selection.pixelCount', { n: cfg.n_classified, total: cfg.n_total, pct: cfg.percentage }));
+      setSelMode('mask');
+      setPhaseMapRoutingAvailable(true);
+      setUsePhaseMapRouting(true);
+    },
+    log, t,
+  });
 
   // Cleanup poll interval on unmount to prevent memory leaks
   useEffect(() => {
@@ -2721,8 +2676,6 @@ export default function IndexingPage({ isActive }) {
       return { ...common, metric, keep_n: keepN, resolution, energy_kv: energy, compute_mode: computeMode };
     } else if (method === 'spherical') {
       return { ...common, ...sphericalParams() };
-    } else if (method === 'embedding') {
-      return { ...common, encoder_path: encoderPath, faiss_path: faissPath, k: embK };
     }
     return common;
   }
@@ -2853,14 +2806,6 @@ export default function IndexingPage({ isActive }) {
     browseFile(setFileInput, filters);
   }
 
-  function handleBrowseEncoder() {
-    browseFile(setEncoderPath, [{ name: 'PyTorch Model', extensions: ['pt', 'pth'] }]);
-  }
-
-  function handleBrowseFaiss() {
-    browseFile(setFaissPath, [{ name: 'Directory', extensions: [] }]);
-  }
-
 
   // ---------------------------------------------------------------------------
   // Chemistry filters
@@ -2917,7 +2862,6 @@ export default function IndexingPage({ isActive }) {
   const showHough      = method === 'hough';
   const showDict       = method === 'dictionary';
   const showSpherical  = method === 'spherical';
-  const showEmbedding  = method === 'embedding';
   // A blocking EDS pre-flight holds Start back only while the prior is actually
   // being sent; turning the EDS switch off releases it.
   // Start waits for the phase list -- but only while there is nothing else to
@@ -3491,39 +3435,6 @@ export default function IndexingPage({ isActive }) {
             dataLoaded={dataLoaded}
             nRows={nRows} nCols={nCols}
           />
-        </GroupBox>
-      )}
-
-      {/* Embedding Parameters */}
-      {showEmbedding && (
-        <GroupBox title={t('embedding.groupTitle')}>
-          <div style={{ fontSize: '9pt', color: C.text, marginBottom: 8, lineHeight: 1.5 }}>
-            {t('embedding.description')}
-          </div>
-          <Row gap={6} style={{ marginBottom: 4 }}>
-            <InlineLabel>{t('embedding.encoder')}</InlineLabel>
-            <span title={encoderPath || undefined} style={{ fontSize: '9pt', color: encoderPath ? C.green : C.red, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {encoderPath || t('embedding.notLoaded')}
-            </span>
-            <button onClick={handleBrowseEncoder} style={btnSmall(C.border, C.text)}>{t('common:browse')}</button>
-          </Row>
-          <Row gap={6} style={{ marginBottom: 4 }}>
-            <InlineLabel>{t('embedding.faissIndex')}</InlineLabel>
-            <span title={faissPath || undefined} style={{ fontSize: '9pt', color: faissPath ? C.green : C.red, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {faissPath || t('embedding.notLoaded')}
-            </span>
-            <button onClick={handleBrowseFaiss} style={btnSmall(C.border, C.text)}>{t('common:browse')}</button>
-          </Row>
-          <Row gap={6}>
-            <InlineLabel>{t('embedding.kNeighbors')}</InlineLabel>
-            <NumberInput
-              value={embK}
-              onChange={e => setEmbK(Number(e.target.value))}
-              min={1} max={50} step={1}
-              style={{ width: 56 }}
-              title={t('embedding.kNeighborsTip')}
-            />
-          </Row>
         </GroupBox>
       )}
 

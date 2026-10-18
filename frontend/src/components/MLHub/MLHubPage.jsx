@@ -51,10 +51,18 @@ function StatusPill({ active, label }) {
 function ModelCard({ model, isSelected, onClick }) {
   const { t } = useTranslation('mlhub');
   const [hovered, setHovered] = useState(false);
-  const name = model.name || model.model_name || t('mlhub:modelCard.unknownModel');
-  const loaded = model.loaded || model.is_loaded || false;
-  const type = model.type || model.model_type || '';
-  const accuracy = model.accuracy != null ? model.accuracy : null;
+  // A stored training run: { run_id, created, phase_names, n_samples,
+  // source_file, final_val_loss, loaded, legacy }.
+  const name = model.legacy
+    ? t('mlhub:modelCard.legacyName')
+    : (model.run_id || t('mlhub:modelCard.unknownModel'));
+  const loaded = model.loaded === true;
+  const type = [
+    Array.isArray(model.phase_names) ? model.phase_names.join(', ') : '',
+    model.n_samples != null ? t('mlhub:modelCard.samples', { count: model.n_samples }) : '',
+    model.source_file || '',
+  ].filter(Boolean).join(' · ');
+  const valLoss = typeof model.final_val_loss === 'number' ? model.final_val_loss : null;
   return (
     <button
       onClick={onClick}
@@ -87,9 +95,9 @@ function ModelCard({ model, isSelected, onClick }) {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
         {loaded && <StatusPill active label={t('mlhub:modelCard.loaded')} />}
-        {accuracy != null && (
+        {valLoss != null && (
           <span style={{ fontSize: '9pt', color: colors.cyan }}>
-            {t('mlhub:modelCard.accuracy', { value: (accuracy * 100).toFixed(1) })}
+            {t('mlhub:modelCard.valLoss', { value: valLoss.toFixed(4) })}
           </span>
         )}
       </div>
@@ -244,6 +252,7 @@ export default function MLHubPage({ onNavigate, isActive = false }) {
   const [models, setModels] = useState([]);
   const [modelsLoading, setModelsLoading] = useState(true);
   const [selectedModel, setSelectedModel] = useState(null);
+  const [modelLoadError, setModelLoadError] = useState(null);
   const [storeStats, setStoreStats] = useState(null);
 
   // Training tab state
@@ -296,17 +305,37 @@ export default function MLHubPage({ onNavigate, isActive = false }) {
     if (!isActive) return;
     refreshStatus();
 
+    refreshModels();
+  }, [isActive]);
+
+  // The run list comes from the stored training runs; the run that is live
+  // in the backend (lazily loaded after a restart, or just clicked) is selected.
+  const refreshModels = () => {
     setModelsLoading(true);
-    mlApi.models()
+    return mlApi.models()
       .then((res) => {
         const list = res.data?.models || res.data || [];
         const arr = Array.isArray(list) ? list : [];
         setModels(arr);
-        if (arr.length > 0) setSelectedModel(arr[0]);
+        setSelectedModel(arr.find((m) => m.loaded) || null);
       })
       .catch(() => setModels([]))
       .finally(() => setModelsLoading(false));
-  }, [isActive]);
+  };
+
+  const handleSelectModel = async (model) => {
+    setSelectedModel(model);
+    setModelLoadError(null);
+    try {
+      await mlApi.loadModel(model.run_id);
+      refreshStatus();
+      await refreshModels();
+    } catch (err) {
+      const message = err.response?.data?.detail || err.message || '';
+      setModelLoadError(t('mlhub:modelCard.loadFailed', { message }));
+      await refreshModels();
+    }
+  };
 
   const mlAvailable = status?.available || status?.ml_available || false;
   const modelLoaded = status?.model_loaded || status?.loaded || false;
@@ -331,7 +360,7 @@ export default function MLHubPage({ onNavigate, isActive = false }) {
     try {
       const { data } = await mlApi.train({
         trainingDataPath: '__last_indexing__',
-        epochs, batchSize, ciThreshold,
+        epochs, batchSize, learningRate, ciThreshold,
       });
       const taskId = data.task_id;
       let lastLogLen = 0;
@@ -362,6 +391,7 @@ export default function MLHubPage({ onNavigate, isActive = false }) {
           }));
           setTrainErr(false);
           refreshStatus();
+          refreshModels();
           break;
         }
         if (st.status === 'failed') {
@@ -468,6 +498,11 @@ export default function MLHubPage({ onNavigate, isActive = false }) {
                     ? t('mlhub:status.modelLoadedPhases', { count: status.phase_names.length, names: status.phase_names.join(', ') })
                     : t('mlhub:status.modelLoaded'))
                 : t('mlhub:status.noModelLoaded')}
+              {modelLoaded && status.loaded_run_id && (
+                <div style={{ fontSize: '9pt', fontWeight: 'normal', color: colors.textSecondary, marginTop: 2 }}>
+                  {t('mlhub:status.loadedRun', { id: status.loaded_run_id })}
+                </div>
+              )}
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -545,14 +580,17 @@ export default function MLHubPage({ onNavigate, isActive = false }) {
                 {t('mlhub:status.goToTraining')}
               </Button>
             </div>
-          ) : models.map((model, i) => (
+          ) : models.map((model) => (
             <ModelCard
-              key={model.name || model.model_name || i}
+              key={model.run_id}
               model={model}
-              isSelected={selectedModel === model}
-              onClick={() => setSelectedModel(model)}
+              isSelected={selectedModel?.run_id === model.run_id}
+              onClick={() => handleSelectModel(model)}
             />
           ))}
+          {modelLoadError && (
+            <Label style={{ color: colors.red, display: 'block', marginTop: 4 }}>{'⚠'} {modelLoadError}</Label>
+          )}
         </div>
       </GroupBox>
     </div>

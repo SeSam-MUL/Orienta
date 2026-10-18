@@ -22,7 +22,11 @@
     "unknownModel": "Unbekanntes Modell",
     "loaded": "Geladen",
     "accuracy": "{{value}} % Gen.",
-    "tooltip": "Dieses Modell als aktives Modell für die Vorhersage auswählen"
+    "tooltip": "Dieses Modell als aktives Modell für die Vorhersage auswählen",
+    "legacyName": "Früherer Checkpoint (ohne Metadaten)",
+    "samples": "{{count}} Proben",
+    "valLoss": "Val.-Verlust {{value}}",
+    "loadFailed": "Das Modell konnte nicht geladen werden: {{message}}"
   },
   "results": {
     "columns": {
@@ -46,6 +50,7 @@
     "failedToLoad": "Status konnte nicht geladen werden",
     "modelLoaded": "Modell geladen",
     "modelLoadedPhases": "Modell geladen — {{count}} Phase(n): {{names}}",
+    "loadedRun": "Geladener Lauf: {{id}}",
     "noModelLoaded": "Kein Modell geladen",
     "mlModule": "ML-Modul",
     "available": "Verfügbar",

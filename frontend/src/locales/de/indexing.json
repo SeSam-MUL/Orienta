@@ -9,9 +9,7 @@
     "dictionary": "Dictionary (Template-Matching)",
     "dictionaryTip": "Hohe Genauigkeit — gleicht Muster mit einem vorsimulierten Dictionary ab",
     "spherical": "Spherical (EMSphinx)",
-    "sphericalTip": "Sphärische Indizierung auf dem Prozessor über EMSphInx (harmonische Transformationen). Benötigt EMsoft: unter Windows über WSL installiert, unter Linux nativ; auf macOS nicht verfügbar.",
-    "embedding": "Embedding (neuronales Netz)",
-    "embeddingTip": "Experimentell — nutzt ein trainiertes neuronales Netz für schnelle Indizierung"
+    "sphericalTip": "Sphärische Indizierung auf dem Prozessor über EMSphInx (harmonische Transformationen). Benötigt EMsoft: unter Windows über WSL installiert, unter Linux nativ; auf macOS nicht verfügbar."
   },
   "dataset": {
     "label": "Datensatz:",
@@ -34,7 +32,7 @@
   },
   "method": {
     "label": "Methode:",
-    "tooltip": "Hough: Schnelle Banddetektion\nDictionary: Template-Matching\nSpherical: EMSphinx-SHT-Indizierung\nEmbedding: ML-basiert FAISS"
+    "tooltip": "Hough: Schnelle Banddetektion\nDictionary: Template-Matching\nSpherical: EMSphinx-SHT-Indizierung"
   },
   "phases": {
     "groupTitle": "Ausgewählte Phasen",
@@ -241,15 +239,6 @@
     "cpuConfirmBodyWithEstimate": "Die sphärische Indizierung läuft auf der CPU. Die Ergebnisse sind identisch zum GPU-Pfad. Für {{n}} Muster sind grob {{estimate}} auf diesem Rechner zu erwarten, gegenüber etwa {{gpuEstimate}} auf einer CUDA-GPU. Die Schätzung ist grob — eine Laptop-CPU kann um ein Vielfaches langsamer sein. Trotzdem starten?",
     "cpuConfirmStart": "Trotzdem starten",
     "cpuConfirmCancel": "Abbrechen"
-  },
-  "embedding": {
-    "groupTitle": "Embedding-Parameter (neuronales Netz)",
-    "description": "Nutzt einen trainierten Encoder + FAISS-Index für schnelle ML-basierte Indizierung. Encoder im ML-Hub trainieren, dann einen FAISS-Index aufbauen.",
-    "encoder": "Encoder:",
-    "faissIndex": "FAISS-Index:",
-    "notLoaded": "Nicht geladen",
-    "kNeighbors": "k (Nachbarn):",
-    "kNeighborsTip": "Anzahl der nächsten Nachbarn, die aus FAISS abgerufen werden"
   },
   "preview": {
     "pixel": "Pixel [{{row}}, {{col}}]",

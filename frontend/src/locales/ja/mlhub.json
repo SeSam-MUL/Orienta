@@ -22,7 +22,11 @@
     "unknownModel": "不明なモデル",
     "loaded": "読み込み済み",
     "accuracy": "{{value}}% 精度",
-    "tooltip": "このモデルを予測用のアクティブモデルとして選択"
+    "tooltip": "このモデルを予測用のアクティブモデルとして選択",
+    "legacyName": "以前のチェックポイント(メタデータなし)",
+    "samples": "{{count}} サンプル",
+    "valLoss": "検証損失 {{value}}",
+    "loadFailed": "モデルを読み込めませんでした: {{message}}"
   },
   "results": {
     "columns": {
@@ -46,6 +50,7 @@
     "failedToLoad": "ステータスの読み込みに失敗しました",
     "modelLoaded": "モデル読み込み済み",
     "modelLoadedPhases": "モデル読み込み済み — {{count}} 相: {{names}}",
+    "loadedRun": "読み込み済みの実行: {{id}}",
     "noModelLoaded": "モデルが読み込まれていません",
     "mlModule": "ML モジュール",
     "available": "利用可能",

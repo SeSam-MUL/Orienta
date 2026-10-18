@@ -49,7 +49,7 @@ describe('buildPhaseRecords', () => {
     // omission shifts nothing. An EMPTY record, on the other hand, is a phase
     // nothing can run: it would quietly reduce the phase count of the run, so
     // the backend refuses it (PhaseFiles._must_bring_a_file) and the page must
-    // not produce one. The picker accepts any file for method "embedding".
+    // not produce one.
     const records = buildPhaseRecords(['D:/db/Al.cif', 'D:/db/notes.txt']);
     expect(records).toEqual([{ cif: 'D:/db/Al.cif' }]);
   });

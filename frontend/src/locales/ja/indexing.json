@@ -9,9 +9,7 @@
     "dictionary": "Dictionary（テンプレートマッチング）",
     "dictionaryTip": "高精度 — 事前にシミュレートした Dictionary とパターンを照合します",
     "spherical": "Spherical（EMSphinx）",
-    "sphericalTip": "EMSphInx による CPU 球面インデックス（調和変換）。EMsoft が必要です：Windows では WSL 経由、Linux ではネイティブ、macOS では利用できません。",
-    "embedding": "Embedding（ニューラルネットワーク）",
-    "embeddingTip": "実験的 — 訓練済みニューラルネットワークで高速に指数付けします"
+    "sphericalTip": "EMSphInx による CPU 球面インデックス（調和変換）。EMsoft が必要です：Windows では WSL 経由、Linux ではネイティブ、macOS では利用できません。"
   },
   "dataset": {
     "label": "データセット:",
@@ -34,7 +32,7 @@
   },
   "method": {
     "label": "手法:",
-    "tooltip": "Hough: 高速バンド検出\nDictionary: テンプレートマッチング\nSpherical: EMSphinx SHT 指数付け\nEmbedding: ML ベース FAISS"
+    "tooltip": "Hough: 高速バンド検出\nDictionary: テンプレートマッチング\nSpherical: EMSphinx SHT 指数付け"
   },
   "phases": {
     "groupTitle": "選択した相",
@@ -241,15 +239,6 @@
     "cpuConfirmBodyWithEstimate": "球面指数付けを CPU で実行します。結果は GPU の場合と同一です。{{n}} 件のパターンで、このマシンでは概ね {{estimate}}、CUDA GPU では約 {{gpuEstimate}} かかります。これは粗い見積もりで、ノート PC の CPU では数倍遅くなることがあります。続行しますか?",
     "cpuConfirmStart": "それでも開始",
     "cpuConfirmCancel": "キャンセル"
-  },
-  "embedding": {
-    "groupTitle": "Embedding パラメータ（ニューラルネットワーク）",
-    "description": "訓練済みエンコーダ + FAISS インデックスで高速な ML ベース指数付けを行います。ML ハブでエンコーダを訓練し、FAISS インデックスを構築してください。",
-    "encoder": "エンコーダ:",
-    "faissIndex": "FAISS インデックス:",
-    "notLoaded": "未読み込み",
-    "kNeighbors": "k（近傍数）:",
-    "kNeighborsTip": "FAISS から取得する最近傍の数"
   },
   "preview": {
     "pixel": "ピクセル [{{row}}, {{col}}]",

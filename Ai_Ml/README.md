@@ -1,9 +1,11 @@
 # Ai_Ml — EBSD-AI (experimental ML module)
 
-> ⚠️ **Experimental / work in progress.** This module ships with Orienta but is
-> not yet complete; its API and results may change. It is currently exposed in
-> the app only through the **ML Hub** page (also work in progress) and is **not
-> required** for the core load → index → analyze workflow.
+> ⚠️ **Experimental / work in progress.** This module is part of the source tree
+> but is not part of the released application and is not yet complete; its API
+> and results may change. It is exposed in the app only through the internal
+> **ML Hub** page, which is hidden unless the backend is started with
+> `ORIENTA_EXPERIMENTAL_ML=1`, and it is **not required** for the core
+> load → index → analyze workflow.
 
 `Ai_Ml` is Orienta's machine-learning component for EBSD. It provides a
 neural-network **phase classifier** (predict the crystal phase of a pattern,
@@ -17,7 +19,8 @@ This is **part of the Orienta source tree** (the `Ai_Ml/` folder) — you do **n
 clone or install it as a separate project. Within Orienta it is driven from the
 application, not as a standalone tool:
 
-- **UI:** the *ML Hub* page (experimental).
+- **UI:** the *ML Hub* page (internal, experimental; shown only with
+  `ORIENTA_EXPERIMENTAL_ML=1`).
 - **Backend route:** [`backend/api/routes/ml_hub.py`](../backend/api/routes/ml_hub.py)
 - **Controller:** [`../ml_controller.py`](../ml_controller.py)
 

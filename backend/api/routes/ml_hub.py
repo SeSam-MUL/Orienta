@@ -9,15 +9,42 @@ Wraps ml_controller and Ai_Ml/ebsd_ai for:
 
 import asyncio
 import logging
+import os
 import uuid
+from pathlib import Path
 from collections import OrderedDict
 from typing import Optional, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+EXPERIMENTAL_ML_ENV = "ORIENTA_EXPERIMENTAL_ML"
+
+
+def require_experimental_ml() -> None:
+    """Router-level gate: the ML Hub is an internal, experimental page.
+
+    Unless the backend was started with ``ORIENTA_EXPERIMENTAL_ML=1`` every
+    ``/api/ml`` route answers 404 -- except ``/status``, which always answers
+    200 so the browser does not log a console error on every start: it says
+    ``{"enabled": false}`` when the switch is off (see ``ml_status``).
+    The variable is read on every request (not at import) so a test can flip it.
+    """
+    if not _experimental_ml_enabled():
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+def _experimental_ml_enabled() -> bool:
+    return os.environ.get(EXPERIMENTAL_ML_ENV, "").strip() == "1"
+
+
+# ``router`` is what main.py mounts. ``/status`` hangs on it directly (ungated);
+# every other route hangs on ``_gated``, which carries the 404 gate and is
+# included at the bottom of this file. Add new routes to ``_gated``.
 router = APIRouter()
+_gated = APIRouter(dependencies=[Depends(require_experimental_ml)])
 
 # Background training tasks: task_id -> {status, progress, epoch, total, log,
 # result, error}. Capped so a long session doesn't grow unbounded.
@@ -65,54 +92,89 @@ class PredictRequest(BaseModel):
     pattern_indices: List[int]
 
 
+class LoadModelRequest(BaseModel):
+    run_id: str
+
+
 class TrainRequest(BaseModel):
     training_data_path: str = "__last_indexing__"
     epochs: int = 50
     batch_size: int = 32
     learning_rate: float = 0.001
     ci_threshold: float = 0.3
+    # The store keeps every sample ever added. By default a run trains only on
+    # the samples THIS request adds (from the last indexing result); set this
+    # to also train on whatever was already in the store (other results, other
+    # files, other phases).
+    include_existing_store: bool = False
 
 
 @router.get("/status")
 async def ml_status():
-    """Check ML module availability and loaded model."""
+    """Is the ML Hub switched on, and (if so) module availability and loaded model.
+
+    Always 200. Switch off: ``{"enabled": false}`` and nothing else. Switch on:
+    the details below plus ``"enabled": true``.
+    """
+    if not _experimental_ml_enabled():
+        return {"enabled": False}
+    body = await _ml_status_details()
+    body["enabled"] = True
+    return body
+
+
+async def _ml_status_details():
     try:
-        from ml_controller import is_ml_available, get_store_stats, list_profiles, get_predictor
+        from ml_controller import (
+            is_ml_available, get_store_stats, get_predictor,
+            ensure_predictor_loaded, get_loaded_run_id,
+        )
         if not is_ml_available():
             return {"available": False, "reason": "ebsd_ai module not installed"}
         stats = get_store_stats()
-        profiles = list_profiles()
-        # model_loaded must reflect the LIVE predictor state, not whether
-        # a profile JSON exists on disk. Previous code returned
-        # `model_loaded = len(profiles) > 0` — true when profiles existed
-        # but no model was loaded into _predictor (so /predict would
-        # return None) AND false when a model was just trained but no
-        # profile saved yet (training only writes a checkpoint).
+        # After a backend restart the predictor is empty although trained
+        # runs are on disk: load the newest one now. Off the event loop: the
+        # first load imports torch and reads a checkpoint (seconds).
+        await asyncio.to_thread(ensure_predictor_loaded)
+        # model_loaded reflects the LIVE predictor, not what is on disk.
         predictor = get_predictor()
         model_loaded = bool(predictor is not None and getattr(predictor, 'has_model', False))
         return {
             "available": True,
             "model_loaded": model_loaded,
+            "loaded_run_id": get_loaded_run_id() if model_loaded else None,
             "store_stats": stats,
-            "profiles": profiles,
             "phase_names": list(getattr(predictor, 'phase_names', [])) if model_loaded else [],
         }
     except ImportError:
         return {"available": False, "reason": "ml_controller not available"}
 
 
-@router.get("/models")
+@_gated.get("/models")
 async def list_models():
-    """List available ML models/profiles."""
+    """List the stored training runs, newest first (``legacy`` last)."""
     try:
-        from ml_controller import list_profiles
-        profiles = list_profiles()
-        return {"models": profiles}
+        from ml_controller import list_runs
+        return {"models": list_runs()}
     except Exception as e:
         return {"models": [], "error": str(e)}
 
 
-@router.post("/predict")
+@_gated.post("/models/load")
+async def load_model(req: LoadModelRequest):
+    """Make a stored training run the live predictor."""
+    from ml_controller import load_run
+    try:
+        phase_names = await asyncio.to_thread(load_run, req.run_id)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Unknown model run: {req.run_id}")
+    except Exception as e:
+        logger.exception("ML model load failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"loaded_run_id": req.run_id, "phase_names": phase_names}
+
+
+@_gated.post("/predict")
 async def predict(req: PredictRequest):
     """Run prediction on the currently loaded EBSD signal's patterns.
 
@@ -120,7 +182,7 @@ async def predict(req: PredictRequest):
     """
     try:
         import numpy as np
-        from ml_controller import predict_single_pattern
+        from ml_controller import predict_single_pattern, ensure_predictor_loaded
         from backend.api.routes.ebsd_viewer import _get_active_signal
 
         signal = _get_active_signal()
@@ -132,7 +194,7 @@ async def predict(req: PredictRequest):
         # (the actual pattern). It silently returned None for every index
         # because _predictor was None. With a trained model it would
         # crash. Resolve the index → pattern here.
-        nav_shape = signal.data.shape[:2]
+        await asyncio.to_thread(ensure_predictor_loaded)  # after a restart: newest stored run
         all_patterns = signal.data.reshape(-1, *signal.data.shape[-2:])
         n_total = all_patterns.shape[0]
 
@@ -167,13 +229,16 @@ async def predict(req: PredictRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _add_last_indexing_to_store(req: "TrainRequest") -> int:
+def _add_last_indexing_to_store(req: "TrainRequest") -> tuple:
     """Extract samples from the last indexing result and add them to the
-    training store. Returns the number of samples added. Raises HTTPException
-    on missing data so the caller can surface a clean message."""
+    training store. Returns ``(n_before, added)``: the store size before this
+    call and the number of samples added, so the caller knows that the new
+    samples occupy store indices ``n_before .. n_before + added - 1``. Raises
+    HTTPException on missing data so the caller can surface a clean message."""
     import numpy as np
-    from ml_controller import add_indexing_results_to_store
+    from ml_controller import add_indexing_results_to_store, _ensure_store
     from backend.api.routes.indexing import get_last_indexing_result
+    from backend.api.routes.ebsd_viewer import _ebsd_file_path
 
     result = get_last_indexing_result()
     if result is None:
@@ -219,6 +284,8 @@ def _add_last_indexing_to_store(req: "TrainRequest") -> int:
           if result.confidence_scores is not None else np.zeros(patterns.shape[0]))
 
     n = min(len(patterns), len(phase_ids), len(orientations), len(ci))
+    store = _ensure_store()
+    n_before = len(store) if store is not None else 0
     added = add_indexing_results_to_store(
         patterns=patterns[:n],
         phase_ids=phase_ids[:n],
@@ -226,13 +293,14 @@ def _add_last_indexing_to_store(req: "TrainRequest") -> int:
         orientations=orientations[:n],
         confidence_scores=ci[:n],
         ci_threshold=req.ci_threshold,
+        source_file=Path(str(_ebsd_file_path)).name if _ebsd_file_path else "",
     )
     logger.info("Added %d samples to ML store from last indexing result (phases=%s, ci>=%.2f)",
                 added, phase_names, req.ci_threshold)
-    return added
+    return n_before, added
 
 
-@router.post("/train")
+@_gated.post("/train")
 async def train(req: TrainRequest):
     """Start model training in the background and return a task id to poll.
 
@@ -254,9 +322,40 @@ async def train(req: TrainRequest):
 
     def _work():
         try:
+            source_file = ""
+            sample_indices = None  # None = the whole store
+            n_before, added = 0, 0
             if req.training_data_path == '__last_indexing__':
-                added = _add_last_indexing_to_store(req)
+                n_before, added = _add_last_indexing_to_store(req)
+                from backend.api.routes.ebsd_viewer import _ebsd_file_path
+                source_file = Path(str(_ebsd_file_path)).name if _ebsd_file_path else ""
                 task["log"].append(f"Added {added} samples from last indexing result")
+                if not req.include_existing_store:
+                    # Train on this request's samples only; the store may hold
+                    # samples of other results, files and phases.
+                    sample_indices = list(range(n_before, n_before + added))
+                    if n_before:
+                        task["log"].append(
+                            f"Training on the {added} samples of this request; "
+                            f"{n_before} older samples in the store are left out"
+                        )
+                elif n_before:
+                    task["log"].append(
+                        f"Training on {added} samples of this request plus "
+                        f"{n_before} older samples from the store"
+                    )
+            else:
+                from ml_controller import _ensure_store
+                _store = _ensure_store()
+                n_before = len(_store) if _store is not None else 0
+            sample_sources = {
+                "this_request": {"n_samples": int(added), "source_file": source_file},
+                "existing_store": {
+                    "available": int(n_before),
+                    "included": sample_indices is None,
+                    "n_samples": int(n_before) if sample_indices is None else 0,
+                },
+            }
 
             def _cb(epoch, total, train_loss, val_loss):
                 task["epoch"] = int(epoch)
@@ -269,6 +368,8 @@ async def train(req: TrainRequest):
             res = train_model(
                 epochs=req.epochs, batch_size=req.batch_size,
                 learning_rate=req.learning_rate, progress_callback=_cb,
+                source_file=source_file, sample_indices=sample_indices,
+                sample_sources=sample_sources,
             )
             task["status"] = "completed"
             task["progress"] = 1.0
@@ -277,6 +378,7 @@ async def train(req: TrainRequest):
                 "best_val_loss": res.get("best_val_loss"),
                 "phase_names": list(res.get("phase_names", []) or []),
                 "checkpoint_path": str(res.get("checkpoint_path", "")),
+                "run_id": res.get("run_id"),
                 "elapsed_seconds": res.get("elapsed_seconds"),
             }
             task["log"].append("Training complete.")
@@ -295,7 +397,7 @@ async def train(req: TrainRequest):
     return {"task_id": task_id, "status": "running"}
 
 
-@router.get("/train/{task_id}")
+@_gated.get("/train/{task_id}")
 async def train_status(task_id: str):
     """Poll a background training task."""
     task = _train_tasks.get(task_id)
@@ -305,7 +407,7 @@ async def train_status(task_id: str):
     return {k: v for k, v in task.items() if k != "_future"}
 
 
-@router.post("/store/clear")
+@_gated.post("/store/clear")
 async def clear_store():
     """Delete all samples from the training store.
 
@@ -333,3 +435,7 @@ async def clear_store():
     except Exception as e:
         logger.exception("ML store clear failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Last, after every ``@_gated`` route above is registered.
+router.include_router(_gated)

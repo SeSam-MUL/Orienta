@@ -9,9 +9,7 @@
     "dictionary": "Dictionary（模板匹配）",
     "dictionaryTip": "高精度 — 将花样与预模拟的 Dictionary 进行匹配",
     "spherical": "Spherical（EMSphinx）",
-    "sphericalTip": "通过 EMSphInx 的 CPU 球面标定（谐波变换）。需要 EMsoft：Windows 上通过 WSL 安装，Linux 上原生安装；macOS 不可用。",
-    "embedding": "Embedding（神经网络）",
-    "embeddingTip": "实验性 — 使用训练好的神经网络进行快速标定"
+    "sphericalTip": "通过 EMSphInx 的 CPU 球面标定（谐波变换）。需要 EMsoft：Windows 上通过 WSL 安装，Linux 上原生安装；macOS 不可用。"
   },
   "dataset": {
     "label": "数据集:",
@@ -34,7 +32,7 @@
   },
   "method": {
     "label": "方法:",
-    "tooltip": "Hough: 快速条带检测\nDictionary: 模板匹配\nSpherical: EMSphinx SHT 标定\nEmbedding: 基于 ML 的 FAISS"
+    "tooltip": "Hough: 快速条带检测\nDictionary: 模板匹配\nSpherical: EMSphinx SHT 标定"
   },
   "phases": {
     "groupTitle": "已选相",
@@ -241,15 +239,6 @@
     "cpuConfirmBodyWithEstimate": "球面标定将在 CPU 上运行。结果与 GPU 路径完全相同。{{n}} 个花样在本机上大约需要 {{estimate}}，而在 CUDA GPU 上约为 {{gpuEstimate}}。这是粗略估计——笔记本 CPU 可能慢数倍。仍要开始吗?",
     "cpuConfirmStart": "仍要开始",
     "cpuConfirmCancel": "取消"
-  },
-  "embedding": {
-    "groupTitle": "Embedding 参数（神经网络）",
-    "description": "使用训练好的编码器 + FAISS 索引进行快速的基于 ML 的标定。在 ML 中心训练编码器，然后构建 FAISS 索引。",
-    "encoder": "编码器:",
-    "faissIndex": "FAISS 索引:",
-    "notLoaded": "未加载",
-    "kNeighbors": "k（近邻数）:",
-    "kNeighborsTip": "从 FAISS 检索的最近邻数量"
   },
   "preview": {
     "pixel": "像素 [{{row}}, {{col}}]",

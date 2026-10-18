@@ -55,7 +55,6 @@ Typical entry points:
    loaded files and any derived/processed datasets). The green/red **data status**
    line tells you whether EBSD data is loaded.
 2. Choose the **Method** dropdown: *Hough*, *Dictionary*, or *Spherical*.
-   (An *Embedding* option is listed but **not implemented** — see Tips.)
 
 ### 2. Add phases
 
@@ -154,9 +153,6 @@ Typical entry points:
   in-process **Spherical GPU** backend is fast; **EMSphInx** is a CPU path that
   runs inside **WSL** and is correspondingly slower. If GPU runs stall or throughput
   drops to near zero, a previous job may still hold VRAM — use **Release GPU**.
-- **The *Embedding / FAISS* method is not implemented** in this build. The option
-  appears in the dropdown but the backend rejects it with a clear error rather than
-  silently running Hough.
 - **Indexing a subset is position-safe.** Region and chemistry-mask selections are
   written back into the full-scan grid at their original coordinates, so partial
   results overlay correctly on the whole map.
