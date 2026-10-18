@@ -294,6 +294,45 @@
     "title": "EBSD-Daten werden geladen...",
     "subtitle": "Bei großen Dateien kann dies einen Moment dauern"
   },
+  "nlpar": {
+    "button": "NLPAR entrauschen",
+    "buttonTooltip": "Entrauscht die Muster mit NLPAR (nicht-lokale Mittelung). Dauert Sekunden bis Minuten; „Abbrechen“ lässt den Datensatz unverändert.",
+    "radiusLabel": "NLPAR-Radius:",
+    "radiusTooltip": "Wie viele Nachbarmuster in jeder Richtung zu einem Muster beitragen dürfen (1–3). Ein größerer Radius mittelt stärker und dauert länger.",
+    "tooltipTitle": "NLPAR – nicht-lokale Mustermittelung",
+    "tooltipP1": "Ersetzt jedes Muster durch einen gewichteten Mittelwert ähnlicher Muster aus seiner Nachbarschaft. Die Gewichte ergeben sich aus dem im Scan gemessenen Rauschen, die Stärke wird also automatisch gewählt.",
+    "tooltipP2": "Hilft, wenn die Indizierung der Rohmuster an einem sehr verrauschten Scan scheitert (kurze Belichtung, hoher Gain). Bei sauberen Scans bringt es nichts und kann einzelne Korngrenzen-Pixel verschlechtern. Die Frame-Mittelung ist die günstigere Alternative.",
+    "tooltipP3": "Zuerst ausführen, auf den Rohmustern und vor der Untergrundentfernung. Die entrauschten Muster verwenden alle Indizierungsmethoden und der Export.",
+    "tooltipP4": "Braucht Platz für eine zweite Kopie der Muster: große Scans vorher zuschneiden. Für hexagonale EDAX-Scans nicht verfügbar. Oxford-Dateien enthalten bereits herstellerbearbeitete Muster.",
+    "pipelineFirst": "In der empfohlenen Pipeline zuerst entrauschen (NLPAR)",
+    "pipelineFirstTooltip": "Führt NLPAR auf den Rohmustern vor den drei Schritten der empfohlenen Pipeline aus.",
+    "cancel": "Abbrechen",
+    "cancelling": "Wird abgebrochen ...",
+    "appliedTooltip": "NLPAR wurde auf diesen Datensatz schon angewendet. Wählen Sie den Originaldatensatz, um es erneut auszuführen.",
+    "advice": {
+      "basis": "Eine Schätzung aus einer Stichprobe dieses Datensatzes in seinem aktuellen Zustand, keine Vorhersage. Die Grenze wurde an wenigen gemessenen Testscans festgelegt (eine öffentliche Nickelserie, ein sauberer Nickelscan, eine feinkörnige Aluminiumlegierung) und mit Rohmustern; nach Untergrundentfernung oder CLAHE kann die Schätzung abweichen.",
+      "checking": "Es wird geprüft, ob NLPAR zu diesem Scan passt ...",
+      "recommended": "Empfohlen: Benachbarte Muster unterscheiden sich etwa so stark, wie das Rauschen allein erklärt (Stärke {{lam}}, unter {{threshold}}; Rauschpegel {{sigma}} Counts). NLPAR kann helfen, umso mehr, je verrauschter der Scan ist.",
+      "notRecommended": "Nicht empfohlen: Benachbarte Muster unterscheiden sich viel stärker, als das Rauschen erklärt (Stärke {{lam}}, ab {{threshold}}; Rauschpegel {{sigma}} Counts). Der Scan ist sauber oder seine Struktur fein, und NLPAR kann dann feine Strukturen wie Korngrenzen verwischen. Sie können es trotzdem ausführen, an einer Kopie.",
+      "applied": "Auf diesen Datensatz schon angewendet (Radius {{radius}}). Wählen Sie den Originaldatensatz, um es erneut auszuführen.",
+      "unavailable": "Keine Empfehlung für diesen Scan.",
+      "unavailableTooSmall": "Keine Empfehlung: Der Scan ist zu klein, um sein Rauschen zu beurteilen.",
+      "unavailableHex": "Keine Empfehlung: NLPAR unterstützt keine hexagonalen EDAX-Scans.",
+      "unavailableUniform": "Keine Empfehlung: Die Muster sind zu gleichförmig, um ihr Rauschen zu beurteilen."
+    },
+    "stage": {
+      "compile": "Numerische Kerne werden vorbereitet (nur beim ersten Lauf langsam) ...",
+      "max": "Scan wird gelesen ...",
+      "sigma": "Rauschpegel jedes Musters wird geschätzt ...",
+      "lambda": "Mittelungsstärke wird gewählt ...",
+      "filter": "Ähnliche Muster werden gemittelt ..."
+    },
+    "stepName": "NLPAR entrauschen (Radius {{radius}})",
+    "label": "NLPAR entrauschen",
+    "skippedInPipeline": "  NLPAR übersprungen: Es lässt sich auf diesem Datensatz nicht ausführen (siehe die Empfehlung unter dem Radiusfeld).",
+    "cancelled": "  ✗ NLPAR abgebrochen – Datensatz unverändert",
+    "result": "  NLPAR: Stärke {{lam}}, Rauschpegel {{sigma}}, Radius {{radius}}"
+  },
   "processingOverlay": {
     "subtitle": "Muster werden verarbeitet, bitte warten",
     "chunks": "{{percent}}% · {{done}}/{{total}} Chunks",

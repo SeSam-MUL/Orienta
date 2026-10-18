@@ -493,6 +493,13 @@ export const ebsdApi = {
   // Poll progress of a long processing op (CLAHE) by its request_id.
   processingProgress: (requestId) =>
     api.get(`/api/ebsd/processing-progress/${requestId}`),
+  // NLPAR denoising of the active dataset (backend/api/routes/nlpar.py). Progress
+  // is polled with processingProgress; cancel leaves the dataset unchanged.
+  nlpar: (radius = 3, requestId = null) =>
+    api.post('/api/ebsd/nlpar', { radius, ...(requestId ? { request_id: requestId } : {}) }),
+  // Will NLPAR help on the active dataset? (recommended / not_recommended / applied / unavailable)
+  nlparAdvice: () => api.get('/api/ebsd/nlpar/advice'),
+  nlparCancel: (requestId) => api.post(`/api/ebsd/nlpar/cancel/${encodeURIComponent(requestId)}`),
 
   // Circular detector signal mask
   getSignalMask: () => api.get('/api/ebsd/signal-mask'),

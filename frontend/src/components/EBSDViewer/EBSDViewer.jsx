@@ -26,6 +26,8 @@ import InfoTooltip from '../common/InfoTooltip';
 import { qualityProvenanceKey } from '../common/qualityProvenance';
 import LoadProgressModal from './LoadProgressModal';
 import CropPanel from './CropPanel';
+import { NlparControls, NlparOverlayExtras } from './NlparControls';
+import { useNlpar, nlparStepFor } from './useNlpar';
 import {
   boundsOf, bytesPerSample, maskForTool, selectionPointsFor,
 } from './navSelection';
@@ -267,6 +269,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const [filter, setFilter] = useState('None');
   const [interpolation, setInterpolation] = useState('nearest');
   const [processingBusy, setProcessingBusy] = useState(false);
+  const nlpar = useNlpar({ ebsdLoaded, activeDataset, busy: processingBusy });   // NLPAR: ./useNlpar.js
   const [processingLabel, setProcessingLabel] = useState('');
   // Granular progress for long ops (CLAHE) — {fraction, done, total, elapsed,
   // stage} or null when the op reports no chunk progress (→ plain spinner).
@@ -924,9 +927,13 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   }, []);
 
   const doProcessing = useCallback(async (op, label) => {
+    // Before the auto-copy: an op that would be refused must not leave a copy behind.
+    const nlparStep = nlparStepFor(op, nlpar);
+    if (nlparStep === 'refuse') return;
     setProcessingBusy(true);
     setProcessingLabel(label);
     log(`${label}...`);
+    if (nlparStep === 'skip') log(t('nlpar.skippedInPipeline'));
     // Helper: wrap any async step with start/done log lines + elapsed time
     // shown in the bottom log. Backend also emits its own logger.info per
     // step → these auto-stream to the DEV panel on the right via the
@@ -963,6 +970,10 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           log(t('logMessages.copiedTo', { name: newName }));
         }
       }
+      // NLPAR runs on the raw patterns, so as the first step; a cancel stops the whole op.
+      if (nlparStep === 'run') {
+        if (!(await nlpar.runStep({ timed, withProgress, log }))) { await fetchDatasets(); return; }
+      }
       if (op === 'bg_dyn') await timed(t('logMessages.stepBgDynamic'), () => ebsdApi.backgroundRemoval('dynamic'));
       else if (op === 'bg_stat') await timed(t('logMessages.stepBgStatic'), () => withProgress((rid) => ebsdApi.backgroundRemoval('static', null, null, rid), { phase: 'scan_average' }));
       else if (op === 'avg') await timed(t('logMessages.stepFrameAverage'), () => ebsdApi.frameAverage(windowSize));
@@ -991,7 +1002,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } finally {
       setProcessingBusy(false);
     }
-  }, [log, t, windowSize, claheKernel, row, col, deepcopy, activeDataset, overviewMode, fetchDatasets, loadPattern, fetchOverview, fetchAtlas]);
+  }, [log, t, nlpar, windowSize, claheKernel, row, col, deepcopy, activeDataset, overviewMode, fetchDatasets, loadPattern, fetchOverview, fetchAtlas]);
 
   // --- Keyboard shortcuts matching PyQt5 ---
   useEffect(() => {
@@ -2007,6 +2018,12 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             </Button>
           </div>
         </FormRow>
+
+        <NlparControls
+          nlpar={nlpar}
+          disabled={!ebsdLoaded || processingBusy}
+          onRun={() => doProcessing('nlpar', t('nlpar.label'))}
+        />
 
         {/* Autocontrast */}
         <Button
@@ -3177,6 +3194,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         }}>
           <div style={{ fontSize: 28, animation: 'spin 1.2s linear infinite' }}>&#9881;</div>
           <div style={{ fontSize: '12pt', color: colors.accent, fontWeight: 600 }}>{processingLabel}...</div>
+          <NlparOverlayExtras nlpar={nlpar} phase={procProgress?.phase} />
           {(() => {
             const pp = procProgress;
             const frac = typeof pp?.fraction === 'number' ? Math.max(0, Math.min(1, pp.fraction)) : null;

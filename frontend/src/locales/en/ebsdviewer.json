@@ -294,6 +294,45 @@
     "title": "Loading EBSD data...",
     "subtitle": "This may take a moment for large files"
   },
+  "nlpar": {
+    "button": "NLPAR denoise",
+    "buttonTooltip": "Denoise the patterns with NLPAR (non-local pattern averaging). Takes seconds to minutes; Cancel leaves the dataset unchanged.",
+    "radiusLabel": "NLPAR radius:",
+    "radiusTooltip": "How many neighbouring patterns, in each direction, may contribute to a pattern (1-3). A larger radius averages more and takes longer.",
+    "tooltipTitle": "NLPAR - non-local pattern averaging",
+    "tooltipP1": "Replaces each pattern by a weighted average of similar patterns in its neighbourhood. The weights follow from the noise measured in the scan itself, so the strength is set automatically.",
+    "tooltipP2": "It helps when indexing the raw patterns fails because the scan is very noisy (short exposure, high gain). On clean scans it brings nothing and can spoil a few grain-boundary pixels. Frame Average is the cheaper alternative.",
+    "tooltipP3": "Run it first, on the raw patterns, before background removal. The denoised patterns are used by every indexing method and by the export.",
+    "tooltipP4": "Needs room for a second copy of the patterns: crop large scans first. Not available for hexagonal EDAX scans. Oxford files already hold vendor-processed patterns.",
+    "pipelineFirst": "Denoise first (NLPAR) in the Recommended Pipeline",
+    "pipelineFirstTooltip": "Run NLPAR on the raw patterns before the three steps of the Recommended Pipeline.",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling...",
+    "appliedTooltip": "NLPAR has already been applied to this dataset. Select the original dataset to run it again.",
+    "advice": {
+      "basis": "An estimate from a sample of this dataset in its current state, not a prediction. The limit was set on a few measured test scans (a public nickel series, one clean nickel scan, one fine-grained aluminium alloy), using raw patterns; after background removal or CLAHE the estimate can differ.",
+      "checking": "Checking whether NLPAR suits this scan...",
+      "recommended": "Recommended: neighbouring patterns differ about as much as noise alone explains (strength {{lam}}, below {{threshold}}; noise level {{sigma}} counts). NLPAR may help, the more the noisier the scan.",
+      "notRecommended": "Not recommended: neighbouring patterns differ much more than noise explains (strength {{lam}}, {{threshold}} or more; noise level {{sigma}} counts). The scan is clean or its structure is fine, and NLPAR may then blur fine structures such as grain boundaries. You can still run it, on a copy.",
+      "applied": "Already applied to this dataset (radius {{radius}}). Select the original dataset to run it again.",
+      "unavailable": "No advice for this scan.",
+      "unavailableTooSmall": "No advice: the scan is too small to judge its noise.",
+      "unavailableHex": "No advice: NLPAR does not support hexagonal EDAX scans.",
+      "unavailableUniform": "No advice: the patterns are too uniform to judge their noise."
+    },
+    "stage": {
+      "compile": "Preparing the numerical kernels (slow on the first run only)...",
+      "max": "Reading the scan...",
+      "sigma": "Estimating the noise level of every pattern...",
+      "lambda": "Choosing the averaging strength...",
+      "filter": "Averaging similar patterns..."
+    },
+    "stepName": "NLPAR denoise (radius {{radius}})",
+    "label": "NLPAR denoise",
+    "skippedInPipeline": "  NLPAR skipped: it cannot run on this dataset (see the advice under the radius field).",
+    "cancelled": "  ✗ NLPAR cancelled - dataset unchanged",
+    "result": "  NLPAR: strength {{lam}}, noise level {{sigma}}, radius {{radius}}"
+  },
   "processingOverlay": {
     "subtitle": "Processing patterns, please wait",
     "chunks": "{{percent}}% · {{done}}/{{total}} chunks",

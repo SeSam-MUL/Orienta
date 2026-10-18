@@ -294,6 +294,45 @@
     "title": "正在加载 EBSD 数据...",
     "subtitle": "大文件可能需要片刻"
   },
+  "nlpar": {
+    "button": "NLPAR 去噪",
+    "buttonTooltip": "用 NLPAR（非局部花样平均）对花样去噪。需要几秒到几分钟；取消后数据集保持不变。",
+    "radiusLabel": "NLPAR 半径：",
+    "radiusTooltip": "每个方向上最多有多少个相邻花样参与平均（1–3）。半径越大，平均越强，耗时也越长。",
+    "tooltipTitle": "NLPAR - 非局部花样平均",
+    "tooltipP1": "把每个花样替换为其邻域内相似花样的加权平均。权重由扫描本身测得的噪声决定，因此强度是自动设定的。",
+    "tooltipP2": "当扫描噪声很大（曝光时间短、增益高）导致原始花样标定失败时有帮助；对干净的扫描没有帮助，还可能使少数晶界像素变差。较省时的替代方法是帧平均。",
+    "tooltipP3": "请在背景去除之前、对原始花样最先运行。去噪后的花样会被所有标定方法和导出功能使用。",
+    "tooltipP4": "需要有空间存放花样的第二份副本：大扫描请先裁剪。不支持 EDAX 六方网格扫描。Oxford 文件中的花样已经过厂商处理。",
+    "pipelineFirst": "在推荐流程中先去噪（NLPAR）",
+    "pipelineFirstTooltip": "在推荐流程的三个步骤之前，先对原始花样运行 NLPAR。",
+    "cancel": "取消",
+    "cancelling": "正在取消...",
+    "appliedTooltip": "此数据集已应用过 NLPAR。要再次运行，请选择原始数据集。",
+    "advice": {
+      "basis": "这是根据此数据集当前状态的一个样本做出的估计，不是预测。判定界限依据少数实测的测试扫描（一组公开的镍扫描、一个干净的镍扫描、一个细晶铝合金）并使用原始花样设定；经背景去除或 CLAHE 之后，估计可能不同。",
+      "checking": "正在检查 NLPAR 是否适合此扫描...",
+      "recommended": "推荐：相邻花样之间的差异大致只能由噪声解释（强度 {{lam}}，低于 {{threshold}}；噪声水平 {{sigma}} 计数）。NLPAR 可能有帮助，扫描噪声越大，效果越明显。",
+      "notRecommended": "不推荐：相邻花样之间的差异远大于噪声所能解释的范围（强度 {{lam}}，不低于 {{threshold}}；噪声水平 {{sigma}} 计数）。扫描较干净或结构较细，NLPAR 可能会模糊晶界等细小结构。仍可在副本上运行。",
+      "applied": "此数据集已应用过（半径 {{radius}}）。要再次运行，请选择原始数据集。",
+      "unavailable": "此扫描没有建议。",
+      "unavailableTooSmall": "无建议：扫描太小，无法判断噪声。",
+      "unavailableHex": "无建议：NLPAR 不支持 EDAX 六方网格扫描。",
+      "unavailableUniform": "无建议：花样过于均匀，无法判断噪声。"
+    },
+    "stage": {
+      "compile": "正在准备数值计算内核（仅首次运行较慢）...",
+      "max": "正在读取扫描数据...",
+      "sigma": "正在估计每个花样的噪声水平...",
+      "lambda": "正在选择平均强度...",
+      "filter": "正在平均相似花样..."
+    },
+    "stepName": "NLPAR 去噪（半径 {{radius}}）",
+    "label": "NLPAR 去噪",
+    "skippedInPipeline": "  已跳过 NLPAR：无法在此数据集上运行（见半径输入框下方的建议）。",
+    "cancelled": "  ✗ NLPAR 已取消 - 数据集保持不变",
+    "result": "  NLPAR：强度 {{lam}}，噪声水平 {{sigma}}，半径 {{radius}}"
+  },
   "processingOverlay": {
     "subtitle": "正在处理花样，请稍候",
     "chunks": "{{percent}}% · {{done}}/{{total}} 块",

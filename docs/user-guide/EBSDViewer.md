@@ -97,7 +97,8 @@ result is recorded relative to the original scan, not to the intermediate.
     Static** (background removal), **Frame Average** (with a window-size input),
     **Auto-Contrast**, or **CLAHE** (adaptive histogram equalisation, with a
     kernel-size input). Use **Recommended Pipeline** to run Static BG → Dynamic BG
-    → CLAHE in one click.
+    → CLAHE in one click. For very noisy scans there is also **NLPAR denoise**
+    (see below).
 13. With **Auto-deepcopy** ticked (default), each destructive step is applied to a
     new derived dataset (e.g. `dataset_bg_dyn`) so your original stays intact. The
     **Datasets** list lets you switch between the original and derived versions,
@@ -135,6 +136,73 @@ result is recorded relative to the original scan, not to the intermediate.
   - **Save crop…** writes the active cut-out as a standalone measurement file
     (patterns in their current, processed state, plus EDS, Band Contrast and
     electron images), which loads again like any other file.
+
+### Denoise a very noisy scan (NLPAR)
+
+**NLPAR denoise** replaces every pattern by a weighted average of similar
+patterns in its neighbourhood (non-local pattern averaging, as implemented in
+PyEBSDIndex). Patterns of the same grain are averaged, patterns across a grain
+boundary get little weight, and the weights come from the noise measured in the
+scan itself, so there is no strength to set. The one setting is the **NLPAR
+radius** (1–3): how many neighbouring patterns in each direction may contribute.
+A larger radius averages more and takes longer.
+
+- **When it helps.** When indexing the raw patterns fails because the scan is
+  very noisy (short exposure, high detector gain). On a scan that already indexes
+  well it brings nothing and can spoil grain-boundary pixels: on a clean nickel
+  scan, dictionary indexing lost 1 percentage point of pixels within 2° of the
+  reference, all of them at grain boundaries. **Frame Average** is the cheaper
+  alternative.
+- **Radius.** 3 (the default) was the best on the very noisy scans below. If the
+  grains or particles of your sample are only a few pixels across, the 7 × 7
+  window reaches across their boundaries; use 1 or 2 there (on an aluminium alloy
+  with fine grains, Hough indexing lost 0.7 points at radius 1 and 1.9 at radius
+  3).
+- **Advice.** Under the radius field the panel says whether NLPAR is likely to
+  help on the active scan. It estimates, from about 1000 patterns (about a second
+  at most), how much of the difference between neighbouring patterns is noise:
+  where that is most of it ("Recommended"), NLPAR may help; where the
+  neighbours differ much more than noise explains ("Not recommended": a clean
+  scan, or structure finer than the search window), it may blur fine structures
+  such as grain boundaries. The numbers are shown (strength, noise level in
+  counts). It is an estimate, not a prediction: the limit (a strength of 1.7) was
+  set on a few measured test scans (the nickel series below, a clean nickel scan
+  that lost 1.0 points and an aluminium alloy with fine grains that lost 1.9 to
+  6.6 points, both "not recommended"), using raw patterns. The estimate is made on
+  the dataset as it is now, so after background removal or CLAHE it can differ.
+  You can still run NLPAR, on a copy. A dataset that NLPAR has already been applied to
+  says so and its button is disabled, as it is for a scan NLPAR cannot run on
+  (too small, hexagonal, uniform); choose the original dataset to run it again.
+  The Recommended Pipeline's "denoise first" is skipped (with a log line) in
+  those cases.
+- **Order.** Run it first, on the raw patterns, before any background removal:
+  the noise estimate and the protection of saturated pixels assume raw detector
+  counts. Tick **Denoise first (NLPAR) in the Recommended Pipeline** to have the
+  pipeline do this for you; it is off by default. Oxford files hold patterns that
+  the acquisition software has already processed; NLPAR on those has not been
+  characterised.
+- **Where the result goes.** Like the other steps it is applied to a derived
+  dataset when **Auto-deepcopy** is ticked (`<name>_nlpar`), and every indexing
+  method and the export use the denoised patterns. A dataset that was already
+  denoised is refused, so the same noise is not averaged away twice.
+- **Size limit.** The denoised patterns are a second copy in memory, so a scan
+  that is too large for that is refused with a message; crop it first (see
+  *Crop to a selection*). EDAX hexagonal-grid scans are not supported. It runs
+  on the CPU.
+- **Measured.** Public nickel gain series (Anes et al., Zenodo 7497682; 29 800
+  patterns of 60 × 60 px per scan), dictionary indexing on the GPU against the
+  orientations of the 0 dB scan of the same area, share of pixels within 2°:
+
+  | noise | raw | NLPAR, radius 3 | radius 2 | radius 1 |
+  |---|---|---|---|---|
+  | 17 dB | 0.68 | 0.85 | 0.85 | 0.83 |
+  | 24 dB | 0.09 | 0.80 | 0.77 | 0.64 |
+
+  The whole map takes about 2 s on a 24-thread CPU (60 × 60 patterns, radius 3);
+  expect longer on a laptop.
+- **Cancel.** The **Cancel** button in the progress overlay stops the run at the
+  next block of rows and leaves the dataset exactly as it was. The first run in a
+  session spends some seconds preparing the numerical kernels; the overlay says so.
 
 ## Tips & notes
 
