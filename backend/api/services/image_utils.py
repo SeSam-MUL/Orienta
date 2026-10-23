@@ -69,6 +69,23 @@ def array_to_base64_raw(arr: np.ndarray) -> str:
     # from signal.data[row, col]); PIL.Image.fromarray needs the numpy
     # __array_interface__ which dask.array.Array does not implement.
     arr = np.asarray(arr)
+    if arr.ndim == 2 and arr.dtype.kind == "f" and np.isnan(arr).any():
+        # NaN marks "no data here" (an electron image that does not reach the
+        # whole EBSD map): scale on the real pixels only and write the rest
+        # fully transparent, so the gap shows the layers beneath it.
+        valid = np.isfinite(arr)
+        if valid.any():
+            lo = float(arr[valid].min())
+            grey = _normalize_to_u8(np.where(valid, arr, lo))
+        else:
+            grey = np.zeros(arr.shape, dtype=np.uint8)
+        grey[~valid] = 0
+        alpha = np.where(valid, 255, 0).astype(np.uint8)
+        img = Image.fromarray(np.stack([grey, alpha], axis=-1))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode("utf-8")
     arr = _normalize_to_u8(arr)
     img = Image.fromarray(arr)
     buf = io.BytesIO()

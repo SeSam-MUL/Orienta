@@ -8,11 +8,13 @@
  * a stale bitmap after every merge, split or paint. What this needs is smaller
  * than that: pick a background, set an opacity.
  *
- * Alignment is by field of view, not by resampling. Measured on a real file:
- * the scan raster is 0.5 um x 120 px = 60.00 um and the electron image is
- * 0.0590 um x 1024 px = 60.39 um — the same field, so drawing both with
- * `objectFit: contain` in one box registers them. `fovRatio` below reports that
- * agreement so the UI can warn instead of quietly showing a shifted overlay.
+ * Alignment is by field of view, not by resampling. The BACKEND hands an
+ * electron image back already cut to the part of the specimen the map covers
+ * (`/api/h5/electron/<name>?scope=dataset`, header `Relative Offset/Size`), so
+ * drawing it with `objectFit: contain` in the map's box registers the two.
+ * Before that cut, a map taken inside a wider SE field was squeezed 1.1-5.7x.
+ * `fovRatio` below checks the returned image against the map (about 1.0 once
+ * registered) so the UI still warns where the cut could not be made.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -54,6 +56,9 @@ export default function useMapBackground({ displayMode = 'at_pct', datasetKey } 
   const [opacity, setOpacity] = useState(0.5);
   const [image, setImage] = useState(null);       // base64 png
   const [shape, setShape] = useState(null);       // [rows, cols] of the background
+  // The backend's registration verdict for an electron image: whether it was
+  // cut to the map by the file's header geometry (see CropWarningChip).
+  const [crop, setCrop] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const token = useRef(0);
@@ -61,7 +66,10 @@ export default function useMapBackground({ displayMode = 'at_pct', datasetKey } 
   const parsed = useMemo(() => parseBackgroundId(backgroundId), [backgroundId]);
 
   useEffect(() => {
-    if (!parsed) { setImage(null); setShape(null); setError(null); return undefined; }
+    if (!parsed) {
+      setImage(null); setShape(null); setCrop(null); setError(null);
+      return undefined;
+    }
     const mine = ++token.current;
     setLoading(true); setError(null);
     const req = parsed.kind === 'element'
@@ -73,10 +81,11 @@ export default function useMapBackground({ displayMode = 'at_pct', datasetKey } 
       if (mine !== token.current) return;
       setImage(res.data?.image || null);
       setShape(res.data?.shape || null);
+      setCrop(res.data?.crop || null);
     }).catch((e) => {
       if (mine !== token.current) return;
       setError(e.response?.data?.detail || String(e));
-      setImage(null); setShape(null);
+      setImage(null); setShape(null); setCrop(null);
     }).finally(() => {
       if (mine === token.current) setLoading(false);
     });
@@ -87,7 +96,7 @@ export default function useMapBackground({ displayMode = 'at_pct', datasetKey } 
 
   return {
     backgroundId, setBackgroundId, opacity, setOpacity,
-    image, shape, error, loading, clear,
+    image, shape, crop, error, loading, clear,
     isSet: !!parsed,
   };
 }

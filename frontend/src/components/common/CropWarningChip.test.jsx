@@ -12,6 +12,11 @@ afterEach(cleanup);
 const REFUSED = { cropped: false, exact: false, reason: 'no step size' };
 const CLAMPED = { cropped: true, exact: false, reason: 'clamped at the edge' };
 const CLEAN = { cropped: true, exact: true, reason: null };
+// Delivered whole as before, because the file's geometry could not place it.
+const UNVERIFIED = { cropped: true, exact: true, reason: 'no Relative Offset',
+                     registration: 'unverified' };
+const REGISTERED = { cropped: true, exact: true, reason: null,
+                     registration: 'registered' };
 
 describe('isCropWarning', () => {
   it('is true for a refusal AND for a clamped cut-out', () => {
@@ -20,8 +25,13 @@ describe('isCropWarning', () => {
     expect(isCropWarning(CLAMPED)).toBe(true);
   });
 
+  it('is true for an image the header could not register, crop or no crop', () => {
+    expect(isCropWarning(UNVERIFIED)).toBe(true);
+  });
+
   it('is false for a faithful cut-out, and for no verdict at all', () => {
     expect(isCropWarning(CLEAN)).toBe(false);
+    expect(isCropWarning(REGISTERED)).toBe(false);
     expect(isCropWarning(undefined)).toBe(false);
     expect(isCropWarning(null)).toBe(false);
   });
@@ -56,6 +66,24 @@ describe('CropWarningChip', () => {
     const el = screen.getByRole('status');
     expect(el.textContent).toMatch(/clipped at its own edge/i);
     expect(el.textContent).not.toMatch(/could not follow the crop/i);
+  });
+
+  it('says the alignment is unverified, in its own words', () => {
+    render(<CropWarningChip status={UNVERIFIED} />);
+    const el = screen.getByRole('status');
+    expect(el.textContent).toMatch(/could not verify that this image lines up/i);
+    expect(el.textContent).not.toMatch(/could not follow the crop|clipped/i);
+    expect(el.getAttribute('title')).toBe('no Relative Offset');
+  });
+
+  it('a refusal still wins over the unverified wording', () => {
+    render(<CropWarningChip status={{ ...REFUSED, registration: 'unverified' }} />);
+    expect(screen.getByRole('status').textContent).toMatch(/could not follow the crop/i);
+  });
+
+  it('renders nothing for a registered image', () => {
+    const { container } = render(<CropWarningChip status={REGISTERED} />);
+    expect(container.innerHTML).toBe('');
   });
 
   it('renders nothing for a layer that did follow the crop', () => {

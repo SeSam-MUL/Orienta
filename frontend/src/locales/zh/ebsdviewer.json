@@ -201,6 +201,7 @@
     "notMaterialised": "裁剪保持惰加载——内存不足",
     "electronImageNotCropped": "此图像无法跟随裁剪，因此显示为完整图像。",
     "electronImageClamped": "此图像在自身边缘处被截断，已不再与裁剪区域的形状一致。",
+    "electronImageUnregistered": "无法确认此图像与图谱对齐（文件中的几何信息缺失或自相矛盾）——图像被拉伸铺满整个图谱。",
     "saveCrop": "保存裁剪…",
     "saveCropWorking": "正在保存…",
     "saveCropHint": "将此裁剪写入单独文件 — 保存已处理的花样，EDS 图和电子图像也同步裁剪。",

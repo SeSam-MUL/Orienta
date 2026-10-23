@@ -279,8 +279,35 @@ def _scoped_extractor(scope: ReadScope):
     return get_active_extractor() if scope == "dataset" else get_extractor()
 
 
-# Historical name; the electron endpoints call it.
-_electron_extractor = _scoped_extractor
+def _electron_extractor(scope: ReadScope):
+    """Like ``_scoped_extractor``, plus REGISTRATION for ``scope="dataset"``.
+
+    The EDS page and the phase-map ``se:`` layers draw an electron image over
+    the whole EBSD map box. That is only right if the image is exactly the
+    part of the specimen the map covers, and on a map taken inside a wider SE
+    field it is not. So under ``dataset`` scope the image comes through a
+    ``CroppedExtractor`` — the active crop window, or the whole scan grid when
+    nothing is cropped — which cuts it by the header geometry. ``file`` scope
+    (the cockpit, standalone views) stays the image exactly as stored.
+    """
+    ext = _scoped_extractor(scope)
+    if scope != "dataset":
+        return ext
+    from backend.api.services.cropped_extractor import CroppedExtractor
+    from backend.api.services.crop_window import CropWindow
+    if isinstance(ext, CroppedExtractor):
+        return ext
+    try:
+        rows, cols = (int(v) for v in ext.get_grid_dimensions())
+        if rows <= 0 or cols <= 0:
+            return ext
+        window = CropWindow(str(get_current_path() or ""), 0, 0, rows, cols,
+                            (rows, cols))
+    except Exception:
+        logger.debug("no scan grid to register an electron image against",
+                     exc_info=True)
+        return ext
+    return CroppedExtractor(ext, window)
 
 
 # --- EDS ---

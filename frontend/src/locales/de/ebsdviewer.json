@@ -201,6 +201,7 @@
     "notMaterialised": "Ausschnitt blieb lazy — zu groß für den Speicher",
     "electronImageNotCropped": "Dieses Bild konnte dem Ausschnitt nicht folgen — es wird vollständig gezeigt.",
     "electronImageClamped": "Dieses Bild endet vor dem Ausschnitt — es hat nicht mehr dessen Form.",
+    "electronImageUnregistered": "Nicht prüfbar, ob dieses Bild zur Karte passt (die Geometrie in der Datei fehlt oder widerspricht sich) — es wird über die ganze Karte gestreckt.",
     "saveCrop": "Ausschnitt speichern…",
     "saveCropWorking": "Speichere…",
     "saveCropHint": "Diesen Ausschnitt als eigene Datei schreiben — Muster wie verarbeitet, EDS-Karten und Elektronenbilder passend zugeschnitten.",

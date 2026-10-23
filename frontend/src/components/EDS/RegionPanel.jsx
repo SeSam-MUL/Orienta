@@ -22,6 +22,7 @@ import { useTranslation } from 'react-i18next';
 import { Button, Label, colors as C, alpha } from '../../theme/components';
 import PhaseRollup from './PhaseRollup';
 import OpacitySlider from '../common/OpacitySlider';
+import CropWarningChip from '../common/CropWarningChip';
 import { BG_NONE } from './useMapBackground';
 
 /** Short, readable composition: the elements that actually carry signal. */
@@ -155,6 +156,7 @@ export default function RegionPanel({ handle }) {
                   {background.error}
                 </Label>
               )}
+              <CropWarningChip status={background.crop} />
               {background.fovWarning && (
                 <Label secondary small style={{ display: 'block',
                                                color: C.orange || '#f0b429' }}>

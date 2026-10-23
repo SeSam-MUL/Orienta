@@ -13,8 +13,15 @@
  *     ratio, and `LayeredCanvas` stretches every layer to the composite size —
  *     so every feature on it moves.
  *
- * Renders nothing when the layer followed the crop, which is the normal case
- * and the case for every layer when no crop is active.
+ *   registration: 'unverified' — the file's header geometry could not place
+ *     the image against the map (a step size, the scan's Relative Offset or
+ *     a consistent Relative Size is missing). The image is still stretched
+ *     over the whole map, as it was before registration existed, and only
+ *     this line says that the alignment is a guess. Applies with or without
+ *     a crop; the phase-map page and the EDS page share the verdict.
+ *
+ * Renders nothing when the layer followed the crop and is registered, which
+ * is the normal case.
  */
 import React from 'react';
 import { useTranslation } from 'react-i18next';
@@ -23,7 +30,8 @@ import { useTranslation } from 'react-i18next';
  *  carries no logic of its own — see CropWarningChip.test.jsx. */
 export function isCropWarning(status) {
   if (!status) return false;
-  return status.cropped === false || status.exact === false;
+  return status.cropped === false || status.exact === false
+    || status.registration === 'unverified';
 }
 
 /** The verdict for `layerId`, or null when there is nothing to say.
@@ -36,9 +44,9 @@ export function cropWarningFor(statuses, layerId) {
 export default function CropWarningChip({ status }) {
   const { t } = useTranslation();
   if (!isCropWarning(status)) return null;
-  const key = status.cropped === false
-    ? 'ebsdviewer:crop.electronImageNotCropped'
-    : 'ebsdviewer:crop.electronImageClamped';
+  let key = 'ebsdviewer:crop.electronImageUnregistered';
+  if (status.cropped === false) key = 'ebsdviewer:crop.electronImageNotCropped';
+  else if (status.exact === false) key = 'ebsdviewer:crop.electronImageClamped';
   return (
     <div
       role="status"

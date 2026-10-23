@@ -201,6 +201,7 @@
     "notMaterialised": "Crop stayed lazy — too large for memory",
     "electronImageNotCropped": "This image could not follow the crop — it is shown in full.",
     "electronImageClamped": "This image was clipped at its own edge — it no longer matches the crop's shape.",
+    "electronImageUnregistered": "Could not verify that this image lines up with the map (the file's geometry is missing or contradicts itself) — it is stretched over the whole map.",
     "saveCrop": "Save crop…",
     "saveCropWorking": "Saving…",
     "saveCropHint": "Write this crop to its own file — patterns as processed, EDS maps and electron images cut to match.",

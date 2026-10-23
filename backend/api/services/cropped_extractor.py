@@ -18,13 +18,15 @@ RETURNS a grid-shaped array — CUT to the window:
 
 PROJECTED — cut, but not by row and column number:
     get_electron_image. An electron image is a separate acquisition area on
-    its own, finer grid over a slightly different field of view, so the window
-    travels into it through MICRONS (``crop_window.project_to_area``). Where
-    the file does not carry both areas' geometry, or says they start at
-    different points, the FULL image comes back with
-    ``last_crop_status(name)["cropped"] is False`` and a reason. A cut that
-    ran off the far edge and had to be clamped keeps ``cropped`` True but sets
-    ``exact`` False — real data, no longer the window's aspect ratio.
+    its own, finer grid and often over a different field of view, so the
+    window travels into it through the HEADER GEOMETRY (``Relative Offset`` /
+    ``Relative Size``, see ``crop_window.electron_footprint``) — also for the
+    full-grid window, which is what registers the uncropped overlay. A part
+    of the window the image does not reach is padded NaN (transparent). Where
+    the file does not carry both areas' geometry, or contradicts itself, the
+    FULL image comes back with ``last_crop_status(name)["registration"] ==
+    "unverified"`` and, for a real crop, ``["cropped"] is False`` and a
+    reason.
 
 TAKES a per-pixel index — TRANSLATED (a crop-local index goes in, the
 corresponding original pixel is read out):
@@ -225,14 +227,29 @@ class CroppedExtractor:
         return features
 
     # --- electron images ------------------------------------------------
-    def get_electron_image(self, image_name):
-        """Cut an electron image to the crop — through um, not row numbers.
+    def _is_full_window(self) -> bool:
+        w = self._window
+        return (w.row0 == 0 and w.col0 == 0
+                and (w.rows, w.cols) == tuple(w.original_shape))
 
-        Three cases, in order:
+    def get_electron_image(self, image_name):
+        """The electron image, cut to the window and REGISTERED to the scan.
+
+        An electron image is a separate acquisition area on a finer grid and,
+        on a map taken inside a wider SE field, a different field of view. The
+        layer compositors stretch whatever comes back over the whole map box,
+        so this returns exactly the part of the image the window covers, in
+        native pixels (``crop_window.project_to_area``). With the full-grid
+        window this is the registration of the plain, uncropped overlay.
+
+        Cases, in order:
         1. The image is already on the scan grid -> cut by index.
-        2. Both areas expose their step size -> project and cut.
-        3. Anything else -> hand back the FULL image and record why. A
-           silently mis-cut image would misplace every feature on it.
+        2. Both areas expose their geometry -> project, cut, and pad with NaN
+           (transparent downstream) wherever the image does not reach.
+        3. Anything else -> hand back the FULL image as before and record why:
+           ``registration: "unverified"``, and ``cropped: False`` when a real
+           crop could not be honoured. A silently mis-placed image would
+           misplace every feature on it.
 
         The navigation mask is deliberately NOT applied: an electron image has
         no pixel-for-pixel correspondence with the scan grid, so there is no
@@ -248,7 +265,8 @@ class CroppedExtractor:
         if (arr.ndim >= 2
                 and tuple(arr.shape[:2]) == tuple(self._window.original_shape)):
             self._crop_status[image_name] = {
-                "cropped": True, "exact": True, "reason": None}
+                "cropped": True, "exact": True, "reason": None,
+                "registration": "registered"}
             return self._window.apply(arr)
 
         geoms: Dict[str, Any] = {}
@@ -270,15 +288,35 @@ class CroppedExtractor:
                 self._window, scan_geom, geoms.get("electron_image"),
                 arr.shape[:2],
             )
+        full = self._is_full_window()
+
         if rect is None:
             reason = (
                 "the file does not give the scan and the electron image a "
-                "common geometry: one of them has no step size or bounding "
-                "box, or the two areas start at different points"
+                "common geometry: one of them has no step size, or the "
+                "header's Relative Size contradicts its step size and cell "
+                "count, or the window lies outside the image"
             )
+            # Nothing to cut when the window is the whole scan: the image is
+            # delivered as it always was, and only the registration is in
+            # doubt. A real crop that cannot be honoured is "not cropped".
             self._crop_status[image_name] = {
-                "cropped": False, "exact": False, "reason": reason}
-            logger.warning("electron image %r not cropped: %s",
+                "cropped": bool(full), "exact": bool(full), "reason": reason,
+                "registration": "unverified"}
+            logger.warning("electron image %r not registered/cropped: %s",
+                           image_name, reason)
+            return arr
+
+        if full and rect["mode"] != "header":
+            # No Relative Offset in the file: the scan's place inside the
+            # image is a guess, and the guess for the whole map is the whole
+            # image, as before. Say so.
+            reason = ("the scan states no Relative Offset, so its position "
+                      "inside the electron image is assumed, not known")
+            self._crop_status[image_name] = {
+                "cropped": True, "exact": True, "reason": reason,
+                "registration": "unverified"}
+            logger.warning("electron image %r not registered: %s",
                            image_name, reason)
             return arr
 
@@ -297,9 +335,22 @@ class CroppedExtractor:
             "reason": None if rect["exact"] else (
                 "the window runs past the edge of the electron image, so the "
                 "cut-out had to be clamped and is not the window's shape"),
+            "registration": ("registered" if rect["mode"] == "header"
+                             else "unverified"),
         }
-        return arr[rect["row0"]:rect["row0"] + rect["rows"],
-                   rect["col0"]:rect["col0"] + rect["cols"]]
+        y0, y1, x0, x1 = rect["box"]
+        inside = arr[rect["row0"]:rect["row0"] + rect["rows"],
+                     rect["col0"]:rect["col0"] + rect["cols"]]
+        if (y1 - y0, x1 - x0) == tuple(inside.shape[:2]):
+            return inside
+        # The image does not reach the whole window: pad, so the picture keeps
+        # the window's shape and each feature its place. NaN is the
+        # transparent marker the PNG writer understands.
+        padded = np.full((y1 - y0, x1 - x0) + tuple(inside.shape[2:]),
+                         np.nan, dtype=np.float32)
+        padded[rect["row0"] - y0:rect["row0"] - y0 + rect["rows"],
+               rect["col0"] - x0:rect["col0"] - x0 + rect["cols"]] = inside
+        return padded
 
     # --- provenance for things that could not be cut --------------------
     def last_crop_status(self, key: str) -> Dict[str, Any]:

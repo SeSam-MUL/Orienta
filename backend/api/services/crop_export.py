@@ -54,11 +54,12 @@ cut-out relative to itself (measured on a real export: offset ``[0, 0]``, box
 ABSOLUTE stage coordinates (10.0 -> 13.5 um for the same crop). Neither is
 rebased, for three reasons: absolute stage coordinates are the honest record
 of where the beam was, and inventing new ones throws that away; every area
-keeps agreeing with every other, which is the property ``project_to_area``
-checks when the file is opened again, and rewriting one area's offset without
-the others would arm that guard against the file's own electron image; and
-cross-area co-registration survives because both areas were cut to the same
-physical region. ``CropProvenance`` records where the crop sat, exactly, in
+keeps agreeing with every other; and cross-area co-registration survives
+because both areas were cut to the same physical region. The one exception is
+the scan areas' ``Relative Offset`` / ``Relative Size`` when the electron image
+was cut by the header geometry: they are fractions OF that image, and the image
+now is exactly the cut-out, so they take the image's own frame values (see
+``frame`` in ``_write``). ``CropProvenance`` records where the crop sat, exactly, in
 scan pixels -- so nothing is lost, it just is not in the site frame.
 """
 from __future__ import annotations
@@ -226,12 +227,33 @@ def _write(src_path, dst_path, window, patterns, report,
                 window, _area_geom(src, ("EBSD", "EDS")),
                 _area_geom(src, ("Electron Image",)), elec_grid,
             )
+            if elec_rect is not None and elec_rect["box"] != (
+                    elec_rect["row0"], elec_rect["row0"] + elec_rect["rows"],
+                    elec_rect["col0"], elec_rect["col0"] + elec_rect["cols"]):
+                # The image does not reach the whole window; a file cannot hold
+                # a transparent margin, and a clamped cut would no longer match
+                # the scan it is written beside.
+                logger.warning(
+                    "electron images written in full: they do not cover the "
+                    "whole crop window")
+                elec_rect = None
             if elec_rect is None:
                 logger.warning(
                     "electron images written in full: the scan and the electron "
                     "image cannot place a window between them (missing step "
-                    "size, or the two areas do not share an origin)"
+                    "size, or a header that contradicts itself)"
                 )
+        # After a header-placed cut the image IS the window, so the scan's
+        # place inside it is the whole frame: the image's own offset and size.
+        # Left as they were, the file would say 'this map sits at 7 % of the
+        # image' about an image that was cut to the map.
+        frame = None
+        if elec_rect is not None and elec_rect["mode"] == "header":
+            img_geom = _area_geom(src, ("Electron Image",)) or {}
+            frame = {"Relative Offset": img_geom.get("relative_offset")
+                     or [0.0, 0.0],
+                     "Relative Size": img_geom.get("relative_size")
+                     or [1.0, 1.0]}
 
         supplied = _checked_patterns(patterns, window) if patterns is not None else None
         supplied_written = []
@@ -286,11 +308,16 @@ def _write(src_path, dst_path, window, patterns, report,
 
         def _header_replacement(marked: str, leaf: str, item: h5py.Dataset):
             """The new value for a size header, or ``None`` to leave it be."""
+            group = item.parent
+            if (frame is not None and leaf in frame
+                    and any(h in marked for h in _SCAN_HEADERS)
+                    and _declared_cells(group) == tuple(window.original_shape)):
+                return np.asarray(frame[leaf], dtype=np.asarray(item[()]).dtype)
+
             if leaf not in _COL_FIELDS and leaf not in _ROW_FIELDS \
                     and leaf != _BBOX_FIELD:
                 return None
 
-            group = item.parent
             if any(h in marked for h in _SCAN_HEADERS):
                 # Only if this area really is the scan grid we are cutting.
                 if _declared_cells(group) != tuple(window.original_shape):
@@ -499,15 +526,16 @@ def _area_geom(h5file: h5py.File, areas: Tuple[str, ...]) -> Optional[dict]:
         if steps is None:
             continue
         return {"x": steps[0], "y": steps[1], "units": "um", "source": "step",
-                "relative_offset": _raw_offset(group)}
+                "relative_offset": _raw_offset(group),
+                "relative_size": _raw_offset(group, "Relative Size")}
     return None
 
 
-def _raw_offset(group: h5py.Group):
-    if "Relative Offset" not in group:
+def _raw_offset(group: h5py.Group, key: str = "Relative Offset"):
+    if key not in group:
         return None
     try:
-        flat = np.asarray(group["Relative Offset"][()]).ravel()
+        flat = np.asarray(group[key][()]).ravel()
         if flat.size < 2:
             return None
         return [float(flat[0]), float(flat[1])]

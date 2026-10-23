@@ -211,8 +211,14 @@ class H5OINADataExtractor:
             reporting the SAME offset start at the same physical point, which
             is what lets a region be carried from one area's grid into the
             other's by pixel size alone. It is reported, never applied — see
-            ``crop_window.project_to_area``, which refuses rather than
-            correcting when two areas disagree.
+            ``crop_window.electron_footprint``, which subtracts it to place
+            the scan inside the electron image.
+
+            ``relative_size`` is the sibling ``Relative Size`` datum (``[x, y]``
+            floats or ``None``). On the electron image both are the frame
+            (``[0, 0]`` / ``[1, 1]``); on the EBSD/EDS areas they are the
+            scan's position and extent as fractions of that image's bounding
+            box -- see ``crop_window.electron_footprint``.
         """
         out = {}
         for key, group in self._AREA_GROUPS.items():
@@ -233,7 +239,8 @@ class H5OINADataExtractor:
         if sx is not None and float(sx) > 0:
             return {"x": float(sx), "y": float(sy if sy else sx),
                     "units": "um", "source": "step",
-                    "relative_offset": offset}
+                    "relative_offset": offset,
+                    "relative_size": self._relative_vec(header, "Relative Size")}
 
         # Older exports: derive from the field of view and the cell count.
         bbox = self._safe_read(header, "Bounding Box Size")
@@ -245,10 +252,26 @@ class H5OINADataExtractor:
                 if bw > 0 and bh > 0 and int(n_cols) > 0 and int(n_rows) > 0:
                     return {"x": bw / int(n_cols), "y": bh / int(n_rows),
                             "units": "um", "source": "bounding_box",
-                            "relative_offset": offset}
+                            "relative_offset": offset,
+                            "relative_size": self._relative_vec(
+                                header, "Relative Size")}
         except (TypeError, IndexError, ValueError):
             pass
         return None
+
+    def _relative_vec(self, header, key):
+        """A two-element header datum (``Relative Size``) as ``[x, y]`` floats
+        or ``None`` -- same contract as ``_relative_offset``."""
+        raw = self._safe_read(header, key)
+        if raw is None:
+            return None
+        try:
+            flat = np.asarray(raw).ravel()
+            if flat.size < 2:
+                return None
+            return [float(flat[0]), float(flat[1])]
+        except (TypeError, ValueError):
+            return None
 
     def _relative_offset(self, header):
         """``Relative Offset`` as a plain ``[x, y]`` of floats, or ``None``.

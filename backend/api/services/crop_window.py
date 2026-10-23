@@ -155,13 +155,114 @@ def compose(outer: CropWindow, inner: CropWindow) -> CropWindow:
     )
 
 
-# Two ``Relative Offset`` values closer than this count as the same origin.
-# The datum is a fraction of the site, so on the widest file measured here
-# (604 um) this is 6e-4 um — far below one pixel of any area, in either
-# reading of the unit — while any offset a real sub-region would carry is
-# orders of magnitude larger. It exists only to absorb float noise, not to
-# tolerate a difference.
-_SAME_ORIGIN_TOL = 1e-6
+# The header's own size figure and the one derived from step x cell count may
+# differ by the odd percent (the Oxford reference scan: 60.39 um image field against a 60.0 um
+# map, 0.65 %); beyond this the two disagree about where the map is, and no
+# placement is claimed.
+_SIZE_TOL = 0.03
+
+
+def _vec2(v) -> Optional[Tuple[float, float]]:
+    if v is None:
+        return None
+    try:
+        flat = [float(x) for x in v]
+    except (TypeError, ValueError):
+        return None
+    if len(flat) < 2:
+        return None
+    return flat[0], flat[1]
+
+
+def _steps(geom) -> Optional[Tuple[float, float]]:
+    if not geom:
+        return None
+    try:
+        sx = float(geom.get("x") or 0.0)
+        sy = float(geom.get("y") or sx)
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if sx <= 0 or sy <= 0:
+        return None
+    return sx, sy
+
+
+def electron_footprint(
+    src_geom: Optional[dict],
+    dst_geom: Optional[dict],
+    scan_shape: Tuple[int, int],
+    dst_shape: Tuple[int, int],
+) -> Tuple[Optional[Dict[str, object]], Optional[str]]:
+    """Where the whole scan grid sits inside an electron image's pixels.
+
+    Returns ``(footprint, reason)``. ``footprint`` is ``{"mode", "x0", "y0",
+    "sx", "sy"}``: the scan's top-left corner in image pixels and the number of
+    image pixels per scan pixel on each axis. ``mode`` is
+
+    * ``"header"`` -- placed by the file's own ``Relative Offset`` /
+      ``Relative Size``;
+    * ``"assumed"`` -- the scan states no offset, so it is taken to start where
+      the image starts and to be sized by step ratio alone (the pre-registration
+      behaviour; nothing in the file backs it).
+
+    ``(None, reason)`` when the two areas cannot be placed against each other.
+
+    The frame, measured on every Oxford file we have (an Oxford reference scan and five
+    scans of an aluminium alloy): the electron image states ``Relative Offset [0, 0]`` and
+    ``Relative Size [1, 1]``, and the scan states its position and extent as
+    FRACTIONS OF THE IMAGE's bounding box -- e.g. one of the alloy scans, offset
+    [0.0696, 0.2550], size [0.7882, 0.3014], and 0.7882 x 17.25 um = 13.6 um =
+    136 cells x 0.1 um. A scan whose offset differs from the image's is
+    therefore not an inconsistency to refuse, it is the ordinary case of a
+    map acquired inside a wider SE field, and subtracting the image's own
+    offset (and dividing by its size, which generalises the frame to an image
+    that is itself a sub-field) is the whole correction.
+
+    The step x cells figure is the cross-check on ``Relative Size``: where they
+    disagree by more than ``_SIZE_TOL`` the header contradicts itself.
+    """
+    src = _steps(src_geom)
+    dst = _steps(dst_geom)
+    if src is None or dst is None:
+        return None, "one of the areas has no step size"
+    rows, cols = int(scan_shape[0]), int(scan_shape[1])
+    img_h, img_w = int(dst_shape[0]), int(dst_shape[1])
+    if min(rows, cols, img_h, img_w) <= 0:
+        return None, "an area has no pixels"
+
+    off_m = _vec2((src_geom or {}).get("relative_offset"))
+    if off_m is None:
+        return ({"mode": "assumed", "x0": 0.0, "y0": 0.0,
+                 "sx": src[0] / dst[0], "sy": src[1] / dst[1]}, None)
+
+    off_i = _vec2((dst_geom or {}).get("relative_offset")) or (0.0, 0.0)
+    size_i = _vec2((dst_geom or {}).get("relative_size")) or (1.0, 1.0)
+    if size_i[0] <= 0 or size_i[1] <= 0:
+        return None, "the electron image states a non-positive Relative Size"
+
+    # The scan's extent in micrometres, from step x cells, and the image's.
+    um_w, um_h = cols * src[0], rows * src[1]
+    img_um_w, img_um_h = img_w * dst[0], img_h * dst[1]
+
+    size_m = _vec2((src_geom or {}).get("relative_size"))
+    if size_m is None:
+        fw, fh = um_w / img_um_w, um_h / img_um_h
+    else:
+        if size_m[0] <= 0 or size_m[1] <= 0:
+            return None, "the scan states a non-positive Relative Size"
+        fw, fh = size_m[0] / size_i[0], size_m[1] / size_i[1]
+        if (abs(fw * img_um_w - um_w) > _SIZE_TOL * um_w
+                or abs(fh * img_um_h - um_h) > _SIZE_TOL * um_h):
+            return None, (
+                "the scan's Relative Size and its step x cell count give "
+                "different extents (%.2f x %.2f um against %.2f x %.2f um)"
+                % (fw * img_um_w, fh * img_um_h, um_w, um_h))
+
+    fx0 = (off_m[0] - off_i[0]) / size_i[0]
+    fy0 = (off_m[1] - off_i[1]) / size_i[1]
+    return ({"mode": "header",
+             "x0": fx0 * img_w, "y0": fy0 * img_h,
+             "sx": fw * img_w / cols, "sy": fh * img_h / rows}, None)
 
 
 def project_to_area(
@@ -170,113 +271,61 @@ def project_to_area(
     dst_geom: Optional[dict],
     dst_shape: Tuple[int, int],
 ) -> Optional[Dict[str, object]]:
-    """Carry a crop window from one acquisition area into another, via um.
+    """Carry a window of the scan grid into an electron image's pixels.
 
-    Electron images do not share the scan grid — measured on the SampleB file
-    in this project, 1024x768 at 0.05897 um against 120x90 at 0.5 um, a factor
-    of 8.478 on a slightly wider field of view. Row and column numbers
-    therefore mean nothing across areas; physical size does.
+    Electron images do not share the scan grid -- measured on the Oxford reference scan file
+    in this project, 1024x768 at 0.05897 um against 120x90 at 0.5 um -- and
+    they usually cover a different field of view. Row and column numbers
+    therefore mean nothing across areas; the header geometry does, see
+    ``electron_footprint``.
 
-    Pixel size alone only places the window if the two areas START at the same
-    physical point. That is a fact about the file, not an assumption to make:
-    each area's ``Relative Offset`` header says where its field of view begins
-    inside the site, and ``get_pixel_sizes()`` reports it. Where both areas
-    state an offset and the two DISAGREE, this returns ``None`` — the caller
-    then shows the full image and says why. Mapping a sub-region inside a wider
-    SE field is a routine Aztec workflow, and correcting for the offset is a
-    harder problem than refusing to guess at it.
+    Native pixels only, never resampled: the box is rounded to whole image
+    pixels, which is at most half an image pixel at either edge (a small
+    fraction of a scan pixel, since the image is the finer grid).
 
-    Where one or both areas do NOT state an offset the window is projected as
-    before: an absent datum is no evidence of disagreement, and refusing on it
-    would strand every older export that omits the key.
+    Returns ``None`` when the areas cannot place the window. Otherwise a dict:
 
-    Each axis uses ITS OWN step ratio: X Step and Y Step are separate numbers
-    and sharing one of them would stretch the window on the other axis.
-
-    Returns ``{"row0","col0","rows","cols","exact"}`` or ``None`` when the two
-    areas cannot place the window between them. ``exact`` is False when the
-    projected rectangle had to be clamped to the destination — the cut-out is
-    then real data but no longer the window's aspect ratio, which matters
-    because the layer compositor stretches every layer to the map's size.
+    ``row0, col0, rows, cols``  the part of the box that lies inside the image
+    ``box``                      ``(y0, y1, x0, x1)`` -- the whole box, which in
+                                 ``header`` mode may run past the image; the
+                                 caller then pads that part transparent, so the
+                                 returned picture still has the window's shape
+    ``mode``                     ``"header"`` or ``"assumed"``
+    ``exact``                    False only in ``assumed`` mode, where the box
+                                 is clamped to the image instead of padded
     """
-    def _steps(geom):
-        if not geom:
-            return None
-        try:
-            sx = float(geom.get("x") or 0.0)
-            sy = float(geom.get("y") or sx)
-        except (TypeError, ValueError, AttributeError):
-            return None
-        if sx <= 0 or sy <= 0:
-            return None
-        return sx, sy
-
-    src = _steps(src_geom)
-    dst = _steps(dst_geom)
-    if src is None or dst is None:
+    fp, reason = electron_footprint(
+        src_geom, dst_geom, tuple(window.original_shape), dst_shape)
+    if fp is None:
+        logger.warning("electron image cannot be registered: %s", reason)
         return None
 
-    if not _same_origin(src_geom, dst_geom):
-        logger.warning(
-            "acquisition areas start at different points (%r vs %r); a window "
-            "cannot be carried between them by pixel size alone",
-            (src_geom or {}).get("relative_offset"),
-            (dst_geom or {}).get("relative_offset"),
-        )
+    img_h, img_w = int(dst_shape[0]), int(dst_shape[1])
+    x0 = int(round(fp["x0"] + window.col0 * fp["sx"]))
+    x1 = int(round(fp["x0"] + (window.col0 + window.cols) * fp["sx"]))
+    y0 = int(round(fp["y0"] + window.row0 * fp["sy"]))
+    y1 = int(round(fp["y0"] + (window.row0 + window.rows) * fp["sy"]))
+    if x1 <= x0 or y1 <= y0:
         return None
 
-    src_x, src_y = src
-    dst_x, dst_y = dst
-    dst_rows, dst_cols = int(dst_shape[0]), int(dst_shape[1])
+    cx0, cx1 = max(x0, 0), min(x1, img_w)
+    cy0, cy1 = max(y0, 0), min(y1, img_h)
+    if cx1 <= cx0 or cy1 <= cy0:
+        # The window lies wholly outside the image: no cut-out at all, and
+        # clamping would hand back a rectangle from the wrong place.
+        return None
 
-    col0 = int(round(window.col0 * src_x / dst_x))
-    row0 = int(round(window.row0 * src_y / dst_y))
-    cols = int(round(window.cols * src_x / dst_x))
-    rows = int(round(window.rows * src_y / dst_y))
-
-    # No lower clamp: ``CropWindow`` validates row0/col0 as non-negative and
-    # both ratios are strictly positive, so the projected origin cannot be
-    # negative.
+    clamped = (cx0, cx1, cy0, cy1) != (x0, x1, y0, y1)
     exact = True
-    if col0 >= dst_cols or row0 >= dst_rows:
-        # The window starts past the far edge of the other area: there is no
-        # cut-out at all, and clamping would hand back a rectangle from the
-        # wrong place.
-        return None
-    if row0 + rows > dst_rows:
-        rows = dst_rows - row0
+    if clamped and fp["mode"] != "header":
+        # Without header backing there is nothing to say where the missing
+        # part is: keep the real data, shorter, and say so.
         exact = False
-    if col0 + cols > dst_cols:
-        cols = dst_cols - col0
-        exact = False
-
-    if rows <= 0 or cols <= 0:
-        return None
-
-    return {"row0": row0, "col0": col0, "rows": rows, "cols": cols,
-            "exact": exact}
-
-
-def _same_origin(src_geom: Optional[dict], dst_geom: Optional[dict]) -> bool:
-    """Do these two areas' fields of view start at the same physical point?
-
-    True unless BOTH state a ``Relative Offset`` and the two differ. An absent
-    datum is not a claim that the area starts at the origin, so it is not
-    evidence of disagreement either — see ``project_to_area``.
-    """
-    a = (src_geom or {}).get("relative_offset")
-    b = (dst_geom or {}).get("relative_offset")
-    if a is None or b is None:
-        return True
-    try:
-        av = [float(v) for v in a]
-        bv = [float(v) for v in b]
-    except (TypeError, ValueError):
-        # Unreadable is not the same as different; fall back to projecting.
-        return True
-    if len(av) != len(bv):
-        return True
-    return all(abs(x - y) <= _SAME_ORIGIN_TOL for x, y in zip(av, bv))
+        box = (cy0, cy1, cx0, cx1)
+    else:
+        box = (y0, y1, x0, x1)
+    return {"row0": cy0, "col0": cx0, "rows": cy1 - cy0, "cols": cx1 - cx0,
+            "exact": exact, "mode": fp["mode"], "box": box}
 
 
 # --- Per-dataset registry -------------------------------------------------
