@@ -837,6 +837,81 @@ def find_linked_cif(
     return None
 
 
+# Parameter suffixes a master / dictionary filename carries after the phase's
+# own stem (same list, same order as find_linked_cif).
+_H5_PARAMETER_SUFFIXES = ("_master_E20kV_npx500", "_E20kV_sig70_n501_o0", "_master")
+
+_PAREN_GROUP = re.compile(r"\(([^()]+)\)")
+
+
+def strict_linked_cif(file_path: Path, cif_library_dir: Path) -> Optional[Path]:
+    """The CIF a phase file belongs to, by the UNAMBIGUOUS rules only, or ``None``.
+
+    ``find_linked_cif`` ends in a formula-only search (its strategy 3) that is
+    right for showing metadata but wrong for deciding which file a phase-map
+    phase is indexed with: a renamed SHT (``Fe (gamma-...)``) can be linked to
+    another polymorph with the same formula (``alpha-Fe...cif``). Per-phase
+    routing and the Indexing page's hand-off join phase files to CIFs through
+    this function and nothing else, so what the page pre-selects is what the
+    backend routes. Rules, in order, each needing an existing CIF of exactly
+    that name (letter case as on disk):
+
+    1. the file's own stem (``Al.sht`` / ``Al.h5`` -> ``Al.cif``);
+    2. an SHT's parenthesised source-CIF name
+       (``Al100.89Fe21.24Mn5.31Si10.62 (alpha-AlFeMnSi_ICSD-52623) [cP138]
+       {20kV}.sht`` -> ``alpha-AlFeMnSi_ICSD-52623.cif``); if the parentheses
+       name two different existing CIFs, ``None``;
+    3. a master / dictionary stem cut at its parameter suffix
+       (``Al_master_E20kV_npx500_dict_20kV_128x156_pc503_326_846_2.0deg.h5``
+       -> ``Al.cif``).
+
+    A CIF is its own CIF. Returns the path inside ``cif_library_dir`` (for a CIF
+    file: the file itself).
+    """
+    import os
+
+    path = Path(file_path)
+    ext = path.suffix.lower()
+    if ext == ".cif":
+        return path
+    cif_dir = Path(cif_library_dir)
+    try:
+        on_disk = {n.lower(): n for n in os.listdir(cif_dir)
+                   if n.lower().endswith(".cif")}
+    except OSError:
+        return None
+
+    def find(stem: str) -> Optional[Path]:
+        name = on_disk.get(f"{stem}.cif".lower())
+        return cif_dir / name if name else None
+
+    stem = display_stem(path)
+    hit = find(stem)
+    if hit is not None:
+        return hit
+
+    if ext == ".sht":
+        hits = {}
+        for name in _PAREN_GROUP.findall(stem):
+            found = find(name.strip())
+            if found is not None:
+                hits[found.name] = found
+        whole = extract_metadata_from_sht_filename(path).phase_name
+        if whole:
+            found = find(whole)
+            if found is not None:
+                hits[found.name] = found
+        return next(iter(hits.values())) if len(hits) == 1 else None
+
+    if ext in (".h5", ".hdf5"):
+        lowered = stem.lower()
+        for suffix in _H5_PARAMETER_SUFFIXES:
+            idx = lowered.find(suffix.lower())
+            if idx > 0:
+                return find(stem[:idx])
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Main entry point: get_phase_metadata
 # ---------------------------------------------------------------------------

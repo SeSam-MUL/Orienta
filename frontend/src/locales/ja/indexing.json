@@ -258,6 +258,7 @@
   "actions": {
     "startIndexing": "指数付けを開始",
     "startIndexingTip": "選択した手法で指数付けを開始します",
+    "startBlockedRoutingNoPhases": "相ごとのピクセルルーティングがオンですが、この手法の相ファイルが選択されていません。相分布図の相ファイルを選択するか、ルーティングをオフにしてください。",
     "indexing": "指数付け中...",
     "indexingInProgress": "指数付け実行中...",
     "stop": "停止",
@@ -314,7 +315,7 @@
   "mask": {
     "noChemistryMask": "化学マスクが読み込まれていません。EDS フィルタリングで作成してください。",
     "perPhaseRouting": "相ごとのピクセルルーティング",
-    "perPhaseRoutingDesc": "各 CIF を自身の相分布図ピクセルのみで実行します。",
+    "perPhaseRoutingDesc": "各相を自身の相分布図ピクセルのみで実行します。",
     "perPhaseRoutingTip": "オン: 各相は自身の分類済みピクセルのみでテストされます（高速、相間ノイズなし）。オフ: 各相がすべての分類済みピクセルに対してテストされ、ピクセルごとに最良が勝ちます。",
     "andAll": "AND（すべて一致する必要あり）",
     "orAny": "OR（いずれか一致でよい）",
@@ -409,6 +410,12 @@
     "chemMaskActivated": "EDS フィルタから化学マスクモードを有効化",
     "handoffSkipped": "相分布図の引き渡しをスキップ — バックエンドにマップが読み込まれていません",
     "handoffMissing": "相分布図の引き渡し: {{count}} 個の CIF が検出ファイルにありません: {{list}}",
+    "handoffMissingForMethod": "相分布図の引き渡し（{{method}}）: {{count}} 個の相に {{kind}} ファイルがなく、それらのピクセルは未インデックスのままです: {{list}}",
+    "handoffNeedsDictionary": "相分布図の引き渡し: {{count}} 個の相に、この検出器とパターンセンターに適合する Dictionary がありません（マスターパターンだけでは不十分です）。先に Dictionary を生成してください。これらのピクセルは未インデックスのままです: {{list}}",
+    "handoffSeveralFiles": "相分布図の引き渡し: {{name}} に適合する {{kind}} ファイルが複数あります。使用: {{taken}}（他の適合: {{others}}）",
+    "handoffKindHough": "CIF",
+    "handoffKindSpherical": "SHT",
+    "handoffKindDictionary": "Dictionary",
     "handoffError": "相分布図の引き渡し読み込みエラー: {{error}}",
     "handoffApplied": "相分布図の引き渡しを適用: {{phases}} 相 · {{pixels}} ピクセル（相ごとのルーティング オン）"
   },

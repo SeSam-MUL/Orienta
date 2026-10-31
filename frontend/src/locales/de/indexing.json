@@ -258,6 +258,7 @@
   "actions": {
     "startIndexing": "Indizierung starten",
     "startIndexingTip": "Indizierung mit der gewählten Methode starten",
+    "startBlockedRoutingNoPhases": "Das phasenweise Pixel-Routing ist an, aber für diese Methode ist keine Phasendatei ausgewählt. Wählen Sie die Phasendateien der Phasenkarte aus oder schalten Sie das Routing aus.",
     "indexing": "Indiziere...",
     "indexingInProgress": "Indizierung läuft...",
     "stop": "Stopp",
@@ -314,7 +315,7 @@
   "mask": {
     "noChemistryMask": "Keine Chemie-Maske geladen. Über EDS-Filterung eine erstellen.",
     "perPhaseRouting": "Phasenweises Pixel-Routing",
-    "perPhaseRoutingDesc": "Jedes CIF nur auf seinen Phasenkarten-Pixeln laufen lassen.",
+    "perPhaseRoutingDesc": "Jede Phase nur auf ihren Phasenkarten-Pixeln laufen lassen.",
     "perPhaseRoutingTip": "AN: jede Phase wird nur auf ihren eigenen klassifizierten Pixeln getestet (schneller, kein phasenübergreifendes Rauschen). AUS: jede Phase wird gegen jeden klassifizierten Pixel getestet und die beste gewinnt pro Pixel.",
     "andAll": "UND (alle müssen passen)",
     "orAny": "ODER (eine kann passen)",
@@ -409,6 +410,12 @@
     "chemMaskActivated": "Chemie-Masken-Modus aus EDS-Filter aktiviert",
     "handoffSkipped": "Phasenkarten-Übergabe übersprungen — keine Karte im Backend geladen",
     "handoffMissing": "Phasenkarten-Übergabe: {{count}} CIF(s) nicht in entdeckten Dateien: {{list}}",
+    "handoffMissingForMethod": "Phasenkarten-Übergabe ({{method}}): {{count}} Phase(n) ohne {{kind}}-Datei, ihre Pixel bleiben unindiziert: {{list}}",
+    "handoffNeedsDictionary": "Phasenkarten-Übergabe: {{count}} Phase(n) ohne ein Dictionary, das zu Detektor und Pattern Center passt (ein Master Pattern allein genügt nicht). Erzeugen Sie zuerst ein Dictionary; die Pixel dieser Phasen bleiben unindiziert: {{list}}",
+    "handoffSeveralFiles": "Phasenkarten-Übergabe: mehrere {{kind}}-Dateien passen zu {{name}}; verwendet: {{taken}} (passen auch: {{others}})",
+    "handoffKindHough": "CIF",
+    "handoffKindSpherical": "SHT",
+    "handoffKindDictionary": "Dictionary",
     "handoffError": "FEHLER beim Laden der Phasenkarten-Übergabe: {{error}}",
     "handoffApplied": "Phasenkarten-Übergabe angewendet: {{phases}} Phasen · {{pixels}} Pixel (phasenweises Routing AN)"
   },

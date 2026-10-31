@@ -1598,6 +1598,195 @@ def _build_phase_configs(req):
     return configs
 
 
+#: Per method: the request field that holds the phase files the method runs on,
+#: and what to call that kind of file in a message to the user.
+_ROUTING_FILE_FIELD = {
+    "hough": ("cif_paths", "CIF"),
+    "spherical": ("sht_paths", "SHT"),
+    "dictionary": ("master_h5_paths", "dictionary (master .h5)"),
+}
+
+
+def phase_map_file_links(req, cif_library_dir=None) -> list:
+    """``[(file, CIF basename or None)]`` for the request's files of ``req.method``.
+
+    The EDS phase map names its phases by CIF filename and nothing else, but a
+    Spherical run is made of SHT files and a Dictionary run of dictionary / master
+    ``.h5`` files. A non-CIF file belongs to a phase-map phase when the CIF it is
+    linked to has that basename -- by ``phase_metadata.strict_linked_cif``, the
+    unambiguous rules only, the SAME function the discovery fills ``linked_cif``
+    with, so what the Indexing page pre-selects is what is routed here. For Hough
+    the file IS the CIF. ``None``: the file links to no CIF of the library.
+
+    The files are the request's own list for ``req.method`` (``cif_paths`` /
+    ``sht_paths`` / ``master_h5_paths``), in request order.
+    ``cif_library_dir`` defaults to the database's CIF library, as for
+    ``_build_phase_configs``. Reads the CIF library for the non-CIF kinds, so
+    it belongs on the run's worker thread, not on the event loop.
+    """
+    spec = _ROUTING_FILE_FIELD.get(str(getattr(req, "method", "")).lower())
+    if spec is None:
+        return []
+    files = list(getattr(req, spec[0], None) or [])
+    if spec[0] == "cif_paths":
+        return [(p, Path(p).name) for p in files]
+
+    import phase_metadata
+    if cif_library_dir is None:
+        try:
+            from path_utils import get_local_database_path, DATABASE_SUBFOLDERS
+            cif_library_dir = (get_local_database_path()
+                               / DATABASE_SUBFOLDERS["cif_library"])
+        except Exception:  # noqa: BLE001 -- no library: nothing links
+            logger.warning("phase-map routing: CIF library not found", exc_info=True)
+            return [(p, None) for p in files]
+    links = []
+    for p in files:
+        try:
+            linked = phase_metadata.strict_linked_cif(Path(p), Path(cif_library_dir))
+        except Exception:  # noqa: BLE001 -- one unreadable file must not hide the rest
+            logger.warning("phase-map routing: cannot link %s to a CIF", p,
+                           exc_info=True)
+            linked = None
+        links.append((p, Path(linked).name if linked is not None else None))
+    return links
+
+
+def first_file_per_cif(links) -> Dict[str, str]:
+    """``{CIF basename: this run's file}`` from :func:`phase_map_file_links`.
+
+    One file per phase: when two selected files are linked to the same CIF the
+    first in request order wins (``route_unused_files`` names the others). Files
+    linked to no CIF are left out. The routed run and the tests use this one
+    function.
+    """
+    out: Dict[str, str] = {}
+    for p, cif in links:
+        if cif is not None:
+            out.setdefault(cif, p)
+    return out
+
+
+def _rename_routed_per_phase_keys(result, ordered_configs) -> None:
+    """Re-key a routed result's per-phase metadata to the phases' final names.
+
+    The merge keys ``per_phase_match_sources``, ``per_phase_data`` and the names
+    in ``per_phase_stats`` by the PhaseConfig name (the phase-map CIF filename,
+    unique per phase). ``_inject_phase_names`` then gives the xmap phases their
+    own names, and the readers -- the pattern-match dialog looks a pixel's source
+    up by ``xmap.phases[id].name``, the per-phase CI layers by phase name -- go by
+    THOSE. Two phases that end up with the same display name (twins) cannot both
+    be served by a name-keyed reader: the first keeps the name, the others keep
+    their CIF filename key, and the collision is logged.
+    """
+    md = result.metadata or {}
+    rename: Dict[str, str] = {}
+    owner: Dict[str, str] = {}          # final name -> the config that took it
+    for pos, pc in enumerate(ordered_configs):
+        try:
+            final = str(result.xmap.phases[pos].name)
+        except Exception:  # noqa: BLE001 -- a phase that won no pixel
+            final = pc.name
+        if final in owner:
+            logger.warning(
+                "phase-map routing: phases %s and %s share the display name %r; "
+                "per-phase lookups by name serve the first", owner[final], pc.name, final)
+            final = pc.name
+        owner.setdefault(final, pc.name)
+        rename[pc.name] = final
+    for key in ("per_phase_match_sources", "per_phase_data"):
+        table = md.get(key)
+        if table:
+            md[key] = {rename.get(k, k): v for k, v in table.items()}
+    for row in md.get("per_phase_stats") or []:
+        row["name"] = rename.get(row["name"], row["name"])
+
+
+def _register_routed_reflectors(req, cif_path):
+    """Register one routed Hough phase's reflector limit and family choice.
+
+    The same registrations ``_build_phase_configs`` makes for the competitive
+    path (so the Hough builds that never see this request -- the pseudo-symmetry
+    resolver, the phase check -- use the same numbers); the per-phase values are
+    aligned with ``req.cif_paths``. Returns the limit for ``PhaseConfig``.
+    """
+    paths = list(req.cif_paths)
+    idx = paths.index(cif_path) if cif_path in paths else None
+    limits = list(getattr(req, "max_reflectors", None) or [])
+    limit = limits[idx] if idx is not None and idx < len(limits) else None
+    try:
+        from ebsd_utils import set_phase_reflector_limit
+        set_phase_reflector_limit(cif_path, limit)
+    except Exception:  # noqa: BLE001 -- registering is an optimisation, not the run
+        logger.debug("could not register reflector limits", exc_info=True)
+    specs = getattr(req, "reflector_specs", None)
+    if specs is not None:
+        import hough_reflectors
+        try:
+            hough_reflectors.set_spec(
+                cif_path, specs[idx] if idx is not None and idx < len(specs) else None)
+        except hough_reflectors.SpecError as exc:
+            raise ValueError(f"Reflector selection for {_stem(cif_path)}: {exc}") from exc
+    return limit
+
+
+def route_unused_files(links, phase_cifs, phases_with_pixels, file_kind: str) -> list:
+    """The selected files a routed run does not use, each with the reason.
+
+    ``links``: :func:`phase_map_file_links`; ``phase_cifs``: every CIF basename of
+    the phase map; ``phases_with_pixels``: those that have pixels. Returns
+    ``[{"file": <basename>, "reason": str}]`` in request order. Nothing a user
+    selected may disappear without being named: a second file for one phase, a
+    file linked to no CIF, a file of a CIF that is not in the phase map or has no
+    pixels there.
+    """
+    taken: Dict[str, str] = {}
+    out = []
+    for p, cif in links:
+        name = Path(p).name
+        if cif is None:
+            reason = "it is linked to no CIF of the library"
+        elif cif not in phase_cifs:
+            reason = f"its CIF {cif} is not a phase of the phase map"
+        elif cif not in phases_with_pixels:
+            reason = f"its phase {cif} has no pixels in the phase map"
+        elif cif in taken:
+            reason = (f"{taken[cif]} is already the {file_kind} file of "
+                      f"phase {cif}, one file per phase")
+        else:
+            taken[cif] = name
+            continue
+        out.append({"file": name, "reason": reason})
+    return out
+
+
+def describe_unused_files(unused, method: str) -> str:
+    """The sentence naming the selected files a routed run does not use; ``""`` if none."""
+    if not unused:
+        return ""
+    return (f"WARNING: {len(unused)} selected {method} file(s) are not used in "
+            f"this phase-map run: "
+            + "; ".join(f"{u['file']}: {u['reason']}" for u in unused))
+
+
+def describe_phases_without_file(missing, method: str) -> str:
+    """The sentence a routed run owes the user for phase-map phases it cannot run.
+
+    ``missing`` is ``[{"phase": <CIF basename>, "pixels": n, "reason": str}]``.
+    Their pixels stay unclassified (-1) -- never handed to a neighbour -- and
+    this says so. ``""`` when nothing is missing.
+    """
+    if not missing:
+        return ""
+    return (
+        f"WARNING: {len(missing)} phase-map phase(s) have no file for "
+        f"{method} indexing and are NOT indexed -- their pixels are left "
+        f"UNCLASSIFIED in this map: "
+        + "; ".join(f"{m['phase']}: {m['pixels']} px, {m['reason']}"
+                    for m in missing)
+    )
+
+
 def _phase_formulas_for_paths(paths: list[str]) -> list[str]:
     """Best-effort formula per phase file (for expected composition)."""
     from pathlib import Path as _P
@@ -2412,7 +2601,9 @@ class IndexingStartRequest(IndexingParams):
 
     # Per-phase routing from the EDS phase map. When true, the
     # backend reads the live PhaseMapStore, builds one (phase, mask)
-    # pair per CIF in cif_paths, and runs each phase only on its
+    # pair per phase-map phase that has a file for the run's method
+    # (cif_paths / sht_paths / master_h5_paths, joined to the phase's
+    # CIF by phase_map_file_links), and runs each phase only on its
     # classified pixels. mask + selection_mode are ignored in that
     # mode — the per-phase masks come from the store, not the
     # request.
@@ -3727,6 +3918,9 @@ async def start_indexing(req: IndexingStartRequest):
                 det_params = build_spherical_det_params(signal, detector, _ebsd_file_path)
 
             result = None
+            # Set by the phase-map routing branch: the file of each phase that
+            # ran, in the order of the result's phase ids (None = not routed).
+            routed_files = None
             # Before any work: name the phases this method cannot run.
             report_phases_without_a_file(req, _progress)
             # A non-zero azimuthal angle is read with the EMsoft sign; say so once.
@@ -3744,7 +3938,7 @@ async def start_indexing(req: IndexingStartRequest):
                 from backend.api.services.phase_map_store import get_phase_map_store
                 from indexing_controller import (
                     ComparisonConfig, PhaseConfig,
-                    run_per_phase_indexing,
+                    run_per_phase_indexing, run_single_phase_method,
                 )
 
                 store = get_phase_map_store()
@@ -3755,67 +3949,119 @@ async def start_indexing(req: IndexingStartRequest):
                         "Auto-classify on the EDS page first, then send to indexing."
                     )
 
-                # Match the request's CIFs to phase-map entries by basename. The
-                # phase map only knows filenames; the request brings full paths.
-                cif_path_by_filename: Dict[str, str] = {}
-                for p in req.cif_paths:
-                    try:
-                        cif_path_by_filename[Path(p).name] = p
-                    except Exception:
-                        continue
+                # The phase map only knows CIF filenames; the run is made of
+                # the request's files for ITS method (CIFs, SHTs or
+                # dictionaries). One rule maps one to the other.
+                file_links = phase_map_file_links(req)
+                file_by_cif = first_file_per_cif(file_links)   # one file per phase
+                file_kind = _ROUTING_FILE_FIELD.get(
+                    req.method, ("cif_paths", "CIF"))[1]
 
                 # Walk the phase map IN ORDER so the resulting phase indices
                 # in consensus_map match the position in phase_configs.
-                # Phases without a matching CIF in the request are dropped
-                # along with their pixels (fail-loud rather than silently
-                # mis-attributing them).
+                # A phase the run cannot take (no file for this method, or a
+                # CIF that cannot be read) keeps its pixels UNCLASSIFIED --
+                # never handed to a neighbour -- and is named in
+                # `routing_unrouted`, which is reported and stored below.
                 ordered_configs: List[PhaseConfig] = []
                 ordered_masks: List[np.ndarray] = []
                 kept_indices: List[int] = []
+                routed_files = []
+                routing_unrouted: List[dict] = []
                 for i, entry in enumerate(state.phase_entries):
-                    cif_path = cif_path_by_filename.get(entry.cif_filename)
-                    if cif_path is None:
-                        continue
-                    mask_2d = (state.phase_grid == i)
+                    # A lasso / ellipse crop keeps its bounding box and carries
+                    # a navigation mask: AND it in, as the competitive path does.
+                    mask_2d = _apply_crop_mask(state.phase_grid == i)
                     if not mask_2d.any():
                         continue
-                    pc = PhaseConfig(name=entry.cif_filename, cif_path=cif_path)
-                    # Hough/Dictionary need a phase_list; spherical uses sht_path
-                    # which the phase map doesn't track. Build a phase_list once
-                    # per CIF using the existing helper so per-phase indexing
-                    # gets the same data as the legacy single-phase path.
-                    from backend.forward_sim.crystal.cif_origin import CifOriginError
-                    try:
-                        from ebsd_utils import hough_phase_from_cif
-                        from orix.crystal_map import PhaseList
-                        phase = hough_phase_from_cif(cif_path)
-                        if phase.name != _stem(cif_path):
-                            phase.name = _stem(cif_path)
-                        pc.phase_list = PhaseList(phases=[phase])
-                    except CifOriginError:
-                        # The CIF read fine but its origin choice cannot be
-                        # established. Skipping it would leave its pixels
-                        # unclassified, and if it was the only phase the run
-                        # would end on "none of the phase-map CIFs are
-                        # present" -- the wrong cause. Fail with this one.
-                        raise
-                    except Exception as exc:
-                        logger.warning(
-                            "Per-phase routing: cannot load phase_list for %s: %s",
-                            cif_path, exc,
-                        )
+                    run_file = file_by_cif.get(entry.cif_filename)
+                    if run_file is None:
+                        routing_unrouted.append({
+                            "phase": entry.cif_filename,
+                            "pixels": int(mask_2d.sum()),
+                            "reason": (f"no {file_kind} file for it among the "
+                                       f"request's {req.method} files"),
+                        })
                         continue
+                    # The name is the CIF filename, unique per phase-map phase:
+                    # the merge matches results to phases by NAME. The names the
+                    # user sees are set from `routed_files` after the run.
+                    if indexing_method == IndexingMethod.SPHERICAL:
+                        pc = PhaseConfig(name=entry.cif_filename, sht_path=run_file)
+                    elif indexing_method == IndexingMethod.DICTIONARY:
+                        # phase_list and the dictionary itself are attached for
+                        # this phase's own pass only (see _run_routed_phase).
+                        pc = PhaseConfig(name=entry.cif_filename,
+                                         master_h5_path=run_file)
+                    else:
+                        pc = PhaseConfig(name=entry.cif_filename, cif_path=run_file)
+                        # The phase's reflector limit and family choice, exactly
+                        # as _build_phase_configs registers them (aligned with
+                        # req.cif_paths).
+                        pc.max_reflectors = _register_routed_reflectors(req, run_file)
+                        # Hough needs a phase_list. Build it once per CIF using
+                        # the existing helper so per-phase indexing gets the
+                        # same data as the legacy single-phase path.
+                        from backend.forward_sim.crystal.cif_origin import CifOriginError
+                        try:
+                            from ebsd_utils import hough_phase_from_cif
+                            from orix.crystal_map import PhaseList
+                            phase = hough_phase_from_cif(run_file)
+                            if phase.name != _stem(run_file):
+                                phase.name = _stem(run_file)
+                            pc.phase_list = PhaseList(phases=[phase])
+                        except CifOriginError:
+                            # The CIF read fine but its origin choice cannot be
+                            # established. Skipping it would leave its pixels
+                            # unclassified, and if it was the only phase the run
+                            # would end on "none of the phase-map CIFs are
+                            # present" -- the wrong cause. Fail with this one.
+                            raise
+                        except Exception as exc:
+                            logger.warning(
+                                "Per-phase routing: cannot load phase_list for %s: %s",
+                                run_file, exc,
+                            )
+                            routing_unrouted.append({
+                                "phase": entry.cif_filename,
+                                "pixels": int(mask_2d.sum()),
+                                "reason": f"its CIF could not be read: {exc}",
+                            })
+                            continue
                     ordered_configs.append(pc)
                     ordered_masks.append(mask_2d)
                     kept_indices.append(i)
+                    routed_files.append(run_file)
 
                 if not ordered_configs:
+                    if routing_unrouted:
+                        raise ValueError(
+                            f"Per-phase routing for {req.method} indexing: none "
+                            f"of the phase-map phases "
+                            f"({', '.join(m['phase'] for m in routing_unrouted)}) "
+                            f"has a {file_kind} file among the request's "
+                            f"{req.method} files ({n_phase_files} phase file(s) "
+                            f"in the request). Select the {file_kind} file of "
+                            f"each phase-map phase, or switch the method."
+                        )
                     raise ValueError(
-                        "Per-phase routing: none of the phase-map CIFs are present "
-                        "in the request's cif_paths AND have non-empty masks. "
-                        "Check that the Indexing page actually pre-selected the "
-                        "matching CIFs from the phase map."
+                        "Per-phase routing: every phase-map phase has an empty "
+                        "mask, so there is nothing to index."
                     )
+                # Up front: a Dictionary or Spherical run takes hours, and this
+                # is the log box the user is watching. (No fraction: these are
+                # notes, the bar belongs to the work.)
+                if routing_unrouted:
+                    _progress(describe_phases_without_file(
+                        routing_unrouted, req.method))
+                routing_unused = route_unused_files(
+                    file_links,
+                    {e.cif_filename for e in state.phase_entries},
+                    {state.phase_entries[i].cif_filename for i in kept_indices}
+                    | {m["phase"] for m in routing_unrouted},
+                    file_kind)
+                if routing_unused:
+                    _progress(describe_unused_files(routing_unused, req.method))
 
                 # Build a consensus_map whose values are positions in
                 # ordered_configs (not the original phase_grid indices). Pixels
@@ -3838,12 +4084,59 @@ async def start_indexing(req: IndexingStartRequest):
                     normed=req.normed,
                     refine=req.refine,
                     nregions=req.nregions,
+                    # The same fields the competitive multi-phase path passes.
+                    # `backend` is the one that matters most: without it a
+                    # Spherical run falls back to EMSphInx CPU whatever the
+                    # user chose (run_single_phase_method copies it).
+                    circmask=req.circmask,
+                    gausbckg=req.gausbckg,
+                    backend=req.backend,
+                    compute_mode=req.compute_mode,
+                    row_start=req.row_start,
+                    row_end=req.row_end,
+                    col_start=req.col_start,
+                    col_end=req.col_end,
                 )
+
+                def _message_only(msg, pct=None):
+                    # An indexer's fraction is of ITS phase; the bar is the run's.
+                    _progress(msg)
+
+                def _run_routed_phase(pc, mask):
+                    # One Dictionary phase at a time: its dictionary is loaded
+                    # for its own pass and let go of afterwards (three at once
+                    # were measured at 48 GB), exactly as _run_one_phase does
+                    # for the competitive path -- including the VRAM handover.
+                    # The load is inside the try: a dictionary that fails to
+                    # load still hands its GPU memory back.
+                    loaded_here = False
+                    failure = None
+                    try:
+                        loaded_here = _load_phase_dictionary(pc, _progress)
+                        pmr = run_single_phase_method(
+                            signal=signal,
+                            detector=detector,
+                            phase_config=pc,
+                            method=indexing_method,
+                            config=comparison_config,
+                            selection_mask=mask,
+                            progress_callback=_message_only,
+                            cancel_check=_cancel_check,
+                        )
+                        _detach_dictionary_from_result(pmr)
+                        return pmr
+                    except Exception as exc:
+                        failure = exc
+                        raise
+                    finally:
+                        if loaded_here:
+                            _drop_phase_dictionary(pc)
+                        _release_phase_gpu_memory(failure)
 
                 _progress(
                     f"Per-phase routing: {len(ordered_configs)} phases, "
                     f"{int(np.sum([m.sum() for m in ordered_masks]))} pixels total",
-                    0.05,
+                    0.1,
                 )
                 result = run_per_phase_indexing(
                     signal=signal,
@@ -3856,12 +4149,20 @@ async def start_indexing(req: IndexingStartRequest):
                     h5_path=_ebsd_file_path if indexing_method == IndexingMethod.SPHERICAL else "",
                     detector_params=det_params if indexing_method == IndexingMethod.SPHERICAL else None,
                     progress_cb=_progress,
+                    run_phase=(_run_routed_phase
+                               if indexing_method == IndexingMethod.DICTIONARY
+                               else None),
+                    cancel_check=_cancel_check,
                 )
                 # Stash the per-phase metadata so the result UI can show
                 # what got routed where.
                 if result.metadata is None:
                     result.metadata = {}
                 result.metadata["selection_mode"] = "phase_map_routing"
+                if routing_unrouted:
+                    result.metadata["phase_map_unrouted"] = routing_unrouted
+                if routing_unused:
+                    result.metadata["phase_map_unused_files"] = routing_unused
 
                 # A phase that died must SAY so.
                 #
@@ -3982,6 +4283,9 @@ async def start_indexing(req: IndexingStartRequest):
                         circmask=req.circmask,
                         gausbckg=req.gausbckg,
                         backend=req.backend,
+                        # The user's Dictionary compute mode (GPU / CPU / auto);
+                        # without it every multi-phase Dictionary run was "auto".
+                        compute_mode=req.compute_mode,
                         row_start=req.row_start,
                         row_end=req.row_end,
                         col_start=req.col_start,
@@ -4093,38 +4397,13 @@ async def start_indexing(req: IndexingStartRequest):
                     # the merged metadata used to drop `dict_path` too — so
                     # every multi-phase Dictionary run showed "Dictionary not
                     # in memory", however well it had indexed.
-                    per_phase_match_sources = {}
+                    # (One function for this and the phase-map routed merge:
+                    # indexing_controller.per_phase_match_sources.)
+                    from indexing_controller import per_phase_match_sources as _pp_sources
+                    per_phase_match_sources = _pp_sources(
+                        all_results, n_total, lambda _pmr: sel_mask_flat)
 
                     for pmr in all_results:
-                        try:
-                            src_meta = getattr(pmr.indexing_result, 'metadata', None) or {}
-                            src_dict_path = src_meta.get('dict_path')
-                            src_xmap = pmr.indexing_result.xmap
-                            src_sim = None
-                            if hasattr(src_xmap, 'prop') and 'simulation_indices' in src_xmap.prop:
-                                src_sim = np.asarray(src_xmap.prop['simulation_indices'])
-                            if src_dict_path and src_sim is not None:
-                                # Lift onto the full grid so the dialog can index
-                                # it with a plain row*n_cols+col, like the xmap.
-                                sim_2d = src_sim.reshape(src_sim.shape[0], -1) if src_sim.ndim > 1 \
-                                    else src_sim.reshape(-1, 1)
-                                sim_full = np.full((n_total, sim_2d.shape[1]), -1, dtype=np.int64)
-                                if sel_mask_flat is not None and sim_2d.shape[0] == int(sel_mask_flat.sum()):
-                                    sim_full[sel_mask_flat] = sim_2d
-                                elif sim_2d.shape[0] == n_total:
-                                    sim_full = sim_2d.astype(np.int64)
-                                else:
-                                    sim_full = None
-                                if sim_full is not None:
-                                    per_phase_match_sources[pmr.phase_name] = {
-                                        'dict_path': src_dict_path,
-                                        'simulation_indices': sim_full,
-                                    }
-                        except Exception as e:
-                            logger.warning(
-                                "Could not record match source for %s: %s", pmr.phase_name, e
-                            )
-
                         try:
                             pmr_euler = pmr.indexing_result.xmap.rotations.to_euler(degrees=False)
                             pmr_ci = pmr.indexing_result.confidence_scores
@@ -4417,15 +4696,38 @@ async def start_indexing(req: IndexingStartRequest):
             else:
                 raise ValueError(f"Unknown indexing method: {req.method}")
 
+            # A phase-map routed run numbers its phases in the phase map's
+            # order, minus the ones it could not run -- NOT in the order of the
+            # request's file lists. Names and the per-phase SHT map are read
+            # off the ids, so they must come from the files that ran, in that
+            # order (a request that lists the phases differently, or holds a
+            # file the run dropped, would otherwise label phase 1 with phase
+            # 0's name and render it against phase 0's master).
+            _names_src = req
+            _sht_src = req.sht_paths
+            _name_paths = (req.phase_name_sources()
+                           or req.cif_paths or req.master_h5_paths or req.sht_paths)
+            if routed_files is not None:
+                import types as _types
+                _ran = list(routed_files)
+                _names_src = _types.SimpleNamespace(
+                    phase_name_sources=lambda: _ran,
+                    cif_paths=[], master_h5_paths=[], sht_paths=[])
+                _sht_src = _ran
+                _name_paths = _ran
+
             # Inject actual phase names into xmap before storing
-            _inject_phase_names(result, req)
+            _inject_phase_names(result, _names_src)
+
+            if routed_files is not None:
+                _rename_routed_per_phase_keys(result, ordered_configs)
 
             # Attach metadata needed by the SHT forward renderer in
             # /api/indexing/pattern-match (Phase A of FEAT-SHT-FWD).
             _attach_indexing_metadata(
                 result,
                 method_name=req.method,
-                sht_paths=req.sht_paths if req.method == "spherical" else None,
+                sht_paths=_sht_src if req.method == "spherical" else None,
                 det_params=det_params,
                 # The same list _inject_phase_names used one line up, so the
                 # id tiebreak is offered the names that are now on the xmap
@@ -4433,9 +4735,7 @@ async def start_indexing(req: IndexingStartRequest):
                 # through req.phase_name_sources() when the request carries
                 # per-phase records — two independent copies of this
                 # precedence is how the label and the master came apart.
-                name_source_paths=(
-                    req.phase_name_sources()
-                    or req.cif_paths or req.master_h5_paths or req.sht_paths),
+                name_source_paths=_name_paths,
                 pc_refinement=_run_pc_refinement,
             )
 
@@ -4449,7 +4749,18 @@ async def start_indexing(req: IndexingStartRequest):
             # Recorded on CONFIGURATION, not on effect: see _eds_prior_is_on.
             # n_adjusted: 0 is the honest number for a prior that ran and
             # changed no winner, and the sentence already carries the count.
-            if _eds_prior_is_on(req):
+            #
+            # A phase-map routed run never builds the prior's weights: the phase
+            # map already decided which phase each pixel belongs to. Citing the
+            # prior (or running the rescue, which pairs REQUEST-order phase ids
+            # with the routed ids) would state a method the run did not use.
+            if routed_files is not None:
+                if any(float(v) > 0.0 for v in (req.eds_phase_strengths or {}).values()):
+                    _progress(
+                        "EDS chemistry prior and particle rescue are not applied "
+                        "in a phase-map routed run: the phase map already decided "
+                        "which phase each pixel belongs to")
+            elif _eds_prior_is_on(req):
                 from backend.api.services.citations.provenance import record_step
                 record_step(result, "eds.chemistry_prior", {
                     # Phase NAMES, never the absolute file paths the request
@@ -4461,7 +4772,8 @@ async def start_indexing(req: IndexingStartRequest):
             # Particles the prior cannot see (pattern-degenerate pairs such
             # as Al/Si, EDS volume larger than the particle): decided by
             # orientation continuity with the matrix. No-op with the prior off.
-            _apply_particle_rescue(result, req, selection_mask, _progress)
+            if routed_files is None:
+                _apply_particle_rescue(result, req, selection_mask, _progress)
 
             # Don't overwrite a multi-pixel result with a single-pixel quick test
             if not (req.quick_test and _get_result() is not None):

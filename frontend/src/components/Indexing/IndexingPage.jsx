@@ -27,6 +27,7 @@ import {
 } from '../PhaseCollections/collectionFilter';
 import { planCollectionAdoption, formatMissingLogMessage, resolveAllowedPaths } from '../PhaseCollections/collectionAdopt';
 import { createPhaseDiscovery, phaseListBlocksRun } from './phaseDiscovery';
+import usePhaseMapHandoff from './usePhaseMapHandoff';
 import {
   addPhaseFromPath, mergeUserAdded, collapseUserAdded, remapCollapsed, sameFile,
 } from './phasePath';
@@ -1539,6 +1540,9 @@ export default function IndexingPage({ isActive }) {
   // backend store is empty and the flag would just produce a 400.
   const [phaseMapRoutingAvailable, setPhaseMapRoutingAvailable] = useState(false);
   const [usePhaseMapRouting, setUsePhaseMapRouting] = useState(false);
+  // What a Dictionary has to fit (PC, detector shape, geometry), kept current
+  // below where those are computed; read by the phase-map hand-off.
+  const dictContextRef = useRef({});
 
   // --- Method ---
   const [method, setMethod]             = useState('hough');
@@ -1579,6 +1583,10 @@ export default function IndexingPage({ isActive }) {
   // cost there: an unloaded list read as "nothing selected" and ran the whole
   // library.
   const [discoverState, setDiscoverState] = useState('idle'); // idle|loading|loaded|error
+  // Which method the files in `discoveredFiles` were listed for. After a method
+  // switch the old list stays on screen until the new one arrives, and the
+  // phase-map hand-off must not pick files out of it (see below).
+  const [discoveredFor, setDiscoveredFor] = useState(null);
   const discoveryRef = useRef(null);
   const [fileInput, setFileInput]       = useState('');    // typed / selected path
   const [phaseFiles, setPhaseFiles]     = useState([]);    // list of added phase files
@@ -1699,6 +1707,10 @@ export default function IndexingPage({ isActive }) {
   // Dictionary generation MUST use these: simulating at detector_tilt 0 for a
   // 3.44 deg detector gives NCC ~0.02 against the correct pattern.
   const [detectorGeom, setDetectorGeom] = useState({ sampleTilt: 70, detectorTilt: 0, azimuthal: 0 });
+  // The file whose signal shape, geometry and PC the three states above and
+  // `pcValues` hold now (set when fetchDataState has heard back for that file).
+  // Until it equals the loaded file they are defaults or the previous file's.
+  const [detectorContextFor, setDetectorContextFor] = useState(null);
   // Backend selector: "spherical_gpu" runs the in-process PyTorch pipeline
   // (~11x faster than EMSphInx CPU on identical data, GPU required).
   // "emsphinx" is the original WSL EMSphInx path (CPU, slower, more battle-
@@ -1779,7 +1791,10 @@ export default function IndexingPage({ isActive }) {
 
   const fetchDataState = useCallback(() => {
     refreshLoadedFiles();
-    ebsdApi.datasets().then(r => {
+    // The file this fetch is FOR: its answers are only "the detector context of
+    // the current file" if the file is still the same when the last one lands.
+    const forFile = useDataStore.getState().filePath;
+    const pDatasets = ebsdApi.datasets().then(r => {
       const ds = r.data?.datasets || [];
       const names = ds.map(d => d.name);
       setDatasets(names);
@@ -1827,23 +1842,31 @@ export default function IndexingPage({ isActive }) {
         azimuthal: Number.isFinite(d.azimuthal) ? d.azimuthal : 0,
       });
     };
-    ebsdApi.getDetector().then(r => applyGeom(r.data)).catch(() => {});
+    const pGeom = ebsdApi.getDetector().then(r => applyGeom(r.data)).catch(() => {});
 
     // Try PC refinement controller first, fall back to EBSD viewer detector
-    pcApi.detectorInfo().then(r => {
+    const pPc = pcApi.detectorInfo().then(r => {
       const d = r.data;
       if (d?.has_detector && d?.pc) {
         setPcValues(t('pcPhase.pcLine', { x: d.pc[0]?.toFixed(3), y: d.pc[1]?.toFixed(3), z: d.pc[2]?.toFixed(3) }));
-      } else {
-        // Fall back to EBSD viewer detector
-        ebsdApi.getDetector().then(r2 => {
-          const d2 = r2.data;
-          if (d2?.has_detector && d2?.pc) {
-            setPcValues(t('pcPhase.pcLine', { x: d2.pc[0]?.toFixed(3), y: d2.pc[1]?.toFixed(3), z: d2.pc[2]?.toFixed(3) }));
-          }
-        }).catch(() => {});
+        return undefined;
       }
+      // Fall back to EBSD viewer detector
+      return ebsdApi.getDetector().then(r2 => {
+        const d2 = r2.data;
+        if (d2?.has_detector && d2?.pc) {
+          setPcValues(t('pcPhase.pcLine', { x: d2.pc[0]?.toFixed(3), y: d2.pc[1]?.toFixed(3), z: d2.pc[2]?.toFixed(3) }));
+        }
+      }).catch(() => {});
     }).catch(() => {});
+
+    // The detector context (signal shape, camera geometry, PC) of THIS file has
+    // arrived -- every part answered, successfully or not. A Dictionary choice
+    // (the phase-map hand-off) must not be made before, nor on the previous
+    // file's values, which is what these states hold until then.
+    Promise.all([pDatasets, pGeom, pPc]).then(() => {
+      if (useDataStore.getState().filePath === forFile) setDetectorContextFor(forFile);
+    });
   }, [refreshLoadedFiles, t]);
 
   // Switch active dataset OR loaded file on backend when user picks from
@@ -2044,6 +2067,8 @@ export default function IndexingPage({ isActive }) {
 
   useEffect(() => {
     // Clear files from previous method — can't use .sht for Dictionary etc.
+    // (usePhaseMapHandoff redoes its selection for this method when the new
+    // list arrives.)
     setPhaseFiles([]);
     setPhases([]);
     setPhaseDropdownOpen(false);
@@ -2128,6 +2153,7 @@ export default function IndexingPage({ isActive }) {
       onLoaded: (files, groups) => {
         const own = userAddedRef.current.filter((u) => u.method === methodRef.current).map((u) => u.file);
         setDiscoveredFiles(mergeUserAdded(files, own));
+        setDiscoveredFor(methodRef.current);
         // An own file that really is a library file (the same file under another
         // spelling, e.g. through a link) collapses into the library entry, and a
         // selection that holds it moves with it.
@@ -2447,6 +2473,10 @@ export default function IndexingPage({ isActive }) {
     () => detectorShapeFromSignalShape(signalShape),
     [signalShape]
   );
+  // What the phase-map hand-off has to fit a dictionary to (read by its hook).
+  dictContextRef.current = {
+    currentPc: currentPcVec, detectorShape: genDictDetectorShape, geom: detectorGeom,
+  };
 
   // The phase paths EXACTLY as they land in cif_paths / master_h5_paths /
   // sht_paths. For Dictionary the selected dictionary path replaces the master
@@ -2461,8 +2491,17 @@ export default function IndexingPage({ isActive }) {
   // afterwards therefore displayed "chosen" while the request shipped its
   // MASTER path — kp.load then returned a master pattern with no xmap and the
   // run died with "phase_list required for Dictionary indexing".
+  //
+  // With per-phase routing on the phases are the phase map's and nothing else:
+  // the typed / seeded `fileInput` (the discovery's first file, a leftover of
+  // an earlier selection) is never a stand-in for them -- see `phaseBase`.
+  const routingActive = phaseMapRoutingAvailable && usePhaseMapRouting;
+  const phaseBase = useMemo(
+    () => (phaseFiles.length > 0 ? phaseFiles
+      : (!routingActive && fileInput ? [fileInput] : [])),
+    [phaseFiles, fileInput, routingActive]);
   const effectivePhasePaths = useMemo(() => {
-    const base = phaseFiles.length > 0 ? phaseFiles : (fileInput ? [fileInput] : []);
+    const base = phaseBase;
     if (method !== 'dictionary') return base;
     return resolvePhasePaths(base, phases, discoveredFiles, {
       explicit: selectedDictPaths,
@@ -2470,7 +2509,7 @@ export default function IndexingPage({ isActive }) {
       detectorShape: genDictDetectorShape,
       geom: detectorGeom,
     });
-  }, [phaseFiles, fileInput, method, selectedDictPaths, phases, discoveredFiles,
+  }, [phaseBase, method, selectedDictPaths, phases, discoveredFiles,
       currentPcVec, genDictDetectorShape, detectorGeom]);
 
   // Phases that would go into the run without a usable dictionary. Reported
@@ -2490,15 +2529,14 @@ export default function IndexingPage({ isActive }) {
   // rather than the dictionary file's stem.
   const edsPhaseLabels = useMemo(() => {
     const out = {};
-    const base = phaseFiles.length > 0 ? phaseFiles : (fileInput ? [fileInput] : []);
-    base.forEach((p, i) => {
+    phaseBase.forEach((p, i) => {
       const key = (method === 'dictionary' && selectedDictPaths[p]) ? selectedDictPaths[p] : p;
       const ph = phases.find(x => x.path === p) || phases[i];
       const label = ph?.display_label || ph?.formula || ph?.filename;
       if (label) out[key] = label;
     });
     return out;
-  }, [phaseFiles, fileInput, method, selectedDictPaths, phases]);
+  }, [phaseBase, method, selectedDictPaths, phases]);
 
   // Would this run actually ship the chemistry prior? Drives the pre-flight
   // fetch AND whether a blocking verdict may hold the Start button back — a
@@ -2652,7 +2690,7 @@ export default function IndexingPage({ isActive }) {
       // backend, otherwise the route returns 400. The flag overrides
       // selection_mode + mask on the backend, so we still ship those
       // for the legacy/non-phasemap codepath.
-      use_phase_map_routing: phaseMapRoutingAvailable && usePhaseMapRouting,
+      use_phase_map_routing: routingActive,
       // EDS chemistry prior. Omitted entirely when the switch is off or the file
       // has no EDS ⇒ the payload stays byte-identical to a run without this
       // feature. When on it is 1.0 for EVERY phase — a partial application is
@@ -2879,8 +2917,12 @@ export default function IndexingPage({ isActive }) {
   // run is blocked with that reason rather than quietly indexing against
   // structures the user excluded.
   const groupMissing = activeMissing(collections, activeName);
+  // Per-phase routing runs the PHASE MAP's phases: with none of them selected
+  // there is nothing to run (the hand-off found no file, or the user unticked
+  // them all), and the backend would only answer with an error after the click.
+  const routingWithoutPhases = routingActive && effectivePhasePaths.length === 0;
   const canStart       = dataLoaded && !running && !edsPreflightBlocked
-    && !phaseListBlocked && !groupMissing;
+    && !phaseListBlocked && !groupMissing && !routingWithoutPhases;
 
   // --- Spherical without a CUDA GPU -----------------------------------------
   // The PyTorch spherical backend falls back to the CPU (same results, ~10-25x
@@ -2925,7 +2967,7 @@ export default function IndexingPage({ isActive }) {
   // the page-level button; per-phase generation goes through
   // handleGenerateDictForPhase, which passes that phase's own master.
   const genDictMaster =
-    fileInput ||
+    (!routingActive && fileInput) ||
     phaseFiles.find(f => /\.(h5|hdf5)$/i.test(f) && !/_dict_/i.test(f)) ||
     phaseFiles.find(f => /\.(h5|hdf5)$/i.test(f)) ||
     '';
@@ -3500,6 +3542,7 @@ export default function IndexingPage({ isActive }) {
               : groupMissing ? t('phaselibrary:activeGroup.startBlockedTip',
                 { name: activeName })
               : phaseListBlocked ? t('phaseDropdown.startBlockedTip')
+              : routingWithoutPhases ? t('actions.startBlockedRoutingNoPhases')
               : t('actions.startIndexingTip')
           }
         >

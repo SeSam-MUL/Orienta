@@ -960,6 +960,62 @@ def _render_to_figure(
     return fig, meta
 
 
+def _per_phase_ci_grid(entry, n_rows: int, n_cols: int, mask, name: str = ""):
+    """One phase's CI as a float (n_rows, n_cols) grid, or ``None`` if it has none.
+
+    THE reader of ``per_phase_data[name]``, for the per-phase CI layer, the
+    uncertainty layer and the CI figure alike. ``entry`` comes in two shapes:
+
+    * ``{'euler': ..., 'ci': <grid>, 'ci_mean': ...}`` -- what the indexing
+      writers store (competitive multi-phase and phase-map routed) and what an
+      imported ``.h5`` result carries in ``analysis.py``; ``ci`` is the grid, or
+      one value per selected pixel;
+    * the bare CI array itself (older callers, tests).
+
+    A grid is used as is; one value per selected pixel is placed on the grid
+    through ``mask``; anything else is a 400 naming the phase and the sizes.
+    """
+    import numpy as np
+
+    ci = entry.get("ci") if isinstance(entry, dict) else entry
+    if ci is None:
+        return None
+    arr = np.asarray(ci)
+    if arr.dtype == object or not np.issubdtype(arr.dtype, np.number):
+        return None
+    arr = arr.astype(float)
+    if arr.size == n_rows * n_cols:
+        return arr.reshape(n_rows, n_cols)
+    if mask is not None and arr.size == int(np.asarray(mask).sum()):
+        out = np.full((n_rows, n_cols), np.nan)
+        out[np.asarray(mask, dtype=bool)] = arr.ravel()
+        return out
+    raise HTTPException(
+        status_code=400,
+        detail=f"Per-phase CI for {name!r} has size {arr.size}, expected "
+               f"{n_rows * n_cols}"
+               + (f" or {int(np.asarray(mask).sum())} (the selection)." if mask is not None
+                  else "."),
+    )
+
+
+def _uncertainty_from_grids(grids) -> "np.ndarray":
+    """Best CI minus second-best CI per pixel, over the phases that have one there.
+
+    A pixel where fewer than two phases have a CI (outside the selection, or in
+    a phase-map routed run, where each pixel was indexed against ITS phase only
+    and the phases never competed) is NaN: there is no second-best to be
+    uncertain against, and a number would be made up.
+    """
+    import numpy as np
+
+    stack = np.stack(list(grids), axis=0)
+    filled = np.where(np.isnan(stack), -np.inf, stack)
+    ordered = np.sort(filled, axis=0)[::-1]
+    best, second = ordered[0], ordered[1]
+    return np.where(np.isfinite(second), best - second, np.nan)
+
+
 def _extract_ci_array(
     *, kind: str, xmap, result, dataset, n_rows: int, n_cols: int, mask
 ) -> "np.ndarray":
@@ -976,23 +1032,12 @@ def _extract_ci_array(
             or (getattr(dataset, "per_phase_data", None) if dataset is not None else None)
             or {}
         )
-        if len(per_phase) < 2:
-            arr = np.full((n_rows, n_cols), np.nan)
-        else:
-            reshaped = []
-            for name in list(per_phase.keys()):
-                arr_pp = np.asarray(per_phase[name])
-                if arr_pp.size != n_rows * n_cols:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Per-phase data for {name!r} has size {arr_pp.size}, "
-                               f"expected {n_rows * n_cols}.",
-                    )
-                reshaped.append(arr_pp.reshape(n_rows, n_cols))
-            stacked = np.stack(reshaped, axis=0)
-            sorted_desc = np.sort(stacked, axis=0)[::-1]
-            arr = sorted_desc[0] - sorted_desc[1]
-        return arr
+        grids = [g for g in (
+            _per_phase_ci_grid(per_phase[name], n_rows, n_cols, mask, name)
+            for name in list(per_phase.keys())) if g is not None]
+        if len(grids) < 2:
+            return np.full((n_rows, n_cols), np.nan)
+        return _uncertainty_from_grids(grids)
 
     if kind.startswith("ci_"):
         phase_name = kind[3:]
@@ -1006,14 +1051,13 @@ def _extract_ci_array(
                 status_code=400,
                 detail=f"No per-phase CI for {phase_name!r}.",
             )
-        per_phase_arr = np.asarray(per_phase[phase_name])
-        if per_phase_arr.size != n_rows * n_cols:
+        grid = _per_phase_ci_grid(per_phase[phase_name], n_rows, n_cols, mask, phase_name)
+        if grid is None:
             raise HTTPException(
                 status_code=400,
-                detail=f"Per-phase CI for {phase_name!r} has size {per_phase_arr.size}, "
-                       f"expected {n_rows * n_cols}.",
+                detail=f"No per-phase CI for {phase_name!r}.",
             )
-        return per_phase_arr.reshape(n_rows, n_cols).astype(float)
+        return grid
 
     # Bare "ci" — best-phase confidence index. Try multiple sources in
     # order: result.confidence_scores (in-memory indexing result),
@@ -1071,7 +1115,7 @@ def _extract_ci_array(
 
 
 # ---------------------------------------------------------------------------
-# Forward NCC Diagnostic Layers (Task 11)
+# Forward NCC Diagnostic Layers
 # ---------------------------------------------------------------------------
 _DIAG_KIND_TO_KEY = {
     "forward_ncc":       "ncc_map",
@@ -1087,7 +1131,7 @@ _DIAG_KIND_TO_CMAP = {
 }
 
 # ---------------------------------------------------------------------------
-# Joint R+PC Refinement Layers (Phase B, Task 10)
+# Joint R+PC Refinement Layers
 # ---------------------------------------------------------------------------
 _REF_KIND_TO_KEY = {
     "refined_ncc":         "refined_ncc_map",
@@ -1696,8 +1740,11 @@ def _render_ci_figure(
     elif direction.startswith("ci_"):
         phase_name = direction[3:]
         map_title = title or f"CI — {phase_name}"
-        if phase_name in per_phase_data and per_phase_data[phase_name].get('ci') is not None:
-            data = per_phase_data[phase_name]['ci']
+        grid = (_per_phase_ci_grid(per_phase_data[phase_name], n_rows, n_cols, mask,
+                                   phase_name)
+                if phase_name in per_phase_data else None)
+        if grid is not None:
+            data = grid
         else:
             raise HTTPException(
                 status_code=400,
@@ -1708,22 +1755,12 @@ def _render_ci_figure(
     elif direction == "uncertainty":
         map_title = title or "Phase Assignment Uncertainty"
         if len(per_phase_data) >= 2:
-            ci_maps = []
-            for name in per_phase_data:
-                ci = per_phase_data[name].get('ci')
-                if ci is not None:
-                    ci_maps.append(ci)
+            ci_maps = [g for g in (
+                _per_phase_ci_grid(per_phase_data[name], n_rows, n_cols, mask, name)
+                for name in per_phase_data) if g is not None]
             if len(ci_maps) >= 2:
-                ci_stack = np.stack(ci_maps, axis=0)
-                best_ci = np.max(ci_stack, axis=0)
-                ci_masked = ci_stack.copy()
-                best_idx = np.argmax(ci_stack, axis=0)
-                rows_idx, cols_idx = np.indices(best_idx.shape)
-                ci_masked[best_idx, rows_idx, cols_idx] = -np.inf
-                second_ci = np.max(ci_masked, axis=0)
-                second_ci = np.where(np.isinf(second_ci), 0.0, second_ci)
-                data = (best_ci - second_ci).astype(np.float32)
-                vmax = float(np.nanmax(data)) if np.nanmax(data) > 0 else 1.0
+                data = _uncertainty_from_grids(ci_maps).astype(np.float32)
+                vmax = float(np.nanmax(data)) if np.isfinite(data).any() and np.nanmax(data) > 0 else 1.0
         else:
             raise HTTPException(
                 status_code=400,

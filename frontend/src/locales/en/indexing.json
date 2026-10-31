@@ -258,6 +258,7 @@
   "actions": {
     "startIndexing": "Start Indexing",
     "startIndexingTip": "Start indexing with the selected method",
+    "startBlockedRoutingNoPhases": "Per-phase pixel routing is on, but no phase file is selected for this method. Select the phase files of the phase map, or switch routing off.",
     "indexing": "Indexing...",
     "indexingInProgress": "Indexing in progress...",
     "stop": "Stop",
@@ -314,7 +315,7 @@
   "mask": {
     "noChemistryMask": "No chemistry mask loaded. Use EDS filtering to create one.",
     "perPhaseRouting": "Per-phase pixel routing",
-    "perPhaseRoutingDesc": "Run each CIF only on its phase-map pixels.",
+    "perPhaseRoutingDesc": "Run each phase only on its phase-map pixels.",
     "perPhaseRoutingTip": "ON: each phase is tested only on its own classified pixels (faster, no cross-phase noise). OFF: every phase is tested against every classified pixel and the best one wins per pixel.",
     "andAll": "AND (all must match)",
     "orAny": "OR (any can match)",
@@ -409,6 +410,12 @@
     "chemMaskActivated": "Chemistry Mask mode activated from EDS filter",
     "handoffSkipped": "Phase-map handoff skipped — no map loaded on backend",
     "handoffMissing": "Phase-map handoff: {{count}} CIF(s) not in discovered files: {{list}}",
+    "handoffMissingForMethod": "Phase-map handoff ({{method}}): {{count}} phase(s) have no {{kind}} file, their pixels stay unindexed: {{list}}",
+    "handoffNeedsDictionary": "Phase-map handoff: {{count}} phase(s) have no dictionary that fits this detector and pattern centre (a master pattern alone is not enough). Generate a dictionary first; their pixels stay unindexed: {{list}}",
+    "handoffSeveralFiles": "Phase-map handoff: several {{kind}} files fit {{name}}; taken: {{taken}} (also fit: {{others}})",
+    "handoffKindHough": "CIF",
+    "handoffKindSpherical": "SHT",
+    "handoffKindDictionary": "dictionary",
     "handoffError": "ERROR loading phase-map handoff: {{error}}",
     "handoffApplied": "Phase-map handoff applied: {{phases}} phases · {{pixels}} pixels (per-phase routing ON)"
   },

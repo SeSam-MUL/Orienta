@@ -258,6 +258,7 @@
   "actions": {
     "startIndexing": "开始标定",
     "startIndexingTip": "使用所选方法开始标定",
+    "startBlockedRoutingNoPhases": "逐相像素路由已开启，但未为此方法选择任何相文件。请选择相分布图的相文件，或关闭路由。",
     "indexing": "标定中...",
     "indexingInProgress": "标定进行中...",
     "stop": "停止",
@@ -314,7 +315,7 @@
   "mask": {
     "noChemistryMask": "未加载化学掩膜。请使用 EDS 筛选创建一个。",
     "perPhaseRouting": "逐相像素路由",
-    "perPhaseRoutingDesc": "每个 CIF 仅在其相分布图像素上运行。",
+    "perPhaseRoutingDesc": "每个相仅在其相分布图像素上运行。",
     "perPhaseRoutingTip": "开: 每个相仅在其自身分类像素上测试（更快，无跨相噪声）。关: 每个相针对每个分类像素测试，逐像素取最佳者。",
     "andAll": "AND（全部必须匹配）",
     "orAny": "OR（任一匹配即可）",
@@ -409,6 +410,12 @@
     "chemMaskActivated": "已从 EDS 筛选激活化学掩膜模式",
     "handoffSkipped": "跳过相分布图交接 — 后端未加载图",
     "handoffMissing": "相分布图交接: {{count}} 个 CIF 不在已发现的文件中: {{list}}",
+    "handoffMissingForMethod": "相分布图交接（{{method}}）: {{count}} 个相没有 {{kind}} 文件，其像素保持未标定: {{list}}",
+    "handoffNeedsDictionary": "相分布图交接: {{count}} 个相没有适合此探测器和花样中心的 Dictionary（仅有主花样不够）。请先生成 Dictionary；这些相的像素保持未标定: {{list}}",
+    "handoffSeveralFiles": "相分布图交接: 有多个 {{kind}} 文件适合 {{name}}；已采用: {{taken}}（其他适合: {{others}}）",
+    "handoffKindHough": "CIF",
+    "handoffKindSpherical": "SHT",
+    "handoffKindDictionary": "Dictionary",
     "handoffError": "加载相分布图交接错误: {{error}}",
     "handoffApplied": "已应用相分布图交接: {{phases}} 个相 · {{pixels}} 个像素（逐相路由 开）"
   },

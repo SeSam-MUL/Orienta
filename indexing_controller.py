@@ -176,6 +176,8 @@ class ComparisonConfig:
     # GPU/CPU choice. Default "emsphinx" preserves legacy behaviour for
     # callers that don't set it explicitly.
     backend: str = "emsphinx"
+    # Dictionary compute mode ("auto" | "gpu" | "cpu"), as on IndexingConfig.
+    compute_mode: str = "auto"
 
     # Region selection
     row_start: int = 0
@@ -259,6 +261,23 @@ def enrich_phase_entries(results: List[Dict], db_root: Path) -> None:
             if "display_label" not in entry:
                 entry["display_label"] = entry["filename"]
             entry.setdefault("element_group", "Sonstiges")
+
+    # The CIF each file belongs to (a CIF is its own), by the unambiguous rules
+    # of phase_metadata.strict_linked_cif -- the SAME function per-phase routing
+    # joins request files to phase-map CIFs with. The EDS phase map names its
+    # phases by CIF filename only, so this is how the Indexing page finds the
+    # SHT / master / dictionary of a phase-map phase. None: no CIF is linked.
+    # Independent of the metadata above: a failure there must not hide it.
+    try:
+        from phase_metadata import strict_linked_cif
+        cif_dir = db_root / DATABASE_SUBFOLDERS["cif_library"]
+        for entry in results:
+            linked = strict_linked_cif(Path(entry["path"]), cif_dir)
+            entry["linked_cif"] = linked.name if linked is not None else None
+    except Exception:
+        logger.warning("could not link phase files to their CIFs", exc_info=True)
+        for entry in results:
+            entry.setdefault("linked_cif", None)
 
 
 def discover_files_for_method(
@@ -4155,10 +4174,18 @@ def run_single_phase_method(
     selection_mask: np.ndarray,
     h5_path: str = "",
     detector_params: Optional[Dict] = None,
+    progress_callback=None,
+    cancel_check=None,
 ) -> PhaseMethodResult:
     """Run indexing for one (phase, method) combination.
 
     Dispatches to the correct indexing function and wraps the result.
+
+    ``detector`` is the calibrated (store-resolved) detector; the Dictionary
+    path uses it for the projection, exactly as the single-phase route does.
+    ``config.compute_mode`` reaches the Dictionary indexer the same way.
+    ``progress_callback`` / ``cancel_check`` are forwarded to the indexers that
+    take them (EMSphInx CPU takes no cancel check).
     """
     n_rows, n_cols = signal.data.shape[:2]
     original_shape = (n_rows, n_cols)
@@ -4189,6 +4216,7 @@ def run_single_phase_method(
         # here would reject a junk value on a Hough or Dictionary run that
         # never reads it.
         backend=getattr(config, "backend", "emsphinx"),
+        compute_mode=getattr(config, "compute_mode", "auto"),
         sht_file=phase_config.sht_path,
         row_start=config.row_start,
         row_end=config.row_end,
@@ -4202,14 +4230,19 @@ def run_single_phase_method(
     if method == IndexingMethod.HOUGH:
         if phase_list is None:
             raise ValueError(f"Phase '{phase_config.name}': CIF/phase_list required for Hough indexing")
-        result = hough_index_patterns(signal, phase_list, detector, idx_config, selection_mask)
+        result = hough_index_patterns(
+            signal, phase_list, detector, idx_config, selection_mask,
+            progress_callback=progress_callback, cancel_check=cancel_check)
 
     elif method == IndexingMethod.DICTIONARY:
         if phase_config.dictionary is None:
             raise ValueError(f"Phase '{phase_config.name}': Dictionary signal required for Dictionary indexing")
         if phase_list is None:
             raise ValueError(f"Phase '{phase_config.name}': phase_list required for Dictionary indexing")
-        result = dictionary_index_patterns(signal, phase_config.dictionary, idx_config, selection_mask)
+        result = dictionary_index_patterns(
+            signal, phase_config.dictionary, idx_config, selection_mask,
+            progress_callback=progress_callback, cancel_check=cancel_check,
+            detector=detector)
 
     elif method == IndexingMethod.SPHERICAL:
         if not phase_config.sht_path:
@@ -4226,6 +4259,8 @@ def run_single_phase_method(
                 config=idx_config,
                 detector_params=detector_params or {},
                 selection_mask=selection_mask,
+                progress_callback=progress_callback,
+                cancel_check=cancel_check,
             )
         else:
             result = spherical_index_patterns(
@@ -4233,6 +4268,7 @@ def run_single_phase_method(
                 config=idx_config,
                 detector_params=detector_params or {},
                 selection_mask=selection_mask,
+                progress_callback=progress_callback,
             )
 
     else:
@@ -4643,6 +4679,183 @@ def _index_selected_hough(signal, selected_indices, phase_list, indexer, detecto
     return xmap
 
 
+def per_phase_match_sources(results, n_total: int, mask_flat_of) -> Dict:
+    """Where the pattern-match dialog can fetch a simulated pattern from, per phase.
+
+    The merged xmap carries neither ``simulation_indices`` (``build_consensus_xmap``
+    builds a bare CrystalMap with no ``prop``) nor the dictionary itself, so each
+    phase's ``dict_path`` and its ``simulation_indices`` -- lifted onto the full
+    grid, so the dialog can index them with a plain ``row * n_cols + col`` -- are
+    kept in the merged metadata. Without it every multi-phase Dictionary run
+    showed "Dictionary not in memory", however well it had indexed.
+
+    ``mask_flat_of(pmr)`` returns the flat boolean mask the phase's rows follow
+    (``None`` for "the whole grid"): one shared mask for the competitive path,
+    the phase's own pixels for a phase-map routed run.
+    """
+    sources: Dict = {}
+    for pmr in results:
+        try:
+            src_meta = getattr(pmr.indexing_result, 'metadata', None) or {}
+            src_dict_path = src_meta.get('dict_path')
+            src_xmap = pmr.indexing_result.xmap
+            src_sim = None
+            if hasattr(src_xmap, 'prop') and 'simulation_indices' in src_xmap.prop:
+                src_sim = np.asarray(src_xmap.prop['simulation_indices'])
+            if src_dict_path and src_sim is not None:
+                sel_mask_flat = mask_flat_of(pmr)
+                sim_2d = src_sim.reshape(src_sim.shape[0], -1) if src_sim.ndim > 1 \
+                    else src_sim.reshape(-1, 1)
+                sim_full = np.full((n_total, sim_2d.shape[1]), -1, dtype=np.int64)
+                if sel_mask_flat is not None and sim_2d.shape[0] == int(sel_mask_flat.sum()):
+                    sim_full[sel_mask_flat] = sim_2d
+                elif sim_2d.shape[0] == n_total:
+                    sim_full = sim_2d.astype(np.int64)
+                else:
+                    sim_full = None
+                if sim_full is not None:
+                    sources[pmr.phase_name] = {
+                        'dict_path': src_dict_path,
+                        'simulation_indices': sim_full,
+                    }
+        except Exception as e:
+            logger.warning(
+                "Could not record match source for %s: %s", pmr.phase_name, e
+            )
+    return sources
+
+
+def _routed_confidence(pmr, n_pix: int):
+    """One phase's per-pixel confidence as a 1-D array of ``n_pix``, or ``None``."""
+    ci = getattr(pmr.indexing_result, 'confidence_scores', None)
+    if ci is None:
+        return None
+    arr = np.asarray(ci)
+    if arr.dtype == object or not np.issubdtype(arr.dtype, np.number):
+        return None
+    if arr.ndim >= 2:
+        # Hough: (n_phases + 1, n_pix), the last row the best-across-phases;
+        # Dictionary top-N: (n_pix, keep_n), column 0 the best match.
+        if arr.shape[-1] == n_pix:
+            arr = arr[-1]
+        elif arr.shape[0] == n_pix:
+            arr = arr[:, 0]
+    arr = arr.astype(np.float32).ravel()
+    return arr if arr.size == n_pix else None
+
+
+def _carry_routed_fields(merged_result, per_phase_results, original_shape) -> None:
+    """Give a phase-map routed result what a competitive multi-phase one has.
+
+    ``build_consensus_xmap`` keeps orientations and phases and nothing else, so a
+    routed result had no ``confidence_scores`` (the CI layer and the phase
+    statistics read them), an empty ``xmap.prop``, no ``per_phase_match_sources``
+    (a routed Dictionary pattern match said "Dictionary not in memory") and no
+    ``orientation_source``. Each phase ran on its own pixels only, so the pieces
+    are lifted onto the full grid at those pixels, NaN / -1 elsewhere.
+    Never raises: a missing nicety must not lose a finished run.
+    """
+    n_total = int(original_shape[0]) * int(original_shape[1])
+
+    def flat_mask(pmr):
+        sm = np.asarray(pmr.indexing_result.selection_mask).ravel().astype(bool)
+        return sm if sm.size == n_total else None
+
+    try:
+        ci_full = np.full(n_total, np.nan, dtype=np.float32)
+        have_ci = False
+        for pmr in per_phase_results:
+            sm = flat_mask(pmr)
+            if sm is None:
+                continue
+            arr = _routed_confidence(pmr, int(sm.sum()))
+            if arr is not None:
+                ci_full[sm] = arr
+                have_ci = True
+        if have_ci:
+            merged_result.confidence_scores = ci_full
+            try:
+                merged_result.xmap.prop['ci'] = ci_full
+            except Exception:  # noqa: BLE001 -- an exotic map type
+                logger.debug("could not set xmap.prop['ci'] on the routed map",
+                             exc_info=True)
+    except Exception:  # noqa: BLE001
+        logger.warning("could not carry the confidence index into the routed result",
+                       exc_info=True)
+
+    try:
+        sources = per_phase_match_sources(per_phase_results, n_total, flat_mask)
+        if sources:
+            merged_result.metadata['per_phase_match_sources'] = sources
+    except Exception:  # noqa: BLE001
+        logger.warning("could not carry the match sources into the routed result",
+                       exc_info=True)
+
+    # What a competitive multi-phase result also has, in the same shapes: the
+    # per-phase orientation / CI grids ('per_phase_data', read by the per-phase
+    # CI layers and the export) and the per-phase summary the Indexing page
+    # shows ('per_phase_stats' with the 'multi_phase' flag).
+    try:
+        per_phase_data = {}
+        per_phase_stats = []
+        total_indexed = max(int(np.asarray(merged_result.selection_mask).sum()), 1)
+        for pmr in per_phase_results:
+            sm = flat_mask(pmr)
+            if sm is None:
+                continue
+            n_pix = int(sm.sum())
+            euler_full = np.full((n_total, 3), np.nan, dtype=np.float32)
+            euler_arr = np.asarray(
+                pmr.indexing_result.xmap.rotations.to_euler(degrees=False)
+            ).reshape(-1, 3).astype(np.float32)
+            if euler_arr.shape[0] == n_pix:
+                euler_full[sm] = euler_arr
+            ci_full_pp = np.full(n_total, np.nan, dtype=np.float32)
+            ci_arr = _routed_confidence(pmr, n_pix)
+            if ci_arr is not None:
+                ci_full_pp[sm] = ci_arr
+            per_phase_data[pmr.phase_name] = {
+                'euler': euler_full.reshape((*original_shape, 3)),
+                'ci': ci_full_pp.reshape(original_shape),
+                'ci_mean': float(pmr.mean_score),
+            }
+            per_phase_stats.append({
+                'name': pmr.phase_name,
+                'ci': round(float(pmr.mean_score), 4),
+                'pixels': n_pix,
+                'fraction': round(n_pix / total_indexed * 100, 1),
+            })
+        per_phase_stats.sort(key=lambda x: x['pixels'], reverse=True)
+        if per_phase_data:
+            merged_result.metadata['multi_phase'] = True
+            merged_result.metadata['n_phases'] = len(per_phase_results)
+            merged_result.metadata['per_phase_data'] = per_phase_data
+            merged_result.metadata['per_phase_stats'] = per_phase_stats
+    except Exception:  # noqa: BLE001
+        logger.warning("could not carry the per-phase data into the routed result",
+                       exc_info=True)
+
+    try:
+        origins = {}
+        reasons = []
+        for pmr in per_phase_results:
+            md = getattr(pmr.indexing_result, 'metadata', None) or {}
+            src = md.get('orientation_source')
+            if src:
+                origins[pmr.phase_name] = src
+                if md.get('orientation_source_reason'):
+                    reasons.append(f"{pmr.phase_name}: {md['orientation_source_reason']}")
+        if origins:
+            kinds = set(origins.values())
+            merged_result.metadata['orientation_source'] = (
+                kinds.pop() if len(kinds) == 1 else 'mixed')
+            if reasons:
+                merged_result.metadata['orientation_source_reason'] = " ".join(reasons)
+    except Exception:  # noqa: BLE001
+        logger.warning("could not carry the orientation source into the routed result",
+                       exc_info=True)
+
+
 def run_per_phase_indexing(
     signal,
     detector,
@@ -4654,6 +4867,8 @@ def run_per_phase_indexing(
     h5_path: str = "",
     detector_params: Optional[Dict] = None,
     progress_cb: Optional[callable] = None,
+    run_phase: Optional[callable] = None,
+    cancel_check: Optional[callable] = None,
 ) -> IndexingResult:
     """Run indexing once per phase, each restricted to that phase's pixels.
 
@@ -4689,6 +4904,23 @@ def run_per_phase_indexing(
         Optional callback ``progress_cb(message: str, fraction: float)``
         invoked at the start of each phase pass + at merge time, so the
         caller can pipe progress to a long-running task UI.
+    run_phase
+        Optional ``run_phase(phase_config, mask) -> PhaseMethodResult`` that
+        does one phase's pass instead of the plain
+        :func:`run_single_phase_method` call. The route passes one for
+        Dictionary, so a phase's dictionary (gigabytes) is loaded for its own
+        pass and released afterwards. ``None`` (the default) keeps the plain
+        call, so every other caller is unchanged. Whatever it raises is
+        handled like a failure of the plain call: the phase is skipped and
+        its pixels stay unclassified.
+    cancel_check
+        Optional ``cancel_check() -> bool``, the user's Stop. Polled before
+        every phase and handed to the plain per-phase call (which polls it
+        inside the indexer). A cancel raises :class:`IndexingCancelled` out of
+        this function: it is not a failed phase and must not be counted as a
+        skipped one, or Stop would run the remaining phases and the run would
+        finish as if nothing had been asked. A ``run_phase`` runner is expected
+        to carry the same check itself.
 
     Returns
     -------
@@ -4734,28 +4966,47 @@ def run_per_phase_indexing(
     per_phase_results: List[PhaseMethodResult] = []
     skipped: List[Tuple[int, str]] = []
     for i, (pc, mask) in enumerate(zip(phase_configs, masks_per_phase)):
+        if cancel_check is not None and cancel_check():
+            raise IndexingCancelled("Indexing cancelled by user")
         if not mask.any():
             skipped.append((i, "empty mask"))
             logger.info("Per-phase indexing: skipping phase %s (empty mask)", pc.name)
             continue
+        # 0.1 .. 0.9 like the competitive loop: the route has already reported
+        # 0.1 for the selection mask, and the bar must not go backwards.
+        phase_fraction = 0.1 + 0.8 * (i / max(len(phase_configs), 1))
         if progress_cb:
             progress_cb(
                 f"Phase {i + 1}/{len(phase_configs)}: {pc.name} "
                 f"({int(mask.sum())} pixels)",
-                0.05 + 0.85 * (i / max(len(phase_configs), 1)),
+                phase_fraction,
             )
+
+        def _phase_progress(msg, pct=None, _frac=phase_fraction):
+            # The indexer's own fraction is of ITS phase; the bar belongs to
+            # the whole run, so only the message goes on.
+            if progress_cb:
+                progress_cb(msg, _frac)
+
         try:
-            pmr = run_single_phase_method(
-                signal=signal,
-                detector=detector,
-                phase_config=pc,
-                method=method,
-                config=config,
-                selection_mask=mask,
-                h5_path=h5_path if method == IndexingMethod.SPHERICAL else "",
-                detector_params=detector_params if method == IndexingMethod.SPHERICAL else None,
-            )
+            if run_phase is not None:
+                pmr = run_phase(pc, mask)
+            else:
+                pmr = run_single_phase_method(
+                    signal=signal,
+                    detector=detector,
+                    phase_config=pc,
+                    method=method,
+                    config=config,
+                    selection_mask=mask,
+                    h5_path=h5_path if method == IndexingMethod.SPHERICAL else "",
+                    detector_params=detector_params if method == IndexingMethod.SPHERICAL else None,
+                    progress_callback=_phase_progress if progress_cb else None,
+                    cancel_check=cancel_check,
+                )
             per_phase_results.append(pmr)
+        except IndexingCancelled:
+            raise
         except Exception as exc:
             logger.warning("Per-phase indexing: phase %s failed: %s", pc.name, exc)
             skipped.append((i, str(exc)))
@@ -4825,4 +5076,5 @@ def run_per_phase_indexing(
     )
     from backend.api.services.citations.provenance import merge_provenance
     merge_provenance(merged_result, (pmr.indexing_result for pmr in per_phase_results))
+    _carry_routed_fields(merged_result, per_phase_results, (n_rows, n_cols))
     return merged_result
