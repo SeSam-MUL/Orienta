@@ -109,6 +109,43 @@ describe('LayerStackPanel — assignment-source provenance row', () => {
     expect(screen.getByTitle("PC Δy (px) — Run 'Refine R + PC' first")).toBeTruthy();
   });
 
+  it('in the refined view a held-back row says where the data is, not "run it first"', () => {
+    // The refinement block sits on the ORIGINAL result. With the refined
+    // result on screen the layer is held back, but telling the user to run the
+    // refinement they have just run would be false.
+    render(<LayerStackPanel {...baseProps}
+      bitmaps={new Map([['pc-delta-y', {}]])}
+      layers={[layer('pc-delta-y', 'PC Δy (px)')]}
+      derivedReady={{ diagnostics: false, refinement: false, refinedView: true,
+        diagnosticsOnOriginal: false, refinementOnOriginal: true }} />);
+    expect(screen.getByTitle(
+      'PC Δy (px) — Computed on the original result; switch the view to Original to use it'))
+      .toBeTruthy();
+  });
+
+  it('in the refined view a diagnostic nobody computed still says "compute it first"', () => {
+    // Held back in the refined view all the same, but the original result does
+    // not have it either: "switch to Original" would send the user to a place
+    // where the layer is just as unavailable.
+    render(<LayerStackPanel {...baseProps}
+      bitmaps={new Map([['forward-ncc', {}]])}
+      layers={[layer('forward-ncc', 'Forward NCC')]}
+      derivedReady={{ diagnostics: false, refinement: false, refinedView: true,
+        diagnosticsOnOriginal: false, refinementOnOriginal: true }} />);
+    expect(screen.getByTitle("Forward NCC — Run 'Compute Diagnostics' first")).toBeTruthy();
+  });
+
+  it('in the refined view a diagnostic computed on the original points to the original', () => {
+    render(<LayerStackPanel {...baseProps}
+      bitmaps={new Map([['forward-ncc', {}]])}
+      layers={[layer('forward-ncc', 'Forward NCC')]}
+      derivedReady={{ diagnostics: false, refinement: false, refinedView: true,
+        diagnosticsOnOriginal: true, refinementOnOriginal: false }} />);
+    expect(screen.getByTitle(
+      'Forward NCC — Computed on the original result; switch the view to Original to use it'))
+      .toBeTruthy();
+  });
+
   it('without an answer the old store reading stands', () => {
     // Other pages pass no derivedReady; their behaviour must not shift.
     render(<LayerStackPanel {...baseProps}

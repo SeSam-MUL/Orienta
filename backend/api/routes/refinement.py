@@ -6,7 +6,7 @@ Two sets of endpoints coexist on this router:
   ``/{file_stem}/pixel/{row}/{col}``, ``/{file_stem}/override`` and
   ``/{file_stem}/override-region`` — operate on ``_multiphase.h5``
   checkpoints from the batch-v2 phase-refinement UI.
-* Joint R+PC refinement (Phase B): ``/compute``, ``/resmooth``, ``/cancel``,
+* Joint R+PC refinement: ``/compute``, ``/resmooth``, ``/cancel``,
   ``/progress`` and ``/summary`` — drive the new joint orientation +
   pattern-centre refinement orchestrator
   (``backend.api.services.refinement.compute_full_refinement``).
@@ -14,8 +14,6 @@ Two sets of endpoints coexist on this router:
 The two groups never share a path: the legacy endpoints all live below a
 ``{file_stem}`` path-parameter segment and never match the bare single-segment
 joint-refinement endpoints registered below.
-
-Spec: ``docs/superpowers/specs/2026-05-14-joint-r-pc-refinement-design.md``.
 """
 import logging
 import os
@@ -67,7 +65,8 @@ async def get_summary(file_stem: str, search_dir: Optional[str] = Query(None)):
                 "mean_uncertainty": float(np.nanmean(uncertainty)),
                 "uncertain_pixels": int(int(np.sum(uncertainty < 0.3))),
             }
-    return {"phases": phases, "grid_shape": grid_shape, "auto_assignment_stats": auto}
+    # json_safe: nanmean of an all-NaN map is NaN, which JSON does not have.
+    return json_safe({"phases": phases, "grid_shape": grid_shape, "auto_assignment_stats": auto})
 
 
 @router.get("/{file_stem}/pixel/{row}/{col}")
@@ -187,14 +186,19 @@ async def set_region_override(file_stem: str, req: RegionOverrideRequest, search
 
 
 # ============================================================================
-# Joint R+PC refinement endpoints (Phase B).
+# Joint R+PC refinement endpoints.
 #
-# Spec: docs/superpowers/specs/2026-05-14-joint-r-pc-refinement-design.md
 # These talk to backend.api.services.refinement.compute_full_refinement and
 # operate on the in-memory indexing-result registry (not multiphase .h5 files).
 # ============================================================================
-from backend.api.routes.indexing import _result_registry  # noqa: E402
+from backend.api.routes import indexing as _indexing_routes  # noqa: E402
 from backend.api.services import refinement as _svc  # noqa: E402
+from backend.api.services.forward_diagnostics import json_safe  # noqa: E402
+
+# The result registry is read through the indexing module at call time, never
+# bound by name: whoever replaces ``indexing._result_registry`` (a test giving
+# itself a private one) must replace it for these routes too, however early or
+# late this module was first imported.
 
 
 class ComputeRequest(BaseModel):
@@ -219,7 +223,7 @@ def _estimate_seconds(result, has_cache: bool) -> int:
 
 @router.post("/compute")
 def compute(req: ComputeRequest):
-    result = _result_registry.get(req.result_id)
+    result = _indexing_routes._result_registry.get(req.result_id)
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -285,13 +289,21 @@ def compute(req: ComputeRequest):
                 max_outer_iter=req.max_outer_iter,
                 force_full_recompute=req.force_full_recompute,
             )
-            if _result_registry.get(req.result_id) is not result:
+            # The refined result this compute registered, if any: whatever
+            # way the job ends below, it must not outlive a refinement that
+            # the user cancelled or that lost its parent.
+            just_made = (((result.metadata or {}).get("refinement") or {})
+                         .get("refined_result_id"))
+            if _indexing_routes._result_registry.get(req.result_id) is not result:
+                _svc.forget_refined_result(just_made)
                 job.mark_failed("result was replaced during compute")
                 return
             if job.cancel_event.is_set():
                 # Cancel-vs-completed race: orchestrator returned normally but
                 # a cancel landed before we mark the job. Drop the just-written
-                # refinement metadata so the registry reflects the cancel.
+                # refinement metadata AND the refined result it registered, so
+                # the registry reflects the cancel.
+                _svc.forget_refined_result(just_made, fallback_rid=req.result_id)
                 try:
                     (result.metadata or {}).pop("refinement", None)
                     (result.metadata or {}).pop("_refinement_stage1_cache", None)
@@ -324,7 +336,7 @@ def compute(req: ComputeRequest):
 
 @router.post("/resmooth")
 def resmooth(req: ResmoothRequest):
-    result = _result_registry.get(req.result_id)
+    result = _indexing_routes._result_registry.get(req.result_id)
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -374,7 +386,7 @@ def progress(job_id: str):
 
 @router.get("/summary")
 def summary(result_id: str):
-    result = _result_registry.get(result_id)
+    result = _indexing_routes._result_registry.get(result_id)
     if result is None:
         raise HTTPException(
             status_code=404,
@@ -386,7 +398,10 @@ def summary(result_id: str):
             status_code=404,
             detail={"error": "refinement not yet computed for this result"},
         )
-    return {
+    # json_safe here, where the block becomes a response: a summary of a map
+    # with no valid value is NaN throughout, and JSON has no NaN (the route
+    # answered 500). The stored block keeps its numbers as they are.
+    return json_safe({
         "computed": True,
         "refined_result_id": block["refined_result_id"],
         "smoothness_lambda": block["smoothness_lambda"],
@@ -398,4 +413,4 @@ def summary(result_id: str):
         },
         "outer_iterations": block["outer_iterations"],
         "summary": block["summary"],
-    }
+    })

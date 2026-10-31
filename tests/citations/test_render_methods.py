@@ -13,6 +13,28 @@ def test_fills_named_slots_from_params():
     assert "Orienta 0.3.0" in out
 
 
+def test_a_yes_no_format_spec_picks_the_text_the_recorded_flag_selects():
+    """``{flag:text if true|text if false}``: a sentence can follow a recorded
+    boolean. Nested slots in the chosen text are filled as usual."""
+    from backend.api.services.citations.render import _METHODS_FORMATTER as fmt
+    template = "It ran {ran:with weight {w}|without the step}."
+    assert fmt.vformat(template, (), {"ran": True, "w": 0.5}) == "It ran with weight 0.5."
+    assert fmt.vformat(template, (), {"ran": False, "w": 0.5}) == "It ran without the step."
+
+
+def test_a_yes_no_format_spec_on_an_unrecorded_flag_names_it_missing():
+    """Not recorded is neither branch: the honesty rule stays (a blank beats
+    a guess)."""
+    from backend.api.services.citations.render import _METHODS_FORMATTER as fmt
+    out = fmt.vformat("It ran {ran:with|without}.", (), {})
+    assert out == "It ran [ran not recorded]."
+
+
+def test_a_plain_bool_without_a_choice_spec_still_reads_yes_no():
+    from backend.api.services.citations.render import _METHODS_FORMATTER as fmt
+    assert fmt.vformat("{a} {b}", (), {"a": True, "b": False}) == "yes no"
+
+
 def test_missing_param_is_named_not_defaulted():
     """Honesty rule 2: a blank beats a guessed number."""
     out = render_methods([

@@ -55,7 +55,7 @@ function LayerRow({
   // diagnostics computed for the active result; layers flagged
   // `requiresRefinement` need joint R+PC refinement computed. Until then they
   // render visually disabled with a locked visibility toggle (user can still
-  // remove). Phase A pattern, extended for Phase B refinement.
+  // remove). The same pattern serves the forward-model diagnostics and the refinement layers.
   //
   // `derivedReady` is the answer the page got from the backend, and it wins:
   // the store only knows what this browser session computed, so a result
@@ -75,9 +75,18 @@ function LayerRow({
   const isGatedDiag = !!def?.requiresCompute && !diagReady;
   const isGatedRef = !!def?.requiresRefinement && !refReady;
   const isGated = isGatedDiag || isGatedRef;
-  const gateHint = isGatedRef
-    ? t('phasemap:layers.gateRefHint')
-    : t('phasemap:layers.gateDiagHint');
+  // In the refined view a layer that IS computed lives on the other result:
+  // say that instead of telling the user to compute what is already computed.
+  // One that was never computed gets the ordinary reason -- sending the user
+  // to the original result would lead them to the same missing layer.
+  const computedOnOriginal = !!derivedReady?.refinedView && !!(isGatedRef
+    ? derivedReady.refinementOnOriginal
+    : derivedReady.diagnosticsOnOriginal);
+  const gateHint = computedOnOriginal
+    ? t('phasemap:layers.gateRefinedView')
+    : (isGatedRef
+      ? t('phasemap:layers.gateRefHint')
+      : t('phasemap:layers.gateDiagHint'));
   const gateSuffix = isGatedRef ? t('phasemap:layers.gateRefSuffix') : t('phasemap:layers.gateDiagSuffix');
 
   // Catalog layers may declare a translated name and a legend. The legend

@@ -2,8 +2,8 @@
  * RefinementPanel - smoothness slider + Refine button + progress + summary display.
  * Lives below ComputeDiagnosticsPanel in PhaseMapPage right settings panel.
  *
- * Mirrors ComputeDiagnosticsPanel (Phase A) for state-management patterns, but
- * uses refinementApi (Phase B joint R+PC refinement) instead of forwardDiagApi.
+ * Mirrors ComputeDiagnosticsPanel for state-management patterns, but
+ * uses refinementApi (joint R+PC refinement) instead of forwardDiagApi.
  */
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,9 +19,13 @@ const sliderToLambda = (v) =>
 const lambdaToSlider = (l) =>
   ((Math.log10(l) - _LAMBDA_MIN_LOG) / (_LAMBDA_MAX_LOG - _LAMBDA_MIN_LOG)) * 100;
 
-export default function RefinementPanel({ resultId, onSwitchToRefined }) {
+// `resultId` is the ORIGINAL result; `refinedResultId` is its refined result
+// as the backend lists it (null when there is none). Both come from the page.
+export default function RefinementPanel({ resultId, refinedResultId = null, onSwitchToRefined }) {
   const { t } = useTranslation('phasemap');
   const [error, setError] = useState(null);
+  // Not an error: the job finished but its summary could not be read.
+  const [notice, setNotice] = useState(null);
   const job = useDataStore((s) => s.refinementJob);
   const computedMap = useDataStore((s) => s.refinementComputed);
   const setJob = useDataStore((s) => s.setRefinementJob);
@@ -31,6 +35,48 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
 
   const computed = resultId ? computedMap[resultId] : null;
   const pollRef = useRef(null);
+
+  // The note belongs to the result it was made for.
+  useEffect(() => { setNotice(null); }, [resultId]);
+
+  // A refined result exists (the backend lists it) but this session never
+  // recorded the refinement -- after a reload, or a loaded result. Read its
+  // stored summary once so the panel can show lambda, timings and counts. A
+  // failure changes nothing: the buttons below depend on `refinedResultId`.
+  useEffect(() => {
+    if (!resultId || !refinedResultId) return undefined;
+    const known = useDataStore.getState().refinementComputed[resultId];
+    if (known) {
+      // Already read (or computed here): the slider still follows the shown
+      // original, so chip A -> B -> A keeps A's lambda and "Open Refined".
+      if (Number.isFinite(known.lambda) && known.lambda > 0) setSliderLambda(known.lambda);
+      return undefined;
+    }
+    let cancelled = false;
+    Promise.resolve()
+      .then(() => refinementApi.summary(resultId))
+      .then((s) => {
+        if (cancelled || !s) return;
+        if (useDataStore.getState().refinementComputed[resultId]) return;
+        // The slider takes the lambda the refinement was made with: left at its
+        // default, a different stored lambda would turn the buttons into
+        // Re-Smooth only and take "Open Refined" away before the user has
+        // touched anything.
+        if (Number.isFinite(s.smoothness_lambda) && s.smoothness_lambda > 0) {
+          setSliderLambda(s.smoothness_lambda);
+        }
+        setComputed(resultId, {
+          lambda: s.smoothness_lambda,
+          computed_at: s.computed_at,
+          refined_result_id: s.refined_result_id,
+          summary: s.summary,
+          stage_timings: s.stage_timings,
+        });
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultId, refinedResultId]);
 
   // Poll progress while a job is running for this result.
   // Latest job snapshot is read inside the interval via useDataStore.getState()
@@ -52,8 +98,18 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
           setJob({ ...currentJob, ...p });
         }
         if (p.state === 'completed') {
-          const s = await refinementApi.summary(resultId);
+          // The job's own state is the truth: it finished. Failing to read its
+          // summary afterwards is a different, smaller problem and must not
+          // be reported as a failed refinement (it used to land in the catch
+          // below and show the server's error under the Refine button).
+          let s = null;
+          try {
+            s = await refinementApi.summary(resultId);
+          } catch (summaryErr) {
+            console.warn('[RefinementPanel] summary unavailable after a completed job:', summaryErr);
+          }
           if (s) {
+            setNotice(null);
             setComputed(resultId, {
               lambda: s.smoothness_lambda,
               computed_at: s.computed_at,
@@ -61,6 +117,8 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
               summary: s.summary,
               stage_timings: s.stage_timings,
             });
+          } else {
+            setNotice(t('phasemap:refinement.summaryUnavailable'));
           }
           setJob(null);
         }
@@ -85,6 +143,7 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
   const onRefine = async () => {
     if (!resultId) return;
     setError(null);
+    setNotice(null);
     try {
       const r = await refinementApi.compute(resultId, sliderLambda, false);
       setJob({
@@ -103,6 +162,7 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
   const onResmooth = async () => {
     if (!resultId) return;
     setError(null);
+    setNotice(null);
     try {
       const r = await refinementApi.resmooth(resultId, sliderLambda);
       setJob({
@@ -130,8 +190,12 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
 
   const isRunning = !!(job && job.result_id === resultId && job.state === 'running');
   const lambdaChanged = !!(computed && Math.abs(computed.lambda - sliderLambda) > 1e-6);
-  const hasCache = computed != null;
+  // A refined result exists: the backend keeps the stage-1 cache with it, so
+  // this is the "already refined" state whether or not this session has the
+  // summary in its store.
+  const hasCache = computed != null || !!refinedResultId;
   const progressPct = Math.round((job?.progress || 0) * 100);
+  const nccMean = computed?.summary?.ncc_improvement?.mean;
 
   return (
     <div style={{
@@ -188,7 +252,7 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
                 <Button onClick={onRefine} disabled={!resultId} title={t('phasemap:hoverTips.reRefine')}>
                   {t('phasemap:refinement.reRefine')}
                 </Button>
-                <Button onClick={onSwitchToRefined} disabled={!computed} title={t('phasemap:hoverTips.openRefined')}>
+                <Button onClick={onSwitchToRefined} disabled={!refinedResultId && !computed} title={t('phasemap:hoverTips.openRefined')}>
                   {t('phasemap:refinement.openRefined')}
                 </Button>
               </>
@@ -212,9 +276,16 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
                   s3: computed.stage_timings?.stage_3?.toFixed(0),
                 })}
               </div>
-              <div>
-                {t('phasemap:refinement.nccImprovement', { value: computed.summary?.ncc_improvement?.median?.toFixed(2) })}
-              </div>
+              {/* `ncc_improvement` is null when the original result has no forward
+                  diagnostics to compare with; the summary has a mean (no median). */}
+              {Number.isFinite(nccMean) && (
+                <div>
+                  {t('phasemap:refinement.nccImprovement', {
+                    // sign of the ROUNDED number: no "-0.00"
+                    value: `${Math.round(nccMean * 100) < 0 ? '-' : '+'}${Math.abs(nccMean).toFixed(2)}`,
+                  })}
+                </div>
+              )}
               <div>
                 {t('phasemap:refinement.pixelSummary', {
                   refined: computed.summary?.n_pixels_refined,
@@ -255,6 +326,16 @@ export default function RefinementPanel({ resultId, onSwitchToRefined }) {
           <div style={{ marginTop: 8 }}>
             <Button onClick={onCancel} title={t('phasemap:hoverTips.refineCancel')}>{t('phasemap:refinement.cancel')}</Button>
           </div>
+        </div>
+      )}
+
+      {notice && !error && (
+        <div style={{
+          color: colors.textSecondary,
+          fontSize: '9pt',
+          marginTop: 8,
+        }}>
+          {notice}
         </div>
       )}
 

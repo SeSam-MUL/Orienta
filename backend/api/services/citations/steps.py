@@ -35,7 +35,14 @@ Which keys are WIRED (i.e. some code path calls ``record_step`` with them):
 own reflector selection), ``indexing.dictionary``, ``indexing.spherical``,
 ``indexing.spherical_emsphinx``, ``eds.chemistry_prior``,
 ``eds.particle_rescue``, ``pseudosym.resolver``, ``indexing.hough_anchor``,
-``calibration.pc_refinement`` and ``refinement.orientation``.
+``calibration.pc_refinement``, ``refinement.orientation`` and
+``refinement.joint_r_pc``.
+
+``refinement.joint_r_pc`` is recorded on the REFINED result of a joint R+PC
+refinement (the parent's trail plus this one step; the parent's own trail is
+not changed), once per refinement of that parent. It is a different step from
+``refinement.orientation``, the orientation-only refinement of a dictionary
+result.
 
 ``calibration.pc_refinement`` is recorded on a result only when the pattern
 centre the run was indexed at really came out of PC refinement (global refine
@@ -205,6 +212,28 @@ _STEPS = (
         sentence=(
             "Orientations were refined against simulated patterns "
             "({n_refined} pixels)."
+        ),
+    ),
+    StepCitation(
+        key="refinement.joint_r_pc",
+        label="Joint orientation and pattern-centre refinement",
+        citation_ids=("orienta", "emsoft"),
+        sentence=(
+            "Orientations were refined jointly with a per-pixel correction of "
+            "the pattern centre against patterns simulated from the master "
+            "pattern at spherical-harmonic bandwidth {bandwidth}, "
+            "{smoothness_applied:with a spatial smoothness constraint on the "
+            "pattern-centre correction (smoothness weight "
+            "{smoothness_lambda})|without smoothing of the pattern-centre "
+            "correction (the smoothing step was skipped)} and "
+            "{outer_iterations} outer iterations, as implemented in Orienta "
+            "{orienta_version}. The total orientation change was limited to "
+            "{orientation_bound_deg} deg, the pattern-centre shift to "
+            "{pc_bound_px} px in x and y and the change of the "
+            "sample-to-detector distance to {distance_bound_um} um. Of the "
+            "{n_pixels_refined} pixels refined, {n_converged} converged, "
+            "{n_max_iter} stopped at the iteration limit and {n_failed} "
+            "failed."
         ),
     ),
 )

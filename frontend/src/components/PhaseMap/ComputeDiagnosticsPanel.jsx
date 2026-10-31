@@ -10,7 +10,10 @@ import useDataStore from '../../stores/useDataStore';
 import { forwardDiagApi } from '../../services/api';
 import { colors, spacing, Button, Select } from '../../theme/components';
 
-export default function ComputeDiagnosticsPanel({ resultId, onOpenBrowser }) {
+// `heldBack` (a reason, or null): the diagnostics cannot be used from the view
+// on screen (the refined view -- they belong to the original result). The
+// panel then shows the reason and offers neither Compute nor the browser.
+export default function ComputeDiagnosticsPanel({ resultId, onOpenBrowser, heldBack = null }) {
   const { t } = useTranslation('phasemap');
   const BANDWIDTH_OPTIONS = [
     { value: 128, label: t('phasemap:diagnostics.bwFast') },
@@ -152,20 +155,25 @@ export default function ComputeDiagnosticsPanel({ resultId, onOpenBrowser }) {
           <div style={{ marginTop: spacing.innerSpacing, display: 'flex', gap: spacing.innerSpacing, flexWrap: 'wrap' }}>
             <Button
               onClick={onCompute}
-              disabled={!resultId}
+              disabled={!resultId || !!heldBack}
               variant="primary"
-              title={!resultId ? t('phasemap:diagnostics.noActiveResult') : undefined}
+              title={heldBack || (!resultId ? t('phasemap:diagnostics.noActiveResult') : undefined)}
             >
               {computed ? t('phasemap:diagnostics.recompute') : t('phasemap:diagnostics.compute')}
             </Button>
             <Button
               onClick={onOpenBrowser}
-              disabled={!computed}
-              title={!computed ? t('phasemap:diagnostics.computeFirst') : undefined}
+              disabled={!computed || !!heldBack}
+              title={heldBack || (!computed ? t('phasemap:diagnostics.computeFirst') : undefined)}
             >
               {t('phasemap:diagnostics.openBrowser')}
             </Button>
           </div>
+          {heldBack && (
+            <div style={{ fontSize: '8.5pt', color: colors.textSecondary, marginTop: 6 }}>
+              {heldBack}
+            </div>
+          )}
           {computed && (
             <div style={{
               fontSize: '8.5pt',

@@ -1144,6 +1144,15 @@ const UNINDEXED_PHASE_NAMES = new Set([
   '', 'not_indexed', 'not indexed', 'notindexed',
   'unindexed', 'nothing', 'none', 'null',
 ]);
+// The result the backend draws, out of its `/api/indexing/results` list: the
+// ACTIVE one, and nothing else. With none active the layer endpoints draw the
+// analysis dataset (an .ang/.ctf file entry, a batch hand-off), not "the newest
+// stored run" -- so null here means "no indexing result is shown". Every place
+// that reads the list to learn what is on screen uses this one rule.
+function pickShown(results) {
+  return results.find((r) => r.is_active) ?? null;
+}
+
 function isUnindexedPhase(name) {
   return name == null || UNINDEXED_PHASE_NAMES.has(String(name).trim().toLowerCase());
 }
@@ -1731,11 +1740,24 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // (Declared up here so the annotation + legend hooks below can use it;
   // the fetch that fills it lives further down, next to the other syncs.)
   const [backendResultId, setBackendResultId] = useState(null);
-  // Whichever result is on screen: a run made in this session wins, else
-  // the backend's active/last result. Every phase-facing gate (legend,
-  // adjacency, annotation stats, layer picker) keys off THIS — gating on
-  // the store alone showed "load a result first" beside a drawn map.
-  const shownResultId = indexingResult?.result_id ?? backendResultId;
+  // The backend's list of results, reduced to what pairs a refined result with
+  // its original (`is_refined`, `refinement_of`). Kept up to date wherever the
+  // page reads `/api/indexing/results`, so "which result is the original here"
+  // is the backend's answer and does not depend on this session having made
+  // the run.
+  // `null` until the backend has answered once (then an array, possibly empty).
+  const [resultList, setResultList] = useState(null);
+  // Whichever result is on screen: the backend's active result -- it is what
+  // every layer endpoint draws, so every gate keys off it (legend, adjacency,
+  // annotation stats, layer picker). The result store's run stands in only
+  // until the backend has answered; once it has, "none active" means no
+  // indexing result is shown (an analysis file entry is), not "the store's
+  // run". A run made in this session is not necessarily what is on screen:
+  // another gallery chip, a result brought on screen in another tab.
+  const storeResultId = indexingResult?.result_id ?? null;
+  const shownResultId = resultList == null
+    ? (backendResultId ?? storeResultId)
+    : backendResultId;
 
   // Coordinate-system frame — drives IPF re-render (frameSig threads into
   // useLayerStack) and the Pole-Figure popout / CS panel.
@@ -1786,28 +1808,37 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     return () => { cancelled = true; };
   }, [shownResultId, phaseColorOverrides]);
 
-  // Phase B: Original/Refined view toggle. The original result id is the
-  // CrystalMap that came out of indexing; `refinementInfo` is populated
-  // (per result) once joint R+PC refinement has been computed. When the
-  // user picks "Refined", layer fetches should target the refined result
-  // id. v1 wires `effectiveResultId` only into the RefinementPanel; the
-  // layer-stack gating still reads `indexingResult.result_id` from the
-  // store directly. Full wiring (LayerStackPanel + per-layer fetchers
-  // honouring `effectiveResultId`) is deferred — see TODO below.
-  const [resultView, setResultView] = useState('original'); // 'original' | 'refined'
-  const originalResultId = indexingResult?.result_id;
+  // Original/Refined view toggle. A joint
+  // R+PC refinement stores a SECOND result next to the one it refined; the
+  // original stays the active result, and the toggle switches which of the
+  // two the backend has active -- every layer fetch draws the active one.
+  // Which result is the ORIGINAL here, and which is its refined result, is the
+  // backend's answer: the shown result (`shownResultId`) -- or, if that is
+  // itself a refined result, the `refinement_of` of its entry -- and the listed
+  // entry that names it as `refinement_of`. A result this session did not
+  // index (after a reload, a loaded file, another tab) has a refined result
+  // all the same. The store entry (`refinementComputed`, written by the panel
+  // in this session) is only the fallback while the list has not answered:
+  // once it has, the list wins, and a remembered id the backend does not list
+  // makes no switch.
+  // Which view is showing is read off the backend's answer too, not kept as a
+  // second copy that a gallery click could contradict.
+  const shownEntry = (resultList ?? []).find((r) => r.id === shownResultId);
+  const originalResultId = (shownEntry?.is_refined
+    ? shownEntry.refinement_of
+    : shownResultId) ?? null;
   const refinementInfo = useDataStore((s) => s.refinementComputed[originalResultId]);
+  const storeRefinedId = refinementInfo?.refined_result_id ?? null;
+  const refinedResultId = resultList == null
+    ? storeRefinedId
+    : ((originalResultId
+      && resultList.find((r) => r.is_refined && r.refinement_of === originalResultId)?.id) || null);
+  const resultView = (refinedResultId && backendResultId === refinedResultId)
+    ? 'refined' : 'original';  // 'original' | 'refined'
   // Virtual BSE needs patterns in the backend. `ebsdLoaded` alone would lie
   // after a page reload: syncFromBackend restores isFileOpen/hasPatterns but
   // not that flag, and the signal is very much still there.
   const ebsdLoaded = useDataStore((s) => s.ebsdLoaded || (s.isFileOpen && s.hasPatterns));
-  const effectiveResultId = (resultView === 'refined' && refinementInfo?.refined_result_id)
-    ? refinementInfo.refined_result_id
-    : originalResultId;
-  // TODO(refinement-v2): thread `effectiveResultId` into LayerStackPanel
-  // and the layer fetchers so all derived layers reflow when the view
-  // toggle flips. v1 keeps layers on the original result and uses the
-  // RefinementPanel to display the refined CrystalMap.
   const [askConfirm, confirmProps] = useConfirm();
   const [askPrompt, promptProps] = usePrompt();
   const [gallery, setGallery] = useState([]);
@@ -1816,6 +1847,57 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const galleryRef = useRef([]);
   galleryRef.current = gallery;
   const [selectedGalleryIdx, setSelectedGalleryIdx] = useState(-1);
+  const selectedIdxRef = useRef(-1);
+  selectedIdxRef.current = selectedGalleryIdx;
+  // The chip label of a result the backend lists.
+  const labelForResult = useCallback((r) => [
+    // A refined result is a second card next to its original; say so.
+    r.is_refined ? t('phasemap:gallery.refined') : null,
+    r.method || 'Indexing',
+    r.phases?.length > 0 ? r.phases.map((p) => (typeof p === 'object' ? p.name : p)).join(', ') : null,
+    r.mean_ci != null ? `CI: ${r.mean_ci.toFixed(3)}` : null,
+    `${r.n_indexed} px`,
+  ].filter(Boolean).join(' — '), [t]);
+  // One-shot request to select the gallery chip of a result (by result id)
+  // once the gallery holds it: the chip and "Save as…" must refer to the
+  // result that is actually shown, also when the Original/Refined switch (not
+  // a chip click) is what brought it on screen.
+  const [followChipId, setFollowChipId] = useState(null);
+  // Called with every read of `/api/indexing/results`. Keeps the list the page
+  // pairs results by, and drops the gallery chips of REFINED results the
+  // backend no longer lists: a re-refine / re-smooth replaces the refined
+  // result under a new id, and the old chip would be a dead id (click = 404,
+  // "Save as…" fails). If the dropped chip was the selected one, the chip of
+  // the result that is shown takes its place.
+  const noteResults = useCallback((results) => {
+    const list = results || [];
+    setResultList(list.map((r) => ({
+      id: r.id, is_refined: !!r.is_refined, refinement_of: r.refinement_of ?? null,
+    })));
+    const listed = new Set(list.map((r) => r.id));
+    const gone = (e) => !!e.data?.is_refined && !!e.result_id && !listed.has(e.result_id);
+    const before = galleryRef.current;
+    if (!before.some(gone)) return;
+    const selectedEntryId = before[selectedIdxRef.current]?.id;
+    const shown = pickShown(list);
+    setGallery((prev) => {
+      const kept = prev.filter((e) => !gone(e));
+      if (shown?.id && !kept.some((e) => e.result_id === shown.id)) {
+        kept.push({ id: shown.id, result_id: shown.id, label: labelForResult(shown), data: shown });
+      }
+      return kept;
+    });
+    const stillThere = before.findIndex((e) => e.id === selectedEntryId && !gone(e));
+    if (stillThere >= 0) {
+      // the survivors shift left by the number of dropped chips before it
+      const shift = before.slice(0, stillThere).filter(gone).length;
+      setSelectedGalleryIdx(stillThere - shift);
+    } else if (shown?.id) {
+      setFollowChipId(shown.id);
+    } else {
+      setSelectedGalleryIdx(-1);
+    }
+  }, [labelForResult]);
   const [showMatchesDialog, setShowMatchesDialog] = useState(false);
   // Pre-seeded pixel for the PatternMatchesDialog when launched from the
   // Anomaly Browser. Null = user opened the dialog manually (no pre-select).
@@ -2281,14 +2363,13 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       .then((res) => {
         if (cancelled) return;
         const rs = res.data?.results || [];
-        // Same precedence as the renderer: the active one, else the last
-        // stored one (get_last_indexing_result draws that).
-        const shown = rs.find((r) => r.is_active) ?? rs[rs.length - 1] ?? null;
+        const shown = pickShown(rs);
+        noteResults(rs);
         setBackendResultId(shown?.id ?? null);
       })
       .catch(() => { if (!cancelled) setBackendResultId(null); });
     return () => { cancelled = true; };
-  }, [isActive, backendSyncTick, resetSignal, indexingResult?.result_id, gallery.length]);
+  }, [isActive, backendSyncTick, resetSignal, indexingResult?.result_id, gallery.length, noteResults]);
 
   // Direct evidence: a result layer that has already produced a bitmap. It
   // cannot have drawn without data behind it, whichever path put the data
@@ -2307,7 +2388,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // Which derived layers can draw anything yet. Keyed off whichever result is
   // on screen — a result adopted from the backend has no entry under the
   // store's (empty) id.
-  const gateResultId = shownResultId;
+  // (In the refined view this is the ORIGINAL result, where the products
+  // live -- `originalResultId` is the backend's answer, also after a reload.)
+  const gateResultId = originalResultId ?? shownResultId;
   const diagStoreFlag = useDataStore((s) => !!s.diagnosticsComputed[gateResultId]);
   const refStoreFlag = useDataStore((s) => !!s.refinementComputed[gateResultId]);
 
@@ -2334,13 +2417,27 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     // The store flags re-trigger the ask the moment a compute finishes here.
   }, [gateResultId, diagStoreFlag, refStoreFlag]);
 
-  const diagnosticsGate = derivedReady.diagnostics || diagStoreFlag;
-  const refinementGate = derivedReady.refinement || refStoreFlag;
-  // The same two booleans go to the layer rows, so a row painted red and a
+  // The diagnostics and the six refinement layers are computed on the
+  // ORIGINAL result and live in its metadata; the refined result carries
+  // neither (they grey out in the refined view). So while the
+  // refined result is the one on screen they are held back, with that reason.
+  const viewingRefined = resultView === 'refined';
+  // (`gateResultId` is the original result in the refined view, so these two
+  // say whether the products exist there.)
+  const diagnosticsOnOriginal = !!(derivedReady.diagnostics || diagStoreFlag);
+  // A refined result listed for the original proves the refinement exists on
+  // it (its block is written before the refined result is registered).
+  const refinementOnOriginal = !!(derivedReady.refinement || refStoreFlag || refinedResultId);
+  const diagnosticsGate = !viewingRefined && diagnosticsOnOriginal;
+  const refinementGate = !viewingRefined && refinementOnOriginal;
+  // The same booleans go to the layer rows, so a row painted red and a
   // layer held back by the picker always mean the same thing.
   const derivedGates = useMemo(
-    () => ({ diagnostics: diagnosticsGate, refinement: refinementGate }),
-    [diagnosticsGate, refinementGate],
+    () => ({
+      diagnostics: diagnosticsGate, refinement: refinementGate, refinedView: viewingRefined,
+      diagnosticsOnOriginal, refinementOnOriginal,
+    }),
+    [diagnosticsGate, refinementGate, viewingRefined, diagnosticsOnOriginal, refinementOnOriginal],
   );
 
   // What each group of layers needs before it can draw anything. The picker
@@ -2364,8 +2461,16 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       analysis: { ok: analysisLoaded, reason: t('phasemap:layers.gateNoAnalysis') },
       ebsd: { ok: ebsdLoaded, reason: t('phasemap:layers.gateNoEbsd') },
       h5: { ok: sourceLink.linked, reason: sourceLink.reason },
-      diagnosticsComputed: { ok: !!diagnosticsGate, reason: t('phasemap:layers.gateDiagHint') },
-      refinementComputed: { ok: !!refinementGate, reason: t('phasemap:layers.gateRefHint') },
+      diagnosticsComputed: {
+        ok: !!diagnosticsGate,
+        reason: (viewingRefined && diagnosticsOnOriginal)
+          ? t('phasemap:layers.gateRefinedView') : t('phasemap:layers.gateDiagHint'),
+      },
+      refinementComputed: {
+        ok: !!refinementGate,
+        reason: (viewingRefined && refinementOnOriginal)
+          ? t('phasemap:layers.gateRefinedView') : t('phasemap:layers.gateRefHint'),
+      },
       // No gate on the provenance layer. The "grain_" id prefix identifies the
       // results the per-grain assignment produced here, but a result exported
       // and re-imported keeps the provenance and loses the prefix — and hiding
@@ -2373,7 +2478,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     };
   }, [originalResultId, backendResultId,
       analysisLoaded, resultLayerDrew, ebsdLoaded, sourceLink.linked, sourceLink.reason,
-      diagnosticsGate, refinementGate, t]);
+      diagnosticsGate, refinementGate, viewingRefined,
+      diagnosticsOnOriginal, refinementOnOriginal, t]);
 
   // Build the "Add Layer" dropdown options (static + dynamic, dedup'd)
   const availableToAdd = useMemo(() => buildAddLayerOptions({
@@ -2959,22 +3065,100 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
 
   // Activate, then repaint — in that order, so the canvas fetches against the
   // result that is now current instead of racing the activation.
+  // (`followChipId` and `labelForResult` are declared with the gallery state.)
+  useEffect(() => {
+    if (!followChipId) return;
+    const idx = gallery.findIndex((e) => e.result_id === followChipId);
+    if (idx < 0) return;
+    setSelectedGalleryIdx((cur) => (cur === idx ? cur : idx));
+    setFollowChipId(null);
+  }, [followChipId, gallery]);
+
   const adoptEntry = useCallback(async (entry) => {
     await activateEntry(entry);
     // Re-read the region: a different result is on screen now, and it may have
     // covered a different part of the scan (or all of it).
     try {
       const res = await indexApi.listResults();
-      const shown = (res.data?.results || []).find((r) => r.is_active)
-        ?? (res.data?.results || []).slice(-1)[0];
+      const results = res.data?.results || [];
+      const shown = pickShown(results);
       setActiveRoiBbox(shown?.roi_bbox ?? null);
+      noteResults(results);
       setBackendResultId(shown?.id ?? null);
+      if (shown?.id) {
+        // The shown result has a chip (a refined result gets one the first
+        // time it is shown), and that chip is the selected one.
+        setGallery((prev) => (prev.some((e) => e.result_id === shown.id)
+          ? prev
+          : [...prev, { id: shown.id, result_id: shown.id, label: labelForResult(shown), data: shown }]));
+        setFollowChipId(shown.id);
+      }
     } catch {
       setActiveRoiBbox(null);
     }
     setBackendSyncTick((tick) => tick + 1);
     handleRefreshPreview();
-  }, [activateEntry, handleRefreshPreview]);
+  }, [activateEntry, handleRefreshPreview, noteResults, labelForResult]);
+
+  // The Original/Refined toggle: make the result it names the active one on
+  // the backend and repaint, through the same path a gallery click takes
+  // (activate, re-read which result is on screen, bump the sync tick so the
+  // layer stack refetches against it).
+  const switchResultView = useCallback(async (next) => {
+    const targetId = next === 'refined' ? refinedResultId : originalResultId;
+    if (!targetId) return;
+    await adoptEntry({ result_id: targetId });
+  }, [refinedResultId, originalResultId, adoptEntry]);
+
+  // A re-refine or re-smooth REPLACES the refined result under a new id (the
+  // old one is removed on the backend). If the refined result was the one on
+  // screen, the backend moved the active id along with it; this page has to
+  // learn that, or the toggle would read "Original" while a refined result is
+  // still being drawn, and its layers would stay the old one's.
+  // The same read happens when a refinement is first recorded in this session
+  // (the list then gains the refined entry, which is what offers the switch)
+  // and whenever a refinement job leaves "running" -- completed, failed or
+  // cancelled -- whether or not its summary could be read: a failed summary
+  // read, a cancel after the refined result was registered, a refinement the
+  // panel never recorded all end with the right pair (or none) on screen.
+  const prevRefinedIdRef = useRef(null);
+  useEffect(() => {
+    const prev = prevRefinedIdRef.current;
+    prevRefinedIdRef.current = storeRefinedId;
+    if (!storeRefinedId || prev === storeRefinedId) return undefined;
+    let cancelled = false;
+    indexApi.listResults()
+      .then((res) => {
+        if (cancelled) return;
+        const results = res.data?.results || [];
+        const shown = pickShown(results);
+        noteResults(results);
+        setBackendResultId(shown?.id ?? null);
+        if (shown?.id === storeRefinedId) setBackendSyncTick((tick) => tick + 1);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [storeRefinedId, noteResults]);
+
+  const refinementRunning = useDataStore((s) => s.refinementJob?.state === 'running');
+  const wasRefinementRunningRef = useRef(false);
+  useEffect(() => {
+    const was = wasRefinementRunningRef.current;
+    wasRefinementRunningRef.current = refinementRunning;
+    if (!was || refinementRunning) return undefined;
+    let cancelled = false;
+    indexApi.listResults()
+      .then((res) => {
+        if (cancelled) return;
+        const results = res.data?.results || [];
+        noteResults(results);
+        setBackendResultId(pickShown(results)?.id ?? null);
+        // The result on screen may have been replaced under a new id.
+        setBackendSyncTick((tick) => tick + 1);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [refinementRunning, noteResults]);
 
   // Populate gallery when indexing results change
   // ---------------------------------------------------------------------------
@@ -3101,13 +3285,6 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // older result until the user clicked a chip. Re-reading on each visit is one
   // cheap call and makes "open Phase Maps" mean "see the current result".
   // ---------------------------------------------------------------------------
-  const labelForResult = (r) => [
-    r.method || 'Indexing',
-    r.phases?.length > 0 ? r.phases.map((p) => (typeof p === 'object' ? p.name : p)).join(', ') : null,
-    r.mean_ci != null ? `CI: ${r.mean_ci.toFixed(3)}` : null,
-    `${r.n_indexed} px`,
-  ].filter(Boolean).join(' — ');
-
   useEffect(() => {
     if (!isActive) return undefined;
     let cancelled = false;
@@ -3115,6 +3292,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       .then((res) => {
         if (cancelled) return;
         const results = res.data?.results || [];
+        noteResults(results);
         if (results.length === 0) {
           // Nothing stored any more (backend restart, results cleared) — say
           // so, or the picker keeps offering layers against a dead id.
@@ -3123,66 +3301,76 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         }
 
         // Follow the backend: it renders exactly one result, and the chip must
-        // name that one. Nothing active → the newest, which is what the user
-        // just produced.
-        const active = results.find((r) => r.is_active);
-        const shown = active || results[results.length - 1];
-        if (!shown?.id) return;
+        // name that one -- the ACTIVE one. With none active the backend draws
+        // the analysis dataset (if any), and the newest stored run is only a
+        // CANDIDATE to adopt below, never a result that is shown.
+        const active = pickShown(results);
+        const candidate = active || results[results.length - 1];
+        if (!candidate?.id) return;
 
-        // ONLY that one gets added. The backend keeps every run and every
+        // ONLY that one gets a chip. The backend keeps every run and every
         // import of the whole session in its registry; listing all of them
         // turned "I loaded one result" into a row of nine chips, most of them
         // indistinguishable. Entries the user actually brought here — this
         // session's runs, files added by hand — are already in the list and
         // stay untouched.
-        const prev = galleryRef.current;
-        const merged = prev.some((e) => e.result_id === shown.id)
-          ? prev
-          : [...prev, { id: shown.id, result_id: shown.id, label: labelForResult(shown), data: shown }];
-        if (merged !== prev) setGallery(merged);
-        setSendToAnalysisEnabled(true);
+        const showChipOf = (shown) => {
+          const prev = galleryRef.current;
+          const merged = prev.some((e) => e.result_id === shown.id)
+            ? prev
+            : [...prev, { id: shown.id, result_id: shown.id, label: labelForResult(shown), data: shown }];
+          if (merged !== prev) {
+            galleryRef.current = merged;
+            setGallery(merged);
+          }
+          setSendToAnalysisEnabled(true);
+          // The region the run covered, straight from the backend. Everything
+          // on the map is framed by it, so a region run reads like a full one.
+          setActiveRoiBbox(shown.roi_bbox ?? null);
+          const idx = merged.findIndex((e) => e.result_id === shown.id);
+          if (idx >= 0) setSelectedGalleryIdx((cur) => (cur === idx ? cur : idx));
+          return merged[idx];
+        };
 
-        // The region the run covered, straight from the backend. Everything
-        // on the map is framed by it, so a region run reads like a full one.
-        setActiveRoiBbox(shown.roi_bbox ?? null);
-        // Which result the layer endpoints will actually draw. The result
-        // store only knows about runs made in this browser session, so a
-        // result adopted from the backend leaves it empty — and the layer
-        // picker would then call every result layer unavailable while one is
-        // on screen.
-        setBackendResultId(shown.id);
+        if (active) {
+          // Which result the layer endpoints will actually draw. The result
+          // store only knows about runs made in this browser session, so a
+          // result adopted from the backend leaves it empty — and the layer
+          // picker would then call every result layer unavailable while one is
+          // on screen.
+          setBackendResultId(active.id);
+          showChipOf(active);
+          // Already the active one → it is on screen already.
+          handleRefreshPreview();
+          return;
+        }
 
-        const idx = merged.findIndex((e) => e.result_id === shown.id);
-        if (idx < 0) return;
-        setSelectedGalleryIdx((cur) => (cur === idx ? cur : idx));
-        // Already the active one → it is on screen already; only a result that
-        // is merely stored needs activating.
+        // Nothing active: no indexing result is shown.
+        setBackendResultId(null);
+        // A result that is merely stored needs activating.
         //
         // But activating a result AUTO-SWITCHES the loaded file to that
         // result's source. Fine when the user clicks a chip — that IS the
         // intent — not on a mere page visit: "nothing active" can also mean
         // "the user just loaded a DIFFERENT file" (loading resets the active
         // result), and adopting then silently threw that file away and
-        // re-loaded the old result's source (user-hit 2026-08-17: fresh
+        // re-loaded the old result's source (a fresh
         // .h5oina load + Hough run gone because the visit-sync re-activated
         // a stale import). Auto-adopt ONLY when it cannot switch the file;
-        // otherwise leave the backend alone and just repaint — the renderer
-        // falls back to the newest stored result for display anyway, and a
-        // deliberate chip click still switches like before.
-        if (!active) {
-          ebsdApi.info()
-            .then((info) => {
-              if (cancelled) return;
-              if (wouldSwitchFile(shown.source_file, info?.data?.file_path)) {
-                handleRefreshPreview();
-              } else {
-                adoptEntry(merged[idx]);
-              }
-            })
-            // Can't tell what is loaded → do nothing destructive, repaint only.
-            .catch(() => { if (!cancelled) handleRefreshPreview(); });
-        }
-        else handleRefreshPreview();
+        // otherwise leave the backend alone and just repaint (the analysis
+        // dataset, if one is loaded) -- and give no chip to a result that is
+        // not shown. A deliberate chip click still switches like before.
+        ebsdApi.info()
+          .then((info) => {
+            if (cancelled) return;
+            if (wouldSwitchFile(candidate.source_file, info?.data?.file_path)) {
+              handleRefreshPreview();
+            } else {
+              adoptEntry(showChipOf(candidate));
+            }
+          })
+          // Can't tell what is loaded → do nothing destructive, repaint only.
+          .catch(() => { if (!cancelled) handleRefreshPreview(); });
       })
       .catch(() => { /* no results yet — nothing to show */ });
     return () => { cancelled = true; };
@@ -3648,18 +3836,18 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           })}
           {/* Phase B: Original/Refined view toggle — only when a refined
               result exists for the active indexing result. */}
-          {refinementInfo && (
+          {refinedResultId && (
             <>
               <span style={{ color: colors.textSecondary, fontSize: '8.5pt', marginLeft: 6 }}>
                 {t('phasemap:gallery.view')}
               </span>
               <Button small variant={resultView === 'original' ? 'primary' : 'default'}
-                onClick={() => setResultView('original')} disabled={resultView === 'original'}
+                onClick={() => switchResultView('original')} disabled={resultView === 'original'}
                 title={t('phasemap:gallery.originalTooltip')}>
                 {t('phasemap:gallery.original')}
               </Button>
               <Button small variant={resultView === 'refined' ? 'primary' : 'default'}
-                onClick={() => setResultView('refined')} disabled={resultView === 'refined'}
+                onClick={() => switchResultView('refined')} disabled={resultView === 'refined'}
                 title={t('phasemap:gallery.refinedTooltip')}>
                 {t('phasemap:gallery.refined')}
               </Button>
@@ -4091,14 +4279,22 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           CollapsibleGroup so it matches the Annotation & Calibration box. */}
       <CollapsibleGroup title={t('phasemap:advanced.title')} defaultCollapsed>
 
+      {/* Diagnostics belong to the ORIGINAL result. In the refined
+          view the panel keeps pointing at the original and is held back with
+          the same reason as the diagnostic layers: nothing is asked of the
+          refined result. */}
       <ComputeDiagnosticsPanel
-        resultId={shownResultId}
+        resultId={originalResultId}
+        heldBack={viewingRefined
+          ? (diagnosticsOnOriginal ? t('phasemap:layers.gateRefinedView') : t('phasemap:layers.gateDiagHint'))
+          : null}
         onOpenBrowser={() => setBrowserOpen(true)}
       />
 
       <RefinementPanel
         resultId={originalResultId}
-        onSwitchToRefined={() => setResultView('refined')}
+        refinedResultId={refinedResultId}
+        onSwitchToRefined={() => switchResultView('refined')}
       />
 
       {/* Map-wide pseudo-symmetry variant unification: fixes IPF variant
@@ -4892,7 +5088,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         <AnomalyBrowserDrawer
           open={browserOpen}
           onClose={() => setBrowserOpen(false)}
-          resultId={shownResultId}
+          resultId={originalResultId}
           onSelectPixel={(r, c) => {
             setMatchesInitialPixel({ row: r, col: c });
             setShowMatchesDialog(true);

@@ -297,8 +297,19 @@ def _stored_scan_provenance(result) -> dict:
     }
 
 
-def _store_result(result, method_name: str) -> str:
-    """Store a result and make it active. Returns the result_id.
+def _store_result(result, method_name: str, *, activate: bool = True,
+                  keep=()) -> str:
+    """Store a result and (by default) make it active. Returns the result_id.
+
+    ``activate=False`` registers the result and leaves the active one alone.
+    A joint R+PC refinement stores its refined result this way: the original
+    stays the active result (the refinement layers and the diagnostics are
+    computed on it) and the Original/Refined toggle switches between the two.
+
+    ``keep`` names results the cap must not evict while this one is stored
+    (the refinement passes its parent: the refined result is only meaningful
+    next to it). The eviction skips them and takes the next oldest instead;
+    the registry may stay over the cap by up to ``len(keep)`` entries.
 
     Also tags the result with the currently-active source file path so the
     frontend gallery can show which file each entry belongs to and the
@@ -319,13 +330,15 @@ def _store_result(result, method_name: str) -> str:
     result_id = f"{method_name}_{int(_time.time())}_{uuid.uuid4().hex[:8]}"
     _result_registry[result_id] = result
     _result_registry.move_to_end(result_id)
-    _active_result_id = result_id
+    if activate:
+        _active_result_id = result_id
     # Bound RAM: evict the oldest results past the cap, but never the active
     # (just-stored) one. Reactivation on file-switch degrades gracefully to an
     # empty map + re-index if a very old result was evicted.
+    kept = set(keep or ())
     while len(_result_registry) > MAX_STORED_RESULTS:
-        oldest = next(iter(_result_registry))
-        if oldest == _active_result_id:
+        oldest = next((rid for rid in _result_registry if rid not in kept), None)
+        if oldest is None or oldest in (_active_result_id, result_id):
             break
         _result_registry.pop(oldest, None)
     # Tag with source file so multi-file workflows can route correctly.
@@ -341,8 +354,7 @@ def _store_result(result, method_name: str) -> str:
             # imported from a saved .h5 ("Add file…") tag themselves with the
             # imported file's path BEFORE calling _store_result; overwriting it
             # with whatever file happens to be active at import time made the
-            # Pattern Match dialog read the wrong file's patterns (user-hit
-            # 2026-07-20). Only a freshly-indexed result (no source_file yet)
+            # Pattern Match dialog read the wrong file's patterns. Only a freshly-indexed result (no source_file yet)
             # gets tagged with the active file.
             result.metadata.setdefault(
                 "source_file",
@@ -370,6 +382,28 @@ def _store_result(result, method_name: str) -> str:
     # Result is now registered + active → tell polling clients to refetch.
     state_version.bump()
     return result_id
+
+
+#: Metadata keys that say "this result is the refined view of another one".
+#: They describe the result a joint R+PC refinement registered, not anything a
+#: copy of it is.
+_REFINED_VIEW_KEYS = ("is_refined", "refinement_of")
+
+
+def _metadata_of_derived_result(parent_metadata) -> dict:
+    """Metadata for a result made from another stored result by deep copy.
+
+    The copy keeps everything the original knew about the scan and the
+    indexing run, but not what makes the original a refinement's result:
+    inherited, ``is_refined`` would label the user's own result "Refined",
+    keep it out of the re-activation on a file reload, and let the next
+    refinement of the parent delete it. A ``dict`` copy, so the original's
+    metadata is never changed.
+    """
+    metadata = dict(parent_metadata or {})
+    for key in _REFINED_VIEW_KEYS:
+        metadata.pop(key, None)
+    return metadata
 
 
 def reactivate_result_for_source(path: str) -> "str | None":
@@ -400,6 +434,10 @@ def reactivate_result_for_source(path: str) -> "str | None":
     for rid, res in _result_registry.items():
         md = getattr(res, "metadata", None) or {}
         src = md.get("source_file") if isinstance(md, dict) else None
+        # A refined result is the second view of its parent, never the one to
+        # come back to on its own: coming back shows the original.
+        if isinstance(md, dict) and md.get("is_refined"):
+            continue
         if src and _canonical_path(src) == canon:
             match = rid
     _active_result_id = match
@@ -784,7 +822,7 @@ import re as _re
 # Match EMsoft-convention SHT filenames: "Name (Formula) [Pearson] {kV}"
 # Example: "Ni (Ni) [cF4] {20kV}" -> prefix "Ni"
 # The [Pearson] block is OPTIONAL — the library contains files like
-# "Al7FeCu2 (Al7FeCu2) {20kV}.sht" without it (user-hit 2026-07-15: those
+# "Al7FeCu2 (Al7FeCu2) {20kV}.sht" without it (those
 # phases never matched an SHT on re-import because the tail survived).
 # We only strip the trailing "(...) [...]? {...}" block so legitimate names
 # containing parentheses (like "alpha-(AlFeSi) (Fe23Al81Si15)") are preserved.
@@ -2576,7 +2614,7 @@ DECISION_RESPONSE_CAP = 500
 #:
 #: The segmentation must run under ONE symmetry for the whole map, because it
 #: is deliberately chemistry-free: it exists to correct the per-pixel phase
-#: labels, so it must not depend on them. The design spec asks for the common
+#: labels, so it must not depend on them. The ideal is the common
 #: supergroup of the phases present. This is the part of that we can serve
 #: honestly: every crystallographic point group EXCEPT the seven hexagonal
 #: ones is a subgroup of m-3m, because m-3m's rotations have orders 1, 2, 3
@@ -3239,7 +3277,7 @@ def _grain_phase_assign_blocking(active, req: GrainPhaseAssignRequest) -> dict:
                         "phases on the unshifted chemistry."))
         # corr_before/corr_after are the goodness of the alignment this route
         # measured, reported because nothing GATES on them: measure_offset has
-        # no goodness-of-fit test (Task 1's deferred item), so two maps with no
+        # no goodness-of-fit test, so two maps with no
         # structure in common still yield a confident sub-pixel number. These
         # two figures are what makes such a run recognisable.
         registration = {
@@ -3376,7 +3414,8 @@ def _grain_phase_assign_blocking(active, req: GrainPhaseAssignRequest) -> dict:
             status_code=500,
             detail="The new phase ids did not take on the copied CrystalMap")
 
-    new_result.metadata = dict(getattr(new_result, "metadata", None) or {})
+    new_result.metadata = _metadata_of_derived_result(
+        getattr(new_result, "metadata", None))
     new_result.metadata["assignment_source"] = source
     new_result.metadata["grain_assign"] = {
         "offset": {"dy": dy, "dx": dx},
@@ -4148,7 +4187,7 @@ async def start_indexing(req: IndexingStartRequest):
                             # EDS chemistry prior: pixels whose winner flipped
                             # due to phase_weights (0 when the prior is off; the
                             # non-GPU spherical merge passes no weights so it is
-                            # always 0 here — see Task 6/8).
+                            # always 0 here).
                             'eds_n_adjusted': comparison.n_eds_adjusted,
                         },
                     )
@@ -7559,7 +7598,7 @@ def _annotate_compare_rows_with_delta(rows, stored_quat, stored_phase_id,
       - ``quat_wxyz``          — the re-indexed orientation, ready to feed
         ``/pattern-match/apply-to-grain``.
 
-    Rationale (user-hit 2026-07-15): "stored R=0.09 poor, compare R=0.16
+    Rationale: "stored R=0.09 poor, compare R=0.16
     acceptable, same phase" almost always means the stored orientation is a
     fraction of a degree off the very sharp render-NCC optimum (~1-2° FWHM),
     NOT a wrong pseudo-symmetry variant. Surfacing the Δ° lets the user see
@@ -8782,6 +8821,10 @@ async def list_results():
             # construction, since nothing could be cropped back then.
             **_stored_scan_provenance(res),
             "is_active": rid == _active_result_id,
+            # A joint R+PC refinement stores its refined result next to the
+            # original; the gallery says which card is which.
+            "is_refined": bool(meta.get("is_refined")),
+            "refinement_of": meta.get("refinement_of"),
             "source_file": source_file,
             "phases": [],
             "mean_ci": None,
@@ -8897,7 +8940,7 @@ def _h5_any_pattern_dataset(f) -> bool:
     Oxford h5oina stores them at /1/EBSD/Data/{Processed Patterns,Patterns};
     EDAX (APEX/OIM) at /<ScanName>/EBSD/Data/Pattern. Rich exports inherit
     whichever layout the source had — the old Oxford-only check reported
-    'no patterns' for every EDAX-sourced rich file (user-hit 2026-07-15)."""
+    'no patterns' for every EDAX-sourced rich file."""
     try:
         for key in f.keys():
             grp = f.get(f"{key}/EBSD/Data")
@@ -8921,7 +8964,7 @@ def _subset_xmap_to_roi(xmap, sel2d):
     (xmap.size == mask.sum() < grid size) — every consumer places xmap rows
     onto the grid via the selection mask in that case, and score/NCC maps
     embed as NaN outside the ROI so displays crop to the ROI instead of
-    padding a red zero-score frame around it (user-hit 2026-07-15)."""
+    padding a red zero-score frame around it."""
     from orix.crystal_map import CrystalMap
     from orix.quaternion import Rotation
 
@@ -8962,7 +9005,7 @@ def _match_library_shts_for_xmap(xmap, stored_hints: dict | None = None) -> dict
     4. Element-RATIO match: phase names carry the CIF formula (e.g.
        "(Al19 Fe4 Mn Si2)5.31") while SHT stems carry a renormalised one
        ("Al100.89Fe21.24Mn5.31Si10.62" = ×5.31) — same stoichiometry, so
-       compare normalised ratios (user-hit 2026-07-15: alpha never matched).
+       compare normalised ratios (otherwise alpha never matched).
 
     Used on rich/light import: sht_paths_by_phase lives only in backend
     memory during a session, so re-imports must reconstruct it for the
@@ -9118,7 +9161,7 @@ async def import_h5_result(req: ImportH5Request):
         # it from the indexed pixels (files without the dataset; the loader
         # marks unindexed as phase -1). ROI exports MUST come back as ROI
         # results — wrapping them in a full grid padded the NCC map with a
-        # huge red zero-score frame (user-hit 2026-07-15).
+        # huge red zero-score frame.
         if "selection_mask" in idx:
             sel = np.asarray(idx["selection_mask"]).astype(bool)
         elif "Assignment" in idx and "selection_mask" in idx["Assignment"]:
@@ -9201,8 +9244,7 @@ async def import_h5_result(req: ImportH5Request):
         # indexing_method MUST be in metadata — the pattern-match dialog and
         # every spherical tool key off metadata["indexing_method"], not the
         # enum. Without it an imported spherical result rendered as
-        # "Dictionary Indexing" with all SHT tools disabled (user-hit
-        # 2026-07-15).
+        # "Dictionary Indexing" with all SHT tools disabled.
         metadata={"source_file": str(p), "imported_from_h5": True,
                   "indexing_method": method.value},
     )
@@ -9734,25 +9776,18 @@ def _write_fresh_edax_h5(out_path: str, signal) -> None:
     step_y = float(nav[1].scale) if len(nav) >= 2 else step_x
     sample_tilt = 70.0
     try:
-        sample_tilt = float(getattr(signal.detector, "sample_tilt", 70.0))
+        sample_tilt = float(geometry.get("sample_tilt", getattr(signal.detector, "sample_tilt", 70.0)))
     except Exception:
         pass
-    with h5py.File(out_path, "w") as f:
-        f.create_dataset("Manufacturer", data=np.bytes_("EDAX"))
-        f.create_dataset("Version", data=np.bytes_("Orienta rich export"))
-        hdr = f.create_group("Scan1/EBSD/Header")
-        hdr.create_dataset("Grid Type", data=np.bytes_("SqrGrid"))
-        hdr.create_dataset("Pattern Height", data=np.array([sy], np.int32))
-        hdr.create_dataset("Pattern Width", data=np.array([sx], np.int32))
-        hdr.create_dataset("Pattern Bit Depth", data=np.array([8], np.int32))
-        hdr.create_dataset("Sample Tilt", data=np.array([sample_tilt], np.float32))
-        hdr.create_dataset("Step X", data=np.array([step_x], np.float32))
-        hdr.create_dataset("Step Y", data=np.array([step_y], np.float32))
-        hdr.create_dataset("nColumns", data=np.array([nx], np.int32))
-        hdr.create_dataset("nRows", data=np.array([ny], np.int32))
-        d = f.create_dataset("Scan1/EBSD/Data/Pattern", data=pats,
-                             compression="gzip", chunks=(1, sy, sx))
-        d.attrs["patterns_processed"] = True
+    tilts = {"sample_tilt": sample_tilt}
+    try:
+        tilts["tilt"] = float(geometry.get("tilt", signal.detector.tilt))
+        tilts["azimuthal"] = float(geometry.get("azimuthal", signal.detector.azimuthal))
+    except Exception:
+        logger.warning("export: camera tilt not written to the EDAX header", exc_info=True)
+    grid = (scan_geometry if scan_geometry is not None and scan_geometry.is_hex
+            else _scan_geometry.ScanGeometry.square(ny, nx, step_x, step_y))
+    write_fresh_file(out_path, pats, grid, pc_bruker=pc_bruker, tilts=tilts)
 
 
 def _json_num_default(o):
@@ -9934,7 +9969,7 @@ def _read_scan_provenance(h5_path) -> dict:
     answer rather than the live window. Seeding these before _store_result is
     what stops its setdefault from reaching for the active crop, exactly as the
     importer already seeds source_file (see the comment in _store_result; the
-    unseeded version of that was a user-hit bug on 2026-07-20).
+    unseeded version of that was a bug).
     """
     import h5py
     out = dict(NO_SCAN_OFFSET)

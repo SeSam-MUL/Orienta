@@ -238,6 +238,13 @@ class _MethodsFormatter(string.Formatter):
             return self._render_dict(value)
         if isinstance(value, (list, tuple)):
             return self._render_sequence(value)
+        if isinstance(value, bool) and "|" in format_spec:
+            # ``{flag:text if true|text if false}``: the sentence follows a
+            # recorded boolean (a step that was skipped is not described as
+            # having run). The two texts are the format spec itself, so any
+            # slot nested in them has been filled already.
+            when_true, _, when_false = format_spec.partition("|")
+            return when_true if value else when_false
         if isinstance(value, bool):          # bool is a subclass of int
             return "yes" if value else "no"
         if isinstance(value, float) and not format_spec:

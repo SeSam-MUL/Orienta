@@ -6,6 +6,10 @@ import { useTranslation } from 'react-i18next';
 import { colors } from '../../../theme/components';
 import { forwardDiagApi } from '../../../services/api';
 
+// A metric that is NaN for a pixel arrives as null (the route cannot send NaN):
+// show a dash, not a crash.
+const fmt = (v) => (Number.isFinite(v) ? v.toFixed(3) : '–');
+
 export default function GalleryItem({ item, resultId, visible, onClick, onHover, onLeave }) {
   const { t } = useTranslation('phasemap');
   const [thumbs, setThumbs] = useState(null);
@@ -49,8 +53,8 @@ export default function GalleryItem({ item, resultId, visible, onClick, onHover,
       </div>
       <div style={{ flex: 1, fontSize: 12 }}>
         <div>{t('phasemap:anomalyBrowser.itemRowCol', { row: item.row, col: item.col })} <strong>{item.phase_name}</strong></div>
-        <div>{t('phasemap:anomalyBrowser.itemNccPrefix')}<strong>{item.ncc.toFixed(3)}</strong></div>
-        <div>{t('phasemap:anomalyBrowser.itemMetrics', { anom: item.local_anomaly.toFixed(3), pcs: item.pc_sensitivity.toFixed(3), res: item.pattern_residual.toFixed(3) })}</div>
+        <div>{t('phasemap:anomalyBrowser.itemNccPrefix')}<strong>{fmt(item.ncc)}</strong></div>
+        <div>{t('phasemap:anomalyBrowser.itemMetrics', { anom: fmt(item.local_anomaly), pcs: fmt(item.pc_sensitivity), res: fmt(item.pattern_residual) })}</div>
         {error && <div style={{ color: colors.red, fontSize: 11 }}>{t('phasemap:anomalyBrowser.thumbnailError', { error })}</div>}
       </div>
     </div>

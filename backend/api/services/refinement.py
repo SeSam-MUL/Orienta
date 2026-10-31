@@ -28,6 +28,7 @@ from backend.api.services.sht_pattern_renderer import (
 )
 from backend.api.services.forward_diagnostics import (
     _get_experimental_pattern,
+    _xmap_flat_index_map,
     build_phase_id_2d,
     summary_stats,
 )
@@ -46,10 +47,10 @@ STAGE1_BOUND_OMEGA_RAD = 0.0873      # 5 degrees in radians
 STAGE1_BOUND_DXY_PX = 10.0
 STAGE1_BOUND_DL_UM = 1000.0
 
-# Phase B v1.5: finite-difference step sizes for PC gradient (autograd through
+# Finite-difference step sizes for PC gradient (autograd through
 # PC is broken because PatternRenderer.render casts pc_emsoft to Python floats,
-# stripping the autograd graph -- same situation Phase A's
-# compute_pc_sensitivity_map handles via finite-difference). Steps chosen
+# stripping the autograd graph -- same situation the
+# compute_pc_sensitivity_map diagnostic handles via finite-difference). Steps chosen
 # small enough that the linearization is valid, large enough to dominate
 # render noise.
 FD_EPS_XY_PX = 0.5
@@ -163,7 +164,7 @@ def _render_serial_per_pc(
     """Render N patterns one (quaternion, PC) pair at a time.
 
     Workaround for ``PatternRenderer.render_batch`` requiring a single shared
-    PC across the batch (Bug 1 from Phase B E2E). Returns an
+    PC across the batch. Returns an
     ``(N, H, W)`` float64 tensor stacked on the quats' device.
 
     ``tilt_deg`` is the SAMPLE tilt and ``det_tilt_deg`` the DETECTOR
@@ -295,7 +296,7 @@ def refine_per_pixel(
     last_r = torch.full((B,), float("nan"), dtype=torch.float64, device=device)
     last_J_p = torch.zeros(B, 3, dtype=torch.float64, device=device)
 
-    # Phase B v1.5: frozen finite-difference J_p. Computed once at the START
+    # Frozen finite-difference J_p. Computed once at the START
     # of the LM loop at the initial (q0, pc0) and reused as the PC columns of
     # the Jacobian for every iteration. Cheaper than recomputing every step
     # (6 renders per pixel total, vs. 6 per iter × max_iter), and accurate
@@ -360,7 +361,7 @@ def refine_per_pixel(
             J = torch.zeros_like(x_active)
         # J: (B_act, 6)
 
-        # Phase B v1.5: replace the (broken-zero) PC columns of the autograd
+        # Replace the (broken-zero) PC columns of the autograd
         # Jacobian with the finite-difference values computed once at the
         # start of the LM loop. Omega columns keep their autograd-derived
         # values (omega gradient DOES flow through the renderer's rotation
@@ -506,7 +507,7 @@ def solve_smooth_pc(
     Closed-form linear system:
         (diag(j^2) + lambda * L) * pc = j * (j * pc_init - r)
 
-    Per-axis degeneracy guard (Phase B v1.8): when ``median(|j[axis]|)``
+    Per-axis degeneracy guard: when ``median(|j[axis]|)``
     is at noise level, ``j`` is too small for the data term ``diag(j^2)``
     to constrain the rank-deficient ``lambda * Laplacian`` (Laplacian
     nullspace = constant vector), and the implied data-term displacement
@@ -727,21 +728,86 @@ class _RefinementCancelledError(RuntimeError):
     """Internal sentinel raised when cancel_event was set."""
 
 
-class _RefinedResult:
-    """Lightweight result wrapper that duck-types as an IndexingResult.
+#: Keys of the parent's metadata that stay true for its refined result (see
+#: the comment where they are copied). A list, written by hand: a key nobody
+#: has decided about is not inherited.
+_RUN_METADATA_OF_THE_PARENT = (
+    "per_phase_data", "per_phase_stats", "per_phase_match_sources",
+    "multi_phase", "n_phases",
+    "dictionary", "dict_path", "signal", "metric", "keep_n",
+    "step_size_um", "recorded_lattices",
+)
 
-    The full orix CrystalMap reconstruction is heavy and not required for
-    downstream consumers — they only need xmap.rotations.data, xmap.phase_id,
-    xmap.shape, xmap.phases, original_shape, selection_mask, and metadata.
+
+def _refined_crystal_map(parent_xmap, rotation_data, ncc_per_row):
+    """The parent's CrystalMap with the refined orientations in it.
+
+    A deep copy, so everything the parent's map carries -- phases, coordinates,
+    properties, scan unit, the frame bookkeeping set by ``_store_result`` --
+    is the parent's, and only the rotations are replaced. The orientations go
+    in through the private ``_rotations`` slot, as every other place in this
+    code base that corrects a stored map does (``orix`` has no public setter).
+
+    ``rotation_data`` is ``(xmap.size, 4)``, one quaternion per row of the
+    map's data; ``ncc_per_row`` is the refined NCC per such row (NaN where the
+    row was not refined). It is stored as ``prop["refined_ncc"]`` and nowhere
+    else: the properties the parent already has keep their meaning.
     """
+    from orix.quaternion import Rotation
+
+    xmap = parent_xmap.deepcopy()
+    in_data = np.asarray(xmap.is_in_data, dtype=bool)
+    rotations = np.array(xmap._rotations.data, dtype=np.float64, copy=True)
+    rotations[in_data] = np.asarray(rotation_data, dtype=np.float64)
+    xmap._rotations = Rotation(rotations)
+    xmap.prop["refined_ncc"] = np.asarray(ncc_per_row, dtype=np.float32)
+    # orix starts a new property array at 0.0 for the rows outside the data and
+    # only fills the rows inside it. A 0.0 there would read as a refined pixel
+    # whose pattern does not match at all; "nothing was refined" is NaN. The
+    # raw array is the dict's own entry (``prop[...]`` returns only the rows in
+    # the data).
+    dict.__getitem__(xmap.prop, "refined_ncc")[~in_data] = np.nan
+    return xmap
 
 
-class _RefinedXMap:
-    """Duck-typed xmap for refined results."""
+def refined_ids_of(parent_rid, parent_metadata) -> list:
+    """Ids of the refined results registered for one parent result.
+
+    Only the refined result THIS parent's refinement made: the id its
+    refinement block records. Carrying the ``is_refined`` flags is not enough
+    to be replaced -- the registry also holds results the user made, and a
+    result copied from the refined view or from a refined parent can carry
+    the flags (or the parent's block) without being the parent's refinement.
+    The recorded result must also say it is a refinement of this very parent.
+    """
+    from backend.api.routes import indexing as ind_routes
+
+    recorded = ((parent_metadata or {}).get("refinement") or {}).get("refined_result_id")
+    if recorded is None:
+        return []
+    md = getattr(ind_routes._result_registry.get(recorded), "metadata", None)
+    if (isinstance(md, dict) and md.get("is_refined")
+            and md.get("refinement_of") == parent_rid):
+        return [recorded]
+    return []
 
 
-class _RefinedRotation:
-    """Duck-typed rotations container for refined results."""
+def forget_refined_result(refined_rid, *, fallback_rid=None) -> None:
+    """Take a refined result out of the registry.
+
+    If it was the active result, ``fallback_rid`` (when it is registered)
+    becomes the active one instead of leaving a dangling id, and polling
+    clients are told to refetch.
+    """
+    from backend.api.routes import indexing as ind_routes
+
+    if refined_rid is None or refined_rid not in ind_routes._result_registry:
+        return
+    ind_routes._result_registry.pop(refined_rid, None)
+    if ind_routes._active_result_id == refined_rid:
+        ind_routes._active_result_id = (
+            fallback_rid if fallback_rid in ind_routes._result_registry else None)
+    state_version.bump()
 
 
 def _gather_experimental_patterns(result, flat_indices, n_cols, H_pat, W_pat):
@@ -776,10 +842,12 @@ def compute_full_refinement(
 
     Writes to ``result.metadata["refinement"]`` and
     ``result.metadata["_refinement_stage1_cache"]`` ONLY on successful
-    completion. Also registers a separate refined ``IndexingResult``-like
-    object in ``backend.api.routes.indexing._result_registry`` via
-    ``_store_result(refined_result, "refinement")``. The id of that refined
-    result is stored as ``refinement.refined_result_id``.
+    completion. Also registers a separate refined ``IndexingResult`` (a real
+    one, on a copy of the parent's CrystalMap with the refined orientations)
+    in ``backend.api.routes.indexing._result_registry`` via
+    ``_store_result(refined_result, "refinement", activate=False)`` -- the
+    original stays the active result. The id of that refined result is
+    stored as ``refinement.refined_result_id``.
 
     On exception or cancellation, leaves metadata unchanged.
 
@@ -829,12 +897,11 @@ def compute_full_refinement(
     if n_indexed == 0:
         raise SHTRenderError("no indexed pixels to refine")
 
-    # Flat-to-xmap-row mapping (handles both selection_mask and full-grid cases)
-    n_total = n_rows * n_cols
-    if int(result.xmap.rotations.size) == n_total:
-        flat_to_xmap = np.arange(n_total)
-    else:
-        flat_to_xmap = np.cumsum(indexed_mask.ravel()) - 1
+    # Flat-to-xmap-row mapping. A region-of-interest result has one xmap row
+    # per SELECTED pixel, including selected pixels that stayed unindexed, so
+    # the rows are counted over the selection mask -- not over the indexed
+    # pixels, which would shift every row after the first unindexed one.
+    _selected_flat, flat_to_xmap = _xmap_flat_index_map(result)
     phase_id_per_pixel = phase_ids_2d.ravel()[indexed_flat_idx]
 
     # ------------------------------------------------------------------
@@ -943,6 +1010,10 @@ def compute_full_refinement(
     # Pre-init so post-loop scatter sees something even if max_outer_iter==0
     ncc_final_all = np.full(n_indexed, np.nan, dtype=np.float64)
     outer_iter = 0
+    # Did the smoothness solve (Stage 2) run in at least one outer iteration?
+    # The degeneracy guard below skips it when the pattern-centre sensitivity
+    # is zero; the methods sentence must not describe a step that did not run.
+    smoothness_applied = False
 
     # Cumulative orientation cap: even though each Stage-3 invocation clips
     # omega to STAGE1_BOUND_OMEGA_RAD, drift accumulates across outer
@@ -964,7 +1035,7 @@ def compute_full_refinement(
 
         # Stage 2: smooth-PC solve (global)
         s2_t0 = _dt.datetime.utcnow()
-        # Per-axis diagnostic at debug level (Phase B v1.8): noisy at info
+        # Per-axis diagnostic at debug level: noisy at info
         # level because it fires 3*max_outer_iter times. Use logging.DEBUG
         # if you need it during incident debugging.
         if logger.isEnabledFor(logging.DEBUG):
@@ -997,6 +1068,7 @@ def compute_full_refinement(
                 pc_stage1=pc_current, r_stage1=r_current, J_p=J_p_current,
                 mask=indexed_mask, lambda_=smoothness_lambda,
             )
+            smoothness_applied = True
         # Hard-clamp pc_new to the spec's Stage-1 bounds around pc_global.
         # Defends against any remaining ill-conditioned drift in the rare
         # non-degenerate-but-noisy case.
@@ -1147,25 +1219,35 @@ def compute_full_refinement(
     refined_xmap_rotations_data = q_orig_all.copy()
     refined_xmap_rotations_data[xmap_rows] = q_current
 
-    refined_xmap = _RefinedXMap()
-    refined_xmap.phase_id = result.xmap.phase_id
-    refined_xmap.shape = result.xmap.shape
-    refined_xmap.phases = result.xmap.phases
-    refined_xmap.scores = _scatter_map(ncc_final_all.astype(np.float32))
-
-    refined_rot = _RefinedRotation()
-    refined_rot.size = q_orig_all.shape[0]
-    refined_rot.data = refined_xmap_rotations_data
-    refined_rot.to_euler = result.xmap.rotations.to_euler  # reuse upstream impl
-    refined_xmap.rotations = refined_rot
+    ncc_per_row = np.full(q_orig_all.shape[0], np.nan, dtype=np.float32)
+    ncc_per_row[xmap_rows] = ncc_final_all
+    refined_xmap = _refined_crystal_map(
+        result.xmap, refined_xmap_rotations_data, ncc_per_row)
 
     pc_per_pixel = np.zeros((n_rows, n_cols, 3), dtype=np.float64)
     pc_per_pixel.reshape(-1, 3)[indexed_flat_idx] = pc_current
 
-    refined_result = _RefinedResult()
-    refined_result.xmap = refined_xmap
-    refined_result.original_shape = result.original_shape
-    refined_result.selection_mask = result.selection_mask
+    # A real IndexingResult: every route that lists, activates, exports or draws
+    # a stored result reads the same fields off it (method, confidence_scores,
+    # a CrystalMap that can be sliced, ...), and a stand-in that only had some
+    # of them made those routes answer 500 the moment it was in the registry.
+    # The confidence index is the indexer's; a refinement does not re-estimate
+    # it, so the refined result keeps the parent's rather than showing the
+    # refined NCC (a different quantity) under the CI's name.
+    from indexing_controller import IndexingResult
+
+    parent_ci = getattr(result, "confidence_scores", None)
+    refined_result = IndexingResult(
+        xmap=refined_xmap,
+        selection_mask=(None if result.selection_mask is None
+                        else np.array(result.selection_mask, copy=True)),
+        original_shape=result.original_shape,
+        method=result.method,
+        confidence_scores=(None if parent_ci is None
+                           else np.array(parent_ci, copy=True)),
+        eds_counts=getattr(result, "eds_counts", None),
+        phase_compositions=getattr(result, "phase_compositions", None),
+    )
 
     # Find original result's id in the registry (needed for refinement_of)
     from backend.api.routes import indexing as ind_routes
@@ -1194,11 +1276,23 @@ def compute_full_refinement(
         parent_meta = {}
     for _key, _default in ind_routes.NO_SCAN_OFFSET.items():
         refined_result.metadata[_key] = parent_meta.get(_key, _default)
-
-    refined_rid = ind_routes._store_result(refined_result, "refinement")
-    # _store_result already bumps; bump again is harmless but the explicit
-    # call here keeps the refinement path self-documenting as a state change.
-    state_version.bump()
+    # Same file as its parent as well: _store_result would otherwise tag it
+    # with whatever file is loaded at this moment, and the file-switch
+    # re-activation and the gallery route by this tag.
+    if parent_meta.get("source_file"):
+        refined_result.metadata["source_file"] = parent_meta["source_file"]
+    # What describes the indexing RUN (same pixels, same patterns, same
+    # dictionary; a refinement changes orientations and the pattern centre,
+    # nothing here): the per-phase confidence maps behind the per-phase CI and
+    # uncertainty layers, the dictionary a pattern match reads its simulated
+    # pattern from, the experimental signal, the scan's step size. Shared by
+    # reference, like eds_counts: both results only read them.
+    # Deliberately NOT copied: anything that describes the parent's
+    # orientations or phase ids -- forward_diagnostics, the refinement block
+    # and its stage-1 cache, assignment_source, cleaned_phase_id.
+    for _key in _RUN_METADATA_OF_THE_PARENT:
+        if _key in parent_meta:
+            refined_result.metadata[_key] = parent_meta[_key]
 
     # ------------------------------------------------------------------
     # Summary stats
@@ -1236,7 +1330,10 @@ def compute_full_refinement(
 
     prior_ncc = (metadata.get("forward_diagnostics") or {}).get("ncc_map")
     if prior_ncc is None or not hasattr(prior_ncc, "shape") or prior_ncc.shape != ncc_map.shape:
-        ncc_improvement = _safe_summary(np.full_like(ncc_map, np.nan))
+        # No forward diagnostics on the parent (nobody has to compute them
+        # before refining), so there is no earlier NCC to improve on: the
+        # improvement is "not available", not a summary of an all-NaN map.
+        ncc_improvement = None
     else:
         ncc_improvement = _safe_summary(ncc_map - prior_ncc)
 
@@ -1256,13 +1353,14 @@ def compute_full_refinement(
     # Atomic write (last step — keeps result.metadata pristine on error)
     # ------------------------------------------------------------------
     block = {
-        "refined_result_id": refined_rid,
+        "refined_result_id": None,      # filled in once the result is registered
         "smoothness_lambda": float(smoothness_lambda),
         "computed_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
         "stage_1_seconds": stage_1_seconds,
         "stage_2_seconds": stage_2_t,
         "stage_3_seconds": stage_3_t,
         "outer_iterations": outer_iter + 1,
+        "smoothness_applied": smoothness_applied,
         "refined_ncc_map": ncc_map,
         "convergence_status_map": conv_map,
         "orientation_delta_map": orientation_delta_map,
@@ -1281,5 +1379,83 @@ def compute_full_refinement(
         "indexed_flat_idx": stage1_data["indexed_flat_idx"],
         "bandwidth": stage1_data["bandwidth"],
     }
-    result.metadata["refinement"] = block
-    result.metadata["_refinement_stage1_cache"] = cache_block
+
+    # Everything that can fail has run; only now does the refined result enter
+    # the registry, so a failed compute leaves no refined result behind. It is
+    # stored WITHOUT becoming the active one: the original stays active (the
+    # refinement layers and the diagnostic layers are computed on it), and the
+    # Original/Refined toggle switches the active result.
+    # The citation trail: everything the parent's trail says (the indexing run
+    # that made the orientations), plus the one declared step for this
+    # refinement. The parent's own trail is not touched. Recorded on the local
+    # refined result, so a refinement that failed above leaves no step anywhere.
+    from backend.api.services.app_version import get_version_info
+    from backend.api.services.citations.provenance import (
+        merge_provenance, record_step,
+    )
+    merge_provenance(refined_result, [result])
+    record_step(refined_result, "refinement.joint_r_pc", {
+        "orienta_version": get_version_info().get("version"),
+        "smoothness_lambda": float(smoothness_lambda),
+        "n_pixels_refined": int(n_indexed),
+        "bandwidth": stage1_data["bandwidth"],
+        "outer_iterations": outer_iter + 1,
+        "smoothness_applied": smoothness_applied,
+        # The bounds that cap the result (they bind in practice) and what
+        # the run's summary knows about how the pixels ended.
+        "orientation_bound_deg": STAGE3_CUM_BOUND_DEG,
+        "pc_bound_px": STAGE1_BOUND_DXY_PX,
+        "distance_bound_um": STAGE1_BOUND_DL_UM,
+        "n_converged": summary["n_converged"],
+        "n_max_iter": summary["n_max_iter"],
+        "n_failed": summary["n_failed"],
+    })
+
+    previous_refined = refined_ids_of(original_rid, result.metadata)
+    # The parent is protected from the result cap while this is stored: with
+    # the parent the oldest entry and a refined result active, the cap would
+    # evict the parent, and the bookkeeping below would then forget the
+    # previous refined result too.
+    refined_rid = ind_routes._store_result(
+        refined_result, "refinement", activate=False,
+        keep=(() if original_rid is None else (original_rid,)))
+    if original_rid is not None and original_rid not in ind_routes._result_registry:
+        # The parent is gone anyway (it was replaced or removed while this ran).
+        # A refined result without its parent is an orphan: take it back out and
+        # leave everything else -- the previous refined result, the parent's
+        # block -- as it was.
+        forget_refined_result(refined_rid)
+        raise RuntimeError(
+            "the result being refined left the registry while its refinement "
+            "was stored")
+    # _store_result already bumps; bump again is harmless but the explicit
+    # call here keeps the refinement path self-documenting as a state change.
+    state_version.bump()
+    before = {k: result.metadata.get(k)
+              for k in ("refinement", "_refinement_stage1_cache")}
+    try:
+        block["refined_result_id"] = refined_rid
+        result.metadata["refinement"] = block
+        result.metadata["_refinement_stage1_cache"] = cache_block
+    except BaseException:
+        # No block on the parent means no refined result: take the new result
+        # out first (nothing below may keep it registered), then put the
+        # parent's metadata back as it was.
+        forget_refined_result(refined_rid, fallback_rid=original_rid)
+        for key, old in before.items():
+            try:
+                if old is None:
+                    result.metadata.pop(key, None)
+                else:
+                    result.metadata[key] = old
+            except Exception:
+                logger.warning("could not restore result.metadata[%r]", key,
+                               exc_info=True)
+        raise
+    # A new refinement of this parent REPLACES the previous one (re-refine,
+    # re-smooth): the old refined result would otherwise sit in the registry
+    # unreachable, counting towards the cap. If the user was looking at it,
+    # they keep looking at a refined result -- the new one.
+    for stale_rid in previous_refined:
+        if stale_rid != refined_rid:
+            forget_refined_result(stale_rid, fallback_rid=refined_rid)

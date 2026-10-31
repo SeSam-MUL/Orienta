@@ -162,7 +162,7 @@ def summary(result_id: str):
     diag = (result.metadata or {}).get("forward_diagnostics")
     if diag is None:
         raise HTTPException(status_code=404, detail={"error": "forward diagnostics not yet computed for this result"})
-    return {
+    return svc.json_safe({
         "computed": True,
         "bandwidth": diag["bandwidth"],
         "computed_at": diag["computed_at"],
@@ -172,7 +172,7 @@ def summary(result_id: str):
         "local_anomaly":    diag["summary"]["local_anomaly"],
         "pc_sensitivity":   diag["summary"]["pc_sensitivity"],
         "pattern_residual": diag["summary"]["pattern_residual"],
-    }
+    })
 
 
 @router.get("/browser")
@@ -207,13 +207,15 @@ def browser(
         metric=metric, sort=direction, n=n,
         range_min=range_min, range_max=range_max,
     )
-    return {
+    # json_safe: an item carries all four metrics, and the ones it was not
+    # sorted by can be NaN for that pixel.
+    return svc.json_safe({
         "metric": metric,
         "sort": direction,
         "range": [range_min, range_max] if (range_min is not None or range_max is not None) else None,
         "total_matching": total,
         "items": items,
-    }
+    })
 
 
 @router.get("/thumbnail")

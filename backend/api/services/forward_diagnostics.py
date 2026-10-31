@@ -105,6 +105,31 @@ def summary_stats(arr: np.ndarray, n_bins: int = 30) -> dict:
     }
 
 
+def json_safe(value):
+    """``value`` with every non-finite number replaced by ``None``, recursively.
+
+    ``summary_stats`` of an array with no valid value is NaN for every scalar,
+    and JSON has no NaN: serialising such a summary fails, which a route
+    answers with 500. The routes that return a summary pass it through here at
+    the point where it becomes a response (the stored block keeps its NaNs for
+    in-process use). Dicts, lists and tuples are rebuilt; numpy scalars become
+    Python numbers and numpy arrays nested lists (``tolist``), so an array
+    that holds a NaN cannot get through either; anything else is returned
+    unchanged.
+    """
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, dict):
+        return {k: json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe(v) for v in value]
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, float) and not np.isfinite(value):
+        return None
+    return value
+
+
 _METRIC_TO_KEY = {
     "ncc": "ncc_map",
     "local_anomaly": "local_anomaly_map",

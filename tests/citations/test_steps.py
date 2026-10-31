@@ -27,12 +27,30 @@ EXPECTED_KEYS = {
     "indexing.hough_anchor",
     "preprocessing.background",
     "refinement.orientation",
+    "refinement.joint_r_pc",
 }
 
 
 def test_registry_holds_exactly_the_declared_steps():
     assert set(STEP_REGISTRY) == EXPECTED_KEYS
-    assert len(STEP_REGISTRY) == 12
+    assert len(STEP_REGISTRY) == 13
+
+
+def test_the_joint_refinement_step_claims_only_what_the_code_does():
+    """The sentence names the quantities the refinement actually has (bandwidth,
+    smoothness weight, outer iterations, pixel count) and credits Orienta and
+    the EMsoft simulations its references come from -- not a method of anyone
+    else's."""
+    step = STEP_REGISTRY["refinement.joint_r_pc"]
+    assert step.citation_ids == ("orienta", "emsoft")
+    for slot in ("bandwidth", "smoothness_lambda", "outer_iterations",
+                 "n_pixels_refined", "orienta_version",
+                 "orientation_bound_deg", "pc_bound_px", "distance_bound_um",
+                 "n_converged", "n_max_iter", "n_failed"):
+        assert "{" + slot + "}" in step.sentence
+    # the smoothness clause follows the recorded flag
+    assert "{smoothness_applied:" in step.sentence
+    assert "EMSphInx" not in step.sentence and "Lenthe" not in step.sentence
 
 
 def test_the_emsphinx_step_does_not_claim_an_orienta_reimplementation():
