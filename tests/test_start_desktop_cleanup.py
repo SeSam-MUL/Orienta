@@ -20,7 +20,38 @@ import start_desktop  # noqa: E402
 
 psutil = pytest.importorskip("psutil")
 
-PORT = 8137          # not the app's port: this test must never touch a real backend
+def _free_port() -> int:
+    """A port nobody holds right now.
+
+    This file used the fixed port 8137. When something else listened there (a
+    verification backend another session had started on it), the spawned child
+    could not bind, `_wait_for_owner` returned that stranger as the test's own
+    child, and `test_our_own_backend_is_killed` killed it -- the very thing the
+    launcher's identity check exists to prevent. A free port plus an owner that
+    must belong to the spawned tree (`_wait_for_owner`) rule that out.
+
+    The band stays near 8137 on purpose: on a Windows 11 build (26300) psutil
+    listed a listener on 18100 and on a port the OS handed out with status NONE,
+    and on 8137 with LISTEN. The owner lookup asks for LISTEN."""
+    import socket
+    for port in range(8137, 8237):
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", port))
+            except OSError:
+                continue
+            return port
+    raise RuntimeError("no free port in 8137-8236")
+
+
+PORT = _free_port()  # not the app's port, and nobody else's
+
+
+@pytest.fixture(autouse=True)
+def _a_port_of_its_own():
+    """Each test asks again: the child of the test before may still be dying."""
+    global PORT
+    PORT = _free_port()
 
 
 def _spawn_tree(port: int):
@@ -59,11 +90,22 @@ def _spawn_tree(port: int):
     return subprocess.Popen([sys.executable, "-c", parent_src], **isolate)
 
 
-def _wait_for_owner(port, timeout=25):
+def _in_tree(pid: int, parent) -> bool:
+    """True when ``pid`` is the spawned ``parent`` or one of its descendants."""
+    try:
+        proc = psutil.Process(pid)
+        return pid == parent.pid or any(p.pid == parent.pid for p in proc.parents())
+    except psutil.Error:
+        return False
+
+
+def _wait_for_owner(port, parent, timeout=25):
+    """The identity of the process holding ``port`` -- only if it belongs to the tree
+    this test spawned. A stranger on the port is never handed to the kill code."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         owner = start_desktop._port_owner(port)
-        if owner:
+        if owner and _in_tree(owner[0], parent):
             return owner
         time.sleep(0.3)
     return None
@@ -82,7 +124,7 @@ def test_killing_the_tree_takes_the_port_holder_with_it():
     # leaves the grandchild holding the port. `_kill_tree` must not.
     parent = _spawn_tree(PORT)
     try:
-        owner = _wait_for_owner(PORT)
+        owner = _wait_for_owner(PORT, parent)
         assert owner is not None, "test child never took the port"
         assert owner[0] != parent.pid, "the CHILD should hold the port, not the parent"
 
@@ -149,7 +191,7 @@ def test_the_lsof_fallback_survives_a_machine_without_lsof(monkeypatch):
 def test_the_port_owner_is_identified_by_pid_and_start_time():
     parent = _spawn_tree(PORT)
     try:
-        owner = _wait_for_owner(PORT)
+        owner = _wait_for_owner(PORT, parent)
         assert owner is not None
         pid, created = owner
         assert isinstance(pid, int) and created > 0
@@ -163,7 +205,7 @@ def test_a_stranger_on_the_port_is_left_alone():
     """PIDs get recycled. A process we did not start must survive cleanup."""
     parent = _spawn_tree(PORT)
     try:
-        owner = _wait_for_owner(PORT)
+        owner = _wait_for_owner(PORT, parent)
         assert owner is not None
 
         # Same pid, different start time: someone else's process now.
@@ -179,7 +221,7 @@ def test_a_stranger_on_the_port_is_left_alone():
 def test_our_own_backend_is_killed():
     parent = _spawn_tree(PORT)
     try:
-        owner = _wait_for_owner(PORT)
+        owner = _wait_for_owner(PORT, parent)
         assert owner is not None
 
         assert start_desktop._kill_backend_if_ours(owner, PORT) is True

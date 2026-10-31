@@ -63,11 +63,28 @@ def by_key(doc):
     return {p["key"]: p for p in doc["phases"]}
 
 
+@pytest.fixture(scope="module")
+def measured(doc):
+    """The records of the 36 phases the spec's numbers were measured on.
+
+    The counts below (9 element bands, 93 placements, 16 dictionary-capable,
+    10 DOIs, Hough 35) describe the library as it was frozen into the frontend
+    fixture. The library is the user's data and grows: every phase added since
+    turned these tests red although nothing in the code had changed. They now
+    count over the measured phases only; checks that hold for every phase (no
+    phantom band, no phase without elements, a bare DOI) still look at all.
+    """
+    if not FIXTURE.is_file():
+        pytest.skip("frontend fixture not in this checkout")
+    keys = {p["key"] for p in json.loads(FIXTURE.read_text(encoding="utf-8"))["phases"]}
+    return [p for p in doc["phases"] if p["key"] in keys]
+
+
 # --- shape ----------------------------------------------------------------
 
 @requires(CIF_LIBRARY)
 def test_one_answer_carries_both_the_phases_and_the_library_totals(doc):
-    """Two requests would let the counts arrive before the list (spec §2.8)."""
+    """Two requests would let the counts arrive before the list."""
     assert set(doc) >= {"schema", "phases", "library_totals"}
     assert doc["phases"], "an empty library here would be a failure, not an answer"
     assert set(doc["library_totals"]) == {"elements", "crystal_system",
@@ -129,7 +146,7 @@ def test_every_total_is_counted_from_the_returned_phases(doc):
 
 
 @requires(CIF_LIBRARY)
-def test_the_bands_are_the_measured_nine_with_no_phantoms(doc):
+def test_the_bands_are_the_measured_nine_with_no_phantoms(doc, measured):
     """93 placements over 9 bands, and no phase without a band.
 
     The phantom bands (`Al0+` and friends) are what the element-symbol fix
@@ -137,9 +154,13 @@ def test_the_bands_are_the_measured_nine_with_no_phantoms(doc):
     """
     bands = doc["library_totals"]["elements"]
     assert not [b for b in bands if "+" in b or "-" in b], bands
-    assert len(bands) == 9
-    assert sum(bands.values()) == 93
-    assert bands["Al"] == 28
+    placements = {}
+    for p in measured:
+        for el in p["elements_structure"]:
+            placements[el] = placements.get(el, 0) + 1
+    assert len(placements) == 9
+    assert sum(placements.values()) == 93
+    assert placements["Al"] == 28
     assert [p["key"] for p in doc["phases"] if not p["elements_structure"]] == []
 
 
@@ -173,14 +194,14 @@ def test_the_capability_agrees_with_what_the_collection_resolver_hands_out(by_ke
 
 
 @requires(CIF_LIBRARY)
-def test_dictionary_capability_counts_masters_by_content(doc, by_key):
+def test_dictionary_capability_counts_masters_by_content(measured, by_key):
     """16, and specifically the one the name rule loses.
 
     `pi-Al8FeMg3Si6_ICSD-27140` has a real master called
     `..._E20kV_sig70_n501_o0.h5` -- a name indistinguishable from the
     Monte-Carlo outputs beside it. A `*master*.h5` glob answers 15.
     """
-    assert doc["library_totals"]["capabilities"]["dictionary"] == 16
+    assert sum(1 for p in measured if p["capabilities"]["dictionary"]) == 16
     p = by_key["pi-Al8FeMg3Si6_ICSD-27140"]
     assert p["capabilities"]["dictionary"] is True
     assert "master" not in p["files"]["master"]["name"].lower()
@@ -341,6 +362,7 @@ def test_a_master_is_recognised_by_content_and_a_monte_carlo_file_is_not(tmp_pat
 
 # --- against the frozen contract, when it is here -------------------------
 
+@requires(CIF_LIBRARY)
 def test_it_matches_the_frontend_fixture_field_for_field(by_key):
     """The agreed contract, compared on the real library.
 
@@ -348,14 +370,19 @@ def test_it_matches_the_frontend_fixture_field_for_field(by_key):
     frontend branch). `test_every_record_has_exactly_the_agreed_fields` covers
     the shape unconditionally, so a skip here never leaves the contract
     unchecked.
+
+    Every phase of the frozen fixture must still be there and answer the same;
+    phases added to the library since the fixture was frozen are not a breach of
+    the contract (the library is the user's data and grows: this test was red
+    from the day the first new phase arrived, and without a library it failed
+    instead of skipping like its neighbours).
     """
     if not FIXTURE.is_file():
         pytest.skip("frontend fixture not in this checkout")
     fx = {p["key"]: p for p in json.loads(
         FIXTURE.read_text(encoding="utf-8"))["phases"]}
-    assert set(fx) == set(by_key), (
-        f"key sets differ: only-fixture={sorted(set(fx) - set(by_key))} "
-        f"only-endpoint={sorted(set(by_key) - set(fx))}")
+    missing = sorted(set(fx) - set(by_key))
+    assert not missing, f"phases of the fixture the endpoint no longer lists: {missing}"
 
     # Fields the endpoint adds on purpose, and the one it answers differently.
     ADDED = {"cell_setting_conflict", "reference_rejected"}
@@ -706,7 +733,7 @@ def test_assign_files_gives_each_file_to_the_longest_matching_key(tmp_path):
 # --- citations, after the DOI decision -----------------------------------
 
 @requires(CIF_LIBRARY)
-def test_the_doi_is_read_from_all_three_places_and_stored_bare(doc, by_key):
+def test_the_doi_is_read_from_all_three_places_and_stored_bare(doc, by_key, measured):
     """10 of 36, and only ONE is in the references block.
 
     Reading only that block finds one; the others are in `_publ_section_doi` (8)
@@ -717,7 +744,7 @@ def test_the_doi_is_read_from_all_three_places_and_stored_bare(doc, by_key):
     assert by_key["beta-AlFeSi"]["doi"] == "10.1107/S0108768193013096"
     assert by_key["α-(AlMnSi)"]["doi"] == "10.1107/S0108270197015989"
     assert by_key["Al3Fe2Si_mp-1190708_symmetrized"]["doi"] == "10.1063/1.4812323"
-    assert sum(1 for p in doc["phases"] if p["doi"]) == 10
+    assert sum(1 for p in measured if p["doi"]) == 10
     for p in doc["phases"]:
         assert "http" not in (p["doi"] or ""), p["key"]
         assert (p["doi"] or "10.").startswith("10.")
@@ -872,7 +899,7 @@ def test_a_block_of_only_ids_and_punctuation_is_not_a_citation():
 
 
 @requires(CIF_LIBRARY)
-def test_the_two_numbers_b9_corrected_in_the_spec(doc, by_key):
+def test_the_two_numbers_b9_corrected_in_the_spec(measured, by_key):
     """Hough 35 of 36, and four pre-built dictionaries.
 
     Hough excludes `sd_1816951`: the reader Hough uses parses that CIF to
@@ -880,9 +907,9 @@ def test_the_two_numbers_b9_corrected_in_the_spec(doc, by_key):
     `Dictionary_Library/sd/` -- a folder named after neither the phase nor its
     stem, which is why it is matched on the FILE NAME.
     """
-    assert doc["library_totals"]["capabilities"]["hough"] == 35
+    assert sum(1 for p in measured if p["capabilities"]["hough"]) == 35
     assert by_key["sd_1816951"]["capabilities"]["hough"] is False
-    with_dict = sorted(p["key"] for p in doc["phases"] if p["files"]["dictionary"])
+    with_dict = sorted(p["key"] for p in measured if p["files"]["dictionary"])
     assert with_dict == ["Al", "Al7FeCu2", "Ni", "sd_0302719"], with_dict
 
 

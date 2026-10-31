@@ -296,6 +296,53 @@ def pytest_sessionfinish(session, exitstatus):
     session.exitstatus = 1
 
 
+# ---------------------------------------------------------------------------
+# The indexing result registry belongs to ONE test, not to the session
+# ---------------------------------------------------------------------------
+#
+# ``backend.api.routes.indexing`` keeps every stored result in a module-level
+# dict and one "active" id. ``_store_result`` fills both, a file load moves the
+# active id, and the batch route pops entries but leaves the id behind. None of
+# that is undone when a test ends, so a result stored by one test (twice a
+# MagicMock) stayed active for every later file: seven tests in
+# test_problem_code_header answered 500 instead of 400 only when they ran after
+# test_refinement_service. Restoring it in each file that happens to store a
+# result fixed three files and left the class: the next test that stores one
+# leaks again. This restores it for every test.
+#
+# Only when the module is already imported - a test that never touches the
+# indexing routes must not pay for (or trigger) that import. A module imported
+# DURING the test did not exist before it, so its fresh state is the empty
+# registry and no active id.
+#
+# The dict is restored IN PLACE: other modules bind it by name
+# (``from ...indexing import _result_registry``) and would otherwise keep
+# looking at an object the module no longer uses.
+
+_INDEXING_MODULE = "backend.api.routes.indexing"
+
+
+@pytest.fixture(autouse=True)
+def _indexing_results_belong_to_one_test():
+    mod = sys.modules.get(_INDEXING_MODULE)
+    if mod is not None:
+        registry = mod._result_registry
+        saved_items = list(registry.items())
+        saved_active = mod._active_result_id
+    else:
+        registry, saved_items, saved_active = None, [], None
+    yield
+    mod = sys.modules.get(_INDEXING_MODULE)
+    if mod is None:
+        return
+    if registry is None:
+        registry = mod._result_registry     # first imported inside the test
+    mod._result_registry = registry
+    registry.clear()
+    registry.update(saved_items)
+    mod._active_result_id = saved_active
+
+
 # --- Register custom markers ---
 
 def pytest_configure(config):
