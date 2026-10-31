@@ -65,7 +65,7 @@ def by_key(doc):
 
 @pytest.fixture(scope="module")
 def measured(doc):
-    """The records of the 36 phases the spec's numbers were measured on.
+    """The records of the 36 phases the expected numbers were measured on.
 
     The counts below (9 element bands, 93 placements, 16 dictionary-capable,
     10 DOIs, Hough 35) describe the library as it was frozen into the frontend
@@ -332,12 +332,26 @@ def test_the_master_check_is_a_key_lookup_not_a_read():
     import inspect
 
     from backend.api.services import phase_library
-    src = inspect.getsource(phase_library._has_master_array)
-    assert "'EMData/EBSDmaster/mLPNH' in f" in src or \
-           '"EMData/EBSDmaster/mLPNH" in f' in src
+    # the lookup lives in master_status; scan_masters and _has_master_array only call it
+    src = inspect.getsource(phase_library.master_status)
+    for caller in (phase_library.scan_masters, phase_library._has_master_array):
+        csrc = inspect.getsource(caller).split('"""', 2)[-1]
+        assert "master_status(" in csrc and "h5py" not in csrc
+    assert any(form in src for form in (
+        "'EMData/EBSDmaster/mLPNH' in f", '"EMData/EBSDmaster/mLPNH" in f',
+        "'EMData/EBSDmaster/mLPNH' not in f", '"EMData/EBSDmaster/mLPNH" not in f'))
     body = src.split('"""', 2)[-1]
     for forbidden in ("[()]", "np.array(", ".value", "[:]"):
         assert forbidden not in body, f"{forbidden} would read the array"
+
+
+def _write_master_header(f, *, program="EMEBSDmaster.f90", namelist="EBSDMasterNameList"):
+    """The header of an EMsoft master the way kikuchipy's reader needs it."""
+    import h5py
+    f.create_dataset("EMData/EBSDmaster/mLPNH", data=[[1.0]])
+    f.create_dataset("EMheader/EBSDmaster/ProgramName", data=[program.encode()],
+                     dtype=h5py.special_dtype(vlen=bytes))
+    f.create_dataset(f"NMLparameters/{namelist}/npx", data=[500])
 
 
 def test_a_master_is_recognised_by_content_and_a_monte_carlo_file_is_not(tmp_path):
@@ -348,7 +362,7 @@ def test_a_master_is_recognised_by_content_and_a_monte_carlo_file_is_not(tmp_pat
     good = tmp_path / "phase" / "x_E20kV_sig70_n501_o0.h5"
     good.parent.mkdir()
     with h5py.File(good, "w") as f:
-        f.create_dataset("EMData/EBSDmaster/mLPNH", data=[[1.0]])
+        _write_master_header(f)
     mc = tmp_path / "phase2" / "y_master_E20kV_npx500.h5"
     mc.parent.mkdir()
     with h5py.File(mc, "w") as f:
@@ -358,6 +372,173 @@ def test_a_master_is_recognised_by_content_and_a_monte_carlo_file_is_not(tmp_pat
     assert _has_master_array(mc) is False, "named 'master', but is not one"
     found = master_files(tmp_path)
     assert [q.name for q in found] == [good.name]
+
+
+def test_a_gpu_opencl_master_that_kikuchipy_cannot_read_is_not_a_master(tmp_path):
+    """Five `EMEBSDmasterOpenCL` masters carried `mLPNH`, so the
+    phase library offered Dictionary indexing for five phases, and `kp.load`
+    refused every one of them. Their header, as measured on the real files:
+    ProgramName `EMEBSDmasterOpenCL.f90` and the namelist group
+    `EBSDMasterOpenCLNameList` instead of `EBSDMasterNameList`."""
+    import h5py
+
+    from backend.api.services.phase_library import _has_master_array, master_files
+
+    opencl = tmp_path / "Mg" / "Mg_master_E20kV_npx500.h5"
+    opencl.parent.mkdir()
+    with h5py.File(opencl, "w") as f:
+        _write_master_header(f, program="EMEBSDmasterOpenCL.f90",
+                             namelist="EBSDMasterOpenCLNameList")
+    assert _has_master_array(opencl) is False
+    assert master_files(tmp_path) == []
+
+
+def test_the_library_does_not_offer_dictionary_for_an_unreadable_master(tmp_path, monkeypatch):
+    """Through the one answer the card, the collections and the Phase Tester all
+    share (`master_map` / `master_for_key`): Al has a readable master, Mg only a
+    GPU one."""
+    import h5py
+
+    from backend.api.services import crystal_hint_local_library as chl
+    from backend.api.services import phase_library as pl
+
+    cache = tmp_path / "Database" / "EBSD_H5_Cache"
+    for key, kwargs in (("Al", {}),
+                        ("Mg", dict(program="EMEBSDmasterOpenCL.f90",
+                                    namelist="EBSDMasterOpenCLNameList"))):
+        (cache / key).mkdir(parents=True)
+        with h5py.File(cache / key / f"{key}_master_E20kV_npx500.h5", "w") as f:
+            _write_master_header(f, **kwargs)
+    monkeypatch.setattr(chl, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(chl, "get_index", lambda: {"Al": object(), "Mg": object()})
+    monkeypatch.setattr(pl, "_ASSIGN_CACHE", {})
+
+    assert set(pl.master_map()) == {"Al"}
+    assert pl.master_for_key("Al") is not None
+    assert pl.master_for_key("Mg") is None
+
+
+# --- a refused master is reported, not made to vanish ------------------------------
+# The gate above stopped offering EMEBSDmasterOpenCL masters,
+# and the "unassigned masters" list is built from the readable ones, so a master the
+# user had just simulated was neither offered nor mentioned.
+
+def test_master_status_tells_the_three_cases_apart(tmp_path):
+    import h5py
+
+    from backend.api.services.phase_library import master_status
+
+    ok = tmp_path / "ok.h5"
+    with h5py.File(ok, "w") as f:
+        _write_master_header(f)
+    gpu = tmp_path / "gpu.h5"
+    with h5py.File(gpu, "w") as f:
+        _write_master_header(f, program="EMEBSDmasterOpenCL.f90",
+                             namelist="EBSDMasterOpenCLNameList")
+    mc = tmp_path / "mc.h5"
+    with h5py.File(mc, "w") as f:
+        f.create_dataset("EMData/MCOpenCL/accum_e", data=[[1]])
+    assert master_status(ok) == ("ok", "EMEBSDmaster.f90")
+    assert master_status(gpu) == ("unreadable", "EMEBSDmasterOpenCL.f90")
+    assert master_status(mc) == ("not_master", None)
+    assert master_status(tmp_path / "missing.h5") == ("not_master", None)
+
+
+def test_the_index_reports_a_refused_master_with_its_code_and_program(tmp_path, monkeypatch):
+    import h5py
+
+    from backend.api.services import crystal_hint_local_library as chl
+    from backend.api.services import phase_library as pl
+
+    cache = tmp_path / "Database" / "EBSD_H5_Cache" / "Mg_COD-9008506"
+    cache.mkdir(parents=True)
+    name = "Mg_COD-9008506_master_E20kV_npx500.h5"
+    with h5py.File(cache / name, "w") as f:
+        _write_master_header(f, program="EMEBSDmasterOpenCL.f90",
+                             namelist="EBSDMasterOpenCLNameList")
+    with h5py.File(cache / "Al_master_E20kV_npx500.h5", "w") as f:
+        _write_master_header(f)
+    monkeypatch.setattr(chl, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(chl, "get_index", lambda: {"Mg_COD-9008506": object()})
+    monkeypatch.setattr(pl, "_ASSIGN_CACHE", {})
+    monkeypatch.setattr(pl, "_phase_record", lambda k, e, ctx: {"files": {"master": None}})
+    monkeypatch.setattr(pl, "_library_totals", lambda phases: {})
+    monkeypatch.setattr(pl, "_synonyms", lambda: {})
+
+    doc = pl.build_index_document()
+
+    assert [(m["name"], m["code"], m["program"], m["phase_key"])
+            for m in doc["unreadable_masters"]] == [
+        (name, "masterUnreadableByKikuchipy", "EMEBSDmasterOpenCL.f90", "Mg_COD-9008506")]
+    assert "Al_master_E20kV_npx500.h5" not in [m["name"] for m in doc["unreadable_masters"]]
+    # ... and it is still not OFFERED
+    assert pl.master_for_key("Mg_COD-9008506") is None
+
+
+def test_a_finished_job_gets_a_coded_warning_for_a_refused_master(tmp_path):
+    import h5py
+
+    from simulation.simulation_controller import master_readability_warnings
+
+    gpu = tmp_path / "Mg_master_E20kV_npx500.h5"
+    with h5py.File(gpu, "w") as f:
+        _write_master_header(f, program="EMEBSDmasterOpenCL.f90",
+                             namelist="EBSDMasterOpenCLNameList")
+    good = tmp_path / "Al_master_E20kV_npx500.h5"
+    with h5py.File(good, "w") as f:
+        _write_master_header(f)
+    assert master_readability_warnings({"master": str(gpu)}) == [
+        {"code": "masterUnreadableByKikuchipy", "file": gpu.name,
+         "program": "EMEBSDmasterOpenCL.f90"}]
+    assert master_readability_warnings({"master": str(good)}) == []
+    assert master_readability_warnings({"sht": "x.sht"}) == []
+    assert master_readability_warnings(None) == []
+
+
+def test_the_job_finishing_step_runs_the_check_and_the_route_passes_it_on():
+    """The wiring, held on the sources: the check sits after the result files
+    are located, and both route loops copy `warnings` into the task payload."""
+    ctl = (PROJECT_ROOT / "simulation" / "simulation_controller.py").read_text(encoding="utf-8")
+    assert ctl.index("self._locate_results(") < ctl.index("master_readability_warnings(job.result_files)")
+    route = (PROJECT_ROOT / "backend" / "api" / "routes" / "simulation.py").read_text(encoding="utf-8")
+    assert route.count('["warnings"] = job.warnings') == 2
+    # ... and the persisted history rows keep them (EMsoft single run, GPU single
+    # run, EMsoft batch), which is where the Simulation page's History tab reads
+    assert route.count('"warnings": task_data.get("warnings") or []') == 2
+    assert route.count('"warnings": entry.get("warnings") or []') == 1
+
+
+@pytest.mark.parametrize("what", ["program name", "namelist"])
+def test_either_header_gate_alone_is_enough_to_refuse_a_master(tmp_path, what):
+    import h5py
+
+    from backend.api.services.phase_library import _has_master_array
+
+    p = tmp_path / f"{what.replace(' ', '_')}.h5"
+    with h5py.File(p, "w") as f:
+        if what == "program name":
+            _write_master_header(f, program="EMEBSDmasterOpenCL.f90")
+        else:
+            _write_master_header(f, namelist="EBSDMasterOpenCLNameList")
+    assert _has_master_array(p) is False
+
+
+def test_a_master_the_gate_accepts_passes_kikuchipys_own_format_check(tmp_path):
+    """The gate must never be looser than the reader it protects: anything it
+    accepts must get past kikuchipy's `check_file_format` (installed version)."""
+    import h5py
+
+    pytest.importorskip("kikuchipy")
+    from kikuchipy.io.plugins._emsoft_master_pattern import check_file_format
+
+    from backend.api.services.phase_library import _has_master_array
+
+    p = tmp_path / "ok.h5"
+    with h5py.File(p, "w") as f:
+        _write_master_header(f)
+    assert _has_master_array(p) is True
+    with h5py.File(p, "r") as f:
+        check_file_format(f, "EBSD")   # raises IOError if the gate lied
 
 
 # --- against the frozen contract, when it is here -------------------------

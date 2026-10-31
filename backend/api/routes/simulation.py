@@ -498,6 +498,8 @@ async def start_simulation(req: SimulationStartRequest, background_tasks: Backgr
                     _simulation_tasks[task_id]["status"] = job.status.value
                     if job.result_files:
                         _simulation_tasks[task_id]["result"] = job.result_files
+                    if getattr(job, "warnings", None):
+                        _simulation_tasks[task_id]["warnings"] = job.warnings
                     if job.error_message:
                         _simulation_tasks[task_id]["error"] = job.error_message
                     break
@@ -527,6 +529,7 @@ async def start_simulation(req: SimulationStartRequest, background_tasks: Backgr
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "output_path": str(task_data.get("result") or ""),
                 "error": error_msg,
+                "warnings": task_data.get("warnings") or [],
                 "log_file": str(_get_job_log_path(task_id)),
                 "params": {
                     "ekev": req.ekev,
@@ -663,7 +666,8 @@ async def scan_missing_materials(output_type: str = "both", ekev: float = 20.0):
             read_xtal_max_lattice_nm, read_xtal_min_occupancy,
         )
         params = SimulationParameters(ekev=ekev)
-        missing = ctrl.scan_missing_materials(output_type, params)
+        unreadable: list = []
+        missing = ctrl.scan_missing_materials(output_type, params, unreadable_out=unreadable)
         # Per-phase engine routing (additive — existing consumers unaffected).
         # Probe EMsoft/WSL availability ONCE for the whole scan, then reuse it.
         from backend.api.services.engine_router import (
@@ -717,7 +721,11 @@ async def scan_missing_materials(output_type: str = "both", ekev: float = 20.0):
                 logger.warning("engine routing failed for %s: %s", m.get("stem"), e)
                 m["recommended_engine"] = None
                 m["engine_reason"] = f"routing failed: {e}"
-        return {"missing": missing, "count": len(missing)}
+        # `unreadable`: phases whose only master kikuchipy cannot load (code
+        # masterUnreadableByKikuchipy, file, writing program). Distinct from
+        # "missing": the file exists, and re-running the GPU master program
+        # would write the same unusable file, so they are reported, not queued.
+        return {"missing": missing, "count": len(missing), "unreadable": unreadable}
     except Exception as e:
         logger.error("scan_missing_materials failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -863,6 +871,8 @@ async def start_batch(req: BatchStartRequest, background_tasks: BackgroundTasks)
                         entry["status"] = job.status.value
                         if job.result_files:
                             entry["result"] = job.result_files
+                        if getattr(job, "warnings", None):
+                            entry["warnings"] = job.warnings
                         if job.error_message:
                             entry["error"] = job.error_message
                         break
@@ -894,6 +904,7 @@ async def start_batch(req: BatchStartRequest, background_tasks: BackgroundTasks)
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "output_path": str(entry.get("result") or ""),
                 "error": job_error,
+                "warnings": entry.get("warnings") or [],
                 "log_file": str(_get_job_log_path(task_id)),
                 "params": {"ekev": req.ekev, "sig": req.sig, "totnum_el": req.totnum_el,
                            "nthreads": req.nthreads, "compute_mode": req.compute_mode},
@@ -1410,6 +1421,7 @@ async def start_gpu_simulation(req: SimulationStartRequest, background_tasks: Ba
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "output_path": str(task_data.get("result") or ""),
                 "error": error_msg,
+                "warnings": task_data.get("warnings") or [],
                 "log_file": str(_get_job_log_path(task_id)),
                 "params": {
                     "ekev": req.ekev,

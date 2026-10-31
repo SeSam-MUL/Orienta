@@ -178,6 +178,8 @@
     "errorPrefix": "错误: {{message}}",
     "scanningMissing": "正在扫描 XTAL 库中缺失的材料...",
     "allHaveResults": "所有材料均已有模拟结果。",
+    "unreadableMasters_one": "没有缺失项，但有 {{count}} 个相的主图无法用于字典索引（kikuchipy 无法加载）：{{names}}。请用 CPU 主图程序重新模拟。",
+    "unreadableMasters_other": "没有缺失项，但有 {{count}} 个相的主图无法用于字典索引（kikuchipy 无法加载）：{{names}}。请用 CPU 主图程序重新模拟。",
     "errorScanningMissing": "扫描缺失材料时出错。",
     "startingBatch": "正在启动批处理...",
     "batchStarted": "批处理已启动：{{count}} 个作业已加入队列。",
@@ -210,6 +212,11 @@
     "viewMasterPattern": "查看主花样",
     "viewMasterTooltipReady": "前往队列标签页 — 用“查看结果”打开完成的 master/SHT",
     "viewMasterTooltipNotReady": "在启动模拟后可用"
+  },
+  "jobWarnings": {
+    "masterUnreadableByKikuchipy": "{{file}} 无法用于字典索引：kikuchipy 无法加载该文件（由 {{program}} 写出），因此相库不会提供它。请用 CPU 主图程序重新模拟。",
+    "unknownProgram": "未知程序",
+    "unknown": "警告 {{code}}：{{file}}"
   },
   "queueTab": {
     "emptyTitle": "没有正在运行的模拟",
@@ -271,6 +278,7 @@
     "select": "选择"
   },
   "missingDialog": {
+    "unreadableMaster": "{{stem}}：主图不可读（由 {{program}} 写出）— {{file}} 无法用于字典索引。未列在上方，因为用同一程序再次模拟会写出同样的文件；请使用 CPU 主图程序。",
     "titlePhases": "模拟所有缺失项 — {{count}} 个相",
     "pipelineOurs": "✨ Orienta Engine",
     "pipelineEmsoft": "⚙ EMsoft 流水线",

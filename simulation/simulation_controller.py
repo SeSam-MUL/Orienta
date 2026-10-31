@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Optional, Dict, List
+from typing import Any, Optional, Dict, List
 import queue
 import threading
 from dataclasses import dataclass
@@ -59,6 +59,42 @@ def _has_usable_master(master_files) -> bool:
     return False
 
 
+def _master_gate(path):
+    """``(status, program)`` of one master ``.h5`` from the phase library's own
+    gate (``phase_library.master_status``); ``("not_master", None)`` if the gate
+    cannot run, which keeps the old "present means usable" reading."""
+    try:
+        from backend.api.services.phase_library import master_status  # noqa: PLC0415
+        return master_status(Path(path))
+    except Exception:
+        return "not_master", None
+
+
+def master_readability_warnings(result_files) -> List[Dict[str, Any]]:
+    """Coded warnings for a produced master that Dictionary indexing cannot read.
+
+    EMsoft's GPU master program (``EMEBSDmasterOpenCL``, the default on every
+    machine with a GPU) writes a file kikuchipy refuses to load; the phase
+    library therefore does not offer it. Without this the job ends "completed"
+    and the user finds out only when the master is missing from the picker.
+    Uses the library's own gate (``phase_library.master_status``), so the two
+    cannot disagree. Best effort: a check that fails never fails the job.
+    """
+    master = (result_files or {}).get("master")
+    if not master:
+        return []
+    try:
+        from backend.api.services.phase_library import (  # noqa: PLC0415
+            UNREADABLE_MASTER_CODE, master_status)
+        status, program = master_status(Path(master))
+    except Exception:
+        return []
+    if status != "unreadable":
+        return []
+    return [{"code": UNREADABLE_MASTER_CODE, "file": Path(master).name,
+             "program": program}]
+
+
 class SimulationStatus(Enum):
     """Status states for a simulation."""
     PENDING = "pending"
@@ -87,6 +123,9 @@ class SimulationJob:
     log_lines: Optional[List[str]] = None
     worker_thread: Optional[threading.Thread] = None
     result_files: Optional[Dict[str, str]] = None  # {"h5": path, "sht": path, "master": path}
+    # Coded warnings about a job that still COMPLETED, e.g.
+    # {"code": "masterUnreadableByKikuchipy", "file": ..., "program": ...}.
+    warnings: Optional[List[Dict[str, Any]]] = None
 
 
 @dataclass
@@ -920,6 +959,13 @@ class SimulationController:
                 job.result_files = self._locate_results(xtal_file, params, db_root)
                 if job.result_files:
                     _progress(f"Result files: {', '.join(f'{k}={Path(v).name}' for k, v in job.result_files.items())}")
+                job.warnings = master_readability_warnings(job.result_files)
+                for w in job.warnings:
+                    _progress(
+                        f"Warning [{w['code']}]: {w['file']} was written by "
+                        f"{w['program'] or 'an unknown program'} and kikuchipy cannot "
+                        "load it, so Dictionary indexing will not offer it. "
+                        "Re-run the master with the CPU program (EMEBSDmaster).")
 
                 # Provenance sidecar for the EMsoft .sht (mirrors the GPU "Ours"
                 # path) so BOTH engines are uniformly traceable: source xtal/cif +
@@ -1273,13 +1319,20 @@ class SimulationController:
         return [job for job in self.jobs.values() if job.status == SimulationStatus.COMPLETED]
 
     def scan_missing_materials(
-        self, output_type: str, params: SimulationParameters
+        self, output_type: str, params: SimulationParameters,
+        unreadable_out: Optional[List[Dict[str, object]]] = None,
     ) -> List[Dict[str, object]]:
         """Scan XTAL Library and find materials that still need simulation.
 
         Searches ALL material subfolders in Database/EBSD_H5_Cache/*/
         and Database/EBSD_SHT_Database/*/ so files in Default/, Fe/, Al/
         etc. are all found regardless of folder naming.
+
+        A phase whose ONLY master is one kikuchipy cannot load (EMsoft's GPU
+        master program writes those) is not "missing" -- the file is there, and
+        simulating again with the same program would write the same file -- but
+        it is not "done" either. Such phases are appended to ``unreadable_out``
+        when it is given: ``{"xtal_path", "stem", "code", "file", "program"}``.
 
         Returns:
             List of dicts: [{"xtal_path": str, "stem": str, "missing": ["h5","sht","master"]}]
@@ -1336,9 +1389,30 @@ class SimulationController:
                 if not master_files:
                     master_files = [f for f in h5_cache.glob("*/*master*.h5")
                                     if safe_stem in f.name] if h5_cache.exists() else []
+                # Split off the masters the library refuses (same gate as the
+                # phase library: phase_library.master_status). A file we cannot
+                # judge at all still counts as present, as before.
+                refused = []
+                judged = []
+                for mf in master_files:
+                    status, program = _master_gate(mf)
+                    (refused if status == "unreadable" else judged).append((mf, program))
                 # A disc-masked (corrupt) master counts as missing so it is
                 # regenerated rather than silently kept (pre-2026-06-22 corner bug).
-                if not _has_usable_master(master_files):
+                if judged:
+                    if not _has_usable_master([mf for mf, _p in judged]):
+                        missing.append("master")
+                elif refused:
+                    # Only an unreadable master exists: not missing, not usable.
+                    if unreadable_out is not None:
+                        from backend.api.services.phase_library import UNREADABLE_MASTER_CODE
+                        mf, program = refused[0]
+                        unreadable_out.append({
+                            "xtal_path": str(xtal_path), "stem": stem,
+                            "code": UNREADABLE_MASTER_CODE,
+                            "file": Path(mf).name, "program": program,
+                        })
+                else:
                     missing.append("master")
 
             if missing:

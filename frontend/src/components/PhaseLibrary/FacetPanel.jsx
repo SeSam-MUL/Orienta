@@ -44,6 +44,7 @@ export default function FacetPanel({
   elementRows, selectedElements, onToggleElement, onResetElements,
   capabilityRows, selectedCapabilities, onToggleCapability, onResetCapabilities,
   unassignedMasters = [],
+  unreadableMasters = [],
 }) {
   const { t } = useTranslation('phaselibrary');
 
@@ -100,7 +101,7 @@ export default function FacetPanel({
         ))}
 
         {unassignedMasters.length > 0 && (
-          // Shown rather than concealed (spec §2.7): one of these four is the
+          // Shown rather than concealed: one of these four is the
           // S-phase's master, sitting under a stem the library does not map.
           // A card that says "no master" about a phase whose master is on the
           // disk is worse than an untidy list.
@@ -112,6 +113,21 @@ export default function FacetPanel({
                 touching anything. It is a fact about the folder, not an
                 error, and it now says what it means for the reader. */}
             {t('facets.unassignedMasters', { count: unassignedMasters.length })}
+          </p>
+        )}
+
+        {unreadableMasters.length > 0 && (
+          // A master the library refuses to offer for Dictionary indexing
+          // (carries the array, kikuchipy cannot load it -- code
+          // masterUnreadableByKikuchipy). Said out loud: the phase would
+          // otherwise just look like "no master" although the user simulated
+          // one. The file names are the part they act on.
+          <p style={S.note} data-testid="unreadable-masters">
+            {t('facets.unreadableMasters', {
+              count: unreadableMasters.length,
+              names: unreadableMasters.map((m) => m.name).join(', '),
+              interpolation: { escapeValue: false },
+            })}
           </p>
         )}
       </section>

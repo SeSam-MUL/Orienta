@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { simApi } from '../../services/api';
 import CrystalPickerModal from './CrystalPickerModal';
 import SimulateMissingDialog from './SimulateMissingDialog';
+import JobWarnings from './JobWarnings';
 import useDataStore from '../../stores/useDataStore';
 import {
   colors, spacing, alpha,
@@ -288,6 +289,7 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState(null);
   const [statusText, setStatusText]   = useState(t('status.ready'));
+  const [unreadableScan, setUnreadableScan] = useState([]);  // phases whose only master cannot be loaded (scan answer, not "missing")
   const [missingDialog, setMissingDialog] = useState(null);  // missing-phases list for the Simulate-All-Missing pre-launch dialog
   const [simDone, setSimDone]         = useState(false);
   const [oclInfo, setOclInfo]         = useState(null);
@@ -406,8 +408,17 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
     try {
       const resp = await simApi.scanMissing(params.outputType, Number(params.voltage));
       const missing = resp.data?.missing || [];
+      // Phases whose only master kikuchipy cannot load: not missing, not done.
+      const unreadable = resp.data?.unreadable || [];
+      setUnreadableScan(unreadable);
       if (missing.length === 0) {
-        setStatusText(t('status.allHaveResults'));
+        setStatusText(unreadable.length > 0
+          ? t('status.unreadableMasters', {
+              count: unreadable.length,
+              names: unreadable.map(u => u.file).join(', '),
+              interpolation: { escapeValue: false },
+            })
+          : t('status.allHaveResults'));
         setLoading(false);
         return;
       }
@@ -703,6 +714,7 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
         {missingDialog && (
           <SimulateMissingDialog
             missing={missingDialog}
+            unreadable={unreadableScan}
             defaultDmin={Number(params.dMin)}
             engine={engine}
             onLaunch={launchMissingBatch}
@@ -1369,6 +1381,7 @@ function QueueTab({ jobs, onStop, onCancelBatch, onBackToConfig }) {
                     {job.eta && (
                       <Label secondary small style={{ display: 'block' }}>{t('queueTab.etaPrefix', { eta: job.eta })}</Label>
                     )}
+                    <JobWarnings warnings={job.warnings} />
                   </td>
                   <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', display: 'flex', gap: 4 }}>
                     {(job.status === 'running' || job.status === 'queued') && (
@@ -1552,6 +1565,7 @@ function HistoryTab({ history, onClear }) {
                   >
                     <td title={crystalFile || fileName} style={{ ...tdStyle, fontFamily: 'monospace', color: colors.accent, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {fileName}
+                      <JobWarnings warnings={entry.warnings} />
                     </td>
                     <td style={tdStyle}>{material}</td>
                     <td style={tdStyle}>
@@ -1651,7 +1665,7 @@ export default function SimulationPage({ isActive = false }) {
           if (j._batch_id !== bid) return j;
           const match = batchJobs.find(b => b.task_id === j.task_id);
           if (!match) return j;
-          return { ...j, status: match.status, progress: match.progress || 0, message: match.message || '', result: match.result || j.result, logLines: match.logLines || j.logLines || [] };
+          return { ...j, status: match.status, progress: match.progress || 0, message: match.message || '', result: match.result || j.result, warnings: match.warnings || j.warnings, logLines: match.logLines || j.logLines || [] };
         }));
       } catch { /* ignore */ }
     }

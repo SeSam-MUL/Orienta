@@ -1,18 +1,15 @@
 /**
  * The phase library.
  *
- * WHAT THIS PAGE IS FOR. Sebastian, holding the shipped app: "ich bin
- * generell damit unzufrieden wie wir phasen wo anzeigen und nennen ... ich
- * musste trotzdem ewig suchen um das cif zu finden". A first-time-user agent
- * put the same thing in numbers: told to "use the Al phases", no search term
- * he tried found pure aluminium, and he said he would close the program and
- * ask a colleague for a list of filenames instead.
+ * WHAT THIS PAGE IS FOR. The library is named after files, so finding the right
+ * CIF means searching a long list of file names: for "the Al phases", no search
+ * term finds pure aluminium. This page shows, searches and groups phases by the
+ * names people use.
  *
- * This is the M0 scaffold: the search from `phaseSearch.js`, the four load
- * states, and the entry points. The facets (M1), the bands (M2) and the
- * profile card (M3) land in it; the shape below is what they land in.
+ * The page holds the search from `phaseSearch.js`, the four load states and
+ * the entry points; the facets, the bands and the profile card sit inside it.
  *
- * THE FOUR STATES, and why the fourth one is written down (spec §2.8):
+ * The four states, and why the fourth one is written down:
  *
  *   loading         asked, waiting -- never an empty list
  *   error           could not ask; still asking, and the page says so
@@ -22,14 +19,14 @@
  * The first three are the lesson from `useAppVersion` and `phaseDiscovery`:
  * a failed request is not an answer, and "no phases found" for a library of
  * 36 sends the user off to rebuild what is already there. The fourth is the
- * one Fassung 1 of the spec forgot, and it is the nastiest, because when the
+ * one that is easily forgotten, and it is the hardest to leave, because when the
  * filters match nothing every facet count is 0 -- so the one way out of the
  * state is invisible from inside it. Hence: name the filter that is biting,
  * and put "clear filters" in the message itself.
  *
- * FACET COUNTS DO NOT APPEAR BEFORE THE LIST. In the mockups they sat there
- * complete while "loading" was still running, which says the numbers are
- * known and the phases are merely slow. They are the same request.
+ * Facet counts do not appear before the list: counts shown while the list is still
+ * loading would say the numbers are known and the phases are merely slow, but they
+ * come from the same request.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -118,7 +115,7 @@ export default function PhaseLibraryPage({
   const [query, setQuery] = useState('');
   const [elements, setElements] = useState([]);
   const [methods, setMethods] = useState([]);
-  // 'systems' is the default view (spec §2), the flat list is the other one.
+  // 'systems' is the default view, the flat list is the other one.
   // "My groups" joins them with the groups themselves.
   const [view, setView] = useState('systems');
   // MEASURED, which is why this exists: the index endpoint answers in 0.11 s
@@ -301,8 +298,8 @@ export default function PhaseLibraryPage({
    * NOT a new path. Indexing and the phase tester already read the ACTIVE
    * collection through `useCollectionStore` and `collectionsApi.resolve`,
    * which is where the per-method availability (`Al -> no_master` for
-   * Dictionary) is worked out. Sebastian's ask was "ich will sie aus jeder
-   * Anzeige heraus benutzen", and the way to honour that is to feed the
+   * Dictionary) is worked out. A group can be used from every
+   * view that shows phases, and the way to do that is to feed the
    * mechanism that is already there, not to build a second one that can
    * disagree with it.
    *
@@ -499,7 +496,7 @@ export default function PhaseLibraryPage({
           )}
           {/* Deliberately empty until the phases are here: the counts and the
               list come from one request, and showing the numbers first says
-              they are known. M1 fills this. */}
+              they are known. */}
           {state === 'ready' || state === 'filtered-empty' ? (
             <FacetPanel
               elementRows={elementRows}
@@ -511,6 +508,7 @@ export default function PhaseLibraryPage({
               onToggleCapability={(c) => setMethods((cur) => toggleCapability(cur, c))}
               onResetCapabilities={() => setMethods([])}
               unassignedMasters={payload?.unassigned_masters || []}
+              unreadableMasters={payload?.unreadable_masters || []}
             />
           ) : null}
           {/* Under the filters rather than beside a term: someone who has

@@ -178,6 +178,8 @@
     "errorPrefix": "Fehler: {{message}}",
     "scanningMissing": "XTAL-Bibliothek wird nach fehlenden Materialien durchsucht...",
     "allHaveResults": "Alle Materialien haben bereits Simulationsergebnisse.",
+    "unreadableMasters_one": "Es fehlt nichts, aber {{count}} Phase hat einen Master, der nicht für die Dictionary-Indizierung verwendet werden kann (kikuchipy kann ihn nicht laden): {{names}}. Simulieren Sie sie erneut mit dem CPU-Masterprogramm.",
+    "unreadableMasters_other": "Es fehlt nichts, aber {{count}} Phasen haben einen Master, der nicht für die Dictionary-Indizierung verwendet werden kann (kikuchipy kann ihn nicht laden): {{names}}. Simulieren Sie sie erneut mit dem CPU-Masterprogramm.",
     "errorScanningMissing": "Fehler beim Suchen fehlender Materialien.",
     "startingBatch": "Stapel wird gestartet...",
     "batchStarted": "Stapel gestartet: {{count}} Job(s) in der Warteschlange.",
@@ -210,6 +212,11 @@
     "viewMasterPattern": "Master-Pattern ansehen",
     "viewMasterTooltipReady": "Zum Warteschlangen-Tab wechseln — fertiges Master/SHT mit „Ergebnis ansehen“ öffnen",
     "viewMasterTooltipNotReady": "Verfügbar, sobald eine Simulation gestartet wurde"
+  },
+  "jobWarnings": {
+    "masterUnreadableByKikuchipy": "{{file}} kann nicht für die Dictionary-Indizierung verwendet werden: kikuchipy kann die Datei nicht laden (sie wurde von {{program}} geschrieben), daher bietet die Phasenbibliothek sie nicht an. Simulieren Sie sie erneut mit dem CPU-Masterprogramm.",
+    "unknownProgram": "einem unbekannten Programm",
+    "unknown": "Warnung {{code}}: {{file}}"
   },
   "queueTab": {
     "emptyTitle": "Keine aktiven Simulationen",
@@ -271,6 +278,7 @@
     "select": "Auswählen"
   },
   "missingDialog": {
+    "unreadableMaster": "{{stem}}: Master nicht lesbar (geschrieben von {{program}}) — {{file}} kann nicht für die Dictionary-Indizierung verwendet werden. Oben nicht aufgeführt, weil eine erneute Simulation mit demselben Programm dieselbe Datei schriebe; verwenden Sie das CPU-Masterprogramm.",
     "titlePhases": "Alle fehlenden simulieren — {{count}} Phase(n)",
     "pipelineOurs": "✨ Orienta Engine",
     "pipelineEmsoft": "⚙ EMsoft-Pipeline",

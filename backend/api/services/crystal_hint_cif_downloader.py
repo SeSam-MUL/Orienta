@@ -194,38 +194,21 @@ def inject_cif_reference(cif_text: str, doi: str = "",
                          reference: str = "") -> str:
     """Return ``cif_text`` with DOI / reference tags added or updated.
 
-    Uses the same CIF tags the Crystal Database reads and writes
-    (`_publ_section_doi`, `_publ_section_references`) so injected values
-    show up in the View Database / Crystal Parameters panels. Existing tags
-    are replaced; missing ones are appended. No-op for empty inputs.
+    Writes through ``phase_library.set_cif_source`` -- the one writer that
+    replaces exactly what the Crystal Database's reader reads, shared with
+    ``PATCH /cif/{f}/meta``: every DOI tag already present is updated (a COD file
+    carries ``_journal_paper_doi``, which the reader prefers), the reference block
+    is found with the reader's own pattern (a citation containing ";" is replaced
+    whole, not up to its first ";"), missing ones are appended. No-op for empty
+    inputs.
 
     MP-rendered CIFs (pure pymatgen structures) carry no bibliography, so
     this is how the source reference fetched from MP's provenance endpoint
     gets persisted into the saved file.
     """
-    content = cif_text
-    doi = (doi or "").strip()
-    reference = (reference or "").strip()
-    if doi:
-        if re.search(r"_publ_section_doi\s+", content):
-            content = re.sub(
-                r"(_publ_section_doi\s+)['\"]?[^'\"\n]+['\"]?",
-                rf"\g<1>'{doi}'", content)
-        else:
-            content = content.rstrip() + f"\n_publ_section_doi      '{doi}'\n"
-    if reference:
-        # Strip any stray semicolons so the multiline text block can't be
-        # closed early by the content itself.
-        ref_clean = reference.replace(";", ",")
-        if re.search(r"_publ_section_references\s*;", content):
-            content = re.sub(
-                r"_publ_section_references\s*;.*?;",
-                f"_publ_section_references\n;\n{ref_clean}\n;",
-                content, flags=re.DOTALL)
-        else:
-            content = content.rstrip() + \
-                f"\n_publ_section_references\n;\n{ref_clean}\n;\n"
-    return content
+    from backend.api.services.phase_library import set_cif_source
+
+    return set_cif_source(cif_text, doi=doi, reference=reference)
 
 
 def download_cif_from_cod(

@@ -178,6 +178,8 @@
     "errorPrefix": "エラー: {{message}}",
     "scanningMissing": "XTAL ライブラリで未生成の材料を検索しています...",
     "allHaveResults": "すべての材料に既にシミュレーション結果があります。",
+    "unreadableMasters_one": "不足しているものはありませんが、{{count}} 件の相のマスターは辞書インデックス法に使用できません (kikuchipy が読み込めません): {{names}}。CPU マスタープログラムで再度シミュレーションしてください。",
+    "unreadableMasters_other": "不足しているものはありませんが、{{count}} 件の相のマスターは辞書インデックス法に使用できません (kikuchipy が読み込めません): {{names}}。CPU マスタープログラムで再度シミュレーションしてください。",
     "errorScanningMissing": "未生成の材料の検索中にエラーが発生しました。",
     "startingBatch": "バッチを開始しています...",
     "batchStarted": "バッチを開始しました：{{count}} 件のジョブをキューに追加。",
@@ -210,6 +212,11 @@
     "viewMasterPattern": "マスターパターンを表示",
     "viewMasterTooltipReady": "キュータブへ移動 — 完成したマスター/SHT を「結果を表示」で開きます",
     "viewMasterTooltipNotReady": "シミュレーション開始後に利用可能になります"
+  },
+  "jobWarnings": {
+    "masterUnreadableByKikuchipy": "{{file}} は辞書インデックス法に使用できません。kikuchipy が読み込めないファイルです ({{program}} が書き込みました)。そのため相ライブラリには表示されません。CPU マスタープログラムで再度シミュレーションしてください。",
+    "unknownProgram": "不明なプログラム",
+    "unknown": "警告 {{code}}: {{file}}"
   },
   "queueTab": {
     "emptyTitle": "実行中のシミュレーションはありません",
@@ -271,6 +278,7 @@
     "select": "選択"
   },
   "missingDialog": {
+    "unreadableMaster": "{{stem}}: マスターを読み込めません ({{program}} が書き込みました) — {{file}} は辞書インデックス法に使用できません。同じプログラムで再度シミュレーションしても同じファイルが書き込まれるため、上の一覧には含めていません。CPU マスタープログラムを使用してください。",
     "titlePhases": "未生成をすべてシミュレート — {{count}} 相",
     "pipelineOurs": "✨ Orienta Engine",
     "pipelineEmsoft": "⚙ EMsoft パイプライン",

@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -183,8 +184,11 @@ def _symop_strings(data: dict) -> list[str]:
                                             "_space_group_symop_operation_xyz"))]
 
 
-def _sites(data: dict) -> list[dict]:
-    """The atom_site loop as a list of dicts, tolerant of single-row loops."""
+def _sites(data: dict, loops: list | None = None) -> list[dict]:
+    """The atom_site loop as a list of dicts, tolerant of single-row loops.
+
+    ``loops`` is the block's ``CifBlock.loops`` (a list of tag lists); it is only
+    needed to know whether a displacement column belongs to this loop."""
     xs = _as_list(data.get("_atom_site_fract_x"))
     if not xs:
         return []
@@ -195,6 +199,19 @@ def _sites(data: dict) -> list[dict]:
     wyckoff = _as_list(_first(data, "_atom_site_Wyckoff_symbol",
                               "_atom_site_Wyckoff_label")) or [""] * len(xs)
     occ = _as_list(data.get("_atom_site_occupancy")) or ["1"] * len(xs)
+    # A displacement column is only this row's when it sits in the SAME loop as
+    # the coordinates: SpringerMaterials files put B in a second loop keyed by
+    # `_atom_site_label_1`, in a different row order, and reading it by index
+    # would hand every site a neighbour's value. Without the block's loop
+    # structure (`loops=None`) no displacement is claimed at all.
+    def _own_column(tag: str) -> list:
+        if loops is not None and any(
+                "_atom_site_fract_x" in tags and tag in tags for tags in loops):
+            return _as_list(data.get(tag))
+        return []
+
+    b_iso = _own_column("_atom_site_B_iso_or_equiv")
+    u_iso = _own_column("_atom_site_U_iso_or_equiv")
     out = []
     for i, x in enumerate(xs):
         label = str(labels[i] if i < len(labels) else "") or f"row {i + 1}"
@@ -205,15 +222,71 @@ def _sites(data: dict) -> list[dict]:
             # The site itself says it has no coordinate; that one is skippable.
             continue
         sym = str(symbols[i] if i < len(symbols) else "") or str(labels[i] if i < len(labels) else "")
+        occ_value = _number(occ[i] if i < len(occ) else None,
+                            field=f"_atom_site_occupancy of {label}")
         out.append({
             "label": str(labels[i] if i < len(labels) else ""),
             "symbol": _element_of(sym),
             "xyz": np.asarray(xyz, dtype=np.float64),
             "wyckoff": str(wyckoff[i] if i < len(wyckoff) else "").lstrip("."),
-            "occupancy": _number(occ[i] if i < len(occ) else None,
-                                 field=f"_atom_site_occupancy of {label}") or 1.0,
+            # `_number` gives None for a missing / "?" / "." occupancy (-> 1.0,
+            # the CIF default) and 0.0 for a STATED zero, which must stay zero:
+            # `... or 1.0` turned "this site is empty" into "this site is full".
+            "occupancy": occ_value if occ_value is not None else 1.0,
+            # Displacement as the file states it, in A^2, or None. Lenient on
+            # purpose: it is display data, so a malformed value must not make
+            # the origin analysis (which shares this reader) refuse the file.
+            "b_iso": _b_iso_angstrom2(b_iso[i] if i < len(b_iso) else None,
+                                      u_iso[i] if i < len(u_iso) else None),
         })
     return out
+
+
+def _b_iso_angstrom2(b_value: Any, u_value: Any) -> float | None:
+    """B (A^2) from ``_atom_site_B_iso_or_equiv``, else 8*pi^2*U from
+    ``_atom_site_U_iso_or_equiv``; ``None`` when the file gives neither."""
+    for raw, factor in ((b_value, 1.0), (u_value, 8.0 * np.pi ** 2)):
+        try:
+            value = _number(raw)
+        except CifOriginError:
+            continue
+        if value is not None:
+            return float(value) * factor
+    return None
+
+
+def read_cif_sites(path: str | Path) -> tuple[str, list[dict]]:
+    """The atom sites the CIF itself lists: ``(block key, sites)``.
+
+    These are the file's own rows -- the asymmetric unit, fractional coordinates
+    in the setting (origin choice) the file was written in. NOT an expansion by
+    symmetry and not a re-expression in another frame (orix/diffpy hand back
+    the cell expanded with origin-choice-1 operators, with coordinates that for
+    a hexagonal cell are not even fractional: Mg's (1/3, 2/3, 1/4) comes back as
+    (0.577, 0.577, 0.25)).
+
+    The block is the FIRST one with atom-site rows. That is the block
+    :func:`structure_from_cif` converts too -- measured over the 49 library CIFs,
+    ``analyse_cif`` picks the same block in all 49 -- but without running the
+    origin analysis, which costs seconds per Fd-3m file and is not needed to
+    LIST what a file says. (Where an earlier block is unusable to the converter
+    and a later one is not, this panel still shows the file's first block.)
+    Each site: ``label``, ``symbol``, ``xyz`` (ndarray), ``wyckoff``,
+    ``occupancy``, ``b_iso`` (A^2 or None).
+    """
+    from pymatgen.io.cif import CifFile
+
+    path = Path(path)
+    cf = CifFile.from_file(str(path))
+    key = None
+    for k, block in cf.data.items():
+        if _sites(block.data):
+            key = k
+            break
+    if key is None:
+        return "", []
+    block = cf.data[key]
+    return key, _sites(block.data, loops=block.loops)
 
 
 _ELEMENT_RE = re.compile(r"^([A-Z][a-z]?)")
@@ -229,10 +302,22 @@ def _element_of(token: str) -> str:
 # the four sources of evidence
 # ---------------------------------------------------------------------------
 
-def _pymatgen_orbit_size(space_group: int, xyz) -> int:
+@lru_cache(maxsize=None)
+def _space_group(number: int):
+    """pymatgen's ``SpaceGroup`` for an IT number, built once per process.
+
+    Building one costs ~2.3 s for group 227 (it assembles the operator set from
+    pymatgen's tables) and the origin evidence asked for it four times per
+    file. A ``SpaceGroup`` is read-only here (only ``get_orbit`` is called), so
+    sharing the instance is safe.
+    """
     from pymatgen.symmetry.groups import SpaceGroup
 
-    sg = SpaceGroup.from_int_number(int(space_group))
+    return SpaceGroup.from_int_number(int(number))
+
+
+def _pymatgen_orbit_size(space_group: int, xyz) -> int:
+    sg = _space_group(int(space_group))
     return len(sg.get_orbit(np.asarray(xyz, dtype=np.float64)))
 
 
@@ -407,9 +492,7 @@ def _lattice(data: dict):
 
 
 def _orbit_positions(space_group: int, xyz) -> set[tuple]:
-    from pymatgen.symmetry.groups import SpaceGroup
-
-    sg = SpaceGroup.from_int_number(int(space_group))
+    sg = _space_group(int(space_group))
     return {tuple(np.round(np.asarray(p, dtype=np.float64) % 1.0, 4))
             for p in sg.get_orbit(np.asarray(xyz, dtype=np.float64))}
 
@@ -461,6 +544,8 @@ def _build_shifted(data: dict, sites: list[dict], space_group: int):
         if not s["symbol"]:
             raise CifOriginError(f"atom site {s['label']!r} has no element symbol.")
         occ = float(s["occupancy"])
+        if occ <= 0.0:
+            continue            # a stated occupancy of zero is an empty site, not an atom
         species.append(s["symbol"] if occ >= 1.0 else {s["symbol"]: occ})
         coords.append(to_choice_1(s["xyz"], space_group, 2))
     return Structure.from_spacegroup(int(space_group), lattice, species, coords)

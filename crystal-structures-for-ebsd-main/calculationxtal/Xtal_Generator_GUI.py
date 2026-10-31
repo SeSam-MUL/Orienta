@@ -415,7 +415,11 @@ class EMsoftXtalGenerator(QWidget):
                     if plain and (plain not in found_refs): found_refs.append(plain)
             if not found_refs: found_refs.append("none found") # Fallback
             
-            dwf_map = {str(r["Element"]).split()[0]: float(r["DWB 300 K"]) for _, r in pd.read_excel(dwf_path).iterrows()}
+            # First row of an element wins: a later row such as "Fe (FCC)" is a
+            # structure variant, the first one ("Fe (BCC)") is the default.
+            dwf_map = {}
+            for _, r in pd.read_excel(dwf_path).iterrows():
+                dwf_map.setdefault(str(r["Element"]).split()[0], float(r["DWB 300 K"]))
             a, b, c = np.array(structure.lattice.abc) / 10.0; alpha, beta, gamma = structure.lattice.angles
             sga = SpacegroupAnalyzer(structure, symprec=1e-5)
             csys_num = {v.lower(): k for k, v in self.CRYSTAL_SYSTEMS.items()}.get(sga.get_crystal_system().lower(), 7)

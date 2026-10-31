@@ -44,6 +44,20 @@ describe('DwfDialog', () => {
     expect(al).toMatchObject({ element: 'Al', dwb_300k: 0.0081, reference: 'unverified (legacy)' });
   });
 
+  it('saves a structure-variant row under its full label (Fe FCC is not Fe BCC)', async () => {
+    getDwf.mockResolvedValue({ data: { entries: [
+      { 'Element': 'Fe (BCC)', 'DWB 300 K': 0.003328, 'Reference': 'Peng 1996' },
+      { 'Element': 'Fe (FCC)', 'DWB 300 K': 0.00571, 'Reference': 'Peng 1996' },
+    ] } });
+    render(<DwfDialog onClose={() => {}} />);
+    const fcc = await screen.findByDisplayValue('0.00571');
+    fireEvent.change(fcc, { target: { value: '0.006' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(updateDwf).toHaveBeenCalledTimes(1));
+    const updates = updateDwf.mock.calls[0][0];
+    expect(updates).toEqual([{ element: 'Fe (FCC)', dwb_300k: 0.006, reference: 'Peng 1996' }]);
+  });
+
   it('adds a new element (Cu) and saves it', async () => {
     render(<DwfDialog onClose={() => {}} />);
     await screen.findByDisplayValue('0.007993');

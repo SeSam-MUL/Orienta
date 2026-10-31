@@ -636,17 +636,11 @@ def _centering_from_hm(space_group: str) -> str:
     return first if first in ("P", "A", "B", "C", "I", "F", "R") else ""
 
 
-_ATOM_SYMBOLS = {
-    1: "H", 3: "Li", 4: "Be", 5: "B", 6: "C", 7: "N", 8: "O",
-    9: "F", 11: "Na", 12: "Mg", 13: "Al", 14: "Si", 15: "P",
-    16: "S", 17: "Cl", 19: "K", 20: "Ca", 21: "Sc", 22: "Ti",
-    23: "V", 24: "Cr", 25: "Mn", 26: "Fe", 27: "Co", 28: "Ni",
-    29: "Cu", 30: "Zn", 31: "Ga", 32: "Ge", 33: "As", 34: "Se",
-    39: "Y", 40: "Zr", 41: "Nb", 42: "Mo", 44: "Ru", 45: "Rh",
-    46: "Pd", 47: "Ag", 48: "Cd", 49: "In", 50: "Sn", 51: "Sb",
-    52: "Te", 57: "La", 58: "Ce", 72: "Hf", 73: "Ta", 74: "W",
-    75: "Re", 76: "Os", 77: "Ir", 78: "Pt", 79: "Au", 82: "Pb",
-}
+# Z -> symbol: the shared table (element_symbols.py). This module used to carry a
+# 55-entry copy with gaps (no He, Ne, Ar, Br, Kr, Rb, Sr, Tc, I, Xe, Cs, Ba,
+# Pr-Lu, Hg, Tl, Bi, Po ...), so a selenide-iodide-barium-bismuth phase was named
+# "Z83SeZ56Z53" on the Orienta Engine path.
+from element_symbols import SYMBOL_OF as _ATOM_SYMBOLS  # noqa: E402
 
 
 def _xtal_element_formula(xtal_path: Path) -> str:
@@ -1027,6 +1021,23 @@ def derive_pearson(
     return f"{fam}{cen}{int(conventional_natoms)}"
 
 
+def _pearson_from_structure(structure) -> str:
+    """Pearson symbol of a full-cell pymatgen ``Structure`` (sg + conventional Z).
+
+    The ONE place that counts atoms for a Pearson symbol: the space group alone
+    does not determine it (hP2 for Mg and alpha-Ti, hP6 for a six-atom cell in
+    the same group 194), so a lookup keyed on the space-group number is wrong by
+    construction. Raises on anything pymatgen/spglib cannot analyse.
+    """
+    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer  # noqa: PLC0415
+
+    sga = SpacegroupAnalyzer(structure)
+    sg_number = int(sga.get_space_group_number())
+    hm = sga.get_space_group_symbol()
+    conventional_natoms = len(sga.get_conventional_standard_structure())
+    return derive_pearson(sg_number, hm, conventional_natoms)
+
+
 def _derive_pearson_from_cif(cif_path: Path) -> str:
     """Best-effort Pearson symbol for a CIF via pymatgen (sg + conventional Z).
 
@@ -1037,14 +1048,29 @@ def _derive_pearson_from_cif(cif_path: Path) -> str:
     """
     try:
         from pymatgen.core import Structure  # noqa: PLC0415
-        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer  # noqa: PLC0415
 
         structure = Structure.from_file(str(cif_path), primitive=False)
-        sga = SpacegroupAnalyzer(structure)
-        sg_number = int(sga.get_space_group_number())
-        hm = sga.get_space_group_symbol()
-        conventional_natoms = len(sga.get_conventional_standard_structure())
-        return derive_pearson(sg_number, hm, conventional_natoms)
+        return _pearson_from_structure(structure)
+    except Exception:
+        return ""
+
+
+def derive_pearson_for_xtal(xtal_path) -> str:
+    """Pearson symbol of an EMsoft ``.xtal``: the asymmetric unit is expanded by
+    its space group (origin choice honoured, partial occupancies merged) exactly
+    as the Database Browser's structure viewer does, then counted like a CIF.
+
+    ``""`` on any failure (unreadable file, pymatgen missing, expansion or
+    symmetry analysis failing): the SHT-name bracket is then omitted, never
+    wrong. Used by the EMsoft automation, which only has the ``.xtal`` at hand.
+    """
+    try:
+        from backend.api.services.crystal_structure import (  # noqa: PLC0415
+            _load_xtal_with_sg,
+        )
+
+        structure, _sg = _load_xtal_with_sg(Path(xtal_path))
+        return _pearson_from_structure(structure)
     except Exception:
         return ""
 
@@ -1101,16 +1127,22 @@ def resolve_sht_name_fields(
 ) -> tuple[str, str]:
     """Return ``(formula, pearson)`` for an SHT filename, READ from files and
     filename-safe. Formula: clean CIF formula → distinct .xtal elements → stem.
-    Pearson: CIF ``_sm_pearson_symbol`` → DERIVED from the CIF (space group +
-    conventional-cell Z) → "" (brackets omitted). The curated CIF tag wins when
-    present; otherwise the symbol is computed so it is almost always available.
-    Never invented from thin air — derivation needs a parseable CIF with a cell.
+    Pearson: DERIVED from the ``.xtal`` when one is given (the structure that is
+    actually simulated; the same rule the EMsoft automation uses, so both
+    engines name a phase the same way) → CIF ``_sm_pearson_symbol`` → DERIVED
+    from the CIF (space group + conventional-cell Z) → "" (brackets omitted).
+    The ``.xtal`` comes first because the CIF can be read wrongly where the
+    ``.xtal`` is right: Si.cif parses to 16 atoms (cF16) and sd_1816951.cif to
+    cF40, the ``.xtal`` expansions give cF8 and cF24. Never invented from thin
+    air — derivation needs a parseable structure.
     """
     pearson = ""
+    xtal_pearson = (derive_pearson_for_xtal(xtal_path)
+                    if xtal_path is not None and Path(xtal_path).exists() else "")
     cif = (Path(cif_library_dir) / f"{stem}.cif") if cif_library_dir is not None else None
     if cif is not None and cif.exists():
         meta = extract_metadata_from_cif(cif)
-        pearson = meta.pearson or _derive_pearson_from_cif(cif)
+        pearson = xtal_pearson or meta.pearson or _derive_pearson_from_cif(cif)
         cand = (meta.formula or "").replace(" ", "")
         if _is_filename_safe_formula(cand):
             return cand, pearson
@@ -1126,9 +1158,9 @@ def resolve_sht_name_fields(
     if xtal_path is not None and Path(xtal_path).exists():
         el = _xtal_element_formula(Path(xtal_path))
         if el:
-            return el, pearson
+            return el, pearson or xtal_pearson
 
-    return stem, pearson
+    return stem, pearson or xtal_pearson
 
 
 def build_sht_filename(

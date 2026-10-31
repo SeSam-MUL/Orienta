@@ -84,6 +84,7 @@ from ..crystal.xtal_io import CrystalStructure
 from backend.dictionary_gpu.lambert import direction_to_lambert
 from backend.spherical_gpu._math.sht import CSHT, grid_DriscollHealy, theta_phi_to_xyz
 from backend.spherical_gpu._math._wigner_logspace import csht_weights_half_pi
+from element_symbols import ATOMIC_SYMBOLS as _AT_SYB
 
 # --- format constants (sht_file.in.hpp) --------------------------------------
 _MAGIC_LE = b"*sht"
@@ -164,19 +165,8 @@ def warm_sht_cache(
     return dev
 
 
-# Element symbols indexed by Z-1 (mp2sht.cpp formula estimate table).
-_AT_SYB = [
-    "H", "He", "Li", "Be", "B", "C", "N", "O", "F", "Ne", "Na", "Mg", "Al",
-    "Si", "P", "S", "Cl", "Ar", "K", "Ca", "Sc", "Ti", "V", "Cr", "Mn", "Fe",
-    "Co", "Ni", "Cu", "Zn", "Ga", "Ge", "As", "Se", "Br", "Kr", "Rb", "Sr",
-    "Y", "Zr", "Nb", "Mo", "Tc", "Ru", "Rh", "Pd", "Ag", "Cd", "In", "Sn",
-    "Sb", "Te", "I", "Xe", "Cs", "Ba", "La", "Ce", "Pr", "Nd", "Pm", "Sm",
-    "Eu", "Gd", "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Hf", "Ta", "W",
-    "Re", "Os", "Ir", "Pt", "Au", "Hg", "Tl", "Pb", "Bi", "Po", "At", "Rn",
-    "Fr", "Ra", "Ac", "Th", "Pa", "U", "Np", "Pu", "Am", "Cm", "Bk", "Cf",
-    "Es", "Fm", "Md", "No", "Lr", "Rf", "Db", "Sg", "Bh", "Hs", "Mt", "Ds",
-    "Rg", "Cn", "Nh", "Fl", "Mc", "Lv", "Ts", "Og",
-]
+# Element symbols indexed by Z-1 (mp2sht.cpp formula estimate table): the shared
+# table in element_symbols.py, imported at the top of this module as _AT_SYB.
 
 # HarmonicsData::SpaceGroupRot — z rotational order per space group (1..230).
 # Port of the 230-entry table (sht_file.in.hpp:1838). The first port carried

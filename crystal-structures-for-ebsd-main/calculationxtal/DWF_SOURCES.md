@@ -40,9 +40,33 @@ against Peng during this work:
   in Peng (Cr 0.26, Fe 0.33, Ni 0.36). The Reference column names that plot;
   the value is the one non-Peng entry in the table.
 
-### Alternative phase values (not used, for reference)
-- Fe (FCC) @ 300 K = 0.5710 Å² = 0.005710 nm²
-- Ca (BCC) @ 300 K = 2.6615 Å²; Ca (FCC, used) = 2.0443 Å²
+### Elements with more than one row (structure variants)
+Peng lists some elements once per crystal structure. Such an element has one
+row per structure, the structure in brackets (`Fe (BCC)`, `Fe (FCC)`), and the
+converter picks the row like this (`backend/api/services/dwf_table.py`,
+`build_dwf_map`):
+- a phase that is the element's **own crystal** (one element only, space group
+  Fm-3m → `FCC`, Im-3m → `BCC`, P6₃/mmc → `HCP`, Fd-3m → `DIA`) takes the row
+  carrying that structure's label, if there is one;
+- every other phase (Fe in a compound or an alloy, an unlabelled structure)
+  takes the **first** row of the element, which is the room-temperature stable
+  structure. For Fe that is `Fe (BCC)`, the value used before the FCC row
+  existed. For Fe in an intermetallic the true B is site-specific; the table
+  has no better value for it.
+
+Current variants: `Fe (BCC)` 0.3328 Å² and `Fe (FCC)` 0.5710 Å² (both Peng
+Table 1, 300 K; checked against the deposited supplement, page 3). Not added
+(no phase in the library needs it yet): Ca (BCC) @ 300 K = 2.6615 Å²; the `Ca`
+row is Peng's FCC value 2.0443 Å².
+
+**Alloyed austenite keeps the BCC iron value.** The FCC row is chosen only for
+an ELEMENTAL crystal (one element in the phase). A future alloyed austenite --
+an Fe-Ni, Fe-C or Fe-Cr-Ni CIF in Fm-3m -- has more than one element, so its iron
+takes the first row, `Fe (BCC)` 0.3328 Å², although the structure is FCC. This
+is the rule working as written, not an oversight: Peng's FCC iron value is for
+pure FCC iron, and the table has no value for iron in a solid solution. If such
+a phase is added, give it its own value through `dwf_overrides` in the
+conversion request (or an explicit table row) and cite where it comes from.
 
 ## How to add / edit entries
 

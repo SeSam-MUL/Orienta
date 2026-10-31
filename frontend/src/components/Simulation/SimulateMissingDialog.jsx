@@ -19,7 +19,7 @@ const SIZE_LABEL_KEY = { ok: 'sizeLevelOk', moderate: 'sizeLevelModerate', large
  * switch — `engine` is 'ours' (default) or 'emsoft'. There is no per-phase
  * EMsoft-vs-Orienta-Engine routing, so no per-phase engine column is shown.
  */
-export default function SimulateMissingDialog({ missing, defaultDmin, onLaunch, onClose, engine = 'ours' }) {
+export default function SimulateMissingDialog({ missing, unreadable = [], defaultDmin, onLaunch, onClose, engine = 'ours' }) {
   const { t } = useTranslation(['simulation', 'common']);
   const useOurs = engine !== 'emsoft';
   const [dmins, setDmins] = useState(() => {
@@ -98,6 +98,24 @@ export default function SimulateMissingDialog({ missing, defaultDmin, onLaunch, 
             {largeCount > 0 && <span><span style={{ color: colors.orange, fontWeight: 600 }}>{t('missingDialog.largeSummary', { count: largeCount })}</span>{t('missingDialog.largeSummarySuffix')}</span>}
             {disorderCount > 0 && <span><span style={{ color: colors.red, fontWeight: 600 }}>{t('missingDialog.disorderSummary', { count: disorderCount })}</span>{t('missingDialog.disorderSummarySuffix')}</span>}
           </div>
+          {unreadable.length > 0 && (
+            // Not in the table: they are not "missing" (the file exists) and
+            // simulating them again with the same master program would write the
+            // same unusable file. Said here so "all done" is never the answer
+            // for a phase whose master the library refuses.
+            <div data-testid="unreadable-in-scan"
+                 style={{ fontSize: 11, color: colors.orange, marginTop: 6, lineHeight: 1.4 }}>
+              {unreadable.map((u) => (
+                <div key={u.stem} data-code={u.code}>
+                  {'⚠ '}{t('missingDialog.unreadableMaster', {
+                    stem: u.stem, file: u.file,
+                    program: u.program || t('jobWarnings.unknownProgram'),
+                    interpolation: { escapeValue: false },
+                  })}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Toolbar */}

@@ -178,6 +178,8 @@
     "errorPrefix": "Error: {{message}}",
     "scanningMissing": "Scanning XTAL Library for missing materials...",
     "allHaveResults": "All materials already have simulation results.",
+    "unreadableMasters_one": "Nothing is missing, but {{count}} phase has a master that cannot be used for Dictionary indexing (kikuchipy cannot load it): {{names}}. Simulate it again with the CPU master program.",
+    "unreadableMasters_other": "Nothing is missing, but {{count}} phases have a master that cannot be used for Dictionary indexing (kikuchipy cannot load it): {{names}}. Simulate them again with the CPU master program.",
     "errorScanningMissing": "Error scanning for missing materials.",
     "startingBatch": "Starting batch...",
     "batchStarted": "Batch started: {{count}} job(s) queued.",
@@ -210,6 +212,11 @@
     "viewMasterPattern": "View Master Pattern",
     "viewMasterTooltipReady": "Go to the Queue tab — open the finished master/SHT with “View Result”",
     "viewMasterTooltipNotReady": "Available after a simulation is started"
+  },
+  "jobWarnings": {
+    "masterUnreadableByKikuchipy": "{{file}} cannot be used for Dictionary indexing: kikuchipy cannot load it (it was written by {{program}}), so the phase library does not offer it. Simulate it again with the CPU master program.",
+    "unknownProgram": "an unknown program",
+    "unknown": "Warning {{code}}: {{file}}"
   },
   "queueTab": {
     "emptyTitle": "No active simulations",
@@ -271,6 +278,7 @@
     "select": "Select"
   },
   "missingDialog": {
+    "unreadableMaster": "{{stem}}: master unreadable (written by {{program}}) — {{file}} cannot be used for Dictionary indexing. Not listed above because simulating it again with the same program would write the same file; use the CPU master program.",
     "titlePhases": "Simulate All Missing — {{count}} phase(s)",
     "pipelineOurs": "✨ Orienta Engine",
     "pipelineEmsoft": "⚙ EMsoft pipeline",

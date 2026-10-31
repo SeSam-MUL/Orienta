@@ -68,7 +68,7 @@ export default function DwfDialog({ onClose }) {
     const v = parseFloat(newDwb);
     if (!el) { setMsg(t('dwf.enterElement')); return; }
     if (!isFinite(v) || v <= 0) { setMsg(t('dwf.enterValue')); return; }
-    if (rows.some(r => firstToken(r.element) === el)) {
+    if (rows.some(r => r.element.trim() === el || firstToken(r.element) === el)) {
       setMsg(t('dwf.alreadyInTable', { element: el })); return;
     }
     setRows(prev => [...prev, { element: el, dwb: v, reference: newRef.trim(), isNew: true }]);
@@ -79,7 +79,9 @@ export default function DwfDialog({ onClose }) {
     if (modifiedCount === 0) return;
     setSaving(true);
     const updates = changed
-      .map(r => ({ element: firstToken(r.element), dwb_300k: parseFloat(r.dwb), reference: r.reference || '' }))
+      // The full label ("Fe (FCC)"): an element can have one row per crystal
+      // structure, and the bare symbol would hit the wrong one.
+      .map(r => ({ element: r.element.trim(), dwb_300k: parseFloat(r.dwb), reference: r.reference || '' }))
       .filter(u => u.element && isFinite(u.dwb_300k));
     try {
       const res = await dbApi.updateDwf(updates);

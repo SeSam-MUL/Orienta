@@ -5,8 +5,6 @@ CIF  -> pymatgen CifParser (symmetry already expanded, partial occ preserved).
 XTAL -> EMsoft asymmetric unit (read_crystal_structure) expanded via
         Structure.from_spacegroup, then merge_sites(mode="sum") to collapse the
         per-species partial-occupancy duplication EMsoft stores in AtomData.
-
-See docs/superpowers/specs/2026-07-14-cif-xtal-crystal-structure-viewer-design.md
 """
 from __future__ import annotations
 
@@ -136,8 +134,15 @@ def _load_xtal_with_sg(p: Path):
     coords = [
         list(to_choice_1(at.xyz, cs.space_group, _setting)) for at in cs.atoms
     ]
+    # tol: fractional distance under which two images of the same atom are one
+    # site. The default 1e-5 is tighter than the rounding in the file itself --
+    # Cr2N stores the 3-fold site as 0.33333/0.66667, whose images differ by
+    # 1e-5 and so stayed apart (19 atoms instead of 11, then merge_sites summed
+    # the duplicates to an occupancy of 2.2 and the whole load failed). 1e-3 of a
+    # cell edge is ~5e-4 nm, far below any interatomic distance.
     try:
-        s = Structure.from_spacegroup(int(cs.space_group), lattice, species, coords)
+        s = Structure.from_spacegroup(
+            int(cs.space_group), lattice, species, coords, tol=1e-3)
         # Collapse EMsoft's per-species partial-occupancy duplicates that now sit
         # on top of each other (sum the occupancies at each shared site).
         s.merge_sites(tol=0.01, mode="sum")

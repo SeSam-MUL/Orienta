@@ -94,6 +94,29 @@ _ID_PATTERNS = (("icsd", r"ICSD[-_ ]?(\d+)"),
 # citation
 # --------------------------------------------------------------------------
 
+#: The tags a CIF states a DOI in. ONE list for every reader of a CIF's source
+#: (the phase card, the CIF info panel, the CIF -> .xtal converter): each of them
+#: used to carry its own, and they named different tags.
+_DOI_TAGS = ("_journal_paper_doi", "_publ_section_doi",
+             "_citation_doi", "_citation_journal_doi")
+
+
+#: Public names for the two patterns the CIF WRITER (``PATCH /cif/{f}/meta``)
+#: must agree with: it has to replace exactly what the reader reads.
+DOI_TAGS = _DOI_TAGS
+REFS_BLOCK = _REFS
+
+
+def read_doi_tag(text: str) -> Optional[str]:
+    """The bare DOI from an explicit DOI tag, or None. Not the references text."""
+    for tag in _DOI_TAGS:
+        raw = _parse_cif_field(text or "", tag)
+        m = _DOI.search(raw or "")
+        if m:
+            return m.group(0).rstrip(".,;")
+    return None
+
+
 def read_doi(text: str) -> Optional[str]:
     """The bare DOI (`10.xxxx/...`) this CIF states, from any of three places.
 
@@ -107,11 +130,9 @@ def read_doi(text: str) -> Optional[str]:
     `'https://doi.org/10.1063/1.4812323'` and `'10.1107/S0108270197015989'` and
     those are one field, not two spellings. The card builds the link.
     """
-    for tag in ("_journal_paper_doi", "_publ_section_doi"):
-        raw = _parse_cif_field(text or "", tag)
-        m = _DOI.search(raw or "")
-        if m:
-            return m.group(0).rstrip(".,;")
+    tagged = read_doi_tag(text)
+    if tagged:
+        return tagged
     block = _REFS.search(text or "")
     if block:
         m = _DOI.search(block.group(1))
@@ -155,6 +176,33 @@ def read_url(text: str) -> Optional[str]:
     return hit.group(0).rstrip(".,;)'\"") if hit else None
 
 
+def read_reference_text(text: str) -> tuple[Optional[str], Optional[str]]:
+    """``(text, reason)``: the references block as the FILE states it, cleaned.
+
+    Markup, entities and whitespace are normalised; nothing else is removed, so a
+    short note ("Smith 2020"), a bare link, or a citation with a link in it all
+    come back as written. This is what an EDITABLE field must show -- the CIF
+    info panel and the database builder's "Reference Text" column -- because the
+    user types into those and must find what they typed. :func:`read_reference`
+    is the same reading plus the card's rejection rules; there is one cleaning
+    step, two outputs.
+
+    ``(None, None)`` when the file has no block, ``(None, "empty")`` for an empty
+    one, ``(None, "cif_tag")`` when the "text" is the next CIF tag.
+    """
+    m = _REFS.search(text or "")
+    if not m:
+        return None, None
+    ref = _TAGS.sub("", m.group(1))
+    ref = _ENTITY.sub(lambda x: chr(int(x.group(1), 16)), ref)
+    ref = " ".join(ref.replace("&amp;", "&").split()).strip()
+    if not ref:
+        return None, "empty"
+    if ref.startswith("_"):
+        return None, "cif_tag"          # e.g. `_publ_author_address`
+    return ref, None
+
+
 def read_reference(text: str) -> tuple[Optional[str], Optional[str]]:
     """``(citation, rejection_reason)`` from a CIF's text. At most one is set.
 
@@ -174,16 +222,9 @@ def read_reference(text: str) -> tuple[Optional[str], Optional[str]]:
     (That old test also wore three hats for one head: of `("http://",
     "https://", "http", "https")` only `"http"` could ever match.)
     """
-    m = _REFS.search(text or "")
-    if not m:
-        return None, None
-    ref = _TAGS.sub("", m.group(1))
-    ref = _ENTITY.sub(lambda x: chr(int(x.group(1), 16)), ref)
-    ref = " ".join(ref.replace("&amp;", "&").split()).strip()
-    if not ref:
-        return None, "empty"
-    if ref.startswith("_"):
-        return None, "cif_tag"          # e.g. `_publ_author_address`
+    ref, reason = read_reference_text(text)
+    if ref is None:
+        return None, reason
 
     # Strip URLs ANYWHERE, not just words that begin with one. The first version
     # dropped whole words starting with "http", which left
@@ -218,6 +259,70 @@ def read_reference(text: str) -> tuple[Optional[str], Optional[str]]:
     if len(rest) < 12:
         return None, "too_short"
     return rest, None
+
+
+def cif_source(text: str) -> dict:
+    """What a CIF says about where it comes from -- THE answer every reader uses.
+
+    ``{"doi", "reference", "url"}``, each ``""`` when the file states none. The
+    CIF info panel (single and batch), the database builder and the CIF -> .xtal
+    converter all call this; before they each had their own regexes and gave
+    different answers for the same file (the info panel cut a citation at its
+    first ``;`` -- "Romming, C." for a three-author reference -- left HTML tags
+    in, and missed a DOI that the references text states).
+
+    ``reference`` is the EDITABLE output: the text the file holds, cleaned
+    (:func:`read_reference_text`), so what a user types into the panel is what
+    the panel shows back -- including a short note or a bare link, which the
+    card refuses. The card keeps its stricter rules in :func:`read_reference`;
+    both come from one cleaning step. ``url`` is the first link in the block
+    (the whole reference, when the reference is only a link).
+    """
+    reference, _why = read_reference_text(text)
+    return {"doi": read_doi(text) or "", "reference": reference or "",
+            "url": read_url(text) or ""}
+
+
+def set_cif_source(content: str, doi: str = "", reference: str = "") -> str:
+    """``content`` with its DOI and/or reference replaced (or added) -- THE writer.
+
+    The counterpart of :func:`cif_source`: it replaces exactly what that reads.
+    ``PATCH /cif/{f}/meta`` (the info panel) and ``inject_cif_reference`` (the
+    Materials Project download) both call it; each used to carry its own regexes,
+    and both had the same two faults: the reference block was found with
+    ``;.*?;``, which ends at the first ";" INSIDE a citation and leaves the rest of
+    the old text in the file, and only ``_publ_section_doi`` was updated while the
+    reader takes the first present tag of :data:`DOI_TAGS` (``_journal_paper_doi``
+    first), so a DOI edit on a COD file was invisible.
+
+    * DOI: EVERY DOI tag present is updated; ``_publ_section_doi`` is appended only
+      when there is none.
+    * Reference: the block the READER finds (:data:`REFS_BLOCK`, every data block)
+      is replaced, or one is appended. A line of the text that starts with ";" would
+      close a CIF text field early, so that one character is neutralised; a ";"
+      inside a line is legal and kept.
+    * Empty arguments change nothing. Substitution is by function, so a backslash
+      in the typed text is not read as a group reference.
+    """
+    doi = (doi or "").strip()
+    reference = (reference or "").strip()
+    if doi:
+        wrote = False
+        for tag in _DOI_TAGS:
+            pat = re.compile(r"(?m)^([ \t]*" + re.escape(tag)
+                             + r"[ \t]+)(?:'[^'\n]*'|\"[^\"\n]*\"|\S+)")
+            content, n = pat.subn(lambda m: f"{m.group(1)}'{doi}'", content)
+            wrote = wrote or n > 0
+        if not wrote:
+            content = content.rstrip() + f"\n_publ_section_doi      '{doi}'\n"
+    if reference:
+        ref = re.sub(r"(?m)^;", ",", reference)
+        block = f"_publ_section_references\n;\n{ref}\n;"
+        if _REFS.search(content):
+            content = _REFS.sub(lambda m: block, content)
+        else:
+            content = content.rstrip() + f"\n{block}\n"
+    return content
 
 
 # --------------------------------------------------------------------------
@@ -411,10 +516,25 @@ def _file_facts(p: Optional[Path], root: Path) -> Optional[dict]:
             "date": date.fromtimestamp(st.st_mtime).isoformat()}
 
 
+#: The program name kikuchipy's EMsoft master-pattern reader accepts in
+#: `EMheader/EBSDmaster/ProgramName` (kikuchipy 0.11, the pinned version; 0.13
+#: also takes the OpenCL name but then fails on the missing namelist below).
+_READABLE_MASTER_PROGRAM = "EMEBSDmaster.f90"
+
+
 def _has_master_array(p: Path) -> bool:
-    """Does this .h5 actually carry a master pattern?
+    """Does this .h5 carry a master pattern that Dictionary indexing can READ?
 
     A KEY lookup, not a read: `mLPNH` is 44 MB of a 210 MB file.
+
+    Carrying the array is not enough. Five masters simulated with EMsoft's GPU
+    program `EMEBSDmasterOpenCL` (2026-10-12) have `mLPNH` and yet `kp.load`
+    refuses every one: kikuchipy accepts only `ProgramName == "EMEBSDmaster.f90"`
+    (the OpenCL program writes `EMEBSDmasterOpenCL.f90`) and reads `npx` from
+    `NMLparameters/EBSDMasterNameList`, a group the OpenCL program does not
+    write (it writes `EBSDMasterOpenCLNameList`). Offering Dictionary for such a
+    file is a promise that fails at the first run, so the two header gates of the
+    reader are checked here too -- as lookups, still without reading an array.
 
     THE NAME CANNOT ANSWER THIS. Measured on the shipped library: 65 `.h5` under
     `EBSD_H5_Cache`, 19 with "master" in the name, but **20** carrying the array
@@ -423,19 +543,54 @@ def _has_master_array(p: Path) -> bool:
     loses it; a looser name rule goes the other way and unlocks 30 phases of
     which 14 have no master at all. Both mistakes were made before this comment.
     """
+    return master_status(p)[0] == "ok"
+
+
+#: The code the library reports for a master that carries `mLPNH` but that
+#: kikuchipy's reader refuses (see :func:`_has_master_array`). Stable: the
+#: frontend and the simulation job's warning both key on it.
+UNREADABLE_MASTER_CODE = "masterUnreadableByKikuchipy"
+
+
+def master_status(p: Path) -> tuple[str, Optional[str]]:
+    """``(status, program)`` for one `.h5`: ``"ok"`` (a master Dictionary indexing
+    can read), ``"unreadable"`` (carries `mLPNH`, refused by the reader; `program`
+    is what `EMheader/EBSDmaster/ProgramName` says) or ``"not_master"`` (no
+    master array, or not an HDF5 file). Header lookups only -- no array is read.
+    """
     try:
         import h5py  # noqa: PLC0415
         with h5py.File(str(p), "r") as f:
-            return "EMData/EBSDmaster/mLPNH" in f
+            if "EMData/EBSDmaster/mLPNH" not in f:
+                return "not_master", None
+            node = f.get("EMheader/EBSDmaster/ProgramName")
+            program = _scalar(node) if node is not None else None
+            if program == _READABLE_MASTER_PROGRAM \
+                    and "NMLparameters/EBSDMasterNameList/npx" in f:
+                return "ok", program
+            return "unreadable", program
     except Exception:
-        return False
+        return "not_master", None
+
+
+def scan_masters(cache_dir: Path) -> tuple[list[Path], list[tuple[Path, Optional[str]]]]:
+    """``(readable masters, [(unreadable master, writing program)])`` under the cache."""
+    readable: list[Path] = []
+    unreadable: list[tuple[Path, Optional[str]]] = []
+    if cache_dir.is_dir():
+        for p in sorted(cache_dir.rglob("*.h5")):
+            status, program = master_status(p)
+            if status == "ok":
+                readable.append(p)
+            elif status == "unreadable":
+                unreadable.append((p, program))
+    return readable, unreadable
 
 
 def master_files(cache_dir: Path) -> list[Path]:
-    """Every `.h5` under the cache that really carries a master pattern."""
-    if not cache_dir.is_dir():
-        return []
-    return [p for p in sorted(cache_dir.rglob("*.h5")) if _has_master_array(p)]
+    """Every `.h5` under the cache that really carries a master pattern that
+    Dictionary indexing can read."""
+    return scan_masters(cache_dir)[0]
 
 
 def assign_files(files: list[Path], keys) -> dict[str, list[Path]]:
@@ -555,20 +710,33 @@ def master_map() -> dict[str, Path]:
     sig = (len(stamps), max(stamps, default=0.0), keys)
     hit = _ASSIGN_CACHE.get("master")
     if hit is None or hit[0] != sig:
-        files = master_files(cache_dir)
+        files, unreadable = scan_masters(cache_dir)
         assigned = assign_files(files, keys)
         # The full file list is cached with the assignment, because
         # `unassigned_masters` needs "every master" and "the claimed ones" and
-        # re-scanning would open all 65 files a second time.
+        # re-scanning would open all 65 files a second time. The refused masters
+        # come out of the same scan, so reporting them costs no extra pass.
         _ASSIGN_CACHE["master"] = (
-            sig, {k: p for k, v in assigned.items() if (p := _pick_one(v))}, files)
+            sig, {k: p for k, v in assigned.items() if (p := _pick_one(v))}, files,
+            unreadable)
     return _ASSIGN_CACHE["master"][1]
 
 
 def all_master_files() -> list[Path]:
-    """Every master `.h5` under the cache, from the same scan as :func:`master_map`."""
+    """Every readable master `.h5` under the cache, from the same scan as :func:`master_map`."""
     master_map()
     return list(_ASSIGN_CACHE["master"][2])
+
+
+def unreadable_master_files() -> list[tuple[Path, Optional[str]]]:
+    """``[(path, writing program)]`` of masters the library REFUSES to offer.
+
+    They carry `mLPNH` but kikuchipy cannot load them (EMsoft's GPU program
+    `EMEBSDmasterOpenCL` writes such files). Kept visible so a master the user
+    just simulated is not silently neither offered nor reported.
+    """
+    master_map()
+    return list(_ASSIGN_CACHE["master"][3])
 
 
 def dictionary_map() -> dict[str, Path]:
@@ -926,16 +1094,36 @@ def build_index_document() -> dict:
 
     # A master that belongs to no library phase is not nothing: one of the four
     # here is the S-phase master. The page shows them under the method chips as
-    # "present, not assigned" (spec §2.7) rather than letting them be invisible
+    # "present, not assigned" rather than letting them be invisible
     # because no CIF happens to carry their name.
     claimed = {f["files"]["master"]["rel"] for f in phases if f["files"]["master"]}
     unassigned = [f for f in (_file_facts(p, root) for p in all_master_files())
                   if f and f["rel"] not in claimed]
+
+    # Masters the library refuses to offer for Dictionary (see
+    # `_has_master_array`). They are REPORTED, not dropped: `all_master_files`
+    # only lists readable ones, so a master the user had just simulated with the
+    # GPU program was neither offered nor mentioned. Each carries the phase it
+    # belongs to (same longest-key rule as every other file) so the page can say
+    # which phase is affected.
+    refused = unreadable_master_files()
+    owner = {}
+    for key, paths in assign_files([p for p, _prog in refused], tuple(idx)).items():
+        for p in paths:
+            owner[p] = key
+    unreadable = []
+    for p, program in refused:
+        facts = _file_facts(p, root)
+        if facts:
+            unreadable.append({**facts, "program": program,
+                               "code": UNREADABLE_MASTER_CODE,
+                               "phase_key": owner.get(p)})
     return {
         "schema": SCHEMA,
         "generated": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "source": "Database/ on this machine, via crystal_hint_local_library",
         "phases": phases,
         "unassigned_masters": unassigned,
+        "unreadable_masters": unreadable,
         "library_totals": _library_totals(phases),
     }

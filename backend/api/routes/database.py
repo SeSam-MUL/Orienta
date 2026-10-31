@@ -726,12 +726,48 @@ async def add_cif(req: AddCifRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _cif_own_atoms(cif_path: Path) -> list:
+    """The atom sites a CIF lists itself, for the info panel.
+
+    Fractional coordinates in the CIF's own setting, one row per site of the
+    asymmetric unit, with the CIF's own displacement parameter (B in A^2, or
+    ``None`` when the file gives none). Never orix's version of the structure:
+    that is the whole cell expanded with origin-choice-1 operators, in a frame
+    where a hexagonal (1/3, 2/3, 1/4) reads (0.577, 0.577, 0.25).
+    """
+    from backend.forward_sim.crystal.cif_origin import read_cif_sites  # noqa: PLC0415
+
+    _block, sites = read_cif_sites(cif_path)
+    atoms = []
+    for s in sites:
+        x, y, z = (float(v) for v in s["xyz"])
+        atoms.append({
+            "label": s["label"],
+            "element": s["symbol"],
+            "x": round(x, 5),
+            "y": round(y, 5),
+            "z": round(z, 5),
+            "occ": round(float(s["occupancy"]), 4),
+            "dwf": round(float(s["b_iso"]), 4) if s["b_iso"] is not None else None,
+            "wyckoff": s["wyckoff"],
+        })
+    return atoms
+
+
 @router.get("/cif/{filename}/info")
 async def cif_info(filename: str):
-    """Parse and return details for a CIF file in the library."""
-    import re as _re
-    import html as _html
+    """Parse and return details for a CIF file in the library.
 
+    The parsing (pymatgen, orix, file reads) is seconds of synchronous work, so
+    it runs on a worker thread: run inline in this ``async def`` it held the
+    event loop and froze every other request, including the health poll.
+    """
+    import asyncio  # noqa: PLC0415
+    return await asyncio.to_thread(_cif_info_sync, filename)
+
+
+def _cif_info_sync(filename: str):
+    """Blocking body of :func:`cif_info` (raises ``HTTPException`` like a route)."""
     # Search in the CIF library directory
     cif_dir = _db_dir("cif")
     matches = list(cif_dir.rglob(filename))
@@ -751,24 +787,20 @@ async def cif_info(filename: str):
     # which made the "Reference" field in the GUI appear to be deleted every
     # time the user saved a DOI — the text was still in the CIF on disk, it
     # just wasn't reported back.
+    # Both through phase_library.cif_source -- the reader the converter and the
+    # database builder use too. Its `reference` is the text the FILE holds
+    # (cleaned), not the card's filtered citation: this panel is editable, so a
+    # short note or a bare link the user typed must come back as typed.
+    # This endpoint used to carry its own regexes and answered differently for
+    # the same file (see that function).
     try:
-        raw_text = cif_path.read_text(encoding="utf-8", errors="ignore")
-        dois = _re.findall(
-            r"(?:_publ_section_doi|_citation_doi|_journal_paper_doi)\s+['\"]?([^'\"\s]+)['\"]?",
-            raw_text,
-        )
-        info["doi"] = dois[0].strip() if dois else ""
-        ref_matches = _re.findall(
-            r"_publ_section_references\s*;\s*(.*?)\s*;", raw_text, _re.DOTALL
-        )
-        info["reference"] = (
-            _re.sub(r"\s+", " ", _html.unescape(ref_matches[0])).strip()
-            if ref_matches
-            else ""
-        )
+        from backend.api.services.phase_library import cif_source  # noqa: PLC0415
+        src = cif_source(cif_path.read_text(encoding="utf-8", errors="ignore"))
+        info["doi"], info["reference"], info["url"] = src["doi"], src["reference"], src["url"]
     except Exception:
         info["doi"] = ""
         info["reference"] = ""
+        info["url"] = ""
 
     # Try to parse with orix
     is_ordered = True
@@ -797,27 +829,24 @@ async def cif_info(filename: str):
                 "beta": float(lat.beta),
                 "gamma": float(lat.gamma),
             }
-            # Extract atom sites for DWF table
+            # n_atoms stays orix's count (the "No atomic sites" fit check reads
+            # it); the sites SHOWN are the CIF's own, below.
             if len(struct) > 0:
-                atoms = []
-                for site in struct:
-                    atoms.append({
-                        "element": str(site.element),
-                        "x": round(float(site.x), 5),
-                        "y": round(float(site.y), 5),
-                        "z": round(float(site.z), 5),
-                        "occ": round(float(site.occupancy), 4) if hasattr(site, "occupancy") else 1.0,
-                        "dwf": round(float(site.Bisoequiv), 4) if hasattr(site, "Bisoequiv") else 0.5,
-                    })
-                info["atoms"] = atoms
-                info["n_atoms"] = len(atoms)
+                info["n_atoms"] = len(struct)
     except Exception as exc:
         info["parse_warning"] = str(exc)
+
+    # The atom sites as the CIF states them (asymmetric unit, its own setting).
+    try:
+        info["atoms"] = _cif_own_atoms(cif_path)
+        info["n_sites"] = len(info["atoms"])
+    except Exception as exc:
+        info["atoms_warning"] = str(exc)
 
     # --- Compute fit_for_xtal (same criteria as cif_database_builder) ---
     fit_warnings = []
     fit = True
-    if not info.get("doi") and not info.get("reference"):
+    if not info.get("doi") and not info.get("reference") and not info.get("url"):
         fit = False
         fit_warnings.append("No reference or DOI found.")
     if not info.get("n_atoms"):
@@ -855,31 +884,14 @@ async def update_cif_meta(filename: str, req: UpdateCifMetaRequest):
         content = cif_path.read_text(encoding="utf-8", errors="ignore")
         updated = False
 
-        # Update or append DOI
-        if req.doi.strip():
-            doi_val = req.doi.strip()
-            if _re.search(r"_publ_section_doi\s+", content):
-                content = _re.sub(
-                    r"(_publ_section_doi\s+)['\"]?[^'\"\n]+['\"]?",
-                    rf"\g<1>'{doi_val}'",
-                    content,
-                )
-            else:
-                content += f"\n_publ_section_doi      '{doi_val}'\n"
-            updated = True
+        # ONE writer, the counterpart of the reader (phase_library.set_cif_source):
+        # it updates every DOI tag the reader looks at and finds the reference
+        # block with the reader's own pattern. The Materials Project download
+        # (inject_cif_reference) calls the same function.
+        from backend.api.services.phase_library import set_cif_source  # noqa: PLC0415
 
-        # Update or append reference text
-        if req.reference.strip():
-            ref_val = req.reference.strip()
-            if _re.search(r"_publ_section_references\s*;", content):
-                content = _re.sub(
-                    r"_publ_section_references\s*;.*?;",
-                    f"_publ_section_references\n;\n{ref_val}\n;",
-                    content,
-                    flags=_re.DOTALL,
-                )
-            else:
-                content += f"\n_publ_section_references\n;\n{ref_val}\n;\n"
+        if req.doi.strip() or req.reference.strip():
+            content = set_cif_source(content, doi=req.doi, reference=req.reference)
             updated = True
 
         if updated:
@@ -988,25 +1000,13 @@ async def xtal_info(stem: str):
                 else:
                     coords, occ, dwf = np.array([]), np.array([]), np.array([])
 
-                # Map Z to element symbol (inline table, no extra dependency)
-                _Z_TO_SYM = {
-                    1:'H',2:'He',3:'Li',4:'Be',5:'B',6:'C',7:'N',8:'O',9:'F',10:'Ne',
-                    11:'Na',12:'Mg',13:'Al',14:'Si',15:'P',16:'S',17:'Cl',18:'Ar',
-                    19:'K',20:'Ca',21:'Sc',22:'Ti',23:'V',24:'Cr',25:'Mn',26:'Fe',
-                    27:'Co',28:'Ni',29:'Cu',30:'Zn',31:'Ga',32:'Ge',33:'As',34:'Se',
-                    35:'Br',36:'Kr',37:'Rb',38:'Sr',39:'Y',40:'Zr',41:'Nb',42:'Mo',
-                    43:'Tc',44:'Ru',45:'Rh',46:'Pd',47:'Ag',48:'Cd',49:'In',50:'Sn',
-                    51:'Sb',52:'Te',53:'I',54:'Xe',55:'Cs',56:'Ba',57:'La',58:'Ce',
-                    59:'Pr',60:'Nd',61:'Pm',62:'Sm',63:'Eu',64:'Gd',65:'Tb',66:'Dy',
-                    67:'Ho',68:'Er',69:'Tm',70:'Yb',71:'Lu',72:'Hf',73:'Ta',74:'W',
-                    75:'Re',76:'Os',77:'Ir',78:'Pt',79:'Au',80:'Hg',81:'Tl',82:'Pb',
-                    83:'Bi',84:'Po',85:'At',86:'Rn',87:'Fr',88:'Ra',89:'Ac',90:'Th',
-                    91:'Pa',92:'U',93:'Np',94:'Pu',95:'Am',96:'Cm',
-                }
+                # Map Z to element symbol: the shared table (this route's own
+                # copy stopped at Cm, 96).
+                from element_symbols import SYMBOL_OF as _Z_TO_SYM  # noqa: PLC0415
                 atoms = []
                 for i in range(len(coords)):
                     z = atomtypes[i] if i < len(atomtypes) else 0
-                    sym = _Z_TO_SYM.get(z, f"Z={z}")
+                    sym = _Z_TO_SYM.get(int(z), f"Z={z}")
                     atoms.append({
                         "element": sym,
                         "Z": z,
@@ -1109,7 +1109,6 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
 
     try:
         import re
-        import html as html_mod
         import h5py
         import numpy as np
         import pandas as pd
@@ -1147,30 +1146,18 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
         # this commit's parent removed. _build_xtal_atomdata handles partial
         # occupancies directly.)
         # --- Reference extraction (matching PyQt5 lines 404-419) ---
+        # Through phase_library's readers -- the same ones the phase card and the
+        # CIF info panel use, so the .xtal's useReference says what they say.
+        # (The converter used to carry its own regexes: they accepted a DOI tag
+        # only if quoted, and cut a citation at its first ';' -- 'Romming, C.'
+        # for a three-author reference.) Order as before: an explicit DOI tag,
+        # else the formatted reference, else a DOI stated inside the references
+        # text, else a bare link.
+        from backend.api.services.phase_library import cif_source, read_doi_tag  # noqa: PLC0415
         raw_text = cif_path.read_text(encoding="utf8", errors="ignore")
-        found_refs = []
-        doi_patterns = [
-            r"_publ_section_doi\s+['\"]([^'\"]+)['\"]",
-            r"_citation_doi\s+['\"]([^'\"]+)['\"]",
-            r"_citation_journal_doi\s+['\"]([^'\"]+)['\"]",
-        ]
-        for pat in doi_patterns:
-            for m_doi in re.findall(pat, raw_text):
-                if m_doi.strip() not in found_refs:
-                    found_refs.append(m_doi.strip())
-
-        if not found_refs:
-            matches_ref = re.findall(
-                r"_publ_section_references\s*;\s*(.*?)\s*;", raw_text, flags=re.DOTALL
-            )
-            for m_ref in matches_ref:
-                cite_text = m_ref.strip()
-                plain = re.sub(r"<[^>]+>", "", cite_text)       # Strip HTML tags
-                plain = html_mod.unescape(plain)                 # Decode HTML entities
-                plain = re.sub(r'\s+', ' ', plain).strip()       # Normalize whitespace
-                if plain and (plain not in found_refs):
-                    found_refs.append(plain)
-
+        src = cif_source(raw_text)
+        found_refs = [v for v in (read_doi_tag(raw_text), src["reference"],
+                                  src["doi"], src["url"]) if v]
         if not found_refs:
             found_refs.append("none found")
 
@@ -1181,13 +1168,10 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
                 status_code=500,
                 detail=f"DWF.xlsx not found at {dwf_xlsx}. Cannot convert without Debye-Waller factors.",
             )
-        dwf_map = {
-            str(r["Element"]).split()[0]: float(r["DWB 300 K"])
+        dwf_rows = [
+            (r["Element"], r["DWB 300 K"])
             for _, r in pd.read_excel(str(dwf_xlsx)).iterrows()
-        }
-        # Apply optional overrides from request
-        if req.dwf_overrides:
-            dwf_map.update(req.dwf_overrides)
+        ]
 
         # --- Crystallographic data (matching PyQt5 lines 422-436) ---
         a, b, c = np.array(structure.lattice.abc) / 10.0  # Angstrom → nm
@@ -1197,6 +1181,17 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
         sga = SpacegroupAnalyzer(structure, symprec=1e-5)
         csys = CRYSTAL_SYSTEMS.get(sga.get_crystal_system().lower(), 7)
         spg_number = sga.get_space_group_number()
+
+        # An element with several rows (Fe BCC / Fe FCC) gets the row of its own
+        # structure when the phase is that element's crystal, else the first row.
+        from backend.api.services.dwf_table import build_dwf_map  # noqa: PLC0415
+        dwf_map = build_dwf_map(
+            dwf_rows, spg_number=spg_number,
+            n_elements=len(structure.composition.elements),
+        )
+        # Apply optional overrides from request
+        if req.dwf_overrides:
+            dwf_map.update(req.dwf_overrides)
 
         # The coordinates written below come out of pymatgen's operator set,
         # which is ITA origin choice 1 for all 24 groups that have two (measured
@@ -1799,10 +1794,16 @@ async def update_dwf(req: UpdateDwfRequest):
             elem = (upd.element or "").strip()
             if not elem:
                 continue
-            # Match by first token so "Fe" matches the stored "Fe (BCC)".
-            mask = df["Element"].astype(str).apply(
-                lambda v: v.split()[0] if v.split() else ""
-            ) == elem
+            # The full label first ("Fe (FCC)" is its own row), then the bare
+            # symbol: "Fe" matches the FIRST stored Fe row ("Fe (BCC)") only --
+            # never every row of the element, which would overwrite the
+            # structure variants with one value.
+            labels = df["Element"].astype(str).str.strip()
+            mask = labels == elem
+            if not mask.any():
+                by_symbol = labels.apply(lambda v: v.split()[0] if v.split() else "") == elem
+                if by_symbol.any():
+                    mask = df.index == df.index[by_symbol][0]
             if mask.any():
                 df.loc[mask, "DWB 300 K"] = upd.dwb_300k
                 if upd.reference:
@@ -1963,7 +1964,14 @@ async def delete_files(req: DeleteFilesRequest):
 
 @router.post("/cif/batch-info")
 async def cif_batch_info(req: BatchInfoRequest):
-    """Parse details for multiple CIF files in one request."""
+    """Parse details for multiple CIF files in one request (on a worker thread,
+    for the reason given at :func:`cif_info`)."""
+    import asyncio  # noqa: PLC0415
+    return await asyncio.to_thread(_cif_batch_info_sync, req)
+
+
+def _cif_batch_info_sync(req: BatchInfoRequest):
+    """Blocking body of :func:`cif_batch_info`."""
     cif_dir = _db_dir("cif")
     xtal_dir = _db_dir("xtal")
 
@@ -2014,20 +2022,15 @@ async def cif_batch_info(req: BatchInfoRequest):
                         "gamma": float(lat.gamma),
                     }
                     if len(struct) > 0:
-                        atoms = []
-                        for site in struct:
-                            atoms.append({
-                                "element": str(site.element),
-                                "x": round(float(site.x), 5),
-                                "y": round(float(site.y), 5),
-                                "z": round(float(site.z), 5),
-                                "occ": round(float(site.occupancy), 4) if hasattr(site, "occupancy") else 1.0,
-                                "dwf": round(float(site.Bisoequiv), 4) if hasattr(site, "Bisoequiv") else 0.5,
-                            })
-                        info["atoms"] = atoms
-                        info["n_atoms"] = len(atoms)
+                        info["n_atoms"] = len(struct)
             except Exception as exc:
                 info["parse_warning"] = str(exc)
+            # The sites as the CIF states them, not orix's expanded cell.
+            try:
+                info["atoms"] = _cif_own_atoms(cif_path)
+                info["n_sites"] = len(info["atoms"])
+            except Exception as exc:
+                info["atoms_warning"] = str(exc)
 
             # Also surface DOI + reference here so the cached parsedInfo
             # in the frontend carries them across refreshCifList() calls
@@ -2035,24 +2038,17 @@ async def cif_batch_info(req: BatchInfoRequest):
             # cif_info endpoint returned them, so the list cache was
             # always missing these fields and the user perceived their
             # freshly-typed DOI as "gone" right after a sync.
+            # The ONE reader of a CIF's source (phase_library.cif_source), the
+            # same one the phase card and the converter use.
             try:
-                import html as _html
-                raw_text = cif_path.read_text(encoding="utf-8", errors="ignore")
-                dois = re.findall(
-                    r"(?:_publ_section_doi|_citation_doi|_journal_paper_doi)\s+['\"]?([^'\"\s]+)['\"]?",
-                    raw_text,
-                )
-                info["doi"] = dois[0].strip() if dois else ""
-                ref_matches = re.findall(
-                    r"_publ_section_references\s*;\s*(.*?)\s*;", raw_text, re.DOTALL
-                )
-                info["reference"] = (
-                    re.sub(r"\s+", " ", _html.unescape(ref_matches[0])).strip()
-                    if ref_matches else ""
-                )
+                from backend.api.services.phase_library import cif_source  # noqa: PLC0415
+                src = cif_source(cif_path.read_text(encoding="utf-8", errors="ignore"))
+                info["doi"], info["reference"], info["url"] = (
+                    src["doi"], src["reference"], src["url"])
             except Exception:
                 info["doi"] = ""
                 info["reference"] = ""
+                info["url"] = ""
 
         except Exception as exc:
             info["error"] = str(exc)

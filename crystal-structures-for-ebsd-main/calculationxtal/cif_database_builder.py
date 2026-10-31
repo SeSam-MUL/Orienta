@@ -263,6 +263,25 @@ def _one_structure(structures, source):
     return structures[0]
 
 
+def _cif_source(raw_text: str) -> dict:
+    """``{"doi", "reference", "url"}`` of a CIF, from the ONE shared reader.
+
+    This module used to read the citation with its own regexes (cut at the first
+    ";", HTML markup kept, no ``_journal_paper_doi``, whole links) and wrote the
+    result into ``crystal_database.xlsx``: on 32 of the 49 library CIFs the
+    spreadsheet row disagreed with the phase card and the CIF info panel. It is
+    shipped in the runtime package together with ``backend/``, so the shared
+    reader is always importable there; if it is not (a stray copy of this file),
+    that is an error to report, not a reason to fall back to a fourth reader.
+    """
+    import sys
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from backend.api.services.phase_library import cif_source
+    return cif_source(raw_text)
+
+
 def parse_cif_file(cif_path: Path) -> dict:
     try:
         structure = _one_structure(
@@ -275,12 +294,11 @@ def parse_cif_file(cif_path: Path) -> dict:
         a, b, c, alpha, beta, gamma = structure.lattice.parameters
         lattice_params_str = f"a={a:.4f} b={b:.4f} c={c:.4f} α={alpha:.3f} β={beta:.3f} γ={gamma:.3f}"
         raw_text = cif_path.read_text(encoding="utf8", errors="ignore")
-        dois = re.findall(r"(?:_publ_section_doi|_citation_doi)\s+['\"]?([^'\"\s]+)['\"]?", raw_text)
-        found_doi = dois[0].strip() if dois else "none found"
-        found_ref_text = "none found"
-        if found_doi == "none found":
-            ref_matches = re.findall(r"_publ_section_references\s*;\s*(.*?)\s*;", raw_text, re.DOTALL)
-            if ref_matches: found_ref_text = re.sub(r'\s+', ' ', html.unescape(ref_matches[0])).strip()
+        source = _cif_source(raw_text)
+        found_doi = source["doi"] or "none found"
+        # The text the file holds (the sheet's "Reference Text" column is
+        # editable); a link-only reference is that link.
+        found_ref_text = source["reference"] or source["url"] or "none found"
         warnings, is_fit = [], True
         if found_doi == "none found" and found_ref_text == "none found": is_fit = False; warnings.append("No reference or DOI found.")
         if len(structure) == 0: is_fit = False; warnings.append("No atomic sites.")
@@ -297,6 +315,10 @@ def parse_cif_file(cif_path: Path) -> dict:
         # a phase is how the bad row got here in the first place.
         logging.warning(f"    -> Skipping {cif_path.name}: {exc}")
         return None
+    except ImportError:
+        # The shared citation reader is missing: a broken install, not a bad CIF.
+        # Silently skipping every file would hand back an empty database.
+        raise
     except Exception: return None
 
 def build_database(cif_folder=None, output_path=None, skip_online=False,

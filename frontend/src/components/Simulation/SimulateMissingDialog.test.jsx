@@ -27,6 +27,28 @@ function setup(overrides = {}) {
   return { onLaunch, onClose };
 }
 
+const UNREADABLE = [{
+  stem: 'Mg', xtal_path: 'X/Mg.xtal', code: 'masterUnreadableByKikuchipy',
+  file: 'Mg_master_E20kV_npx500.h5', program: 'EMEBSDmasterOpenCL.f90',
+}];
+
+describe('phases whose only master is refused', () => {
+  it('are named in the dialog, with the file and the writing program, and are not rows', () => {
+    setup({ unreadable: UNREADABLE });
+    const note = screen.getByTestId('unreadable-in-scan');
+    expect(note.textContent).toContain('Mg: master unreadable (written by EMEBSDmasterOpenCL.f90)');
+    expect(note.textContent).toContain('Mg_master_E20kV_npx500.h5');
+    expect(note.querySelector('[data-code]').dataset.code).toBe('masterUnreadableByKikuchipy');
+    // not a launchable row: simulating again with the same program writes the same file
+    expect(screen.queryByText('Mg')).toBeNull();
+  });
+
+  it('say nothing when there are none', () => {
+    setup();
+    expect(screen.queryByTestId('unreadable-in-scan')).toBeNull();
+  });
+});
+
 describe('SimulateMissingDialog', () => {
   it('lists phases, flags large + disordered', () => {
     setup();
