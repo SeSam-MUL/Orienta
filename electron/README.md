@@ -35,8 +35,9 @@ resolves it in priority order, checking files on disk only (no Python subprocess
 `startBackend()` spawns the FastAPI app with
 `python -m uvicorn backend.api.main:app --host 127.0.0.1 --port 8000`, using the project root as
 the working directory and piping backend stdout/stderr into the Electron console (prefixed
-`[Backend]`). `waitForBackend()` then polls `http://127.0.0.1:8000/api/health` (up to ~15 s) before
-the window is shown; if the backend never becomes ready, an error dialog is displayed.
+`[Backend]`). `waitForBackend()` (`backend_wait.js`) then polls `http://127.0.0.1:8000/api/health`,
+one request at a time, for up to 3 minutes before the window is shown; if the backend never becomes
+ready, an error dialog is displayed.
 
 ### Loading the frontend
 `createWindow()` opens a `1400×900` `BrowserWindow` (Dracula-dark background, menu auto-hidden,

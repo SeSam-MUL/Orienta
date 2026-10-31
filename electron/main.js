@@ -10,6 +10,7 @@ const platformInfo = require('./platform.js');
 const removeDataModule = require('./remove_data.js');
 const saveDialogs = require('./save_dialogs.js');
 const { openLogFolder } = require('./log_folder.js');
+const { waitForBackend: waitForBackendHealth } = require('./backend_wait.js');
 const { spawn, execSync } = require('child_process');
 const path = require('path');
 const http = require('http');
@@ -113,9 +114,8 @@ if (cacheDir) {
 // macOS builds the application menu from `app.name`: the first menu itself, and
 // the "About X" / "Quit X" items. Electron reads that from package.json `name`,
 // which is "kikuchipy-gui" — `productName` sits under `build`, where only
-// electron-builder looks. So the M5 tester read "About kikuchipy-gui" and
-// "Quit kikuchipy-gui" in the menu bar of the signed dmg (report
-// tasks/mac-test-m5-2026-09-25/bericht.md, point 4).
+// electron-builder looks. So the menu bar of the signed dmg read "About kikuchipy-gui" and
+// "Quit kikuchipy-gui".
 //
 // Naming it here rather than adding a top-level `productName`, because
 // `setName` also moves the DEFAULT userData directory — and that directory
@@ -135,7 +135,7 @@ if (cacheDir) {
 // with no window and no log (see the note at the top of this file).
 //
 // Moving that directory on purpose is a migration, like the backend config
-// directory — see tasks/mac-tester/naming-audit.md.
+// directory.
 const userDataBeforeRename = app.getPath('userData');   // this read is the pin
 app.setName('Orienta');
 if (app.getPath('userData') !== userDataBeforeRename) {
@@ -150,7 +150,7 @@ let mainWindow = null;
 let backendProcess = null;
 // What the setup page should show when it is loaded. A query string would
 // not survive a reload and additionalArguments would not survive a
-// navigation, so Task 12 exposes this over its own IPC channel.
+// navigation, so it is exposed over its own IPC channel.
 let setupContext = { reason: 'first-run', message: '' };
 // Returned by startWaitingPageClock; called once the backend answers or fails.
 let stopWaitingClock = null;
@@ -526,49 +526,16 @@ async function maybeRestartBackend(code) {
   }, 1000);
 }
 
-// 360 x 500 ms = 3 minutes. The first start of a fresh installation imports
+// 3 minutes of wall-clock time. The first start of a fresh installation imports
 // the scientific stack cold and blew past the old 15 s (30 retries): the
 // "Backend Startup Failed" dialog appeared over a backend that was still
-// loading. Found by tasks/install_smoke/fresh_install.ps1; start_app.py has
-// the same limit (BACKEND_START_TIMEOUT_S).
-const BACKEND_START_RETRIES = 360;
+// loading. Found by a fresh-install smoke test; start_app.py has
+// the same limit (BACKEND_START_TIMEOUT_S). One request at a time — see
+// backend_wait.js for the doubling that made the old wait give up after ~20 s.
+const BACKEND_START_LIMIT_MS = 180_000;
 
-function waitForBackend(retries = BACKEND_START_RETRIES) {
-  return new Promise((resolve, reject) => {
-    let attempts = 0;
-
-    const check = () => {
-      attempts++;
-      const req = http.get(`http://127.0.0.1:${BACKEND_PORT}/api/health`, (res) => {
-        if (res.statusCode === 200) {
-          resolve();
-        } else if (attempts < retries) {
-          setTimeout(check, 500);
-        } else {
-          reject(new Error('Backend health check failed'));
-        }
-      });
-
-      req.on('error', () => {
-        if (attempts < retries) {
-          setTimeout(check, 500);
-        } else {
-          reject(new Error(`Backend not reachable after ${Math.round(retries * 0.5)} seconds`));
-        }
-      });
-
-      req.setTimeout(2000, () => {
-        req.destroy();
-        if (attempts < retries) {
-          setTimeout(check, 500);
-        } else {
-          reject(new Error('Backend timeout'));
-        }
-      });
-    };
-
-    check();
-  });
+function waitForBackend() {
+  return waitForBackendHealth({ port: BACKEND_PORT, limitMs: BACKEND_START_LIMIT_MS });
 }
 
 /**
