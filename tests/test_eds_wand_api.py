@@ -27,6 +27,20 @@ def _entry(name, comp):
     )
 
 
+@pytest.fixture(autouse=True)
+def no_open_file():
+    """These tests build their own 4x4 map and assume no measurement is open.
+
+    ``h5_session`` is a process-wide singleton and a file left open by any
+    earlier test file makes the grid guard compare the 4x4 map with that
+    file's grid instead.
+    """
+    from backend.api.services import h5_session
+    if h5_session.is_open():
+        h5_session.close_file()
+    yield
+
+
 @pytest.fixture
 def loaded_map():
     store = get_phase_map_store()
