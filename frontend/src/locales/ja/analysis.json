@@ -127,6 +127,7 @@
     "loadedPhasesSuffix": " | {{count}} 相",
     "unknownShape": "不明な形状",
     "browseFileTooltip": "CrystalMap ファイル (.h5, .h5oina, .ang, .ctf) を参照します。",
+    "useViewerFile": "EBSD ビューアーで開いているファイルを使う",
     "loadTooltip": "入力したパスの CrystalMap を解析用に読み込みます。",
     "infoShape": "形状: {{shape}} ピクセル",
     "infoPhases": "相: {{phases}}",

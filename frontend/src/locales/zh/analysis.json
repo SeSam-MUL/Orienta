@@ -127,6 +127,7 @@
     "loadedPhasesSuffix": " | {{count}} 个相",
     "unknownShape": "未知形状",
     "browseFileTooltip": "浏览 CrystalMap 文件 (.h5, .h5oina, .ang, .ctf)。",
+    "useViewerFile": "使用 EBSD 查看器中打开的文件",
     "loadTooltip": "加载所输入路径处的 CrystalMap 以进行分析。",
     "infoShape": "形状：{{shape}} 像素",
     "infoPhases": "相：{{phases}}",

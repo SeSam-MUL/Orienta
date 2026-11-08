@@ -127,6 +127,7 @@
     "loadedPhasesSuffix": " | {{count}} phase(s)",
     "unknownShape": "unknown shape",
     "browseFileTooltip": "Browse for a CrystalMap file (.h5, .h5oina, .ang, .ctf).",
+    "useViewerFile": "Use the file open in the EBSD Viewer",
     "loadTooltip": "Load the CrystalMap at the entered path for analysis.",
     "infoShape": "Shape: {{shape}} pixels",
     "infoPhases": "Phases: {{phases}}",

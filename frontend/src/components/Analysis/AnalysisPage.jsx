@@ -20,6 +20,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { analysisApi, indexApi, edsApi } from '../../services/api';
 import useResultStore, { EMPTY_BATCH_RUN, EMPTY_EXPORT_RUN } from '../../stores/useResultStore';
+import useDataStore from '../../stores/useDataStore';
 import { toast } from '../../stores/useToastStore';
 import { codedProblemText } from '../../services/problemText';
 import {
@@ -746,12 +747,49 @@ function EDSElementTable({ elements }) {
 // TAB 1: Data & Preprocessing
 // Mirrors _create_data_tab() in analysis_gui.py
 // ---------------------------------------------------------------------------
+/** A file the Analysis page can read as a CrystalMap (what its own Browse filter offers). */
+export function isCrystalMapPath(p) {
+  return typeof p === 'string' && /\.(h5oina|h5|hdf5|ang|ctf)$/i.test(p.trim());
+}
+
+const fileNameOf = (p) => String(p ?? '').split(/[\\/]/).filter(Boolean).pop() || '';
+
 function DataTab({ status, onLoad, onComplete, analysisLoaded, hasGrains, grainsVersion }) {
   const { t } = useTranslation(['analysis', 'common']);
   const [xmapPath,         setXmapPath]         = useState('');
   const [loading,          setLoading]           = useState(false);
   const [msg,              setMsg]               = useState(null);
   const [isError,          setIsError]           = useState(false);
+  // The path this tab last loaded, to tell whether the viewer's file is already the one analysed.
+  const [loadedPath,       setLoadedPath]        = useState('');
+
+  // The file open in the EBSD Viewer. The page used to ignore it: a user who had just opened a
+  // scan there found "No indexed data loaded" and had to browse for the same file again
+  // It is offered, not loaded on its own: after an indexing run
+  // the map to analyse may be the result, not the vendor's map in that file.
+  const viewerFile = useDataStore((s) => s.filePath);
+  const viewerFileUsable = isCrystalMapPath(viewerFile);
+  const viewerName = viewerFileUsable ? fileNameOf(viewerFile) : '';
+  // A map is here when the page holds one: the store's flag, set by a load (whose answer says `success`,
+  // not `loaded`) and by GET /status alike.
+  const mapHere = Boolean(analysisLoaded);
+  // Is the map here the viewer's file? The file name the backend reports for the map (`source_name`,
+  // from /status and from a load) is the authority: the map also changes without this tab (Batch
+  // "Open in Analysis", a load on another page). The full path this tab loaded only refines it
+  // (a file of the same name in another folder), and only while it still names that map. A map
+  // without a file name (an indexing result held in memory) is not the viewer's file.
+  const sourceName = status?.source_name || '';
+  const windowsNames = /^[A-Za-z]:[\\/]/.test(viewerFile || '') || (viewerFile || '').includes('\\');
+  const sameName = (a, b) => (windowsNames ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const loadedPathCurrent = Boolean(loadedPath && sourceName && sameName(fileNameOf(loadedPath), sourceName));
+  const sameAsViewer = loadedPathCurrent
+    ? samePath(loadedPath, viewerFile)
+    : Boolean(sourceName) && sameName(sourceName, viewerName);
+  const offerViewerFile = viewerFileUsable && (!mapHere || !sameAsViewer);
+
+  useEffect(() => {
+    if (viewerFileUsable) setXmapPath((current) => (current.trim() ? current : viewerFile));
+  }, [viewerFile, viewerFileUsable]);
 
   // Session results selector (ResultStore / last indexing)
   const [sessionResults,   setSessionResults]    = useState([]);
@@ -815,6 +853,7 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded, hasGrains, grains
     try {
       const res = await analysisApi.load(path);
       const d = res.data;
+      setLoadedPath(isCrystalMapPath(path) ? path : '');   // the session selector loads '__last_indexing__'
       onLoad(d);
       const shape = d.shape?.length ? d.shape.join(' × ') : t('analysis:data.unknownShape');
       const phases = d.phases ? t('analysis:data.loadedPhasesSuffix', { count: d.phases.length }) : '';
@@ -964,6 +1003,29 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded, hasGrains, grains
 
         {/* Load CrystalMap — matches load_group */}
         <ColoredGroupBox title={t('analysis:data.loadTitle')}>
+          {offerViewerFile && (
+            <Button
+              onClick={() => { setXmapPath(viewerFile); handleLoad(viewerFile); }}
+              disabled={loading}
+              title={viewerFile}
+              // A scan's name is long: cut with an ellipsis inside the button, the full path is the tooltip.
+              // The ellipsis needs a block of its own: Chromium clips a <button>'s text without one.
+              // Button is a one-row inline-flex of fixed height: a column of auto height puts the name below.
+              style={{
+                width: '100%', marginBottom: 8, textAlign: 'left',
+                flexDirection: 'column', alignItems: 'stretch', height: 'auto', gap: 3, lineHeight: 1.3,
+              }}
+            >
+              <span style={{ display: 'block' }}>{t('analysis:data.useViewerFile')}</span>
+              {/* the name on a line of its own: after the label it was cut away entirely */}
+              <span style={{
+                display: 'block', minWidth: 0, fontSize: 11, opacity: 0.85,
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
+                {viewerName}
+              </span>
+            </Button>
+          )}
           <FieldRow label={t('analysis:data.xmapFileLabel')}>
             <div style={{ display: 'flex', gap: 6 }}>
               <Input
