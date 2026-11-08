@@ -5373,7 +5373,7 @@ async def start_indexing(req: IndexingStartRequest):
                 _rename_routed_per_phase_keys(result, ordered_configs)
 
             # Attach metadata needed by the SHT forward renderer in
-            # /api/indexing/pattern-match (Phase A of FEAT-SHT-FWD).
+            # /api/indexing/pattern-match.
             _attach_indexing_metadata(
                 result,
                 method_name=req.method,
@@ -6823,11 +6823,11 @@ async def get_pattern_match_variants(
             cand_defs.append(("Hough", "hough", qh))
     except Exception:
         logger.debug("[variants] Hough candidate unavailable", exc_info=True)
-    # Adjacent same-phase grains — covers foreign basins (building block A).
+    # Adjacent same-phase grains -- covers foreign basins.
     for lab, qn, _npx in _neighbour_grain_candidates(result, xmap, phase_id, pg,
                                                      row, col, topology=topology):
         cand_defs.append((lab, "neighbour", np.asarray(qn, dtype=np.float64)))
-    # Free reference pixel (building block B): the user names any indexed
+    # Free reference pixel: the user names any indexed
     # pixel; its stored orientation joins the gallery. Rendered with the
     # CLICKED pixel's phase SHT — the reference only contributes a quat.
     if ref_row is not None and ref_col is not None:
@@ -7084,7 +7084,9 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
         backend._ensure_built(det)
         indexer = backend._indexers[0]
         L, free_bytes, device = _newton_bandwidth(indexer.bandwidth)
-        if L < MIN_NEWTON_BANDWIDTH:
+        # Skipped only when the MEMORY holds the bandwidth below the minimum; a master that is
+        # itself band-limited below it is refined at its own bandwidth.
+        if L < MIN_NEWTON_BANDWIDTH and L < int(indexer.bandwidth):
             need = NEWTON_BYTES_PER_L4 * MIN_NEWTON_BANDWIDTH ** 4 / NEWTON_MEMORY_SHARE
             return None, {"status": "skipped", "reason": (
                 f"not enough free {device} memory for the refine: {free_bytes / 2**30:.1f} GiB "
@@ -9829,7 +9831,7 @@ async def get_ncc_heatmap(result_id: str = None):
 
 
 # ===========================================================================
-# Phase B: Forward-NCC quality map (SHT-forward simulated vs experimental)
+# Forward-NCC quality map (SHT-forward simulated vs experimental)
 # ===========================================================================
 
 def _stats_of_map(arr: np.ndarray) -> dict:
@@ -13631,7 +13633,7 @@ async def start_batch_indexing(req: BatchRequest):
                 if result is None:
                     raise RuntimeError("Indexing returned no result")
 
-                # Attach metadata for the SHT forward renderer (Phase A).
+                # Attach metadata for the SHT forward renderer.
                 _attach_indexing_metadata(
                     result,
                     method_name=ds_config.method,
