@@ -45,7 +45,8 @@ function describeExit(code, signal, platform = process.platform) {
   if (code === null || code === undefined) return 'no exit code';
   if (code === 0) return 'exit code 0 (the backend ended itself)';
   if (code === 1) {
-    return 'exit code 1 (a Python error, or the port was taken; the lines above say which)';
+    return 'exit code 1 (a Python error, a port that was taken, or the process was ended from '
+      + 'outside, for example in the Task Manager; the lines above say which)';
   }
   if (platform === 'win32') {
     const status = code >>> 0;
