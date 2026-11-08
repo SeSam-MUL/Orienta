@@ -145,4 +145,12 @@ describe('main.js wiring', () => {
     expect(MAIN).toContain('backendProcess.orientaStopReason = reason;');
     expect(MAIN).toContain('const stopReason = proc.orientaStopReason ||');
   });
+
+  it('writes the stop line to disk before it kills the backend', () => {
+    const kill = MAIN.slice(MAIN.indexOf('function killBackend('), MAIN.indexOf("app.on('window-all-closed'"));
+    const line = kill.indexOf('logBackendLineNow(`Stopping backend');
+    expect(line).toBeGreaterThan(-1);
+    expect(line).toBeLessThan(kill.indexOf('taskkill'));
+    expect(MAIN).toMatch(/fs\.appendFileSync\(backendLogPath, line \+ '\\n'\)/);
+  });
 });

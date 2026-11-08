@@ -94,9 +94,9 @@ let homeStorageError = '';
  * A recorded data folder that is gone, settled BEFORE anything reads the home.
  *
  * usableCacheDir() below creates `<home>/electron` recursively, so a pointer to
- * a deleted folder silently re-created the whole chain on the next start -- the
- * reason "deleting the directory and reinstalling does not help" for a user
- * whose folder had nested (…/Orienta/Orienta/Orienta). Deleted while its drive
+ * a deleted folder silently re-created the whole chain on the next start, which
+ * is why deleting the folder and reinstalling did not help once the folder had
+ * nested (…/Orienta/Orienta/Orienta). Deleted while its drive
  * is present: back to the default folder, pointer file renamed to
  * home.txt.previous, the wizard says so. Drive absent: the pointer stays, because it is the only record of
  * where the library is, and the wizard explains instead.
@@ -298,6 +298,15 @@ function findPython({ allowSystemFallback = false } = {}) {
 // from scientific libs, and CUDA C++-level stderr. console.log alone is lost
 // the moment the hosting console closes — and a packaged app has none at all.
 let backendLogStream = null;
+// The same file, for the lines that must be on disk before the next statement:
+// a stream write still in Node's buffer is lost when the app quits right after.
+let backendLogPath = null;
+
+function logBackendLineNow(line) {
+  console.log(`[Backend] ${line}`);
+  if (!backendLogPath) return;
+  try { fs.appendFileSync(backendLogPath, line + '\n'); } catch {}
+}
 
 function openBackendLog(projectRoot) {
   try {
@@ -313,6 +322,7 @@ function openBackendLog(projectRoot) {
       }
     } catch {}
     backendLogStream = fs.createWriteStream(logPath, { flags: 'a' });
+    backendLogPath = logPath;
     backendLogStream.write(`\n===== session start ${new Date().toISOString()} =====\n`);
   } catch (err) {
     console.error('Could not open backend-console.log:', err);
@@ -590,7 +600,7 @@ async function maybeRestartBackend(code, ended = { code, signal: null, state: nu
 // 3 minutes of wall-clock time. The first start of a fresh installation imports
 // the scientific stack cold and blew past the old 15 s (30 retries): the
 // "Backend Startup Failed" dialog appeared over a backend that was still
-// loading. Found by a fresh-install smoke test; start_app.py has
+// loading. start_app.py has
 // the same limit (BACKEND_START_TIMEOUT_S). One request at a time — see
 // backend_wait.js for the doubling that made the old wait give up after ~20 s.
 const BACKEND_START_LIMIT_MS = 180_000;
@@ -2033,7 +2043,10 @@ function killBackend(reason = 'the app stopped it') {
   if (!backendProcess) return;
   const pid = backendProcess.pid;
   backendProcess.orientaStopReason = reason;
-  logBackendLine(`Stopping backend (PID ${pid}): ${reason}`);
+  // Synchronously: the backend is killed right below and cannot write its own end line,
+  // and on quit the app exits before a buffered write would reach the file (observed in
+  // testing: the stream line was never written).
+  logBackendLineNow(`Stopping backend (PID ${pid}): ${reason}`);
 
   // 1. Graceful: ask backend to shut itself down via API
   try {
