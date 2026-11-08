@@ -229,9 +229,10 @@ def test_open_starts_job_and_status_reaches_ready(sampleb, client):
     assert np.isfinite(fit["chi2_red"]) and fit["chi2_red"] < 8  # 5.18 measured (T3)
     assert set(fit["params"]) == {"offset_kev", "gain", "fwhm_mnka_kev",
                                   "absorption_a"}
-    # the line per element AFTER the spectrum-source policy: Cu through L
-    assert fit["lines"]["Cu"]["family"] == "L"
-    assert fit["lines"]["Cu"]["label"] == "Cu Lα1,2"
+    # the line per element AFTER the spectrum-source policy: with the file's
+    # geometry (matrix correction) Cu through K like every other element
+    assert fit["lines"]["Cu"]["family"] == "K"
+    assert fit["lines"]["Cu"]["label"] == "Cu Kα1"
     assert {fit["lines"][el]["family"] for el in ("Al", "Si", "Fe", "Mn", "Zn")} == {"K"}
 
     # detections and quality warnings are the fit package's own verdicts
@@ -249,7 +250,7 @@ def test_open_starts_job_and_status_reaches_ready(sampleb, client):
     r = client.get("/api/eds/spectrum-fit/status")
     assert r.status_code == 200, r.text
     assert r.json()["state"] == "ready"
-    assert r.json()["fit"]["lines"]["Cu"]["family"] == "L"
+    assert r.json()["fit"]["lines"]["Cu"]["family"] == "K"
     print(f"\nSampleB open -> ready: {elapsed:.2f} s "
           f"(job reports {st['elapsed_s']:.2f} s)")
 
@@ -871,8 +872,7 @@ def test_detected_element_is_available(which, sampleb):
         assert lab in labels, (lab, labels)
     exported_symbols = {lab.split()[0] for lab in exported}
     fit = svc.status(str(path))["fit"]
-    # The composition is AZtec's exported elements only (revised
-    # 2026-10-25): a detection adds no label to it ...
+    # The composition is AZtec's exported elements only: a detection adds no label to it ...
     assert {lab.split()[0] for lab in labels} <= exported_symbols
     detected = ext.get_detected_only_elements()
     assert svc.detected_only_labels(ext) == detected

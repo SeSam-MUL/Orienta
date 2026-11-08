@@ -722,6 +722,8 @@
     "headline_other": "この組成の算出方法 — 注意点 {{count}} 件",
     "noZaf": "標準試料を用いない Cliff-Lorimer 法（k 係数はモデル計算）。ZAF マトリックス補正なし — 半定量値であり、標準試料による定量分析ではありません。",
     "calibratedOn": "検出器応答は {{matrix}}・{{kv}} kV で校正されています。",
+    "matrixCorrected": "φ(ρz) マトリックス補正（Pouchou & Pichoir の XPP、試料傾斜 {{tilt}}°、取り出し角 {{psi}}°、Reed 蛍光補正）による標準試料なし定量、合計 100 % に規格化。",
+    "calibratedAfterMatrix": "装置応答はマトリックス補正後に {{standard}}（{{kv}} kV）で測定。",
     "overlap": "{{window}} のウィンドウは {{interferer}} の発光と重なるため、その元素があるところでは高めに読みます。",
     "beamAssumed": "加速電圧がファイルに記録されていません — {{kv}} kV と仮定しました。すべての k 係数の過電圧がこの値に依存します。",
     "sourceSpectrum": "スペクトルから: バックグラウンドを差し引き、重なったピークを分離し、パイルアップをモデル化しています。",

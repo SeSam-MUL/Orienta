@@ -14,7 +14,7 @@ module globals, no loaded file. Two reasons, both load-bearing:
 
   * a batch driver over a folder can call it without touching it, which is
     what let the batch feature be deferred honestly rather than silently
-    omitted (spec section 2);
+    omitted;
   * every number below is unit-testable against a hand-built state, which is
     how the tests check the arithmetic rather than checking that a route
     returns 200.
@@ -147,9 +147,6 @@ four seconds." ``phase_map.png`` and ``region_map.png`` are written by
 ``phase_map_store``'s OWN renderers, the ones the app draws with, so the
 picture in the folder is the picture on the screen rather than a second
 drawing that can disagree with it.
-
-Spec: docs/superpowers/specs/2026-08-27-eds-presets-and-export-design.md
-      (sections 3, 6, 8, 9)
 """
 from __future__ import annotations
 
@@ -292,15 +289,47 @@ SEMI_QUANTITATIVE_CAVEAT_SPECTRUM = (
 )
 
 
-def semi_quantitative_caveat(source: Optional[str]) -> str:
+#: The sentence for at% made from net line intensities WITH the phi(rho z)
+#: matrix correction (eds_utils._matrix_corrected_weight_pct). The numbers are
+#: the leave-one-out / held-out deviations measured on the reference set.
+STANDARDLESS_CAVEAT_MATRIX = (
+    "STANDARDLESS. The at% values in this export come from net line "
+    "intensities fitted from the per-pixel spectra (eds-spectrum-fit/1: "
+    "background subtracted, overlapping lines separated, pile-up modelled), "
+    "quantified with a phi(rho z) matrix correction (XPP with specimen tilt, "
+    "Reed fluorescence) and an instrument response measured on reference "
+    "regions, and normalised to 100 % over the quantified elements. No "
+    "standard was measured on this instrument. On reference regions (AZtec "
+    "Tru-Q values and stoichiometric phases; one detector, 20 kV, 70 deg tilt), "
+    "each calibration region left out of the fit in turn and the test regions "
+    "partly overlapping the calibration pixels, the per-element deviation from "
+    "the reference value was 0.5 at% in the median, 1.9 at% or less for about "
+    "nine in ten values and at most 2.5 at%. The references are themselves "
+    "standardless or nominal, so this is "
+    "not an uncertainty, least of all for another specimen or instrument. "
+    "Lines below 0.7 keV are "
+    "qualitative, elements without a reference line (e.g. Mg) rest on the "
+    "physics model alone, "
+    "carbon is left out of the composition (surface contamination), and an "
+    "element that was neither mapped nor detected in the spectrum cannot be "
+    "seen at all -- so the composition is renormalised over a set that may "
+    "be incomplete. Use these numbers to distinguish phases and compare "
+    "regions; certify a composition only against standards."
+)
+
+
+def semi_quantitative_caveat(source: Optional[str],
+                             matrix_corrected: bool = False) -> str:
     """The caveat for the intensities actually used.
 
-    ``"spectrum"``: net intensities from the spectrum fit. Anything else --
-    ``"window"``, or maps that carried no record (the contract before the
-    spectrum path existed) -- is AZtec's window integrals.
+    ``"spectrum"``: net intensities from the spectrum fit -- matrix-corrected
+    when their provenance carries a ``matrix_correction`` block. Anything
+    else -- ``"window"``, or maps that carried no record (the contract before
+    the spectrum path existed) -- is AZtec's window integrals.
     """
     if source == "spectrum":
-        return SEMI_QUANTITATIVE_CAVEAT_SPECTRUM
+        return (STANDARDLESS_CAVEAT_MATRIX if matrix_corrected
+                else SEMI_QUANTITATIVE_CAVEAT_SPECTRUM)
     return SEMI_QUANTITATIVE_CAVEAT
 
 
@@ -335,6 +364,12 @@ def _quantification_block(qprov: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         "k_lines": {str(el): {"line": (e or {}).get("line"),
                               "k": (e or {}).get("k")}
                     for el, e in sorted((qprov.get("lines") or {}).items())},
+        # the phi(rho z) block (exit angle, tilt, model) when the spectrum
+        # source was matrix-corrected; None otherwise
+        "matrix_correction": (dict(qprov["matrix_correction"])
+                              if isinstance(qprov.get("matrix_correction"), Mapping)
+                              else None),
+        "excluded_windows": list(qprov.get("excluded_windows") or []),
     }
     if source == "spectrum":
         fit = dict(qprov.get("fit") or {})
@@ -4530,7 +4565,9 @@ def _provenance(
         "rounding": ("None. Every numeric cell carries full float precision; "
                      "rounding is presentation and belongs in whatever reads "
                      "this file."),
-        "caveat": semi_quantitative_caveat(quantification["source"]),
+        "caveat": semi_quantitative_caveat(
+            quantification["source"],
+            bool(quantification.get("matrix_correction"))),
         "not_built": {
             "batch_over_folder": (
                 "Deferred. The export core is a pure function of (state, "
@@ -4544,6 +4581,10 @@ def _provenance(
             "sensitivity_reruns": "Not built.",
             "effective_n_standard_errors": "Not built — see composition.spread_note.",
             "k_factor_calibration": (
+                "Measured after the phi(rho z) matrix correction on reference "
+                "regions (quantification.calibration); no standard was "
+                "measured on this instrument."
+                if quantification.get("matrix_correction") else
                 "Not built. There is no standard, no measured k-factor and "
                 "no ZAF correction; acquisition.beam_voltage_kv is now in "
                 "this file so the caveat can at least be weighed."),
@@ -4675,7 +4716,10 @@ def build_summary_line(
             clause += f" (sha256 {str(digest)[:12]})"
         parts.append(clause)
 
-    parts.append("semi-quantitative EDS, no standard and no ZAF correction")
+    if (provenance.get("quantification") or {}).get("matrix_correction"):
+        parts.append("standardless EDS with phi(rho z) matrix correction")
+    else:
+        parts.append("semi-quantitative EDS, no standard and no ZAF correction")
 
     app = provenance.get("app") or {}
     name = app.get("app") or "Orienta"

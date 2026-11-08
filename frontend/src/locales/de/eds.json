@@ -722,6 +722,8 @@
     "headline_other": "Wie diese Zusammensetzung gerechnet wurde — {{count}} Vorbehalte",
     "noZaf": "Standardlose Cliff-Lorimer-Rechnung mit modellierten k-Faktoren. Ohne ZAF-Matrixkorrektur — halbquantitativ, keine Analyse mit Standards.",
     "calibratedOn": "Detektorantwort kalibriert an {{matrix}} bei {{kv}} kV.",
+    "matrixCorrected": "Standardlos mit φ(ρz)-Matrixkorrektur (XPP nach Pouchou & Pichoir, Probenkippung {{tilt}}°, Austrittswinkel {{psi}}°, Fluoreszenz nach Reed), auf 100 % normiert.",
+    "calibratedAfterMatrix": "Geräteantwort nach der Matrixkorrektur gemessen an {{standard}} bei {{kv}} kV.",
     "overlap": "Das Fenster {{window}} liegt unter der {{interferer}}-Emission und liest deshalb zu hoch, wo dieses Element vorkommt.",
     "beamAssumed": "Die Beschleunigungsspannung steht nicht in der Datei — {{kv}} kV angenommen. Die Überspannung jedes k-Faktors hängt davon ab.",
     "sourceSpectrum": "Aus den Spektren: Untergrund abgezogen, überlappende Linien getrennt, Pile-up modelliert.",

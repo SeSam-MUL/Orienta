@@ -45,6 +45,7 @@ import contextlib
 import json
 import logging
 import os
+import functools
 import pickle
 import queue
 import subprocess
@@ -174,8 +175,7 @@ class SpectrumNetResult:
     ``maps``: family label (``"Fe K"``) -> flat float32 net counts per live
     second per pixel, UNCLIPPED (see ``project_cube``), file order.
     ``labels``: the COMPOSITION's labels -> family label: every fitted family
-    of an element AZtec exported, nothing else (revised
-    2026-10-25). ``detected_labels``: the same for the elements the spectrum
+    of an element AZtec exported, nothing else. ``detected_labels``: the same for the elements the spectrum
     shows but AZtec did not export -- their net maps are reachable (the
     notice's "add as map"), they never enter a quantification.
     ``detected_at_pct``: each detected element's at% in the composition of
@@ -857,8 +857,11 @@ def _build_result(maps, ff: FileFit, detections, warnings,
 
     # The line each element is quantified through, by the production policy
     # itself (the label stands in for the counts; only the choice is read).
+    from backend.eds_spectrum.matrix import geometry_from_meta
+    geometry = geometry_from_meta(ff.meta)
     chosen = build_counts_by_element([(lab, lab) for lab in labels],
-                                     beam_kv=ff.meta.beam_kv, source="spectrum")
+                                     beam_kv=ff.meta.beam_kv, source="spectrum",
+                                     geometry=geometry)
     lines = {str(el): {"label": lab, "family": el.line}
              for el, lab in chosen.items()}
     lt = (None if live_time is None
@@ -869,12 +872,12 @@ def _build_result(maps, ff: FileFit, detections, warnings,
         exported_not_fitted=exported_not_fitted, detected_not_exported=extra,
         detected_labels=dict(sorted(detected_labels.items())),
         detected_at_pct=_detected_at_pct(maps, labels, detected_labels, extra,
-                                         lt, ff.meta.beam_kv),
+                                         lt, ff.meta.beam_kv, geometry),
         lines=dict(sorted(lines.items())), live_time=lt)
 
 
 def _detected_at_pct(maps, labels, detected_labels, extra, live_time,
-                     beam_kv) -> Dict[str, Optional[float]]:
+                     beam_kv, geometry=None) -> Dict[str, Optional[float]]:
     """Each detected element's at% in the whole map, were it added.
 
     The composition of the map's summed net counts (cps x live time over all
@@ -895,7 +898,7 @@ def _detected_at_pct(maps, labels, detected_labels, extra, live_time,
                      and live_time.size == cps.size else float(np.sum(cps)))
             pairs.append((lab, np.array([total])))
         counts = build_counts_by_element(pairs, beam_kv=beam_kv,
-                                         source="spectrum")
+                                         source="spectrum", geometry=geometry)
         at = weight_pct_to_atomic_pct(counts_to_weight_pct(counts,
                                                            beam_kv=beam_kv))
         got = {str(el): float(v[0]) for el, v in at.items()}
@@ -1063,6 +1066,49 @@ def quant_source_of(extractor) -> str:
     return src if isinstance(src, str) else "window"
 
 
+@functools.lru_cache(maxsize=32)
+def _header_geometry_cached(path: str, _mtime_ns: int, _size: int):
+    # keyed on the file's stat as well: a file replaced under the same name
+    # is read again. Exceptions propagate and are therefore not cached.
+    from backend.eds_spectrum.matrix import geometry_from_meta
+    _has, root = _probe(path)
+    if root is None:
+        return None
+    with h5py.File(path, "r") as f:
+        return geometry_from_meta(read_meta(f, root))
+
+
+def _header_geometry(path: str):
+    """``matrix.geometry_from_meta`` of the file's EDS header; None if unreadable.
+
+    A read failure is logged and answers None, but is not remembered: the
+    next request tries again (a file still being copied, a share that was
+    briefly away).
+    """
+    try:
+        st = os.stat(path)
+        return _header_geometry_cached(path, st.st_mtime_ns, st.st_size)
+    except Exception:
+        logger.warning("EDS: could not read the acquisition geometry of %s",
+                       path, exc_info=True)
+        return None
+
+
+def quant_geometry_of(extractor):
+    """The matrix-correction geometry of ``extractor``'s net intensities, or None.
+
+    None for a window extractor, and for a spectrum extractor whose header
+    lacks tilt or detector elevation or holds an implausible value (see
+    ``matrix.geometry_from_meta``). The spectrum source then quantifies with
+    the uncorrected net-intensity curve; its provenance summary says "NO ZAF"
+    and its warnings say why. Reading the header does not wait for the fit.
+    """
+    if quant_source_of(extractor) != "spectrum":
+        return None
+    get = getattr(extractor, "quant_geometry", None)
+    return get() if callable(get) else None
+
+
 # ---------------------------------------------------------------------------
 # the extractor
 # ---------------------------------------------------------------------------
@@ -1138,6 +1184,14 @@ class SpectrumNetExtractor:
         """The ``fit`` block of :func:`status` (raises while not ready)."""
         self._result()
         return status(self._path)["fit"]
+
+    def quant_geometry(self):
+        """Exit angle and tilt of this file for the matrix correction (or None).
+
+        From the file header, so it answers while the fit still runs (name
+        resolution and provenance need it before the numbers do).
+        """
+        return _header_geometry(self._path)
 
     def get_available_elements(self) -> List[str]:
         job = _job_for(self._path, start=self._may_start())

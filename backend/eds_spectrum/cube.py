@@ -72,7 +72,15 @@ def read_meta(h5file: H5Like, root: str = "1") -> SpectrumMeta:
                              f"has {n_cube}")
         tilt = h.get("Tilt Angle")
         det = h.get("Detector Serial Number")
+
+        def _deg(name):
+            ds = h.get(name)
+            return float(np.degrees(_scalar(ds))) if ds is not None else None
+
         return SpectrumMeta(
+            elevation_deg=_deg("Detector Elevation"),
+            azimuth_deg=_deg("Detector Azimuth"),
+            tilt_axis_deg=_deg("Tilt Axis"),
             start_kev=_scalar(h["Start Channel"]) / 1e3,
             width_kev=_scalar(h["Channel Width"]) / 1e3,
             n_channels=n_ch,

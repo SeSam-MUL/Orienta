@@ -41,7 +41,7 @@ from backend.api.services.h5_session import (
 # other layers) leaves out only its EDS part and says why in "eds_status".
 from backend.api.services.eds_spectrum_service import (
     SPECTRUM_FIT_ERRORS, detected_only_labels, fit_status_marker,
-    quant_source_of, window_maps,
+    quant_geometry_of, quant_source_of, window_maps,
 )
 from backend.api.services.cif_phase_library import (
     auto_classify_pixels,
@@ -105,6 +105,15 @@ def _quant_source(ext) -> str:
     return quant_source_of(ext)
 
 
+def _quant_kwargs(ext) -> dict:
+    """``source=`` and ``geometry=`` for ``build_counts_by_element``.
+
+    The geometry (exit angle, tilt from the file header) makes the spectrum
+    source use the phi(rho z) matrix correction; the window source has none.
+    """
+    return {"source": _quant_source(ext), "geometry": quant_geometry_of(ext)}
+
+
 def _maps_source(maps) -> str:
     """Which source the numbers in ``maps`` came from, by their provenance.
 
@@ -163,7 +172,8 @@ def _source_provenance(ext, beam_kv) -> dict:
     from eds_utils import quantification_provenance
     src = _quant_source(ext)
     out = {"source": src,
-           "source_data": quantification_provenance(beam_kv, src)["source_data"]}
+           "source_data": quantification_provenance(
+               beam_kv, src, quant_geometry_of(ext))["source_data"]}
     if src == "spectrum":
         out["fit"] = ext.spectrum_fit_summary()
     return out
@@ -476,11 +486,28 @@ async def get_elements():
         raise HTTPException(status_code=400, detail="No file open")
     ext = get_extractor()
     elements = ext.get_available_elements()
+    not_quantified = _not_quantified_labels(ext, elements)
     try:
-        return {"elements": elements, "detected_only": detected_only_labels(ext)}
+        return {"elements": elements, "detected_only": detected_only_labels(ext),
+                "not_quantified": not_quantified}
     except SPECTRUM_FIT_ERRORS as exc:
         return {"elements": elements, "detected_only": [],
+                "not_quantified": not_quantified,
                 "eds_status": fit_status_marker(exc)}
+
+
+def _not_quantified_labels(ext, elements) -> List[str]:
+    """The labels of ``elements`` the quantification leaves out on purpose.
+
+    From the header geometry alone (answers while the fit runs): with it the
+    spectrum source is matrix-corrected and leaves
+    ``eds_utils.MATRIX_EXCLUDED_ELEMENTS`` out of every composition.
+    """
+    if quant_geometry_of(ext) is None:
+        return []
+    from eds_utils import MATRIX_EXCLUDED_ELEMENTS, parse_element_name
+    return [lab for lab in elements
+            if str(parse_element_name(lab)) in MATRIX_EXCLUDED_ELEMENTS]
 
 
 def _resolve_element_name(element: str, ext) -> str:
@@ -503,7 +530,7 @@ def _resolve_element_name(element: str, ext) -> str:
     if len(matches) > 1:
         from eds_utils import preferred_windows
         chosen = preferred_windows(matches, beam_kv=_beam_kv(ext),
-                                   source=_quant_source(ext))
+                                   **_quant_kwargs(ext))
         if len(chosen) == 1:
             return next(iter(chosen.values()))
     if matches:
@@ -598,7 +625,7 @@ async def get_eds_map(element: str, mode: str = "counts", cmap: str = "hot", col
             beam_kv = _beam_kv(ext)
             counts_dict = build_counts_by_element(_window_counts(ext),
                                                   beam_kv=beam_kv,
-                                                  source=_quant_source(ext))
+                                                  **_quant_kwargs(ext))
 
             if mode == "wt_pct":
                 from eds_utils import counts_to_weight_pct
@@ -677,7 +704,7 @@ async def quantify_pixel(req: QuantifyRequest):
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(
             _window_counts(ext, elements, index=index), beam_kv=beam_kv,
-            source=_quant_source(ext))
+            **_quant_kwargs(ext))
 
         # Single pixel quantification
         wt_pct = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
@@ -746,7 +773,7 @@ async def region_quantify(req: RegionQuantifyRequest):
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(
             _window_counts(ext, elements, indices=linear_indices),
-            beam_kv=beam_kv, source=_quant_source(ext))
+            beam_kv=beam_kv, **_quant_kwargs(ext))
 
         if not counts_dict:
             return {"row_start": r0, "row_end": r1, "col_start": c0, "col_end": c1,
@@ -894,7 +921,7 @@ async def suggest_phases(req: PhaseSuggestionRequest):
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(
             _window_counts(ext, elements, index=index), beam_kv=beam_kv,
-            source=_quant_source(ext))
+            **_quant_kwargs(ext))
 
         wt = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
         at = weight_pct_to_atomic_pct(wt)
@@ -1100,7 +1127,7 @@ async def generate_chemistry_mask(req: ChemMaskRequest):
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(_window_counts(ext, elements),
                                               beam_kv=beam_kv,
-                                              source=_quant_source(ext))
+                                              **_quant_kwargs(ext))
 
         # Pre-compute unit maps to avoid redundant conversions
         wt_maps_cache = None
@@ -1231,7 +1258,7 @@ async def display_modes():
 
 
 # =============================================================================
-# Phase-map builder (M3 + M4)
+# Phase-map builder
 # =============================================================================
 
 
@@ -1637,7 +1664,7 @@ def _build_at_pct_maps_for_loaded_file(
         elements = ext.get_available_elements()
         counts_dict = build_counts_by_element(_window_counts(ext, elements),
                                               beam_kv=beam_kv,
-                                              source=_quant_source(ext))
+                                              **_quant_kwargs(ext))
 
     if not counts_dict:
         raise HTTPException(status_code=400, detail="No EDS element data in this file")
@@ -1695,12 +1722,14 @@ class _SummedNetComposition:
         from eds_utils import preferred_windows
         lt = np.asarray(ext.get_live_time(), dtype=np.float64).ravel()
         self.beam_kv = beam_kv
+        self.geometry = quant_geometry_of(ext)
         self._n = int(lt.size)
         # Only the label per element the quantification keeps (Cu L, not
         # also Cu K): the others would be multiplied out for nothing, on
         # every wand preview of a 485k-pixel map.
         names = list(preferred_windows(ext.get_available_elements(), beam_kv,
-                                       source="spectrum").values())
+                                       source="spectrum",
+                                       geometry=self.geometry).values())
         self._counts = []
         for name, cps in _window_counts(ext, names):
             if cps.shape != lt.shape:
@@ -1724,7 +1753,7 @@ class _SummedNetComposition:
         counts = build_counts_by_element(
             ((name, np.array([float(c[idx].sum())]))
              for name, c in self._counts),
-            beam_kv=self.beam_kv, source="spectrum")
+            beam_kv=self.beam_kv, source="spectrum", geometry=self.geometry)
         wt = counts_to_weight_pct(counts, beam_kv=self.beam_kv)
         return counts, wt, weight_pct_to_atomic_pct(wt)
 
@@ -1960,7 +1989,7 @@ async def auto_classify(req: AutoClassifyRequest):
     Stores the result in the per-process :class:`PhaseMapStore` and
     returns a rendered PNG plus per-phase summary so the UI can show
     the map immediately. Re-running this endpoint replaces the
-    previous classification (any manual edits from M4 are lost — by
+    previous classification (any manual region edits are lost — by
     design, the re-classify is the "I want to start over" path).
     """
     # EDS numbers in, a replaced map out: refuse before anything changes.
@@ -2605,7 +2634,7 @@ def _probe_phase_at_safe(row: int, col: int) -> Optional[dict]:
         # branch that swallows a RAISED mismatch — `_phase_grid_mismatch` asks
         # `get_active_extractor`, which is deliberately fail-loud when the crop
         # window does not fit the open file. Degrading a read to "no value" is
-        # allowed; doing it in silence is the one thing the spec forbids, and
+        # allowed; doing it in silence is not, and
         # this was the only place left doing it.
         logger.warning("could not read the phase at (%s, %s) — omitting it "
                        "from the probe", row, col, exc_info=True)
@@ -2649,7 +2678,7 @@ async def probe(req: ProbeRequest):
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(
             _window_counts(ext, index=index), beam_kv=beam_kv,
-            source=_quant_source(ext))
+            **_quant_kwargs(ext))
         wt_pct = (counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
                   if counts_dict else {})
         at_pct = weight_pct_to_atomic_pct(wt_pct) if wt_pct else {}
@@ -2849,7 +2878,7 @@ async def linescan(req: LinescanRequest):
             else:
                 counts_dict = build_counts_by_element(
                     _window_counts(ext, elements, dtype=np.float32),
-                    beam_kv=beam_kv, source=_quant_source(ext))
+                    beam_kv=beam_kv, **_quant_kwargs(ext))
                 if req.display_mode == "wt_pct":
                     full = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
                 else:  # at_pct (default)

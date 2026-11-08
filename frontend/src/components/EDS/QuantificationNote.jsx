@@ -38,6 +38,12 @@ export function quantSourceOf(provenance) {
   return null;
 }
 
+/** An angle for the caveat: one decimal, trailing .0 dropped (70, 81, 9.5). */
+function fmtDeg(v) {
+  const x = Number(v);
+  return Number.isFinite(x) ? String(Math.round(x * 10) / 10) : '?';
+}
+
 export default function QuantificationNote({ provenance }) {
   const { t } = useTranslation('eds');
   const [open, setOpen] = useState(false);
@@ -58,6 +64,8 @@ export default function QuantificationNote({ provenance }) {
     .filter((w) => !(assumedKv && typeof w === 'string'
       && w.startsWith('beam voltage ')));
   const overlaps = provenance.spectral_overlaps || [];
+  const matrix = provenance.matrix_correction && typeof provenance.matrix_correction === 'object'
+    ? provenance.matrix_correction : null;
   const hasSpecifics = warnings.length > 0 || overlaps.length > 0 || assumedKv
     || quality.length > 0;
   const tone = hasSpecifics ? colors.yellow : colors.textSecondary;
@@ -110,16 +118,28 @@ export default function QuantificationNote({ provenance }) {
 
       {open && (
         <div style={{ marginTop: 5, lineHeight: 1.5 }}>
-          {/* The standing caveat, always — it is true of every number here. */}
+          {/* The standing caveat, always — it is true of every number here.
+              Which one is the backend's call: the matrix-corrected spectrum
+              source sends a `matrix_correction` block (eds_utils
+              ._matrix_provenance), everything else the no-ZAF method. */}
           <div style={{ color: colors.textSecondary }}>
-            {t('quantNote.noZaf')}
+            {matrix
+              ? t('quantNote.matrixCorrected', {
+                tilt: fmtDeg(matrix.tilt_deg), psi: fmtDeg(matrix.exit_angle_deg),
+              })
+              : t('quantNote.noZaf')}
           </div>
           {provenance.calibration?.standard && (
             <div style={{ color: colors.textSecondary, marginTop: 3 }}>
-              {t('quantNote.calibratedOn', {
-                matrix: provenance.calibration.matrix,
-                kv: provenance.calibration.beam_kv,
-              })}
+              {matrix
+                ? t('quantNote.calibratedAfterMatrix', {
+                  standard: provenance.calibration.standard,
+                  kv: provenance.calibration.beam_kv,
+                })
+                : t('quantNote.calibratedOn', {
+                  matrix: provenance.calibration.matrix,
+                  kv: provenance.calibration.beam_kv,
+                })}
             </div>
           )}
           {/* Loudest of the specifics: every k-factor's overvoltage term

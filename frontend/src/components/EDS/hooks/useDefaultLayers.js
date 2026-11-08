@@ -70,12 +70,16 @@ export function useDefaultLayers(isFileOpen, filePath, datasetKey = null) {
       // synthesised a placeholder. Treat as "no BC" for default-layer purposes.
       const hasBC = bcRes.status === 'fulfilled' && bcRes.value.data?.label !== 'fallback';
 
+      const notQuantified = elemsRes.status === 'fulfilled'
+        ? (elemsRes.value.data?.not_quantified || []) : [];
+
       const electronImageName = pickPreferredElectronImage(electronImages);
       const layers = defaultLayersFor({
         hasSE: !!electronImageName,
         hasBC,
         electronImageName,
         elements,
+        notQuantified,
       });
       setState({ ready: true, layers, elements, electronImages });
     })();

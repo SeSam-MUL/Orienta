@@ -28,6 +28,14 @@ describe('buildEdsLayerSources', () => {
 });
 
 describe('defaultLayersFor', () => {
+  it('does not seed an element the quantification leaves out (C on the corrected spectrum source)', () => {
+    const out = defaultLayersFor({
+      hasSE: true, electronImageName: 'SE1',
+      elements: ['Al Kα1', 'C Kα1,2', 'Cu Kα1', 'Fe Kα1'], notQuantified: ['C Kα1,2'],
+    });
+    const seeded = out.filter(l => l.kind === 'eds-element').map(l => l.element);
+    expect(seeded).toEqual(['Al Kα1', 'Cu Kα1', 'Fe Kα1']);
+  });
   it('uses real SE when hasSE=true', () => {
     const out = defaultLayersFor({ hasSE: true, hasBC: true, electronImageName: 'SE1', elements: ['Al Kα1', 'Fe Kα1', 'Cu Kα1'] });
     const kinds = out.map(l => l.kind);

@@ -722,6 +722,8 @@
     "headline_other": "How this composition was calculated — {{count}} caveats",
     "noZaf": "Standardless Cliff-Lorimer with modelled k-factors. No ZAF matrix correction — treat as semi-quantitative, not a standards-quality analysis.",
     "calibratedOn": "Detector response calibrated on {{matrix}} at {{kv}} kV.",
+    "matrixCorrected": "Standardless with a φ(ρz) matrix correction (XPP after Pouchou & Pichoir, specimen tilt {{tilt}}°, exit angle {{psi}}°, Reed fluorescence), normalised to 100 %.",
+    "calibratedAfterMatrix": "Instrument response measured after the matrix correction on {{standard}} at {{kv}} kV.",
     "overlap": "The {{window}} window overlaps {{interferer}} emission, so it reads high wherever that element is present.",
     "beamAssumed": "Beam voltage is not in the file — {{kv}} kV assumed. Every k-factor's overvoltage depends on it.",
     "sourceSpectrum": "From the spectra: background subtracted, overlapping lines separated, pile-up modelled.",

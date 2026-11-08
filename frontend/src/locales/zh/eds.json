@@ -722,6 +722,8 @@
     "headline_other": "该成分的计算方式 — {{count}} 项注意",
     "noZaf": "无标样 Cliff-Lorimer 法，k 因子由模型计算。未做 ZAF 基体校正 — 属半定量结果，不是标样定量分析。",
     "calibratedOn": "探测器响应在 {{matrix}}、{{kv}} kV 下标定。",
+    "matrixCorrected": "无标样定量，采用 φ(ρz) 基体校正（Pouchou & Pichoir 的 XPP，样品倾斜 {{tilt}}°，出射角 {{psi}}°，Reed 荧光校正），归一化至 100 %。",
+    "calibratedAfterMatrix": "仪器响应在基体校正后于 {{standard}}（{{kv}} kV）上测定。",
     "overlap": "{{window}} 窗口与 {{interferer}} 的发射峰重叠，因此在含该元素处读数偏高。",
     "beamAssumed": "文件中没有加速电压 — 按 {{kv}} kV 假定。每个 k 因子的过电压都取决于它。",
     "sourceSpectrum": "来自能谱：已扣除背底，已分离重叠谱线，已对堆积峰建模。",

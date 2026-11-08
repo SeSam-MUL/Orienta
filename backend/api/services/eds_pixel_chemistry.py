@@ -210,7 +210,7 @@ def get_pixel_at_pct_with_reason(
             return None, _give_up("no_file", "no file is open")
         ext = _get_extractor()
         from backend.api.services.eds_spectrum_service import (
-            quant_source_of, window_maps)
+            quant_geometry_of, quant_source_of, window_maps)
         if chemistry_waits_for_fit():
             # Before any per-pixel read: the same answer for every pixel
             # while the spectrum fit runs, logged once (keyed on the code --
@@ -221,11 +221,13 @@ def get_pixel_at_pct_with_reason(
                                       refusal.expected, key=refusal.code)
             elements, read = ext.get_available_elements(), ext.get_element_map
             source = quant_source_of(ext)
+            geometry = quant_geometry_of(ext)
         else:
             # The window numbers (chemistry_source): AZtec's raw windows,
             # cut to the crop, priced with the window curve. No fit needed.
             elements, read = window_maps(ext)
             source = "window"
+            geometry = None
         if not elements:
             return None, _give_up("no_eds", "this scan carries no EDS windows")
         n_rows, n_cols = ext.get_grid_dimensions()
@@ -251,7 +253,8 @@ def get_pixel_at_pct_with_reason(
         # The source tells the quantification which response curve to use:
         # net line intensities (spectrum fit) or AZtec's window integrals.
         counts = build_counts_by_element(
-            _window_counts(read, elements, pixel_index), source=source)
+            _window_counts(read, elements, pixel_index), source=source,
+            geometry=geometry)
         if not counts:
             return None, _give_up(
                 "no_counts", "no EDS window has data at this pixel")
@@ -274,8 +277,13 @@ def get_pixel_at_pct_with_reason(
         # So the prior goes OFF for this dataset, as it did before the
         # per-window skip, and says why. Teaching the scorer the difference is
         # the better fix and belongs with the scorer.
-        excluded = list((getattr(at, "provenance", None) or {}).get(
-            "excluded_windows", []))
+        # An element the scorer ignores anyway (C, O: crystal_hint_phase_fit.
+        # _CHEM_IGNORE) leaves no hole it could misread -- the matrix-corrected
+        # spectrum source leaves C out on purpose (eds_utils.
+        # MATRIX_EXCLUDED_ELEMENTS) and must not switch the prior off for it.
+        from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
+        excluded = [e for e in (getattr(at, "provenance", None) or {}).get(
+            "excluded_windows", []) if str(e.get("element")) not in _CHEM_IGNORE]
         if excluded:
             names = ", ".join(str(e.get("element")) for e in excluded)
             return None, _give_up(

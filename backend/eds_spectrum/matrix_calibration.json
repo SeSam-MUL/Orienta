@@ -1,0 +1,134 @@
+{
+ "matrix_model": "xpp-tilt-reed/1",
+ "fit_model_version": "eds-spectrum-fit/1",
+ "written": "2026-11-07",
+ "written_by": "calibrated outside this repository",
+ "beam_kv": 20.0,
+ "detector": "Oxford Ultim Max 100, SATW window",
+ "geometry_convention": "toward",
+ "anchors": [
+  "Al K",
+  "Si K",
+  "Mn K",
+  "Fe K",
+  "Fe L",
+  "Cu K",
+  "Cu L",
+  "Zn K",
+  "Zn L"
+ ],
+ "prior_sigma": 0.1,
+ "chi2": 1.832166188357312,
+ "dof": 9,
+ "response": {
+  "family_log": {
+   "K": 30.35691698829001,
+   "L": 31.089016143154222
+  },
+  "delta": {
+   "Al K": -0.018306647029801226,
+   "Cu K": 0.11464428257925086,
+   "Cu L": 0.2463454347896512,
+   "Fe K": 0.000792030929016363,
+   "Fe L": -0.2938343723355832,
+   "Mn K": -0.05945874921595813,
+   "Si K": -0.049247574995710544,
+   "Zn K": 0.011576657733195682,
+   "Zn L": 0.04748893754597752
+  },
+  "prior_sigma": 0.1,
+  "label": "Al7Cu2Fe stoichiometry + AZtec 6.3 Tru-Q on a reference scan (matrix, alpha), 2026-11-06"
+ },
+ "references": [
+  {
+   "name": "reference_A_al7cu2fe_eroded",
+   "scan": "reference_A",
+   "n_px": 7892,
+   "kind": "stoichiometry",
+   "ref_at_pct": {
+    "Al": 70.0,
+    "Cu": 20.0,
+    "Fe": 10.0
+   },
+   "nets": {
+    "Al K": 171214.3782944754,
+    "Si K": 1876.3331727164632,
+    "Mn K": 593.4543981380724,
+    "Fe K": 15976.953157420094,
+    "Fe L": 14074.227441554738,
+    "Cu K": 23144.641350244907,
+    "Cu L": 63911.06982124897,
+    "Zn K": 621.6294723799886,
+    "Zn L": 1658.151672916622
+   },
+   "header": {
+    "beam_kv": 20.0,
+    "elevation_deg": 29.0,
+    "azimuth_deg": 0.0,
+    "tilt_deg": 70.0,
+    "tilt_axis_deg": 0.0
+   }
+  },
+  {
+   "name": "reference_B_R1_matrix",
+   "scan": "reference_B",
+   "n_px": 1066,
+   "kind": "aztec",
+   "ref_at_pct": {
+    "Al": 96.56,
+    "Si": 0.77,
+    "Cu": 1.35,
+    "Zn": 1.33
+   },
+   "nets": {
+    "Al K": 345587.6784269465,
+    "Si K": 1310.2360148608795,
+    "Mn K": 528.0918176201283,
+    "Fe K": 248.49216855243267,
+    "Fe L": -383.1799206051549,
+    "Cu K": 1592.1519634987578,
+    "Cu L": 6313.027957338553,
+    "Zn K": 1308.9759822497895,
+    "Zn L": 6054.6088949340465
+   },
+   "header": {
+    "beam_kv": 20.0,
+    "elevation_deg": 29.0,
+    "azimuth_deg": 0.0,
+    "tilt_deg": 70.0,
+    "tilt_axis_deg": 0.0
+   }
+  },
+  {
+   "name": "reference_B_R2_alpha",
+   "scan": "reference_B",
+   "n_px": 546,
+   "kind": "aztec",
+   "ref_at_pct": {
+    "Al": 68.65,
+    "Si": 10.09,
+    "Mn": 6.66,
+    "Fe": 12.89,
+    "Cu": 1.71
+   },
+   "nets": {
+    "Al K": 186625.70100732602,
+    "Si K": 22689.642919201553,
+    "Mn K": 10040.273459326216,
+    "Fe K": 19037.145508650894,
+    "Fe L": 13683.068885384026,
+    "Cu K": 1768.3070269163711,
+    "Cu L": 4336.156785436056,
+    "Zn K": 328.52066945418335,
+    "Zn L": 1310.6724031871056
+   },
+   "header": {
+    "beam_kv": 20.0,
+    "elevation_deg": 29.0,
+    "azimuth_deg": 0.0,
+    "tilt_deg": 70.0,
+    "tilt_axis_deg": 0.0
+   }
+  }
+ ]
+}

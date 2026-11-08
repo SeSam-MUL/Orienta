@@ -104,7 +104,8 @@ def direct_summed(path, idx):
     lt = live_time(str(path))[np.atleast_1d(idx)]
     summed = CountsByElement(
         {el: np.array([np.sum(np.asarray(v, dtype=np.float64) * lt)])
-         for el, v in counts.items()}, source="spectrum")
+         for el, v in counts.items()}, source="spectrum",
+        geometry=counts.geometry)
     wt = counts_to_weight_pct(summed, beam_kv=kv)
     return wt, weight_pct_to_atomic_pct(wt)
 
@@ -191,7 +192,10 @@ def test_region_quantify_uses_summed_net_counts(ready, client, r0, r1, c0, c1):
     wt, at = direct_summed(ready, idx)
     per_px = direct_at_pct(ready, idx)
     data = body["data"]
-    assert sorted(data) == sorted(str(el) for el in at)
+    quantified = {el for el, v in data.items() if v["at_pct"] is not None}
+    assert sorted(quantified) == sorted(str(el) for el in at)
+    # C (exported, left out of the matrix-corrected composition) keeps counts only
+    assert data["C"]["at_pct"] is None and data["C"]["counts"] is not None
     for el in at:
         got = data[str(el)]
         assert got["at_pct"]["mean"] == pytest.approx(
@@ -207,8 +211,9 @@ def test_region_quantify_uses_summed_net_counts(ready, client, r0, r1, c0, c1):
         assert got["at_pct"]["max"] == pytest.approx(float(px.max()),
                                                      rel=1e-9, abs=1e-12), el
     # Not vacuous: on these boxes the mean of the pixels' at% is a different
-    # number (Zn 0.68 against 0.35 summed on the first box; Ti, which read
-    # 0.64 against a negative summed net, left the composition 2026-10-25).
+    # number (Zn 0.68 against 0.35 summed on the first box; Ti would read
+    # 0.64 against a negative summed net, but an element the spectrum detects
+    # but AZtec did not export is in no composition).
     gap = max(abs(data[str(el)]["at_pct"]["mean"] - float(np.mean(per_px[el])))
               for el in at)
     assert gap > 0.3, gap
@@ -316,7 +321,8 @@ def test_region_inspector_and_wand_use_the_same_helper(ready, client):
                        ("region-at", at_px), ("wand", wand)):
         assert resp["composition_method"] == SUMMED, name
 
-    ref = {el: v["at_pct"]["mean"] for el, v in rq["data"].items()}
+    ref = {el: v["at_pct"]["mean"] for el, v in rq["data"].items()
+           if v["at_pct"] is not None}
     at_maps = _build_at_pct_maps_for_loaded_file()[0]
     helper = _composition_of(at_maps)
     assert helper is not None
@@ -529,6 +535,9 @@ def test_crop_region_composition(ready, client, monkeypatch):
     assert crop["n_pixels"] == full["n_pixels"] == 150
     assert sorted(crop["data"]) == sorted(full["data"])
     for el, v in full["data"].items():
+        if v["at_pct"] is None:
+            assert crop["data"][el]["at_pct"] is None, el
+            continue
         for key in ("mean", "std", "min", "max"):
             assert crop["data"][el]["at_pct"][key] == pytest.approx(
                 v["at_pct"][key], rel=1e-12, abs=1e-12), (el, key)
@@ -544,14 +553,15 @@ def test_crop_region_composition(ready, client, monkeypatch):
     helper = _composition_of(at_maps)
     got = {str(el): v for el, v in helper(grid == 1).items()}
     assert got == pytest.approx(
-        {el: v["at_pct"]["mean"] for el, v in full["data"].items()},
+        {el: v["at_pct"]["mean"] for el, v in full["data"].items()
+         if v["at_pct"] is not None},
         rel=1e-12, abs=1e-12)
     wand = client.post("/api/eds/phase-map/wand-stats",
                        json={"mask_b64": _pack(grid == 1), "phase_index": 0})
     assert wand.status_code == 200, wand.text
     assert wand.json()["mean_at_pct"] == {
         el: round(v["at_pct"]["mean"], 2) for el, v in full["data"].items()
-        if v["at_pct"]["mean"] >= 0.05}
+        if v["at_pct"] is not None and v["at_pct"]["mean"] >= 0.05}
 
 
 # ---------------------------------------------------------------------------
@@ -587,13 +597,21 @@ def test_legend_composition_is_the_inspectors(ready, client):
         assert {el: shown[el] for el in legend["mean_at_pct"]} == pytest.approx(
             legend["mean_at_pct"], rel=1e-9), sid
 
-    # Not vacuous: the mean of region 1's pixels reads Zn above the legend's
-    # 0.5 at% cut (0.68), the summed composition does not (0.36). (Ti until
-    # 2026-10-25, when detected-not-exported elements left the composition.)
+    # Not vacuous: the mean of the pixels and the summed composition differ
+    # visibly (more than the legend's 0.01 at% rounding) on some element of
+    # region 1, and the legend shows the summed value. (No element or
+    # cut is pinned: which element differs depends on the quantification.)
     m = (grid == 1).ravel()
-    zn_px = float(np.asarray(at_maps["Zn"], dtype=np.float64).ravel()[m].mean())
-    assert zn_px >= 0.5, zn_px
-    assert "Zn" not in regions[1]["mean_at_pct"]
+    summed = {str(el): v for el, v in helper(grid == 1).items()}
+    differs = []
+    for el, v in summed.items():
+        if el in _CHEM_IGNORE or el not in at_maps or el not in regions[1]["mean_at_pct"]:
+            continue
+        px = float(np.asarray(at_maps[el], dtype=np.float64).ravel()[m].mean())
+        if abs(px - v) > 0.05:
+            differs.append(el)
+            assert regions[1]["mean_at_pct"][el] == pytest.approx(round(v, 2)), (el, px, v)
+    assert differs, summed
 
 
 def test_legend_window_source_unchanged(ready, client):

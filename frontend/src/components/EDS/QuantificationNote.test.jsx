@@ -271,3 +271,33 @@ describe('where the numbers come from', () => {
       "From AZtec's window maps: background is included (this file has no spectra).");
   });
 });
+
+
+describe('QuantificationNote — matrix-corrected spectrum source', () => {
+  const CORRECTED = {
+    summary: 'phi(rho z) matrix correction (XPP with specimen tilt ...)',
+    method: 'standardless phi(rho z)',
+    matrix_correction: { model: 'xpp-tilt-reed/1', exit_angle_deg: 81.0, tilt_deg: 70.0 },
+    beam_kv: 20.0,
+    calibration: { standard: 'Al7Cu2Fe stoichiometry + AZtec 6.3 Tru-Q', beam_kv: 20.0 },
+    lines: {}, spectral_overlaps: [], warnings: [], source: 'spectrum',
+  };
+  it('names the matrix correction, not the no-ZAF method', () => {
+    render(<QuantificationNote provenance={CORRECTED} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.queryByText('quantNote.noZaf')).toBeNull();
+    expect(screen.getByText('quantNote.matrixCorrected:{"tilt":"70","psi":"81"}')).toBeTruthy();
+    expect(screen.getByText(/quantNote\.calibratedAfterMatrix/)).toBeTruthy();
+  });
+  it('keeps the no-ZAF caveat without a matrix_correction block', () => {
+    render(<QuantificationNote provenance={CLEAN} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByText('quantNote.noZaf')).toBeTruthy();
+  });
+  it('every locale carries both new strings', () => {
+    for (const loc of [en, de, ja, zh]) {
+      expect(loc.quantNote.matrixCorrected).toMatch(/\{\{tilt\}\}.*\{\{psi\}\}/);
+      expect(loc.quantNote.calibratedAfterMatrix).toMatch(/\{\{standard\}\}.*\{\{kv\}\}/);
+    }
+  });
+});

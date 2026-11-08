@@ -52,6 +52,7 @@ export function defaultLayersFor({
   hasBC = false,
   electronImageName = null,
   elements = [],
+  notQuantified = [],
 } = {}) {
   const out = [];
   if (hasSE && electronImageName) {
@@ -82,12 +83,15 @@ export function defaultLayersFor({
   }
   // The seeded layers are at%, where two families of one element (the
   // spectrum source's `Cu Kα1` and `Cu Lα1,2`) draw the same quantified map:
-  // seed three different elements, not three labels.
+  // seed three different elements, not three labels. An element the
+  // quantification leaves out (`notQuantified`, the /elements response: C on
+  // the matrix-corrected spectrum source) has no at% map -- not a seed.
+  const skip = new Set((notQuantified || []).map((l) => String(l).split(' ')[0]));
   const seenSymbols = new Set();
   const seeded = [];
   for (const el of elements) {
     const symbol = String(el).split(' ')[0];
-    if (seenSymbols.has(symbol)) continue;
+    if (seenSymbols.has(symbol) || skip.has(symbol)) continue;
     seenSymbols.add(symbol);
     seeded.push(el);
     if (seeded.length === 3) break;

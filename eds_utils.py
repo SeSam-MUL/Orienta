@@ -86,6 +86,7 @@ import json
 import logging
 import math
 import re
+import threading
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
@@ -516,13 +517,28 @@ class CountsByElement(dict):
     """
 
     source: str
+    #: acquisition geometry of net line intensities (``backend.eds_spectrum.matrix.Geometry``);
+    #: with it the spectrum source is quantified with the phi(rho z) matrix correction, without
+    #: it by the uncorrected net-intensity response curve. Always None on the window source.
+    geometry: Optional[object]
 
-    def __init__(self, *args, source: str = "window", **kwargs):
+    def __init__(self, *args, source: str = "window", geometry=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.source = _check_source(source)
+        if geometry is not None and self.source != "spectrum":
+            raise ValueError("a geometry only belongs to net line intensities "
+                             "(source='spectrum'), not to window integrals")
+        self.geometry = geometry
 
     def copy(self) -> "CountsByElement":
-        return CountsByElement(self, source=self.source)
+        return CountsByElement(self, source=self.source, geometry=self.geometry)
+
+    def __reduce__(self):
+        return (_rebuild_counts, (dict(self), self.source, self.geometry))
+
+
+def _rebuild_counts(items, source, geometry):
+    return CountsByElement(items, source=source, geometry=geometry)
 
 
 #: Per element, the line the SPECTRUM source quantifies through when more than
@@ -534,21 +550,30 @@ class CountsByElement(dict):
 #: net-intensity standard: Cu L reads Cu 17.9 at% (max deviation 2.09), Cu K
 #: reads 16.0 at% (max deviation 4.03). Zn deliberately stays on K: Zn L carries
 #: the Cu L overlap residual (quality warning -0.21 in Al7Cu2Fe), Zn K is clean.
+#:
+#: Only for the UNCORRECTED spectrum path (no geometry). With the matrix
+#: correction every element takes :func:`default_line_for` (K for Cu): on the
+#: reference set Cu K gave the smaller deviation from the reference values
+#: (leave-one-out, mean 1.00 vs 1.35 at% over six regions with Cu; K closer in
+#: five of six) -- the Cu L advantage was the uncorrected absorption of Cu L in
+#: the Al-rich calibration matrix.
 _SPECTRUM_LINE_PREFERENCE = {"Cu": "L"}
 
 
-def _window_rank(symbol: str, beam_kv: float, source: str):
+def _window_rank(symbol: str, beam_kv: float, source: str,
+                 corrected: bool = False):
     """Sort key over ONE element's :class:`ElementLine` keys, kept one first.
 
-    The line :func:`default_line_for` picks at this voltage (on the spectrum
-    source overridden by ``_SPECTRUM_LINE_PREFERENCE``), then K, L, M among
-    the rest; within one shell the alpha sub-line before beta.
+    The line :func:`default_line_for` picks at this voltage (on the
+    uncorrected spectrum source overridden by ``_SPECTRUM_LINE_PREFERENCE``),
+    then K, L, M among the rest; within one shell the alpha sub-line before
+    beta. ``corrected``: the counts are quantified with the matrix correction.
     """
     try:
         preferred = default_line_for(symbol, beam_kv)
     except UnknownLineError:
         preferred = ""
-    if source == "spectrum":
+    if source == "spectrum" and not corrected:
         preferred = _SPECTRUM_LINE_PREFERENCE.get(symbol, preferred)
     order = [preferred] + [f for f in ("K", "L", "M") if f != preferred]
 
@@ -561,7 +586,7 @@ def _window_rank(symbol: str, beam_kv: float, source: str):
 
 
 def preferred_windows(raw_names, beam_kv: float = 20.0,
-                      source: str = "window") -> Dict[str, str]:
+                      source: str = "window", geometry=None) -> Dict[str, str]:
     """``{element symbol: raw name}``: per element, the name among ``raw_names``
     that :func:`build_counts_by_element` keeps.
 
@@ -576,7 +601,7 @@ def preferred_windows(raw_names, beam_kv: float = 20.0,
         by_symbol.setdefault(str(key), []).append((key, raw_name))
     out: Dict[str, str] = {}
     for symbol, windows in by_symbol.items():
-        rank = _window_rank(symbol, beam_kv, source)
+        rank = _window_rank(symbol, beam_kv, source, geometry is not None)
         windows.sort(key=lambda win: rank(win[0]))
         out[symbol] = windows[0][1]
     return out
@@ -586,6 +611,7 @@ def build_counts_by_element(
     raw_counts,
     beam_kv: float = 20.0,
     source: str = "window",
+    geometry=None,
 ) -> "CountsByElement":
     """Build the ``{element: counts}`` dict quantification expects.
 
@@ -614,7 +640,12 @@ def build_counts_by_element(
             is stored on the result and decides which response curve
             :func:`counts_to_weight_pct` uses. The choice of window per
             element is the same for both, except for the elements in
-            ``_SPECTRUM_LINE_PREFERENCE`` (Cu: L) on the spectrum source.
+            ``_SPECTRUM_LINE_PREFERENCE`` (Cu: L) on the uncorrected
+            spectrum source.
+        geometry: acquisition geometry of the net intensities
+            (``backend.eds_spectrum.matrix.Geometry``, spectrum source only).
+            Stored on the result; with it :func:`counts_to_weight_pct`
+            applies the matrix correction.
 
     Returns:
         :class:`CountsByElement` -- ``{ElementLine: np.ndarray}`` with exactly
@@ -631,10 +662,10 @@ def build_counts_by_element(
         key = parse_element_name(raw_name)
         by_symbol.setdefault(str(key), []).append((key, raw_name, data))
 
-    result = CountsByElement(source=source)
+    result = CountsByElement(source=source, geometry=geometry)
     for symbol, windows in by_symbol.items():
         if len(windows) > 1:
-            rank = _window_rank(symbol, beam_kv, source)
+            rank = _window_rank(symbol, beam_kv, source, geometry is not None)
             windows.sort(key=lambda win: rank(win[0]))
             # On the spectrum source the extractor offers EVERY fitted family
             # (Cu K and Cu L, Fe K and Fe L, ...) by design, so two lines per
@@ -1027,12 +1058,16 @@ def k_factor(element: str, line: Optional[str] = None,
 
 
 def quantification_provenance(beam_kv: float = 20.0,
-                              source: str = "window") -> Dict:
+                              source: str = "window", geometry=None) -> Dict:
     """The standing caveats on any At.%/Wt.% this module produces.
 
     ``source="spectrum"`` describes the net-intensity path and raises
     :class:`UnknownLineError` while its calibration standard is missing.
+    With a ``geometry`` (spectrum source only) it describes the
+    matrix-corrected quantification.
     """
+    if geometry is not None and source == "spectrum":
+        return _matrix_provenance(beam_kv, geometry)
     std = _standard_for(source)
     lo, hi = _curve_for(source)[4]
     if source == "window":
@@ -1082,7 +1117,67 @@ def quantification_provenance(beam_kv: float = 20.0,
     }
     if source != "window":
         prov["source"] = source
+        prov["warnings"].append(
+            "no usable acquisition geometry, so no matrix correction "
+            "(absorption and atomic-number effects are not corrected): the "
+            "file header could not be read, lacks the specimen tilt or the "
+            "detector elevation, or holds a tilt outside 0-89.5 deg or a "
+            "detector the specimen shadows")
     return prov
+
+
+def _matrix_provenance(beam_kv: float, geometry) -> Dict:
+    from backend.eds_spectrum import matrix as _matrix
+    cal = _matrix.stored_calibration()
+    resp = cal["response"]
+    return {
+        "summary": (
+            "phi(rho z) matrix correction (XPP with specimen tilt, Pouchou & "
+            "Pichoir; Reed fluorescence), standardless, normalised to 100 %. "
+            f"Exit angle {geometry.psi_deg:.2f} deg, beam-to-normal tilt "
+            f"{geometry.tilt_deg:.1f} deg from the file header. Instrument "
+            "response measured after the matrix correction on "
+            f"{resp.get('label', 'the reference set')} at "
+            f"{cal['beam_kv']:g} kV."),
+        "method": "standardless phi(rho z): C_i proportional to I_i / (R_i K_i Q_i ZA_i(C) Fl_i(C)), iterated",
+        "matrix_correction": {
+            "model": cal["matrix_model"],
+            "phi_rho_z": ("XPP (Pouchou & Pichoir) as in NIST EPQ (public domain); specimen "
+                          "tilt: tilted ionisation area with the normal-incidence depth "
+                          "distribution compressed by sqrt(cos tilt), checked against "
+                          "Monte Carlo at 70 deg tilt only"),
+            "fluorescence": ("Reed characteristic fluorescence of K lines, one "
+                             "representative exciting line per element (as NIST EPQ)"),
+            "mass_attenuation": "xraylib (vendored tables)",
+            "exit_angle_deg": float(geometry.psi_deg),
+            "tilt_deg": float(geometry.tilt_deg),
+            "geometry_convention": cal.get("geometry_convention", "toward"),
+        },
+        "source_data": ("spectrum fit (eds-spectrum-fit/1): background "
+                        "subtracted, overlaps deconvolved, pile-up modelled"),
+        "beam_kv": float(beam_kv),
+        "calibration": {
+            "standard": resp.get("label"),
+            "matrix": ("reference set: Al7Cu2Fe (stoichiometry), Al matrix and "
+                       "alpha-Al(Fe,Mn)Si (AZtec Tru-Q)"),
+            "references": [r["name"] for r in cal["references"]],
+            "reference_kinds": sorted({r["kind"] for r in cal["references"]}),
+            "beam_kv": cal["beam_kv"],
+            "detector": cal.get("detector"),
+            "measured_on": cal.get("written"),
+            "anchors": list(cal["anchors"]),
+            "prior_sigma": cal["prior_sigma"],
+            "chi2": cal.get("chi2"), "dof": cal.get("dof"),
+        },
+        "lines": {},
+        "spectral_overlaps": [],
+        "excluded_windows": [],
+        "warnings": ([] if abs(float(beam_kv) - float(cal["beam_kv"])) <= 0.51 else [
+            f"beam voltage {beam_kv:g} kV differs from the {cal['beam_kv']:g} kV "
+            "the instrument response was measured at; the physics follows the "
+            "voltage, the measured family factors may not"]),
+        "source": "spectrum",
+    }
 
 
 def _resolve_k_factors(counts, k_factors, beam_kv, source="window"):
@@ -1296,9 +1391,18 @@ def counts_to_weight_pct(
     if source is None:
         source = getattr(counts, "source", "window")
     _check_source(source)
+    geometry = getattr(counts, "geometry", None) if source == "spectrum" else None
 
     if not counts:
-        return QuantMap(provenance=quantification_provenance(beam_kv, source))
+        return QuantMap(provenance=quantification_provenance(beam_kv, source, geometry))
+
+    if geometry is not None:
+        if k_factors is not None:
+            raise ValueError(
+                "EDS quantification: k_factors do not apply to the matrix-corrected "
+                "spectrum source (it has no Cliff-Lorimer k); build the counts "
+                "without a geometry to use them.")
+        return _matrix_corrected_weight_pct(counts, geometry, beam_kv)
 
     resolved, prov = _resolve_k_factors(counts, k_factors, beam_kv, source)
 
@@ -1333,6 +1437,213 @@ def counts_to_weight_pct(
     result = QuantMap(provenance=prov)
     for elem, arr in weighted.items():
         result[elem] = (arr / total) * 100.0
+    return result
+
+
+#: Lines below this energy are far outside the reference set of the matrix
+#: correction (lowest anchor Fe L at 0.705 keV); their response is physics only
+#: and the window and absorption corrections there are large.
+MATRIX_SOFT_LINE_KEV = 0.70
+
+#: Elements the matrix-corrected path leaves out of the normalised composition,
+#: with the reason it reports. Carbon: on these specimens the C K signal is the
+#: surface contamination layer, not the bulk, and C K (0.277 keV) lies far below
+#: every reference line, where mass attenuation coefficients are least certain
+#: and its absorption correction is the largest of all lines. Quantified as
+#: bulk it took several at% on the regions of the reference set (7-11 at%,
+#: measured during development) and pushed every metal down by as much.
+#: Reporting it as a vendor package does would need a carbon reference
+#: measurement, which the calibration lacks.
+MATRIX_EXCLUDED_ELEMENTS = {
+    "C": ("carbon is left out of the matrix-corrected composition: its signal is "
+          "the surface contamination layer and C K lies far below the calibrated "
+          "lines; the other elements are normalised to 100 % without it"),
+}
+
+
+#: Whole maps are quantified again by every map / linescan / mask request; the
+#: matrix correction iterates per pixel (about 3 s for 121 000 px), so the last
+#: results for maps of at least this many values are kept, keyed on the exact
+#: input bytes, geometry and calibration. Copies go out, never the cached arrays.
+_MATRIX_CACHE_MIN_VALUES = 50_000
+_MATRIX_CACHE_SIZE = 2
+_MATRIX_CACHE: "collections.OrderedDict" = None  # created on first use
+# FastAPI runs sync routes in a thread pool: two requests may quantify at once.
+_MATRIX_CACHE_LOCK = threading.Lock()
+
+
+def _matrix_cache_key(counts, geometry, beam_kv):
+    import hashlib
+    from backend.eds_spectrum import matrix as _matrix
+    total = sum(int(np.size(v)) for v in counts.values())
+    if total < _MATRIX_CACHE_MIN_VALUES:
+        return None
+    h = hashlib.blake2b(digest_size=20)
+    h.update(repr((float(beam_kv), float(geometry.beam_kv), float(geometry.psi_rad),
+                   float(geometry.tilt_rad))).encode())
+    h.update(json.dumps(_matrix.stored_calibration()["response"], sort_keys=True).encode())
+    for elem in sorted(counts, key=lambda e: (str(e), getattr(e, "line", "") or "")):
+        arr = np.ascontiguousarray(np.asarray(counts[elem], dtype=np.float64))
+        h.update(f"{elem}|{getattr(elem, 'line', '')}|{getattr(elem, 'sub_line', '')}"
+                 f"|{arr.shape}".encode())
+        h.update(arr.tobytes())
+    return h.hexdigest()
+
+
+def _copy_quant(q: "QuantMap") -> "QuantMap":
+    import copy as _copy
+    out = QuantMap(provenance=_copy.deepcopy(q.provenance))
+    for k, v in q.items():
+        out[k] = np.array(v, copy=True)
+    return out
+
+
+def _matrix_corrected_weight_pct(counts, geometry, beam_kv: float) -> "QuantMap":
+    global _MATRIX_CACHE
+    import collections
+    key = _matrix_cache_key(counts, geometry, beam_kv)
+    if key is not None:
+        with _MATRIX_CACHE_LOCK:
+            if _MATRIX_CACHE is None:
+                _MATRIX_CACHE = collections.OrderedDict()
+            hit = _MATRIX_CACHE.get(key)
+            if hit is not None:
+                _MATRIX_CACHE.move_to_end(key)
+                return _copy_quant(hit)
+    # computed outside the lock: a second request for the same map computes it
+    # again rather than waiting; both results are identical
+    result = _matrix_corrected_weight_pct_uncached(counts, geometry, beam_kv)
+    if key is not None:
+        with _MATRIX_CACHE_LOCK:
+            _MATRIX_CACHE[key] = _copy_quant(result)
+            while len(_MATRIX_CACHE) > _MATRIX_CACHE_SIZE:
+                _MATRIX_CACHE.popitem(last=False)
+    return result
+
+
+def _matrix_corrected_weight_pct_uncached(counts, geometry, beam_kv: float) -> "QuantMap":
+    """Net line intensities -> Wt.% with the phi(rho z) matrix correction.
+
+    Standardless and normalised: ``backend.eds_spectrum.matrix.quantify_map``
+    with the stored response (``matrix_calibration.json``). Which elements
+    take part follows the same per-window rules as the Cliff-Lorimer path
+    (:func:`_resolve_one_k`): an unusable window is dropped and named, never
+    fatal for the others.
+    """
+    from backend.eds_spectrum import matrix as _matrix
+
+    if abs(float(geometry.beam_kv) - float(beam_kv)) > 0.01:
+        beam_kv = float(geometry.beam_kv)
+    prov = quantification_provenance(beam_kv, "spectrum", geometry)
+    if getattr(geometry, "note", ""):
+        prov["warnings"].append(geometry.note)
+    resolved: Dict = {}
+    scratch = {"lines": {}, "warnings": prov["warnings"],
+               "excluded_windows": prov["excluded_windows"]}
+    first_failure = None
+    for elem in counts:
+        symbol = str(elem)
+        if symbol in MATRIX_EXCLUDED_ELEMENTS:
+            prov["excluded_windows"].append(
+                {"element": symbol, "line": getattr(elem, "line", "") or None,
+                 "reason": MATRIX_EXCLUDED_ELEMENTS[symbol]})
+            prov["warnings"].append(MATRIX_EXCLUDED_ELEMENTS[symbol])
+            continue
+        try:
+            # same validity rules as the Cliff-Lorimer path; the k it computes
+            # is discarded, the open range suppresses its response-curve note.
+            # Coupling: for source "spectrum" _resolve_one_k reads
+            # _CALIBRATION_STANDARD_SPECTRUM (the Cliff-Lorimer standard), so
+            # setting that to None also stops this corrected path. The matrix
+            # path itself uses only matrix_calibration.json.
+            _resolve_one_k(elem, symbol, counts, None, beam_kv, resolved,
+                           scratch, -math.inf, math.inf, "spectrum")
+        except UnknownLineError as exc:
+            if first_failure is None:
+                first_failure = exc
+            resolved.pop(elem, None)
+            line = getattr(elem, "line", "") or getattr(exc, "line", "") or None
+            prov["excluded_windows"].append(
+                {"element": symbol, "line": line, "reason": str(exc)})
+            prov["warnings"].append(
+                f"{symbol}{' ' + str(line) if line else ''} was left out of the "
+                f"quantification: {exc}. The remaining elements are "
+                "renormalised to 100 % without it.")
+    if not resolved:
+        if first_failure is not None:
+            raise first_failure
+        return QuantMap(provenance=prov)
+
+    response = _matrix.stored_response()
+    cal = _matrix.stored_calibration()
+    lo_cal = min(_XRAY_LINES[f][e][1] for e, f in response.anchored)
+    intens = {}
+    clipped: Dict[str, int] = {}
+    keys = {}
+    unanchored = []
+    soft_lines = set()
+    for elem in resolved:
+        symbol = str(elem)
+        family = scratch["lines"][symbol]["line"]
+        arr = np.asarray(counts[elem], dtype=np.float64)
+        clipped[symbol] = int(np.count_nonzero(arr < 0))
+        intens[symbol] = (family, arr)
+        keys[symbol] = elem
+        line_kev = _XRAY_LINES[family][symbol][1]
+        anchored = (symbol, family) in response.delta
+        if not anchored:
+            unanchored.append(f"{symbol} {family}")
+        entry = {"line": family, "line_kev": line_kev,
+                 "response": response(symbol, family),
+                 "source": ("physics x calibrated response (reference line)"
+                            if anchored else
+                            "physics x family factor (no reference for this line)")}
+        if scratch["lines"][symbol].get("line_assumed"):
+            entry["line_assumed"] = True
+        if response.family_for(family) != family:
+            entry["source"] += f"; {family} lines take the {response.family_for(family)}-family factor"
+            prov["warnings"].append(
+                f"{symbol} {family}: no {family}-family calibration, the "
+                f"{response.family_for(family)}-family factor is used")
+        if line_kev < min(lo_cal, MATRIX_SOFT_LINE_KEV):
+            soft_lines.add(f"{symbol} {family}")
+            entry["source"] += "; soft line far below the reference set"
+            prov["warnings"].append(
+                f"{symbol} {family} at {line_kev:.3f} keV lies below every "
+                f"reference line ({lo_cal:.2f} keV); window transmission and "
+                "absorption corrections are large there and unverified -- "
+                "treat this element as qualitative")
+        prov["lines"][symbol] = entry
+    prov["clipped_negative"] = clipped
+    # a soft line already carries the stronger "qualitative" warning
+    unanchored = [u for u in unanchored if u not in soft_lines]
+    if unanchored:
+        prov["warnings"].append(
+            f"{', '.join(sorted(unanchored))}: no reference measurement for "
+            "this line; its detector response comes from the family factor "
+            "alone, so the result rests on the physics model without a check "
+            "(expect larger errors than for the reference lines)")
+
+    # tol 1e-5 in mass fraction: 1e-6 changes nothing visible (4e-6 measured on
+    # 500 000 synthetic pixels) and costs two more iterations
+    stats: Dict = {}
+    comp, n_iter = _matrix.quantify_map(
+        intens, geometry, {(e, f): response(e, f) for e, (f, _a) in intens.items()},
+        tol=1e-5, stats=stats)
+    prov["matrix_correction"]["iterations"] = int(n_iter)
+    prov["matrix_correction"]["converged"] = bool(stats["converged"])
+    if not stats["converged"]:
+        prov["warnings"].append(
+            f"matrix correction did not converge in {int(n_iter)} iterations "
+            f"(largest change {float(stats.get('max_change', float('nan'))):.2g} "
+            "in mass fraction); the composition is approximate")
+    if stats.get("non_finite"):
+        prov["warnings"].append(
+            f"{int(stats['non_finite'])} pixel value(s) were not finite in the "
+            "matrix correction and were set to 0")
+    result = QuantMap(provenance=prov)
+    for symbol, frac in comp.items():
+        result[keys[symbol]] = frac * 100.0
     return result
 
 
@@ -1451,12 +1762,16 @@ def get_pixel_composition(
     pixel_counts_arrays = CountsByElement(
         {elem: np.array([val]) for elem, val in pixel_counts.items()},
         source=getattr(counts, "source", "window"),
+        geometry=getattr(counts, "geometry", None),
     )
 
     wt_pct_arrays = counts_to_weight_pct(pixel_counts_arrays, k_factors, beam_kv)
     at_pct_arrays = weight_pct_to_atomic_pct(wt_pct_arrays)
 
-    elements = sorted(pixel_counts.keys())
+    # only what was quantified: a window left out (no usable line, or carbon on
+    # the matrix-corrected path) keeps its counts but has no Wt.%; the
+    # provenance names it under excluded_windows
+    elements = sorted(e for e in pixel_counts if e in wt_pct_arrays)
     wt_pct = {elem: float(wt_pct_arrays[elem][0]) for elem in elements}
     at_pct = {elem: float(at_pct_arrays[elem][0]) for elem in elements}
 

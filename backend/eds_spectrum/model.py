@@ -72,6 +72,11 @@ class SpectrumMeta:
     beam_kv: float
     detector: str = ""
     tilt_deg: Optional[float] = None
+    #: EDS detector elevation / azimuth and specimen tilt axis from the header, degrees;
+    #: what the matrix correction needs for the exit angle (``matrix.geometry_from_meta``)
+    elevation_deg: Optional[float] = None
+    azimuth_deg: Optional[float] = None
+    tilt_axis_deg: Optional[float] = None
 
     def energies(self) -> np.ndarray:
         return self.start_kev + self.width_kev * np.arange(self.n_channels)

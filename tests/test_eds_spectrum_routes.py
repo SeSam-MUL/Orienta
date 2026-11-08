@@ -35,6 +35,7 @@ from backend.api.services import eds_spectrum_service as svc
 from backend.api.services import h5_session
 from backend.eds_spectrum import fit as spectrum_fit
 from backend.eds_spectrum.cube import read_meta
+from backend.eds_spectrum.matrix import geometry_from_meta
 from eds_utils import (build_counts_by_element, counts_to_weight_pct,
                        parse_element_name, weight_pct_to_atomic_pct)
 from tests.test_eds_spectrum_service import (  # noqa: F401  (fixtures)
@@ -101,8 +102,7 @@ _DIRECT = {}
 
 def direct_counts(path, index):
     """``CountsByElement`` of the net maps at ``index`` (int or index array),
-    built from the fit package directly. Composition (revised
-    2026-10-25): AZtec's exported elements only -- an element the spectrum
+    built from the fit package directly. Composition: AZtec's exported elements only -- an element the spectrum
     shows but AZtec did not export (Ti on the Oxford reference scan) is not in it."""
     key = str(path)
     if key not in _DIRECT:
@@ -110,13 +110,17 @@ def direct_counts(path, index):
         with h5py.File(path, "r") as f:
             exported = {str(parse_element_name(lab))
                         for lab in f["1/EDS/Data/Window Integral"].keys()}
+        meta = read_meta(path)
         _DIRECT[key] = ({lab: m for lab, m in maps.items()
                          if str(parse_element_name(lab)) in exported},
-                        float(read_meta(path).beam_kv))
-    maps, kv = _DIRECT[key]
+                        float(meta.beam_kv), geometry_from_meta(meta))
+    maps, kv, geometry = _DIRECT[key]
     idx = np.atleast_1d(index)
     pairs = [(lab, np.asarray(m[idx], dtype=np.float64)) for lab, m in maps.items()]
-    return build_counts_by_element(pairs, beam_kv=kv, source="spectrum"), kv
+    # the file's geometry, as the service reads it from the header: the
+    # matrix-corrected quantification (backend/eds_spectrum/matrix.py)
+    return build_counts_by_element(pairs, beam_kv=kv, source="spectrum",
+                                   geometry=geometry), kv
 
 
 def direct_at_pct(path, index):
@@ -181,7 +185,9 @@ def test_every_route_names_the_spectrum_source(ready, client, method, url, body)
     quant = r.json().get("quantification")
     assert _is_spectrum(quant), (url, quant)
     fit = quant["fit"]
-    assert fit["lines"]["Cu"]["family"] == "L"
+    # matrix-corrected spectrum source (the file's header gives the geometry):
+    # Cu through K; _SPECTRUM_LINE_PREFERENCE (Cu L) applies only without it
+    assert fit["lines"]["Cu"]["family"] == "K"
     assert np.isfinite(fit["chi2_red"])
 
 
@@ -219,14 +225,15 @@ def test_quantify_pixel_equals_the_direct_computation(ready, client, row, col):
     idx = row * 120 + col
     direct = direct_at_pct(ready, idx)
     counts, _kv = direct_counts(ready, idx)
-    assert sorted(data) == sorted(str(el) for el in direct)
+    assert sorted(_quantified(data)) == sorted(str(el) for el in direct)
+    _carbon_left_out(data, r.json()["quantification"])
     for el in direct:
         assert data[str(el)]["at_pct"] == pytest.approx(
             float(direct[el][0]), rel=1e-9, abs=1e-12), el
         # the counts beside it are the net intensity of the family it used
         assert data[str(el)]["counts"] == pytest.approx(
             float(counts[el][0]), rel=1e-9, abs=1e-12), el
-    assert r.json()["quantification"]["lines"]["Cu"]["line"] == "L"
+    assert r.json()["quantification"]["lines"]["Cu"]["line"] == "K"
 
 
 @pytest.mark.parametrize("r0,r1,c0,c1", BOXES)
@@ -357,18 +364,34 @@ def test_phase_map_eds_layer_window_path_unchanged(ready, client, scope):
     assert body["min_val"] == float(np.nanmin(raw))
 
 
+def _quantified(data):
+    """The elements a response actually quantified (an element the
+    quantification left out keeps its counts and has no at%)."""
+    def at(v):
+        a = v.get("at_pct") if isinstance(v, dict) else None
+        return a.get("mean") if isinstance(a, dict) else a
+    return {el for el, v in data.items() if at(v) is not None}
+
+
+def _carbon_left_out(data, quant):
+    """The Oxford reference scan exports C K; the matrix-corrected composition leaves it out and
+    says so (eds_utils.MATRIX_EXCLUDED_ELEMENTS)."""
+    assert "C" in data and "C" not in _quantified(data)
+    assert any(x["element"] == "C" for x in quant["excluded_windows"]), quant
+
+
 # ---------------------------------------------------------------------------
-# a bare symbol means the line the quantification uses (Cu -> Cu L here)
+# a bare symbol means the line the quantification uses (Cu -> Cu K here)
 # ---------------------------------------------------------------------------
 def test_a_bare_symbol_resolves_to_the_quantified_line(ready, client):
     res = svc.get_result(str(ready))
     for el, chosen in res.lines.items():
         assert res.family_for(el) == f"{el} {chosen['family']}", el
-    assert res.family_for("Cu") == "Cu L"
+    assert res.family_for("Cu") == "Cu K"
 
     ext = h5_session.get_active_extractor()
     np.testing.assert_array_equal(ext.get_element_map("Cu"),
-                                  ext.get_element_map("Cu Lα1,2"))
+                                  ext.get_element_map("Cu Kα1"))
     cu_l = ext.get_element_map("Cu Lα1,2")
     cu_k = ext.get_element_map("Cu Kα1")
     assert float(cu_l.max()) != pytest.approx(float(cu_k.max()), rel=1e-3)
@@ -376,7 +399,7 @@ def test_a_bare_symbol_resolves_to_the_quantified_line(ready, client):
     # the phase-test dialog asks /map with a bare symbol
     r = client.get("/api/eds/map/Cu?mode=counts")
     assert r.status_code == 200, r.text
-    assert r.json()["max_val"] == pytest.approx(float(cu_l.max()), rel=1e-6)
+    assert r.json()["max_val"] == pytest.approx(float(cu_k.max()), rel=1e-6)
 
 
 def test_linescan_counts_samples_each_layers_own_family(ready, client):
@@ -407,8 +430,8 @@ def test_carbon_is_counts_only_and_named_not_quantified(ready, client):
 
 
 # ---------------------------------------------------------------------------
-# a detected-not-exported element: a map, never a composition (revised
-# 2026-10-25). The Oxford reference scan: Ti K at 5.2 sigma, not exported by AZtec.
+# a detected-not-exported element: a map, never a composition.
+# The Oxford reference scan: Ti K at 5.2 sigma, not exported by AZtec.
 # ---------------------------------------------------------------------------
 def test_a_detected_element_is_a_map_and_not_a_composition(ready, client):
     r = client.get("/api/eds/elements")
@@ -850,10 +873,16 @@ def test_export_provenance_names_the_spectrum_fit(ready, client, tmp_path, monke
     assert q["source_data"].startswith("spectrum fit")
     assert q["model_version"] == "eds-spectrum-fit/1"
     assert np.isfinite(q["chi2_red"])
-    assert q["lines"]["Cu"]["family"] == "L"
+    # matrix-corrected spectrum source (the file's header gives the geometry):
+    # Cu through K; _SPECTRUM_LINE_PREFERENCE (Cu L) applies only without it
+    assert q["lines"]["Cu"]["family"] == "K"
     assert q["lines"]["Fe"]["label"] == "Fe Kα1"
     assert "Aztec window integral" not in prov["caveat"]
     assert "net line intensities" in prov["caveat"]
+    # matrix-corrected: the export says so, and no longer claims "no ZAF"
+    assert "phi(rho z) matrix correction" in prov["caveat"]
+    assert "no full ZAF" not in prov["caveat"]
+    assert q["matrix_correction"]["exit_angle_deg"] == pytest.approx(81.0, abs=0.05)
     # the declared window overlaps do not apply to separated lines
     overlaps = prov["peak_overlaps"]
     assert overlaps["applies_to_this_scan"] == []
