@@ -13,19 +13,26 @@ Wraps the analysis/ module (MTEX-equivalent post-processing):
 import copy
 import functools
 import io
+import json
 import logging
+import re
 import threading
+import urllib.parse
 import uuid
-from typing import Optional, List, Dict
+from pathlib import Path
+from typing import Dict, List, Literal, Optional, Union
 
 import numpy as np
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StrictInt
 
+from analysis.ebsd_dataset import NO_BAND_CONTRAST
+from analysis.deformation_analysis import DEFAULT_DEFORMATION_PARAMS
+from analysis.rx_analysis import DEFAULT_RX_CRITERIA, RX_CRITERIA_RANGES, rx_phase_info
 from backend.api.problem import problem
-from backend.api.services.image_utils import array_to_base64_png, colormap_array_to_base64
+from backend.api.services.image_utils import array_to_base64_png, colormap_array_to_base64, colormap_stops
 from backend.api.services.scan_geometry import ScanGeometry
 
 logger = logging.getLogger(__name__)
@@ -49,6 +56,170 @@ def _serialize_mpl(fn):
 router = APIRouter()
 
 _dataset = None  # EBSDDataset instance
+
+# The scalar maps /map/{type} draws with a colormap scaled to the data's own minimum and maximum, and the unit of
+# their values. They answer ``value_range`` and ``colormap_stops``; the maps with fixed colours (IPF, RX, texture
+# components, grain boundaries) do not.
+SCALAR_MAP_UNITS = {"bc": "", "kam": "°", "gos": "°", "ecd": "µm"}
+
+# Edge-grain rule, ECD basis and phase of the grain-size statistics, as last used by a grain
+# reconstruction or a /grain-size call. The Excel export and the ECD map follow them, so the numbers on
+# the page, in the map and in the file come from the same choice. Reset to the defaults wherever _dataset
+# is replaced. ``stats_phase`` is None (all phases), a phase id or "most_measured".
+# (The parameters the grains were reconstructed with live on the dataset: ``_dataset.grain_recon_params``.)
+EdgeRule = Literal["matlab_script", "mtex", "outer_row", "keep_all"]
+EcdBasis = Literal["cell_area", "measured_pixels"]
+StatsPhase = Union[StrictInt, Literal["most_measured"]]
+# the phase the texture is computed on: "most_measured" (the phase with the most indexed pixels) or a phase id
+TexturePhase = Union[StrictInt, Literal["most_measured"]]
+# the phase the RX analysis is made on: the same choice
+RxPhase = Union[StrictInt, Literal["most_measured"]]
+DEFAULT_GRAIN_STATS = {"edge_rule": "matlab_script", "ecd_basis": "cell_area", "stats_phase": None}
+_grain_stats_settings: dict = dict(DEFAULT_GRAIN_STATS)
+
+# The texture presets the page offers, and the largest tolerance angle it accepts (degrees).
+TexturePreset = Literal["FCC_Rolling", "BCC_Rolling"]
+TEXTURE_TOLERANCE_MAX_DEG = 30.0
+TEXTURE_PRESET_NAME = "FCC_Rolling"        # the default preset
+TEXTURE_TOLERANCE_DEG = 10.0               # the default tolerance angle, degrees
+
+# What the last texture analysis (POST /texture) was run with: the phase ("most_measured" or a phase id), the preset and
+# the tolerance angle. The Excel export, the RX / substructure texture split, the "Texture Components" map and /status
+# follow it, so the numbers on the page, in the map and in the file are of the same choice. Reset with the grain
+# statistics settings, under the same lock, wherever _dataset is replaced.
+DEFAULT_TEXTURE_SETTINGS = {"phase": "most_measured", "preset": TEXTURE_PRESET_NAME, "tolerance_deg": TEXTURE_TOLERANCE_DEG}
+_texture_settings: dict = dict(DEFAULT_TEXTURE_SETTINGS)
+# One texture run at a time (the kernel density needs about 1 GB at its peak). Nothing else waits for it: the texture
+# code draws nothing with matplotlib, so it does not take ``_mpl_lock``.
+_texture_lock = threading.Lock()
+
+# The four RX criteria the Recrystallization tab sends with "Classify" (POST /rx): the GOS threshold (degrees), the
+# gBC fraction of the largest gBC, the gKAM threshold (degrees) and the minimum grain radius (um). The RX map,
+# the panel numbers, the Excel export and /status follow them, so the numbers on the page, in the map and in
+# the file come from the same choice. They are reset together with the grain statistics settings, under the same
+# lock, wherever _dataset is replaced.
+_rx_criteria: dict = dict(DEFAULT_RX_CRITERIA)
+
+# The phase of the RX analysis ("most_measured" or a phase id), remembered with the criteria it was classified with
+# (same lock, same reset): the RX map, the panel, the Excel export and the RX / texture split use it.
+DEFAULT_RX_SETTINGS = {"phase": "most_measured"}
+_rx_settings: dict = dict(DEFAULT_RX_SETTINGS)
+
+# The deformation parameters of the last POST /deformation: the KAM order, the KAM threshold (degrees) and the angle
+# from which a boundary is HAGB (degrees; SAGB runs from 3 degrees up to it). The KAM map, the RX analysis' KAM, the
+# Excel export and /status follow them. Reset with the others, under the same lock.
+_deformation_settings: dict = dict(DEFAULT_DEFORMATION_PARAMS)
+
+# The last RX result (ids of the RX grains and the panel fields), so that "Classify" (POST /rx) and the map fetch
+# that follows it (GET /map/rx) compute the KAM and the RX analysis once. It holds the dataset and the grains it
+# was made for and is used only for the same dataset object, the same grains object, the same criteria and an
+# unchanged map (band contrast present, number of indexed pixels): a reconstruction makes new grains, another
+# map is another dataset, other criteria another key. It is cleared where the map is replaced and by the
+# quality filter, which unindexes pixels. Read and written under ``_grain_state_lock``.
+_rx_cache: dict = {}
+
+
+# Held by POST /grain-size and the reconstruct task while they read or write the grains of ``_dataset``,
+# the parameters they were made with and the stored statistics settings, so a settings write from an
+# analysis of older grains cannot land after a newer reconstruction. ``GET /status`` and the start of
+# ``_collect_export_results`` take their snapshot (dataset, grains, parameters, settings) under it, so
+# they see the grains of one reconstruction with its own parameters; the export then works on that
+# snapshot for its whole run (it does not see a reconstruction that finishes meanwhile). ``/load`` and
+# ``restore_dataset_for_file`` replace ``_dataset`` and reset the settings without it, in two statements:
+# a ``/status`` between them can show the new map with the settings of the old one (microseconds; the
+# next call is right).
+_grain_state_lock = threading.Lock()
+
+
+def _reset_grain_stats_settings() -> None:
+    # one update, never an empty dict in between: a reader on another thread must always find every key
+    _grain_stats_settings.update(DEFAULT_GRAIN_STATS)
+    _texture_settings.update(DEFAULT_TEXTURE_SETTINGS)
+    _rx_criteria.update(DEFAULT_RX_CRITERIA)
+    _rx_settings.update(DEFAULT_RX_SETTINGS)
+    _deformation_settings.update(DEFAULT_DEFORMATION_PARAMS)
+    _rx_cache.clear()
+
+
+def _edge_fields(gs=None) -> dict:
+    """The fields that say what a grain-size result is made of: rule, basis, phase, the counts."""
+    if gs is None:
+        # the stored choice as it is: None, a phase id or "most_measured" (no grains, so no name to give)
+        return {"edge_rule": _grain_stats_settings["edge_rule"], "ecd_basis": _grain_stats_settings["ecd_basis"],
+                "stats_phase": _grain_stats_settings.get("stats_phase"), "stats_phase_name": None,
+                "n_grains_total": 0, "n_edge_grains": 0, "n_grains_used": 0, "edge_safeguard_applied": False}
+    return {
+        "edge_rule": gs.edge_rule, "ecd_basis": gs.ecd_basis,
+        "stats_phase": gs.stats_phase, "stats_phase_name": gs.stats_phase_name,
+        "n_grains_total": int(gs.n_grains_total), "n_edge_grains": int(gs.n_edge_grains),
+        "n_grains_used": int(gs.n_grains_used), "edge_safeguard_applied": bool(gs.edge_safeguard_applied),
+    }
+
+
+def _recon_fields(recon):
+    """The reconstruction parameters in the names of the page's controls, or None without any."""
+    if not recon:
+        return None
+    return {"threshold": recon.get("gb_threshold_deg"), "min_pixels": recon.get("min_pixels"),
+            "min_intercept": recon.get("min_intercept_um"), "alpha": recon.get("alpha"),
+            "fill": recon.get("fill")}
+
+
+def _phase_options(dataset=None) -> list:
+    """The phases of ``dataset`` (default: the loaded map) as ``[{"id", "name"}]`` (not-indexed left out),
+    for the page's phase list."""
+    from analysis.grain_analysis import phase_ids, phase_name
+    if dataset is None:
+        dataset = _dataset
+    if dataset is None:
+        return []
+    try:
+        from analysis.texture_analysis import cubic_phase_ids
+        cubic = cubic_phase_ids(dataset)      # the texture components are cubic: the Texture tab marks the others
+        return [{"id": i, "name": phase_name(dataset, i), "cubic": i in cubic} for i in phase_ids(dataset)]
+    except Exception as e:
+        # an empty list hides the page's phase dropdowns: say why in the log, with the traceback
+        logger.warning("could not list the phases of the analysis dataset (the phase lists stay empty): %s", e,
+                       exc_info=True)
+        return []
+
+
+def _check_stats_phase(stats_phase, dataset=None) -> None:
+    """400 with the known phase ids when ``stats_phase`` is a phase id ``dataset`` (default: the loaded map)
+    does not have."""
+    if dataset is None:
+        dataset = _dataset
+    if isinstance(stats_phase, int) and dataset is not None:
+        known = [o["id"] for o in _phase_options(dataset)]
+        if stats_phase not in known:
+            raise HTTPException(
+                status_code=400,
+                detail=f"stats_phase {stats_phase} is not a phase of this map; the phase ids are {known}")
+
+def _check_chosen_phase_present(dataset, choice, kind: str) -> None:
+    """400 when a chosen phase id has no indexed pixel in ``dataset`` any more (the quality filter can unindex every
+    pixel of a phase that the RX tab or the Texture tab had chosen). ``choice`` is ``"most_measured"`` (never gone)
+    or a phase id; ``kind`` is ``"RX"`` or ``"texture"``. An id the map never had is the caller's own 400 that lists
+    the ids; this one is for a phase that was there."""
+    if isinstance(choice, bool) or not isinstance(choice, int):
+        return
+    if np.any(np.asarray(dataset.xmap.phase_id) == choice):
+        return
+    from analysis.texture_analysis import _indexed_phase_ids, _phase_label
+    known = choice in _indexed_phase_ids(dataset)
+    name = _phase_label(dataset, choice) if known else str(choice)
+    raise HTTPException(
+        status_code=400,
+        detail=f"the chosen {kind} phase {name} is no longer in this map; choose a phase")
+
+
+def _check_stored_phases_present(dataset) -> None:
+    """The same check for the RX phase and the texture phase as remembered (the export uses both)."""
+    with _grain_state_lock:
+        rx_phase, texture_phase = _rx_settings["phase"], _texture_settings["phase"]
+    _check_chosen_phase_present(dataset, rx_phase, "RX")
+    _check_chosen_phase_present(dataset, texture_phase, "texture")
+
 
 # Per-file stash so analysis results survive a file round-trip (A -> B -> A).
 # Before this, every file switch ran ``_dataset = None`` and grain
@@ -82,7 +253,9 @@ def restore_dataset_for_file(file_path, variant_key=None) -> bool:
     """Make the analysis dataset previously built for ``file_path`` (as ``variant_key``) active
     again (or ``None`` if there is none). Returns True if one was restored."""
     global _dataset
-    _dataset = _dataset_by_file.get(_stash_key(file_path, variant_key))
+    with _grain_state_lock:
+        _dataset = _dataset_by_file.get(_stash_key(file_path, variant_key))
+        _reset_grain_stats_settings()
     return _dataset is not None
 
 # Cap analysis-task tracking at MAX_TRACKED_TASKS so a long backend session
@@ -95,23 +268,48 @@ _analysis_tasks: _OrderedDict = _OrderedDict()
 def _track_task(task_id: str, initial_state: dict) -> None:
     """Insert a new task while enforcing MAX_TRACKED_TASKS LRU cap."""
     _analysis_tasks[task_id] = initial_state
+    # the oldest task that is no longer running goes first: a run in flight is never forgotten (its poller
+    # and the one-run-per-map guard both look it up here), even if that leaves more than the cap
     while len(_analysis_tasks) > MAX_TRACKED_TASKS:
-        _analysis_tasks.popitem(last=False)
+        for old_id, old_state in _analysis_tasks.items():
+            if old_state.get("status") != "running":
+                del _analysis_tasks[old_id]
+                break
+        else:
+            break
 
 
-class _RXExportData:
-    """Minimal RX result container for Excel export."""
-    __slots__ = ('rx_fraction', 'high_bc_fraction', 'low_gkam_fraction',
-                 'low_kam_fraction', 'gos_histogram', 'gkam_histogram')
+# Grain reconstructions in flight: task id -> the dataset the run works on. One run per dataset: a second
+# POST /grains/reconstruct answers 409 while the recorded task is still "running" in ``_analysis_tasks``;
+# a task that finished, failed or fell out of the registry no longer counts. The run removes its own entry
+# in a ``finally``, so a crash cannot block the dataset for good. GET /status names the run on the loaded
+# map, so a remounted Grain tab can attach to its poll again.
+_reconstruct_runs: dict = {}
+_reconstruct_lock = threading.Lock()
+RECONSTRUCT_BUSY = "A grain reconstruction is already running; wait for it to finish."
 
-    def __init__(self, rx_fraction, high_bc_fraction, low_gkam_fraction,
-                 low_kam_fraction, gos_histogram, gkam_histogram):
-        self.rx_fraction = rx_fraction
-        self.high_bc_fraction = high_bc_fraction
-        self.low_gkam_fraction = low_gkam_fraction
-        self.low_kam_fraction = low_kam_fraction
-        self.gos_histogram = gos_histogram
-        self.gkam_histogram = gkam_histogram
+
+def _prune_reconstruct_runs_locked() -> None:
+    for task_id in list(_reconstruct_runs):
+        task = _analysis_tasks.get(task_id)
+        if task is None or task.get("status") != "running":
+            del _reconstruct_runs[task_id]
+
+
+def _clear_reconstruct_marker() -> None:
+    with _reconstruct_lock:
+        _reconstruct_runs.clear()
+
+
+def _running_reconstruct(dataset):
+    """``{"task_id", "status": "running", "progress"}`` of the reconstruction running on ``dataset``, or None."""
+    with _reconstruct_lock:
+        _prune_reconstruct_runs_locked()
+        for task_id, run_dataset in _reconstruct_runs.items():
+            if run_dataset is dataset:
+                task = _analysis_tasks.get(task_id) or {}
+                return {"task_id": task_id, "status": "running", "progress": float(task.get("progress", 0.0))}
+    return None
 
 
 def get_analysis_dataset():
@@ -119,229 +317,9 @@ def get_analysis_dataset():
     return _dataset
 
 
-def _load_kikuchipy_rich_h5(path: str):
-    """Build a CrystalMap from our own .h5 export schema.
-
-    Handles three export layouts produced by the GUI (see result_exporter.py
-    and indexing.py /api/indexing/export):
-
-    **Rich/Light multi-phase**  ``result_<stem>.h5`` / ``..._light.h5``:
-       - ``/Indexing/Assignment/phase_id``      (uint8, 0=not indexed, 1..N=phase)
-       - ``/Indexing/Assignment/euler_angles``  (float32, radians, Bunge)
-       - ``/Indexing/Assignment/confidence_index``
-       - ``/Indexing/Phases/<1..N>`` with attrs.name
-
-    **Rich single-phase**       ``result_<stem>.h5``:
-       - same fields, but written FLAT under ``/Indexing/`` (no Assignment
-         sub-group) because indexing.py's single-phase branch skips the
-         consensus group when there's only one phase. The writer/reader
-         used to disagree on this layout — see the Assignment-or-flat
-         fallback below.
-
-    orix.io.load doesn't recognise any of these; this walks the h5 directly
-    and returns a CrystalMap that Analysis / Phase Map can consume.
-    """
-    import h5py
-    import numpy as np
-    from orix.crystal_map import CrystalMap, PhaseList
-    from crystal_symmetry import FramePhase as Phase
-    from orix.quaternion import Rotation
-
-    with h5py.File(path, "r") as f:
-        idx = f.get("Indexing")
-        if idx is None:
-            raise ValueError("file has no /Indexing group — not a GUI export")
-        asg = idx.get("Assignment")
-        if asg is None:
-            # Single-phase rich-h5 layout: datasets sit flat under /Indexing/
-            # rather than nested in /Indexing/Assignment/. Treat /Indexing/
-            # itself as the assignment group — the dataset names are
-            # identical, just one level up. Quality fields are absent in
-            # this layout but the loop below handles that gracefully.
-            if "phase_id" not in idx or "euler_angles" not in idx:
-                raise ValueError(
-                    "/Indexing exists but neither /Indexing/Assignment nor "
-                    "flat phase_id+euler_angles datasets are present"
-                )
-            asg = idx
-
-        phase_id = np.asarray(asg["phase_id"])  # 0 = not indexed, 1..N = phase
-        euler = np.asarray(asg["euler_angles"])  # shape (rows, cols, 3) in radians
-        ci = np.asarray(asg.get("confidence_index", np.zeros_like(phase_id, dtype=np.float32)))
-        # Step size in µm — exporter (format_version >= 1.1) writes this
-        # into /Indexing.attrs. Older files don't carry it; we set 0.0
-        # here and let the caller's _fallback_step_size pick up the
-        # active EBSD signal's axes manager. Keeping 0.0 (not 1.0) lets
-        # the load_xmap detection logic distinguish "file says 1 µm"
-        # from "file doesn't say".
-        try:
-            step_size_um = float(idx.attrs.get("step_size_um", 0.0))
-        except (TypeError, ValueError):
-            step_size_um = 0.0
-        # Orientation export-frame tag (format_version >= 1.3). When present,
-        # the stored Euler is in the vendor's frame (Aztec/MTEX) and must be
-        # inverted back to our native (EMsoft/kikuchipy) frame so the working
-        # map matches freshly-indexed results and the renderer. Absent on
-        # older files, which were always written native.
-        _src_vendor = idx.attrs.get("source_vendor", None)
-        if isinstance(_src_vendor, bytes):
-            _src_vendor = _src_vendor.decode("utf-8", errors="replace")
-        # Optional per-pixel quality fields carried through from the source
-        # h5oina by export_result_h5_light. Older light files don't have
-        # them; in that case the prop key is simply absent.
-        quality_keys = ("band_contrast", "mad", "pc_x", "pc_y", "dd", "bands")
-        quality_data: dict = {
-            k: np.asarray(asg[k]) for k in quality_keys if k in asg
-        }
-
-        grid_shape = phase_id.shape
-        n_pixels = int(np.prod(grid_shape))
-
-        # Per-phase CI maps — loaded for the "CI — <phase>" and uncertainty
-        # views in Phase Map. Lives under /Indexing/PerPhase/<name>/ in the
-        # h5 schema written by result_exporter.export_result_h5_light /
-        # export_result_h5. Absent on .ang/.ctf (single-CI formats).
-        per_phase_data: dict = {}
-        per_phase_grp = idx.get("PerPhase")
-        if per_phase_grp is not None:
-            for pname in per_phase_grp:
-                sub = per_phase_grp[pname]
-                entry: dict = {}
-                if "confidence_index" in sub:
-                    entry["ci"] = np.array(sub["confidence_index"]).astype(np.float32)
-                if "euler_angles" in sub:
-                    pe = np.array(sub["euler_angles"]).astype(np.float32)
-                    if _src_vendor and str(_src_vendor) not in ("", "unknown"):
-                        from backend.api.services.orientation_frame import (
-                            from_vendor_export_frame as _from_vendor,
-                        )
-                        _shp = pe.shape
-                        pe = _from_vendor(
-                            Rotation.from_euler(pe.reshape(-1, 3).astype(np.float64)),
-                            str(_src_vendor),
-                        ).to_euler().reshape(_shp).astype(np.float32)
-                    entry["euler"] = pe
-                if entry:
-                    per_phase_data[pname] = entry
-
-        # Phase list — pick up space_group / point_group attrs so the
-        # rebuilt Phase objects carry the crystallographic symmetry. With
-        # them missing, orix treats every phase as triclinic and IPF
-        # coloring degenerates into noise, which was exactly what the
-        # batch "Open in Phase Map" handoff produced until we started
-        # writing these attrs on export.
-        phases_grp = idx.get("Phases") or idx.get("phases")
-        phase_names = []
-        phase_sgs: list = []      # int or None
-        phase_pgs: list = []      # str or None
-        phase_lattices: list = []  # [a, b, c, alpha, beta, gamma] angstrom/deg or None
-        if phases_grp is not None:
-            # Keys are "1", "2", ... — iterate in numeric order
-            for key in sorted(phases_grp.keys(), key=lambda k: int(k) if k.isdigit() else 0):
-                nm = phases_grp[key].attrs.get("name", f"phase_{key}")
-                if isinstance(nm, bytes):
-                    nm = nm.decode("utf-8", errors="replace")
-                phase_names.append(str(nm))
-                sg = phases_grp[key].attrs.get("space_group", None)
-                pg = phases_grp[key].attrs.get("point_group", None)
-                if isinstance(pg, bytes):
-                    pg = pg.decode("utf-8", errors="replace")
-                phase_sgs.append(int(sg) if sg is not None else None)
-                phase_pgs.append(str(pg) if pg else None)
-                # format >= 1.4: the lattice the exporter recorded (angstrom, deg)
-                lat = phases_grp[key].attrs.get("lattice_constants", None)
-                phase_lattices.append(
-                    [float(v) for v in np.asarray(lat).ravel()]
-                    if lat is not None and np.asarray(lat).size == 6 else None)
-        if not phase_names:
-            # Fall back: derive from max phase_id
-            n = int(phase_id.max()) if phase_id.size else 0
-            phase_names = [f"phase_{i+1}" for i in range(n)]
-            phase_sgs = [None] * n
-            phase_pgs = [None] * n
-
-    # Build flat arrays
-    phase_id_flat = phase_id.flatten().astype(int)
-    euler_flat = euler.reshape(n_pixels, 3)
-    ci_flat = ci.flatten().astype(np.float32)
-
-    # Pixel coordinates → µm coordinates so xmap.step_sizes returns the
-    # real value. Without this every downstream consumer (EBSDDataset,
-    # Phase Map, PC Refinement) reconstructs an axes manager with
-    # scale=1.0 even though the file knows the real step. When the file
-    # didn't carry a step (older exports), use 1.0 unit-coordinates and
-    # let the caller substitute from the active EBSD signal.
-    scale = step_size_um if step_size_um > 0 else 1.0
-    y_coords, x_coords = np.mgrid[0:grid_shape[0], 0:grid_shape[1]]
-    x_flat = (x_coords.flatten() * scale).astype(float)
-    y_flat = (y_coords.flatten() * scale).astype(float)
-
-    # Phase list — Phase 0 represents "not indexed"; orix handles that via id -1.
-    # Build each Phase with its persisted symmetry (space_group preferred,
-    # point_group fallback) so IPF coloring has something to reduce against.
-    built_phases = []
-    for i, nm in enumerate(phase_names):
-        sg = phase_sgs[i] if i < len(phase_sgs) else None
-        pg = phase_pgs[i] if i < len(phase_pgs) else None
-        ph = None
-        if sg is not None:
-            try: ph = Phase(name=nm, space_group=int(sg))
-            except Exception: ph = None
-        if ph is None and pg:
-            try: ph = Phase(name=nm, point_group=str(pg))
-            except Exception: ph = None
-        if ph is None:
-            ph = Phase(name=nm)
-        built_phases.append(ph)
-    phase_list = PhaseList(built_phases)
-
-    # Remap: our 0 = unindexed → orix's phase_id convention usually uses 0..N-1.
-    # Shift real phases by -1 so orix phase 0 = first real phase.
-    # Unindexed pixels get -1 which orix treats as "not indexed".
-    orix_phase_id = np.where(phase_id_flat == 0, -1, phase_id_flat - 1)
-
-    rotations = Rotation.from_euler(euler_flat, degrees=False)
-    # Invert the export-frame rotation so re-imported maps return to native.
-    if _src_vendor and str(_src_vendor) not in ("", "unknown"):
-        from backend.api.services.orientation_frame import from_vendor_export_frame
-        rotations = from_vendor_export_frame(rotations, str(_src_vendor))
-    # Map disk-key → xmap.prop key. 'band_contrast' on disk shows up as
-    # 'bc' in prop because that's the convention the analysis routes use.
-    DISK_TO_PROP = {
-        "band_contrast": "bc",
-        "mad": "mad",
-        "pc_x": "pc_x",
-        "pc_y": "pc_y",
-        "dd": "dd",
-        "bands": "bands",
-    }
-    prop_dict = {"ci": ci_flat}
-    for disk_key, prop_key in DISK_TO_PROP.items():
-        arr = quality_data.get(disk_key)
-        if arr is not None and arr.size == n_pixels:
-            prop_dict[prop_key] = arr.flatten().astype(np.float32)
-    xmap = CrystalMap(
-        rotations=rotations,
-        phase_id=orix_phase_id,
-        x=x_flat,
-        y=y_flat,
-        phase_list=phase_list,
-        prop=prop_dict,
-        scan_unit="um",
-    )
-    # Stash per-phase CI maps on the xmap so load_xmap can mirror them
-    # onto the EBSDDataset. Attribute name matches the one indexing
-    # already uses on IndexingResult.metadata['per_phase_data'].
-    try:
-        xmap._per_phase_data = per_phase_data or None
-        # Re-import restores what the file recorded about its own grid and
-        # phases, so a re-exported .ang needs nothing from a loaded source.
-        xmap._step_size_um = step_size_um if step_size_um > 0 else None
-        xmap._recorded_lattices = {
-            i: lat for i, lat in enumerate(phase_lattices) if lat is not None}
-    except Exception:
-        pass
-    return xmap
+# The reader of Orienta's own result .h5 lives with the other crystal-map readers; this name is kept
+# for the callers that import it from here (indexing.py, the tests).
+from analysis.xmap_loader import load_orienta_result_h5 as _load_kikuchipy_rich_h5  # noqa: E402,F401
 
 
 def read_index_stamp(path: str) -> Optional[ScanGeometry]:
@@ -377,7 +355,51 @@ class LoadXmapRequest(BaseModel):
 class GrainReconstructionRequest(BaseModel):
     misorientation_threshold: float = 5.0  # degrees
     min_grain_size: int = 5  # minimum pixels
-    min_intercept_um: float = 1.5  # minimum grain intercept in µm
+    # only recorded in the workbook (Sheet 1 row 11); None = not given, and the cell stays empty
+    min_intercept_um: Optional[float] = Field(None, ge=0.0)
+    alpha: float = Field(3.1, ge=0.0, le=20.0)  # Voronoi alpha-shape radius factor; 0 closes nothing
+    fill: bool = True  # build the display-only fill of closed pixels
+    edge_rule: EdgeRule = "matlab_script"   # which grains the grain-size statistics leave out
+    ecd_basis: EcdBasis = "cell_area"       # ECD from the cell area or from the measured pixels
+    stats_phase: Optional[StatsPhase] = None  # None = all phases, a phase id, or "most_measured"
+
+
+class GrainSizeRequest(BaseModel):
+    edge_rule: Optional[EdgeRule] = None    # None = the setting of the last run
+    ecd_basis: Optional[EcdBasis] = None
+    # left out = the setting of the last run; an explicit null = all phases
+    stats_phase: Optional[StatsPhase] = None
+
+
+def _rx_field(name: str):
+    low, high = RX_CRITERIA_RANGES[name]
+    return Field(None, ge=low, le=high)
+
+
+class RXCriteriaRequest(BaseModel):
+    """The RX criteria of the Recrystallization tab. A field left out (or null) keeps the stored value."""
+    rx_gos_threshold: Optional[float] = _rx_field("rx_gos_threshold")      # degrees, 0 to 20
+    rx_gbc_fraction: Optional[float] = _rx_field("rx_gbc_fraction")        # fraction of the largest gBC, 0 to 1
+    rx_gkam_threshold: Optional[float] = _rx_field("rx_gkam_threshold")    # degrees, 0 to 10
+    rx_min_radius_um: Optional[float] = _rx_field("rx_min_radius_um")      # micrometres, 0 to 100
+    # "most_measured" (the phase with the most indexed pixels) or a phase id; left out (or null) keeps the stored phase
+    # ("most_measured" until a choice was made)
+    phase: Optional[RxPhase] = None
+
+
+class DeformationRequest(BaseModel):
+    """The parameters of the Deformation tab. A field left out (or null) takes the choice of the last run (the script's
+    values until then): KAM order 2, KAM threshold 7 degrees, HAGB from 15 degrees (SAGB from 3 degrees up to it)."""
+    kam_order: Optional[int] = Field(None, ge=1, le=5, strict=True)
+    kam_threshold_deg: Optional[float] = Field(None, gt=0.0, le=30.0, strict=True)
+    hagb_min_deg: Optional[float] = Field(None, gt=3.0, le=90.0, strict=True)
+
+
+class TextureRequest(BaseModel):
+    # a field left out (or null) takes the choice of the last run ("most_measured", FCC_Rolling, 10 degrees until then)
+    phase: Optional[TexturePhase] = None
+    preset: Optional[TexturePreset] = None
+    tolerance_deg: Optional[float] = Field(None, gt=0.0, le=TEXTURE_TOLERANCE_MAX_DEG, strict=True)
 
 
 class ExportExcelRequest(BaseModel):
@@ -388,6 +410,52 @@ class ExportExcelRequest(BaseModel):
 class BatchProcessRequest(BaseModel):
     folder_path: str
     output_path: str
+    grain_edge_rule: Optional[EdgeRule] = None   # None = the batch default (matlab_script)
+    grain_ecd_basis: Optional[EcdBasis] = None   # None = the batch default (cell_area)
+    grain_stats_phase: Optional[Literal["most_measured"]] = None   # None = all phases
+    texture_phase: Optional[TexturePhase] = None   # None = the batch default (most_measured, per file)
+    texture_preset: Optional[TexturePreset] = None   # None = the batch default (FCC_Rolling)
+    texture_tolerance_deg: Optional[float] = Field(None, gt=0.0, le=TEXTURE_TOLERANCE_MAX_DEG, strict=True)   # None = 10 degrees
+    # the reconstruction of every file; None = the processor's default (4 deg, 3 px, alpha 3.1, fill)
+    misorientation_threshold: Optional[float] = Field(None, gt=0.0)
+    min_grain_size: Optional[int] = Field(None, ge=1)
+    alpha: Optional[float] = Field(None, ge=0.0, le=20.0)
+    fill: Optional[bool] = None
+    min_intercept_um: Optional[float] = Field(None, ge=0.0)   # only recorded in the workbook: 0 is a value, not an error
+    # the RX criteria of every file; None = the batch default (1.25 deg, 0.7, 0.55 deg, 0.4 um)
+    rx_gos_threshold: Optional[float] = _rx_field("rx_gos_threshold")
+    rx_gbc_fraction: Optional[float] = _rx_field("rx_gbc_fraction")
+    rx_gkam_threshold: Optional[float] = _rx_field("rx_gkam_threshold")
+    rx_min_radius_um: Optional[float] = _rx_field("rx_min_radius_um")
+    # the phase of the RX analysis of every file: "most_measured" (per file, the default) or a phase id
+    rx_phase: Optional[RxPhase] = None
+    # the deformation parameters of every file; None = the script's values (2, 7 degrees, 15 degrees)
+    kam_order: Optional[int] = Field(None, ge=1, le=5, strict=True)
+    kam_threshold_deg: Optional[float] = Field(None, gt=0.0, le=30.0, strict=True)
+    hagb_min_deg: Optional[float] = Field(None, gt=3.0, le=90.0, strict=True)
+
+
+NO_BC_LAYER_DETAIL = "This file has no band contrast; choose another layer."
+
+
+def _file_name_only(path) -> Optional[str]:
+    """The last component of a file path, whichever separator it uses; None for anything that names no file."""
+    if not isinstance(path, str):
+        return None
+    name = re.split(r"[\\/]", path.strip().rstrip("\\/"))[-1]
+    return name or None
+
+
+def _source_name(dataset) -> Optional[str]:
+    """The name (not the folder) of the file the dataset was read from: what the page offers as the default
+    dataset name of an export. None when the dataset does not come from a file."""
+    name = getattr(dataset, "source_name", None)
+    if name:
+        return name
+    src = getattr(dataset, "source", None)
+    if src in (None, "", "unknown", "indexing_result"):
+        return None
+    return _file_name_only(src)
 
 
 @router.post("/load")
@@ -409,6 +477,8 @@ async def load_xmap(req: LoadXmapRequest):
             except Exception:
                 pass
             return 1.0
+
+        load_meta: dict = {}        # what the file reader says about the file (the indexing result has none)
 
         # Special case: load from last indexing result
         if req.xmap_path == '__from_indexing__' or req.xmap_path == '__last_indexing__':
@@ -452,66 +522,55 @@ async def load_xmap(req: LoadXmapRequest):
             step_size = getattr(xmap, 'dx', None)
             if not step_size or step_size == 1.0:
                 step_size = _fallback_step_size()
-            _dataset = EBSDDataset(xmap, step_size=step_size, source="indexing_result")
+            new_dataset = EBSDDataset(xmap, step_size=step_size, source="indexing_result")
+            _meta = getattr(_last_result, "metadata", None)
+            new_dataset.source_name = _file_name_only(_meta.get("source_file")) if isinstance(_meta, dict) else None
             # Which grid the grains and the KAM will be computed on: the one the result ran on.
             # Its own copy: the dataset must not change what the result says about itself.
-            _dataset.scan_geometry = copy.deepcopy(
-                (getattr(_last_result, "metadata", None) or {}).get("scan_geometry"))
+            new_dataset.scan_geometry = copy.deepcopy(
+                (_meta if isinstance(_meta, dict) else {}).get("scan_geometry"))
+            with _grain_state_lock:           # the new map and the reset settings appear together
+                _dataset = new_dataset
+                _reset_grain_stats_settings()
         else:
-            # Load from file.
-            # Try orix first (native .ang/.ctf/.h5 with orix structure). If the
-            # file is one of our custom exports (rich result_*.h5 with
-            # /Indexing/, or light result_*_light.h5 with /SourceReference/),
-            # orix's rsciio chain fails with a cryptic "NoneType has no
-            # attribute 'file_reader'". Fall back to parsing our schema.
-            from orix.io import load as orix_load
-            from analysis.ang_hexgrid import AngGridRefused, load_ang_xmap
-            hex_grid = None     # the grid a hexagonal .ang states (analysis/ang_hexgrid.py)
+            # Load from file: one function for the page and the batch (analysis/xmap_loader.py). Aztec
+            # .h5oina is read from /1/EBSD; .ang/.ctf go through orix (a HexGrid .ang is kept as a
+            # hexagonal scan or refused by name, never read as a square map), and Orienta's own result .h5
+            # (rich result_*.h5 with /Indexing/, light result_*_light.h5 with /SourceReference/), which
+            # orix's rsciio chain cannot read, through our schema reader.
+            from analysis.ang_hexgrid import AngGridRefused
+            from analysis.xmap_loader import load_xmap_file
             try:
-                if str(req.xmap_path).lower().endswith(".ang"):
-                    # a HexGrid file is kept as a hexagonal scan or refused by name; it is never
-                    # read as a square map
-                    xmap, hex_grid = load_ang_xmap(req.xmap_path)
-                else:
-                    xmap = orix_load(req.xmap_path)
+                xmap, step_size, load_meta = load_xmap_file(req.xmap_path)
             except AngGridRefused as refused:
                 raise problem(400, refused.code, str(refused))
-            except Exception as orix_err:
-                xmap = None
-                try:
-                    xmap = _load_kikuchipy_rich_h5(req.xmap_path)
-                except Exception as our_err:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"orix.io.load failed: {orix_err}\n"
-                            f"Custom .h5 fallback failed: {our_err}"
-                        ),
-                    )
+            except ValueError as load_err:
+                raise HTTPException(status_code=400, detail=str(load_err))
+            hex_grid = load_meta.get("hex_grid")    # the grid a hexagonal .ang states
             # orix CrystalMap exposes the µm step as ``dx``/``dy``, not
             # the legacy ``step_sizes`` array used by older orix builds.
             # When the file said nothing about step (older exports), dx
             # comes back as 1.0 from the unit-pixel coordinates we built;
             # _fallback_step_size pulls the real value off the active
-            # signal in that case.
+            # signal in that case. An Aztec header states its step: that is used as it is, and so is
+            # the step a hexagonal .ang states.
             # An Orienta .h5 states its grid on /Indexing (a damaged stamp is a 400, before anything
             # is stored); a file with no stamp states none.
             file_stamp = None if hex_grid is not None else read_index_stamp(req.xmap_path)
-            if hex_grid is not None:
-                step_size = hex_grid["step_x"]
-            else:
-                step_size = getattr(xmap, 'dx', None)
-                if not step_size or step_size == 1.0:
-                    step_size = _fallback_step_size()
-            _dataset = EBSDDataset(xmap, step_size=step_size, source=req.xmap_path)
+            if not load_meta.get("step_from_file") and (not step_size or step_size == 1.0):
+                step_size = _fallback_step_size()
+            new_dataset = EBSDDataset(xmap, step_size=step_size, source=req.xmap_path)
             # A hexagonal .ang states its grid, and so does an Orienta .h5 with a stamp; any other
             # file does not state it (unknown, not square)
             if hex_grid is not None:
-                _dataset.scan_geometry = ScanGeometry.hex(
+                new_dataset.scan_geometry = ScanGeometry.hex(
                     hex_grid["n_rows"], hex_grid["n_cols"], hex_grid["step_x"], hex_grid["step_y"],
                     odd_row_shift=hex_grid["shift"], shift_confirmed=hex_grid["confirmed"]).to_dict()
             else:
-                _dataset.scan_geometry = None if file_stamp is None else file_stamp.to_dict()
+                new_dataset.scan_geometry = None if file_stamp is None else file_stamp.to_dict()
+            with _grain_state_lock:           # the new map and the reset settings appear together
+                _dataset = new_dataset
+                _reset_grain_stats_settings()
             # Forward per-phase CI maps extracted by our custom .h5 reader
             # onto the dataset so Phase Map's "CI — <phase>" and
             # "Uncertainty" modes work after a file load (orix .ang/.ctf
@@ -523,6 +582,16 @@ async def load_xmap(req: LoadXmapRequest):
 
         # Build response carefully to avoid PhaseList len() issue
         resp = {"success": True}
+        # what the reader did with the file: slices beyond the first are not read, phases without pixels and
+        # without a usable symmetry are left out, and whether the map has band contrast of its own
+        resp["n_slices"] = load_meta.get("n_slices")
+        resp["skipped_phases"] = list(load_meta.get("skipped_phases", []))
+        resp["has_native_bc"] = bool(_dataset.has_native_bc)
+        resp["source_name"] = _source_name(_dataset)
+        resp["step_size"] = float(_dataset.step_size) if _dataset.step_size is not None else None
+        logger.info("analysis load: %s format=%s n_slices=%s skipped_phases=%s has_native_bc=%s",
+                    req.xmap_path, load_meta.get("format"), resp["n_slices"], resp["skipped_phases"],
+                    resp["has_native_bc"])
         try:
             resp["shape"] = list(_dataset.shape)
         except Exception as ex:
@@ -541,6 +610,7 @@ async def load_xmap(req: LoadXmapRequest):
                 sg_str = f" ({sg.short_name})" if sg and hasattr(sg, 'short_name') else ""
                 formatted.append(f"{name}{sg_str}")
             resp["phases"] = formatted
+            resp["phase_options"] = _phase_options()
         except Exception as ex:
             resp["phases_error"] = str(ex)
             resp["n_phases"] = 0
@@ -556,13 +626,14 @@ async def load_xmap(req: LoadXmapRequest):
 @router.get("/status")
 async def analysis_status():
     """Get current analysis dataset status."""
-    if _dataset is None:
+    dataset = _dataset      # read once: everything below comes from this object, whatever is loaded meanwhile
+    if dataset is None:
         return {"loaded": False}
 
     phases = []
     try:
-        if hasattr(_dataset, 'xmap') and hasattr(_dataset.xmap, 'phases'):
-            for p in _dataset.xmap.phases:
+        if hasattr(dataset, 'xmap') and hasattr(dataset.xmap, 'phases'):
+            for p in dataset.xmap.phases:
                 # p may be a (id, Phase) tuple or a Phase object
                 if isinstance(p, tuple) and len(p) == 2:
                     phase_obj = p[1]
@@ -575,14 +646,51 @@ async def analysis_status():
     except Exception:
         pass
 
-    step_size = getattr(_dataset, 'step_size', None)
+    step_size = getattr(dataset, 'step_size', None)
 
+    # one snapshot of the grains, what they were reconstructed with and the statistics settings
+    with _grain_state_lock:
+        has_grains = getattr(dataset, "grains", None) is not None
+        recon = getattr(dataset, "grain_recon_params", None) if has_grains else None
+        settings = dict(_grain_stats_settings)
+        rx_criteria = dict(_rx_criteria)
+        rx_settings = dict(_rx_settings)
+        deformation_settings = dict(_deformation_settings)
+        texture_settings = dict(_texture_settings)
     return {
         "loaded": True,
-        "shape": list(_dataset.shape) if hasattr(_dataset, 'shape') else [],
-        "has_grains": hasattr(_dataset, 'grains') and _dataset.grains is not None,
+        "shape": list(dataset.shape) if hasattr(dataset, 'shape') else [],
+        "has_grains": has_grains,
         "phases": phases,
+        "phase_options": _phase_options(dataset),
         "step_size": float(step_size) if step_size is not None else None,
+        # whether the map has band contrast of its own (the BC layer, the GMM and the RX analysis need it)
+        "has_native_bc": bool(dataset.has_native_bc),
+        # the file the map was read from, without its folder; null when it does not come from a file
+        "source_name": _source_name(dataset),
+        # what the page's grain-size controls follow: the settings of the last reconstruction or
+        # /grain-size call (stats_phase: null = all phases, a phase id, or "most_measured")
+        "edge_rule": settings["edge_rule"],
+        "ecd_basis": settings["ecd_basis"],
+        "stats_phase": settings["stats_phase"],
+        # the phase of the last texture analysis ("most_measured" or a phase id), which the Excel export follows
+        "texture_phase": texture_settings["phase"],
+        # and the preset and tolerance angle (degrees) of that run
+        "texture_preset": texture_settings["preset"],
+        "texture_tolerance_deg": texture_settings["tolerance_deg"],
+        # the RX criteria of the last "Classify" (the defaults until then): GOS and gKAM in degrees, the gBC
+        # fraction of the largest gBC, the minimum radius in um
+        **rx_criteria,
+        # the phase of the last "Classify" ("most_measured" or a phase id)
+        "rx_phase": rx_settings["phase"],
+        # the deformation parameters of the last run (the script's values until then)
+        "deformation_params": deformation_settings,
+        # what the grains were reconstructed with; null when they were not reconstructed in this session
+        "recon_params": _recon_fields(recon),
+        # identity of the loaded map: changes when another map replaces it, not otherwise
+        "dataset_token": getattr(dataset, "dataset_token", None),
+        # the grain reconstruction running on this map ({"task_id", "status", "progress"}), else null
+        "reconstruct": _running_reconstruct(dataset),
     }
 
 
@@ -1097,7 +1205,10 @@ async def quality_stats():
         raise HTTPException(status_code=400, detail="No dataset loaded")
     out = {"bc": None, "bands": None}
     for key in ("bc", "bands"):
-        arr = _dataset.xmap.prop.get(key) if hasattr(_dataset, "xmap") else None
+        if key == "bc":
+            arr = _dataset.band_contrast_raw()
+        else:
+            arr = _dataset.xmap.prop.get(key) if hasattr(_dataset, "xmap") else None
         if arr is None:
             continue
         flat = np.asarray(arr).ravel()
@@ -1127,8 +1238,8 @@ async def apply_quality_filter(req: QualityFilterRequest):
     if not _dataset.has_native_bc:
         raise HTTPException(
             status_code=400,
-            detail=("Band Contrast quality filter requires native Band Contrast (Oxford H5OINA). "
-                    "This dataset has only computed Pattern Quality."),
+            detail=(f"Band Contrast quality filter: {NO_BAND_CONTRAST}. It needs band contrast from the "
+                    "measurement (Oxford H5OINA or .ctf); computed Pattern Quality is not a substitute."),
         )
     try:
         stats = _dataset.apply_quality_filter(
@@ -1137,48 +1248,86 @@ async def apply_quality_filter(req: QualityFilterRequest):
         )
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+    with _grain_state_lock:
+        _rx_cache.clear()           # pixels were unindexed: an RX result made before is for other pixels
     return {"success": True, "filters": req.model_dump(), **stats}
 
 
 @router.post("/grains/reconstruct")
 async def reconstruct_grains(req: GrainReconstructionRequest, background_tasks: BackgroundTasks):
-    """Reconstruct grains from indexed data."""
+    """Reconstruct grains from indexed data.
+
+    ``stats_phase`` here: omitted or null means all phases (it overwrites the stored choice). POST
+    /grain-size differs: omitted keeps the last setting, an explicit null means all phases.
+    """
     if _dataset is None:
         raise HTTPException(status_code=400, detail="No dataset loaded")
+    dataset = _dataset      # the run works on the dataset it was started for, whatever is loaded later
+    _check_stats_phase(req.stats_phase, dataset)
 
     task_id = str(uuid.uuid4())
-    _track_task(task_id, {"status": "running", "progress": 0.0})
+    with _reconstruct_lock:
+        _prune_reconstruct_runs_locked()
+        if any(run_dataset is dataset for run_dataset in _reconstruct_runs.values()):
+            raise HTTPException(status_code=409, detail=RECONSTRUCT_BUSY)
+        _track_task(task_id, {"status": "running", "progress": 0.0})
+        _reconstruct_runs[task_id] = dataset
 
     def run():
         try:
             from analysis.grain_analysis import reconstruct_grains
             grain_set = reconstruct_grains(
-                _dataset,
+                dataset,
                 angle_threshold_deg=req.misorientation_threshold,
                 min_pixels=req.min_grain_size,
+                alpha=req.alpha,
+                fill=req.fill,
             )
-            _dataset.grains = grain_set
+            with _grain_state_lock:
+                if _dataset is not dataset:
+                    raise RuntimeError("the dataset was replaced while the grains were being reconstructed; "
+                                       "the result was dropped")
+                dataset.grains = grain_set
+                _rx_cache.clear()           # the cached RX result is for the grains that were just replaced
+                dataset.grain_recon_params = {
+                    "gb_threshold_deg": req.misorientation_threshold, "min_pixels": req.min_grain_size,
+                    "alpha": req.alpha, "min_intercept_um": req.min_intercept_um, "fill": req.fill,
+                }
+                _grain_stats_settings.update(edge_rule=req.edge_rule, ecd_basis=req.ecd_basis,
+                                             stats_phase=req.stats_phase)
             n_grains = grain_set.n_grains if grain_set else 0
-            result = {"n_grains": n_grains, "grain_count": n_grains}
+            filled_mask = getattr(grain_set, "filled_mask", None) if grain_set else None
+            result = {
+                "n_grains": n_grains,
+                "grain_count": n_grains,
+                "alpha": req.alpha,
+                "fill": req.fill,
+                "n_filled": int(filled_mask.sum()) if filled_mask is not None else 0,
+                "edge_rule": req.edge_rule,
+                "ecd_basis": req.ecd_basis,
+            }
+            if n_grains == 0:
+                result.update(_edge_fields())      # no grains: the counts are truly zero
             # Enrich with grain-size stats so the UI's completion handler shows
             # real ECD / aspect-ratio (it reads mean_ecd, median_ecd, std_ecd,
             # mean_aspect_ratio) instead of "undefined". Best-effort: if it
             # fails, reconstruction still succeeds and /grain-size can be called.
             if n_grains > 0:
                 try:
-                    import numpy as _np
-                    from analysis.grain_analysis import analyze_grain_size
-                    gs = analyze_grain_size(_dataset, grain_set)
+                    from analysis.grain_analysis import analyze_grain_size, grain_size_summary
+                    gs = analyze_grain_size(dataset, grain_set, edge_rule=req.edge_rule,
+                                            ecd_basis=req.ecd_basis, stats_phase=req.stats_phase)
+                    result.update(_edge_fields(gs))
                     if hasattr(gs, "avg_ECD"):
                         result["mean_ecd"] = float(gs.avg_ECD)
                         result["std_ecd"] = float(gs.std_ECD)
                     if hasattr(gs, "avg_AR"):
                         result["mean_aspect_ratio"] = float(gs.avg_AR)
-                    epg = getattr(gs, "ecd_per_grain", None)
-                    if epg is not None and len(epg):
-                        result["median_ecd"] = float(_np.median(epg))
-                except Exception:
+                    result.update(grain_size_summary(gs))
+                except Exception as e:
+                    # no counts at all: zeros would read like a map without grains
                     logger.warning("grain-size summary after reconstruct failed", exc_info=True)
+                    result["grain_stats_error"] = str(e)
             _analysis_tasks[task_id]["result"] = result
             _analysis_tasks[task_id]["grain_count"] = n_grains
             # Set progress=1.0 BEFORE status=completed so polling clients that
@@ -1188,8 +1337,11 @@ async def reconstruct_grains(req: GrainReconstructionRequest, background_tasks: 
             _analysis_tasks[task_id]["status"] = "completed"
         except Exception as e:
             _analysis_tasks[task_id]["progress"] = 1.0
+            _analysis_tasks[task_id]["error"] = str(e)       # before the status: a poller never sees "failed" without it
             _analysis_tasks[task_id]["status"] = "failed"
-            _analysis_tasks[task_id]["error"] = str(e)
+        finally:
+            with _reconstruct_lock:
+                _reconstruct_runs.pop(task_id, None)
 
     background_tasks.add_task(run)
     return {"task_id": task_id}
@@ -1202,15 +1354,197 @@ async def get_task_status(task_id: str):
     return _analysis_tasks[task_id]
 
 
+def _per_grain_image(values, grain_ids) -> np.ndarray:
+    """Image of one value per grain: ``values[i]`` on every pixel of grain ``i + 1``, NaN elsewhere.
+
+    One lookup instead of a pass over the map per grain. A label without a value (above
+    ``len(values)``) and label 0 (no grain) are NaN: a pixel that belongs to no grain has no grain quantity, and
+    the map draws it in the colormap's "bad" colour and leaves it out of the value range.
+    """
+    values = np.asarray(values, dtype=float)
+    grain_ids = np.asarray(grain_ids)
+    lookup = np.concatenate(([np.nan], values))
+    return lookup[np.where(grain_ids <= len(values), grain_ids, 0)]
+
+
+_NO_GRAIN_GREY = (128, 128, 128)
+# The RX map has its own fixed colours, whatever colormap the page offers: red means "RX by the analysis" and
+# nothing else, and the GOS bands around it must not borrow a red from a colormap. Index = class of rx_map_classes.
+_RX_CLASS_COLOURS = {
+    0: (166, 206, 227),       # GOS below 1.5 degrees, not RX by the analysis: light blue
+    1: (254, 224, 139),       # substructured, GOS 1.5 to 7.5 degrees: yellow
+    2: (140, 86, 40),         # deformed, GOS from 7.5 degrees: brown
+    3: (215, 48, 39),         # RX by the analysis: red
+}
+
+
+# Fixed colours of the texture components (no greys: grey is "no component", black "not of the texture phase"); the
+# i-th component of the preset takes the i-th colour.
+_TEXTURE_COMPONENT_COLOURS = (
+    "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#bcbd22", "#17becf",
+    "#aec7e8", "#ffbb78", "#98df8a", "#ff9896", "#c5b0d5", "#c49c94", "#f7b6d2", "#dbdb8d", "#9edae5",
+)
+_NO_COMPONENT_COLOUR = "#808080"
+_OUTSIDE_PHASE_COLOUR = "#000000"
+
+
+def _hex_to_rgb(colour: str):
+    return tuple(int(colour[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _texture_component_map_response(dataset) -> dict:
+    """The answer of ``/map/texture_component``: each pixel of the texture phase in the colour of the component it is
+    closest to (within the tolerance), "no component" grey for the other pixels of that phase, black for pixels of
+    other phases and not-indexed pixels, plus the legend ``[{name, color}]``.
+
+    Phase, preset and tolerance are those of the last texture run (``_texture_settings``), so the map shows the pixels
+    the numbers on the Texture tab were counted on. 400 when the
+    phase cannot be used (not cubic, unknown id)."""
+    import base64
+    import io
+    from PIL import Image
+    from analysis.texture_analysis import _phase_label, calculate_texture_component_map, resolve_texture_phase
+    from analysis.texture_components import TEXTURE_PRESETS
+    with _grain_state_lock:
+        settings = dict(_texture_settings)
+    try:
+        phase_id = resolve_texture_phase(dataset, settings["phase"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _check_chosen_phase_present(dataset, settings["phase"], "texture")
+    preset = TEXTURE_PRESETS[settings["preset"]]
+    # (no _texture_lock: the angles are cached on the dataset after a texture run, and a cold call is a couple of seconds)
+    component_map, names = calculate_texture_component_map(
+        dataset, preset, settings["tolerance_deg"], texture_phase=phase_id)
+    in_phase = (np.asarray(dataset.xmap.phase_id) == phase_id).reshape(component_map.shape)
+    palette = [_TEXTURE_COMPONENT_COLOURS[i % len(_TEXTURE_COMPONENT_COLOURS)] for i in range(len(names))]
+    rgb = np.empty(component_map.shape + (3,), dtype=np.uint8)
+    rgb[:] = _hex_to_rgb(_OUTSIDE_PHASE_COLOUR)
+    rgb[in_phase] = _hex_to_rgb(_NO_COMPONENT_COLOUR)
+    for k, colour in enumerate(palette, start=1):
+        rgb[component_map == k] = _hex_to_rgb(colour)
+    buf = io.BytesIO()
+    Image.fromarray(rgb).save(buf, format="PNG")
+    return {
+        "image": base64.b64encode(buf.getvalue()).decode("utf-8"),
+        "map_type": "texture_component",
+        "shape": list(component_map.shape),
+        "min_val": 0.0,
+        "max_val": float(len(names)),
+        "legend": [{"name": n, "color": c} for n, c in zip(names, palette)],
+        "no_component_color": _NO_COMPONENT_COLOUR,
+        "outside_color": _OUTSIDE_PHASE_COLOUR,
+        "texture_phase": {"id": phase_id, "name": _phase_label(dataset, phase_id)},
+        "texture_preset": settings["preset"],                 # what the colours were counted with
+        "texture_tolerance_deg": settings["tolerance_deg"],
+    }
+
+
+def _rx_class_image_to_base64(classes):
+    """PNG of the RX map classes (``analysis.rx_analysis.rx_map_classes``) in fixed colours: red for the grains the
+    RX analysis classified as recrystallized, light blue / yellow / brown for the GOS bands of the other grains,
+    neutral grey for pixels without a grain."""
+    import base64
+    import io
+    from PIL import Image
+    classes = np.asarray(classes)
+    rgb = np.empty(classes.shape + (3,), dtype=np.uint8)
+    rgb[:] = _NO_GRAIN_GREY
+    for cls, colour in _RX_CLASS_COLOURS.items():
+        rgb[classes == cls] = colour
+    buf = io.BytesIO()
+    Image.fromarray(rgb).save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+
+def _rx_cache_key(dataset, criteria: dict, phase_id: int, deformation: dict) -> tuple:
+    return (getattr(dataset, "dataset_token", None), tuple(float(criteria[name]) for name in DEFAULT_RX_CRITERIA),
+            int(phase_id), int(deformation["kam_order"]), float(deformation["kam_threshold_deg"]),
+            bool(dataset.has_native_bc), int(dataset.indexed_mask.sum()))
+
+
+def _rx_state() -> tuple:
+    """``(criteria, rx_phase, deformation)`` as remembered right now, one snapshot under the lock."""
+    with _grain_state_lock:
+        return dict(_rx_criteria), _rx_settings["phase"], dict(_deformation_settings)
+
+
+def _rx_panel(dataset, grains, criteria: dict, strict: bool = False, rx_phase="most_measured",
+              deformation: Optional[dict] = None):
+    """The numbers of the RX tab for ``criteria`` (the names of ``DEFAULT_RX_CRITERIA``): the ids of the grains the
+    RX analysis classified as RX, and the response fields (the criteria used, the grain counts and, when the
+    analysis ran, its fractions).
+
+    The ids are None when the analysis was not run: without native band contrast (gBC would be a surrogate) there
+    is no RX fraction, no RX grain count and no red, only the GOS bands, because a GOS-only number would read
+    like the analysis'. When the analysis fails, ``strict`` raises its error; otherwise it is logged and the
+    numbers are left out as well. The result of the last call is reused for the same dataset, grains, criteria,
+    RX phase and deformation parameters (``_rx_cache``); a failure is never cached. The fields come back as a copy.
+
+    ``rx_phase``: ``"most_measured"`` or a phase id; the fields name the phase it resolves to (``rx_phase``:
+    ``{"id", "name"}``). ``ValueError`` for an id the map does not have. ``deformation``: the KAM order and threshold
+    (``kam_order``, ``kam_threshold_deg``) the RX analysis' gKAM is made with; default the script's.
+    """
+    deformation = dict(DEFAULT_DEFORMATION_PARAMS if deformation is None else deformation)
+    phase = rx_phase_info(dataset, rx_phase)
+    key = _rx_cache_key(dataset, criteria, phase["id"], deformation)
+    with _grain_state_lock:
+        hit = _rx_cache.get("entry")
+        if hit is not None and hit["dataset"] is dataset and hit["grains"] is grains and hit["key"] == key:
+            return hit["ids"], dict(hit["fields"])
+    fields = {"total_grains": int(grains.n_grains), "rx_needs_bc": not bool(dataset.has_native_bc),
+              "rx_phase": phase,
+              **{name: float(criteria[name]) for name in DEFAULT_RX_CRITERIA}}
+    rx_ids = None
+    failed = False
+    if dataset.has_native_bc:
+        try:
+            from analysis.deformation_analysis import calculate_kam
+            from analysis.rx_analysis import analyze_recrystallization
+            rx_kam = calculate_kam(dataset, order=deformation["kam_order"],
+                                   threshold_deg=deformation["kam_threshold_deg"],
+                                   grains=grains if grains.n_grains > 0 else None)
+            rx_res = analyze_recrystallization(
+                dataset, grains, rx_kam, gos_threshold_deg=criteria["rx_gos_threshold"],
+                gbc_min_fraction=criteria["rx_gbc_fraction"], gkam_threshold_deg=criteria["rx_gkam_threshold"],
+                min_grain_radius_um=criteria["rx_min_radius_um"], rx_phase=phase["id"])
+            rx_ids = rx_res.rx_grain_ids
+            fields["rx_grain_count"] = int(len(rx_res.rx_grain_ids))
+            # a number the analysis could not make (None: no pixel to divide by) is left out, like a number of an
+            # analysis that did not run, never sent as a 0
+            for name, value in (("rx_fraction", rx_res.rx_fraction), ("high_bc_fraction", rx_res.high_bc_fraction),
+                                ("low_gkam_fraction", rx_res.low_gkam_fraction),
+                                ("low_kam_fraction", rx_res.low_kam_fraction)):
+                if value is not None:
+                    fields[name] = float(value)
+        except Exception as rx_err:
+            if strict:
+                raise
+            failed = True
+            logger.warning("RX map: the RX numbers are left out and no grain is drawn RX: %s", rx_err)
+    fields["rx_drawn"] = rx_ids is not None
+    if not failed:
+        with _grain_state_lock:
+            if _dataset is not dataset:
+                return rx_ids, fields       # the map was replaced meanwhile: the cache must not keep it alive
+            _rx_cache["entry"] = {"dataset": dataset, "grains": grains, "key": key, "ids": rx_ids, "fields": dict(fields)}
+    return rx_ids, fields
+
+
 @router.get("/map/{map_type}")
 @_serialize_mpl
 def get_analysis_map(map_type: str, cmap: str = "viridis"):
     """Get an analysis map (BC, IPF, KAM, GOS, ECD, etc.)."""
-    if _dataset is None:
+    # One snapshot of the map and its grains for the whole build: a reconstruction that finishes meanwhile
+    # replaces ``dataset.grains``, and the ids of one set of grains must not be drawn on another.
+    with _grain_state_lock:
+        dataset = _dataset
+        grains = dataset.grains if dataset is not None else None
+    if dataset is None:
         raise HTTPException(status_code=400, detail="No dataset loaded")
 
     # Validate dataset has a 2D shape (not a scalar from single-pixel indexing)
-    ds_shape = _dataset.shape
+    ds_shape = dataset.shape
     if not ds_shape or len(ds_shape) < 2:
         raise HTTPException(
             status_code=400,
@@ -1226,18 +1560,31 @@ def get_analysis_map(map_type: str, cmap: str = "viridis"):
 
         if map_type == "bc":
             # Band Contrast map from xmap
-            if hasattr(_dataset.xmap, 'prop') and 'bc' in _dataset.xmap.prop:
-                data = _dataset.xmap.prop['bc'].reshape(_dataset.shape)
-            else:
-                # Fallback: use Band Contrast from xmap properties
-                data = np.zeros(_dataset.shape)
+            bc_raw = dataset.band_contrast_raw()
+            if bc_raw is None:
+                # an all-zero map would be drawn black and read as a broken image
+                raise HTTPException(status_code=400, detail=NO_BC_LAYER_DETAIL)
+            data = bc_raw.reshape(dataset.shape)
         elif map_type in ("ipf", "ipf_x", "ipf_y", "ipf_z"):
             from tools.phase_map_generator import compute_ipf_colors
             direction = map_type.split("_")[1].upper() if "_" in map_type else "Z"
-            colors = compute_ipf_colors(_dataset.xmap, direction_str=direction)
+            xm = dataset.xmap
+            g = grains
+            if g is not None and g.filled_mask is not None and g.filled_mask.any():
+                # Display copy: closed pixels take their grain's orientation and phase.
+                from orix.crystal_map import CrystalMap
+                from orix.quaternion import Rotation
+                q = np.asarray(xm.rotations.data, dtype=float).reshape(-1, 4).copy()
+                pid = np.asarray(xm.phase_id).reshape(-1).copy()
+                f = g.filled_mask.reshape(-1)
+                q[f] = g.filled_rotations.reshape(-1, 4)[f]
+                pid[f] = g.grain_phase[g.grain_ids.reshape(-1)[f] - 1]
+                xm = CrystalMap(rotations=Rotation(q), phase_id=pid, x=xm.x, y=xm.y,
+                                phase_list=xm.phases)
+            colors = compute_ipf_colors(xm, direction_str=direction)
             import io, base64
             from PIL import Image
-            n_rows, n_cols = _dataset.shape
+            n_rows, n_cols = dataset.shape
             rgb = (colors.reshape(n_rows, n_cols, 3) * 255).astype(np.uint8)
             img = Image.fromarray(rgb)
             buf = io.BytesIO()
@@ -1250,73 +1597,86 @@ def get_analysis_map(map_type: str, cmap: str = "viridis"):
             }
         elif map_type == "kam":
             from analysis.deformation_analysis import calculate_kam
-            data = calculate_kam(_dataset)
+            g = grains
+            # A GrainSet without grains (every grain culled) would mask every pixel out. The order and threshold are
+            # those of the last deformation run, so the map shows the KAM the numbers were made of.
+            with _grain_state_lock:
+                deformation = dict(_deformation_settings)
+            data = calculate_kam(dataset, order=deformation["kam_order"], threshold_deg=deformation["kam_threshold_deg"],
+                                 grains=g if g is not None and g.n_grains > 0 else None)
         elif map_type == "gos":
-            if _dataset.grains is None:
+            if grains is None:
                 raise HTTPException(status_code=400, detail="Reconstruct grains first for GOS map")
             # Map per-grain GOS values back to pixel grid
-            gos_per_grain = _dataset.grains.gos  # radians, per grain
-            grain_ids = _dataset.grains.grain_ids
-            data = np.zeros(_dataset.shape, dtype=float)
+            gos_per_grain = grains.gos  # radians, per grain
+            grain_ids = grains.grain_ids
+            data = np.zeros(dataset.shape, dtype=float)
             if gos_per_grain is not None:
-                for i, gos_val in enumerate(gos_per_grain):
-                    data[grain_ids == (i + 1)] = np.degrees(gos_val)
+                data = _per_grain_image(np.degrees(gos_per_grain), grain_ids)
         elif map_type == "ecd":
-            if _dataset.grains is None:
+            if grains is None:
                 raise HTTPException(status_code=400, detail="Reconstruct grains first for ECD map")
-            ecd_per_grain = _dataset.grains.ecd  # µm, per grain
-            grain_ids = _dataset.grains.grain_ids
-            data = np.zeros(_dataset.shape, dtype=float)
+            ecd_per_grain = grains.ecd  # µm, per grain
+            grain_ids = grains.grain_ids
+            data = np.zeros(dataset.shape, dtype=float)
+            ecd_basis = _grain_stats_settings["ecd_basis"]
             if ecd_per_grain is not None:
-                for i, ecd_val in enumerate(ecd_per_grain):
-                    data[grain_ids == (i + 1)] = ecd_val
+                from analysis.grain_analysis import grain_ecd_and_area
+                try:
+                    ecd_per_grain, _ = grain_ecd_and_area(dataset, grains, ecd_basis)
+                except ValueError as e:      # e.g. measured_pixels on grains without grain_size
+                    raise HTTPException(status_code=400, detail=str(e))
+                data = _per_grain_image(ecd_per_grain, grain_ids)
+            extra_fields["ecd_basis"] = ecd_basis     # the range line names it
         elif map_type == "rx":
-            if _dataset.grains is None:
+            if grains is None:
                 raise HTTPException(status_code=400, detail="Reconstruct grains first for RX map")
-            from analysis.rx_analysis import classify_rx
-            data = classify_rx(_dataset, _dataset.grains)
-            # Compute RX statistics from the pixel map (0=RX, 1=Sub, 2=Def)
-            try:
-                total_px = data.size
-                rx_px = int(np.sum(data == 0))
-                extra_fields["rx_fraction"] = float(rx_px / max(total_px, 1) * 100)
-                extra_fields["total_grains"] = int(_dataset.grains.n_grains)
-                # Count unique grain IDs in RX pixels
-                grain_ids = _dataset.grains.grain_ids
-                rx_grain_ids = np.unique(grain_ids[data == 0])
-                rx_grain_ids = rx_grain_ids[rx_grain_ids > 0]  # exclude background
-                extra_fields["rx_grain_count"] = int(len(rx_grain_ids))
-                # BC-based fractions from xmap properties
-                if hasattr(_dataset.xmap, 'prop') and 'bc' in _dataset.xmap.prop:
-                    bc = _dataset.xmap.prop['bc']
-                    bc_max = float(np.nanmax(bc)) if bc.size > 0 else 1.0
-                    extra_fields["high_bc_fraction"] = float(np.sum(bc > 0.7 * bc_max) / max(bc.size, 1) * 100)
-                else:
-                    extra_fields["high_bc_fraction"] = 0.0
-                extra_fields["low_gkam_fraction"] = 0.0
-                extra_fields["low_kam_fraction"] = 0.0
-            except Exception as rx_err:
-                logger.warning("Could not compute RX statistics: %s", rx_err)
+            from analysis.rx_analysis import rx_map_classes
+            # The red of the map and the numbers of the panel are the RX analysis' own (the Excel export and the
+            # batch use the same call), with the criteria of the last "Classify" (POST /rx; the defaults until
+            # then), so the map, the page and the workbook agree. A GET never changes the criteria. When the
+            # analysis cannot run, no number is sent and no grain is drawn red.
+            criteria, rx_phase, deformation = _rx_state()
+            _check_chosen_phase_present(dataset, rx_phase, "RX")
+            rx_ids, rx_fields = _rx_panel(dataset, grains, criteria, rx_phase=rx_phase, deformation=deformation)
+            extra_fields.update(rx_fields)
+            # without native band contrast rx_ids is None: only the GOS bands are drawn; the grains of the other
+            # phases are drawn neutral either way (they are not part of the analysis)
+            data = rx_map_classes(dataset, grains, rx_ids, phase_id=rx_fields["rx_phase"]["id"])   # -1 no grain, 0..2 GOS, 3 RX
         elif map_type == "texture_component":
-            data = np.zeros(_dataset.shape, dtype=float)
+            return _texture_component_map_response(dataset)
         elif map_type == "grain_boundaries":
-            if _dataset.grains is None:
+            if grains is None:
                 raise HTTPException(status_code=400, detail="Reconstruct grains first for grain boundary map")
             # Grain boundary map: 1 at boundaries, 0 elsewhere
-            grain_ids = _dataset.grains.grain_ids
-            gb = np.zeros(_dataset.shape, dtype=float)
+            grain_ids = grains.grain_ids
+            gb = np.zeros(dataset.shape, dtype=float)
             gb[:-1, :] += (grain_ids[:-1, :] != grain_ids[1:, :]).astype(float)
             gb[:, :-1] += (grain_ids[:, :-1] != grain_ids[:, 1:]).astype(float)
             data = np.clip(gb, 0, 1)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown map type: {map_type}")
 
+        if map_type == "rx":
+            # fixed colours per class (the colormap does not apply); pixels without a grain (-1) are drawn neutral
+            image = _rx_class_image_to_base64(data)
+            classified = data[data >= 0]
+            lo, hi = (float(classified.min()), float(classified.max())) if classified.size else (0.0, 0.0)
+        else:
+            image = colormap_array_to_base64(data, cmap)
+            finite = np.isfinite(data)
+            lo, hi = (float(np.min(data[finite])), float(np.max(data[finite]))) if finite.any() else (0.0, 0.0)
+            if map_type in SCALAR_MAP_UNITS and np.isfinite(lo) and np.isfinite(hi):
+                # the numbers the image was scaled with (colormap_array_to_base64 uses nanmin / nanmax of ``data``) and
+                # the colours of the colormap, so the viewer can draw a scale bar under the map
+                extra_fields["value_range"] = {"min": lo, "max": hi, "unit": SCALAR_MAP_UNITS[map_type]}
+                extra_fields["colormap_stops"] = colormap_stops(cmap)
         response = {
-            "image": colormap_array_to_base64(data, cmap),
+            "image": image,
             "map_type": map_type,
             "shape": list(data.shape),
-            "min_val": float(np.nanmin(data)),
-            "max_val": float(np.nanmax(data)),
+            "min_val": lo,
+            "max_val": hi,
         }
         response.update(extra_fields)
         return response
@@ -1334,27 +1694,102 @@ def get_analysis_map(map_type: str, cmap: str = "viridis"):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/rx")
+def classify_recrystallization(req: Optional[RXCriteriaRequest] = None):
+    """Classify the RX grains with the criteria of the Recrystallization tab and remember them.
+
+    A field left out (or null) takes the stored value. The criteria used are remembered for the RX map, the Excel
+    export and /status, and answered with the numbers of the panel (``rx_fraction``, ``rx_grain_count``,
+    ``total_grains``, ``high_bc_fraction``, ``low_gkam_fraction``, ``low_kam_fraction``, ``rx_needs_bc``,
+    ``rx_drawn``). Without native band contrast the criteria are remembered and no number is sent. 409 when the
+    map or its grains were replaced while the call was computing (nothing is stored then).
+
+    ``phase``: ``"most_measured"`` (the phase with the most indexed pixels, the default) or a phase id; only the
+    grains of that phase can be RX and its pixels are the denominator of the RX fraction (RxxAnalysis.m,
+    ``RXedGrains(ph)``). Left out it takes the stored phase. 400 for an id the map does not have (the message lists
+    the ids), 422 for any other type. The answer names the phase (``rx_phase``: ``{"id", "name"}``) and /status
+    carries the choice. The gKAM is made with the KAM order and threshold of the Deformation tab.
+    """
+    with _grain_state_lock:
+        dataset = _dataset
+        if dataset is None:
+            raise HTTPException(status_code=400, detail="No dataset loaded")
+        grains = dataset.grains
+        if grains is None:
+            raise HTTPException(status_code=400, detail="Reconstruct grains first for the RX classification")
+        criteria = dict(_rx_criteria)
+        rx_phase = _rx_settings["phase"]
+        deformation = dict(_deformation_settings)
+        if req is not None:
+            criteria.update({name: float(getattr(req, name)) for name in DEFAULT_RX_CRITERIA
+                             if getattr(req, name) is not None})
+            if req.phase is not None:
+                rx_phase = req.phase
+    try:
+        rx_phase_info(dataset, rx_phase)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _check_chosen_phase_present(dataset, rx_phase, "RX")
+    try:
+        _, fields = _rx_panel(dataset, grains, criteria, strict=True, rx_phase=rx_phase, deformation=deformation)
+    except Exception as e:
+        logger.exception("RX classification failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    with _grain_state_lock:
+        # remembered only if these are still the grains the criteria were chosen for
+        if _dataset is not dataset or dataset.grains is not grains:
+            raise HTTPException(
+                status_code=409,
+                detail="The map changed while classifying; the criteria were not stored. Press Classify again.")
+        _rx_criteria.update(criteria)
+        _rx_settings["phase"] = rx_phase
+    return {"success": True, **fields}
+
+
 @router.post("/grain-size")
 @_serialize_mpl
-def analyze_grain_size():
-    """Run grain size analysis."""
+def analyze_grain_size(req: Optional[GrainSizeRequest] = None):
+    """Run grain size analysis. A field left out takes the setting of the last run; the settings used are
+    remembered for the Excel export and the ECD map."""
     if _dataset is None:
         raise HTTPException(status_code=400, detail="No dataset loaded")
     try:
-        from analysis.grain_analysis import analyze_grain_size
-        if _dataset.grains is None:
-            raise HTTPException(status_code=400, detail="Reconstruct grains first")
-        results = analyze_grain_size(_dataset, _dataset.grains)
+        from analysis.grain_analysis import analyze_grain_size, grain_size_summary
+        with _grain_state_lock:
+            dataset, grains = _dataset, _dataset.grains
+            if grains is None:
+                raise HTTPException(status_code=400, detail="Reconstruct grains first")
+            edge_rule = (req.edge_rule if req and req.edge_rule else _grain_stats_settings["edge_rule"])
+            ecd_basis = (req.ecd_basis if req and req.ecd_basis else _grain_stats_settings["ecd_basis"])
+            # a field left out keeps the last setting; for the phase an explicit null means all phases
+            stats_phase = (req.stats_phase if req and "stats_phase" in req.model_fields_set
+                           else _grain_stats_settings["stats_phase"])
+        _check_stats_phase(stats_phase, dataset)
+        try:
+            results = analyze_grain_size(dataset, grains, edge_rule=edge_rule, ecd_basis=ecd_basis,
+                                         stats_phase=stats_phase)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        with _grain_state_lock:
+            # remembered only if these are still the grains the settings were chosen for: a reconstruction
+            # that finished meanwhile has stored its own settings
+            if _dataset is dataset and dataset.grains is grains:
+                _grain_stats_settings.update(edge_rule=edge_rule, ecd_basis=ecd_basis, stats_phase=stats_phase)
         # Serialize GrainSizeResult
-        response = {"success": True}
+        response = {"success": True, **_edge_fields(results)}
         if hasattr(results, 'avg_ECD'):
             response["mean_ecd"] = float(results.avg_ECD)
             response["std_ecd"] = float(results.std_ECD)
         if hasattr(results, 'avg_maxDimX'):
             response["mean_maxDimX"] = float(results.avg_maxDimX)
             response["mean_maxDimY"] = float(results.avg_maxDimY)
+            response["std_maxDimX"] = float(results.std_maxDimX)
+            response["std_maxDimY"] = float(results.std_maxDimY)
         if hasattr(results, 'avg_AR'):
             response["mean_aspect_ratio"] = float(results.avg_AR)
+            response["std_aspect_ratio"] = float(results.std_AR)
+        response["area_weighted_ecd"] = float(results.area_weighted_ECD)
+        response.update(grain_size_summary(results))
         # Generate histogram image if available
         if hasattr(results, 'ecd_per_grain') and results.ecd_per_grain is not None:
             import matplotlib
@@ -1386,24 +1821,39 @@ def analyze_grain_size():
 
 @router.post("/deformation")
 @_serialize_mpl
-def analyze_deformation():
-    """Run deformation analysis (KAM, GB classification)."""
-    if _dataset is None:
-        raise HTTPException(status_code=400, detail="No dataset loaded")
+def analyze_deformation(req: Optional[DeformationRequest] = None):
+    """Run deformation analysis (KAM, GB classification).
+
+    ``kam_order`` (1 to 5), ``kam_threshold_deg`` (more than 0, at most 30) and ``hagb_min_deg`` (more than 3, at most
+    90; SAGB is 3 degrees up to it, as DeformationAnalysis.m): a field left out takes the choice of the last run (2, 7
+    and 15 until then); 422 when one is out of range. The choices are remembered for the KAM map, the RX analysis'
+    gKAM, the Excel export and /status, and the answer carries them as ``deformation_params``."""
+    with _grain_state_lock:
+        dataset = _dataset
+        if dataset is None:
+            raise HTTPException(status_code=400, detail="No dataset loaded")
+        asked = req if req is not None else DeformationRequest()
+        params = {name: getattr(asked, name) if getattr(asked, name) is not None else _deformation_settings[name]
+                  for name in DEFAULT_DEFORMATION_PARAMS}
     try:
         from analysis.deformation_analysis import analyze_deformation
-        if _dataset.grains is None:
+        if dataset.grains is None:
             raise HTTPException(status_code=400, detail="Reconstruct grains first")
-        results = analyze_deformation(_dataset, _dataset.grains)
+        results = analyze_deformation(dataset, dataset.grains, kam_order=params["kam_order"],
+                                      kam_threshold=params["kam_threshold_deg"], hagb_min=params["hagb_min_deg"])
+        with _grain_state_lock:
+            # remembered only if the map is still the one the choice was made for
+            if _dataset is dataset:
+                _deformation_settings.update(params)
         # Serialize DeformationResult to JSON-compatible dict
-        response = {"success": True}
+        response = {"success": True, "deformation_params": dict(params)}
         if hasattr(results, 'kam') and results.kam is not None:
             response["kam_image"] = colormap_array_to_base64(results.kam, "hot")
             import numpy as np
             valid_kam = results.kam[~np.isnan(results.kam)] if results.kam.size > 0 else results.kam
             if valid_kam.size > 0:
                 response["mean_kam"] = float(np.nanmean(valid_kam))
-        if hasattr(results, 'total_gb_length'):
+        if getattr(results, 'total_gb_length', None) is not None:     # None: no grain, no boundary
             response["hagb_length_um"] = float(results.hagb_length)
             response["sagb_length_um"] = float(results.sagb_length)
             response["gb_classification"] = {
@@ -1434,8 +1884,8 @@ def fit_bc_gmm():
     if not _dataset.has_native_bc:
         raise HTTPException(
             status_code=400,
-            detail=("Band Contrast GMM requires native Band Contrast (Oxford H5OINA). "
-                    "This dataset has only computed Pattern Quality."),
+            detail=(f"Band Contrast GMM: {NO_BAND_CONTRAST}. It needs band contrast from the "
+                    "measurement (Oxford H5OINA or .ctf); computed Pattern Quality is not a substitute."),
         )
 
     try:
@@ -1489,21 +1939,48 @@ def fit_bc_gmm():
 
 
 @router.post("/texture")
-@_serialize_mpl
-def analyze_texture():
-    """Run texture analysis (ODF, components)."""
-    if _dataset is None:
-        raise HTTPException(status_code=400, detail="No dataset loaded")
+def analyze_texture(req: Optional[TextureRequest] = None):
+    """Run texture analysis (component fractions, kernel-density index and entropy, surface planes).
+
+    ``phase``: ``"most_measured"`` (the phase with the most indexed pixels, the default) or a phase id.
+    ``preset``: one of the presets the page offers (FCC_Rolling, BCC_Rolling). ``tolerance_deg``: more than 0 and
+    at most 30. A field left out takes the choice of the last run. 400 for a phase id the map does not have (the
+    message lists the ids) and for a phase that is not cubic (the components are cubic); 422 for any other type,
+    an unknown preset (the message lists the presets) and a tolerance out of range. The choices are remembered for
+    the Excel export, the component map and /status; the answer names the phase (``texture_phase``) and the preset
+    and tolerance used. Like the other analysis
+    routes this is a plain ``def``, so it runs in the worker pool and does not block the event loop."""
+    with _grain_state_lock:
+        dataset = _dataset
+        if dataset is None:
+            raise HTTPException(status_code=400, detail="No dataset loaded")
+        asked = req if req is not None else TextureRequest()
+        choice = {
+            "phase": asked.phase if asked.phase is not None else _texture_settings["phase"],
+            "preset": asked.preset if asked.preset is not None else _texture_settings["preset"],
+            "tolerance_deg": asked.tolerance_deg if asked.tolerance_deg is not None else _texture_settings["tolerance_deg"],
+        }
     try:
-        from analysis.texture_analysis import analyze_texture
+        from analysis.texture_analysis import analyze_texture, resolve_texture_phase
         from analysis.texture_components import TEXTURE_PRESETS
-        # Use FCC_Rolling as default preset
-        preset = TEXTURE_PRESETS.get("FCC_Rolling", {})
-        results = analyze_texture(_dataset, preset)
-        response = {"success": True}
+        try:
+            phase_id = resolve_texture_phase(dataset, choice["phase"])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        _check_chosen_phase_present(dataset, choice["phase"], "texture")
+        preset = TEXTURE_PRESETS[choice["preset"]]
+        with _texture_lock:             # one run at a time; map requests do not wait for it
+            results = analyze_texture(dataset, preset, texture_phase=phase_id, tolerance_deg=choice["tolerance_deg"],
+                                      preset_name=choice["preset"])
+        with _grain_state_lock:
+            # remembered only if the map is still the one the choice was made for
+            if _dataset is dataset:
+                _texture_settings.update(choice)
+        response = {"success": True, "texture_phase": {"id": results.phase_id, "name": results.phase_name},
+                    "texture_preset": choice["preset"], "texture_tolerance_deg": choice["tolerance_deg"]}
         if hasattr(results, 'component_fractions'):
             response["components"] = [
-                {"name": name, "fraction": float(frac)}
+                {"name": name, "fraction": None if frac is None else float(frac)}   # None: not buildable
                 for name, frac in results.component_fractions.items()
             ]
         if hasattr(results, 'texture_index') and results.texture_index is not None:
@@ -1511,10 +1988,18 @@ def analyze_texture():
         if hasattr(results, 'entropy') and results.entropy is not None:
             response["texture_entropy"] = float(results.entropy)
         if hasattr(results, 'plane_111_fraction'):
+            # the script's single-direction numbers
             response["surface_planes"] = {
-                "{111}": float(results.plane_111_fraction),
-                "{100}": float(results.plane_100_fraction),
-                "{110}": float(results.plane_110_fraction),
+                "{111}": None if results.plane_111_fraction is None else float(results.plane_111_fraction),
+                "{100}": None if results.plane_100_fraction is None else float(results.plane_100_fraction),
+                "{110}": None if results.plane_110_fraction is None else float(results.plane_110_fraction),
+            }
+        if getattr(results, "plane_111_family_fraction", None) is not None:
+            # the share of pixels with any plane of the family in the surface
+            response["surface_planes_family"] = {
+                "{111}": float(results.plane_111_family_fraction),
+                "{100}": float(results.plane_100_family_fraction),
+                "{110}": float(results.plane_110_family_fraction),
             }
         return response
     except HTTPException:
@@ -1538,116 +2023,167 @@ async def get_texture_components(preset: str = "FCC_Rolling"):
         return {"error": "Texture components module not available"}
 
 
-def _collect_export_results() -> dict:
-    """Collect all available analysis results from _dataset for Excel export."""
+_WARNING_REASON_MAX = 300      # characters of one export warning (orix and sklearn messages can be long)
+
+
+def _collect_export_results(warnings: Optional[list] = None) -> dict:
+    """Collect all available analysis results from the loaded dataset for Excel export.
+
+    The dataset, its grains, their reconstruction parameters and the statistics settings are read once under
+    ``_grain_state_lock`` and used throughout, so the file never mixes two reconstructions. A step that
+    fails is left out of the results; with ``warnings`` (a list) given it appends ``"<step>: <reason>"``,
+    so the caller can tell the user which part of the workbook is empty.
+    """
     import numpy as np
     results = {}
 
-    if _dataset is None:
-        return results
+    def warn(step, exc):
+        logger.warning("Excel export: %s failed: %s", step, exc)
+        if warnings is not None:
+            # an exception is named with its class, so an empty message still says something
+            reason = f"{type(exc).__name__}: {exc}" if isinstance(exc, BaseException) else str(exc)
+            if len(reason) > _WARNING_REASON_MAX:
+                reason = reason[:_WARNING_REASON_MAX - 3] + "..."
+            warnings.append(f"{step}: {reason}")
+
+    with _grain_state_lock:
+        dataset = _dataset
+        if dataset is None:
+            return results
+        grains = dataset.grains
+        recon = (getattr(dataset, "grain_recon_params", None) or {}) if grains is not None else {}
+        settings = dict(_grain_stats_settings)
+        rx_criteria = dict(_rx_criteria)
+        rx_phase = _rx_settings["phase"]
+        deformation_settings = dict(_deformation_settings)
+        texture_settings = dict(_texture_settings)
+    texture_phase = texture_settings["phase"]
 
     # Basic info
-    shape = _dataset.xmap.shape if hasattr(_dataset.xmap, 'shape') else (0, 0)
+    shape = dataset.xmap.shape if hasattr(dataset.xmap, 'shape') else (0, 0)
     dim_y = shape[0] if len(shape) >= 1 else 0
     dim_x = shape[1] if len(shape) >= 2 else 0
-    n_grains = _dataset.grains.n_grains if _dataset.grains else 0
+    n_grains = grains.n_grains if grains else 0
     results["basic_info"] = {
-        "step_micron": float(_dataset.step_size),
+        "step_micron": float(dataset.step_size),
         "dim_x": dim_x,
         "dim_y": dim_y,
         "n_grains": n_grains,
         "rotation_deg_1": 0, "rotation_deg_2": 0, "rotation_deg_3": 0,
-        "gb_threshold_deg": 5.0,
-        "min_pixels": 5,
-        "min_intercept_um": 1.5,
+        # what the grains were reconstructed with; empty when this session did not reconstruct them
+        "gb_threshold_deg": recon.get("gb_threshold_deg", ""),
+        "min_pixels": recon.get("min_pixels", ""),
+        "min_intercept_um": recon.get("min_intercept_um", ""),
+        "grain_alpha": recon.get("alpha", ""),
     }
 
-    if _dataset.grains is None:
+    # The BC histogram, the BC fit and the RX block are calibrated on native band contrast. Without it
+    # ``dataset.bc`` is a surrogate (pattern quality, scores or a constant), so these steps are left out and
+    # their cells stay unwritten, as the BC routes refuse such a map.
+    native_bc = dataset.has_native_bc
+
+    # BC GMM
+    if not native_bc:
+        warn("bc_gmm", NO_BAND_CONTRAST)
+    else:
+        try:
+            from analysis.bc_analysis import fit_bc_gmm as _fit_gmm, calculate_bc_histogram
+            hist_result = calculate_bc_histogram(dataset)
+            results["bc_histogram"] = hist_result
+            gmm_result = _fit_gmm(dataset)
+            if gmm_result is not None:
+                results["bc_gmm"] = gmm_result
+            else:
+                warn("bc_gmm", "too few points for the fit")
+        except Exception as e:
+            warn("bc_gmm", e)
+
+    if grains is None:
+        warn("grains", "not reconstructed in this session; the grain-based sheets are not written")
         return results
 
     # Grain size
     try:
-        from analysis.grain_analysis import analyze_grain_size
-        gs = analyze_grain_size(_dataset, _dataset.grains)
+        from analysis.grain_analysis import analyze_grain_size, grain_size_basic_info
+        gs = analyze_grain_size(dataset, grains, edge_rule=settings["edge_rule"],
+                                ecd_basis=settings["ecd_basis"],
+                                stats_phase=settings["stats_phase"])
         results["grain_size"] = gs
+        results["basic_info"].update(grain_size_basic_info(gs))
     except Exception as e:
-        logger.warning("Excel export: grain_size failed: %s", e)
+        warn("grain_size", e)
 
     # Deformation
     try:
         from analysis.deformation_analysis import analyze_deformation
-        deform = analyze_deformation(_dataset, _dataset.grains)
+        deform = analyze_deformation(dataset, grains, kam_order=deformation_settings["kam_order"],
+                                     kam_threshold=deformation_settings["kam_threshold_deg"],
+                                     hagb_min=deformation_settings["hagb_min_deg"])
         results["deformation"] = deform
     except Exception as e:
-        logger.warning("Excel export: deformation failed: %s", e)
-
-    # BC GMM
-    try:
-        from analysis.bc_analysis import fit_bc_gmm as _fit_gmm, calculate_bc_histogram
-        hist_result = calculate_bc_histogram(_dataset)
-        results["bc_histogram"] = hist_result
-        gmm_result = _fit_gmm(_dataset)
-        if gmm_result is not None:
-            results["bc_gmm"] = gmm_result
-    except Exception as e:
-        logger.warning("Excel export: bc_gmm failed: %s", e)
+        warn("deformation", e)
 
     # Texture
+    preset = {}
     try:
         from analysis.texture_analysis import analyze_texture
         from analysis.texture_components import TEXTURE_PRESETS
-        preset = TEXTURE_PRESETS.get("FCC_Rolling", {})
-        tx = analyze_texture(_dataset, preset)
+        preset = TEXTURE_PRESETS[texture_settings["preset"]]
+        with _texture_lock:
+            tx = analyze_texture(dataset, preset, texture_phase=texture_phase,
+                                 tolerance_deg=texture_settings["tolerance_deg"], preset_name=texture_settings["preset"])
         results["texture"] = tx
     except Exception as e:
-        logger.warning("Excel export: texture failed: %s", e)
+        warn("texture", e)
 
-    # RX — use pixel-level classify_rx to compute basic stats
-    try:
-        import numpy as np
-        from analysis.rx_analysis import classify_rx
+    # RX: the same analysis as the batch, so every number of the block (including the two low-KAM fractions)
+    # comes from the RX result and none is a placeholder
+    if not native_bc:
+        warn("rx", NO_BAND_CONTRAST)
+    elif grains.n_grains == 0:
+        # analyze_recrystallization would return all-zero fractions that read like measurements
+        warn("rx", "the reconstruction found no grains, so there is nothing to classify")
+    elif "deformation" not in results:
+        warn("rx", "needs the KAM of the deformation step, which failed")
+    else:
+        try:
+            from analysis.rx_analysis import analyze_recrystallization
+            results["rx"] = analyze_recrystallization(
+                dataset, grains, results["deformation"].kam,
+                gos_threshold_deg=rx_criteria["rx_gos_threshold"], gbc_min_fraction=rx_criteria["rx_gbc_fraction"],
+                gkam_threshold_deg=rx_criteria["rx_gkam_threshold"],
+                min_grain_radius_um=rx_criteria["rx_min_radius_um"], rx_phase=rx_phase)
+        except Exception as e:
+            warn("rx", e)
 
-        rx_map = classify_rx(_dataset, _dataset.grains)
-        total_px = rx_map.size
-        rx_px = int(np.sum(rx_map == 0))
-        rx_fraction = float(rx_px / max(total_px, 1) * 100)
-
-        # Compute high BC fraction
-        high_bc_fraction = 0.0
-        if hasattr(_dataset.xmap, 'prop') and 'bc' in _dataset.xmap.prop:
-            bc = _dataset.xmap.prop['bc']
-            bc_max = float(np.nanmax(bc)) if bc.size > 0 else 1.0
-            high_bc_fraction = float(np.sum(bc > 0.7 * bc_max) / max(bc.size, 1) * 100)
-
-        # Build GOS histogram from grains
-        gos_hist = (np.array([]), np.array([]))
-        gkam_hist = (np.array([]), np.array([]))
-        if hasattr(_dataset.grains, 'gos') and _dataset.grains.gos is not None:
-            gos_deg = np.degrees(_dataset.grains.gos)
-            gos_valid = gos_deg[np.isfinite(gos_deg)]
-            if len(gos_valid) > 0:
-                counts, edges = np.histogram(gos_valid, bins=20)
-                centers = (edges[:-1] + edges[1:]) / 2
-                # Area-weight: use grain sizes as weights
-                if hasattr(_dataset.grains, 'grain_size'):
-                    counts_w, _ = np.histogram(gos_valid, bins=edges,
-                                               weights=_dataset.grains.grain_size[np.isfinite(gos_deg)])
-                    gos_hist = (counts_w, centers)
-                else:
-                    gos_hist = (counts, centers)
-
-        results["rx"] = _RXExportData(
-            rx_fraction=rx_fraction,
-            high_bc_fraction=high_bc_fraction,
-            low_gkam_fraction=0.0,
-            low_kam_fraction=0.0,
-            gos_histogram=gos_hist,
-            gkam_histogram=gkam_hist,
-        )
-    except Exception as e:
-        logger.warning("Excel export: rx failed: %s", e)
+    # Texture of the RX grains and of the substructure grains: the sheet "SmallVSLargeGrain" (same components
+    # and tolerance as the texture step above)
+    if "texture" in results and "rx" in results:
+        from analysis.texture_analysis import split_phase_conflict
+        conflict = split_phase_conflict(results["rx"], results["texture"])
+        if conflict:
+            # the split counts texture-phase pixels in RX grains: with another RX phase it would be wrong, not empty
+            warn("SmallVSLargeGrain", conflict)
+            results["texture_by_rx_left_out"] = True
+        else:
+            try:
+                from analysis.texture_analysis import calculate_texture_split_by_rx
+                results["texture_by_rx"] = calculate_texture_split_by_rx(
+                    dataset, grains, results["rx"].rx_grain_ids, preset, texture_settings["tolerance_deg"],
+                    texture_phase=texture_phase)
+            except Exception as e:
+                warn("texture_by_rx", e)
 
     return results
+
+
+def _requested_name_has_content(requested) -> bool:
+    """True if a workbook with content is at the requested name ("already existed"). False: the name was taken
+    by a run that is writing right now (an empty reservation), not by a workbook."""
+    try:
+        return Path(requested).stat().st_size > 0
+    except OSError:
+        return False
 
 
 @router.post("/export/excel")
@@ -1655,32 +2191,52 @@ async def export_excel(req: ExportExcelRequest, background_tasks: BackgroundTask
     """Export analysis results to Excel."""
     if _dataset is None:
         raise HTTPException(status_code=400, detail="No dataset loaded")
+    _check_stored_phases_present(_dataset)
 
     task_id = str(uuid.uuid4())
     _track_task(task_id, {"status": "running", "progress": 0.0})
 
     def run():
+        target = None
         try:
-            from analysis.excel_exporter import export_to_excel
-            results = _collect_export_results()
-            export_to_excel(req.output_path, req.dataset_name, results)
-            _analysis_tasks[task_id]["progress"] = 1.0
-            _analysis_tasks[task_id]["status"] = "completed"
-            _analysis_tasks[task_id]["result"] = {"path": req.output_path}
+            from analysis.excel_exporter import export_to_excel, free_workbook_path, release_workbook_reservation
+            warnings: list = []
+            results = _collect_export_results(warnings)
+            # an existing workbook is never opened or overwritten: a second export goes to <name>_2.xlsx
+            target = free_workbook_path(req.output_path)
+            export_to_excel(str(target), req.dataset_name, results)
+            task = _analysis_tasks[task_id]
+            task["progress"] = 1.0
+            # path: the file that was written; requested_path: what the request asked for (the same unless it
+            # already existed); warnings: the steps that failed and are therefore empty ("<step>: <reason>")
+            # both as the OS spells them: "C:/o/a.xlsx" and "C:\o\a.xlsx" are one file, not a rename
+            requested = Path(req.output_path)
+            task["result"] = {"path": str(target), "requested_path": str(requested), "warnings": warnings}
+            release_workbook_reservation(target)             # written: the name is no longer a reservation
+            if Path(target) != requested:
+                why = "already exists" if _requested_name_has_content(requested) else "is in use by another run"
+                task["message"] = f"{requested} {why}: the export was written to {target}"
+            task["status"] = "completed"
         except Exception as e:
+            text = str(e)
+            if target is not None:
+                from analysis.excel_exporter import incomplete_workbook_note, release_workbook_reservation
+                text += incomplete_workbook_note(target)     # a half-written file must not pass as a workbook
+                release_workbook_reservation(target)         # nothing was written: the reserved name goes back
             _analysis_tasks[task_id]["progress"] = 1.0
+            _analysis_tasks[task_id]["error"] = text         # before the status: a poller never sees "failed" without it
             _analysis_tasks[task_id]["status"] = "failed"
-            _analysis_tasks[task_id]["error"] = str(e)
 
     background_tasks.add_task(run)
     return {"task_id": task_id}
 
 
 @router.get("/export/excel-download")
-async def export_excel_download(name: str = "Dataset"):
+def export_excel_download(name: str = "Dataset"):
     """Generate Excel in a temp file and return as a browser download."""
     if _dataset is None:
         raise HTTPException(status_code=400, detail="No dataset loaded")
+    _check_stored_phases_present(_dataset)
     try:
         import tempfile, os
         from analysis.excel_exporter import export_to_excel
@@ -1688,8 +2244,9 @@ async def export_excel_download(name: str = "Dataset"):
         with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
             tmp_path = tmp.name
 
+        warnings: list = []
         try:
-            results = _collect_export_results()
+            results = _collect_export_results(warnings)
             export_to_excel(tmp_path, name, results)
             with open(tmp_path, "rb") as fh:
                 data = fh.read()
@@ -1699,14 +2256,75 @@ async def export_excel_download(name: str = "Dataset"):
             except OSError:
                 pass
 
+        headers = {"Content-Disposition": 'attachment; filename="EBSD_Analysis.xlsx"'}
+        if warnings:
+            # a file answer has no JSON body: the failed steps travel in a header, as a JSON list of
+            # "<step>: <reason>" strings, percent-encoded (url-decode, then JSON-parse)
+            headers["X-Orienta-Warnings"] = urllib.parse.quote(json.dumps(warnings), safe="")
         return StreamingResponse(
             io.BytesIO(data),
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": 'attachment; filename="EBSD_Analysis.xlsx"'},
+            headers=headers,
         )
     except Exception as e:
         logger.exception("Failed to generate Excel for download")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+STEP_SIZE_NOTE_PREFIX = "step_size:"      # the batch warning for a file without a recorded step size
+
+
+def _cut(text, limit=_WARNING_REASON_MAX) -> str:
+    """``text`` cut to ``limit`` characters (the last three are "...")."""
+    text = str(text)
+    return text if len(text) <= limit else text[:limit - 3] + "..."
+
+
+def _batch_reasons(items, limit=3) -> str:
+    """``name (reason)`` for the first few files of a failed or skipped list; a reason is cut like a warning."""
+    shown = [f"{Path(item['file']).name} ({_cut(item['reason'])})" for item in items[:limit]]
+    if len(items) > limit:
+        shown.append(f"{len(items) - limit} more")
+    return "; ".join(shown)
+
+
+def _batch_left_out(warnings, limit=3) -> str:
+    """``name: step, step`` for the first few files that had analysis steps left out."""
+    by_file: dict = {}
+    for item in warnings:
+        by_file.setdefault(item["file"], []).append(item["reason"].split(":", 1)[0])
+    shown = [f"{Path(file).name}: {', '.join(steps)}" for file, steps in list(by_file.items())[:limit]]
+    if len(by_file) > limit:
+        shown.append(f"{len(by_file) - limit} more")
+    return "; ".join(shown)
+
+
+def _batch_failure_text(folder_path, outcome) -> str:
+    """The message of a batch in which no file gave a result."""
+    if outcome.n_files == 0:
+        return f"No EBSD files (.h5, .h5oina, .ang, .ctf) found in {folder_path}"
+    parts = []
+    if outcome.failed:
+        parts.append(f"{len(outcome.failed)} failed: {_batch_reasons(outcome.failed)}")
+    if outcome.skipped:
+        parts.append(f"{len(outcome.skipped)} skipped: {_batch_reasons(outcome.skipped)}")
+    return (f"None of the {outcome.n_files} files gave a result, no workbook was written. " + ". ".join(parts))
+
+
+def _batch_summary_text(outcome) -> str:
+    """The completion message of a batch: how many files went into the workbook and what happened to the rest."""
+    text = f"Processed {outcome.n_processed} of {outcome.n_files} files"
+    rest = []
+    if outcome.skipped:
+        rest.append(f"{len(outcome.skipped)} skipped ({_batch_reasons(outcome.skipped)})")
+    if outcome.failed:
+        rest.append(f"{len(outcome.failed)} failed ({_batch_reasons(outcome.failed)})")
+    # the step-size note says an assumption was made, not that a step is missing: it stays in the warnings list only
+    left_out = [item for item in outcome.warnings if not item["reason"].startswith(STEP_SIZE_NOTE_PREFIX)]
+    if left_out:
+        n_files = len({item["file"] for item in left_out})
+        rest.append(f"{n_files} file(s) with analysis steps left out ({_batch_left_out(left_out)})")
+    return text + (": " + ", ".join(rest) if rest else "") + "."
 
 
 @router.post("/batch")
@@ -1718,13 +2336,61 @@ async def batch_process(req: BatchProcessRequest, background_tasks: BackgroundTa
     def run():
         try:
             from analysis.batch_processor import batch_process_folder
-            batch_process_folder(req.folder_path, req.output_path)
-            _analysis_tasks[task_id]["progress"] = 1.0
-            _analysis_tasks[task_id]["status"] = "completed"
+            running = _analysis_tasks.get(task_id)
+
+            def on_progress(message, current, total):
+                # only the per-file calls carry a total; the step messages inside a file have -1
+                if running is not None and total > 0 and message.startswith("Processing file"):
+                    running["current_file"] = message
+                    running["progress"] = max(0.0, min(0.99, (current - 1) / total))
+
+            options = {key: value for key, value in (("grain_edge_rule", req.grain_edge_rule),
+                                                     ("grain_ecd_basis", req.grain_ecd_basis),
+                                                     ("grain_stats_phase", req.grain_stats_phase),
+                                                     ("texture_phase", req.texture_phase),
+                                                     ("texture_preset", req.texture_preset),
+                                                     ("tolerance_deg", req.texture_tolerance_deg),
+                                                     ("gb_threshold_deg", req.misorientation_threshold),
+                                                     ("min_grain_pixels", req.min_grain_size),
+                                                     ("grain_alpha", req.alpha),
+                                                     ("grain_fill", req.fill),
+                                                     ("min_intercept_um", req.min_intercept_um),
+                                                     ("rx_gos_threshold", req.rx_gos_threshold),
+                                                     ("rx_gbc_fraction", req.rx_gbc_fraction),
+                                                     ("rx_gkam_threshold", req.rx_gkam_threshold),
+                                                     ("rx_min_radius_um", req.rx_min_radius_um),
+                                                     ("rx_phase", req.rx_phase),
+                                                     ("kam_order", req.kam_order),
+                                                     ("kam_threshold_deg", req.kam_threshold_deg),
+                                                     ("hagb_min_deg", req.hagb_min_deg))
+                       if value is not None}
+            outcome = batch_process_folder(req.folder_path, req.output_path, progress_callback=on_progress, **options)
+            task = _analysis_tasks[task_id]
+            task["result"] = outcome.to_dict()
+            task["progress"] = 1.0
+            task["current_file"] = None                       # the batch is over: no file is "current" any more
+            if outcome.save_error:
+                task["error"] = outcome.save_error
+                task["status"] = "failed"
+            elif outcome.n_processed == 0:
+                # no workbook was written: say why instead of announcing a finished batch
+                task["error"] = _batch_failure_text(req.folder_path, outcome)
+                task["status"] = "failed"
+            else:
+                text = _batch_summary_text(outcome)
+                if outcome.workbook_path:
+                    renamed = Path(outcome.workbook_path) != Path(req.output_path)
+                    why = ("already existed" if _requested_name_has_content(req.output_path)
+                           else "was in use by another run")
+                    text += f" Workbook: {outcome.workbook_path}" + (
+                        f" ({Path(req.output_path).name} {why}, nothing was overwritten)." if renamed else ".")
+                task["message"] = text
+                task["status"] = "completed"
         except Exception as e:
             _analysis_tasks[task_id]["progress"] = 1.0
+            _analysis_tasks[task_id]["current_file"] = None
+            _analysis_tasks[task_id]["error"] = str(e)       # before the status: a poller never sees "failed" without it
             _analysis_tasks[task_id]["status"] = "failed"
-            _analysis_tasks[task_id]["error"] = str(e)
 
     background_tasks.add_task(run)
     return {"task_id": task_id}

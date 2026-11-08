@@ -1064,23 +1064,71 @@ export const phaseMapApi = {
 export const analysisApi = {
   load: (xmapPath) => api.post('/api/analysis/load', { xmap_path: xmapPath }),
   status: () => api.get('/api/analysis/status'),
-  reconstructGrains: (threshold = 5.0, minSize = 5, minIntercept = 1.5) =>
-    api.post('/api/analysis/grains/reconstruct', { misorientation_threshold: threshold, min_grain_size: minSize, min_intercept_um: minIntercept }),
+  // edgeRule: matlab_script | mtex | outer_row | keep_all; ecdBasis: cell_area | measured_pixels.
+  // They choose which grains the grain-size statistics leave out and how the ECD is measured.
+  // statsPhase: null = all phases, or a phase id (the statistics are made of that phase's grains).
+  // minIntercept is only recorded in the workbook: undefined (or null) is not sent, and the cell stays empty.
+  reconstructGrains: (threshold = 5.0, minSize = 5, minIntercept = undefined, alpha = 3.1, fill = true,
+    edgeRule = 'matlab_script', ecdBasis = 'cell_area', statsPhase = null) =>
+    api.post('/api/analysis/grains/reconstruct', { misorientation_threshold: threshold, min_grain_size: minSize, min_intercept_um: minIntercept ?? undefined, alpha, fill, edge_rule: edgeRule, ecd_basis: ecdBasis, stats_phase: statsPhase }),
   getTaskStatus: (taskId) => api.get(`/api/analysis/task/${taskId}`),
   getMap: (mapType, cmap = 'viridis') =>
     api.get(`/api/analysis/map/${mapType}`, { params: { cmap } }),
-  grainSize: () => api.post('/api/analysis/grain-size'),
-  deformation: () => api.post('/api/analysis/deformation'),
-  texture: () => api.post('/api/analysis/texture'),
+  // An edge rule or basis left undefined is not sent: the backend then keeps the setting of the last run.
+  // The phase is always sent: left out would keep the last one, null means all phases.
+  grainSize: (edgeRule, ecdBasis, statsPhase = null) =>
+    api.post('/api/analysis/grain-size', { edge_rule: edgeRule, ecd_basis: ecdBasis, stats_phase: statsPhase }),
+  // The RX criteria of the Recrystallization tab as numbers: { gosThreshold (deg), gbcFraction (of the largest gBC),
+  // gkamThreshold (deg), minRadius (um) }. The backend remembers them for the RX map, the Excel export and
+  // /status, and answers the numbers of the panel.
+  // phase: the phase the RX analysis works on, 'most_measured' (the phase with the most indexed pixels) or a phase id;
+  // left undefined it is not sent (the backend then takes 'most_measured').
+  rxClassify: (criteria, phase) => api.post('/api/analysis/rx', {
+    rx_gos_threshold: criteria.gosThreshold, rx_gbc_fraction: criteria.gbcFraction,
+    rx_gkam_threshold: criteria.gkamThreshold, rx_min_radius_um: criteria.minRadius,
+    ...(phase !== undefined ? { phase } : {}),
+  }),
+  // params: { kamOrder, kamThreshold (deg), hagbMin (deg) } as numbers; the backend remembers them for the KAM map, the RX
+  // analysis, the Excel export and /status. Left out, the backend keeps what it holds.
+  deformation: (params) => api.post('/api/analysis/deformation', params ? {
+    kam_order: params.kamOrder, kam_threshold_deg: params.kamThreshold, hagb_min_deg: params.hagbMin,
+  } : undefined),
+  // phase: 'most_measured' (the phase with the most indexed pixels) or a phase id; preset: a texture preset name;
+  // toleranceDeg: more than 0, at most 30. A value left undefined is not sent: the backend then keeps its last choice.
+  texture: (phase, preset, toleranceDeg) => {
+    const body = {};
+    if (phase !== undefined) body.phase = phase;
+    if (preset !== undefined) body.preset = preset;
+    if (toleranceDeg !== undefined) body.tolerance_deg = toleranceDeg;
+    return api.post('/api/analysis/texture', Object.keys(body).length ? body : undefined);
+  },
   bcGmm: () => api.post('/api/analysis/bc_gmm'),
   textureComponents: (preset = 'FCC_Rolling') =>
     api.get('/api/analysis/texture/components', { params: { preset } }),
   exportExcel: (outputPath, name = 'Dataset') =>
     api.post('/api/analysis/export/excel', { output_path: outputPath, dataset_name: name }),
+  // The workbook as a blob, so the page can read the header X-Orienta-Warnings (a window.open cannot).
   downloadExcel: (name = 'Dataset') =>
-    `${API_BASE}/api/analysis/export/excel-download?name=${encodeURIComponent(name)}`,
-  batch: (folderPath, outputPath) =>
-    api.post('/api/analysis/batch', { folder_path: folderPath, output_path: outputPath }),
+    api.get('/api/analysis/export/excel-download', { params: { name }, responseType: 'blob' }),
+  // statsPhase: null = all phases, 'most_measured' = the phase with the most measured pixels (per file).
+  // recon: { threshold, minPixels, alpha, fill } of the grain reconstruction of every file (null: the batch's own).
+  // rx: the RX criteria of every file as numbers, the same object as for rxClassify (null: the batch's own).
+  // texture: { preset, toleranceDeg } of the Texture tab (null: the batch's own FCC_Rolling / 10 degrees).
+  // deformation: { kamOrder, kamThreshold, hagbMin } of the Deformation tab (null: the batch's own 2 / 7 / 15 degrees).
+  // The RX phase and the texture phase are not sent: a phase id of the open map means nothing for the other files, so
+  // the batch takes the phase with the most indexed pixels of each file.
+  batch: (folderPath, outputPath, edgeRule, ecdBasis, statsPhase = null, recon = null, rx = null, texture = null,
+    deformation = null) =>
+    api.post('/api/analysis/batch', {
+      folder_path: folderPath, output_path: outputPath, grain_edge_rule: edgeRule, grain_ecd_basis: ecdBasis,
+      grain_stats_phase: statsPhase,
+      misorientation_threshold: recon?.threshold, min_grain_size: recon?.minPixels, alpha: recon?.alpha, fill: recon?.fill,
+      min_intercept_um: recon?.minIntercept,
+      rx_gos_threshold: rx?.gosThreshold, rx_gbc_fraction: rx?.gbcFraction,
+      rx_gkam_threshold: rx?.gkamThreshold, rx_min_radius_um: rx?.minRadius,
+      texture_preset: texture?.preset, texture_tolerance_deg: texture?.toleranceDeg,
+      kam_order: deformation?.kamOrder, kam_threshold_deg: deformation?.kamThreshold, hagb_min_deg: deformation?.hagbMin,
+    }),
   qualityStats: () => api.get('/api/analysis/quality-stats'),
   applyQualityFilter: (bcMin = 0, bandsMin = 0) =>
     api.post('/api/analysis/quality-filter', { bc_min: bcMin, bands_min: bandsMin }),

@@ -63,13 +63,13 @@ def client_with_pq_dataset():
 def test_bc_gmm_fail_loud_without_native_bc(client_with_pq_dataset):
     r = client_with_pq_dataset.post("/api/analysis/bc_gmm")
     assert r.status_code == 400
-    assert "native Band Contrast" in r.json()["detail"]
+    assert "no band contrast in this map" in r.json()["detail"]
 
 
 def test_quality_filter_fail_loud_without_native_bc(client_with_pq_dataset):
     r = client_with_pq_dataset.post("/api/analysis/quality-filter", json={})
     assert r.status_code == 400
-    assert "native Band Contrast" in r.json()["detail"]
+    assert "no band contrast in this map" in r.json()["detail"]
 
 
 # ─── Native BC bridge for indexing results ───────────────────────────────────
@@ -166,4 +166,4 @@ def test_from_indexing_no_native_bc_still_fails_loud(client_from_indexing, monke
 
     gmm = client.post("/api/analysis/bc_gmm")
     assert gmm.status_code == 400
-    assert "native Band Contrast" in gmm.json()["detail"]
+    assert "no band contrast in this map" in gmm.json()["detail"]

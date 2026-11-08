@@ -19,7 +19,7 @@ Modules:
     texture_analysis   - ODF, volume fractions, surface plane fractions
     rx_analysis        - Recrystallization classification (GOS/gBC/gKAM)
     smoothing          - Orientation smoothing (HalfQuadratic, Median)
-    excel_exporter     - Documentation.xlsx export (14 sheets)
+    excel_exporter     - Documentation.xlsx export (11 sheets)
     batch_processor    - Folder → Documentation.xlsx batch processing
 
 Reference:
@@ -68,6 +68,7 @@ from analysis.texture_analysis import (
     calculate_volume_fraction,
     calculate_texture_component_fractions,
     calculate_surface_plane_fraction,
+    calculate_surface_plane_family_fraction,
     analyze_texture,
     TextureResult,
 )
@@ -92,6 +93,7 @@ from analysis.excel_exporter import (
 )
 from analysis.batch_processor import (
     BatchProcessor,
+    BatchResult,
     batch_process_folder,
 )
 
@@ -128,6 +130,7 @@ __all__ = [
     "calculate_volume_fraction",
     "calculate_texture_component_fractions",
     "calculate_surface_plane_fraction",
+    "calculate_surface_plane_family_fraction",
     "analyze_texture",
     "TextureResult",
     "calculate_grain_average_kam",
@@ -144,5 +147,6 @@ __all__ = [
     "export_batch_to_excel",
     "excel_column",
     "BatchProcessor",
+    "BatchResult",
     "batch_process_folder",
 ]

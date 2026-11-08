@@ -16,14 +16,24 @@
  * Bottom bar: "Run Complete Analysis" button + status label, always visible.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { analysisApi, indexApi, edsApi } from '../../services/api';
-import useResultStore from '../../stores/useResultStore';
+import useResultStore, { EMPTY_BATCH_RUN, EMPTY_EXPORT_RUN } from '../../stores/useResultStore';
 import { toast } from '../../stores/useToastStore';
 import { codedProblemText } from '../../services/problemText';
 import {
-  colors, alpha,
+  grainStatsFrom, mergeGrainSize, edgeSummary, reconstructArgs, batchReconstruction, taskOutcome, pollErrorOutcome,
+  errorMessageFrom, statsPhaseLabel, warningsFromHeader, samePath, progressPercent, DEFAULT_GRAIN_STATS_SETTINGS,
+  datasetNameFromFile, batchStatsFromGrain,
+} from './grainStats';
+import GrainStatsSettings from './GrainStatsSettings';
+import { MAX_TEXTURE_TOLERANCE, textureBatchArgs, textureToleranceOf } from './textureSettings';
+import { rxCriteriaArgs, rxCriteriaLabels } from './rxCriteria';
+import { deformationArgs, deformationBody } from './deformationSettings';
+import { useReconstructionWatch } from './useReconstructionWatch';
+import {
+  colors, alpha, alpha as colorAlpha,   // GrainTab has a state called `alpha`
   Button,
   Label,
   Input,
@@ -136,16 +146,17 @@ function InfoBadge({ label, value, color = colors.cyan }) {
   );
 }
 
-function StatusMsg({ msg, isError }) {
+function StatusMsg({ msg, isError, isWarn = false }) {
   if (!msg) return null;
+  const tone = isError ? colors.red : isWarn ? colors.orange : colors.green;
   return (
     <div role={isError ? 'alert' : 'status'} style={{
       marginTop:   8,
       padding:     '5px 10px',
       borderRadius: 4,
-      background:  isError ? alpha(colors.red, 13) : alpha(colors.green, 8),
-      border:      `1px solid ${isError ? colors.red : colors.green}`,
-      color:       isError ? colors.red : colors.green,
+      background:  isError ? alpha(colors.red, 13) : isWarn ? alpha(colors.orange, 13) : alpha(colors.green, 8),
+      border:      `1px solid ${tone}`,
+      color:       tone,
       fontSize:    11,
       animation:   'fadeSlideIn 0.2s ease-out',
     }}>
@@ -211,13 +222,250 @@ const CMAP_OPTIONS = [
   { value: 'RdYlBu_r',  label: 'RdYlBu_r' },
 ];
 
-function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
+// The map types whose route raises "Reconstruct grains first" (routes/analysis.py get_map):
+// they cannot be drawn before grains exist, so they are not requested then.
+const GRAIN_SIZE_DEBOUNCE_MS = 250;
+const GRAIN_LAYERS = ['gos', 'ecd', 'rx', 'grain_boundaries'];
+
+/**
+ * Ask the backend what it holds (GET /status) and hand the answer to the store. An answer that was overtaken
+ * by a reconstruction or a load made here while it was on its way is older than what the page knows and is
+ * not applied (`applied: false`). Throws when the request fails.
+ */
+async function syncFromBackend() {
+  const { grainsVersion: versionAsked, grainSizeEpoch: epochAsked, hasGrains: hadGrains } = useResultStore.getState();
+  const res = await analysisApi.status();
+  const d = res.data;
+  if (!d || typeof d !== 'object') return null;
+  const now = useResultStore.getState();
+  if (now.grainsVersion !== versionAsked || now.grainSizeEpoch !== epochAsked) return { d, applied: false };
+  now.applyBackendStatus(d);
+  // Grains that appeared unseen (a reconstruction that finished while nobody looked, a map with grains loaded
+  // elsewhere) come without statistics: ask for them once, with the settings the page shows.
+  if (d.loaded && d.has_grains && !hadGrains) fetchStatisticsOnce();
+  return { d, applied: true };
+}
+
+// A coded refusal (a pattern source a step cannot read) in the reader's language first, as the page's own
+// handlers do; otherwise the backend's sentence, then the fallback under `fallbackKey`.
+async function refusedRequest(err, t, fallbackKey) {
+  if (err?.response?.status === 409) {
+    try { await syncFromBackend(); } catch { /* the message below says enough */ }
+  }
+  return new Error(codedError(err, t) || errorMessageFrom(err, t(fallbackKey)));
+}
+
+/**
+ * The Deformation parameters that are typed and not run yet (`deformationEdited`), sent with a deformation run: the RX
+ * analysis's KAM and the workbook follow them. Nothing pending, or no grains to work on: nothing is sent and null comes
+ * back; else the numbers that were sent. Throws a readable message when they are not valid or the backend refuses.
+ */
+async function applyPendingDeformation(t) {
+  const store = useResultStore.getState();
+  if (!store.hasGrains || !store.deformationEdited) return null;
+  const args = deformationArgs(store.deformationParams);
+  if (!args) throw new Error(t('analysis:deformation.invalidParams'));
+  try {
+    const res = await analysisApi.deformation(args);
+    useResultStore.getState().adoptDeformationUsed(res.data?.deformation_params ?? deformationBody(args));
+    useResultStore.getState().bumpGrainMaps();
+    return args;
+  } catch (err) {
+    throw await refusedRequest(err, t, 'analysis:deformation.failed');
+  }
+}
+
+/**
+ * The settings the user chose on the Deformation, Texture and Recrystallization tabs and did not send yet
+ * (`deformationEdited`, `textureEdited`, `rxCriteriaEdited`) are the current choice, so an output of the open map must
+ * use them: they are sent first, in the order the analyses depend on each other (the RX analysis's KAM uses the
+ * Deformation settings). Nothing pending: nothing is sent; the Deformation and RX settings also wait for grains to work on, the texture does not need any.
+ * Returns what was sent, `{ deformation, texture, rx }` (each null when nothing was sent): numbers for deformation and
+ * RX, `{ preset, tolerance, phase }` for texture. Throws, with a readable message, when a pending setting is not valid or
+ * the backend refuses; a 409 (the map changed meanwhile) asks the backend what it holds first.
+ */
+async function applyTypedSettings(t) {
+  const applied = { deformation: null, texture: null, rx: null };
+  // the texture needs no grains; the Deformation and RX analyses work on them
+  const hasGrains = useResultStore.getState().hasGrains;
+  const refused = refusedRequest;
+  applied.deformation = await applyPendingDeformation(t);
+  if (useResultStore.getState().textureEdited) {
+    const { texturePhase: phase, texturePreset: preset, textureTolerance: tolerance } = useResultStore.getState();
+    const toleranceDeg = textureToleranceOf(tolerance);
+    if (toleranceDeg === undefined) throw new Error(t('analysis:texture.toleranceInvalid'));
+    try {
+      await analysisApi.texture(phase, preset, toleranceDeg);
+      useResultStore.getState().markTextureApplied({ phase, preset, tolerance });
+      useResultStore.getState().bumpGrainMaps();
+      applied.texture = { preset, tolerance: toleranceDeg, phase };
+    } catch (err) {
+      throw await refused(err, t, 'analysis:texture.failed');
+    }
+  }
+  if (hasGrains && useResultStore.getState().rxCriteriaEdited) {
+    const args = rxCriteriaArgs(useResultStore.getState().rxCriteria);
+    if (!args) throw new Error(t('analysis:rx.invalidCriteria'));
+    try {
+      const res = await analysisApi.rxClassify(args, useResultStore.getState().rxPhase);
+      useResultStore.getState().adoptRxCriteriaUsed(res.data);
+      useResultStore.getState().bumpGrainMaps();
+      applied.rx = args;
+    } catch (err) {
+      throw await refused(err, t, 'analysis:rx.failed');
+    }
+  }
+  return applied;
+}
+
+async function fetchStatisticsOnce() {
+  const store = useResultStore.getState();
+  if (store.grainStats !== null || store.runAllBusy || store.reconTaskId !== null) return;
+  const epoch = store.grainSizeEpoch;
+  const { edgeRule, ecdBasis, statsPhase } = store.grainStatsSettings;
+  try {
+    const res = await analysisApi.grainSize(edgeRule, ecdBasis, statsPhase ?? null);
+    const d = res?.data;
+    const now = useResultStore.getState();
+    if (!d || d.mean_ecd === undefined || now.grainSizeEpoch !== epoch || now.grainStats !== null) return;
+    now.setGrainStats(mergeGrainSize(null, d));
+  } catch { /* the statistics stay empty; "Analyze Grain Size" asks again */ }
+}
+
+// The fixed colours of the RX map (routes/analysis.py _RX_CLASS_COLOURS): red is "recrystallized by the RX analysis"
+// and nothing else; the other colours are the GOS bands of the remaining grains.
+const RX_LEGEND_COLOURS = {
+  rx:       'rgb(215, 48, 39)',
+  lowGos:   'rgb(166, 206, 227)',
+  sub:      'rgb(254, 224, 139)',
+  deformed: 'rgb(140, 86, 40)',
+  noGrain:  'rgb(128, 128, 128)',
+};
+
+// The colour scale under a scalar map: every such map is drawn with its colormap stretched between the smallest and
+// the largest value, so the bar says which values the two ends are (`range` = { min, max, unit, stops, basis }).
+// Numbers are shown with three significant digits.
+function formatSig3(value, language) {
+  try {
+    return new Intl.NumberFormat(language, { maximumSignificantDigits: 3, useGrouping: false }).format(value);
+  } catch {
+    return String(Number(Number(value).toPrecision(3)));
+  }
+}
+
+function MapScaleBar({ range, layer }) {
+  const { t, i18n } = useTranslation('analysis');
+  if (!range) return null;
+  const min = formatSig3(range.min, i18n.language);
+  const max = formatSig3(range.max, i18n.language);
+  const unit = range.unit || '';
+  const line = (layer === 'ecd' && range.basis
+    ? t('analysis:map.rangeEcd', { basis: t(`analysis:grain.ecdBasisShort.${range.basis}`), min, max, unit })
+    : t('analysis:map.range', { min, max, unit })).trim();
+  return (
+    <div data-testid="map-scale" style={{ padding: '4px 10px 2px', flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span data-testid="map-scale-min" style={{ fontSize: 10, color: colors.textSecondary }}>{min}</span>
+        <div
+          role="img"
+          aria-label={t('analysis:map.rangeBarLabel')}
+          data-testid="map-scale-bar"
+          style={{
+            flex: 1, height: 8, borderRadius: 2, border: `1px solid ${colors.border}`,
+            background: `linear-gradient(to right, ${range.stops.join(', ')})`,
+          }}
+        />
+        <span data-testid="map-scale-max" style={{ fontSize: 10, color: colors.textSecondary }}>{`${max} ${unit}`.trim()}</span>
+      </div>
+      <div data-testid="map-scale-line" style={{ fontSize: 10, color: colors.textSecondary, textAlign: 'center', marginTop: 2 }}>
+        {line}
+      </div>
+    </div>
+  );
+}
+
+/** What the colours of the RX map mean. ``rx`` is the answer of the map route: ``rx_drawn`` (red is drawn),
+ * ``rx_needs_bc`` (the map has no native band contrast, so the analysis did not run). */
+function RxLegend({ rx }) {
+  const { t } = useTranslation('analysis');
+  const drawn = rx?.rx_drawn === true;
+  const rows = [
+    drawn && ['rx', 'legendRx'],
+    ['lowGos', drawn ? 'legendLowGos' : 'legendLowGosOnly'],
+    ['sub', 'legendSub'],
+    ['deformed', 'legendDeformed'],
+    ['noGrain', 'legendNoGrain'],
+  ].filter(Boolean);
+  return (
+    <div data-testid="rx-legend" style={{
+      padding: '6px 10px', background: colors.bgSecondary, border: `1px solid ${colors.border}`,
+      borderTop: 'none', borderRadius: '0 0 5px 5px', fontSize: 11, color: colors.textSecondary,
+    }}>
+      <div style={{ fontWeight: 700, color: colors.purple, marginBottom: 3 }}>{t('analysis:rx.legendTitle')}</div>
+      {!drawn && (
+        <div data-testid="rx-legend-no-red" style={{ color: colors.orange, fontWeight: 600, marginBottom: 3 }}>
+          {rx?.rx_needs_bc ? t('analysis:rx.legendNoRedBc') : t('analysis:rx.legendNoRedFailed')}
+        </div>
+      )}
+      <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 14, rowGap: 2 }}>
+        {rows.map(([key, text]) => (
+          <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 11, height: 11, background: RX_LEGEND_COLOURS[key], border: `1px solid ${colors.border}`, flexShrink: 0 }} />
+            {t(`analysis:rx.${text}`)}
+          </span>
+        ))}
+      </div>
+      {drawn && <div style={{ marginTop: 3 }}>{t('analysis:rx.legendBands')}</div>}
+    </div>
+  );
+}
+
+/** What the colours of the Texture Components map mean. ``info`` is the answer of the map route: ``legend``
+ * ([{ name, color }], one colour per component), the colours of "no component" and "not of the texture phase", and
+ * ``texture_phase`` ({ id, name }). */
+function TextureLegend({ info }) {
+  const { t } = useTranslation('analysis');
+  const rows = [
+    ...(info.legend || []).map((e) => [e.name, e.color, e.name]),
+    ['none', info.no_component_color, t('analysis:map.textureLegendNone')],
+    ['outside', info.outside_color, t('analysis:map.textureLegendOutside')],
+  ];
+  return (
+    <div data-testid="texture-legend" style={{
+      padding: '6px 10px', background: colors.bgSecondary, border: `1px solid ${colors.border}`,
+      borderTop: 'none', borderRadius: '0 0 5px 5px', fontSize: 11, color: colors.textSecondary,
+    }}>
+      <div style={{ fontWeight: 700, color: colors.purple, marginBottom: 3 }}>
+        {t('analysis:map.textureLegendTitle', {
+          phase: info.texture_phase?.name ?? '', preset: info.texture_preset ?? '', tolerance: info.texture_tolerance_deg ?? '',
+        })}
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', columnGap: 14, rowGap: 2 }}>
+        {rows.map(([key, color, text]) => (
+          <span key={key} data-testid={`texture-legend-${key}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ width: 11, height: 11, background: color, border: `1px solid ${colors.border}`, flexShrink: 0 }} />
+            {text}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MapViewer({ defaultLayer = 'bc', analysisLoaded, hasGrains = false, grainsVersion = 0, style }) {
   const { t } = useTranslation(['analysis', 'common']);
   const layerLabel = (v) => t(`analysis:map.layers.${v}`);
   const layerTip   = (v) => t(`analysis:map.layers.${v}Tip`);
-  const [layer, setLayer]   = useState(defaultLayer);
+  // A map without band contrast of its own cannot draw the BC layer (the backend answers 400): the tabs whose
+  // default is BC start on IPF-Z then. What the user picks stays; null = nothing picked yet.
+  const noBc = useResultStore((state) => state.hasNativeBc) === false;
+  const [picked, setPicked] = useState(null);
+  const layer = picked ?? (defaultLayer === 'bc' && noBc ? 'ipf' : defaultLayer);
   const [cmap, setCmap]     = useState('gray');
   const [image, setImage]   = useState(null);
+  const [rxInfo, setRxInfo] = useState(null);     // what the RX map says about its red (rx_drawn, rx_needs_bc)
+  const [textureInfo, setTextureInfo] = useState(null);   // the legend of the Texture Components map
+  const [range, setRange]   = useState(null);     // the values the scalar map's colours stand for (value_range, colormap_stops)
   const [loading, setLoading] = useState(false);
   const [info, setInfo]     = useState(t('analysis:map.noMapLoaded'));
 
@@ -226,37 +474,67 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
   // anyway suggests an effect that does not exist — every reviewer of the
   // user report called that out first.
   const isOrientationLayer = layer.startsWith('ipf');
+  // the RX map has fixed colours as well: red is "RX by the analysis", a colormap would paint over it
+  const hasFixedColours = isOrientationLayer || layer === 'rx' || layer === 'texture_component';
   const [error, setError] = useState(false);
+  const needsGrains = GRAIN_LAYERS.includes(layer) && !hasGrains;
+  const requestId = useRef(0);   // a slow answer for an older request must not overwrite a newer one
 
   const handleRefresh = useCallback(async () => {
     if (!analysisLoaded) return;
+    const mine = ++requestId.current;
+    if (needsGrains) {
+      // Neutral hint, no request: the backend would answer 400 and the red line would stay.
+      setImage(null);
+      setRxInfo(null);
+      setRange(null);
+      setTextureInfo(null);
+      setError(false);
+      setLoading(false);
+      setInfo(t('analysis:map.needsGrainsHint'));
+      return;
+    }
     setLoading(true);
+    // the "needs grains" hint must not stay on the line while the map is on its way
+    setInfo((prev) => (prev === t('analysis:map.needsGrainsHint') ? t('analysis:map.loading') : prev));
     try {
       const res = await analysisApi.getMap(layer, cmap);
+      if (mine !== requestId.current) return;
       const img = res.data?.image || null;
       setImage(img);
+      setRxInfo(layer === 'rx' && img ? res.data : null);
+      setTextureInfo(layer === 'texture_component' && img ? res.data : null);
+      const vr = res.data?.value_range;
+      setRange(img && vr && Array.isArray(res.data?.colormap_stops) && res.data.colormap_stops.length > 1
+        ? { ...vr, stops: res.data.colormap_stops, basis: res.data.ecd_basis ?? null }
+        : null);
       setError(!img);
       setInfo(img
-        ? (layer.startsWith('ipf') ? layerLabel(layer) : `${layerLabel(layer)} | ${cmap}`)
+        ? (hasFixedColours ? layerLabel(layer) : `${layerLabel(layer)} | ${cmap}`)
         : t('analysis:map.noDataReturned'));
     } catch (err) {
+      if (mine !== requestId.current) return;
       // The backend says exactly what is missing ("Reconstruct grains first
       // for grain boundary map"). Show it, and show it as a failure.
       setImage(null);
+      setRxInfo(null);
+      setRange(null);
+      setTextureInfo(null);
       setError(true);
-      setInfo(codedError(err, t) || err.response?.data?.detail || t('analysis:map.failedToLoad'));
+      setInfo(codedError(err, t) || errorMessageFrom(err, t('analysis:map.failedToLoad')));
     } finally {
-      setLoading(false);
+      if (mine === requestId.current) setLoading(false);
     }
-  }, [analysisLoaded, layer, cmap]);
+  }, [analysisLoaded, layer, cmap, needsGrains, hasFixedColours, t]);
 
   // Changing the layer used to do nothing until "Refresh" was pressed — the
   // reported "grain boundaries draws nothing, it just does nothing at all".
-  // Picking a layer IS the request to see it.
+  // Picking a layer IS the request to see it. A finished reconstruction (grainsVersion)
+  // replaces the grains under every layer, so every layer is fetched again.
   useEffect(() => {
     if (!analysisLoaded) return;
     handleRefresh();
-  }, [layer, cmap, analysisLoaded, handleRefresh]);
+  }, [layer, cmap, analysisLoaded, handleRefresh, grainsVersion]);
 
   return (
     <div style={{
@@ -283,7 +561,8 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
           <span style={{ fontSize: 10, color: colors.textSecondary }}>{t('analysis:map.layerLabel')}</span>
           <select
             value={layer}
-            onChange={(e) => setLayer(e.target.value)}
+            onChange={(e) => setPicked(e.target.value)}
+            aria-label={t('analysis:map.layerLabel')}
             title={layerTip(layer)}
             style={{
               background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 3,
@@ -291,28 +570,32 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
             }}
           >
             {MAP_LAYER_OPTIONS.map(o => (
-              <option key={o.value} value={o.value} title={layerTip(o.value)}>{layerLabel(o.value)}</option>
+              <option key={o.value} value={o.value} title={layerTip(o.value)}>
+                {o.value === 'bc' && noBc ? t('analysis:map.layers.bcMissing') : layerLabel(o.value)}
+              </option>
             ))}
           </select>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <span style={{
             fontSize: 10,
-            color: isOrientationLayer ? colors.textSecondary : colors.textSecondary,
-            opacity: isOrientationLayer ? 0.5 : 1,
+            color: colors.textSecondary,
+            opacity: hasFixedColours ? 0.5 : 1,
           }}>{t('analysis:map.colormapLabel')}</span>
           <select
             value={cmap}
-            disabled={isOrientationLayer}
+            disabled={hasFixedColours}
             onChange={(e) => setCmap(e.target.value)}
+            aria-label={t('analysis:map.colormapLabel')}
             title={isOrientationLayer
               ? t('analysis:map.colormapIpfTooltip')
-              : t('analysis:map.colormapTooltip')}
+              : layer === 'rx' ? t('analysis:map.colormapRxTooltip')
+                : layer === 'texture_component' ? t('analysis:map.colormapTextureTooltip') : t('analysis:map.colormapTooltip')}
             style={{
               background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 3,
               color: colors.text, fontSize: 11, padding: '2px 4px',
-              cursor: isOrientationLayer ? 'not-allowed' : 'pointer',
-              opacity: isOrientationLayer ? 0.5 : 1,
+              cursor: hasFixedColours ? 'not-allowed' : 'pointer',
+              opacity: hasFixedColours ? 0.5 : 1,
             }}
           >
             {CMAP_OPTIONS.map(o => (
@@ -364,10 +647,15 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
           />
         ) : (
           <span style={{ fontSize: 12, color: colors.textSecondary }}>
-            {analysisLoaded ? t('analysis:map.selectLayerHint') : t('analysis:map.loadDatasetFirst')}
+            {!analysisLoaded
+              ? t('analysis:map.loadDatasetFirst')
+              : needsGrains ? t('analysis:map.needsGrainsHint') : t('analysis:map.selectLayerHint')}
           </span>
         )}
       </div>
+      {range && image && <MapScaleBar range={range} layer={layer} />}
+      {layer === 'rx' && rxInfo && <RxLegend rx={rxInfo} />}
+      {layer === 'texture_component' && textureInfo && <TextureLegend info={textureInfo} />}
     </div>
   );
 }
@@ -375,7 +663,7 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
 // ---------------------------------------------------------------------------
 // Per-tab layout: left = scrollable controls (300 px), right = map viewer
 // ---------------------------------------------------------------------------
-function TabLayout({ controls, defaultLayer = 'bc', analysisLoaded }) {
+function TabLayout({ controls, defaultLayer = 'bc', analysisLoaded, hasGrains = false, grainsVersion = 0 }) {
   return (
     <div style={{ display: 'flex', gap: 14, height: '100%', overflow: 'hidden' }}>
       {/* Left controls panel */}
@@ -389,7 +677,12 @@ function TabLayout({ controls, defaultLayer = 'bc', analysisLoaded }) {
         {controls}
       </div>
       {/* Right map viewer */}
-      <MapViewer defaultLayer={defaultLayer} analysisLoaded={analysisLoaded} />
+      <MapViewer
+        defaultLayer={defaultLayer}
+        analysisLoaded={analysisLoaded}
+        hasGrains={hasGrains}
+        grainsVersion={grainsVersion}
+      />
     </div>
   );
 }
@@ -453,7 +746,7 @@ function EDSElementTable({ elements }) {
 // TAB 1: Data & Preprocessing
 // Mirrors _create_data_tab() in analysis_gui.py
 // ---------------------------------------------------------------------------
-function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
+function DataTab({ status, onLoad, onComplete, analysisLoaded, hasGrains, grainsVersion }) {
   const { t } = useTranslation(['analysis', 'common']);
   const [xmapPath,         setXmapPath]         = useState('');
   const [loading,          setLoading]           = useState(false);
@@ -529,7 +822,7 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
       setIsError(false);
       onComplete('data');
     } catch (err) {
-      setMsg(codedError(err, t) || err.response?.data?.detail || err.message || t('analysis:data.loadFailed'));
+      setMsg(codedError(err, t) || errorMessageFrom(err, t('analysis:data.loadFailed')));
       setIsError(true);
     } finally {
       setLoading(false);
@@ -575,7 +868,7 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
       setAzCmpImage(r.data?.image || null);
       setAzCmpStats(r.data || null);
     } catch (err) {
-      setAzCmpError(err.response?.data?.detail || err.message || t('analysis:data.comparisonFailed'));
+      setAzCmpError(errorMessageFrom(err, t('analysis:data.comparisonFailed')));
     } finally {
       setAzCmpLoading(false);
     }
@@ -590,6 +883,10 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
       const r = await analysisApi.applyQualityFilter(bc, bands);
       const d = r.data || {};
       const pct = (d.filtered_fraction || 0) * 100;
+      // grains made before are still the old ones (the backend leaves them): say so, and draw the maps again (the indexed
+      // pixels changed)
+      const grainsOld = useResultStore.getState().hasGrains;
+      useResultStore.getState().bumpGrainMaps();
       setQfMsg(t('analysis:data.qualityFilterResult', {
         total: d.filtered_total,
         pct: pct.toFixed(2),
@@ -597,10 +894,10 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
         byBands: d.filtered_by_bands,
         after: d.indexed_after,
         before: d.indexed_before,
-      }));
+      }) + (grainsOld ? ` ${t('analysis:data.qualityFilterGrainsNote')}` : ''));
       setQfMsgError(false);
     } catch (err) {
-      setQfMsg(codedError(err, t) || err.response?.data?.detail || err.message || t('analysis:data.qualityFilterFailed'));
+      setQfMsg(codedError(err, t) || errorMessageFrom(err, t('analysis:data.qualityFilterFailed')));
       setQfMsgError(true);
     } finally {
       setQfApplying(false);
@@ -630,12 +927,12 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
       setSuggestedPhases(phases);
       setSuggestMsg(t('analysis:data.phasesSuggested', { count: phases.length }));
     } catch (err) {
-      setSuggestMsg(err.response?.data?.detail || t('analysis:data.suggestionFailed'));
+      setSuggestMsg(errorMessageFrom(err, t('analysis:data.suggestionFailed')));
     }
   };
 
   return (
-    <TabLayout defaultLayer="bc" analysisLoaded={analysisLoaded} controls={
+    <TabLayout defaultLayer="bc" analysisLoaded={analysisLoaded} hasGrains={hasGrains} grainsVersion={grainsVersion} controls={
       <>
         {/* Session Results — matches session_group in PyQt5 */}
         {sessionResults.length > 0 && (
@@ -737,6 +1034,7 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
                     min={0} max={Math.ceil(qfStats.bc.max)} step={1}
                     disabled={qfApplying}
                     title={t('analysis:data.minBandContrastTooltip')}
+                    aria-label={t('analysis:data.minBandContrast')}
                     style={{ width: 70 }}
                   />
                   <span style={{ fontSize: 10, color: colors.textSecondary }}>
@@ -755,6 +1053,7 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
                     min={0} max={Math.ceil(qfStats.bands.max)} step={1}
                     disabled={qfApplying}
                     title={t('analysis:data.minBandsTooltip')}
+                    aria-label={t('analysis:data.minBands')}
                     style={{ width: 70 }}
                   />
                   <span style={{ fontSize: 10, color: colors.textSecondary }}>
@@ -964,74 +1263,102 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
 // ---------------------------------------------------------------------------
 // TAB 2: Grain Analysis
 // Mirrors _create_grain_tab() in analysis_gui.py
-// Parameters: GB Threshold (4°), Min Grain Size (3 px), Min Intercept (1.5 µm)
+// Parameters: GB Threshold (4°), Min Grain Size (3 px), Min Intercept (1.5 µm),
+// Close holes alpha (3.1 px, MTEX default), Fill holes in maps (on)
 // ---------------------------------------------------------------------------
-function GrainTab({ analysisLoaded, hasGrains, onGrainsReconstructed, onComplete }) {
+// `statsSettings` (the reconstruction parameters, `edgeRule`, `ecdBasis`) and `onStatsSettingsChange(patch)`
+// are held by the page: the backend keeps the statistics settings after the tab is left, so a tab-local
+// copy would show the wrong ones, and "Run Complete Analysis" reads the same object.
+// `onGrainMapsStale()` says the maps drawn from the grains changed although the grains did not.
+export function GrainTab({
+  analysisLoaded, hasGrains, grainsVersion, onGrainsReconstructed, onComplete,
+  statsSettings = DEFAULT_GRAIN_STATS_SETTINGS, onStatsSettingsChange = () => {}, onGrainMapsStale = () => {},
+}) {
   const { t } = useTranslation('analysis');
-  const [gbThreshold,  setGbThreshold]  = useState('4.0');
-  const [minPixels,    setMinPixels]    = useState('3');
-  const [minIntercept, setMinIntercept] = useState('1.5');
+  const { gbThreshold, minPixels, minIntercept, alpha, fill, edgeRule, ecdBasis } = statsSettings;
+  const statsPhase = statsSettings.statsPhase ?? null;
 
-  const [loading,      setLoading]      = useState(false);
-  const [taskId,       setTaskId]       = useState(null);
-  const [progress,     setProgress]     = useState(null);
+  // A reconstruction the backend is running (started here, or found by the page's /status sync) is in the store
+  // (`reconTaskId`) and polled by the page (`useReconstructionWatch`), whichever tab is open; this tab shows it.
+  const reconTaskId = useResultStore((state) => state.reconTaskId);
+  const progress = useResultStore((state) => state.reconProgress);
+  const outcome = useResultStore((state) => state.reconOutcome);
+  const [starting,     setStarting]     = useState(false);     // the request that starts it is on its way
+  const loading = starting || reconTaskId !== null;
   const [msg,          setMsg]          = useState(null);
   const [isError,      setIsError]      = useState(false);
+  useEffect(() => { if (outcome) setMsg(null); }, [outcome]);     // the end of a task says more than an earlier detail
 
-  const [grainStats,   setGrainStats]   = useState(null);
-  const [analyzingSize,setAnalyzingSize]= useState(false);
-
-  // Poll reconstruction task
+  // The statistics block, the epoch of /grain-size answers and the busy flag of "Run Complete Analysis" are
+  // in the store: the block survives leaving the tab, and the chain can fill it and stop the tab.
+  const grainStats = useResultStore((state) => state.grainStats);
+  const runAllBusy = useResultStore((state) => state.runAllBusy);
+  const grainSizeEpoch = useResultStore((state) => state.grainSizeEpoch);
+  const phaseOptions = useResultStore((state) => state.phaseOptions);
+  const setGrainStats = useResultStore.getState().setGrainStats;
+  const busy = loading || runAllBusy;      // a reconstruction is running, from this tab or from the chain
+  // "Run Complete Analysis" waits for this tab's own reconstruction; a task that runs on keeps the flag when the tab
+  // is left, the page's watch ends it.
   useEffect(() => {
-    if (!taskId) return;
-    const iv = setInterval(async () => {
-      try {
-        const res = await analysisApi.getTaskStatus(taskId);
-        const d = res.data;
-        if (d.progress !== undefined) setProgress(d.progress);
-        if (d.status === 'done' || d.status === 'completed') {
-          clearInterval(iv);
-          setTaskId(null);
-          setLoading(false);
-          setProgress(null);
-          setGrainStats({ count: d.grain_count, meanEcd: d.mean_ecd, medianEcd: d.median_ecd, stdEcd: d.std_ecd, meanAr: d.mean_aspect_ratio });
-          setMsg(t('analysis:grain.reconstructedMsg', { count: d.grain_count }));
-          setIsError(false);
-          onGrainsReconstructed();
-          onComplete('grains');
-        } else if (d.status === 'error') {
-          clearInterval(iv);
-          setTaskId(null);
-          setLoading(false);
-          setProgress(null);
-          setMsg(d.message || t('analysis:grain.reconstructionFailed'));
-          setIsError(true);
-        }
-      } catch { /* keep polling */ }
-    }, 1500);
-    return () => clearInterval(iv);
-  }, [taskId, onGrainsReconstructed, onComplete, t]);
+    useResultStore.getState().setGrainReconBusy(loading);
+  }, [loading]);
+  useEffect(() => () => {
+    const state = useResultStore.getState();
+    if (state.reconTaskId === null) state.setGrainReconBusy(false);     // a task that runs on keeps the flag
+  }, []);
+  const [analyzingSize,setAnalyzingSize]= useState(false);
+  // /grain-size: the backend keeps the settings of the request that FINISHES last, so at most one is in
+  // flight, and when it returns and the selection has moved on, one more is sent with the current one.
+  const sizeBusy = useRef(false);    // a /grain-size request is in flight
+  const sizeWanted = useRef(null);   // { rule, basis, phase } the statistics should be for
+  const sizeTimer = useRef(null);    // debounce of the selects
+  const sizeTimerPending = useRef(false);   // a pick is waiting out the pause
+  const statsUpdateFailed = useRef(false);   // the shown message is that of a failed recompute
+  const statsRef = useRef(null);     // the statistics on screen, for the answer that arrives later
+  statsRef.current = grainStats;
+  const currentEpoch = () => useResultStore.getState().grainSizeEpoch;
+  const runGrainSizeRef = useRef(null);
+  // A reconstruction started somewhere (this tab, the chain) or a map was loaded: a pick still waiting is void.
+  useEffect(() => {
+    sizeWanted.current = null;
+    sizeTimerPending.current = false;
+    clearTimeout(sizeTimer.current);
+  }, [grainSizeEpoch]);
+  // Leaving the tab inside the pause must not lose the pick: send it once.
+  useEffect(() => () => {
+    if (sizeTimerPending.current) {
+      sizeTimerPending.current = false;
+      clearTimeout(sizeTimer.current);
+      runGrainSizeRef.current?.();
+    }
+  }, []);
 
   const handleReconstruct = async () => {
-    setLoading(true);
-    setProgress(0);
+    const args = reconstructArgs(statsSettings);
+    if (!args) {
+      // An empty or non-numeric field would reach the API as null and come back as a 422.
+      setMsg(t('analysis:grain.reconstructionFailed'));
+      setIsError(true);
+      return;
+    }
+    setStarting(true);
     setMsg(null);
-    setGrainStats(null);
+    statsUpdateFailed.current = false;
+    // the statistics of the old grains go, and a /grain-size answer for them must not land on the new ones
+    useResultStore.getState().beginReconstruction();
+    sizeWanted.current = null;
+    sizeTimerPending.current = false;
+    clearTimeout(sizeTimer.current);
     try {
-      const res = await analysisApi.reconstructGrains(
-        parseFloat(gbThreshold),
-        parseInt(minPixels, 10),
-        parseFloat(minIntercept),
-      );
+      const res = await analysisApi.reconstructGrains(...args);
       const d = res.data;
       if (d.task_id) {
-        setTaskId(d.task_id);
-        setMsg(t('analysis:grain.reconstructionRunning'));
+        useResultStore.getState().setReconTaskId(d.task_id);      // the page's watch polls it from here
+        setStarting(false);
         setIsError(false);
       } else if (d.grain_count !== undefined) {
-        setLoading(false);
-        setProgress(null);
-        setGrainStats({ count: d.grain_count, meanEcd: d.mean_ecd, medianEcd: d.median_ecd, stdEcd: d.std_ecd, meanAr: d.mean_aspect_ratio });
+        setStarting(false);
+        setGrainStats(grainStatsFrom(d));
         setMsg(t('analysis:grain.reconstructedMsg', { count: d.grain_count }));
         setIsError(false);
         toast.success(t('analysis:grain.reconstructionCompleteToast', { count: d.grain_count }));
@@ -1039,34 +1366,120 @@ function GrainTab({ analysisLoaded, hasGrains, onGrainsReconstructed, onComplete
         onComplete('grains');
       }
     } catch (err) {
-      setLoading(false);
-      setProgress(null);
-      setMsg(err.response?.data?.detail || err.message || t('analysis:grain.failed'));
+      setStarting(false);
+      const detail = errorMessageFrom(err, t('analysis:grain.failed'));
+      if (err?.response?.status === 409) {
+        // one is already running (started elsewhere): ask the backend which, the page's watch polls it
+        try { await syncFromBackend(); } catch { /* the detail below says enough */ }
+      }
+      setMsg(detail);
       setIsError(true);
     }
   };
 
-  const handleGrainSizeAnalysis = async () => {
+  // Sends /grain-size for `sizeWanted`; if the selection has moved on when the answer is back, once more.
+  const runGrainSize = async () => {
+    if (sizeBusy.current || !sizeWanted.current) return;
+    const epoch = currentEpoch();
+    const sent = sizeWanted.current;
+    sizeBusy.current = true;
     setAnalyzingSize(true);
     try {
-      const res = await analysisApi.grainSize();
+      const res = await analysisApi.grainSize(sent.rule, sent.basis, sent.phase);
+      if (epoch !== currentEpoch()) return;
       const d = res.data || {};
       if (d.mean_ecd !== undefined) {
-        setGrainStats(prev => ({
-          ...prev,
-          meanEcd:   d.mean_ecd,
-          medianEcd: d.median_ecd,
-          stdEcd:    d.std_ecd,
-          meanAr:    d.mean_aspect_ratio,
-        }));
+        // the ECD map is drawn on the basis the backend now uses: draw it again if that changed
+        if (statsRef.current?.ecdBasis !== (d.ecd_basis ?? sent.basis)) onGrainMapsStale();
+        setGrainStats(mergeGrainSize(useResultStore.getState().grainStats, d));
+        // only the message of an earlier recompute goes; a reconstruction error stays
+        if (statsUpdateFailed.current) { setMsg(null); setIsError(false); statsUpdateFailed.current = false; }
       }
-    } catch { /* ignore */ } finally {
-      setAnalyzingSize(false);
+    } catch (err) {
+      if (epoch !== currentEpoch()) return;
+      setMsg(errorMessageFrom(err, t('analysis:grain.statsUpdateFailed')));
+      setIsError(true);
+      statsUpdateFailed.current = true;
+    } finally {
+      sizeBusy.current = false;
+      const want = sizeWanted.current;
+      // A pick wanted after a reconstruction may have found this request still in flight (and was not
+      // sent); a want from before the reconstruction was voided. So: resend when a want exists and either
+      // the epoch moved on or the selection differs from what was sent.
+      if (want && (epoch !== currentEpoch() || want.rule !== sent.rule || want.basis !== sent.basis
+          || want.phase !== sent.phase)) {
+        runGrainSize();
+      } else {
+        setAnalyzingSize(false);
+      }
     }
   };
 
+  runGrainSizeRef.current = runGrainSize;
+
+  // The button: the current selection, now.
+  const handleGrainSizeAnalysis = () => {
+    sizeTimerPending.current = false;
+    clearTimeout(sizeTimer.current);
+    sizeWanted.current = { rule: edgeRule, basis: ecdBasis, phase: statsPhase };
+    runGrainSize();
+  };
+
+  // Picking an option IS the request: with grains present the statistics are recomputed (after a short
+  // pause, so stepping through the options with the keyboard sends the last one, not each).
+  const changeStatsSettings = (patch) => {
+    onStatsSettingsChange(patch);
+    if (hasGrains && !busy && ('edgeRule' in patch || 'ecdBasis' in patch || 'statsPhase' in patch)) {
+      const next = { ...statsSettings, ...patch };
+      sizeWanted.current = { rule: next.edgeRule, basis: next.ecdBasis, phase: next.statsPhase ?? null };
+      clearTimeout(sizeTimer.current);
+      sizeTimerPending.current = true;
+      sizeTimer.current = setTimeout(() => { sizeTimerPending.current = false; runGrainSize(); }, GRAIN_SIZE_DEBOUNCE_MS);
+    }
+  };
+
+  // What the edge-grain rule did, in words (the safeguard gets its own visible notice below).
+  const edge = edgeSummary(grainStats);
+  const edgeValues = edge.kind && edge.kind !== 'keep_all'
+    ? { rule: t(`analysis:grain.edgeRuleShort.${edge.rule}`), edge: edge.edge, total: edge.total, used: edge.used, left: edge.left }
+    : {};
+  // grains exist but none entered the statistics (every one left out, or none in the chosen set): zeros
+  // are not measurements, so no means are printed
+  const noneUsed = !!grainStats && grainStats.nGrainsUsed === 0 && grainStats.nGrainsTotal > 0;
+  // a chosen phase has no grain in this map (other phases do): one line, no means
+  const phaseLabel = statsPhaseLabel(grainStats, phaseOptions);
+  const phased = !!grainStats && grainStats.statsPhase !== null && grainStats.statsPhase !== undefined;
+  const phaseName = phaseLabel ?? (phased ? t('analysis:grain.statsPhaseUnknown', { id: grainStats.statsPhase }) : null);
+  const noGrainOfPhase = phased && !grainStats.statsError && grainStats.nGrainsTotal === 0 && grainStats.count !== 0;
+  // no mean where nothing was measured: zeros are not measurements
+  const noMeans = noneUsed || noGrainOfPhase || grainStats?.nGrainsTotal === 0;
+  let totalLine = null;
+  if (grainStats && noGrainOfPhase) {
+    totalLine = t('analysis:grain.statNoGrainOfPhase', { phase: phaseName });
+  } else if (grainStats && phased && grainStats.nGrainsTotal > 0 && !grainStats.statsError) {
+    totalLine = grainStats.count !== undefined
+      ? t('analysis:grain.statPhaseGrains', { phase: phaseName, count: grainStats.nGrainsTotal.toLocaleString(), all: grainStats.count.toLocaleString() })
+      : t('analysis:grain.statPhaseGrainsOnly', { phase: phaseName, count: grainStats.nGrainsTotal.toLocaleString() });
+  } else if (grainStats && grainStats.count !== undefined) {
+    totalLine = t('analysis:grain.statTotalGrains', { count: grainStats.count.toLocaleString() });
+  }
+  // the number the means are made of, next to the total (which is before any edge grain is left out)
+  const usedLine = grainStats && !grainStats.statsError && !noGrainOfPhase && !noneUsed
+    && grainStats.nGrainsTotal !== 0 && grainStats.nGrainsUsed !== undefined
+    ? t('analysis:grain.statGrainsUsed', { used: grainStats.nGrainsUsed.toLocaleString() })
+    : null;
+  let edgeLine = null;
+  if (edge.kind === 'removed') edgeLine = t('analysis:grain.statEdgeRemoved', edgeValues);
+  else if (edge.kind === 'keep_all') edgeLine = t('analysis:grain.statEdgeKeepAll');
+  else if (edge.kind === 'safeguard') edgeLine = t('analysis:grain.statEdgeSafeguardLine', edgeValues);
+  // the step of the map the numbers are made on (µm); with the rule, the basis and the phase it says what they were made with
+  const stepSize = useResultStore((state) => state.stepSize);
+  const stepLine = Number.isFinite(stepSize) && stepSize > 0
+    ? t('analysis:grain.statStep', { step: String(Number(stepSize.toPrecision(6))) })
+    : null;
+
   return (
-    <TabLayout defaultLayer="ecd" analysisLoaded={analysisLoaded} controls={
+    <TabLayout defaultLayer="ecd" analysisLoaded={analysisLoaded} hasGrains={hasGrains} grainsVersion={grainsVersion} controls={
       <>
         {/* Grain Reconstruction — matches recon_group with QFormLayout */}
         <ColoredGroupBox title={t('analysis:grain.reconstructionTitle')}>
@@ -1074,10 +1487,11 @@ function GrainTab({ analysisLoaded, hasGrains, onGrainsReconstructed, onComplete
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
                 type="number" value={gbThreshold}
-                onChange={(e) => setGbThreshold(e.target.value)}
+                onChange={(e) => onStatsSettingsChange({ gbThreshold: e.target.value })}
                 min={1.0} max={15.0} step={0.5}
-                disabled={loading || !analysisLoaded}
+                disabled={busy || !analysisLoaded}
                 title={t('analysis:grain.gbThresholdTooltip')}
+                aria-label={t('analysis:grain.gbThreshold')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:grain.unitDegrees')}</span>
@@ -1087,10 +1501,11 @@ function GrainTab({ analysisLoaded, hasGrains, onGrainsReconstructed, onComplete
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
                 type="number" value={minPixels}
-                onChange={(e) => setMinPixels(e.target.value)}
+                onChange={(e) => onStatsSettingsChange({ minPixels: e.target.value })}
                 min={1} max={100} step={1}
-                disabled={loading || !analysisLoaded}
+                disabled={busy || !analysisLoaded}
                 title={t('analysis:grain.minGrainSizeTooltip')}
+                aria-label={t('analysis:grain.minGrainSize')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:grain.unitPixels')}</span>
@@ -1100,25 +1515,59 @@ function GrainTab({ analysisLoaded, hasGrains, onGrainsReconstructed, onComplete
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
                 type="number" value={minIntercept}
-                onChange={(e) => setMinIntercept(e.target.value)}
+                onChange={(e) => onStatsSettingsChange({ minIntercept: e.target.value })}
                 min={0.1} max={10.0} step={0.1}
-                disabled={loading || !analysisLoaded}
+                disabled={busy || !analysisLoaded}
                 title={t('analysis:grain.minInterceptTooltip')}
+                aria-label={t('analysis:grain.minIntercept')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:grain.unitMicrometres')}</span>
+              <span style={{ fontSize: 10, color: colors.textSecondary, fontStyle: 'italic' }}>{t('analysis:grain.minInterceptNote')}</span>
             </div>
           </FormRow>
+          <FormRow label={t('analysis:grain.alpha')}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Input
+                type="number" value={alpha}
+                onChange={(e) => onStatsSettingsChange({ alpha: e.target.value })}
+                min={0} max={20} step={0.1}
+                disabled={busy || !analysisLoaded}
+                title={t('analysis:grain.alphaTooltip')}
+                aria-label={t('analysis:grain.alpha')}
+                style={{ width: 70 }}
+              />
+              <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:grain.unitPixelSpacing')}</span>
+            </div>
+          </FormRow>
+          <label
+            style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: busy || !analysisLoaded ? 'default' : 'pointer', fontSize: 11, color: colors.text, margin: '4px 0' }}
+            title={t('analysis:grain.fillTooltip')}
+          >
+            <input
+              type="checkbox" checked={fill}
+              onChange={(e) => onStatsSettingsChange({ fill: e.target.checked })}
+              disabled={busy || !analysisLoaded}
+              style={{ accentColor: colors.accent }}
+            />
+            {t('analysis:grain.fill')}
+          </label>
+          <GrainStatsSettings
+            settings={statsSettings}
+            onChange={changeStatsSettings}
+            disabled={busy || !analysisLoaded}
+            phaseOptions={phaseOptions}
+          />
           <Button
             onClick={handleReconstruct}
-            disabled={loading || !analysisLoaded}
+            disabled={busy || !analysisLoaded}
             title={t('analysis:grain.reconstructGrainsTooltip')}
             style={{ width: '100%', marginTop: 4, background: colors.green, color: colors.textOnAccent }}
           >
             {loading ? <span className="btn-loading">{t('analysis:grain.reconstructing')}</span> : t('analysis:grain.reconstructGrains')}
           </Button>
 
-          {loading && progress !== null && (
+          {loading && progress !== null && progress !== undefined && (
             <div style={{ marginTop: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
                 <Label secondary small>{t('analysis:grain.progress')}</Label>
@@ -1127,28 +1576,60 @@ function GrainTab({ analysisLoaded, hasGrains, onGrainsReconstructed, onComplete
               <ProgressBar value={progress} color={colors.green} />
             </div>
           )}
-          <StatusMsg msg={msg} isError={isError} />
+          <StatusMsg
+            msg={msg ?? (loading ? t('analysis:grain.reconstructionRunning') : (outcome?.text ?? null))}
+            isError={msg ? isError : (!loading && !!outcome?.error)}
+          />
         </ColoredGroupBox>
 
-        {/* Grain Statistics — matches stats_group */}
-        {grainStats && (
+        {/* Grain Statistics — matches stats_group; only while grains exist (a map loaded elsewhere has none) */}
+        {hasGrains && grainStats && (
           <ColoredGroupBox title={t('analysis:grain.statisticsTitle')}>
+            <div aria-live="polite">
             <ReadonlyText
               minHeight={70}
               text={[
-                grainStats.count    !== undefined ? t('analysis:grain.statTotalGrains', { count: grainStats.count.toLocaleString() }) : null,
-                grainStats.meanEcd  !== undefined ? t('analysis:grain.statMeanEcd', { value: grainStats.meanEcd.toFixed(2) }) : null,
-                grainStats.medianEcd !== undefined ? t('analysis:grain.statMedianEcd', { value: grainStats.medianEcd.toFixed(2) }) : null,
-                grainStats.stdEcd   !== undefined ? t('analysis:grain.statStdEcd', { value: grainStats.stdEcd.toFixed(2) }) : null,
-                grainStats.meanAr   !== undefined ? t('analysis:grain.statMeanAr', { value: grainStats.meanAr.toFixed(3) }) : null,
+                totalLine,
+                usedLine,
+                noneUsed ? t('analysis:grain.statNoneUsed') : null,
+                !noMeans && grainStats.meanEcd  !== undefined ? t('analysis:grain.statMeanEcd', { value: grainStats.meanEcd.toFixed(2) }) : null,
+                !noMeans && grainStats.medianEcd !== undefined ? t('analysis:grain.statMedianEcd', { value: grainStats.medianEcd.toFixed(2) }) : null,
+                !noMeans && grainStats.stdEcd   !== undefined ? t('analysis:grain.statStdEcd', { value: grainStats.stdEcd.toFixed(2) }) : null,
+                !noMeans && grainStats.meanAr   !== undefined ? t('analysis:grain.statMeanAr', { value: grainStats.meanAr.toFixed(3) }) : null,
+                edgeLine,
+                // no basis line where no numbers exist: the statistics failed, or there are no grains
+                grainStats.ecdBasis && !grainStats.statsError && grainStats.nGrainsTotal !== 0 ? t('analysis:grain.statEcdBasis', { basis: t(`analysis:grain.ecdBasisShort.${grainStats.ecdBasis}`) }) : null,
+                grainStats.nGrainsTotal !== 0 ? stepLine : null,
               ].filter(Boolean).join('\n')}
               placeholder={t('analysis:grain.statisticsPlaceholder')}
             />
+            {edge.kind === 'safeguard' && (
+              // an information about what happened, not a warning: neutral colours
+              <div role="status" style={{
+                marginTop: 6, padding: '5px 10px', borderRadius: 4, fontSize: 11,
+                background: colorAlpha(colors.cyan, 13), border: `1px solid ${colors.cyan}`, color: colors.cyan,
+              }}>
+                {t({
+                  few: phased ? 'analysis:grain.statEdgeSafeguardFewPhase' : 'analysis:grain.statEdgeSafeguardFew',
+                  share: phased ? 'analysis:grain.statEdgeSafeguardSharePhase' : 'analysis:grain.statEdgeSafeguardShare',
+                  many: phased ? 'analysis:grain.statEdgeSafeguardManyPhase' : 'analysis:grain.statEdgeSafeguardMany',
+                }[edge.reason], { ...edgeValues, phase: phaseName })}
+              </div>
+            )}
+            {grainStats.statsError && (
+              <div role="alert" style={{
+                marginTop: 6, padding: '5px 10px', borderRadius: 4, fontSize: 11,
+                background: colorAlpha(colors.red, 13), border: `1px solid ${colors.red}`, color: colors.red,
+              }}>
+                {t('analysis:grain.statsError', { message: grainStats.statsError })}
+              </div>
+            )}
+            </div>
           </ColoredGroupBox>
         )}
 
         {/* Grain Size Analysis — only after grains are available */}
-        {hasGrains && !loading && (
+        {hasGrains && !busy && (
           <ColoredGroupBox title={t('analysis:grain.sizeAnalysisTitle')}>
             <Button
               onClick={handleGrainSizeAnalysis}
@@ -1170,11 +1651,14 @@ function GrainTab({ analysisLoaded, hasGrains, onGrainsReconstructed, onComplete
 // Mirrors _create_deformation_tab() in analysis_gui.py
 // Parameters: KAM Order (1-3), KAM Threshold (0.55°), HAGB Threshold (10°)
 // ---------------------------------------------------------------------------
-function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
+export function DeformationTab({ analysisLoaded, hasGrains, grainsVersion, onComplete }) {
   const { t } = useTranslation('analysis');
-  const [kamOrder,     setKamOrder]     = useState('1');
-  const [kamThreshold, setKamThreshold] = useState('0.55');
-  const [hagbThreshold,setHagbThreshold]= useState('10.0');
+  // The three parameters live in the store (the Batch tab and "Run Complete Analysis" read them too); "Analyze
+  // Deformation" sends them to the backend, which remembers them for the KAM map, the RX analysis, the Excel export and /status.
+  const params = useResultStore((state) => state.deformationParams);
+  const paramsPending = useResultStore((state) => state.deformationEdited) && hasGrains;   // typed, not sent yet
+  const setDeformationParams = useResultStore.getState().setDeformationParams;
+  const args = deformationArgs(params);
 
   const [loading,      setLoading]      = useState(false);
   const [gmmRunning,   setGmmRunning]   = useState(false);
@@ -1183,18 +1667,29 @@ function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
   const [results,      setResults]      = useState(null);
 
   const handleDeformation = async () => {
+    if (!args) {                                   // an empty field or a number outside the backend's range
+      setMsg(t('analysis:deformation.invalidParams'));
+      setIsError(true);
+      return;
+    }
     setLoading(true);
     setMsg(null);
     setResults(null);
     try {
-      const res = await analysisApi.deformation();
+      const res = await analysisApi.deformation(args);
       const d = res.data || {};
-      setResults(d);
+      // the backend holds these parameters now; the maps drawn from them are drawn again
+      useResultStore.getState().adoptDeformationUsed(d.deformation_params ?? deformationBody(args));
+      useResultStore.getState().bumpGrainMaps();
+      setResults({ ...d, used: args });
       setMsg(t('analysis:deformation.complete'));
       setIsError(false);
       onComplete('deformation');
     } catch (err) {
-      setMsg(codedError(err, t) || err.response?.data?.detail || t('analysis:deformation.failed'));
+      if (err?.response?.status === 409) {
+        try { await syncFromBackend(); } catch { /* the message says what to do */ }
+      }
+      setMsg(codedError(err, t) || errorMessageFrom(err, t('analysis:deformation.failed')));
       setIsError(true);
     } finally {
       setLoading(false);
@@ -1221,7 +1716,7 @@ function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
       }
       setIsError(false);
     } catch (err) {
-      setMsg(codedError(err, t) || err.response?.data?.detail || t('analysis:deformation.gmmFailed'));
+      setMsg(codedError(err, t) || errorMessageFrom(err, t('analysis:deformation.gmmFailed')));
       setIsError(true);
     } finally {
       setGmmRunning(false);
@@ -1239,30 +1734,39 @@ function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
     results.gb_classification?.sagb !== undefined
       ? t('analysis:deformation.metricSagbFraction', { value: (results.gb_classification.sagb * 100).toFixed(1) }) : null,
   ].filter(Boolean).join('\n') : null;
+  // the parameters the numbers above were made with (what was sent, not what is typed now)
+  const usedLine = results?.used
+    ? t('analysis:deformation.paramsUsed', { order: results.used.kamOrder, threshold: results.used.kamThreshold, hagb: results.used.hagbMin })
+    : null;
 
   return (
-    <TabLayout defaultLayer="kam" analysisLoaded={analysisLoaded} controls={
+    <TabLayout defaultLayer="kam" analysisLoaded={analysisLoaded} hasGrains={hasGrains} grainsVersion={grainsVersion} controls={
       <>
         {/* Deformation Parameters — matches params_group with QFormLayout */}
         <ColoredGroupBox title={t('analysis:deformation.parametersTitle')}>
           <FormRow label={t('analysis:deformation.kamOrder')}>
-            <Input
-              type="number" value={kamOrder}
-              onChange={(e) => setKamOrder(e.target.value)}
-              min={1} max={3} step={1}
-              disabled={loading || !analysisLoaded}
-              title={t('analysis:deformation.kamOrderTooltip')}
-              style={{ width: 60 }}
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Input
+                type="number" value={params.kamOrder}
+                onChange={(e) => setDeformationParams({ kamOrder: e.target.value })}
+                min={1} max={5} step={1}
+                disabled={loading || !analysisLoaded}
+                title={t('analysis:deformation.kamOrderTooltip')}
+                aria-label={t('analysis:deformation.kamOrder')}
+                style={{ width: 60 }}
+              />
+              <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:deformation.rangeOrder')}</span>
+            </div>
           </FormRow>
           <FormRow label={t('analysis:deformation.kamThreshold')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
-                type="number" value={kamThreshold}
-                onChange={(e) => setKamThreshold(e.target.value)}
-                min={0.1} max={10.0} step={0.05}
+                type="number" value={params.kamThreshold}
+                onChange={(e) => setDeformationParams({ kamThreshold: e.target.value })}
+                min={0} max={30} step={0.5}
                 disabled={loading || !analysisLoaded}
                 title={t('analysis:deformation.kamThresholdTooltip')}
+                aria-label={t('analysis:deformation.kamThreshold')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:deformation.unitDegrees')}</span>
@@ -1271,20 +1775,35 @@ function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
           <FormRow label={t('analysis:deformation.hagbThreshold')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
-                type="number" value={hagbThreshold}
-                onChange={(e) => setHagbThreshold(e.target.value)}
-                min={5.0} max={30.0} step={1.0}
+                type="number" value={params.hagbMin}
+                onChange={(e) => setDeformationParams({ hagbMin: e.target.value })}
+                min={3} max={90} step={1}
                 disabled={loading || !analysisLoaded}
                 title={t('analysis:deformation.hagbThresholdTooltip')}
+                aria-label={t('analysis:deformation.hagbThreshold')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:deformation.unitDegrees')}</span>
             </div>
           </FormRow>
+          <div data-testid="deformation-sagb-help" style={{ fontSize: 10, color: colors.textSecondary, lineHeight: 1.35, margin: '-2px 0 4px' }}>
+            {t('analysis:deformation.sagbHelp')}
+          </div>
+          {/* what is typed is the current choice, but the maps, the numbers and the export follow the last run */}
+          {/* the live region is always there; its text arrives later (a region inserted with its text is often not read) */}
+          <div data-testid="deformation-not-applied" role="status" aria-live="polite" style={{ fontSize: 10, color: colors.orange, lineHeight: 1.35, marginTop: 2 }}>
+            {paramsPending ? t('analysis:deformation.notApplied') : null}
+          </div>
+          {!args && (
+            <div data-testid="deformation-invalid" style={{ fontSize: 10, color: colors.red, marginTop: 4 }}>
+              {t('analysis:deformation.invalidParams')}
+            </div>
+          )}
           <Button
             onClick={handleDeformation}
-            disabled={loading || !analysisLoaded || !hasGrains}
-            title={t('analysis:deformation.analyzeTooltip')}
+            disabled={loading || !analysisLoaded || !hasGrains || !args}
+            title={!analysisLoaded ? t('analysis:map.loadDatasetFirst')
+              : !hasGrains ? t('analysis:page.needsGrainsFirst') : t('analysis:deformation.analyzeTooltip')}
             style={{ width: '100%', marginTop: 4, background: colors.green, color: colors.textOnAccent }}
           >
             {loading ? t('analysis:deformation.computing') : t('analysis:deformation.analyze')}
@@ -1299,6 +1818,11 @@ function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
             placeholder={t('analysis:deformation.metricsPlaceholder')}
             minHeight={90}
           />
+          {usedLine && (
+            <div data-testid="deformation-params-used" style={{ marginTop: 6, fontSize: 10, color: colors.textSecondary, lineHeight: 1.35 }}>
+              {usedLine}
+            </div>
+          )}
         </ColoredGroupBox>
 
         {/* BC Histogram + 3-Gaussian GMM */}
@@ -1326,10 +1850,21 @@ function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
 // Parameters: Texture Preset, Tolerance Angle (10°)
 // Results: 14 components + surface planes {111}/{100}/{110} + Texture Index/Entropy
 // ---------------------------------------------------------------------------
-function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
+// The three plane families of the surface-plane numbers: the key of the answer, the direction the MATLAB script
+// measures for it, and the colour of the number.
+const SURFACE_PLANES = [
+  { key: '{111}', direction: '1 1 1', color: colors.cyan },
+  { key: '{100}', direction: '1 0 0', color: colors.orange },
+  { key: '{110}', direction: '1 1 0', color: colors.green },
+];
+
+export function TextureTab({ analysisLoaded, hasGrains, grainsVersion, onComplete }) {
   const { t } = useTranslation('analysis');
-  const [preset,       setPreset]       = useState('FCC_Rolling');
-  const [tolerance,    setTolerance]    = useState('10.0');
+  // The preset and the tolerance angle (the text of the field) live in the store with the phase: they are sent with every
+  // run, and the backend's choice comes back with the status unless a pick is pending.
+  const preset = useResultStore((state) => state.texturePreset);
+  const tolerance = useResultStore((state) => state.textureTolerance);
+  const toleranceDeg = textureToleranceOf(tolerance);
   const [components,   setComponents]   = useState([]);
   const [loading,      setLoading]      = useState(false);
   const [odfRunning,   setOdfRunning]   = useState(false);
@@ -1337,7 +1872,15 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
   const [isError,      setIsError]      = useState(false);
   const [textureIndex, setTextureIndex] = useState(null);
   const [entropy,      setEntropy]      = useState(null);
-  const [surfacePlanes,setSurfacePlanes]= useState(null);   // { p111, p100, p110 }
+  const [surfacePlanes,setSurfacePlanes]= useState(null);   // { '{111}': number, ... }: the script's single direction
+  const [planeFamilies,setPlaneFamilies]= useState(null);   // the same planes, any plane of the family
+  const [resultPhase,  setResultPhase]  = useState(null);   // the name of the phase the numbers are of
+  const [resultChoice, setResultChoice] = useState(null);   // { preset, tolerance }: what the numbers were made with
+  const choicePending = useResultStore((state) => state.textureEdited);   // chosen or typed, not run yet
+  // The phase of the texture: 'most_measured' or a phase id of the map. It lives in the store (the backend's
+  // choice comes back with every status answer) and is sent with every run.
+  const texturePhase = useResultStore((state) => state.texturePhase);
+  const phaseOptions = useResultStore((state) => state.phaseOptions);
 
   const PRESET_OPTIONS = [
     { value: 'FCC_Rolling', label: t('analysis:texture.presetFcc') },
@@ -1346,7 +1889,7 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
 
   const handlePresetChange = async (e) => {
     const p = e.target.value;
-    setPreset(p);
+    useResultStore.getState().setTexturePreset(p);
     setComponents([]);
     if (!analysisLoaded) return;
     setLoading(true);
@@ -1363,7 +1906,7 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
       const res = await analysisApi.textureComponents(preset);
       setComponents(res.data?.components || []);
     } catch (err) {
-      setMsg(err.response?.data?.detail || t('analysis:texture.loadComponentsFailed'));
+      setMsg(errorMessageFrom(err, t('analysis:texture.loadComponentsFailed')));
       setIsError(true);
     } finally { setLoading(false); }
   };
@@ -1372,29 +1915,28 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
     setOdfRunning(true);
     setMsg(null);
     try {
-      const res = await analysisApi.texture();
+      const res = await analysisApi.texture(texturePhase, preset, toleranceDeg);
+      useResultStore.getState().markTextureApplied({ phase: texturePhase, preset, tolerance });
+      useResultStore.getState().bumpGrainMaps();      // the Texture Components map on screen was drawn with the earlier choice
       const d = res.data || {};
       if (d.components)             setComponents(d.components);
-      if (d.texture_index !== undefined) setTextureIndex(d.texture_index);
-      if (d.texture_entropy !== undefined) setEntropy(d.texture_entropy);
-      if (d.plane_111_fraction !== undefined) {
-        setSurfacePlanes({
-          p111: d.plane_111_fraction,
-          p100: d.plane_100_fraction,
-          p110: d.plane_110_fraction,
-        });
-      }
+      setTextureIndex(d.texture_index ?? null);
+      setEntropy(d.texture_entropy ?? null);
+      setSurfacePlanes(d.surface_planes ?? null);
+      setPlaneFamilies(d.surface_planes_family ?? null);
+      setResultPhase(d.texture_phase?.name ?? null);
+      setResultChoice({ preset: d.texture_preset ?? preset, tolerance: d.texture_tolerance_deg ?? toleranceDeg });
       setMsg(t('analysis:texture.complete'));
       setIsError(false);
       onComplete('texture');
     } catch (err) {
-      setMsg(err.response?.data?.detail || t('analysis:texture.failed'));
+      setMsg(errorMessageFrom(err, t('analysis:texture.failed')));
       setIsError(true);
     } finally { setOdfRunning(false); }
   };
 
   return (
-    <TabLayout defaultLayer="ipf" analysisLoaded={analysisLoaded} controls={
+    <TabLayout defaultLayer="ipf" analysisLoaded={analysisLoaded} hasGrains={hasGrains} grainsVersion={grainsVersion} controls={
       <>
         {/* Texture Parameters — matches params_group */}
         <ColoredGroupBox title={t('analysis:texture.parametersTitle')}>
@@ -1415,14 +1957,40 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
               ))}
             </select>
           </FormRow>
+          <FormRow label={t('analysis:texture.phaseLabel')}>
+            <select
+              value={String(texturePhase)}
+              onChange={(e) => useResultStore.getState().setTexturePhase(
+                e.target.value === 'most_measured' ? 'most_measured' : parseInt(e.target.value, 10))}
+              disabled={odfRunning || !analysisLoaded}
+              aria-label={t('analysis:texture.phaseLabel')}
+              title={t('analysis:texture.phaseHelp')}
+              style={{
+                background: colors.bgSecondary, border: `1px solid ${colors.border}`,
+                borderRadius: 4, color: colors.text, fontSize: 12, padding: '4px 6px',
+                width: '100%',
+              }}
+            >
+              <option value="most_measured">{t('analysis:texture.phaseMostMeasured')}</option>
+              {phaseOptions.map((p) => (
+                <option key={p.id} value={String(p.id)} disabled={p.cubic === false}>
+                  {p.cubic === false ? t('analysis:texture.phaseNotCubic', { name: p.name }) : p.name}
+                </option>
+              ))}
+            </select>
+          </FormRow>
+          <div style={{ fontSize: 10, color: colors.textSecondary, margin: '-2px 0 6px' }}>
+            {t('analysis:texture.phaseHelp')}
+          </div>
           <FormRow label={t('analysis:texture.toleranceAngle')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
                 type="number" value={tolerance}
-                onChange={(e) => setTolerance(e.target.value)}
-                min={1.0} max={30.0} step={1.0}
+                onChange={(e) => useResultStore.getState().setTextureTolerance(e.target.value)}
+                min={0.1} max={MAX_TEXTURE_TOLERANCE} step={1.0}
                 disabled={odfRunning || !analysisLoaded}
                 title={t('analysis:texture.toleranceTooltip')}
+                aria-label={t('analysis:texture.toleranceAngle')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:texture.unitDegrees')}</span>
@@ -1439,17 +2007,37 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
             </Button>
             <Button
               onClick={handleODF}
-              disabled={odfRunning || !analysisLoaded || !hasGrains}
-              title={t('analysis:texture.analyzeTooltip')}
+              disabled={odfRunning || !analysisLoaded || toleranceDeg === undefined}
+              title={!analysisLoaded ? t('analysis:map.loadDatasetFirst')
+                : toleranceDeg === undefined ? t('analysis:texture.toleranceInvalid') : t('analysis:texture.analyzeTooltip')}
               style={{ flex: 1, background: colors.purple, color: colors.textOnAccent }}
             >
               {odfRunning ? t('analysis:texture.computing') : t('analysis:texture.analyze')}
             </Button>
           </div>
+          {toleranceDeg === undefined && (
+            <div data-testid="texture-tolerance-invalid" role="alert" style={{ fontSize: 10, color: colors.red, marginTop: 4 }}>
+              {t('analysis:texture.toleranceInvalid')}
+            </div>
+          )}
+          {/* what is picked is the current choice, but the numbers, the map and the export follow the last run */}
+          <div data-testid="texture-not-applied" role="status" aria-live="polite" style={{ fontSize: 10, color: colors.orange, lineHeight: 1.35, marginTop: 4 }}>
+            {choicePending ? t('analysis:texture.notApplied') : null}
+          </div>
           <StatusMsg msg={msg} isError={isError} />
         </ColoredGroupBox>
 
         {/* Texture Metrics — Texture Index + Entropy */}
+        {resultPhase && (
+          <div data-testid="texture-phase" style={{ fontSize: 12, fontWeight: 600, color: colors.text, margin: '0 2px 8px' }}>
+            {t('analysis:texture.phaseResult', { phase: resultPhase })}
+          </div>
+        )}
+        {resultPhase && resultChoice && (
+          <div data-testid="texture-made-with" style={{ fontSize: 10, color: colors.textSecondary, margin: '-6px 2px 8px' }}>
+            {t('analysis:texture.resultMadeWith', resultChoice)}
+          </div>
+        )}
         {(textureIndex !== null || entropy !== null) && (
           <ColoredGroupBox title={t('analysis:texture.metricsTitle')}>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1466,11 +2054,25 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
         {/* Surface Plane Fractions {111}/{100}/{110} */}
         {surfacePlanes && (
           <ColoredGroupBox title={t('analysis:texture.surfacePlanesTitle')}>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <InfoBadge label="{111}" value={`${Number(surfacePlanes.p111).toFixed(1)}%`} color={colors.cyan} />
-              <InfoBadge label="{100}" value={`${Number(surfacePlanes.p100).toFixed(1)}%`} color={colors.orange} />
-              <InfoBadge label="{110}" value={`${Number(surfacePlanes.p110).toFixed(1)}%`} color={colors.green} />
-            </div>
+            {SURFACE_PLANES.map(({ key, direction, color }) => {
+              const script = surfacePlanes[key];
+              const family = planeFamilies?.[key];
+              return (
+                <div key={key} data-testid={`plane-${key}`} style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 10, color: colors.textSecondary }}>
+                    {t('analysis:texture.planeFamily', { plane: key })}
+                  </div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color }}>
+                    {family !== undefined ? `${Number(family).toFixed(1)} %` : '—'}
+                  </div>
+                  <div title={t('analysis:texture.planeScriptTooltip')} style={{ fontSize: 10, color: colors.textSecondary, cursor: 'help' }}>
+                    {typeof script === 'number'
+                      ? t('analysis:texture.planeScript', { direction, value: script.toFixed(1) })
+                      : t('analysis:texture.planeScriptNone', { direction })}
+                  </div>
+                </div>
+              );
+            })}
           </ColoredGroupBox>
         )}
 
@@ -1502,9 +2104,7 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
                   <span style={{ color: colors.text }}>{c.name || c}</span>
                   {c.fraction !== undefined && (
                     <span style={{ color: colors.orange, fontWeight: 600, textAlign: 'right' }}>
-                      {typeof c.fraction === 'number'
-                        ? (c.fraction > 1 ? c.fraction.toFixed(1) : (c.fraction * 100).toFixed(1))
-                        : '—'}%
+                      {typeof c.fraction === 'number' ? `${c.fraction.toFixed(1)}%` : '—'}
                     </span>
                   )}
                 </div>
@@ -1521,13 +2121,17 @@ function TextureTab({ analysisLoaded, hasGrains, onComplete }) {
 // TAB 5: Recrystallization
 // Mirrors _create_rx_tab() in analysis_gui.py
 // Parameters: GOS Threshold (1.25°), gBC Fraction (0.7), gKAM Threshold (0.55°), Min Grain Radius (0.4 µm)
+// The four inputs live in the store (the Batch tab and "Run Complete Analysis" read them too); "Classify" sends
+// them to the backend, which remembers them for the RX map, the Excel export and the status.
 // ---------------------------------------------------------------------------
-function RXTab({ analysisLoaded, hasGrains, onComplete }) {
+export function RXTab({ analysisLoaded, hasGrains, grainsVersion, onComplete }) {
   const { t } = useTranslation('analysis');
-  const [gosThreshold,    setGosThreshold]    = useState('1.25');
-  const [gbcFraction,     setGbcFraction]     = useState('0.7');
-  const [gkamThreshold,   setGkamThreshold]   = useState('0.55');
-  const [minGrainRadius,  setMinGrainRadius]  = useState('0.4');
+  const criteria = useResultStore((state) => state.rxCriteria);
+  const criteriaPending = useResultStore((state) => state.rxCriteriaEdited) && hasGrains;   // typed, not sent with Classify yet
+  const setRxCriteria = useResultStore.getState().setRxCriteria;
+  // the phase the RX analysis works on ('most_measured' or a phase id): chosen with the criteria, sent with them
+  const rxPhase = useResultStore((state) => state.rxPhase);
+  const phaseOptions = useResultStore((state) => state.phaseOptions);
 
   const [loading,    setLoading]    = useState(false);
   const [msg,        setMsg]        = useState(null);
@@ -1535,13 +2139,23 @@ function RXTab({ analysisLoaded, hasGrains, onComplete }) {
   const [rxResults,  setRxResults]  = useState(null);
 
   const handleRX = async () => {
+    const args = rxCriteriaArgs(criteria);
+    if (!args) {                                   // an empty field or a number outside the backend's range
+      setMsg(t('analysis:rx.invalidCriteria'));
+      setIsError(true);
+      return;
+    }
     setLoading(true);
     setMsg(null);
     setRxResults(null);
     try {
-      // analysisApi does not yet expose separate RX params — pass via rx analysis endpoint
-      const res = await analysisApi.getMap('rx', 'RdYlBu_r');
+      // the KAM of the criteria follows the Deformation parameters: a value typed there and not run yet is run first
+      await applyPendingDeformation(t);
+      const res = await analysisApi.rxClassify(args, rxPhase);
       const d = res.data || {};
+      // the backend holds these criteria now; the map and the other maps are drawn again with them
+      useResultStore.getState().adoptRxCriteriaUsed(d);
+      useResultStore.getState().bumpGrainMaps();
       setRxResults({
         rxFraction:       d.rx_fraction,
         highBcFraction:   d.high_bc_fraction,
@@ -1549,12 +2163,19 @@ function RXTab({ analysisLoaded, hasGrains, onComplete }) {
         lowKamFraction:   d.low_kam_fraction,
         rxGrainCount:     d.rx_grain_count,
         totalGrains:      d.total_grains,
+        needsBc:          d.rx_needs_bc === true,     // no native band contrast: there is no RX number at all
+        used:             args,                       // what was sent: the criteria the numbers belong to
+        phaseName:        d.rx_phase?.name ?? null,   // the phase the numbers are of
       });
       setMsg(t('analysis:rx.complete'));
       setIsError(false);
       onComplete('rx');
     } catch (err) {
-      setMsg(codedError(err, t) || err.response?.data?.detail || t('analysis:rx.failed'));
+      if (err?.response?.status === 409) {
+        // the map or its grains were replaced while classifying: the backend did not store the criteria
+        try { await syncFromBackend(); } catch { /* the message says what to do */ }
+      }
+      setMsg(codedError(err, t) || errorMessageFrom(err, t('analysis:rx.failed')));
       setIsError(true);
     } finally {
       setLoading(false);
@@ -1562,28 +2183,57 @@ function RXTab({ analysisLoaded, hasGrains, onComplete }) {
   };
 
   // Build results text to match rx_results_text in PyQt5
+  // a number the backend did not give is "not available", with the reason the page knows (never 0, never nothing)
+  const rxReason = rxResults?.needsBc ? t('analysis:rx.reasonNeedsBc') : t('analysis:rx.reasonNoPixels');
+  const rxMetric = (value, key, nameKey) => (value === undefined || value === null
+    ? t('analysis:rx.metricNotAvailable', { name: t(`analysis:rx.${nameKey}`), reason: rxReason })
+    : t(`analysis:rx.${key}`, { value: Number(value).toFixed(1) }));
   const resultsText = rxResults ? [
-    rxResults.rxFraction      !== undefined ? t('analysis:rx.metricRxFraction', { value: Number(rxResults.rxFraction).toFixed(1) }) : null,
-    rxResults.highBcFraction  !== undefined ? t('analysis:rx.metricHighBcFraction', { value: Number(rxResults.highBcFraction).toFixed(1) }) : null,
-    rxResults.lowGkamFraction !== undefined ? t('analysis:rx.metricLowGkamFraction', { value: Number(rxResults.lowGkamFraction).toFixed(1) }) : null,
-    rxResults.lowKamFraction  !== undefined ? t('analysis:rx.metricLowKamFraction', { value: Number(rxResults.lowKamFraction).toFixed(1) }) : null,
+    rxMetric(rxResults.rxFraction, 'metricRxFraction', 'nameRxFraction'),
+    rxMetric(rxResults.highBcFraction, 'metricHighBcFraction', 'nameHighBcFraction'),
+    rxMetric(rxResults.lowGkamFraction, 'metricLowGkamFraction', 'nameLowGkamFraction'),
+    rxMetric(rxResults.lowKamFraction, 'metricLowKamFraction', 'nameLowKamFraction'),
     (rxResults.rxGrainCount !== undefined && rxResults.totalGrains !== undefined)
       ? t('analysis:rx.metricRxGrains', { rx: rxResults.rxGrainCount, total: rxResults.totalGrains }) : null,
   ].filter(Boolean).join('\n') : null;
 
   return (
-    <TabLayout defaultLayer="rx" analysisLoaded={analysisLoaded} controls={
+    <TabLayout defaultLayer="rx" analysisLoaded={analysisLoaded} hasGrains={hasGrains} grainsVersion={grainsVersion} controls={
       <>
         {/* RX Classification Parameters — matches params_group with QFormLayout */}
         <ColoredGroupBox title={t('analysis:rx.parametersTitle')}>
+          <FormRow label={t('analysis:rx.phaseLabel')}>
+            <select
+              value={String(rxPhase)}
+              onChange={(e) => useResultStore.getState().setRxPhase(
+                e.target.value === 'most_measured' ? 'most_measured' : parseInt(e.target.value, 10))}
+              disabled={loading || !analysisLoaded}
+              aria-label={t('analysis:rx.phaseLabel')}
+              title={t('analysis:rx.phaseHelp')}
+              style={{
+                background: colors.bgSecondary, border: `1px solid ${colors.border}`,
+                borderRadius: 4, color: colors.text, fontSize: 12, padding: '4px 6px',
+                width: '100%',
+              }}
+            >
+              <option value="most_measured">{t('analysis:rx.phaseMostMeasured')}</option>
+              {phaseOptions.map((p) => (
+                <option key={p.id} value={String(p.id)}>{p.name}</option>
+              ))}
+            </select>
+          </FormRow>
+          <div style={{ fontSize: 10, color: colors.textSecondary, margin: '-2px 0 6px' }}>
+            {t('analysis:rx.phaseHelp')}
+          </div>
           <FormRow label={t('analysis:rx.gosThreshold')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
-                type="number" value={gosThreshold}
-                onChange={(e) => setGosThreshold(e.target.value)}
-                min={0.1} max={5.0} step={0.05}
+                type="number" value={criteria.gosThreshold}
+                onChange={(e) => setRxCriteria({ gosThreshold: e.target.value })}
+                min={0} max={20} step={0.05}
                 disabled={loading || !analysisLoaded}
                 title={t('analysis:rx.gosThresholdTooltip')}
+                aria-label={t('analysis:rx.gosThreshold')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:rx.unitDegrees')}</span>
@@ -1591,22 +2241,24 @@ function RXTab({ analysisLoaded, hasGrains, onComplete }) {
           </FormRow>
           <FormRow label={t('analysis:rx.gbcFraction')}>
             <Input
-              type="number" value={gbcFraction}
-              onChange={(e) => setGbcFraction(e.target.value)}
-              min={0.1} max={1.0} step={0.05}
+              type="number" value={criteria.gbcFraction}
+              onChange={(e) => setRxCriteria({ gbcFraction: e.target.value })}
+              min={0} max={1} step={0.05}
               disabled={loading || !analysisLoaded}
               title={t('analysis:rx.gbcFractionTooltip')}
+              aria-label={t('analysis:rx.gbcFraction')}
               style={{ width: 70 }}
             />
           </FormRow>
           <FormRow label={t('analysis:rx.gkamThreshold')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
-                type="number" value={gkamThreshold}
-                onChange={(e) => setGkamThreshold(e.target.value)}
-                min={0.1} max={2.0} step={0.05}
+                type="number" value={criteria.gkamThreshold}
+                onChange={(e) => setRxCriteria({ gkamThreshold: e.target.value })}
+                min={0} max={10} step={0.05}
                 disabled={loading || !analysisLoaded}
                 title={t('analysis:rx.gkamThresholdTooltip')}
+                aria-label={t('analysis:rx.gkamThreshold')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:rx.unitDegrees')}</span>
@@ -1615,20 +2267,27 @@ function RXTab({ analysisLoaded, hasGrains, onComplete }) {
           <FormRow label={t('analysis:rx.minGrainRadius')}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
               <Input
-                type="number" value={minGrainRadius}
-                onChange={(e) => setMinGrainRadius(e.target.value)}
-                min={0.1} max={5.0} step={0.1}
+                type="number" value={criteria.minRadius}
+                onChange={(e) => setRxCriteria({ minRadius: e.target.value })}
+                min={0} max={100} step={0.1}
                 disabled={loading || !analysisLoaded}
                 title={t('analysis:rx.minGrainRadiusTooltip')}
+                aria-label={t('analysis:rx.minGrainRadius')}
                 style={{ width: 70 }}
               />
               <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('analysis:rx.unitMicrometres')}</span>
             </div>
           </FormRow>
+          {/* what is typed is the current choice, but the map, the numbers and the export follow the last Classify */}
+          {/* the live region is always there; its text arrives later (a region inserted with its text is often not read) */}
+          <div data-testid="rx-not-applied" role="status" aria-live="polite" style={{ fontSize: 10, color: colors.orange, lineHeight: 1.35, marginTop: 2 }}>
+            {criteriaPending ? t('analysis:rx.notApplied') : null}
+          </div>
           <Button
             onClick={handleRX}
             disabled={loading || !analysisLoaded || !hasGrains}
-            title={t('analysis:rx.classifyTooltip')}
+            title={!analysisLoaded ? t('analysis:map.loadDatasetFirst')
+              : !hasGrains ? t('analysis:page.needsGrainsFirst') : t('analysis:rx.classifyTooltip')}
             style={{ width: '100%', marginTop: 4, background: colors.green, color: colors.textOnAccent }}
           >
             {loading ? t('analysis:rx.classifying') : t('analysis:rx.classify')}
@@ -1643,16 +2302,28 @@ function RXTab({ analysisLoaded, hasGrains, onComplete }) {
             placeholder={t('analysis:rx.metricsPlaceholder')}
             minHeight={90}
           />
+          {rxResults?.phaseName && (
+            <div data-testid="rx-phase-result" style={{ marginTop: 6, fontSize: 11, fontWeight: 600, color: colors.text }}>
+              {t('analysis:rx.phaseResult', { phase: rxResults.phaseName })}
+            </div>
+          )}
+          {/* the criteria the numbers above were made with (what was sent, not what is typed now) */}
+          {rxResults && !rxResults.needsBc && rxResults.used && (
+            <div data-testid="rx-criteria-used" style={{ marginTop: 6, fontSize: 10, color: colors.textSecondary, lineHeight: 1.35 }}>
+              <div>{t('analysis:rx.criteriaUsed', rxCriteriaLabels(rxResults.used))}</div>
+              <div style={{ marginTop: 2 }}>{t('analysis:rx.fixedFractionsNote')}</div>
+            </div>
+          )}
         </ColoredGroupBox>
 
         {/* RX fraction badges */}
-        {rxResults?.rxFraction !== undefined && (
+        {rxResults?.rxFraction !== undefined && rxResults.rxFraction !== null && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10, animation: 'fadeSlideIn 0.2s ease-out' }}>
             <InfoBadge label={t('analysis:rx.badgeRxFraction')}   value={`${Number(rxResults.rxFraction).toFixed(1)}%`}   color={colors.green} />
-            {rxResults.highBcFraction !== undefined && (
+            {rxResults.highBcFraction !== undefined && rxResults.highBcFraction !== null && (
               <InfoBadge label={t('analysis:rx.badgeHighBc')}      value={`${Number(rxResults.highBcFraction).toFixed(1)}%`}  color={colors.cyan} />
             )}
-            {rxResults.lowGkamFraction !== undefined && (
+            {rxResults.lowGkamFraction !== undefined && rxResults.lowGkamFraction !== null && (
               <InfoBadge label={t('analysis:rx.badgeLowGkam')}     value={`${Number(rxResults.lowGkamFraction).toFixed(1)}%`} color={colors.orange} />
             )}
           </div>
@@ -1666,20 +2337,188 @@ function RXTab({ analysisLoaded, hasGrains, onComplete }) {
 // TAB 6: Batch & Export
 // Mirrors _create_batch_tab() in analysis_gui.py
 // ---------------------------------------------------------------------------
-function BatchTab({ analysisLoaded, onComplete }) {
+const EXPORT_POLL_MS = 500;
+const LIST_PREVIEW = 10;          // a list longer than this is cut, with a toggle for the rest
+
+const baseName = (path) => String(path ?? '').split(/[\\/]/).filter(Boolean).pop() || String(path ?? '');
+
+/** The text of a Blob (a failed blob request carries the JSON error as a blob). */
+function readBlobText(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(blob);
+  });
+}
+
+/** `errorMessageFrom` for a request made with responseType 'blob': the `detail` is inside the blob. */
+async function blobErrorMessage(err, fallback) {
+  const data = err?.response?.data;
+  if (typeof Blob !== 'undefined' && data instanceof Blob) {
+    try {
+      const detail = JSON.parse(await readBlobText(data))?.detail;
+      if (typeof detail === 'string' && detail) return detail;
+    } catch { /* not JSON: the fallback */ }
+    return fallback;
+  }
+  return errorMessageFrom(err, fallback);
+}
+
+/** Hand a blob to the browser as a file download. */
+function saveBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/**
+ * The batch's "Processing file 2/5: name" as one line ("File 2 of 5: name"); a message of another shape is shown as it is.
+ */
+function currentFileText(message, t) {
+  const m = /^Processing file (\d+)\/(\d+):\s*(.*)$/.exec(String(message));
+  return m ? t('analysis:batch.currentFile', { current: m[1], total: m[2], name: m[3] }) : String(message);
+}
+
+/** A compact list that shows its first entries and the rest on request. */
+function CompactList({ title, items, color = colors.textSecondary }) {
+  const { t } = useTranslation('analysis');
+  const [showAll, setShowAll] = useState(false);
+  if (!items.length) return null;
+  const shown = showAll ? items : items.slice(0, LIST_PREVIEW);
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: 10, fontWeight: 700, color, marginBottom: 2 }}>{title}</div>
+      <ul style={{ margin: 0, paddingLeft: 16, fontSize: 10, color: colors.textSecondary, lineHeight: 1.4 }}>
+        {shown.map((item, i) => (
+          <li key={i} style={{ overflowWrap: 'anywhere' }}>
+            {/* focusable, so the full path (title) is reachable by keyboard and named for a screen reader */}
+            <span tabIndex={0} title={item.title} aria-label={item.title ? `${item.text} (${item.title})` : item.text}>{item.text}</span>
+          </li>
+        ))}
+      </ul>
+      {items.length > LIST_PREVIEW && (
+        <button
+          type="button"
+          aria-expanded={showAll}
+          onClick={() => setShowAll((v) => !v)}
+          style={{ background: 'none', border: 'none', color: colors.cyan, cursor: 'pointer', fontSize: 10, padding: '2px 0' }}
+        >
+          {showAll ? t('analysis:batch.showFewer') : t('analysis:batch.showAll', { count: items.length })}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The files where the edge rule kept all grains, in one line: the names are plain text (no tab stop for each),
+ * a long list is cut with a toggle for the rest, like the lists below it.
+ */
+function EdgeSafeguardFiles({ names, processed }) {
+  const { t } = useTranslation('analysis');
+  const [showAll, setShowAll] = useState(false);
+  if (!names.length) return null;
+  const shown = showAll ? names : names.slice(0, LIST_PREVIEW);
+  const list = shown.join(', ') + (shown.length < names.length ? ', …' : '');
+  return (
+    <div data-testid="batch-safeguard-files" style={{ marginTop: 6, fontSize: 10, color: colors.textSecondary, lineHeight: 1.4, overflowWrap: 'anywhere' }}>
+      {t('analysis:batch.edgeSafeguardFiles', { n: names.length, processed, names: list })}
+      {names.length > LIST_PREVIEW && (
+        <button
+          type="button"
+          aria-expanded={showAll}
+          onClick={() => setShowAll((v) => !v)}
+          style={{ background: 'none', border: 'none', color: colors.cyan, cursor: 'pointer', fontSize: 10, padding: '0 0 0 6px' }}
+        >
+          {showAll ? t('analysis:batch.showFewer') : t('analysis:batch.showAll', { count: names.length })}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** What a batch did, file by file: the lists of the task's `result`, with the reasons. */
+function BatchResultLists({ result }) {
+  const { t } = useTranslation('analysis');
+  if (!result || typeof result !== 'object') return null;
+  const listOf = (list) => (Array.isArray(list) ? list : []);
+  const withReason = (list) => listOf(list).map((e) => ({ text: `${baseName(e?.file)}: ${e?.reason ?? ''}`, title: String(e?.file ?? '') }));
+  const processed = listOf(result.processed).map((f) => ({ text: baseName(f), title: String(f) }));
+  const failed = withReason(result.failed);
+  const skipped = withReason(result.skipped);
+  // the step size note is not an analysis step that was left out: it has its own list ("step_size: ..." in the reason)
+  const isStepNote = (e) => typeof e?.reason === 'string' && e.reason.startsWith('step_size:');
+  const stepNotes = listOf(result.warnings).filter(isStepNote).map((e) => ({ text: baseName(e?.file), title: String(e?.file ?? '') }));
+  const warnings = withReason(listOf(result.warnings).filter((e) => !isStepNote(e)));
+  const safeguard = listOf(result.edge_safeguard_files).filter((name) => typeof name === 'string' && name);
+  const processedCount = Number.isFinite(result.n_processed) ? result.n_processed : processed.length;
+  return (
+    <div data-testid="batch-result" style={{ marginTop: 8 }}>
+      <CompactList title={t('analysis:batch.resultProcessed', { count: processed.length })} items={processed} color={colors.green} />
+      <CompactList title={t('analysis:batch.resultFailed', { count: failed.length })} items={failed} color={colors.red} />
+      <CompactList title={t('analysis:batch.resultSkipped', { count: skipped.length })} items={skipped} color={colors.orange} />
+      <CompactList title={t('analysis:batch.resultWarnings', { count: warnings.length })} items={warnings} color={colors.orange} />
+      <CompactList title={t('analysis:batch.resultStepSize', { count: stepNotes.length })} items={stepNotes} color={colors.orange} />
+      <EdgeSafeguardFiles names={safeguard} processed={processedCount} />
+    </div>
+  );
+}
+
+export function BatchTab({ analysisLoaded, hasGrains, grainsVersion, onComplete }) {
   const { t } = useTranslation('analysis');
   const [folderPath,   setFolderPath]   = useState('');
   const [outputPath,   setOutputPath]   = useState('');
-  const [datasetName,  setDatasetName]  = useState('Dataset');
-  const [batchRunning, setBatchRunning] = useState(false);
-  const [exportRunning,setExportRunning]= useState(false);
-  const [batchTaskId,  setBatchTaskId]  = useState(null);
-  const [batchProgress,setBatchProgress]= useState(null);
-  const [batchLog,     setBatchLog]     = useState('');
-  const [batchMsg,     setBatchMsg]     = useState(null);
-  const [batchError,   setBatchError]   = useState(false);
-  const [exportMsg,    setExportMsg]    = useState(null);
-  const [exportError,  setExportError]  = useState(false);
+  // The name of the dataset in the workbook: what the user typed, else the loaded file's name without folder and
+  // extension, else "Dataset". `null` = nothing typed (the field follows the loaded file); an emptied field falls back.
+  const sourceName = useResultStore((state) => state.sourceName);
+  const defaultDatasetName = datasetNameFromFile(sourceName) || 'Dataset';
+  const [typedDatasetName, setTypedDatasetName] = useState(null);
+  const datasetName = (typedDatasetName ?? '').trim() || defaultDatasetName;
+  // Same settings as in the Grain Analysis tab, here for every file of the folder. The phase is "all phases"
+  // or the phase with the most measured pixels of each file (a phase id of the loaded map means nothing for
+  // other files). Its own copy, kept in the store so that it survives leaving the tab: a batch runs on other
+  // files, not on the map the Grain tab works on; it starts at what the Grain tab has the first time the tab is
+  // used (a single phase there becomes all phases), then goes its own way and is not reset per map.
+  const storedStats = useResultStore((state) => state.batchStatsSettings);
+  const statsSettings = storedStats ?? batchStatsFromGrain(useResultStore.getState().grainStatsSettings);
+  useEffect(() => { useResultStore.getState().ensureBatchStatsSettings(); }, []);
+  // The reconstruction of every file is the Grain tab's (one place to set it), read from the store.
+  const reconSettings = useResultStore((state) => state.grainStatsSettings);
+  const recon = batchReconstruction(reconSettings);
+  // The RX criteria of every file are the Recrystallization tab's (one place to set them), read from the store.
+  const rxSettings = useResultStore((state) => state.rxCriteria);
+  const rxPending = useResultStore((state) => state.rxCriteriaEdited);   // typed, not applied to the open map yet
+  const rx = rxCriteriaArgs(rxSettings);
+  // The texture step of every file uses the Texture tab's preset and tolerance angle (the tolerance is left out, and the
+  // batch uses its own 10 degrees, when the field holds no usable number)
+  const texturePreset = useResultStore((state) => state.texturePreset);
+  const textureTolerance = useResultStore((state) => state.textureTolerance);
+  const texture = textureBatchArgs(texturePreset, textureTolerance);
+  // The deformation parameters of every file are the Deformation tab's (KAM order, KAM threshold, HAGB limit).
+  const deformationTyped = useResultStore((state) => state.deformationParams);
+  const deformation = deformationArgs(deformationTyped);
+  // What the batch and the export show lives in the store: it survives leaving the tab, and the poll of a
+  // task that is still running starts again when the tab is opened.
+  const batchRun = useResultStore((state) => state.batchRun);
+  const exportRun = useResultStore((state) => state.exportRun);
+  const setBatchRun = useResultStore.getState().setBatchRun;
+  const setExportRun = useResultStore.getState().setExportRun;
+  const {
+    taskId: batchTaskId, running: batchRunning, progress: batchProgress, log: batchLog, msg: batchMsg,
+    error: batchError, warn: batchWarn, result: batchResult, settings: batchSettings, currentFile: batchCurrentFile,
+  } = batchRun;
+  const {
+    taskId: exportTaskId, running: exportRunning, msg: exportMsg, error: exportError, warn: exportWarn, warnings: exportWarnings,
+    renamed: exportRenamed, rxApplied: exportRxApplied, textureApplied: exportTextureApplied,
+    deformationApplied: exportDeformationApplied,
+  } = exportRun;
+  const phaseOptions = useResultStore((state) => state.phaseOptions);
 
   // Separate export output path — matches batch_output_edit in PyQt5
   const [exportOutputPath, setExportOutputPath] = useState('');
@@ -1691,84 +2530,161 @@ function BatchTab({ analysisLoaded, onComplete }) {
       try {
         const res = await analysisApi.getTaskStatus(batchTaskId);
         const d = res.data;
-        if (d.progress !== undefined) setBatchProgress(d.progress);
-        if (d.message) setBatchLog(prev => prev + '\n' + d.message);
-        if (d.status === 'done' || d.status === 'completed') {
+        const percent = progressPercent(d.progress);
+        if (percent !== undefined) setBatchRun({ progress: percent });
+        setBatchRun({ currentFile: typeof d.current_file === 'string' && d.current_file ? d.current_file : null });
+        if (d.message) setBatchRun((prev) => ({ log: prev.log + '\n' + d.message }));
+        // the backend writes 'completed' / 'failed' with the text in `error`; taskOutcome knows both spellings
+        const out = taskOutcome(d);
+        if (out.done) {
           clearInterval(iv);
-          setBatchTaskId(null);
-          setBatchRunning(false);
-          setBatchMsg(d.message || t('analysis:batch.complete'));
-          setBatchError(false);
-          setBatchProgress(null);
+          const result = d.result ?? null;
+          const trouble = ['failed', 'skipped', 'warnings'].some((k) => Array.isArray(result?.[k]) && result[k].length > 0);
+          setBatchRun({
+            taskId: null, running: false, progress: null, error: false, warn: trouble, result,
+            msg: d.message || t('analysis:batch.complete'),
+          });
           onComplete('batch');
-        } else if (d.status === 'error') {
+        } else if (out.failed) {
           clearInterval(iv);
-          setBatchTaskId(null);
-          setBatchRunning(false);
-          setBatchMsg(d.message || t('analysis:batch.failedMsg'));
-          setBatchError(true);
-          setBatchProgress(null);
+          setBatchRun({
+            taskId: null, running: false, progress: null, error: true, warn: false,
+            msg: out.message || t('analysis:batch.failedMsg'),
+            result: d.result ?? null,      // a batch with no file processed still says what happened to each
+          });
         }
-      } catch { /* keep polling */ }
+      } catch (err) {
+        if (pollErrorOutcome(err).stop) {      // the backend forgot the task: nothing to wait for
+          clearInterval(iv);
+          // not "failed": a task that is gone may have finished (the registry keeps the last 50), or the server restarted
+          setBatchRun({ taskId: null, running: false, progress: null, error: false, warn: true, msg: t('analysis:batch.statusUnknown') });
+        }
+        // other errors (network blip): keep polling
+      }
     }, 2000);
     return () => clearInterval(iv);
-  }, [batchTaskId, onComplete, t]);
+  }, [batchTaskId, onComplete, t, setBatchRun]);
 
   const handleBatch = async () => {
-    if (!folderPath.trim() || !outputPath.trim()) return;
-    setBatchRunning(true);
-    setBatchLog(t('analysis:batch.logHeader', { folder: folderPath, output: outputPath }));
-    setBatchMsg(t('analysis:batch.startingMsg'));
-    setBatchError(false);
+    if (!folderPath.trim() || !outputPath.trim() || !recon || !rx || !deformation) return;
+    setBatchRun({
+      ...EMPTY_BATCH_RUN, running: true,
+      settings: { edgeRule: statsSettings.edgeRule, ecdBasis: statsSettings.ecdBasis, statsPhase: statsSettings.statsPhase, recon, rx, rxPending, deformation },
+      log: t('analysis:batch.logHeader', { folder: folderPath, output: outputPath }),
+      msg: t('analysis:batch.startingMsg'),
+    });
     try {
-      const res = await analysisApi.batch(folderPath.trim(), outputPath.trim());
+      const res = await analysisApi.batch(
+        folderPath.trim(), outputPath.trim(), statsSettings.edgeRule, statsSettings.ecdBasis, statsSettings.statsPhase, recon, rx,
+        texture, deformation,
+      );
       if (res.data?.task_id) {
-        setBatchTaskId(res.data.task_id);
+        setBatchRun({ taskId: res.data.task_id });
       } else {
-        setBatchRunning(false);
-        setBatchMsg(res.data?.message || t('analysis:batch.completeShort'));
-        setBatchError(false);
+        setBatchRun({ running: false, msg: res.data?.message || t('analysis:batch.completeShort'), error: false });
         onComplete('batch');
       }
     } catch (err) {
-      setBatchRunning(false);
-      setBatchMsg(err.response?.data?.detail || t('analysis:batch.failedShort'));
-      setBatchError(true);
+      setBatchRun({ running: false, msg: errorMessageFrom(err, t('analysis:batch.failedShort')), error: true });
     }
   };
 
+  // Poll the export task (Electron path): its answer carries the file that was written and the steps that failed
+  useEffect(() => {
+    if (!exportTaskId) return;
+    const fail = (msg) => setExportRun({ taskId: null, running: false, msg, error: true });
+    const iv = setInterval(async () => {
+      try {
+        const res = await analysisApi.getTaskStatus(exportTaskId);
+        const out = taskOutcome(res.data);
+        if (out.done) {
+          clearInterval(iv);
+          const result = res.data.result && typeof res.data.result === 'object' ? res.data.result : {};
+          const path = result.path || useResultStore.getState().exportRun.path;
+          const requested = result.requested_path;
+          setExportRun({
+            taskId: null, running: false, error: false,
+            msg: t('analysis:batch.exportedTo', { path }),
+            warnings: Array.isArray(result.warnings) ? result.warnings.filter((w) => typeof w === 'string') : [],
+            // the file existed: the backend wrote beside it and did not replace it
+            renamed: requested && result.path && !samePath(requested, result.path, window.electronAPI?.platform)
+              ? { requested, path: result.path } : null,
+          });
+          return;
+        }
+        if (out.failed) {
+          clearInterval(iv);
+          fail(out.message || t('analysis:batch.exportFailed'));
+          return;
+        }
+      } catch (err) {
+        if (pollErrorOutcome(err).stop) {
+          // the task is gone: the file may have been written (or the server restarted); not "failed"
+          clearInterval(iv);
+          setExportRun({ taskId: null, running: false, msg: t('analysis:batch.exportStatusUnknown'), error: false, warn: true });
+          return;
+        }
+        // other errors (network blip): ask again; a running export is polled until it ends or is gone
+      }
+    }, EXPORT_POLL_MS);
+    return () => clearInterval(iv);
+  }, [exportTaskId, t, setExportRun]);
+
   const handleExport = async () => {
-    setExportRunning(true);
-    setExportMsg(null);
+    setExportRun({ ...EMPTY_EXPORT_RUN, running: true });
     try {
-      // Browser mode: trigger native file download via the streaming endpoint
+      // Electron saves to a path: without one nothing is exported, so nothing is reclassified either
+      const electronPath = window.electronAPI?.saveFile ? (exportOutputPath.trim() || outputPath.trim()) : null;
+      if (window.electronAPI?.saveFile && !electronPath) {
+        setExportRun({ running: false, msg: t('analysis:batch.chooseOutputFirst'), error: true });
+        return;
+      }
+      // the workbook of the open map must be made with the deformation parameters, the texture choice and the RX criteria
+      // that are typed, not with the last ones sent
+      const applied = await applyTypedSettings(t);
+      const texturePhaseText = applied.texture
+        ? (applied.texture.phase === 'most_measured' ? t('analysis:batch.phaseMostMeasuredShort')
+          : (phaseOptions.find((p) => p.id === applied.texture.phase)?.name ?? String(applied.texture.phase)))
+        : null;
+      setExportRun({
+        ...(applied.rx ? { rxApplied: rxCriteriaLabels(applied.rx) } : {}),
+        ...(applied.texture ? { textureApplied: { preset: applied.texture.preset, tolerance: applied.texture.tolerance, phase: texturePhaseText } } : {}),
+        ...(applied.deformation ? {
+          deformationApplied: { order: applied.deformation.kamOrder, threshold: applied.deformation.kamThreshold, hagb: applied.deformation.hagbMin },
+        } : {}),
+      });
+      // Browser mode: the workbook comes as a blob, so that the warnings in its header can be read
       if (!window.electronAPI?.saveFile) {
-        const url = analysisApi.downloadExcel(datasetName);
-        window.open(url, '_blank');
-        setExportMsg(t('analysis:batch.downloadStarted'));
-        setExportError(false);
+        let res;
+        try {
+          res = await analysisApi.downloadExcel(datasetName);
+        } catch (err) {
+          throw new Error(await blobErrorMessage(err, t('analysis:batch.exportFailed')));
+        }
+        const { warnings, unreadable } = warningsFromHeader(res.headers?.['x-orienta-warnings']);
+        saveBlob(res.data, 'EBSD_Analysis.xlsx');
+        setExportRun({
+          running: false, msg: t('analysis:batch.downloadStarted'), error: false,
+          warnings: unreadable ? [t('analysis:batch.exportWarningsUnreadable')] : warnings,
+        });
         return;
       }
       // Electron mode: save to a user-chosen path
-      const path = exportOutputPath.trim() || outputPath.trim();
-      if (!path) {
-        setExportMsg(t('analysis:batch.chooseOutputFirst'));
-        setExportError(true);
+      const path = electronPath;
+      const res = await analysisApi.exportExcel(path, datasetName);
+      const taskId = res.data?.task_id;
+      if (!taskId) {
+        setExportRun({ running: false, msg: res.data?.message || t('analysis:batch.exportedTo', { path }), error: false });
         return;
       }
-      const res = await analysisApi.exportExcel(path, datasetName);
-      setExportMsg(res.data?.message || t('analysis:batch.exportedTo', { path }));
-      setExportError(false);
+      setExportRun({ taskId, path });       // the poll above takes it from here
     } catch (err) {
-      setExportMsg(err.response?.data?.detail || t('analysis:batch.exportFailed'));
-      setExportError(true);
-    } finally {
-      setExportRunning(false);
+      setExportRun({ running: false, msg: errorMessageFrom(err, t('analysis:batch.exportFailed')), error: true });
     }
   };
 
   return (
-    <TabLayout defaultLayer="bc" analysisLoaded={analysisLoaded} controls={
+    <TabLayout defaultLayer="bc" analysisLoaded={analysisLoaded} hasGrains={hasGrains} grainsVersion={grainsVersion} controls={
       <>
         {/* Batch Processing — matches batch_group */}
         <ColoredGroupBox title={t('analysis:batch.processingTitle')} color={colors.purple}>
@@ -1820,14 +2736,74 @@ function BatchTab({ analysisLoaded, onComplete }) {
               />
             </div>
           </FieldRow>
+          <GrainStatsSettings
+            settings={statsSettings}
+            onChange={(patch) => useResultStore.getState().setBatchStatsSettings(patch)}
+            disabled={batchRunning}
+            phaseOptions={[]}
+            allowMostMeasured
+          />
+          {/* its own copy of the Grain tab's settings: they start equal, and a change on one side stays there */}
+          <div data-testid="batch-stats-own" style={{ fontSize: 10, color: colors.textSecondary, lineHeight: 1.35, margin: '2px 0 8px' }}>
+            {t('analysis:batch.statsSettingsOwn')}
+          </div>
+          {/* the texture phase of every file: not a setting here, the rule of the texture step */}
+          <div data-testid="batch-texture-line" style={{ fontSize: 10, color: colors.textSecondary, lineHeight: 1.35, margin: '2px 0 8px' }}>
+            {t('analysis:batch.textureLine')}
+          </div>
+          <div data-testid="batch-texture-settings-line" style={{ fontSize: 10, color: colors.textSecondary, lineHeight: 1.35, margin: '2px 0 8px' }}>
+            {t('analysis:batch.textureSettingsLine', { preset: texture.preset, tolerance: texture.toleranceDeg ?? 10 })}
+          </div>
+          {/* the reconstruction of every file: the Grain tab's, said here because it is set there */}
+          <div
+            data-testid="batch-recon-line"
+            style={{ fontSize: 10, color: recon ? colors.textSecondary : colors.red, lineHeight: 1.35, margin: '2px 0 8px' }}
+          >
+            {recon
+              ? t(recon.minIntercept === undefined ? 'analysis:batch.reconLineNoIntercept' : 'analysis:batch.reconLine', {
+                threshold: String(reconSettings.gbThreshold).trim(),
+                minPixels: String(reconSettings.minPixels).trim(),
+                alpha: String(reconSettings.alpha).trim(),
+                fill: recon.fill ? t('analysis:batch.reconFillOn') : t('analysis:batch.reconFillOff'),
+                minIntercept: String(reconSettings.minIntercept).trim(),
+              })
+              : t('analysis:batch.reconInvalid')}
+          </div>
+          {/* the RX criteria of every file: the Recrystallization tab's, said here because it is set there */}
+          <div
+            data-testid="batch-rx-line"
+            style={{ fontSize: 10, color: rx ? colors.textSecondary : colors.red, lineHeight: 1.35, margin: '2px 0 8px' }}
+          >
+            {rx
+              ? `${t(rxPending ? 'analysis:batch.rxLinePending' : 'analysis:batch.rxLine', rxCriteriaLabels(rx))} ${t('analysis:batch.rxPhaseRule')}`
+              : t('analysis:batch.rxInvalid')}
+          </div>
+          {/* the deformation parameters of every file: the Deformation tab's, said here because it is set there */}
+          <div
+            data-testid="batch-deformation-line"
+            style={{ fontSize: 10, color: deformation ? colors.textSecondary : colors.red, lineHeight: 1.35, margin: '2px 0 8px' }}
+          >
+            {deformation
+              ? t('analysis:batch.deformationLine', { order: deformation.kamOrder, threshold: deformation.kamThreshold, hagb: deformation.hagbMin })
+              : t('analysis:batch.deformationInvalid')}
+          </div>
           <Button
             onClick={handleBatch}
-            disabled={batchRunning || !folderPath.trim() || !outputPath.trim()}
+            disabled={batchRunning || !folderPath.trim() || !outputPath.trim() || !recon || !rx || !deformation}
             title={t('analysis:batch.processFolderTooltip')}
             style={{ width: '100%', padding: '8px 14px', background: colors.purple, color: colors.textOnAccent }}
           >
             {batchRunning ? <span className="btn-loading">{t('analysis:batch.processing')}</span> : t('analysis:batch.processFolder')}
           </Button>
+          {/* why the button is disabled, when the only reason is a path that is still empty */}
+          {!batchRunning && recon && rx && deformation && (!folderPath.trim() || !outputPath.trim()) && (
+            <div data-testid="batch-start-hint" style={{ marginTop: 4, fontSize: 10, color: colors.textSecondary, lineHeight: 1.35 }}>
+              {t('analysis:batch.startHint')}
+            </div>
+          )}
+          <div data-testid="batch-records" style={{ marginTop: 4, fontSize: 10, color: colors.textSecondary, lineHeight: 1.35 }}>
+            {t('analysis:batch.workbookRecords')}
+          </div>
           {batchRunning && batchProgress !== null && (
             <div style={{ marginTop: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
@@ -1837,7 +2813,31 @@ function BatchTab({ analysisLoaded, onComplete }) {
               <ProgressBar value={batchProgress} color={colors.purple} />
             </div>
           )}
-          <StatusMsg msg={batchMsg} isError={batchError} />
+          {batchRunning && batchCurrentFile && (
+            <div data-testid="batch-current-file" role="status" aria-live="polite" style={{ marginTop: 4, fontSize: 10, color: colors.textSecondary, overflowWrap: 'anywhere' }}>
+              {currentFileText(batchCurrentFile, t)}
+            </div>
+          )}
+          <StatusMsg msg={batchMsg} isError={batchError} isWarn={batchWarn} />
+          <div aria-live="polite">
+          {batchSettings && !batchRunning && (batchResult || batchMsg) && (
+            <div data-testid="batch-ran-with" style={{ marginTop: 6, fontSize: 10, color: colors.textSecondary, lineHeight: 1.35 }}>
+              {t('analysis:batch.ranWith', {
+                edge: t(`analysis:grain.edgeRuleShort.${batchSettings.edgeRule}`),
+                basis: t(`analysis:grain.ecdBasisShort.${batchSettings.ecdBasis}`),
+                phase: batchSettings.statsPhase === 'most_measured'
+                  ? t('analysis:grain.statsPhaseMostMeasured') : t('analysis:grain.statsPhaseAll'),
+                threshold: batchSettings.recon.threshold,
+                minPixels: batchSettings.recon.minPixels,
+                alpha: batchSettings.recon.alpha,
+                fill: batchSettings.recon.fill ? t('analysis:batch.reconFillOn') : t('analysis:batch.reconFillOff'),
+              })}
+              {batchSettings.rx && ` · ${t(batchSettings.rxPending ? 'analysis:batch.ranWithRxPending' : 'analysis:batch.ranWithRx', rxCriteriaLabels(batchSettings.rx))}`}
+              {batchSettings.deformation && ` · ${t('analysis:batch.ranWithDeformation', { order: batchSettings.deformation.kamOrder, threshold: batchSettings.deformation.kamThreshold, hagb: batchSettings.deformation.hagbMin })}`}
+            </div>
+          )}
+          <BatchResultLists result={batchResult} />
+          </div>
 
           {/* Batch processing log — matches batch_log QTextEdit */}
           {batchLog && (
@@ -1858,10 +2858,15 @@ function BatchTab({ analysisLoaded, onComplete }) {
           <div style={{ fontSize: 11, color: colors.textSecondary, marginBottom: 10 }}>
             {t('analysis:batch.exportDesc')}
           </div>
+          <div data-testid="export-records" style={{ fontSize: 10, color: colors.textSecondary, lineHeight: 1.35, marginBottom: 10 }}>
+            {t('analysis:batch.workbookRecordsExport')}
+          </div>
           <FormRow label={t('analysis:batch.datasetNameLabel')}>
             <Input
-              value={datasetName}
-              onChange={(e) => setDatasetName(e.target.value)}
+              value={typedDatasetName ?? defaultDatasetName}
+              onChange={(e) => setTypedDatasetName(e.target.value)}
+              placeholder={defaultDatasetName}
+              aria-label={t('analysis:batch.datasetNameLabel')}
               disabled={exportRunning}
             />
           </FormRow>
@@ -1896,7 +2901,45 @@ function BatchTab({ analysisLoaded, onComplete }) {
           >
             {exportRunning ? <span className="btn-loading">{t('analysis:batch.exporting')}</span> : t('analysis:batch.downloadExcel')}
           </Button>
-          <StatusMsg msg={exportMsg} isError={exportError} />
+          <StatusMsg msg={exportMsg} isError={exportError} isWarn={exportWarn} />
+          {/* the live region is always there; its text arrives later (a region inserted with its text is often not read) */}
+          <div role="status" aria-live="polite" data-testid="export-rx-applied-region">
+            {exportDeformationApplied && (
+              <div data-testid="export-deformation-applied" style={{ marginTop: 6, fontSize: 11, color: colors.textSecondary, overflowWrap: 'anywhere' }}>
+                {t('analysis:batch.exportDeformationApplied', exportDeformationApplied)}
+              </div>
+            )}
+            {exportTextureApplied && (
+              <div data-testid="export-texture-applied" style={{ marginTop: 6, fontSize: 11, color: colors.textSecondary, overflowWrap: 'anywhere' }}>
+                {t('analysis:batch.exportTextureApplied', exportTextureApplied)}
+              </div>
+            )}
+            {exportRxApplied && (
+              <div data-testid="export-rx-applied" style={{ marginTop: 6, fontSize: 11, color: colors.textSecondary, overflowWrap: 'anywhere' }}>
+                {t('analysis:batch.exportRxApplied', exportRxApplied)}
+              </div>
+            )}
+            {exportRenamed && (
+              <div data-testid="export-renamed" style={{
+                marginTop: 6, padding: '5px 10px', borderRadius: 4, fontSize: 11,
+                background: colorAlpha(colors.orange, 13), border: `1px solid ${colors.orange}`, color: colors.orange,
+                overflowWrap: 'anywhere',
+              }}>
+                {t('analysis:batch.exportRenamed', { requested: exportRenamed.requested, path: exportRenamed.path })}
+              </div>
+            )}
+          </div>
+          {exportWarnings.length > 0 && (
+            <div role="alert" data-testid="export-warnings" style={{
+              marginTop: 6, padding: '5px 10px', borderRadius: 4, fontSize: 11,
+              background: colorAlpha(colors.orange, 13), border: `1px solid ${colors.orange}`, color: colors.orange,
+            }}>
+              <div>{t('analysis:batch.exportWarningsTitle')}</div>
+              <ul style={{ margin: '3px 0 0', paddingLeft: 16 }}>
+                {exportWarnings.map((w, i) => <li key={i} style={{ overflowWrap: 'anywhere' }}>{w}</li>)}
+              </ul>
+            </div>
+          )}
         </ColoredGroupBox>
       </>
     } />
@@ -1932,15 +2975,31 @@ export default function AnalysisPage({ onNavigate, isActive }) {
     data: false, grains: false, deformation: false, texture: false, rx: false, batch: false,
   });
 
-  const { analysisLoaded, hasGrains, setAnalysis } = useResultStore();
+  // grainsVersion counts finished reconstructions (and basis changes): the map viewers fetch again
+  // when it changes. It and hasGrains are set in one store update.
+  const {
+    analysisLoaded, hasGrains, grainsVersion, grainStatsSettings, setAnalysis,
+    markGrainsReconstructed, bumpGrainMaps, setGrainStatsSettings, resetGrainStatsSettings,
+  } = useResultStore();
+  const grainReconBusy = useResultStore((state) => state.grainReconBusy);   // the Grain tab's own reconstruction
+  // The map the page shows was replaced or lost: what the tabs kept of the old one (results in their own state, the ticks
+  // of the tab bar) goes. The tabs that keep results are keyed on it.
+  const mapEpoch = useResultStore((state) => state.mapEpoch);
 
   // Global status label text — mirrors status_label in PyQt5
   const [statusMsg, setStatusMsg] = useState(() => t('analysis:status.ready'));
 
   // "Run Complete Analysis" state
-  const [runAllBusy, setRunAllBusy] = useState(false);
+  const runAllBusy = useResultStore((state) => state.runAllBusy);   // in the store: the Grain tab stops with it
+  const setRunAllBusy = useResultStore.getState().setRunAllBusy;
   const [runAllStep, setRunAllStep] = useState(0);
   const [runAllTotal, setRunAllTotal] = useState(0);
+
+  useEffect(() => {
+    setCompletionFlags((prev) => ({
+      ...prev, grains: useResultStore.getState().hasGrains, deformation: false, texture: false, rx: false,
+    }));
+  }, [mapEpoch]);
 
   const markComplete = useCallback((tabId) => {
     setCompletionFlags(prev => ({ ...prev, [tabId]: true }));
@@ -1955,20 +3014,33 @@ export default function AnalysisPage({ onNavigate, isActive }) {
     setStatusMsg(labels[tabId] || t('analysis:status.tabComplete', { tab: tabId }));
   }, [t]);
 
-  // On mount + when page becomes active: check backend for already-loaded xmap
+  // Ask the backend what it holds when the page becomes active and whenever the tab changes: a reconstruction may
+  // have finished while the Grain tab was away (a tab that is left stops polling), a running one is picked up
+  // again by the Grain tab, a map may have been loaded or swapped on another page (EBSD viewer, PhaseMap "Add
+  // file", a reload of the window), and the backend may have lost its map (restart). The answer is applied by
+  // the store (`applyBackendStatus`); one that was overtaken by something done here is dropped.
+  useReconstructionWatch({ onComplete: markComplete });
+  const announced = useRef(false);
   useEffect(() => {
-    if (!isActive) return;
-    analysisApi.status().then(res => {
-      const d = res.data;
-      if (d?.loaded) {
-        setAnalysis(d);
-        setDatasetStatus(d);
-        setCompletionFlags(prev => ({ ...prev, data: true, grains: d.has_grains || false }));
+    if (!isActive) { announced.current = false; return; }
+    syncFromBackend().then((outcome) => {
+      if (!outcome || !outcome.applied) return;
+      const { d } = outcome;
+      if (!d.loaded) {
+        setDatasetStatus(null);
+        setCompletionFlags({ data: false, grains: false, deformation: false, texture: false, rx: false, batch: false });
+        setStatusMsg(t('analysis:status.ready'));
+        return;
+      }
+      setDatasetStatus(d);
+      setCompletionFlags(prev => ({ ...prev, data: true, grains: d.has_grains || false }));
+      if (!announced.current) {      // the status line is rewritten when the page is entered, not at every tab click
+        announced.current = true;
         const detail = d.shape?.length ? t('analysis:page.pixelsLoadedPlain', { shape: d.shape.join(' × ') }) : t('analysis:status.readyForAnalysis');
         setStatusMsg(t('analysis:status.datasetLoaded', { detail }));
       }
     }).catch(() => {});
-  }, [setAnalysis, isActive, t]);
+  }, [isActive, activeTab, t]);
 
   // Batch-Dashboard handoff: clicked "Open in Analysis" after a batch run.
   // The .ang path is in sessionStorage. Load it via the public API —
@@ -1992,27 +3064,29 @@ export default function AnalysisPage({ onNavigate, isActive }) {
       .then((res) => {
         const d = res.data;
         setAnalysis(d);
+        resetGrainStatsSettings();   // a new map: the backend is back at its defaults
+        bumpGrainMaps();             // and the maps on screen are the old map's
         setDatasetStatus(d);
         setCompletionFlags(prev => ({ ...prev, data: true }));
         const shape = d.shape?.length ? t('analysis:page.pixelsLoadedPlain', { shape: d.shape.join(' × ') }) : t('analysis:status.dataset');
         setStatusMsg(t('analysis:status.loadedFromBatch', { shape }));
       })
       .catch((err) => {
-        const msg = err.response?.data?.detail || err.message || t('analysis:status.handoffFailed');
+        const msg = errorMessageFrom(err, t('analysis:status.handoffFailed'));
         setStatusMsg(t('analysis:status.batchHandoffFailed', { msg }));
       });
-  }, [isActive, setAnalysis, t]);
+  }, [isActive, setAnalysis, resetGrainStatsSettings, bumpGrainMaps, t]);
 
   const handleLoaded = useCallback((data) => {
     setAnalysis(data);
+    resetGrainStatsSettings();   // a new map: the backend is back at its defaults
+    bumpGrainMaps();             // the layers that need no grains (BC, IPF, KAM) are the old map's: fetch them again
     setDatasetStatus(data);
     const shape = data.shape?.length ? t('analysis:page.pixelsLoadedPlain', { shape: data.shape.join(' × ') }) : t('analysis:status.dataset');
     setStatusMsg(t('analysis:status.loadedShape', { shape }));
-  }, [setAnalysis, t]);
+  }, [setAnalysis, resetGrainStatsSettings, bumpGrainMaps, t]);
 
-  const handleGrainsReconstructed = useCallback(() => {
-    useResultStore.setState({ hasGrains: true });
-  }, []);
+  const handleGrainsReconstructed = markGrainsReconstructed;
 
   // "Run Complete Analysis" — chains Grains → Deformation → Texture → RX
   // Grain reconstruction is async (returns task_id), so we poll until done.
@@ -2020,29 +3094,95 @@ export default function AnalysisPage({ onNavigate, isActive }) {
     if (!analysisLoaded) return;
     setRunAllBusy(true);
 
-    // Helper: wait for async task to complete
+    // Helper: wait for async task to complete. The backend writes 'completed' / 'failed' (older code
+    // also 'done' / 'error'); taskOutcome knows both and a task the backend forgot (404) ends the wait.
     const waitForTask = async (taskId) => {
       for (let i = 0; i < 300; i++) { // max 5 min (300 × 1s)
         await new Promise(r => setTimeout(r, 1000));
-        const res = await analysisApi.getTaskStatus(taskId);
-        if (res.data?.status === 'done') return res.data;
-        if (res.data?.status === 'error') throw new Error(res.data?.error || t('analysis:runSteps.taskFailed'));
+        let res;
+        try {
+          res = await analysisApi.getTaskStatus(taskId);
+        } catch (err) {
+          if (pollErrorOutcome(err).stop) throw new Error(t('analysis:grain.reconstructionFailed'));
+          continue;   // network blip: ask again
+        }
+        const out = taskOutcome(res.data);
+        if (out.done) return res.data;
+        if (out.failed) throw new Error(out.message || t('analysis:runSteps.taskFailed'));
       }
       throw new Error(t('analysis:runSteps.taskTimedOut'));
     };
+
+    // the texture and RX steps come after the reconstruction: a tolerance or a criterion that cannot be sent is found
+    // before anything has run
+    if (textureToleranceOf(useResultStore.getState().textureTolerance) === undefined) {
+      setStatusMsg(t('analysis:texture.toleranceInvalid'));
+      setRunAllBusy(false);
+      return;
+    }
+    if (!rxCriteriaArgs(useResultStore.getState().rxCriteria)) {
+      setStatusMsg(t('analysis:rx.invalidCriteria'));
+      setRunAllBusy(false);
+      return;
+    }
+    if (!deformationArgs(useResultStore.getState().deformationParams)) {
+      setStatusMsg(t('analysis:deformation.invalidParams'));
+      setRunAllBusy(false);
+      return;
+    }
 
     const steps = [
       {
         label: t('analysis:runSteps.grainReconstruction'),
         fn: async () => {
-          const res = await analysisApi.reconstructGrains(5.0, 5);
-          const taskId = res.data?.task_id;
-          if (taskId) await waitForTask(taskId);
+          // the Grain tab's parameters and statistics settings, as they are now (the store, not a copy)
+          const args = reconstructArgs(useResultStore.getState().grainStatsSettings);
+          if (!args) throw new Error(t('analysis:grain.reconstructionFailed'));
+          useResultStore.getState().beginReconstruction();   // old statistics and pending answers go
+          try {
+            const res = await analysisApi.reconstructGrains(...args);
+            const taskId = res.data?.task_id;
+            const answer = taskId ? await waitForTask(taskId) : res.data;
+            // the grains exist now: maps may be drawn and the Grain tab shows this run's statistics
+            useResultStore.getState().setGrainStats(grainStatsFrom(answer));
+            markGrainsReconstructed();
+          } finally {
+            // a tab click during the chain may have put the chain's task in the store: it is over, whatever
+            // way it ended (the page's watch stays out of the chain's way while it runs)
+            useResultStore.getState().setReconTaskId(null);
+          }
         },
       },
-      { label: t('analysis:runSteps.deformationAnalysis'), fn: () => analysisApi.deformation() },
-      { label: t('analysis:runSteps.textureAnalysis'),     fn: () => analysisApi.texture() },
-      { label: t('analysis:runSteps.rxClassification'),    fn: () => analysisApi.getMap('rx', 'RdYlBu_r') },
+      {
+        label: t('analysis:runSteps.deformationAnalysis'),
+        fn: async () => {
+          // the Deformation tab's parameters, as they are now (the store, not the backend's last ones)
+          const args = deformationArgs(useResultStore.getState().deformationParams);
+          if (!args) throw new Error(t('analysis:deformation.invalidParams'));
+          const res = await analysisApi.deformation(args);
+          useResultStore.getState().adoptDeformationUsed(res.data?.deformation_params ?? deformationBody(args));
+          useResultStore.getState().bumpGrainMaps();
+          return res;
+        },
+      },
+      { label: t('analysis:runSteps.textureAnalysis'),     fn: async () => {
+        const { texturePhase: phase, texturePreset: preset, textureTolerance: tolerance } = useResultStore.getState();
+        const res = await analysisApi.texture(phase, preset, textureToleranceOf(tolerance));
+        useResultStore.getState().markTextureApplied({ phase, preset, tolerance });
+        useResultStore.getState().bumpGrainMaps();
+        return res;
+      } },
+      {
+        label: t('analysis:runSteps.rxClassification'),
+        fn: async () => {
+          // the Recrystallization tab's criteria, as they are now (the store, not the backend's last ones)
+          const args = rxCriteriaArgs(useResultStore.getState().rxCriteria);
+          if (!args) throw new Error(t('analysis:rx.invalidCriteria'));
+          const res = await analysisApi.rxClassify(args, useResultStore.getState().rxPhase);
+          useResultStore.getState().adoptRxCriteriaUsed(res.data);
+          useResultStore.getState().bumpGrainMaps();
+        },
+      },
     ];
     setRunAllTotal(steps.length);
     for (let i = 0; i < steps.length; i++) {
@@ -2051,14 +3191,13 @@ export default function AnalysisPage({ onNavigate, isActive }) {
       try {
         await steps[i].fn();
       } catch (err) {
-        setStatusMsg(t('analysis:status.failedAtStep', { step: i + 1, total: steps.length, label: steps[i].label, error: err.message || '' }));
+        setStatusMsg(t('analysis:status.failedAtStep', { step: i + 1, total: steps.length, label: steps[i].label, error: errorMessageFrom(err, err.message || '') }));
         setRunAllBusy(false);
         setRunAllStep(0);
         return;
       }
     }
     setCompletionFlags({ data: true, grains: true, deformation: true, texture: true, rx: true, batch: false });
-    useResultStore.setState({ hasGrains: true });
     setStatusMsg(t('analysis:status.completeFinished'));
     setRunAllBusy(false);
     setRunAllStep(0);
@@ -2176,40 +3315,54 @@ export default function AnalysisPage({ onNavigate, isActive }) {
             onLoad={handleLoaded}
             onComplete={markComplete}
             analysisLoaded={analysisLoaded}
+            hasGrains={hasGrains}
+            grainsVersion={grainsVersion}
           />
         )}
         {activeTab === 'grains' && (
           <GrainTab
             analysisLoaded={analysisLoaded}
             hasGrains={hasGrains}
+            grainsVersion={grainsVersion}
             onGrainsReconstructed={handleGrainsReconstructed}
+            statsSettings={grainStatsSettings}
+            onStatsSettingsChange={setGrainStatsSettings}
+            onGrainMapsStale={bumpGrainMaps}
             onComplete={markComplete}
           />
         )}
         {activeTab === 'deformation' && (
           <DeformationTab
+            key={mapEpoch}
             analysisLoaded={analysisLoaded}
             hasGrains={hasGrains}
+            grainsVersion={grainsVersion}
             onComplete={markComplete}
           />
         )}
         {activeTab === 'texture' && (
           <TextureTab
+            key={mapEpoch}
             analysisLoaded={analysisLoaded}
             hasGrains={hasGrains}
+            grainsVersion={grainsVersion}
             onComplete={markComplete}
           />
         )}
         {activeTab === 'rx' && (
           <RXTab
+            key={mapEpoch}
             analysisLoaded={analysisLoaded}
             hasGrains={hasGrains}
+            grainsVersion={grainsVersion}
             onComplete={markComplete}
           />
         )}
         {activeTab === 'batch' && (
           <BatchTab
             analysisLoaded={analysisLoaded}
+            hasGrains={hasGrains}
+            grainsVersion={grainsVersion}
             onComplete={markComplete}
           />
         )}
@@ -2228,7 +3381,7 @@ export default function AnalysisPage({ onNavigate, isActive }) {
       }}>
         <Button
           onClick={handleRunAll}
-          disabled={runAllBusy || !analysisLoaded}
+          disabled={runAllBusy || grainReconBusy || !analysisLoaded}
           style={{ flexShrink: 0, background: colors.pink, color: colors.textOnAccent }}
           title={t('analysis:page.runCompleteTooltip')}
         >
@@ -2249,7 +3402,7 @@ export default function AnalysisPage({ onNavigate, isActive }) {
             {Object.values(completionFlags).filter(Boolean).length}/{Object.keys(completionFlags).length}
           </span>
         </div>
-        <div style={{
+        <div role="status" aria-live="polite" style={{
           flex:         1,
           padding:      '6px 10px',
           background:   colors.bgSecondary,

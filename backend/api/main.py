@@ -545,9 +545,10 @@ app.add_middleware(
     # same-origin (vite proxies /api to 8000), so this matters for a frontend
     # pointed straight at the backend with VITE_API_URL — where, without it,
     # errors would be translated in the packaged app and English in dev.
+    # X-Orienta-Warnings: the warnings of an Excel download (a file answer, so they travel in a header).
     # X-Orienta-Resampled: the facts of a hexagonal scan resampled to a square grid (.ctf and square
     # .ang exports answer with a file, so they travel in a header).
-    expose_headers=["X-Orienta-Code", "X-Orienta-Resampled"],
+    expose_headers=["X-Orienta-Code", "X-Orienta-Warnings", "X-Orienta-Resampled"],
 )
 app.add_middleware(HTTPTimingMiddleware)
 

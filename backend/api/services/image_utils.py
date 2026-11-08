@@ -177,10 +177,7 @@ def colormap_array_to_base64(arr: np.ndarray, cmap_name: str = "viridis") -> str
     else:
         normalized = np.zeros_like(arr, dtype=np.float64)
 
-    try:
-        colormap = matplotlib.colormaps[cmap_name]
-    except (AttributeError, KeyError):
-        colormap = cm.get_cmap(cmap_name)
+    colormap = _get_colormap(cmap_name)
     colored = (colormap(normalized)[:, :, :3] * 255).astype(np.uint8)
 
     img = Image.fromarray(colored)
@@ -188,6 +185,27 @@ def colormap_array_to_base64(arr: np.ndarray, cmap_name: str = "viridis") -> str
     img.save(buf, format="PNG")
     buf.seek(0)
     return base64.b64encode(buf.read()).decode("utf-8")
+
+
+def _get_colormap(cmap_name: str):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+    try:
+        return matplotlib.colormaps[cmap_name]
+    except (AttributeError, KeyError):
+        return cm.get_cmap(cmap_name)
+
+
+def colormap_stops(cmap_name: str, n: int = 5) -> list:
+    """``n`` hex colours (``#rrggbb``) of the colormap at 0, 1/(n-1), ..., 1 (five: 0, .25, .5, .75, 1): the colours
+    ``colormap_array_to_base64`` gives the smallest value, the quarter points and the largest value, for a colour bar."""
+    colormap = _get_colormap(cmap_name)
+    out = []
+    for x in np.linspace(0.0, 1.0, n):
+        r, g, b = (int(round(c * 255)) for c in colormap(float(x))[:3])
+        out.append(f"#{r:02x}{g:02x}{b:02x}")
+    return out
 
 
 def element_color_overlay_to_base64(arr: np.ndarray, hex_color: str) -> str:

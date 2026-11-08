@@ -12,14 +12,18 @@ Architecture: the MTEX-equivalence design notes §2.3
 """
 
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional, Tuple
 import numpy as np
 
-try:
-    from orix.quaternion import Misorientation
-    ORIX_AVAILABLE = True
-except ImportError:
-    ORIX_AVAILABLE = False
+# The deformation parameters the page, the routes and the batch use, with the values of the script
+# (DeformationAnalysis.m:15-17, :142-147) and the range each is accepted in (the unit is in the comment).
+# SAGB is 3 degrees up to the HAGB limit, so the HAGB limit is the only boundary parameter.
+DEFAULT_DEFORMATION_PARAMS = {
+    "kam_order": 2,              # neighbour order of the KAM (|dy| + |dx| <= order)
+    "kam_threshold_deg": 7.0,    # degrees: neighbours further apart are not part of the KAM
+    "hagb_min_deg": 15.0,        # degrees: a boundary from this angle is HAGB, from 3 degrees up to it SAGB
+}
+SAGB_MIN_DEG = 3.0
 
 
 @dataclass
@@ -33,10 +37,10 @@ class DeformationResult:
         kam_order: KAM calculation order (2 = 2nd nearest neighbors)
         kam_threshold: KAM threshold in degrees (7.0)
 
-        # Grain boundary metrics
+        # Grain boundary metrics (None when the reconstruction found no grain: a missing number, not a 0)
         total_gb_length: Total grain boundary length (µm)
-        hagb_length: High-angle GB length (>15°) (µm)
-        sagb_length: Sub-grain/low-angle GB length (3-15°) (µm)
+        hagb_length: High-angle GB length (from ``hagb_min``, 15° by default) (µm)
+        sagb_length: Sub-grain/low-angle GB length (3° up to ``hagb_min``) (µm)
         gb_per_phase_area: GB length per phase area (µm/µm²)
         gb_per_field_area: GB length per field area (µm/µm²)
         hagb_per_phase_area: HAGB length per phase area
@@ -49,7 +53,9 @@ class DeformationResult:
         gb_seg_hist_bins: Bin centers (3, 5, 7, ..., 63 degrees)
 
         # Sphericity per grain
-        sphericity: Sphericity values per grain (area / (perimeter * equiv_radius))
+        sphericity: Sphericity per grain, area / (perimeter including inclusions * equivalent radius)
+            as in the MATLAB reference; 0.5 for a smooth circle (pi r^2 / (2 pi r * r)), pi / 8 for a
+            disc of square pixels (its staircase outline is 8 r long)
     """
     kam: np.ndarray
     kam_hist_counts: np.ndarray
@@ -72,82 +78,84 @@ class DeformationResult:
 
     sphericity: np.ndarray
 
+    # the HAGB limit the boundary classification used (degrees); SAGB runs from 3 degrees up to it
+    hagb_min: float = DEFAULT_DEFORMATION_PARAMS["hagb_min_deg"]
 
-def calculate_kam(dataset, order: int = 2, threshold_deg: float = 7.0) -> np.ndarray:
-    """Calculate Kernel Average Misorientation (KAM) for each pixel.
 
-    KAM measures local misorientation by averaging the misorientation angles
-    between each pixel and its neighbors up to 'order' distance (diamond neighborhood).
+def check_deformation_params(**values) -> None:
+    """Raise ``ValueError`` naming the first deformation parameter that is not a number inside its range.
 
     Args:
-        dataset: EBSDDataset instance
-        order: Neighbor order (1 = 1st nearest, 2 = 2nd nearest, default=2)
-        threshold_deg: Maximum misorientation angle to include (default=7.0°)
-                      Angles > threshold are excluded (grain boundary artifact removal)
-
-    Returns:
-        KAM map of shape (ny, nx) in degrees
-
-    Reference: DeformationAnalysis.m lines 142-147
+        **values: ``kam_order`` (integer, 1 to 5), ``kam_threshold_deg`` (more than 0, at most 30) and
+            ``hagb_min_deg`` (more than 3, at most 90), by the names of ``DEFAULT_DEFORMATION_PARAMS``
     """
-    if not ORIX_AVAILABLE:
-        raise ImportError("orix is required for KAM calculation")
+    ranges = {"kam_order": "1 to 5", "kam_threshold_deg": "more than 0 and at most 30",
+              "hagb_min_deg": "more than 3 and at most 90"}
+    for name, value in values.items():
+        if name not in ranges:
+            raise ValueError(f"{name} is not a deformation parameter; they are {sorted(ranges)}")
+        if isinstance(value, (bool, np.bool_)):
+            raise ValueError(f"{name} must be a number, got {value!r}")
+        if name == "kam_order":
+            ok = isinstance(value, (int, np.integer)) and 1 <= value <= 5
+        else:
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                raise ValueError(f"{name} must be a number, got {value!r}") from None
+            ok = (0 < number <= 30) if name == "kam_threshold_deg" else (SAGB_MIN_DEG < number <= 90)
+        if not ok:
+            raise ValueError(f"{name} must be {ranges[name]}, got {value!r}")
 
-    # Get 2D orientation map
-    ori_2d = dataset.orientations_2d  # shape (ny, nx)
-    ny, nx = ori_2d.shape
 
-    # Initialize KAM map
-    kam = np.zeros((ny, nx), dtype=np.float32)
-    count = np.zeros((ny, nx), dtype=np.int32)  # Number of valid neighbors
+def calculate_kam(dataset, order: int = 2, threshold_deg: float = 7.0, grains=None) -> np.ndarray:
+    """Kernel average misorientation per pixel (degrees).
 
-    threshold_rad = np.radians(threshold_deg)
+    Mean disorientation to the neighbours up to ``order`` steps (|dy| + |dx| <=
+    order) that are below ``threshold_deg``, counting only neighbours of the
+    same phase that are measurements and, when ``grains`` (a GrainSet) is
+    given, lie in the same grain and were not culled. NaN where no neighbour
+    counts and on every pixel that is not a measurement.
 
-    # Diamond neighborhood: all (dy, dx) where abs(dy) + abs(dx) <= order
+    Reference: DeformationAnalysis.m lines 142-147 (KAM after calcGrains).
+    """
+    from analysis.grain_reconstruction import grid_arrays, phase_ops
+    from analysis.orientation_math import disorientation_angle
+
+    quats, phase = grid_arrays(dataset)
+    ops = phase_ops(dataset.xmap)
+    ny, nx = phase.shape
+    ok_px = (phase >= 0) & np.isfinite(quats).all(axis=-1)
+    gid = None
+    if grains is not None:
+        gid = grains.grain_ids
+        ok_px &= gid > 0
+        if grains.culled_mask is not None:
+            ok_px &= ~grains.culled_mask
+    thr = np.radians(threshold_deg)
+    acc = np.zeros((ny, nx))
+    cnt = np.zeros((ny, nx), dtype=np.int32)
     for dy in range(-order, order + 1):
         for dx in range(-order, order + 1):
-            if dx == 0 and dy == 0:
+            if (dy == 0 and dx == 0) or abs(dx) + abs(dy) > order:
                 continue
-            if abs(dx) + abs(dy) > order:  # Outside diamond
-                continue
-
-            # Create shifted arrays (handle boundary with valid indexing)
-            y_min = max(0, dy)
-            y_max = min(ny, ny + dy)
-            x_min = max(0, dx)
-            x_max = min(nx, nx + dx)
-
-            y_src_min = max(0, -dy)
-            y_src_max = min(ny, ny - dy)
-            x_src_min = max(0, -dx)
-            x_src_max = min(nx, nx - dx)
-
-            # Extract overlapping regions
-            ori_center = ori_2d[y_src_min:y_src_max, x_src_min:x_src_max]
-            ori_neighbor = ori_2d[y_min:y_max, x_min:x_max]
-
-            # Calculate misorientation angles with crystal symmetry
-            symmetry = dataset.phase.point_group
-            miso = Misorientation(
-                ori_center.reshape(-1) * (~ori_neighbor.reshape(-1)),
-                symmetry=(symmetry, symmetry)
-            )
-            miso = miso.map_into_symmetry_reduced_zone()
-            angles = miso.angle.reshape(ori_center.shape)
-
-            # Filter by threshold
-            valid_mask = angles < threshold_rad
-
-            # Accumulate
-            kam[y_src_min:y_src_max, x_src_min:x_src_max] += np.where(
-                valid_mask, np.degrees(angles), 0.0
-            )
-            count[y_src_min:y_src_max, x_src_min:x_src_max] += valid_mask.astype(np.int32)
-
-    # Average KAM (avoid division by zero)
-    with np.errstate(divide='ignore', invalid='ignore'):
-        kam = np.where(count > 0, kam / count, np.nan)
-
+            c = (slice(max(0, -dy), min(ny, ny - dy)), slice(max(0, -dx), min(nx, nx - dx)))
+            b = (slice(max(0, dy), min(ny, ny + dy)), slice(max(0, dx), min(nx, nx + dx)))
+            ok = ok_px[c] & ok_px[b] & (phase[c] == phase[b])
+            if gid is not None:
+                ok &= gid[c] == gid[b]
+            ang = np.full(ok.shape, np.inf)
+            pc = phase[c]
+            for pid in np.unique(pc[ok]):
+                if int(pid) not in ops:
+                    raise ValueError(f"no point group for phase id {int(pid)}; cannot compute KAM")
+                s = ok & (pc == pid)
+                ang[s] = disorientation_angle(quats[c][s], quats[b][s], ops[int(pid)])
+            valid = ok & (ang < thr)
+            acc[c] += np.where(valid, np.degrees(np.where(valid, ang, 0.0)), 0.0)
+            cnt[c] += valid
+    kam = np.where(cnt > 0, acc / np.maximum(cnt, 1), np.nan)
+    kam[~ok_px] = np.nan
     return kam
 
 
@@ -188,6 +196,19 @@ def calculate_kam_histogram(kam: np.ndarray, bin_width: float = 0.25) -> Tuple[n
     counts = counts.astype(np.float64) / total if total > 0 else counts.astype(np.float64)
 
     return counts, edges
+
+
+def _segment_lengths(grains, dataset) -> np.ndarray:
+    """Length in um of every entry of ``grains.boundary_type``: ``grains.boundary_length`` when present,
+    otherwise one step per segment (a square-grid segment of a GrainSet built without cells)."""
+    n = len(np.asarray(grains.boundary_type))
+    length = getattr(grains, "boundary_length", None)
+    if length is None:
+        return np.full(n, float(dataset.step_size))
+    length = np.asarray(length, dtype=float)
+    if length.shape != (n,):
+        raise ValueError(f"boundary_length has {length.shape} entries for {n} boundary segments")
+    return length
 
 
 def classify_grain_boundaries(grains, sagb_min_deg: float = 3.0, sagb_max_deg: float = 15.0,
@@ -243,13 +264,14 @@ def calculate_gb_metrics(grains, dataset, sagb_min_deg: float = 3.0,
         grains, sagb_min_deg, sagb_max_deg, hagb_min_deg
     )
 
-    # Segment length = step_size (square grid assumption)
-    segment_length = dataset.step_size  # µm
+    # Lengths of the boundary segments (um): the edge lengths of the grain cells when the grains carry
+    # them, one pixel step per segment for a GrainSet built without
+    segment_length = _segment_lengths(grains, dataset)
 
     # Total lengths
-    total_gb_length = all_gb_mask.sum() * segment_length
-    hagb_length = hagb_mask.sum() * segment_length
-    sagb_length = sagb_mask.sum() * segment_length
+    total_gb_length = float(segment_length[all_gb_mask].sum())
+    hagb_length = float(segment_length[hagb_mask].sum())
+    sagb_length = float(segment_length[sagb_mask].sum())
 
     # Phase area: number of indexed pixels * step_size²
     n_phase_pixels = dataset.indexed_mask.sum()
@@ -304,35 +326,38 @@ def calculate_gb_segment_histogram(grains, dataset,
         raise ValueError("Grain boundary types not calculated")
 
     angles = grains.boundary_type  # degrees
-    segment_length = dataset.step_size  # µm
 
     # Create bin edges
     bin_edges = np.arange(min_angle, max_angle + bin_width, bin_width)
     bin_centers = bin_edges[:-1] + bin_width / 2
 
-    # Calculate histogram of segment lengths — vectorized
-    raw_counts, _ = np.histogram(angles, bins=bin_edges)
-    counts = raw_counts.astype(float) * segment_length
+    # Sum of the segment lengths (um) per bin — vectorized
+    counts, _ = np.histogram(angles, bins=bin_edges, weights=_segment_lengths(grains, dataset))
+    counts = counts.astype(float)
 
     return counts, bin_centers
 
 
 def calculate_sphericity(grains) -> np.ndarray:
-    """Calculate sphericity for each grain.
+    """Calculate sphericity for each grain, as the MATLAB reference does.
 
-    Sphericity = area / (perimeter * equivalent_radius)
+    Sphericity = area / perimeter / equivalent_radius, with the perimeter including inclusions
+    (``GrainSet.perimeter_with_inclusions``: the outer boundary plus the boundary of every hole or
+    enclosed grain, MTEX ``perimeter('withInclusion')``). A GrainSet without it falls back to the
+    outer ``perimeter``, and one without any perimeter to the circle estimate 2 * pi * r.
 
-    Sphericity measures how close a grain's shape is to a circle:
-    - Sphericity ≈ 1.0: circular grain
-    - Sphericity < 1.0: elongated or irregular grain
+    The value is not 1.0 for a circle: a smooth circle gives pi r^2 / (2 pi r * r) = 0.5, and a disc
+    of square pixels, whose staircase outline is 8 r long, gives pi / 8 = 0.393. Smaller values mean
+    a longer boundary for the same area (elongated, ragged, or with inclusions). The formula is kept
+    so the numbers stay comparable with the reference Documentation.xlsx.
 
     Args:
-        grains: GrainSet instance with area, perimeter, and ecd
+        grains: GrainSet instance with area, ecd and, if available, the perimeters
 
     Returns:
         Sphericity array (length = n_grains)
 
-    Reference: DeformationAnalysis.m line 51
+    Reference: DeformationAnalysis.m line 54
     """
     if grains.area is None or grains.ecd is None:
         raise ValueError("Grain area and ECD not calculated")
@@ -340,11 +365,11 @@ def calculate_sphericity(grains) -> np.ndarray:
     # Equivalent radius = ECD / 2
     equiv_radius = grains.ecd / 2.0
 
-    # Calculate perimeter if not available
-    if hasattr(grains, 'perimeter') and grains.perimeter is not None:
-        perimeter = grains.perimeter
-    else:
-        # Estimate perimeter from area and ECD (circle approximation)
+    # Perimeter including inclusions as in the reference; then the outer one; then the circle estimate
+    perimeter = getattr(grains, 'perimeter_with_inclusions', None)
+    if perimeter is None:
+        perimeter = getattr(grains, 'perimeter', None)
+    if perimeter is None:
         perimeter = 2 * np.pi * equiv_radius
 
     # Sphericity
@@ -356,7 +381,7 @@ def calculate_sphericity(grains) -> np.ndarray:
 
 
 def analyze_deformation(dataset, grains, kam_order: int = 2, kam_threshold: float = 7.0,
-                       sagb_min: float = 3.0, sagb_max: float = 15.0, hagb_min: float = 15.0,
+                       sagb_min: float = 3.0, sagb_max: Optional[float] = None, hagb_min: float = 15.0,
                        kam_bin_width: float = 0.25, gb_bin_width: float = 2.0) -> DeformationResult:
     """Full deformation analysis workflow.
 
@@ -366,7 +391,8 @@ def analyze_deformation(dataset, grains, kam_order: int = 2, kam_threshold: floa
         kam_order: KAM neighbor order (default=2)
         kam_threshold: KAM threshold in degrees (default=7.0)
         sagb_min: SAGB minimum angle (default=3.0°)
-        sagb_max: SAGB maximum angle (default=15.0°)
+        sagb_max: SAGB maximum angle; default None = ``hagb_min``, as the script classifies (a boundary is SAGB
+            from 3° up to the HAGB limit and HAGB from it)
         hagb_min: HAGB minimum angle (default=15.0°)
         kam_bin_width: KAM histogram bin width (default=0.25°)
         gb_bin_width: GB histogram bin width (default=2.0°)
@@ -376,20 +402,22 @@ def analyze_deformation(dataset, grains, kam_order: int = 2, kam_threshold: floa
 
     Reference: DeformationAnalysis.m full workflow
     """
+    if sagb_max is None:
+        sagb_max = hagb_min
+
     # 1. Calculate KAM
-    kam = calculate_kam(dataset, order=kam_order, threshold_deg=kam_threshold)
+    kam = calculate_kam(dataset, order=kam_order, threshold_deg=kam_threshold,
+                        grains=grains if grains is not None and grains.n_grains > 0 else None)
     kam_hist_counts, kam_hist_edges = calculate_kam_histogram(kam, bin_width=kam_bin_width)
 
     # 2-4: GB-dependent metrics — skip gracefully when no grains exist
     _no_gb = (grains.n_grains == 0 or grains.boundary_type is None)
 
     if _no_gb:
-        gb_metrics = {
-            'total_gb_length': 0.0, 'hagb_length': 0.0, 'sagb_length': 0.0,
-            'gb_per_phase_area': 0.0, 'gb_per_field_area': 0.0,
-            'hagb_per_phase_area': 0.0, 'hagb_per_field_area': 0.0,
-            'sagb_per_phase_area': 0.0, 'sagb_per_field_area': 0.0,
-        }
+        # no grain, no boundary: the numbers are missing (None, an empty cell in the workbook), not 0
+        gb_metrics = {key: None for key in (
+            'total_gb_length', 'hagb_length', 'sagb_length', 'gb_per_phase_area', 'gb_per_field_area',
+            'hagb_per_phase_area', 'hagb_per_field_area', 'sagb_per_phase_area', 'sagb_per_field_area')}
         gb_seg_counts = np.array([], dtype=float)
         gb_seg_bins = np.array([], dtype=float)
         sphericity = np.array([], dtype=float)
@@ -426,4 +454,5 @@ def analyze_deformation(dataset, grains, kam_order: int = 2, kam_threshold: floa
         gb_seg_hist_bins=gb_seg_bins,
 
         sphericity=sphericity,
+        hagb_min=float(hagb_min),
     )

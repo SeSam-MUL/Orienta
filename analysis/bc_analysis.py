@@ -116,6 +116,13 @@ def calculate_bc_histogram(
     Returns:
         BCHistogramResult with bin edges, centers, and probability-normalized counts
 
+    The counts are normalised as MATLAB ``histcounts(bc, edges, "Normalization", "probability")`` does
+    (EBSDanalysis_frame.m:269): each count is divided by the number of elements of the input, which is every pixel
+    with a finite band contrast (the script drops NaN and Inf before the histogram, :266), also those above the last
+    bin edge. So the counts add up to the share of pixels inside the bin range, not to 1, when the band contrast
+    exceeds ``bin_range[1]`` (Oxford band contrast reaches 255, the bins end at 230). NaN and Inf are not part of
+    the input and are in no count. With no finite value every count is 0.
+
     Reference: MATLAB EBSDanalysis_frame.m lines 264-277
     """
     # Get BC values, remove NaN/Inf
@@ -128,8 +135,7 @@ def calculate_bc_histogram(
 
     # Calculate histogram (probability normalized)
     counts, _ = np.histogram(bc, bins=bin_edges, density=False)
-    total = counts.sum()
-    counts = counts / total if total > 0 else counts.astype(float)
+    counts = counts / bc.size if bc.size > 0 else counts.astype(float)
 
     return BCHistogramResult(
         bin_edges=bin_edges,
@@ -234,12 +240,28 @@ def fit_bc_gmm(
         return None
 
 
+def measured_grain_ids(grains: GrainSet) -> np.ndarray:
+    """Flat grain id per pixel, 0 on every pixel that is not a measurement of its grain.
+
+    A closed not-indexed pixel carries its host grain's id, but
+    orientation, quality and chemistry values of a grain come from its measurements only.
+    A GrainSet built by hand has no ``closed_mask``; every labelled pixel then counts.
+    """
+    gid = np.asarray(grains.grain_ids).reshape(-1)
+    if grains.closed_mask is None:
+        return gid
+    return np.where(np.asarray(grains.closed_mask).reshape(-1), 0, gid)
+
+
 def grain_average_bc(
     dataset: EBSDDataset,
     grains: GrainSet,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Calculate grain-average Band Contrast values.
+    Calculate grain-average Band Contrast values, over the grain's measured pixels only.
+
+    Closed not-indexed pixels carry the grain's id but are not measurements; their
+    band contrast (usually low, which is why they failed to index) is left out.
 
     Args:
         dataset: EBSDDataset with BC values
@@ -255,7 +277,7 @@ def grain_average_bc(
     if not SCIPY_AVAILABLE:
         # Fallback: manual calculation
         bc_flat = dataset.bc
-        grain_ids_flat = grains.grain_ids.ravel()
+        grain_ids_flat = measured_grain_ids(grains)
 
         unique_grain_ids = np.arange(1, grains.n_grains + 1)
         gBC = np.zeros(grains.n_grains)
@@ -273,9 +295,9 @@ def grain_average_bc(
 
     # Fast scipy implementation
     bc_flat = dataset.bc
-    grain_ids_flat = grains.grain_ids.ravel()
+    grain_ids_flat = measured_grain_ids(grains)
 
-    # Only consider indexed pixels with valid grain IDs
+    # Only consider measured pixels with valid grain IDs
     valid_mask = (grain_ids_flat > 0) & np.isfinite(bc_flat)
     bc_valid = bc_flat[valid_mask]
     gids_valid = grain_ids_flat[valid_mask]

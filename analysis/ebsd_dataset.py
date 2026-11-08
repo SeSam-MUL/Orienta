@@ -16,9 +16,13 @@ Reference: the MTEX-equivalence design notes §1.2
 
 import copy
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, TYPE_CHECKING
 import logging
+import uuid
 import numpy as np
+
+if TYPE_CHECKING:
+    from analysis.grain_cells import Cells
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,11 @@ except ImportError:
     Phase = None
     Orientation = None
     Rotation = None
+
+
+# The one wording for "this map has no band contrast", shared by the Excel export, the batch and the
+# BC routes. It names the cause; it does not claim anything about the file's format.
+NO_BAND_CONTRAST = "no band contrast in this map"
 
 
 def _reduce_to_best_match(xmap: 'CrystalMap', rpp: int) -> 'CrystalMap':
@@ -102,20 +111,30 @@ class GrainSet:
     Grain reconstruction results.
 
     Attributes:
-        grain_ids: Per-pixel grain labels (same shape as EBSD map), 0 = not indexed
+        grain_ids: Per-pixel grain labels (same shape as EBSD map), 0 = not in a grain
         n_grains: Total number of grains (excluding grain_id=0)
 
         Per-grain properties (arrays of length n_grains):
-        mean_orientations: Grain-average orientations (orix.Orientation)
-        grain_size: Number of pixels per grain
-        area: Grain area in µm² (grain_size * step_size²)
+        mean_orientations: Grain-average orientations (orix.Orientation), from measurements only
+        grain_size: Number of measured pixels per grain
+        area: Grain area in µm², the area of the grain's cells * step_size² (covered not-indexed
+            pixels inside a grain belong to the cells around them)
         ecd: Equivalent circular diameter = 2 * sqrt(area / π) in µm
-        aspect_ratio: Width/Height ratio from fitted ellipse or bounding box
-        gos: Grain orientation spread in radians
+        perimeter: Length of the grain's outer boundary loop in µm
+        perimeter_with_inclusions: Length of all boundary loops of the grain (holes included) in µm
+        aspect_ratio: Long over short principal axis of the grain shape (MTEX aspectRatio), >= 1
+        gos: Grain orientation spread in radians, from measurements only
 
-        Grain boundary info:
-        boundary_segments: List of (pixel_i, pixel_j, misorientation_angle_rad)
-        boundary_type: Per-segment classification ('HAGB' or 'SAGB')
+        Grain boundary info (cell edges between measurements of different grains of one phase,
+        one entry per pair of measurements):
+        boundary_segments: Unused, kept for compatibility; the boundary data lives in boundary_type
+            and boundary_length
+        boundary_type: Per-segment disorientation angle in degrees
+        boundary_length: Per-segment length in µm, same order as boundary_type
+        boundary_pairs: (K, 2) flat pixel indices a < b of the two measurements of each segment,
+            same order as boundary_type and boundary_length
+
+        cells: The exact cells of the last segmentation pass (None for a GrainSet built by hand)
 
     Reference: the MTEX-equivalence design notes §2.1
     """
@@ -128,12 +147,26 @@ class GrainSet:
     area: Optional[np.ndarray] = None
     ecd: Optional[np.ndarray] = None
     perimeter: Optional[np.ndarray] = None
+    perimeter_with_inclusions: Optional[np.ndarray] = None
     aspect_ratio: Optional[np.ndarray] = None
     gos: Optional[np.ndarray] = None
+
+    # Reconstruction details; None for GrainSets built elsewhere
+    n_closed: Optional[np.ndarray] = None         # closed pixels per grain
+    closed_mask: Optional[np.ndarray] = None      # (ny, nx) in a grain, not a measurement of it
+    culled_mask: Optional[np.ndarray] = None      # (ny, nx) measurements dropped by min_pixels
+    dropped_mask: Optional[np.ndarray] = None     # (ny, nx) the part of culled_mask dropped after the second pass
+    cells: Optional['Cells'] = None               # cells of the last segmentation pass (analysis/grain_cells.py)
+    grain_phase: Optional[np.ndarray] = None      # (n_grains,) phase id per grain
+    alpha: Optional[float] = None                 # closing radius used, in pixels
+    filled_rotations: Optional[np.ndarray] = None # (ny, nx, 4) fill result, NaN where not filled
+    filled_mask: Optional[np.ndarray] = None      # (ny, nx) pixels that received a filled orientation
 
     # Grain boundary info
     boundary_segments: list = field(default_factory=list)
     boundary_type: Optional[np.ndarray] = None
+    boundary_length: Optional[np.ndarray] = None   # um per entry of boundary_type, same order
+    boundary_pairs: Optional[np.ndarray] = None    # (K, 2) flat pixel indices a < b per entry, same order
 
     def __post_init__(self):
         """Validate grain_ids shape."""
@@ -160,7 +193,11 @@ class EBSDDataset:
         xmap: Original orix CrystalMap
         step_size: Pixel step size in µm
         source: Indexing method identifier
+        dataset_token: uuid4 hex, fixed for the life of this object (``GET /api/analysis/status`` reports it)
         grains: GrainSet from grain reconstruction (None until reconstructed)
+        grain_recon_params: What the grains were reconstructed with (threshold, min pixels, alpha,
+            min intercept), set by the reconstruct route; None whenever ``grains`` is None or was
+            made elsewhere
 
     Reference: the MTEX-equivalence design notes §1.1, §1.2
     """
@@ -193,6 +230,10 @@ class EBSDDataset:
         self.step_size = step_size
         self.source = source
         self.grains: Optional[GrainSet] = None
+        self.grain_recon_params: Optional[dict] = None
+        # Identity of this map for a page that must notice a swap: a new EBSDDataset (a load) gets a new
+        # token, the same object (stashed and restored on a file switch) keeps its own.
+        self.dataset_token: str = uuid.uuid4().hex
         # The grid this map sits on (a ScanGeometry dict). None = unknown, never "square": set by
         # whoever knows it (the result a dataset was made from), copied by every derived dataset.
         self.scan_geometry: Optional[dict] = None
@@ -243,8 +284,8 @@ class EBSDDataset:
         "zero-size array to reduction operation" crash on degenerate
         xmaps).
         """
-        for key in ('bc', 'pq'):
-            if key in self.xmap.prop:
+        for key in (self._band_contrast_key(), 'pq'):
+            if key is not None and key in self.xmap.prop:
                 arr = self.xmap.prop[key]
                 if arr.size == 0:
                     continue
@@ -262,10 +303,11 @@ class EBSDDataset:
         """
         Band contrast or equivalent quality metric as raw values.
 
-        Tries: bc → pq → scores → fallback (128).
+        Tries: bc (any capitalisation, orix keeps the .ctf column as "BC") → pq → scores → fallback (128).
         Returns array of shape (size,).
         """
-        for key in ['bc', 'pq', 'scores']:
+        native = self._band_contrast_key()
+        for key in ([native] if native is not None else []) + ['pq', 'scores']:
             if key in self.xmap.prop:
                 val = self.xmap.prop[key]
                 # Dictionary indexing stores scores as (n_pixels, keep_n) — take best match
@@ -273,22 +315,42 @@ class EBSDDataset:
         # Fallback: mid-range gray value
         return np.ones(self.xmap.size) * 128
 
+    def _band_contrast_key(self) -> Optional[str]:
+        """The key of the band-contrast array in ``xmap.prop`` (any capitalisation, one value per pixel), or None.
+
+        Oxford ``.ctf`` files reach orix with the column under ``"BC"``; H5OINA and Orienta's own exports use
+        ``"bc"``.
+        """
+        prop = getattr(self.xmap, "prop", {}) or {}
+        found = []
+        try:
+            for key in prop:
+                if str(key).lower() == "bc" and np.asarray(prop[key]).size == self.xmap.size:
+                    found.append(key)
+        except Exception:
+            return None
+        if not found:
+            return None
+        # not dependent on the order of the properties: an exact "bc" first, then the other spellings sorted
+        return "bc" if "bc" in found else sorted(found, key=str)[0]
+
+    def band_contrast_raw(self) -> Optional[np.ndarray]:
+        """The native band-contrast array as stored (one value per pixel, any spelling of the key), or None."""
+        key = self._band_contrast_key()
+        return np.asarray(self.xmap.prop[key]) if key is not None else None
+
     @property
     def has_native_bc(self) -> bool:
         """True only when the xmap carries a real native Band Contrast array.
         pq / scores are NOT native BC — the BC-calibrated GMM/quality-filter
         must fail loud rather than run on those.
 
-        INVARIANT: xmap.prop['bc'] must only ever hold REAL native Band
+        INVARIANT: xmap.prop['bc'] (or 'BC' from a .ctf) must only ever hold REAL native Band
         Contrast (e.g. bridged from an Oxford H5OINA source file), never a
         computed/surrogate value (CI, scores, FFT image quality). This property
         trusts prop['bc'] as native — writing a surrogate there would silently
         make the BC-only analyses run on fake data."""
-        prop = getattr(self.xmap, "prop", {}) or {}
-        try:
-            return bool("bc" in prop and np.asarray(prop["bc"]).size == self.xmap.size)
-        except Exception:
-            return False
+        return self._band_contrast_key() is not None
 
     @property
     def bc_2d(self) -> np.ndarray:
@@ -444,7 +506,7 @@ class EBSDDataset:
             filtered_total : int
             filtered_fraction : float (0..1)
         """
-        bc = self.xmap.prop.get("bc")
+        bc = self.band_contrast_raw()
         bands = self.xmap.prop.get("bands")
 
         before = int(np.sum(self.xmap.phase_id >= 0))
@@ -486,6 +548,7 @@ class EBSDDataset:
         # Invalidate cached grain reconstruction — a quality filter changes
         # which pixels participate, so existing grains are stale.
         self.grains = None
+        self.grain_recon_params = None
 
         after = int(np.sum(self.xmap.phase_id >= 0))
         return {

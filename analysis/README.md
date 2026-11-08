@@ -19,12 +19,16 @@ scientific layer behind the application's "EBSD Analysis" features.
 | [`ebsd_dataset.py`](ebsd_dataset.py) | `EBSDDataset` (a thin adapter that normalizes quality metrics, phases, symmetry, and indexed-pixel masks across indexing methods) and `GrainSet` (per-pixel grain labels plus per-grain properties). The common data model every other module consumes. |
 | [`smoothing.py`](smoothing.py) | Orientation pre-smoothing filters (median, mean, quality-weighted mean) applied before grain reconstruction to suppress noise while preserving boundaries. |
 | [`grain_analysis.py`](grain_analysis.py) | Misorientation-based grain reconstruction (connected-component segmentation), per-grain properties (mean orientation, GOS), and grain-size analysis (ECD, MaxDim, aspect ratio, area-weighted stats). Returns `GrainSizeResult`. |
+| [`orientation_math.py`](orientation_math.py) | Symmetry-aware quaternion arithmetic: disorientation angles (one-sided maximum over the point group, chunked), nearest symmetry equivalent, and grain mean orientations. |
+| [`grain_reconstruction.py`](grain_reconstruction.py) | Grain segmentation of a square grid: closing of narrow not-indexed areas, joining of similar neighbouring measurements, removal of grains below `min_pixels`. |
+| [`grain_cells.py`](grain_cells.py) | Exact Voronoi cells of the pixels (edges, areas, area moments), grain boundary loops and the grain that holds a not-indexed pixel's centre. |
+| [`grain_fill.py`](grain_fill.py) | Display-only orientations for the closed pixels of a grain, grown inward from its measurements; never enters a statistic. |
 | [`bc_analysis.py`](bc_analysis.py) | Band-contrast histogram, 3-Gaussian Mixture Model fit (deformed / recovered / recrystallized populations), and grain-average BC. Returns `BCHistogramResult` / `BCGMMResult`. |
 | [`deformation_analysis.py`](deformation_analysis.py) | Kernel Average Misorientation (KAM), grain-boundary classification (SAGB/HAGB), GB length metrics and segment histograms, and grain sphericity. Returns `DeformationResult`. |
 | [`texture_components.py`](texture_components.py) | Phase-agnostic ideal texture-component presets (FCC rolling = 14 components, BCC rolling) defined by `{hkl}<uvw>` or Euler angles, with helpers to list, validate, and add custom components. |
 | [`texture_analysis.py`](texture_analysis.py) | Texture-component volume fractions, surface plane fractions ({111}/{100}/{110}), and ODF-based texture index / entropy. Returns `TextureResult`. |
 | [`rx_analysis.py`](rx_analysis.py) | Recrystallization classification using GOS / gBC / gKAM criteria, RX area fraction, and area-weighted GOS/gKAM histograms. Returns `RXResult`. |
-| [`excel_exporter.py`](excel_exporter.py) | Writes a 14-sheet `Documentation.xlsx` (basic info, BC histogram + GMM, grain-size / KAM / GOS / gKAM histograms, grain boundaries, texture components, surface planes, RX metrics), one column per dataset. |
+| [`excel_exporter.py`](excel_exporter.py) | Writes an 11-sheet `Documentation.xlsx` (basic info, BC histogram + GMM, grain-size / KAM / GOS / gKAM histograms, grain boundaries, texture components, surface planes, RX metrics), one column per dataset. |
 | [`batch_processor.py`](batch_processor.py) | Scans a folder of EBSD files (`.h5`, `.h5oina`, `.ang`, `.ctf`), runs the full pipeline on each, and consolidates everything into a single `Documentation.xlsx`. |
 
 ## How it fits the Orienta architecture

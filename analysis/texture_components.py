@@ -2,7 +2,13 @@
 Texture Component Definitions for EBSD Analysis.
 
 Phase-agnostic preset system for ideal texture components (FCC rolling, BCC rolling, etc.).
-Each component is defined by Miller indices {hkl}<uvw> or Euler angles.
+Each component is defined by Miller indices {hkl}<uvw> or Euler angles, AS WRITTEN in the MATLAB script (no signs
+are added: Brass {011}<211> is not perpendicular as written, and does not need to be).
+
+How a definition becomes orientations is in ``analysis.texture_analysis`` (``ideal_orientation``,
+``component_variants``): the plane normal to ND, the crystal equivalent of uvw that is perpendicular to it to RD,
+then the specimen symmetry mmm gives the distinct variants. A fraction is the sum over the variants of the share of
+pixels within the tolerance of that variant, as the script sums ``volume(...)`` over ``sym_X(1..n)``.
 
 Reference: MATLAB/MTEX TextureAnalysis_mtex6.m lines 16-29
 Architecture: the MTEX-equivalence design notes §2.4
@@ -26,8 +32,9 @@ class TextureComponent:
         hkl: Miller indices for plane normal (None if defined by Euler)
         uvw: Miller indices for rolling direction (None if defined by Euler)
         euler_deg: Euler angles in degrees [phi1, Phi, phi2] (None if defined by Miller)
-        symmetry_multiplicity: Number of symmetry equivalents under specimen symmetry
-                              (e.g., 2 for Brass, 4 for S, 1 for Goss)
+        symmetry_multiplicity: Number of distinct variants under the specimen symmetry mmm that the script sums
+                              (2 for Brass, 4 for S, 1 for Goss); for a cubic phase it is the number of variants
+                              ``component_variants`` returns (checked by the tests)
         description: Optional description or reference
     """
     name: str
@@ -166,9 +173,9 @@ BCC_ROLLING_COMPONENTS: Dict[str, TextureComponent] = {
     "Rot. Goss": TextureComponent(
         name="Rot. Goss",
         hkl=[1, 1, 0],
-        uvw=[0, 0, 1],
+        uvw=[1, -1, 0],
         symmetry_multiplicity=1,
-        description="{110}<001> — Rotated Goss in BCC"
+        description="{110}<1-10> — Rotated Goss in BCC (Goss turned by 90 deg about ND)"
     ),
     # Additional BCC components can be added here:
     # - Alpha fiber: <110>||RD (rolling direction)
