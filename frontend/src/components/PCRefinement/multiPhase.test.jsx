@@ -480,8 +480,13 @@ describe('PC refinement with several phases', () => {
   it('a typed PC re-indexes one pattern only: the badge says N/A instead of keeping an old mean', async () => {
     await twoPhasesAndIndexAll();
     expect(screen.getByTestId('pc-global-ci').textContent).toBe('Global CI: 0.4000');
-    const pcx = screen.getByTitle(/Pattern Center X/);
-    fireEvent.change(pcx, { target: { value: '0.51' } });
+    // typing alone applies nothing: the badge keeps the mean until "Use these numbers" is pressed
+    for (const [name, v] of [['PC X:', '0.51'], ['PC Y:', '0.3'], ['PC Z:', '0.8']]) {
+      fireEvent.change(screen.getByLabelText(name), { target: { value: v } });
+    }
+    await new Promise((r) => setTimeout(r, 700));            // longer than the old 500 ms debounce
+    expect(screen.getByTestId('pc-global-ci').textContent).toBe('Global CI: 0.4000');
+    fireEvent.click(screen.getByRole('button', { name: 'Use these numbers' }));
     await waitFor(() => expect(screen.getByTestId('pc-global-ci').textContent).toBe('Global CI: N/A'),
       { timeout: 4000 });
   }, 15000);

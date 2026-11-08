@@ -32,7 +32,7 @@
   "pipeline": {
     "label": "流水线:",
     "mcTooltip": "蒙特卡洛（EMMCOpenCL）— 始终运行",
-    "masterTooltip": "主花样（EMEBSDmaster/OpenCL）",
+    "masterTooltip": "主花样（EMEBSDmaster，CPU）",
     "shtTooltip": "球谐函数（EMEBSDmasterSHT）",
     "gpuDetecting": "检测中...",
     "gpuCpuOnly": "仅 CPU"
@@ -116,15 +116,12 @@
     "gpuDetected": "检测到 GPU",
     "vram": "{{gb}} GB 显存",
     "platform": "平台: 通过 PoCL-CUDA 的 OpenCL",
-    "blockSize": "块大小: {{size}}",
-    "lowVramWarning": "GPU 有 {{gb}} GB — 主花样将使用缩减的块大小",
+    "masterOnCpuNote": "蒙特卡罗在 GPU 上运行，主花样在 CPU 上计算。",
     "cpuModeTitle": "CPU 模式（OpenMP）",
     "coresAvailable": "{{count}} 个核心可用",
     "threadsLabel": "线程:",
     "threadsTooltip": "EMsoft 程序使用的 CPU 线程数",
-    "autoDetected": "自动检测",
-    "cpuHelperThreadsLabel": "CPU 辅助线程:",
-    "helperThreadsNote": "（4N+3 格式，已为 GPU 流水线自动优化）"
+    "autoDetected": "自动检测"
   },
   "advanced": {
     "groupTitle": "高级选项",
@@ -178,8 +175,8 @@
     "errorPrefix": "错误: {{message}}",
     "scanningMissing": "正在扫描 XTAL 库中缺失的材料...",
     "allHaveResults": "所有材料均已有模拟结果。",
-    "unreadableMasters_one": "没有缺失项，但有 {{count}} 个相的主图无法用于字典索引（kikuchipy 无法加载）：{{names}}。请用 CPU 主图程序重新模拟。",
-    "unreadableMasters_other": "没有缺失项，但有 {{count}} 个相的主图无法用于字典索引（kikuchipy 无法加载）：{{names}}。请用 CPU 主图程序重新模拟。",
+    "unreadableMasters_one": "没有缺失项，但有 {{count}} 个相的主图无法用于字典索引（kikuchipy 无法加载）：{{names}}。请删除相应文件，然后重新模拟相应的相；模拟现在使用 CPU 主图程序。",
+    "unreadableMasters_other": "没有缺失项，但有 {{count}} 个相的主图无法用于字典索引（kikuchipy 无法加载）：{{names}}。请删除相应文件，然后重新模拟相应的相；模拟现在使用 CPU 主图程序。",
     "errorScanningMissing": "扫描缺失材料时出错。",
     "startingBatch": "正在启动批处理...",
     "batchStarted": "批处理已启动：{{count}} 个作业已加入队列。",
@@ -214,7 +211,7 @@
     "viewMasterTooltipNotReady": "在启动模拟后可用"
   },
   "jobWarnings": {
-    "masterUnreadableByKikuchipy": "{{file}} 无法用于字典索引：kikuchipy 无法加载该文件（由 {{program}} 写出），因此相库不会提供它。请用 CPU 主图程序重新模拟。",
+    "masterUnreadableByKikuchipy": "{{file}} 无法用于字典索引：kikuchipy 无法加载该文件（由 {{program}} 写出），因此相库不会提供它。请删除该文件，然后重新模拟该相；模拟现在使用 CPU 主图程序。",
     "unknownProgram": "未知程序",
     "unknown": "警告 {{code}}：{{file}}"
   },
@@ -278,7 +275,7 @@
     "select": "选择"
   },
   "missingDialog": {
-    "unreadableMaster": "{{stem}}：主图不可读（由 {{program}} 写出）— {{file}} 无法用于字典索引。未列在上方，因为用同一程序再次模拟会写出同样的文件；请使用 CPU 主图程序。",
+    "unreadableMaster": "{{stem}}：主图不可读（由 {{program}} 写出）— {{file}} 无法用于字典索引。未列在上方，因为该文件已在库中，而新的运行不会替换已有文件。请先删除该文件，然后重新模拟该相（将使用 CPU 主图程序）。",
     "titlePhases": "模拟所有缺失项 — {{count}} 个相",
     "pipelineOurs": "✨ Orienta Engine",
     "pipelineEmsoft": "⚙ EMsoft 流水线",
@@ -319,8 +316,8 @@
     "testConnection": "检查所配置的 Database 根目录是否可访问",
     "saveServerConfig": "保存服务器模式设置",
     "crystalFileInput": "要模拟的输入 .xtal 晶体结构文件路径",
-    "computeModeAuto": "如有 GPU（OpenCL）则使用，否则回退到 CPU（OpenMP）",
-    "computeModeGpu": "强制仅通过 OpenCL 进行 GPU 计算",
+    "computeModeAuto": "如有 GPU（OpenCL）则在 GPU 上运行蒙特卡罗，否则在 CPU（OpenMP）上运行；主花样始终在 CPU 上计算",
+    "computeModeGpu": "强制蒙特卡罗通过 OpenCL 在 GPU 上运行；主花样仍在 CPU 上计算",
     "computeModeCpu": "强制仅通过 OpenMP 进行 CPU 计算",
     "checkSystem": "检测本机的 EMsoft 安装、GPU 和 OpenCL 设备",
     "stopJob": "停止此运行中或排队中的模拟作业",

@@ -16,9 +16,9 @@
       "fast": "Schnell (bw=128)",
       "fastDesc": "~225 MB, leicht unscharf",
       "standard": "Standard (bw=256)",
-      "standardDesc": "Schärferes simuliertes Muster (~1,7 GB VRAM). Nur der Render — die Neuindexierung für „Compare phases“ läuft immer bei 128, der einzigen Bandbreite, bei der ihre Legendre-Tabellen numerisch gültig sind.",
+      "standardDesc": "Schärferes simuliertes Muster (~1,8 GB VRAM). Nur der Render — die Neuindexierung für „Compare phases“ läuft immer bei 128, der einzigen Bandbreite, bei der ihre Legendre-Tabellen numerisch gültig sind.",
       "high": "Hoch (bw=384)",
-      "highDesc": "Schärfstes simuliertes Muster (~5,7 GB VRAM; wird abgelehnt, wenn die GPU es nicht frei hat). Nur der Render — die Neuindexierung für „Compare phases“ läuft immer bei 128."
+      "highDesc": "Schärfstes simuliertes Muster (~5,9 GB VRAM; wird abgelehnt, wenn die GPU es nicht frei hat). Nur der Render — die Neuindexierung für „Compare phases“ läuft immer bei 128."
     },
     "aperture": "Blende:",
     "apertureTooltip": "Kreisförmige Detektorblende für den R/NCC-Score. „Circular“ erzwingt die Eckenmaske — bei EDAX-Phosphor-Mustern verwenden, deren graue Ecken die Auto-Erkennung übersieht.",
@@ -149,8 +149,8 @@
     "forwardNccBody": "Rendert das SHT-vorwärts simulierte Muster für jeden indizierten Pixel und berechnet die normierte Kreuzkorrelation gegen das experimentelle Muster. Liefert eine „Ground-Truth“-Qualitätskarte (getrennt vom Spherical-CI).",
     "bandwidth": "Bandbreite:",
     "bandwidthFast": "Schnell (bw=128, ~225 MB)",
-    "bandwidthStandard": "Standard (bw=256, ~1,7 GB)",
-    "bandwidthHigh": "Hoch (bw=384, ~5,7 GB)",
+    "bandwidthStandard": "Standard (bw=256, ~1,8 GB)",
+    "bandwidthHigh": "Hoch (bw=384, ~5,9 GB)",
     "computing": "Berechnet...",
     "computeForwardNcc": "Forward-NCC-Karte berechnen",
     "forwardNccHint": "Erwarte ~10–60 s, je nach Kartengröße und GPU. Ergebnis wird zwischengespeichert, bis die Indizierung erneut läuft.",
@@ -168,6 +168,8 @@
     "saveCancelled": "Speichern abgebrochen.",
     "loadCancelled": "Laden abgebrochen.",
     "saved": "Gespeichert „{{label}}“ → {{path}}",
+    "savedResampled": "Gespeichert „{{label}}“ → {{path}}. Auf {{rows}} × {{cols}} Punkte übertragen; jeder Punkt übernahm den nächsten gemessenen.",
+    "savedResampledPlain": "Gespeichert „{{label}}“ → {{path}}. Auf ein Quadratraster übertragen; jeder Punkt übernahm den nächsten gemessenen.",
     "saveFailed": "Speichern fehlgeschlagen: {{msg}}",
     "loaded": "Geladen {{name}}: {{features}}.",
     "noRecognisedData": "keine erkannten Daten",
@@ -211,6 +213,10 @@
     "ang": "MTEX .ang",
     "angLine1": "Standard-Orientierungsdatei. Lädt nativ in MTEX, Aztec, OIM.",
     "angLine2": "Kein HDF5 — keine MATLAB-Kompatibilitätsüberraschungen.",
+    "angSquare": ".ang (quadratisches Raster, umgerechnet)",
+    "angSquareLine1": "Der hexagonale Scan, auf ein Quadratraster übertragen: Jeder Punkt übernimmt den nächsten gemessenen Punkt, und die Datei vermerkt das.",
+    "ctf": ".ctf (quadratisches Raster, umgerechnet)",
+    "ctfLine1": "Oxford/MTEX-Format. Es braucht ein Quadratraster, deshalb wird der hexagonale Scan übertragen: Jeder Punkt übernimmt den nächsten gemessenen Punkt, und die Datei vermerkt das.",
     "h5Light": "Light .h5",
     "recommended": "EMPFOHLEN",
     "h5LightLine1": "~5–50 MB unabhängig von der Quellgröße. Keine Rohmuster kopiert.",
@@ -222,6 +228,8 @@
     "h5RichLine2": "Erbt den Quell-Superblock — alte MATLAB-Versionen verweigern das Öffnen evtl.",
     "h5RichLine3": "Für die Archivierung, wenn alles in einer Datei sein soll.",
     "filterAng": "MTEX .ang (Orientierungsdatei)",
+    "filterAngSquare": "MTEX .ang (quadratisches Raster, umgerechnet)",
+    "filterCtf": "Oxford .ctf (quadratisches Raster, umgerechnet)",
     "filterH5Light": "Light .h5 (kompakt, MATLAB-freundlich)",
     "filterH5Rich": "Rich .h5 (volle Quellkopie + Ergebnisse)",
     "promptTitle": "Ergebnis speichern als {{format}}…",
@@ -269,11 +277,13 @@
   "renamePrompt": "Neuer Name:",
   "errors": {
     "couldntLoadResult": "Dieses Ergebnis konnte nicht geladen werden: {{detail}}. Beim Dateiwechsel wird von der Festplatte neu geladen und das aktive Ergebnis zurückgesetzt — für diesen Datensatz Indizierung/Analyse erneut ausführen, falls es weg ist.",
-    "noResultOrDataset": "Kein Indizierungsergebnis und kein Analyse-Datensatz geladen. Laden Sie zuerst Daten."
+    "noResultOrDataset": "Kein Indizierungsergebnis und kein Analyse-Datensatz geladen. Laden Sie zuerst Daten.",
+    "pc_missing": "Diese Datei enthält kein Pattern Center (PC); der Platzhalter von kikuchipy würde falsche Orientierungen liefern. Kalibrieren Sie das PC in der PC-Verfeinerung oder legen Sie die .osc-/Metadaten-Datei mit dem PC neben den Scan und starten Sie erneut."
   },
   "pc": {
     "label": "PC",
-    "value": " (aktiver Detektor): ({{x}}, {{y}}, {{z}})"
+    "value": " (aktiver Detektor): ({{x}}, {{y}}, {{z}})",
+    "mapMean": " (Mittelwert der PC-Karte)"
   },
   "linescan": {
     "title": "Linescan-Profil"
@@ -339,7 +349,8 @@
     "stepX": "Schritt X:",
     "stepY": "Schritt Y:",
     "micron": "µm",
-    "stepHint": "Automatisch aus der geladenen EBSD-Datei gefüllt, falls verfügbar. Bestimmt die Maßstabslänge."
+    "stepHint": "Automatisch aus der geladenen EBSD-Datei gefüllt, falls verfügbar. Bestimmt die Maßstabslänge.",
+    "stepHintHex": "Bei einem hexagonalen Scan stammt der Schritt aus der Scangeometrie der Karte und lässt sich hier nicht ändern. Der Maßstab folgt ihm."
   },
   "poleFigure": {
     "openButton": "Polfigur öffnen ⧉"
@@ -421,14 +432,17 @@
     "showUnavailableN": "Nicht verfügbare anzeigen ({{n}})",
     "title": "Ebenen",
     "toggleVisibilityAria": "Sichtbarkeit von {{label}} umschalten",
-    "unavailable": "Noch nicht verfügbar"
+    "unavailable": "Noch nicht verfügbar",
+    "gateHexGrid": "Für hexagonale Scans noch nicht verfügbar",
+    "notOnHexRaster": "Diese Ebene ist nicht auf das hexagonale Kartenraster gezeichnet und kann deshalb mit diesem Scan nicht angezeigt werden.",
+    "hexRasterNotExpected": "Diese Ebene ist auf ein hexagonales Kartenraster gezeichnet, das nicht zu diesem Scan passt, und kann deshalb mit ihm nicht angezeigt werden."
   },
   "diagnostics": {
     "title": "Forward-Diagnostik",
     "bandwidth": "Bandbreite:",
     "bwFast": "Schnell (128, unschärfer)",
-    "bwStandard": "Standard (256, ~1,7 GB VRAM)",
-    "bwSharp": "Scharf (384, ~5,7 GB VRAM)",
+    "bwStandard": "Standard (256, ~1,8 GB VRAM)",
+    "bwSharp": "Scharf (384, ~5,9 GB VRAM)",
     "compute": "Diagnostik berechnen",
     "recompute": "Neu berechnen",
     "noActiveResult": "Kein aktives Indizierungs-Ergebnis",

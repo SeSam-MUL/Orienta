@@ -7,8 +7,10 @@ phase with no source at all.
 
 Measured on the real 36: TEN carry one -- eight in `_publ_section_doi`, one
 in `_journal_paper_doi`, and one sitting alone inside the reference block --
-and for SIX of them it is the only source there is. Reading the field takes
-"no source" from nine phases down to three.
+and for SIX of them it was the only source there was. Reading the field takes
+"no source" from nine phases down to three. Three of the six also name their
+paper in the journal tags, which the one citation reader composes, so the DOI
+stands alone for the other three.
 
 `reference()` rejecting a bare `http…` block is right; a URL is not a
 citation. Throwing the content away with it was not.
@@ -81,15 +83,12 @@ def test_ten_of_thirty_six_carry_one(phases):
     assert len(with_doi) == 10, with_doi
 
 
-def test_the_six_for_which_it_is_the_only_source(phases):
+def test_the_three_for_which_it_is_the_only_source(phases):
     only = sorted(p['key'] for p in phases if p.get('doi') and not p.get('reference'))
     assert only == [
         'Al3Fe2Si_mp-1190708_symmetrized',
         'Al6Fe_mp-570001_symmetrized',
-        'Fe3Al2Si4',
-        'Fe3_Al2_Si3',
         'MnAl6_mp-173_symmetrized',
-        'beta-AlFeSi',
     ], only
 
 
@@ -99,7 +98,9 @@ def test_beta_alfesi_is_the_acceptance_case(phases):
     phase most likely to be looked at closely."""
     beta = next(p for p in phases if p['key'] == 'beta-AlFeSi')
     assert beta['doi'] == '10.1107/S0108768193013096'
-    assert beta['reference'] is None      # which is why the DOI matters here
+    # composed from the author loop and the journal tags: the file has no reference block
+    assert beta['reference'] == ('Romming, C., Hanson, V., Gjonnes, J.: '
+                                 'Acta Crystallographica, Section B 50 (1994) 307-312')
 
 
 def test_only_three_phases_have_no_source_at_all(phases):

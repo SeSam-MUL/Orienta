@@ -3,6 +3,7 @@
 ``GET  /api/indexing/hough/reflectors?cif_path=``  the family table
 ``PUT  /api/indexing/hough/reflectors``            change the choice (null = default)
 ``POST /api/indexing/hough/reflectors/validate``   check one hand-typed family
+``POST /api/indexing/hough/reflectors/fit``        the largest default list that fits
 ``GET  /api/indexing/hough/reflectors/cost``       what the choice would cost
 
 The PC Refinement page has the same four under ``/api/pc/phase/reflectors``,
@@ -28,6 +29,11 @@ class ReflectorChangeRequest(BaseModel):
     spec: Optional[dict] = None
     # also list the weaker and finer families (down to 0.7 A): a computation of
     # its own, so only on demand
+    extended: bool = False
+
+
+class ReflectorFitRequest(BaseModel):
+    cif_path: str
     extended: bool = False
 
 
@@ -72,6 +78,21 @@ async def put_reflectors(req: ReflectorChangeRequest):
     def work():
         phase = svc.phase_for_path(req.cif_path)
         return svc.change(phase, req.cif_path, req.spec, req.extended)
+
+    try:
+        return await asyncio.to_thread(work)
+    except svc.ReflectorError as exc:
+        raise_http(exc)
+
+
+@router.post("/reflectors/fit")
+async def fit_reflectors(req: ReflectorFitRequest):
+    """The one-click answer to a refusal: store the largest default list that fits
+    this machine (an ordinary ``auto`` spec with ``max_rows`` set); returns the
+    table and ``fit`` (what was chosen and why)."""
+    def work():
+        phase = svc.phase_for_path(req.cif_path)
+        return svc.fit(phase, req.cif_path, req.extended)
 
     try:
         return await asyncio.to_thread(work)

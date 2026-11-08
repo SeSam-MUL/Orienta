@@ -118,7 +118,7 @@
     "presetHigh": "High",
     "presetMax": "Max",
     "downloadFirst": "Download this file first to view its sphere.",
-    "reconstructing": "Reconstructing master sphere…",
+    "reconstructingElapsed": "Reconstructing master sphere… ({{s}} s)",
     "loadError": "Could not load sphere: {{error}}",
     "loadErrorFallback": "Failed to load sphere",
     "selectLocal": "Select a local .sht to view its sphere.",
@@ -126,7 +126,19 @@
     "spaceGroupShort": "SG {{sg}}",
     "bandwidthSuffix": "bw {{bw}}",
     "hint": "drag to rotate · scroll to zoom",
-    "captureNotReady": "The sphere is not ready yet — wait until it is drawn."
+    "captureNotReady": "The sphere is not ready yet — wait until it is drawn.",
+    "useStandard": "Use Standard",
+    "retry": "Retry",
+    "timeout": "The server is still busy with other spheres. Try again in a moment.",
+    "cancel": "Cancel",
+    "cancelled": "Cancelled.",
+    "workerSlowStart": "The compute process is starting slowly (first start, or a virus scanner checking it). It is still working."
+  },
+  "errors": {
+    "sphereOutOfMemory": "Not enough memory for the sphere at this resolution. Choose Standard.",
+    "workerCrashed": "The compute process ended unexpectedly. Orienta and your data are not affected; try again or choose a lower resolution.",
+    "workerStartFailed": "The compute process could not be started. Check that no virus scanner blocks Orienta's Python, then try again.",
+    "workerStopped": "Orienta is shutting down, so the sphere was not computed. Restart Orienta and try again."
   },
   "splitterTooltip": "Drag to resize the file table versus the preview panel.",
   "status": {

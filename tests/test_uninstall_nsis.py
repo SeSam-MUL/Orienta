@@ -508,6 +508,551 @@ def test_a_pointer_to_a_different_folder_survives_an_orienta_home_removal(box):
 
 
 # --------------------------------------------------------------------------
+# what repeated "change..." clicks of 0.4.6 left behind
+# --------------------------------------------------------------------------
+#
+# The wizard added an Orienta level per click, so the recorded data folder could
+# be <default>\Orienta\Orienta, with the default folder holding the electron\ and
+# logs\ the application wrote before the choice. The uninstaller removed the
+# recorded folder and nothing above it, and a reinstall then found the default
+# folder "not empty". Each case below is one way that cleanup could go too far.
+
+# --------------------------------------------------------------------------
+# one table of cases for BOTH implementations of "only Orienta's leftovers"
+# --------------------------------------------------------------------------
+#
+# electron/leftovers.js (the setup, the folder chooser) and this uninstaller
+# decide "is this folder only Orienta's leftovers" by SHAPE, not by name: a
+# user's own logs\mydata.csv, pending\report.docx, python\myscript.py or
+# runtime\x.txt once went with a folder the uninstaller took for Orienta's.
+# tests/leftover_shapes.json is the one table; tests/electron/leftovers.test.js
+# runs it against the JavaScript, the tests below against the NSIS bench, so the
+# two cannot drift apart.
+
+import shutil  # noqa: E402
+
+SHAPES = json.loads((REPO / "tests" / "leftover_shapes.json").read_text(encoding="utf-8"))
+
+
+def _build(folder: Path, files: list[str], dirs: list[str] | None = None) -> None:
+    for name in dirs or []:
+        folder.joinpath(*name.split("/")).mkdir(parents=True, exist_ok=True)
+    for name in files:
+        target = folder.joinpath(*name.split("/"))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x")
+
+
+def _tree(folder: Path) -> list[str]:
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*"))
+
+
+@pytest.mark.parametrize("case", SHAPES["shapes"], ids=lambda c: c["name"])
+def test_the_default_folder_is_cleaned_exactly_when_it_holds_only_leftovers(box, case):
+    default = box / "local" / "Orienta"
+    _build(default, case["files"], case.get("dirs"))
+    before = _tree(default)
+    _run(box, answers=("yes", "no"))
+    # the uninstaller's own verdict where it deliberately differs (empty folders)
+    if case.get("nsis_leftover", case["leftover"]):
+        assert not default.exists(), f"{case['name']}: leftovers were not cleaned, left {_tree(default)}"
+    else:
+        assert default.is_dir(), f"{case['name']}: a folder with somebody's files was removed"
+        assert _tree(default) == before, f"{case['name']}: something in it was touched"
+
+
+@pytest.mark.parametrize("case", SHAPES["recognition"], ids=lambda c: c["name"])
+def test_a_data_folder_is_recognised_exactly_as_the_javascript_recognises_it(box, case):
+    home = box / "home"
+    _build(home, case["files"])
+    decided = _run(box, answers=("no", "no"), env_home=home)
+    assert decided["verdict"] == ("ours" if case["ours"] else "unsure"), case["name"]
+
+
+@pytest.mark.parametrize(
+    "case", [c for c in SHAPES["shapes"] if not c["leftover"] and not c["name"].startswith(("chain", "conda"))],
+    ids=lambda c: c["name"])
+def test_user_data_in_the_level_above_a_nested_data_folder_is_never_removed(box, case):
+    """The four that lost data (logs, pending, python, runtime), and the rest:
+    Work\\Orienta\\logs\\mydata.csv beside the data in Work\\Orienta\\Orienta
+    left Work\\ EMPTY after yes/yes."""
+    level = box / "Work" / "Orienta"
+    home = level / "Orienta"
+    _build(level, case["files"])
+    before = _tree(level)
+    _home(home, user_file=False)
+    _pointer(box / "appdata", str(home))
+    _run(box, answers=("yes", "yes"))
+    assert not home.exists()
+    after = _tree(level)
+    for kept in before:
+        assert kept in after, f"{case['name']}: {kept} was removed from the level above"
+
+
+def _node_json(expression: str):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+    out = subprocess.run(
+        [node, "-e", f"const l=require({json.dumps(str(REPO / 'electron' / 'leftovers.js'))});"
+                     f"console.log(JSON.stringify({expression}))"],
+        capture_output=True, text=True, check=True)
+    return json.loads(out.stdout)
+
+
+def _nsh_text() -> str:
+    return NSH.read_text(encoding="utf-8-sig")
+
+
+def test_the_name_lists_of_the_uninstaller_and_the_javascript_are_the_same():
+    import re
+    text = _nsh_text()
+    js_files = {n.lower() for n in _node_json("l.LEFTOVER_FILES")}
+    js_dirs = {n.lower() for n in _node_json("l.LEFTOVER_DIRS")}
+    pending_record = _node_json("l.PENDING_RECORD")
+    all_names = {n.lower() for n in _node_json("l.ALL_NAMES")}
+
+    # the shape check: state files and the record, by name
+    shape = text[text.index("!macro orientaEntryLeftover"):text.index("!macro orientaLevelsLight")]
+    nsh_files = {m.lower() for m in re.findall(r'\$\{(?:If|OrIf|ElseIf)\} "\$\{NAME\}" == "(\.[^"]+)"', shape)}
+    # the marker is the one name the NSIS side accepts only while judging the chain
+    # below a recognised home (guarded by $oMarkerOk); it is not a leftover in JS
+    assert "${AndIf} $oMarkerOk" in shape
+    assert nsh_files - {".orienta-home"} == js_files
+    assert f'"${{NAME}}" == "{pending_record}"' in shape
+    # ... and the four folders whose SHAPE is checked
+    nsh_dirs = set(re.findall(r'"\$\{NAME\}" == "([a-z-]+)"', shape)) - {pending_record}
+    assert nsh_dirs == js_dirs
+
+    # what is wiped in a leftover level: exactly the leftovers, never the marker, python or runtime
+    wipe = text[text.index("!macro orientaWipeLevel"):text.index("!macro orientaCleanLight")]
+    wiped = {m.lower() for m in re.findall(r'orientaRemovePath "\$oWipe\\([^"]+)"', wipe)}
+    assert wiped == js_files | js_dirs | {pending_record}
+    assert not {".orienta-home", "python", "runtime"} & wiped
+
+    # what a recognised data folder loses: every name Orienta creates (Windows has no conda folders)
+    main = text[text.index("; ---- the top level, by name ----"):text.index("; ---- runtime\\: the program folder")]
+    removed = {m.lower() for m in re.findall(r'orientaRemovePath "\$oHome\\([^"*$]+)"', main)} | {".orienta-home", "runtime"}
+    js_conda = {n.lower() for n in _node_json("l.OWNED_ONLY")} - {"python", "runtime"}
+    assert removed == all_names - js_conda
+
+
+def test_the_child_shapes_of_the_uninstaller_and_the_javascript_are_the_same():
+    import re
+    text = _nsh_text()
+    block = text[text.index("!macro orientaChildrenOk"):text.index("!macro orientaEntryLeftover")]
+    electron = block[block.index('"${KIND}" == "electron"'):block.index('"${KIND}" == "pending"')]
+    nsh_electron = {m.lower() for m in re.findall(r'\$oName4 == "([^"]+)"', electron)}
+    assert nsh_electron == set(_node_json("l.ELECTRON_CHILDREN"))
+    setup_tmp = block[block.index('"${KIND}" == "setup-tmp"'):block.index('"${KIND}" == "logs"')]
+    nsh_prefixes = set(re.findall(r'orientaStarts "\$oName4" "([^"]+)"', setup_tmp))
+    assert nsh_prefixes == set(_node_json("l.SETUP_TMP_PREFIXES"))
+    assert '".tmp"' in setup_tmp
+    pending = block[block.index('"${KIND}" == "pending"'):block.index('"${KIND}" == "setup-tmp"')]
+    assert '"orienta-runtime-"' in pending
+
+
+def _light(folder: Path) -> None:
+    """What the application writes into the default folder before any setup."""
+    (folder / "electron" / "userData").mkdir(parents=True, exist_ok=True)
+    (folder / "electron" / "userData" / "prefs").write_text("x")
+    (folder / "logs").mkdir(exist_ok=True)
+    (folder / "logs" / "orienta-shell.log").write_text("x")
+
+
+def test_a_nested_data_folder_leaves_no_chain_and_no_default_folder_behind(box):
+    default = box / "local" / "Orienta"
+    nested = default / "Orienta" / "Orienta"
+    _light(default)
+    _home(nested, user_file=False)
+    pointer = _pointer(box / "appdata", str(nested))
+    # the record of the volume (electron/volume_id.js) sits beside the pointer
+    (box / "appdata" / "Orienta" / "home.volume").write_text('{"root":"C:\\\\","serial":"AAAA-0001"}')
+    _run(box, answers=("yes", "yes"))
+    assert not default.exists(), "the leftover default folder was not cleaned"
+    assert not pointer.exists()
+    assert not (box / "appdata" / "Orienta").exists(), "the volume record kept the settings folder alive"
+
+
+def test_with_the_library_kept_nothing_above_it_is_touched(box):
+    default = box / "local" / "Orienta"
+    nested = default / "Orienta" / "Orienta"
+    _light(default)
+    _home(nested, user_file=False)
+    pointer = _pointer(box / "appdata", str(nested))
+    _run(box, answers=("yes", "no"))
+    assert _library(nested).read_text() == "irreplaceable"
+    assert pointer.exists()
+    assert (default / "Orienta").is_dir()
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_file_of_the_users_in_the_default_folder_keeps_it_whole(box):
+    default = box / "local" / "Orienta"
+    nested = default / "Orienta" / "Orienta"
+    _light(default)
+    (default / "thesis.docx").write_text("mine")
+    _home(nested, user_file=False)
+    _pointer(box / "appdata", str(nested))
+    _run(box, answers=("yes", "yes"))
+    assert not nested.exists()
+    assert (default / "thesis.docx").read_text() == "mine"
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_real_installation_in_the_default_folder_is_not_swept(box):
+    """python\\ means an installation lives there; the cleanup is for leftovers."""
+    default = box / "local" / "Orienta"
+    _home(default, user_file=False)
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert not elsewhere.exists()
+    assert (default / "python" / "python.exe").exists()
+    assert (default / "logs").exists()
+    assert _library(default).read_text() == "irreplaceable"
+
+
+def test_answering_no_to_the_components_leaves_the_default_folder_alone(box):
+    default = box / "local" / "Orienta"
+    _light(default)
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("no", "no"))
+    assert (default / "electron" / "userData" / "prefs").exists()
+    assert (elsewhere / "python" / "python.exe").exists()
+
+
+def test_an_unreachable_recorded_folder_leaves_the_default_folder_alone(box):
+    default = box / "local" / "Orienta"
+    _light(default)
+    gone = box / "unplugged" / "Orienta"
+    pointer = _pointer(box / "appdata", str(gone))
+    _run(box, answers=("yes", "yes"))
+    assert pointer.exists()
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_link_called_orienta_is_never_followed_or_removed(box):
+    default = box / "local" / "Orienta"
+    _light(default)
+    _junction(default / "Orienta", box / "outside" / "victim")
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert (box / "outside" / "victim" / "keep.txt").read_text() == "behind a link"
+    assert (default / "Orienta").exists()
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_nested_data_folder_elsewhere_takes_its_empty_parents_with_it(box):
+    outer = box / "outer"
+    home = outer / "Orienta" / "Orienta"
+    _home(home, user_file=False)
+    _pointer(box / "appdata", str(home))
+    _run(box, answers=("yes", "yes"))
+    assert not (outer / "Orienta").exists()
+    assert outer.is_dir()        # not named Orienta: stays
+
+
+def test_a_level_above_that_holds_only_the_application_s_leftovers_goes_too(box):
+    """A first pick (D:\\Data -> D:\\Data\\Orienta) gets electron\\ and logs\\ from
+    the shell; the second pick nests below it. The level above the data folder
+    is then not empty, but holds nothing of anybody's."""
+    outer = box / "outer"
+    level = outer / "Orienta"
+    home = level / "Orienta"
+    _light(level)
+    _home(home, user_file=False)
+    _pointer(box / "appdata", str(home))
+    _run(box, answers=("yes", "yes"))
+    assert not level.exists()
+    assert outer.is_dir()
+
+
+def test_a_level_above_that_holds_a_file_of_the_users_keeps_everything_in_it(box):
+    level = box / "outer" / "Orienta"
+    home = level / "Orienta"
+    _light(level)
+    (level / "thesis.docx").write_text("mine")
+    _home(home, user_file=False)
+    _pointer(box / "appdata", str(home))
+    _run(box, answers=("yes", "yes"))
+    assert not home.exists()
+    assert (level / "thesis.docx").read_text() == "mine"
+    assert (level / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_level_above_that_holds_an_installation_is_not_swept(box):
+    level = box / "outer" / "Orienta"
+    home = level / "Orienta"
+    _light(level)
+    (level / "python").mkdir()
+    (level / "python" / "python.exe").write_text("exe")
+    _home(home, user_file=False)
+    _pointer(box / "appdata", str(home))
+    _run(box, answers=("yes", "yes"))
+    assert (level / "python" / "python.exe").exists()
+    assert (level / "electron" / "userData" / "prefs").exists()
+
+
+def test_an_empty_chain_in_the_default_folder_goes_with_the_leftovers(box):
+    """The chain here is NOT above the recorded folder, so only the default
+    folder's own cleanup can remove it."""
+    default = box / "local" / "Orienta"
+    _light(default)
+    (default / "Orienta" / "Orienta").mkdir(parents=True)
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert not default.exists()
+
+
+def test_a_default_folder_holding_python_is_not_light_even_with_nothing_else(box):
+    default = box / "local" / "Orienta"
+    _light(default)
+    (default / "python").mkdir()
+    (default / "python" / "python.exe").write_text("exe")
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert (default / "python" / "python.exe").exists()
+    # the whole folder is untouched, not merely python: an installation lives here
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+def test_the_default_folder_is_left_alone_when_the_environment_names_the_data(box):
+    """Only a RECORDED choice implies that the default folder is a leftover."""
+    default = box / "local" / "Orienta"
+    _light(default)
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _run(box, answers=("yes", "yes"), env_home=elsewhere)
+    assert not elsewhere.exists()
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_chain_level_with_a_file_beside_the_next_orienta_is_not_a_chain(box):
+    """`a.txt` sorts BEFORE `Orienta`, so the last entry enumerated is the
+    Orienta folder: a check that looks only at the last name takes this level for
+    a chain link and clears the default folder around a file of the user's."""
+    default = box / "local" / "Orienta"
+    _light(default)
+    (default / "Orienta" / "Orienta").mkdir(parents=True)
+    (default / "Orienta" / "a.txt").write_text("mine")
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert (default / "Orienta" / "a.txt").read_text() == "mine"
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+@pytest.mark.parametrize("user_name,light_name", [("Orienta", "orienta"), ("orienta", "Orienta"), ("ORIENTA", "orienta")])
+def test_two_chain_named_folders_on_a_case_sensitive_directory_are_never_guessed_between(
+        box, user_name, light_name):
+    """NSIS's == is case-insensitive, so `Orienta` and `orienta` both look like the
+    chain; only one was checked and the cleaning followed the literal name -- the
+    OTHER one on a case-sensitive directory, whose logs\\mydata.csv went with it."""
+    default = box / "local" / "Orienta"
+    default.mkdir(parents=True)
+    made = subprocess.run(["fsutil", "file", "setCaseSensitiveInfo", str(default), "enable"],
+                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if made.returncode != 0:
+        pytest.skip("this machine cannot make a directory case-sensitive: "
+                    + (made.stderr or made.stdout).strip()[:80])
+    _light(default)
+    _light(default / light_name)
+    (default / user_name / "logs").mkdir(parents=True)
+    (default / user_name / "logs" / "mydata.csv").write_text("mine")
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert (default / user_name / "logs" / "mydata.csv").read_text() == "mine"
+    assert (default / "electron" / "userData" / "prefs").exists(), "nothing may be touched when it cannot be told"
+
+
+@pytest.mark.parametrize("levels", [9, 12, 16])
+def test_a_deep_empty_chain_in_the_default_folder_is_removed_whole(box, levels):
+    default = box / "local" / "Orienta"
+    _light(default)
+    (default.joinpath(*["Orienta"] * levels)).mkdir(parents=True)
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert not default.exists(), f"{levels} levels of chain left something behind"
+
+
+def test_a_chain_of_leftovers_inside_a_recognised_data_folder_goes_with_it(box):
+    """After yes/yes the data folder held only its chain levels (electron\\ and
+    logs\\ each, as 0.4.6 left them), and its own marker made every level "not
+    light": the whole folder stayed. The marker is allowed for that one call."""
+    home = box / "home"
+    _home(home, user_file=False)
+    cur = home
+    for _ in range(3):
+        cur = cur / "Orienta"
+        _light(cur)
+    _run(box, answers=("yes", "yes"), env_home=home)
+    assert not home.exists(), f"left: {_tree(home)}"
+
+
+def test_but_a_user_file_in_such_a_chain_keeps_it_and_the_marker_never_counts_elsewhere(box):
+    home = box / "home"
+    _home(home, user_file=False)
+    cur = home
+    for _ in range(3):
+        cur = cur / "Orienta"
+        _light(cur)
+    (cur / "logs" / "mydata.csv").write_text("mine")
+    _run(box, answers=("yes", "yes"), env_home=home)
+    assert (cur / "logs" / "mydata.csv").read_text() == "mine"
+    assert (cur / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_marker_in_the_default_folder_beside_a_pointer_is_not_a_leftover(box):
+    """The marker is allowed only for the recognised data folder's own chain: a
+    marked DEFAULT folder (an earlier installation) is not 'only leftovers'."""
+    default = box / "local" / "Orienta"
+    _light(default)
+    (default / ".orienta-home").write_text("x")
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert (default / ".orienta-home").exists()
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+@pytest.mark.parametrize("levels", [9, 12, 16])
+def test_a_deep_empty_chain_inside_the_data_folder_does_not_keep_it_alive(box, levels):
+    home = box / "home"
+    _home(home, user_file=False)
+    (home.joinpath(*["Orienta"] * levels)).mkdir(parents=True)
+    _run(box, answers=("yes", "yes"), env_home=home)
+    assert not home.exists(), f"{levels} levels of chain kept the folder"
+
+
+def test_a_link_to_an_empty_folder_called_orienta_is_not_a_chain_either(box):
+    """An empty target makes the link LOOK like an empty chain; it is still a
+    link, and a link is never ours to remove."""
+    default = box / "local" / "Orienta"
+    _light(default)
+    target = box / "outside" / "empty_target"
+    target.mkdir(parents=True)
+    _junction(default / "Orienta", target)
+    elsewhere = box / "elsewhere" / "Orienta"
+    _home(elsewhere, user_file=False)
+    _pointer(box / "appdata", str(elsewhere))
+    _run(box, answers=("yes", "yes"))
+    assert target.is_dir()
+    assert (default / "Orienta").exists()
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_level_above_that_is_itself_a_link_is_not_removed(box):
+    """The data folder sits behind a junction called Orienta: the level above it
+    is empty after the run, but it is a link, and only plain directories go."""
+    target = box / "outside" / "real_parent"
+    target.mkdir(parents=True)
+    link = box / "outer" / "Orienta"
+    link.parent.mkdir()
+    _junction(link, target)
+    home = link / "Orienta"
+    _home(home, user_file=False)
+    _pointer(box / "appdata", str(home))
+    _run(box, answers=("yes", "yes"))
+    assert not home.exists()
+    assert link.exists(), "the link above the data folder was removed"
+    assert target.is_dir()
+
+
+def test_an_empty_chain_inside_the_data_folder_does_not_keep_it_alive(box):
+    home = box / "home"
+    _home(home, user_file=False)
+    (home / "Orienta" / "Orienta").mkdir(parents=True)
+    _run(box, answers=("yes", "yes"), env_home=home)
+    assert not home.exists()
+
+
+def test_a_link_called_orienta_inside_the_data_folder_is_not_pruned(box):
+    home = box / "home"
+    _home(home, user_file=False)
+    _junction(home / "Orienta", box / "outside" / "victim")
+    _run(box, answers=("yes", "yes"), env_home=home)
+    assert (box / "outside" / "victim" / "keep.txt").read_text() == "behind a link"
+    assert (home / "Orienta").exists(), "the link was removed as if it were an empty folder"
+
+
+def test_a_chain_with_a_file_in_it_inside_the_data_folder_is_kept(box):
+    home = box / "home"
+    _home(home, user_file=False)
+    (home / "Orienta" / "Orienta").mkdir(parents=True)
+    (home / "Orienta" / "Orienta" / "results.ang").write_text("mine")
+    _run(box, answers=("yes", "yes"), env_home=home)
+    assert (home / "Orienta" / "Orienta" / "results.ang").read_text() == "mine"
+
+
+def test_a_folder_above_that_is_not_named_orienta_is_left_alone(box):
+    outer = box / "outer"
+    home = outer / "Orienta" / "Mine" / "Orienta"
+    _home(home, user_file=False)
+    _pointer(box / "appdata", str(home))
+    _run(box, answers=("yes", "yes"))
+    assert not home.exists()
+    assert (outer / "Orienta" / "Mine").is_dir()
+
+
+def test_a_level_above_that_holds_a_file_is_left_alone(box):
+    outer = box / "outer" / "Orienta"
+    home = outer / "Orienta"
+    _home(home, user_file=False)
+    (outer / "keep.txt").write_text("mine")
+    _pointer(box / "appdata", str(home))
+    _run(box, answers=("yes", "yes"))
+    assert not home.exists()
+    assert (outer / "keep.txt").read_text() == "mine"
+
+
+def test_the_default_folder_with_only_leftovers_is_removed_without_a_pointer(box):
+    """The state a 0.4.6 uninstall left: no pointer any more, the default
+    folder holding electron\\, logs\\ and an empty chain -- previously reported
+    as 'could not be identified' and left in place."""
+    default = box / "local" / "Orienta"
+    _light(default)
+    (default / "Orienta" / "Orienta").mkdir(parents=True)
+    decided = _run(box, answers=("yes", "no"))
+    assert decided["verdict"] == "ours"
+    assert not default.exists()
+
+
+def test_the_default_folder_with_a_foreign_file_is_still_not_recognised(box):
+    default = box / "local" / "Orienta"
+    _light(default)
+    (default / "thesis.docx").write_text("mine")
+    decided = _run(box, answers=("yes", "yes"))
+    assert decided["verdict"] == "unsure"
+    assert (default / "thesis.docx").read_text() == "mine"
+    assert (default / "electron" / "userData" / "prefs").exists()
+
+
+def test_a_folder_the_user_named_is_never_judged_by_its_leftovers(box):
+    """The light-folder rule is for the DEFAULT location only."""
+    home = box / "home"
+    _light(home)
+    decided = _run(box, answers=("yes", "yes"), env_home=home)
+    assert decided["verdict"] == "unsure"
+    assert (home / "electron" / "userData" / "prefs").exists()
+
+
+# --------------------------------------------------------------------------
 # the real hook
 # --------------------------------------------------------------------------
 

@@ -9,7 +9,9 @@ Wraps IndexingController for:
 """
 
 import asyncio
+import copy
 import logging
+import math
 import numbers
 import threading
 import uuid
@@ -21,10 +23,14 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from display_names import display_stem as _stem
+from hough_reflectors import HoughLibraryTooBig
 from backend.api.services.image_utils import array_to_base64_png, array_to_base64_raw, colormap_array_to_base64
 from backend.api.services.calibration_store import calibration_store
 from backend.api.services.detector_convention import report_azimuthal
 from backend.api.services import state_version
+from backend.api.services import load_choices
+from backend.api.services import variant_registry
+from backend.api.services.orienta_hex_h5 import signal_patterns_3d as _signal_patterns_3d
 from backend.api.problem import problem
 
 logger = logging.getLogger(__name__)
@@ -94,10 +100,17 @@ def _resolve_step_size_um(active) -> float | None:
     Order of preference:
       1. ``result.metadata['step_size_um']`` — set on re-import of a light
          file and the most robust source (survives signal unload/switch).
-      2. The active EBSD signal's navigation-axis scale — what kikuchipy
-         records from the source h5oina; reliable right after indexing.
+      2. The step of the square scan geometry stamped on the result when it
+         ran (``metadata['scan_geometry']``, only when its steps are known; a
+         hexagonal stamp is not read: for a map resampled from a hexagonal
+         scan its step is not the step of the square map).
+      3. The active EBSD signal's navigation-axis scale — what kikuchipy
+         records from the source h5oina — but only when that file is the one
+         the result ran on (``_own_source_path``). A run stores neither of
+         the first two in its metadata, so this is the lookup of a result
+         without a stamp; another file's step would mis-scale the map.
 
-    Returns None when neither is available; callers that need step size for a
+    Returns None when none is available; callers that need step size for a
     grid (e.g. the MTEX-facing exports) must fail loud rather than guess a
     default — a wrong step silently mis-scales the whole map.
     """
@@ -110,9 +123,20 @@ def _resolve_step_size_um(active) -> float | None:
     except (TypeError, ValueError):
         pass
 
-    # 2. Active signal navigation-axis scale.
+    # 2. The geometry stamped on the result.
     try:
-        from backend.api.routes.ebsd_viewer import _get_active_signal
+        stamp = (getattr(active, "metadata", None) or {}).get("scan_geometry")
+        if (isinstance(stamp, dict) and stamp.get("kind") == "square"
+                and stamp.get("steps_known", True) and float(stamp["step_x"]) > 0):
+            return float(stamp["step_x"])
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    # 3. Active signal navigation-axis scale, of the result's own source file only.
+    try:
+        from backend.api.routes.ebsd_viewer import _ebsd_file_path, _get_active_signal
+        if _own_source_path(active, _ebsd_file_path) is None:
+            return None
         signal = _get_active_signal()
         if signal is not None:
             scales = [a.scale for a in signal.axes_manager.navigation_axes]
@@ -124,40 +148,70 @@ def _resolve_step_size_um(active) -> float | None:
     return None
 
 
+def _own_source_path(active, open_path) -> "str | None":
+    """``open_path`` (the file open in the viewer) if it is the file ``active`` was computed on,
+    else None.
+
+    An export reads the vendor, the acquisition header and the quality channels from the
+    source file. The viewer can hold another file than the one the result ran on (the user
+    switched files, or imported the result next to another scan): nothing of that file says
+    anything about this result. A result that records no ``source_file`` cannot be told apart,
+    so the open file stays the source for it, as it always was."""
+    if not open_path:
+        return None
+    source = (getattr(active, "metadata", None) or {}).get("source_file")
+    if not source:
+        return open_path
+    return open_path if variant_registry.same_file(open_path, source) else None
+
+
 def _resolve_source_vendor(active, src_path_str: str | None = None) -> str:
     """Resolve the source vendor ("oxford"/"edax"/"bruker"/"") for an export.
 
     Used to put exported orientations into the vendor's stored Euler frame so
     MTEX/Aztec read them aligned (see orientation_frame.to_vendor_export_frame).
-    Order: result metadata -> source h5 Manufacturer. Returns "" when unknown,
-    which the frame helpers treat as "leave native" (no silent mis-rotation).
+    Order: the vendor stamped on the result (``metadata["source_vendor"]``, taken when its run
+    started or restored from the file it was imported from) -> the Manufacturer of the result's own
+    source file (``src_path_str``, only if it IS the result's ``source_file``; an EDAX
+    ``.up1`` / ``.up2`` counts as EDAX). Returns "" when unknown, which the frame helpers treat
+    as "leave native" (no silent mis-rotation).
     """
-    def _norm(s: str) -> str:
-        s = (s or "").lower()
-        if "oxford" in s:
-            return "oxford"
-        if "edax" in s or "tsl" in s or "ametek" in s:
-            return "edax"
-        if "bruker" in s:
-            return "bruker"
-        return ""
-
     md = getattr(active, "metadata", None) or {}
-    v = _norm(str(md.get("source_vendor", "")))
+    v = _vendor_name(str(md.get("source_vendor", "")))
     if v:
         return v
+    return _vendor_of_file(_own_source_path(active, src_path_str))
 
-    if src_path_str and Path(src_path_str).is_file():
-        try:
-            import h5py
-            with h5py.File(src_path_str, "r") as f:
-                if "Manufacturer" in f:
-                    raw = f["Manufacturer"][()]
-                    s = raw[0] if np.ndim(raw) else raw
-                    s = s.decode() if isinstance(s, bytes) else str(s)
-                    return _norm(s)
-        except Exception:
-            logger.debug("vendor resolve from source failed", exc_info=True)
+
+def _vendor_name(s: str) -> str:
+    """"oxford", "edax", "bruker" or "" for a Manufacturer string or a stamped vendor."""
+    s = (s or "").lower()
+    if "oxford" in s:
+        return "oxford"
+    if "edax" in s or "tsl" in s or "ametek" in s:
+        return "edax"
+    if "bruker" in s:
+        return "bruker"
+    return ""
+
+
+def _vendor_of_file(path) -> str:
+    """The vendor of an EBSD file: the Manufacturer of an HDF5 file, EDAX for an APEX ``.up1`` /
+    ``.up2`` pattern file (only EDAX writes them and they hold no Manufacturer), else ""."""
+    if not path or not Path(path).is_file():
+        return ""
+    try:
+        import h5py
+        if not h5py.is_hdf5(str(path)):
+            return "edax" if str(path).lower().endswith((".up1", ".up2")) else ""
+        with h5py.File(str(path), "r") as f:
+            if "Manufacturer" in f:
+                raw = f["Manufacturer"][()]
+                s = raw[0] if np.ndim(raw) else raw
+                s = s.decode() if isinstance(s, bytes) else str(s)
+                return _vendor_name(s)
+    except Exception:
+        logger.debug("vendor resolve from source failed", exc_info=True)
     return ""
 
 
@@ -276,6 +330,256 @@ def _scan_provenance_fields() -> dict:
     }
 
 
+def _scan_geometry_fields_of(dataset_id, signal) -> dict:
+    """The scan geometry of dataset ``dataset_id`` (whose map is ``signal``), to be stamped on a
+    result next to the offsets.
+
+    A key of its own and not a fourth entry of ``_scan_provenance_fields``: that dict is what the
+    exporters write as file attributes (``_write_scan_provenance``), and a dict cannot be an HDF5
+    attribute. ``None`` when nothing is registered - read as "unknown" by every consumer, never as
+    "square".
+
+    ``hex_resampled`` rides along: True when the map the result ran on was resampled to a square
+    grid from a hexagonal scan on load, False for an ordinary scan, None when there is no signal
+    to ask. Without it a result on a resampled map reads like a native square scan.
+
+    The two reads are independent: a failing geometry lookup still yields ``hex_resampled`` from a
+    readable signal and the other way round. A failure is a warning, not a debug line - a freshly
+    indexed hexagonal result that silently became "unknown" must leave a trace."""
+    fields = {"scan_geometry": None, "hex_resampled": None}
+    try:
+        from backend.api.services import scan_geometry as _sg
+        geometry = _sg.geometry_for(dataset_id)
+        fields["scan_geometry"] = geometry.to_dict() if geometry is not None else None
+    except Exception:
+        logger.warning("could not read the scan geometry of dataset %r", dataset_id, exc_info=True)
+    try:
+        if signal is not None:
+            from backend.api.routes import ebsd_viewer
+            fields["hex_resampled"] = bool(ebsd_viewer._signal_is_hex_resampled(signal))
+    except Exception:
+        logger.warning("could not tell whether the map of dataset %r was resampled from a "
+                       "hexagonal scan", dataset_id, exc_info=True)
+    return fields
+
+
+def _scan_geometry_fields() -> dict:
+    """``_scan_geometry_fields_of`` for the dataset that is active NOW.
+
+    The live fallback of ``_store_result``'s setdefault, for the producers that do not seed the
+    stamp themselves (the grain path copies its parent, an import seeds None, a refinement copies
+    its parent's). A run seeds ``_scan_stamp_at_run_start`` instead."""
+    try:
+        from backend.api.routes import ebsd_viewer
+        dataset_id, signal = ebsd_viewer._active_dataset, ebsd_viewer._get_active_signal()
+    except Exception:
+        logger.warning("could not read the active dataset for its scan geometry", exc_info=True)
+        return {"scan_geometry": None, "hex_resampled": None}
+    return _scan_geometry_fields_of(dataset_id, signal)
+
+
+def _scan_stamp_at_run_start(dataset_id, signal) -> dict:
+    """The five scan keys (offsets, shape, geometry, hex_resampled) of the dataset a run indexes.
+
+    Taken when the run STARTS, not when its result is stored: a run lasts minutes, and a crop (a
+    new dataset, activated) or a file switch during it would otherwise give the finished result
+    the geometry and the window of a dataset it never ran on. The geometry and the signal are the
+    run's own (``dataset_id`` and ``signal`` were checked against the request); the offsets go
+    through ``_scan_provenance_fields`` and its ``_active_crop_window`` seam, so the caller takes
+    the stamp right after that check, while the active dataset IS the run's.
+
+    ``source_vendor`` rides along: the vendor of the file the run reads its patterns from
+    (``"oxford"``, ``"edax"``, ``"bruker"``, or ``""`` when the file does not say). The exports
+    put the Euler angles into that vendor's frame, and the file that is open when the result is
+    exported can be another one; ``""`` is stamped too, so that "unknown at the start" is not read
+    from whatever file is open later."""
+    from backend.api.routes import ebsd_viewer
+    return {**_scan_provenance_fields(), **_scan_geometry_fields_of(dataset_id, signal),
+            "source_vendor": _vendor_of_file(ebsd_viewer._ebsd_file_path)}
+
+
+def _seed_scan_stamp(result, stamp: dict) -> None:
+    """Put ``stamp`` on ``result.metadata`` so that ``_store_result``'s setdefault keeps it.
+
+    Creates the metadata dict when there is none; a key the producer already set stays."""
+    if getattr(result, "metadata", None) is None:
+        result.metadata = {}
+    for _key, _value in stamp.items():
+        result.metadata.setdefault(_key, _value)
+
+
+def _variant_stamp_at_run_start() -> "dict | None":
+    """The variant (``{"measurement", "pattern_source"}``, None = the default) of the file loaded NOW.
+
+    Taken with the scan stamp when a run STARTS: a variant loaded while the run is going (the same
+    file, the other patterns) would otherwise give the finished result the stamp of patterns it never
+    saw. The caller takes it while the active dataset is the run's."""
+    from backend.api.routes import ebsd_viewer as _ev
+    return _loaded_variant_stamp(_ev._ebsd_file_path)
+
+
+def _seed_variant_stamp(result, stamp: "dict | None") -> None:
+    """Put ``stamp`` on ``result.metadata["load_variant"]`` (``_store_result``'s setdefault keeps it) and,
+    when the patterns were the unprocessed ones, record that for the methods sentence (once: the step
+    carries no path and no file name, only the source)."""
+    if getattr(result, "metadata", None) is None:
+        result.metadata = {}
+    result.metadata.setdefault("load_variant", stamp)
+    if isinstance(stamp, dict) and stamp.get("pattern_source") == "unprocessed":
+        from backend.api.services.citations.provenance import get_steps, record_step
+        if not any(s.get("key") == "indexing.pattern_source" for s in get_steps(result)
+                   if isinstance(s, dict)):
+            record_step(result, "indexing.pattern_source", {"pattern_source": "unprocessed"})
+
+
+def _stored_variant(result) -> "dict | None":
+    """The variant the patterns of this result were, as stamped when it ran: ``indexed_variant`` (what an
+    imported file said about its original scan) before ``load_variant`` (the variant of ``source_file``).
+    None = the default variant, also for a result stored before the stamp existed. The rule lives
+    in ``variant_registry.stamp_of_result``: the file readers that follow a result use the same one."""
+    from backend.api.services import variant_registry
+    return variant_registry.stamp_of_result(result)
+
+
+def _write_variant_attrs(group, result) -> None:
+    """``measurement`` and ``pattern_source`` on an export's /Indexing group, only for a result that did
+    not run on the default variant (a file without them reads as the default, as before)."""
+    stamp = _stored_variant(result)
+    if stamp is None or not stamp.get("pattern_source"):
+        return                       # no variant of the file; a metadata pairing is not an HDF5 attribute
+    if stamp.get("measurement") is not None:
+        group.attrs["measurement"] = str(stamp["measurement"])
+    group.attrs["pattern_source"] = str(stamp["pattern_source"])
+
+
+def _stored_scan_geometry(result) -> "dict | None":
+    """The geometry STAMPED ON THIS RESULT when it ran (see ``_stored_scan_provenance`` for why
+    never the live one), or None for a result stored before it existed or imported from a file that
+    states no geometry (an Orienta ``.h5`` states it on ``/Indexing``).
+    A copy: the caller may hold or edit it without touching what the result says about itself."""
+    meta = getattr(result, "metadata", None)
+    value = meta.get("scan_geometry") if isinstance(meta, dict) else None
+    return copy.deepcopy(value) if isinstance(value, dict) else None
+
+
+def _stored_hex_geometry(result):
+    """The hexagonal ``ScanGeometry`` stamped on THIS result, for the ``.h5`` exports, or None.
+
+    None for a result without a stamp, with a square stamp, or on a map that was resampled to a
+    square grid from a hexagonal file: those files get no hexagonal block. A hexagonal stamp that
+    cannot be used is refused with a 400 before any file is made, because a hexagonal file with
+    the wrong grid is worse than none: it cannot be read (``ValueError`` in the stamp), its steps
+    are placeholders, or its grid is not the result's ``original_shape``."""
+    stamp = _stored_scan_geometry(result)
+    if not isinstance(stamp, dict) or stamp.get("kind") != "hex" or _stored_hex_resampled(result) is True:
+        return None
+    from backend.api.services.scan_geometry import ScanGeometry
+    try:
+        geometry = ScanGeometry.from_dict(stamp)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=(
+            f"The scan geometry stored with this result cannot be used ({exc}). Nothing was written."))
+    shape = tuple(int(v) for v in getattr(result, "original_shape", ()))
+    if not geometry.steps_known:
+        raise HTTPException(status_code=400, detail=(
+            "The step sizes of this hexagonal scan are not known, so its positions cannot be "
+            "written. Nothing was written."))
+    if geometry.grid_shape != shape:
+        raise HTTPException(status_code=400, detail=(
+            f"The hexagonal scan geometry of this result is {geometry.n_rows} x {geometry.n_cols} "
+            f"points, its grid is {shape[0] if shape else '?'} x {shape[1] if len(shape) > 1 else '?'}. "
+            "Nothing was written."))
+    return geometry
+
+
+def _same_hex_scan(a, b) -> bool:
+    """Whether two hexagonal geometries are the same scan: grid, steps and the side of the row
+    offset. The steps are floats read back from a file, so they are compared to 1e-6 relative."""
+    return (a.is_hex and b.is_hex and a.grid_shape == b.grid_shape
+            and float(a.odd_row_shift) == float(b.odd_row_shift)
+            and math.isclose(float(a.step_x), float(b.step_x), rel_tol=1e-6)
+            and math.isclose(float(a.step_y), float(b.step_y), rel_tol=1e-6))
+
+
+def _describe_scan(geometry) -> str:
+    """One phrase for a scan in a refusal: the kind, and for a hexagonal one grid, step and offset."""
+    if geometry is None or not geometry.is_hex:
+        return "not hexagonal"
+    side = "right" if float(geometry.odd_row_shift) > 0 else "left"
+    return (f"hexagonal, {geometry.n_rows} x {geometry.n_cols} points, step {geometry.step_x:g} um, "
+            f"odd rows half a step to the {side}")
+
+
+def _other_dataset(what: str, stamp_geometry) -> HTTPException:
+    """The refusal of a rich file whose header or patterns are not the scan of the result. The
+    code ``export_other_dataset`` is worded in the interface; ``what`` says which scan was found."""
+    return problem(400, "export_other_dataset", (
+        f"{what}, the scan stored with this result is {_describe_scan(stamp_geometry)}: the file would "
+        "state two different scans (the patterns of one under the result of the other). Select the "
+        "dataset this result was computed on and save again. Nothing was written."))
+
+
+def _refuse_header_that_disagrees_with_stamp(dataset_geometry, stamp_geometry) -> None:
+    """The fresh rich file takes its header from the geometry registered for the dataset in the
+    viewer and its ``/Indexing`` from the result's own stamp. Refuse (400 ``export_other_dataset``,
+    nothing written) when the result is hexagonal and the dataset is not the scan it was computed
+    on (not hexagonal, or another grid, step or side of the row offset), or when the dataset is
+    hexagonal and the result is not. Two square scans are not compared."""
+    header_is_hex = dataset_geometry is not None and dataset_geometry.is_hex
+    if header_is_hex != (stamp_geometry is not None):
+        raise _other_dataset(f"The scan of the loaded dataset is {_describe_scan(dataset_geometry)}",
+                             stamp_geometry)
+    if stamp_geometry is not None and not _same_hex_scan(dataset_geometry, stamp_geometry):
+        raise _other_dataset(f"The scan of the loaded dataset is {_describe_scan(dataset_geometry)}",
+                             stamp_geometry)
+
+
+def _refuse_source_that_is_not_the_scan_of_the_stamp(source_path, stamp_geometry, result) -> None:
+    """The rich file that copies its source keeps the source's header and patterns. A hexagonal
+    stamp (``stamp_geometry``, never None here) needs a native hexagonal Orienta file whose header
+    is that stamp, or the stamp is the header cut to the window the result ran in (the offsets
+    stored with it): anything else (a square .h5oina or an OIM file left open, or another hexagonal
+    scan) is refused with ``export_other_dataset``, nothing written."""
+    from backend.api.services.orienta_hex_h5 import is_native_hex_file, read_header_geometry
+    name = Path(source_path).name
+    if not is_native_hex_file(str(source_path)):
+        raise _other_dataset(f"The open file {name} is not a hexagonal Orienta file", stamp_geometry)
+    try:
+        header = read_header_geometry(str(source_path))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=(
+            f"The scan geometry in the header of {name} cannot be used ({exc}). Nothing was written."))
+    if header is not None and _same_hex_scan(header, stamp_geometry):
+        return
+    where = _stored_scan_provenance(result)
+    # a window is claimed only by a result that states the scan it was cut from, and that scan is
+    # the file's own grid: zero offsets without a scan shape are "the whole scan", not a window
+    try:
+        claims_window = (header is not None and where["scan_shape"] is not None
+                         and tuple(int(v) for v in where["scan_shape"]) == header.grid_shape)
+    except (TypeError, ValueError):
+        claims_window = False
+    if claims_window:
+        try:
+            window = header.cropped(where["scan_row_offset"], where["scan_col_offset"],
+                                    stamp_geometry.n_rows, stamp_geometry.n_cols)
+        except ValueError:
+            window = None
+        if window is not None and _same_hex_scan(window, stamp_geometry):
+            return
+    raise _other_dataset(f"The open file {name} is {_describe_scan(header)}", stamp_geometry)
+
+
+def _stored_hex_resampled(result) -> "bool | None":
+    """Whether the map this result ran on was resampled from a hexagonal scan, as STAMPED when it
+    ran; False for a result imported from a file that states a geometry (the writers give a resampled
+    map none), None for a result stored before it existed, imported from a file that states none, or
+    run with no signal."""
+    meta = getattr(result, "metadata", None)
+    value = meta.get("hex_resampled") if isinstance(meta, dict) else None
+    return value if isinstance(value, bool) else None
+
+
 def _stored_scan_provenance(result) -> dict:
     """The scan_* fields as STAMPED ON THIS RESULT when it ran.
 
@@ -360,12 +664,24 @@ def _store_result(result, method_name: str, *, activate: bool = True,
                 "source_file",
                 str(_ebsd_file_path) if _ebsd_file_path else None,
             )
+            # Which variant (measurement x pattern source) of the file it ran on: a result of the
+            # processed patterns must not become the active result of the unprocessed ones, nor
+            # one of another measurement (another grid) of the same file. None = the file's
+            # default variant. A result that names another file (an import) is not the loaded
+            # variant's: it keeps None. setdefault: a run seeds it at its start. Stamped before
+            # the scan provenance and with its own guard: a failing read of the crop window must
+            # not leave the result looking like one of the default variant.
+            try:
+                result.metadata.setdefault("load_variant", _loaded_variant_stamp(result.metadata.get("source_file")))
+            except Exception:
+                logger.warning("could not tell which variant of its file a result ran on; it "
+                               "reads as the default variant", exc_info=True)
             # Where the dataset this ran on sits in the original scan. Stamped
             # here, not read at list time, so the answer survives the user
             # loading something else afterwards. setdefault for the same reason
             # source_file uses it: a caller that already knows its own
             # provenance (the grain-reassign path deep-copies it along) keeps it.
-            for _key, _value in _scan_provenance_fields().items():
+            for _key, _value in {**_scan_provenance_fields(), **_scan_geometry_fields()}.items():
                 result.metadata.setdefault(_key, _value)
             # Every result passes through here, so this is the one place that
             # can guarantee the subtree exists. A consumer should never have
@@ -406,7 +722,41 @@ def _metadata_of_derived_result(parent_metadata) -> dict:
     return metadata
 
 
-def reactivate_result_for_source(path: str) -> "str | None":
+def _loaded_variant_stamp(source_file) -> "dict | None":
+    """The variant of the loaded file as a result stamp (``{"measurement", "pattern_source"}``), None
+    for the default variant, and None when ``source_file`` is not the loaded file."""
+    from backend.api.routes import ebsd_viewer as _ev
+    if not source_file or not _ev._ebsd_file_path:
+        return None
+    if _ev._canonical_path(source_file) != _ev._canonical_path(_ev._ebsd_file_path):
+        return None
+    key = _ev._ebsd_variant_key
+    if key is None:
+        return None
+    stamp = {"measurement": key[0], "pattern_source": key[1]}
+    if len(key) > 2:
+        # A pattern file the user paired with a measurement: the stamp names it, and the metadata
+        # file too, so that activating the result can load the file with the same pairing again.
+        # The file comes from the pairing the loaded file was loaded with (set together with the
+        # key), not from the loaded-files entry: that is written at the end of a load and emptied
+        # by "Clear all", and a stamp without its file cannot be loaded again.
+        apex = _ev._ebsd_apex or {}
+        stamp["apex"] = {"h5_path": apex.get("h5_path") if apex.get("measurement_id") == key[2] else None,
+                         "measurement_id": key[2]}
+    return stamp
+
+
+def _stamp_key(stamp):
+    """The comparable form of a result's ``load_variant`` (missing = the default variant): the
+    same tuple as the viewer's ``_ebsd_variant_key`` for the variant it stands for."""
+    if not isinstance(stamp, dict):
+        return None
+    key = (stamp.get("measurement"), stamp.get("pattern_source"))
+    apex = variant_registry.apex_of_stamp(stamp)
+    return key if apex is None else key + (apex["measurement_id"],)
+
+
+def reactivate_result_for_source(path: str, variant_key=None) -> "str | None":
     """Re-activate the most recent indexing result computed for ``path``.
 
     Called on file (re)load. Previously load_ebsd hard-reset
@@ -421,11 +771,18 @@ def reactivate_result_for_source(path: str) -> "str | None":
     result whose tagged source file canonically matches the file being
     loaded, so there's no risk of showing a previous file's (wrong-shape)
     xmap; if nothing matches it sets None, exactly like before.
+
+    A result also belongs to one variant of its file (``metadata["load_variant"]``, absent = the
+    default variant): only a result of the variant being loaded (``variant_key`` as the viewer
+    keeps it, None = default; by default the one of the loaded file) is re-activated.
     """
     global _active_result_id
     try:
-        from backend.api.routes.ebsd_viewer import _canonical_path
+        from backend.api.routes import ebsd_viewer as _ev
+        _canonical_path = _ev._canonical_path
         canon = _canonical_path(path)
+        if variant_key is None and _ev._ebsd_file_path and _canonical_path(_ev._ebsd_file_path) == canon:
+            variant_key = _ev._ebsd_variant_key
     except Exception:
         _active_result_id = None
         return None
@@ -438,7 +795,8 @@ def reactivate_result_for_source(path: str) -> "str | None":
         # come back to on its own: coming back shows the original.
         if isinstance(md, dict) and md.get("is_refined"):
             continue
-        if src and _canonical_path(src) == canon:
+        if src and _canonical_path(src) == canon and _stamp_key(
+                variant_registry.file_stamp_of_result(res)) == variant_key:
             match = rid
     _active_result_id = match
     if match:
@@ -673,6 +1031,7 @@ def _attach_indexing_metadata(
     det_params: dict | None = None,
     name_source_paths: list | None = None,
     pc_refinement: dict | None = None,
+    pc_at_run: dict | None = None,
 ) -> None:
     """Populate result.metadata fields needed by the SHT forward renderer.
 
@@ -689,6 +1048,11 @@ def _attach_indexing_metadata(
     ``pc_refinement`` is the origin of the PC the run was indexed at, taken
     with :func:`_pc_refinement_snapshot` when the run STARTED (the active dataset
     can change while it runs); it adds the PC-refinement citation step.
+
+    ``pc_at_run`` is the record of the PC and tilts the run was indexed at
+    (:func:`backend.api.services.pc_record.pc_run_record`), taken at the same moment;
+    the exports state it instead of whatever the calibration store holds when they are
+    written.
 
     Idempotent and safe to call before ``_store_result``. Adds nothing for
     methods other than spherical that don't have an SHT.
@@ -777,6 +1141,8 @@ def _attach_indexing_metadata(
         # Store a defensive copy so later mutations of det_params don't
         # leak into the registered result.
         md["detector_geometry"] = dict(det_params)
+    if pc_at_run is not None:
+        md["pc_at_run"] = dict(pc_at_run)
     _record_pc_refinement_step(result, pc_refinement)
 
 
@@ -1113,7 +1479,14 @@ class MultiPhaseRunFailed(ValueError):
     task handler can show the message WITHOUT the raw traceback stapled under
     it — the advice is the last line of the message, and appending a traceback
     buries exactly the part the user needs.
+
+    ``problem`` (optional): the coded problem of a phase that was refused for
+    memory (``ebsd_utils.HoughLibraryTooBig.as_problem``), so the page can word it
+    in the user's language and offer the one-click answer instead of the English
+    text of the message.
     """
+
+    problem = None
 
 
 def _load_phase_dictionary(pc, progress=None) -> bool:
@@ -1261,6 +1634,7 @@ def _run_phases_or_raise(phase_configs, run_one, progress, method_label: str):
 
     all_results = []
     phase_errors = []
+    refusals = []
     n = len(phase_configs)
     for i, pc in enumerate(phase_configs):
         progress(
@@ -1287,6 +1661,8 @@ def _run_phases_or_raise(phase_configs, run_one, progress, method_label: str):
                 logger.warning(f"Phase {pc.name} failed: {e}\n{traceback.format_exc()}")
                 progress(f"Phase {pc.name} FAILED: {e}")
                 phase_errors.append(f"{pc.name}: {e}")
+                if isinstance(e, HoughLibraryTooBig):
+                    refusals.append(e)
         finally:
             # Runs on every exit path — success, failure and cancel — and
             # OUTSIDE the handlers above, so a fault in the cleanup itself is
@@ -1302,8 +1678,14 @@ def _run_phases_or_raise(phase_configs, run_one, progress, method_label: str):
     # "Indexing complete. Mean CI: ..." over a map that was wrong exactly
     # where the missing phase belonged.
     if phase_errors:
-        raise MultiPhaseRunFailed(_multi_phase_failure_error(
+        failed = MultiPhaseRunFailed(_multi_phase_failure_error(
             phase_errors, n, len(all_results)))
+        if refusals:
+            problem = refusals[0].as_problem()
+            problem["params"] = dict(problem["params"], phases=[
+                p for r in refusals for p in r.params.get("phases", [])])
+            failed.problem = problem
+        raise failed
     if not all_results:
         raise MultiPhaseRunFailed(
             "Multi-phase indexing produced no results and reported no "
@@ -1801,10 +2183,37 @@ def _phase_formulas_for_paths(paths: list[str]) -> list[str]:
     return out
 
 
-def _build_eds_phase_weights(req, method_paths, selection_mask, full_grid_order: bool):
+def _read_run_chemistry(req, nav_shape, run_dataset, run_variant):
+    """The EDS chemistry the run holds from its start (``eds_indexing_prior.RunChemistry``), or None
+    when the prior is not configured for this run (fewer than two phases, or every strength 0).
+
+    Read while the dataset the run was made for is still the active one; if the viewer was switched
+    (another dataset, or another variant of it) while the read was going on, what was read may be
+    another measurement's, so the snapshot is declared unreadable (``at_maps`` None: no prior, as
+    for any chemistry that cannot be read) rather than used."""
+    paths = _method_phase_paths(req)
+    strengths = req.eds_phase_strengths or {}
+    if len(paths) < 2 or not any(float(strengths.get(p, 0.0)) > 0.0 for p in paths):
+        return None
+    from backend.api.routes import ebsd_viewer as _ev
+    from backend.api.services.eds_indexing_prior import RunChemistry, read_run_chemistry
+    snapshot = read_run_chemistry(nav_shape)
+    if (_ev._active_dataset != run_dataset
+            or variant_registry.variant_for(run_dataset) != run_variant):
+        logger.warning("EDS chemistry prior is off for this run: the loaded dataset changed while its "
+                       "chemistry was being read")
+        return RunChemistry(None, nav_shape=nav_shape,
+                            dropped="the loaded dataset changed while its chemistry was being read")
+    return snapshot
+
+
+def _build_eds_phase_weights(req, method_paths, selection_mask, full_grid_order: bool, chemistry=None):
     """(P, N) weight matrix or None. full_grid_order=True builds N over the whole nav
     grid (Dictionary/Hough merge); False builds N over the selected pattern stack
-    (Spherical). None when no EDS or every strength is 0."""
+    (Spherical). None when no EDS or every strength is 0.
+
+    ``chemistry`` is the snapshot the run took at its start (``_read_run_chemistry``); a run passes
+    it so that the chemistry is the one of its own dataset. Without it the loaded file is read now."""
     from backend.api.services.eds_indexing_prior import (
         expected_at_pct_for_phases, chemistry_weight_matrix, measured_atpct_per_pixel,
     )
@@ -1818,8 +2227,13 @@ def _build_eds_phase_weights(req, method_paths, selection_mask, full_grid_order:
     # EdsGridMismatch; let it propagate — a wrong-pixel prior is worse than a
     # failed run. selection_mask alone does not cover full_grid_order=True,
     # hence the explicit nav shape.
-    from backend.api.services.eds_preflight import _ebsd_nav_shape
-    measured = measured_atpct_per_pixel(sel, expected_shape=_ebsd_nav_shape())
+    if chemistry is not None:
+        # the run's own grid and chemistry; nothing is asked of the loaded dataset
+        measured = measured_atpct_per_pixel(
+            sel, expected_shape=chemistry.nav_shape, chemistry=chemistry)
+    else:
+        from backend.api.services.eds_preflight import _ebsd_nav_shape
+        measured = measured_atpct_per_pixel(sel, expected_shape=_ebsd_nav_shape())
     if measured is None:
         return None
     overrides = [req.eds_expected_overrides.get(p) for p in method_paths]
@@ -1927,10 +2341,12 @@ def _phase_point_group_and_name(xmap, pid: int, path: str) -> tuple:
     (None, "") when neither can say -- the caller then skips the phase.
     """
     from pathlib import Path as _P
+    from crystal_symmetry import phase_point_group_key
     try:
         ph = xmap.phases[int(pid)]
-        pg = getattr(ph, "point_group", None)
-        pg_name = getattr(pg, "name", None) if pg is not None else None
+        # The key, not the name: two phases pair when their groups are the
+        # same, and "-3m" is two groups (two-folds along X or along Y).
+        pg_name = phase_point_group_key(ph)
         if pg_name:
             return str(pg_name), str(getattr(ph, "name", "") or _stem(path))
     except Exception:
@@ -1944,14 +2360,14 @@ def _phase_point_group_and_name(xmap, pid: int, path: str) -> tuple:
         if suffix == ".cif":
             from ebsd_utils import sanitize_cif
             from crystal_symmetry import FramePhase as _Phase
-            pg = _Phase.from_cif(sanitize_cif(path)).point_group
-            return (str(pg.name) if pg is not None else None), name
+            pg = phase_point_group_key(_Phase.from_cif(sanitize_cif(path)))
+            return (str(pg) if pg is not None else None), name
         if suffix in (".h5", ".hdf5"):
             # A kikuchipy master / dictionary carries its phase in the file
             # header; lazy so the pattern data stays on disk.
             import kikuchipy as kp
-            pg = getattr(getattr(kp.load(path, lazy=True), "phase", None), "point_group", None)
-            return (str(pg.name) if pg is not None else None), name
+            pg = phase_point_group_key(getattr(kp.load(path, lazy=True), "phase", None))
+            return (str(pg) if pg is not None else None), name
     except Exception:
         logger.debug("point group of %s not readable", path, exc_info=True)
     return None, name
@@ -1990,7 +2406,12 @@ def _ensure_phases_in_list(xmap, needed_ids, names, point_groups) -> None:
     xmap.phases = PhaseList(phases=[phases[i] for i in order], ids=[ids[i] for i in order])
 
 
-def _apply_particle_rescue(result, req, selection_mask, progress=None):
+#: "No stamp was passed: ask the dataset that is active now." Not ``None``: a run's stamp may say
+#: ``None`` for an unknown geometry, and unknown is not hexagonal; it must not trigger a live read.
+_LIVE = object()
+
+
+def _apply_particle_rescue(result, req, selection_mask, progress=None, scan_geometry=_LIVE, chemistry=None):
     """Post-pass for pattern-degenerate phase pairs (Al/Si): particles the
     prior left on the matrix phase because the EDS volume dilutes them, and
     rim pixels the prior put on the particle although the surface is matrix.
@@ -2003,6 +2424,11 @@ def _apply_particle_rescue(result, req, selection_mask, progress=None):
     report under ``metadata["eds_particle_rescue"]`` and returns it, or
     ``None`` when nothing applied. Never raises: a failure here must not lose
     an indexing result, so it is logged and the result is left as it was.
+
+    ``scan_geometry`` is the run's own stamp (a dict, or ``None`` for "unknown"), taken when the
+    run started; the live dataset may have changed since (a crop, a file switch). Left out, the
+    active dataset decides. ``chemistry`` is the EDS snapshot of the run's own dataset, taken when
+    it started; left out, the loaded file is read now.
     """
     try:
         xmap = getattr(result, "xmap", None)
@@ -2051,12 +2477,28 @@ def _apply_particle_rescue(result, req, selection_mask, progress=None):
         pairs = select_rescue_pairs(ids, expected, point_groups, names)
         if not pairs:
             return None
+        # The one automatic neighbourhood pass of a run. It compares each pixel with the ring of
+        # matrix pixels around it on the index grid, which on a hexagonal scan is four of six
+        # neighbours and half-step-offset rows: skipped, and said so, rather than run wrongly.
+        # Decided only now that a degenerate pair exists: with none the pass would have done
+        # nothing on a square scan either, and "skipped" would be a statement about a pass that
+        # never was.
+        from backend.api.services.hex_guard import is_hex
+        if is_hex(_scan_geometry_fields()["scan_geometry"] if scan_geometry is _LIVE
+                  else scan_geometry):
+            report = {"skipped": "hex_grid"}
+            result.metadata["eds_particle_rescue"] = report
+            if progress is not None:
+                progress("EDS particle rescue skipped: this is a hexagonal scan, and the pass "
+                         "compares each pixel with its four neighbours on the index grid.")
+            return report
 
         H, W = result.original_shape
         rows = _full_grid_rows(result, int(H), int(W))
         full_grid = rows.size == int(H) * int(W)
         measured = measured_atpct_per_pixel(
-            None if full_grid else selection_mask, expected_shape=(int(H), int(W)))
+            None if full_grid else selection_mask, expected_shape=(int(H), int(W)),
+            **({} if chemistry is None else {"chemistry": chemistry}))
         if measured is None or len(measured) != rows.size:
             return None
         pid_rows = np.asarray(xmap.phase_id).reshape(-1).astype(int)
@@ -2299,6 +2741,16 @@ def _get_detector_for_phase_test(pixel_index=None, use_pixel_pc=False):
             pixel_rc = None
     det_params = build_spherical_det_params(signal, detector, _ebsd_file_path, pixel_rc=pixel_rc)
     return entry, det_params
+
+
+def _require_pc_for_phase_test(entry) -> None:
+    """Both phase-test starts: a simulated pattern at a placeholder PC would be
+    misleading. Coded 400 (``pc_missing``), as the indexing starts answer."""
+    if entry is not None and getattr(entry, "pc_source", None) == "missing":
+        from backend.api.problem import problem
+        from backend.api.services.pc_guard import PC_MISSING_CODE, pc_missing_message
+        raise problem(400, PC_MISSING_CODE,
+                      pc_missing_message(getattr(entry, "dataset_name", None)))
 
 
 def get_pixel_at_pct_for_phase_test(pixel_index: int):
@@ -2808,10 +3260,15 @@ DECISION_RESPONSE_CAP = 500
 #: labels, so it must not depend on them. The ideal is the common
 #: supergroup of the phases present. This is the part of that we can serve
 #: honestly: every crystallographic point group EXCEPT the seven hexagonal
-#: ones is a subgroup of m-3m, because m-3m's rotations have orders 1, 2, 3
-#: and 4 only -- a 6-fold axis (proper, in 6/622/6mm..., or improper, in
-#: -6 = 3/m) has no image in it. Trigonal groups DO fit: the 3-fold sits on
-#: <111> and -3m's 2-folds on the <110> directions perpendicular to it.
+#: ones is an abstract subgroup of m-3m, because m-3m's rotations have orders
+#: 1, 2, 3 and 4 only -- a 6-fold axis (proper, in 6/622/6mm..., or improper,
+#: in -6 = 3/m) has no image in it. The trigonal groups are left out as well,
+#: like the hexagonal ones: abstractly their 3-fold fits on <111>, but the
+#: orientations of this application are in the frame X||a, Z||c*, so a
+#: trigonal phase's 3-fold axis sits on Z, where orix' m-3m has no 3-fold.
+#: Under m-3m the two-fold halves of a trigonal map merge (measured on maps
+#: of space groups 149, 150, 162 and 164: the segmentation fails as
+#: "degenerate"), so these phases are refused by name too.
 #:
 #: A phase outside this set is refused by name rather than segmented under a
 #: coarser symmetry, which would merge orientations that are genuinely
@@ -2827,7 +3284,6 @@ _M3M_SUBGROUP_POINT_GROUPS = frozenset({
     "2/m", "112", "121", "211", "m11", "1m1", "11m",
     "222", "mm2", "mmm",
     "4", "-4", "4/m", "422", "4mm", "-42m", "4/mmm",
-    "3", "-3", "32", "312", "321", "3m", "-3m",
     "23", "m-3", "432", "-43m", "m-3m",
 })
 
@@ -3065,7 +3521,10 @@ def _render_scorer_for(result, labels: np.ndarray,
         if state:
             return state
         try:
-            ctx = _phase_check_ctx(result, build_scorers=True)
+            # No topology, on purpose: the only caller is grain-phase-assign, which is locked on hexagonal
+            # scans (hex_guard), and its grain interior (``_interior``) erodes with the 8 neighbours of the
+            # index grid. Whoever lifts that lock must hand a topology to this context and to ``_interior``.
+            ctx = _phase_check_ctx(result, build_scorers=True, with_topology=False)
         except HTTPException as exc:
             # Its own message names the phase-check feature, which is not what
             # the operator asked for. Re-raised with the operation named and
@@ -3241,7 +3700,8 @@ def _segmentation_point_group(xmap) -> str:
         raise HTTPException(
             status_code=400,
             detail=(f"Grain segmentation needs one symmetry for the whole map, "
-                    f"and {named} is not a subgroup of m-3m, so segmenting "
+                    f"and {named} is not a subgroup of m-3m in the frame of "
+                    "the stored orientations, so segmenting "
                     "under m-3m would merge orientations that are genuinely "
                     "distinct for it. Index this scan without that phase, or "
                     "assign its grains by hand."))
@@ -3721,9 +4181,12 @@ async def grain_phase_assign(req: GrainPhaseAssignRequest):
     if active is None:
         raise HTTPException(status_code=400,
                             detail="No indexing result available")
-    _free_interactive_gpu_caches()
+    # The flag is taken BEFORE the first await: the release below waits for a
+    # compute worker (seconds) off the event loop, and a second request that
+    # arrives meanwhile must see the flag, not slip past the check above.
     _phase_check_busy = True
     try:
+        await asyncio.to_thread(_free_interactive_gpu_caches)
         return await asyncio.to_thread(_grain_phase_assign_blocking, active, req)
     finally:
         _phase_check_busy = False
@@ -3748,6 +4211,25 @@ async def start_indexing(req: IndexingStartRequest):
                    f"{', '.join(sorted(_supported_methods))}. "
                    "(Embedding/FAISS indexing is not implemented in this build.)",
         )
+
+    # A file that carries no PC would be indexed at kikuchipy's placeholder.
+    from backend.api.routes.ebsd_viewer import _active_dataset as _run_dataset
+    from backend.api.services.pc_guard import require_pc
+    require_pc(_run_dataset, calibration_store)
+
+    # A Spherical run re-reads the source file by path (the ROI, the streamed full map, the file
+    # EMSphInx reads): it must be able to name the pattern dataset of the variant the viewer holds.
+    # Where the layout cannot, it refuses here with the code, before any work, instead of reading
+    # another source's patterns.
+    if req.method == "spherical":
+        from backend.api.routes.ebsd_viewer import _ebsd_file_path as _pre_path
+        from backend.api.services import variant_registry as _pre_registry
+        _pre_variant = _pre_registry.variant_for(_run_dataset)
+        if _pre_variant is not None and _pre_path:
+            try:
+                load_choices.reread_dataset_path(str(_pre_path), _pre_variant, "start_indexing")
+            except load_choices.LoadChoiceError as e:
+                raise problem(400, e.code, str(e))
 
     task_id = str(uuid.uuid4())
     _track_task(task_id, {
@@ -3852,15 +4334,45 @@ async def start_indexing(req: IndexingStartRequest):
                     "low_vram_warning": False,
                 }
 
-            # Re-fetch the signal here (closures capture names, not values)
+            # Re-fetch the signal here (closures capture names, not values) - but only
+            # for the dataset the request was made for: the PC guard above and the PC
+            # taken below are that dataset's, and indexing another file's patterns at
+            # them would be a wrong result that looks fine.
             from backend.api.routes.ebsd_viewer import _get_active_signal
+            from backend.api.routes import ebsd_viewer as _ev_now
+            if _ev_now._active_dataset != _run_dataset:
+                raise RuntimeError(
+                    f"The active dataset changed from '{_run_dataset}' to "
+                    f"'{_ev_now._active_dataset}' before the run started; "
+                    "start it again for the file you want.")
             signal = _get_active_signal()
+            # Where this dataset sits and which grid it is on, taken now: the active dataset can
+            # change before the run ends (a crop, a file switch), and the result describes the
+            # one that was indexed. Seeded onto the result just before it is stored.
+            _run_scan_stamp = _scan_stamp_at_run_start(_run_dataset, signal)
+            # The measurement and pattern source of that dataset (None: the file's default). Every
+            # re-read of the source file below takes it, so the run never indexes another source's
+            # patterns than the ones the viewer shows.
+            from backend.api.services import variant_registry as _variant_registry
+            _run_variant = _variant_registry.variant_for(_run_dataset)
+            _run_variant_stamp = _variant_stamp_at_run_start()
             nav_shape = signal.axes_manager.navigation_shape
             # kikuchipy navigation_shape is (cols, rows) - reverse for (rows, cols)
             if len(nav_shape) >= 2:
                 n_rows, n_cols = nav_shape[1], nav_shape[0]
             else:
                 n_rows, n_cols = nav_shape[0], 1
+
+            # The EDS chemistry of THIS dataset and variant, read now and held for the run. Every
+            # prior and the rescue below take it from here and never ask the loaded file: the run
+            # outlives a switch of the viewer to another measurement, and a read after the indexer
+            # would pair these patterns with that measurement's chemistry. Only when the prior is
+            # configured (a run without it pays nothing and stays bit-identical).
+            _run_chemistry = _read_run_chemistry(
+                req, (int(n_rows), int(n_cols)), _run_dataset, _run_variant)
+            if _run_chemistry is not None and _run_chemistry.dropped:
+                # the user watches the run window, not the log
+                _progress(f"EDS chemistry prior is off for this run: {_run_chemistry.dropped}")
 
             _indexing_tasks[task_id]["message"] = "Building selection mask..."
             _indexing_tasks[task_id]["progress"] = 0.05
@@ -3895,11 +4407,16 @@ async def start_indexing(req: IndexingStartRequest):
             _indexing_tasks[task_id]["progress"] = 0.1
 
             # Get detector from CalibrationStore (single source of truth)
-            from backend.api.routes.ebsd_viewer import _active_dataset
+            # (the dataset the request was made and checked for, not whatever is active now)
+            _active_dataset = _run_dataset
             detector = calibration_store.get_detector(_active_dataset)
             # How that PC was obtained, taken now: the active dataset can change
             # before the run ends, and the citation must follow the PC it used.
             _run_pc_refinement = _pc_refinement_snapshot(_active_dataset)
+            # ... and the PC and tilts themselves, for every method: the exports of
+            # this result state THESE, not what the store holds when they are written.
+            from backend.api.services.pc_record import pc_run_record
+            _run_pc_record = pc_run_record(_active_dataset, calibration_store)
 
             if detector is None:
                 # Fallback: signal's own detector
@@ -4149,10 +4666,12 @@ async def start_indexing(req: IndexingStartRequest):
                     h5_path=_ebsd_file_path if indexing_method == IndexingMethod.SPHERICAL else "",
                     detector_params=det_params if indexing_method == IndexingMethod.SPHERICAL else None,
                     progress_cb=_progress,
+                    variant=_run_variant,
                     run_phase=(_run_routed_phase
                                if indexing_method == IndexingMethod.DICTIONARY
                                else None),
                     cancel_check=_cancel_check,
+                    scan_geometry=_run_scan_stamp["scan_geometry"],
                 )
                 # Stash the per-phase metadata so the result UI can show
                 # what got routed where.
@@ -4249,7 +4768,7 @@ async def start_indexing(req: IndexingStartRequest):
                     # strength 0 → the call is byte-for-byte unchanged.
                     sph_weights = _build_eds_phase_weights(
                         req, list(req.sht_paths or []), selection_mask,
-                        full_grid_order=False,
+                        full_grid_order=False, chemistry=_run_chemistry,
                     )
                     result = spherical_gpu_index_patterns(
                         h5_path=_ebsd_file_path or '',
@@ -4260,6 +4779,9 @@ async def start_indexing(req: IndexingStartRequest):
                         sht_paths=list(req.sht_paths or []),
                         cancel_check=_cancel_check,
                         phase_weights=sph_weights,
+                        scan_geometry=_run_scan_stamp["scan_geometry"],
+                        signal=signal,
+                        variant=_run_variant,
                     )
                     # Phase names for the legend/exports are set centrally by
                     # _inject_phase_names() after the method dispatch (clean,
@@ -4310,6 +4832,8 @@ async def start_indexing(req: IndexingStartRequest):
                                 selection_mask=selection_mask,
                                 h5_path=_ebsd_file_path if indexing_method == IndexingMethod.SPHERICAL else '',
                                 detector_params=det_params if indexing_method == IndexingMethod.SPHERICAL else None,
+                                variant=_run_variant,
+                                scan_geometry=_run_scan_stamp["scan_geometry"],
                             )
                             # The CPU path hands the whole dictionary back
                             # inside the result, and every result lives until
@@ -4353,7 +4877,7 @@ async def start_indexing(req: IndexingStartRequest):
                     if indexing_method == IndexingMethod.DICTIONARY:
                         dict_weights = _build_eds_phase_weights(
                             req, list(req.master_h5_paths), selection_mask,
-                            full_grid_order=True,
+                            full_grid_order=True, chemistry=_run_chemistry,
                         )
                     comparison = compute_comparison_maps(comparison, phase_weights=dict_weights)
                     merged_xmap = build_consensus_xmap(comparison)
@@ -4479,6 +5003,9 @@ async def start_indexing(req: IndexingStartRequest):
                     )
                     merge_provenance(
                         result, (r.indexing_result for r in all_results))
+                    from hough_reflectors import merge_build_records
+                    merge_build_records(
+                        result, (r.indexing_result for r in all_results))
 
             # ============================================================
             # SINGLE-PHASE PATH: original logic (unchanged)
@@ -4564,6 +5091,7 @@ async def start_indexing(req: IndexingStartRequest):
                     # loaded → unweighted merge (graceful).
                     hough_weights = _build_eds_phase_weights(
                         req, list(req.cif_paths), selection_mask, full_grid_order=True,
+                        chemistry=_run_chemistry,
                     )
                     comparison = compute_comparison_maps(
                         comparison, phase_weights=hough_weights,
@@ -4592,6 +5120,9 @@ async def start_indexing(req: IndexingStartRequest):
                         merge_provenance,
                     )
                     merge_provenance(
+                        result, (r.indexing_result for r in per_phase_results))
+                    from hough_reflectors import merge_build_records
+                    merge_build_records(
                         result, (r.indexing_result for r in per_phase_results))
                 else:
                     from orix.crystal_map import PhaseList
@@ -4682,6 +5213,9 @@ async def start_indexing(req: IndexingStartRequest):
                         selection_mask=selection_mask,
                         progress_callback=_progress,
                         cancel_check=_cancel_check,
+                        scan_geometry=_run_scan_stamp["scan_geometry"],
+                        signal=signal,
+                        variant=_run_variant,
                     )
                 else:
                     _progress("Running spherical (EMSphinx CPU) indexing...")
@@ -4691,6 +5225,8 @@ async def start_indexing(req: IndexingStartRequest):
                         detector_params=det_params,
                         selection_mask=selection_mask,
                         progress_callback=_progress,
+                        scan_geometry=_run_scan_stamp["scan_geometry"],
+                        variant=_run_variant,
                     )
 
             else:
@@ -4737,6 +5273,7 @@ async def start_indexing(req: IndexingStartRequest):
                 # precedence is how the label and the master came apart.
                 name_source_paths=_name_paths,
                 pc_refinement=_run_pc_refinement,
+                pc_at_run=_run_pc_record,
             )
 
             # Unified EDS-adjusted-pixel log line — covers all three methods.
@@ -4749,6 +5286,9 @@ async def start_indexing(req: IndexingStartRequest):
             # Recorded on CONFIGURATION, not on effect: see _eds_prior_is_on.
             # n_adjusted: 0 is the honest number for a prior that ran and
             # changed no winner, and the sentence already carries the count.
+            # "Configured" still needs a chemistry to have been there: a snapshot that was dropped
+            # (the viewer switched during the read, an unreadable file) means the prior did not run,
+            # and a methods text that says it did is a false statement of method.
             #
             # A phase-map routed run never builds the prior's weights: the phase
             # map already decided which phase each pixel belongs to. Citing the
@@ -4760,7 +5300,7 @@ async def start_indexing(req: IndexingStartRequest):
                         "EDS chemistry prior and particle rescue are not applied "
                         "in a phase-map routed run: the phase map already decided "
                         "which phase each pixel belongs to")
-            elif _eds_prior_is_on(req):
+            elif _eds_prior_is_on(req) and _run_chemistry is not None and _run_chemistry.at_maps:
                 from backend.api.services.citations.provenance import record_step
                 record_step(result, "eds.chemistry_prior", {
                     # Phase NAMES, never the absolute file paths the request
@@ -4773,10 +5313,14 @@ async def start_indexing(req: IndexingStartRequest):
             # as Al/Si, EDS volume larger than the particle): decided by
             # orientation continuity with the matrix. No-op with the prior off.
             if routed_files is None:
-                _apply_particle_rescue(result, req, selection_mask, _progress)
+                _apply_particle_rescue(result, req, selection_mask, _progress,
+                                       scan_geometry=_run_scan_stamp["scan_geometry"],
+                                       chemistry=_run_chemistry)
 
             # Don't overwrite a multi-pixel result with a single-pixel quick test
             if not (req.quick_test and _get_result() is not None):
+                _seed_scan_stamp(result, _run_scan_stamp)
+                _seed_variant_stamp(result, _run_variant_stamp)
                 _store_result(result, req.method)
             _indexing_tasks[task_id]["status"] = "completed"
             _indexing_tasks[task_id]["progress"] = 1.0
@@ -4813,7 +5357,41 @@ async def start_indexing(req: IndexingStartRequest):
             if hasattr(result, 'metadata') and result.metadata.get('multi_phase'):
                 task_result["multi_phase"] = True
                 task_result["per_phase_stats"] = result.metadata.get('per_phase_stats', [])
+            # Notes the result carries about itself (see hough_caveats); the key is
+            # absent for a result without any, so that answer is unchanged.
+            _caveats = _caveats_record(result)
+            if _caveats:
+                task_result["caveats"] = _caveats
             _indexing_tasks[task_id]["result"] = task_result
+
+        except HoughLibraryTooBig as e:
+            # The band-triplet library of a reflector list does not fit the memory
+            # budget: not "the computer ran out of RAM" (it did not: the build was
+            # refused before it asked), so no generic out-of-memory advice. The
+            # coded problem goes to the page, which words it in the user's language
+            # and offers the one-click answer where the failure is shown.
+            logger.warning("Hough library refused: %s", e)
+            _indexing_tasks[task_id]["status"] = "failed"
+            _indexing_tasks[task_id]["error"] = str(e)
+            _indexing_tasks[task_id]["problem"] = e.as_problem()
+            _indexing_tasks[task_id]["message"] = "Hough library too big"
+
+        except load_choices.LoadChoiceError as e:
+            # A re-reader inside the run could not follow the variant the viewer holds (the file
+            # changed under it, its layout cannot name the source). Not the generic failure with a
+            # traceback: the code travels with the task (like a batch item's ``error_code``), and
+            # the page words it in the user's language.
+            logger.warning("Indexing refused (%s): %s", e.code, e)
+            _indexing_tasks[task_id]["status"] = "failed"
+            _indexing_tasks[task_id]["error"] = str(e)
+            _indexing_tasks[task_id]["error_code"] = e.code
+            _indexing_tasks[task_id]["error_params"] = e.params
+            _indexing_tasks[task_id]["message"] = "Indexing failed"
+            try:
+                from indexing_controller import _release_cuda_cache
+                _release_cuda_cache()
+            except Exception:
+                pass
 
         except MemoryError as e:
             # str(MemoryError()) is usually EMPTY, so the generic handler below
@@ -4870,6 +5448,8 @@ async def start_indexing(req: IndexingStartRequest):
                 # whole state dict, so nothing is lost.
                 _indexing_tasks[task_id]["error"] = str(e)
                 _indexing_tasks[task_id]["traceback"] = tb
+                if getattr(e, "problem", None):
+                    _indexing_tasks[task_id]["problem"] = e.problem
             else:
                 _indexing_tasks[task_id]["error"] = f"{e}\n{tb}"
             # Same defensive cleanup on hard failures (e.g. OOM partway
@@ -4986,7 +5566,8 @@ async def release_gpu_memory():
     To stop a running run, use ``/stop/{task_id}``.
     """
     info = {"device": "cpu", "freed_mb": 0, "free_before_gb": 0.0,
-            "free_after_gb": 0.0, "backends_evicted": 0, "tables_cleared": 0}
+            "free_after_gb": 0.0, "backends_evicted": 0, "tables_cleared": 0,
+            "workers_released": 0}
 
     import gc
     try:
@@ -5014,6 +5595,9 @@ async def release_gpu_memory():
         info["backends_evicted"] = _evict_phase_compare_backends()
     except Exception as exc:
         logger.warning("release_gpu_memory: backend eviction failed: %s", exc)
+    # The warm compute worker holds its own CUDA context and grids (the sphere
+    # work runs there). It is ended when it has no job; a running one is left.
+    info["workers_released"] = int(await asyncio.to_thread(_release_compute_worker))
     # Drop the SHT renderer's per-phase LambertGrid cache + singleton — a
     # high-bandwidth grid is several GB and is held by the Pattern Match, the
     # variant-flip tool and the Phase Test. empty_cache() alone can't reclaim it
@@ -5113,6 +5697,12 @@ async def refine_orientations_endpoint(req: RefineRequest):
         pc = None
 
     if pc is None:
+        # The store answers None for a file that carries no PC (EDAX UP1/UP2 without
+        # an .osc): the signal's own detector then holds kikuchipy's placeholder
+        # (0.5, 0.5, 0.5), which is exactly what must not be refined against.
+        from backend.api.routes.ebsd_viewer import _active_dataset
+        from backend.api.services.pc_guard import require_pc
+        require_pc(_active_dataset)          # coded 400 (pc_missing), translated by the page
         try:
             from backend.api.routes.ebsd_viewer import _get_active_signal
             sig = _get_active_signal()
@@ -5189,7 +5779,7 @@ async def get_pattern_match(
     max_bandwidth : Optional[int]
         For spherical results: truncate the SHT to this bandwidth when
         rendering the simulated pattern. Default = 128 (fast).
-        256 = sharper bands (~1.7 GB VRAM), 384 = sharpest (~5.7 GB).
+        256 = sharper bands (~1.8 GB VRAM), 384 = sharpest (~5.9 GB).
     aperture : str
         Circular-aperture handling for the R/NCC computation:
         ``"auto"`` (default) heuristically detects a black-corner aperture,
@@ -5234,7 +5824,10 @@ async def get_pattern_match(
     if not (0 <= row < n_rows and 0 <= col < n_cols):
         raise HTTPException(status_code=400, detail=f"Pixel ({row}, {col}) out of bounds")
 
-    exp = get_experimental_pattern(result, row, col)
+    # A source file refused with a code (its pairing lost, its variant gone) leaves the panel empty;
+    # the code goes out with the answer so the window can say why.
+    experimental_refusals: list = []
+    exp = get_experimental_pattern(result, row, col, refusals=experimental_refusals)
 
     # Convert patterns to base64 PNG
     import io, base64
@@ -5287,6 +5880,11 @@ async def get_pattern_match(
                     f"Pixel ({row},{col}) was not indexed in this run."
                 )
 
+            if (result.metadata or {}).get("pc_missing"):
+                # A file without a PC is the first reason, whether or not the library
+                # has the phase's master: there is no geometry to render at either way.
+                raise _SHTRenderError(_no_geometry_text(result))
+
             phase_id_local = int(xmap_local.phase_id[px_idx_local])
             sht_map = (result.metadata or {}).get("sht_paths_by_phase") or {}
             # Accept both int and str keys (JSON round-trip safety)
@@ -5299,10 +5897,7 @@ async def get_pattern_match(
 
             det = (result.metadata or {}).get("detector_geometry")
             if not det:
-                raise _SHTRenderError(
-                    "detector_geometry missing from result.metadata; "
-                    "re-run indexing on this dataset."
-                )
+                raise _SHTRenderError(_no_geometry_text(result))
 
             # orix Rotation -> quaternion (w,x,y,z)
             rot_obj = xmap_local.rotations[px_idx_local]
@@ -5496,8 +6091,8 @@ async def get_pattern_match(
             # reports each same-phase row's Δ° to THIS orientation.
             stored_quat = np.asarray(rot.data).reshape(4).astype(np.float64)
             try:
-                _pg = xmap.phases[stored_phase_id].point_group
-                stored_pg_name = getattr(_pg, "name", None)
+                from crystal_symmetry import phase_point_group_key
+                stored_pg_name = phase_point_group_key(xmap.phases[stored_phase_id])
             except Exception:
                 stored_pg_name = None
     except Exception as e:
@@ -5615,9 +6210,14 @@ async def get_pattern_match(
                 # Off the event loop for the same reason as the render above:
                 # the first call builds a SphericalGPUBackend (seconds) and
                 # every call re-indexes the pixel per phase on the GPU.
+                # The re-index sees the pattern as the map run saw it (an int16 scan
+                # rescaled by the range of the whole scan); the first click on a
+                # signal reads that range, so it is fetched off the event loop too.
+                exp_for_indexer = await asyncio.to_thread(
+                    get_experimental_pattern, result, row, col, for_indexer=True)
                 phase_results = await asyncio.to_thread(
                     _compute_phase_compare_results,
-                    exp_pattern=exp,
+                    exp_pattern=exp_for_indexer,
                     detector_geometry=det_local,
                     sht_paths_by_phase=sht_map_local,
                     phase_list=result.xmap.phases,
@@ -5658,6 +6258,7 @@ async def get_pattern_match(
         "indexing_method": indexing_method,
         "simulated_source": simulated_source,
         "simulated_error": simulated_error,
+        "experimental_error_code": experimental_refusals[0] if experimental_refusals else None,
         # Provenance: for pseudo-symmetric (cubic-approximant) phases the spherical
         # SO(3) correlation lands on a wrong variant, so the stored orientation
         # comes from Hough band-geometry indexing instead. Surface that here so the
@@ -5699,6 +6300,17 @@ class GrainApplyRequest(BaseModel):
     result_id: str | None = None
 
 
+def _no_geometry_text(result, default: str = "detector_geometry missing from result.metadata; "
+                      "re-run indexing on this dataset.") -> str:
+    """Why a result cannot be rendered: its file carries no PC (an imported result
+    of such a file has no geometry to render at, rather than the placeholder's), else
+    the usual "re-run indexing"."""
+    if (getattr(result, "metadata", None) or {}).get("pc_missing"):
+        from backend.api.services.pc_guard import pc_missing_message
+        return pc_missing_message(None)
+    return default
+
+
 def _spherical_pixel_ctx(result, row: int, col: int):
     """Resolve (xmap, px_idx, phase_id, sht_path, det, point_group) for a spherical
     result pixel, raising HTTPException on any problem."""
@@ -5723,14 +6335,19 @@ def _spherical_pixel_ctx(result, row: int, col: int):
     sht_path = sht_map.get(phase_id) or sht_map.get(str(phase_id))
     det = (result.metadata or {}).get("detector_geometry")
     if not sht_path or not det:
-        raise HTTPException(status_code=400,
-                            detail="Result missing SHT/detector metadata; re-run indexing")
+        raise HTTPException(status_code=400, detail=_no_geometry_text(
+            result, "Result missing SHT/detector metadata; re-run indexing"))
+    # The text is handed to the pseudo-symmetry helpers, which cache by it: the
+    # key tells the two settings of a trigonal class apart, the name does not.
+    from crystal_symmetry import phase_point_group_key
     pg = None
     try:
-        pg = xmap.phases[phase_id].point_group.name
+        pg = phase_point_group_key(xmap.phases[phase_id])
     except Exception:
+        pg = None
+    if pg is None:
         try:
-            pg = list(xmap.phases)[0].point_group.name
+            pg = phase_point_group_key(list(xmap.phases)[0])
         except Exception:
             pg = None
     return xmap, px_idx, phase_id, str(sht_path), det, pg
@@ -5745,7 +6362,59 @@ def _spherical_pixel_ctx(result, row: int, col: int):
 # correct variant).
 
 
-def _neighbour_grain_candidates(result, xmap, phase_id, pg, row, col, max_n=4):
+def _result_topology(result, shape):
+    """The HEXAGONAL topology of the geometry stamped on ``result`` (six neighbours), or None for a square or
+    unstamped one (the four of the index grid, as before). A stamp that does not describe the map is a 409."""
+    from backend.api.services.scan_neighbours import topology_of_stamp
+    md = getattr(result, "metadata", None) or {}
+    try:
+        return topology_of_stamp(md.get("scan_geometry"), shape)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
+_CONTACT_BLOCK = 1 << 18          # pixels of the grain whose neighbours are looked at at once (bounds the memory)
+
+
+def _grain_contacts(labels, g0, n_rows, n_cols, topology=None):
+    """{label of another grain: number of (pixel of g0, its neighbour in that grain) pairs}.
+
+    The neighbours are the four of the index grid, or, given a ``scan_neighbours.Topology``, exactly its
+    neighbours (six on a hexagonal scan). The pixels of the grain are looked at in blocks, so a grain of a
+    million pixels never holds its whole neighbour list. The keys come in the order in which the loop over the
+    pixels (ascending) and their neighbours meets them first (without a topology: up, down, left, right; on a
+    hexagonal scan: the order of the topology table, left, right, up, up-diagonal, down, down-diagonal). The
+    order decides only ties: a caller that sorts the keys by count gets the same order on ties as it always did."""
+    labels = np.asarray(labels).reshape(-1)
+    n_rows, n_cols = int(n_rows), int(n_cols)
+    table = None
+    if topology is not None:
+        if (topology.n_rows, topology.n_cols) != (n_rows, n_cols):
+            raise ValueError(f"the topology is for a {topology.n_rows} x {topology.n_cols} grid, "
+                             f"but the map is {n_rows} x {n_cols}")
+        table = topology.table()
+    pix = np.flatnonzero(labels == g0)
+    contact: dict[int, int] = {}
+    for start in range(0, pix.size, _CONTACT_BLOCK):
+        f = pix[start:start + _CONTACT_BLOCK]
+        if table is not None:
+            nbs = table[f]
+        else:
+            r, c = np.divmod(f, n_cols)
+            nbs = np.stack([np.where(r > 0, f - n_cols, -1), np.where(r < n_rows - 1, f + n_cols, -1),
+                            np.where(c > 0, f - 1, -1), np.where(c < n_cols - 1, f + 1, -1)], axis=1)
+        nbs = nbs.reshape(-1)
+        seen = labels[nbs[nbs >= 0]]
+        seen = seen[(seen >= 0) & (seen != g0)]
+        if not seen.size:
+            continue
+        found, first, count = np.unique(seen, return_index=True, return_counts=True)
+        for k in np.argsort(first, kind="stable"):
+            contact[int(found[k])] = contact.get(int(found[k]), 0) + int(count[k])
+    return contact
+
+
+def _neighbour_grain_candidates(result, xmap, phase_id, pg, row, col, max_n=4, topology=None):
     """Mean orientations of the same-phase grains ADJACENT to the clicked
     pixel's grain — extra candidate sources for the variant gallery.
 
@@ -5759,6 +6428,9 @@ def _neighbour_grain_candidates(result, xmap, phase_id, pg, row, col, max_n=4):
     Returns ``[(label, quat (4,), n_px), ...]`` sorted by shared boundary
     length, at most ``max_n``, contacts under 3 px ignored. Fail-soft: []
     on any problem (the gallery then simply shows the classic candidates).
+
+    ``topology`` (``scan_neighbours.Topology`` of a hexagonal result, from ``_result_topology``) says which
+    pixels are neighbours, for the segmentation and for the census; ``None`` is the four of the index grid.
     """
     try:
         from backend.spherical_gpu.pipeline.variant_unification import (
@@ -5785,19 +6457,11 @@ def _neighbour_grain_candidates(result, xmap, phase_id, pg, row, col, max_n=4):
 
         labels = segment_supergroup_grains(
             full_q, phase_full, n_rows, n_cols, int(phase_id), pg or "1",
-            threshold_deg=5.0)
+            threshold_deg=5.0, topology=topology)
         g0 = int(labels[row * n_cols + col])
         if g0 < 0:
             return []
-        contact: dict[int, int] = {}
-        for f in np.flatnonzero(labels == g0):
-            r, c = divmod(int(f), n_cols)
-            for nb in ((f - n_cols) if r > 0 else -1,
-                       (f + n_cols) if r < n_rows - 1 else -1,
-                       (f - 1) if c > 0 else -1,
-                       (f + 1) if c < n_cols - 1 else -1):
-                if nb >= 0 and labels[nb] >= 0 and labels[nb] != g0:
-                    contact[int(labels[nb])] = contact.get(int(labels[nb]), 0) + 1
+        contact = _grain_contacts(labels, g0, n_rows, n_cols, topology=topology)
 
         holo = pseudosym_holohedry(pg or "1") or (pg or "1")
         sym = _sym_quats(holo)
@@ -5834,7 +6498,8 @@ def _propagate_to_similar_grains(*, result, det, sht_path, pg, phase_id,
                                  full_q, phase_full, n_rows, n_cols,
                                  q_click, q_target, clicked_flat,
                                  threshold_deg, max_total_deg, tol_deg,
-                                 xmap_index_of, qdata, new_q, undo_idx, undo_old):
+                                 xmap_index_of, qdata, new_q, undo_idx, undo_old,
+                                 topology=None):
     """Render-verified map-wide propagation of a grain-flip correction.
 
     Finds every OTHER same-phase grain whose seed orientation matches the
@@ -5848,6 +6513,8 @@ def _propagate_to_similar_grains(*, result, det, sht_path, pg, phase_id,
 
     Mutates ``new_q`` / ``undo_idx`` / ``undo_old`` in place (they already
     carry the clicked grain's changes; ONE undo restores everything).
+    ``topology`` (``scan_neighbours.Topology`` of a hexagonal result, else None for the four neighbours of
+    the index grid) is handed to the segmentation and to every flood fill.
     Returns a summary dict for the UI toast.
     """
     from backend.spherical_gpu.pipeline.variant_unification import (
@@ -5862,7 +6529,7 @@ def _propagate_to_similar_grains(*, result, det, sht_path, pg, phase_id,
                "n_pixels": 0, "truncated": False}
     labels = segment_supergroup_grains(
         full_q, phase_full, n_rows, n_cols, int(phase_id), pg or "1",
-        threshold_deg=float(threshold_deg))
+        threshold_deg=float(threshold_deg), topology=topology)
     g0 = int(labels[int(clicked_flat)])
     q_click = np.asarray(q_click, dtype=np.float64).reshape(4)
     q_target = np.asarray(q_target, dtype=np.float64).reshape(4)
@@ -5897,9 +6564,8 @@ def _propagate_to_similar_grains(*, result, det, sht_path, pg, phase_id,
         p = get_experimental_pattern(result, r, c)
         return None if p is None else np.asarray(p, dtype=np.float32)
 
-    # The scorer allocates an SHT grid — free the interactive render VRAM
-    # once up front (same self-heal as refine / unify).
-    _free_interactive_gpu_caches()
+    # The scorer allocates an SHT grid; the interactive render VRAM was freed
+    # by the route before it read the result (no await may sit in between).
     score_fn = build_render_score_fn(str(sht_path), det, _get_pattern)
     written = set(int(i) for i in undo_idx)
 
@@ -5911,7 +6577,7 @@ def _propagate_to_similar_grains(*, result, det, sht_path, pg, phase_id,
             grain_s, q_map_s, _stats = grain_snap_floodfill(
                 full_q, phase_full, n_rows, n_cols, (sr, sc), int(phase_id),
                 pg, sib_target, threshold_deg=float(threshold_deg),
-                max_total_deg=float(max_total_deg))
+                max_total_deg=float(max_total_deg), topology=topology)
             # Constrain everything to THIS sibling's own segmentation label:
             # the snap fill legitimately walks through correct territory and
             # could reach the NEXT nest — but each candidate must be judged
@@ -5993,6 +6659,9 @@ async def get_pattern_match_variants(
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
     xmap, px_idx, phase_id, sht_path, det, pg = _spherical_pixel_ctx(result, row, col)
+    # What a neighbour is on this result's scan; a stamp that does not describe the map stops the
+    # request here, before a pattern is read or rendered.
+    topology = _result_topology(result, tuple(result.original_shape))
 
     from tools.pattern_comparison import (
         get_experimental_pattern, compute_ncc_scalar,
@@ -6014,6 +6683,12 @@ async def get_pattern_match_variants(
     if exp is None:
         raise HTTPException(status_code=400, detail="No experimental pattern for this pixel")
     exp = np.asarray(exp, dtype=np.float32)
+    # What the Hough candidate and the re-index candidate feed their indexers: the pattern as
+    # the map run saw it (an int16 scan rescaled by the range of the whole scan). The raw
+    # `exp` stays for the renders' NCC and the aperture. The first click on a signal reads
+    # the scan's range, so this is fetched off the event loop.
+    exp_idx = await asyncio.to_thread(
+        get_experimental_pattern, result, row, col, for_indexer=True)
 
     q_cur = np.asarray(xmap.rotations[px_idx].data).reshape(-1)[:4].astype(np.float64)
     variants = pseudosym_variant_quats(q_cur, pg or "1")     # (K,4), current first
@@ -6027,7 +6702,7 @@ async def get_pattern_match_variants(
     try:
         from indexing_controller import _resolve_cif_for_sht
         _cif = _resolve_cif_for_sht(sht_path)
-        eu_h = _hough_euler_for_phase(exp, _cif, det) if _cif else None
+        eu_h = _hough_euler_for_phase(exp_idx, _cif, det) if _cif else None
         if eu_h is not None:
             qh = np.asarray(_R.from_euler(np.asarray(eu_h, float).reshape(1, 3)).data
                             ).reshape(-1)[:4].astype(np.float64)
@@ -6036,7 +6711,7 @@ async def get_pattern_match_variants(
         logger.debug("[variants] Hough candidate unavailable", exc_info=True)
     # Adjacent same-phase grains — covers foreign basins (building block A).
     for lab, qn, _npx in _neighbour_grain_candidates(result, xmap, phase_id, pg,
-                                                     row, col):
+                                                     row, col, topology=topology):
         cand_defs.append((lab, "neighbour", np.asarray(qn, dtype=np.float64)))
     # Free reference pixel (building block B): the user names any indexed
     # pixel; its stored orientation joins the gallery. Rendered with the
@@ -6089,7 +6764,7 @@ async def get_pattern_match_variants(
         try:
             with _silence_console():
                 rows_ri = _compute_phase_compare_results(
-                    exp_pattern=exp, detector_geometry=det,
+                    exp_pattern=exp_idx, detector_geometry=det,
                     sht_paths_by_phase={phase_id: sht_path},
                     phase_names={phase_id: _phase_name_of(xmap, phase_id)},
                     cif_paths_by_phase=({phase_id: _cif} if _cif else None),
@@ -6343,7 +7018,8 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
         logger.warning("[grain-flip] refine failed (snap results kept): %s",
                        e, exc_info=True)
         msg = str(e)
-        if "out of memory" in msg.lower() or "CUDA out of memory" in msg:
+        from backend.api.services.sht_pattern_renderer import is_out_of_memory  # noqa: PLC0415
+        if is_out_of_memory(e):
             # GPU is full from the indexing run / variant renders. Try once
             # more to reclaim it so the NEXT apply can refine, and give the
             # user an actionable message instead of the raw torch dump.
@@ -6363,6 +7039,17 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
 MAX_REFINE_GRAIN_PX = 1500
 
 
+def _release_compute_worker() -> bool:
+    """Ends the idle compute worker so the GPU memory it holds is free. Never
+    raises: a failure here must not stop the rest of the release."""
+    try:
+        from backend.worker.manager import release_idle_worker
+        return bool(release_idle_worker())
+    except Exception:
+        logger.warning("release of the compute worker failed", exc_info=True)
+        return False
+
+
 def _free_interactive_gpu_caches() -> None:
     """Free the VRAM held by the interactive Pattern-Match / variant-render
     caches so a following allocation (the refine backend) fits, WITHOUT the user
@@ -6374,6 +7061,7 @@ def _free_interactive_gpu_caches() -> None:
     cost is that the next variant render / pattern-match click rebuilds its grid
     once (~a few seconds). The already-displayed thumbnails are unaffected (they
     are decoded client-side). Best-effort — never raises."""
+    _release_compute_worker()
     try:
         from backend.api.services.sht_pattern_renderer import release_gpu_caches
         release_gpu_caches()
@@ -6398,7 +7086,24 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
     distortion is preserved. Optionally runs the guarded Newton refine
     (`req.refine`). Stores a one-level undo in the result metadata. Modifies the
     stored CrystalMap."""
-    result = _get_result(req.result_id)
+    # Self-heal the OOM: free the interactive variant-render VRAM (and end the
+    # idle compute worker) BEFORE the result is read, so a refine or a
+    # propagation render fits and the user never has to press 'Release GPU'.
+    # The release waits for the worker, so it runs off the event loop. This is
+    # the ONLY await of the route: everything from the first read of the result
+    # to the write-back below runs without a suspension, so a second request
+    # cannot change the result in between and be overwritten by this one's
+    # older copy. Cost: the worker is freed even if the refine ends up skipped
+    # or no sibling grain qualifies.
+    # The result is bound BEFORE the await: the client sends no result_id, and
+    # if the user activates another result in the gallery while the release
+    # waits, resolving the active one afterwards would write the correction
+    # and its undo into that other result. Only the READ of the result's
+    # content stays behind the await.
+    rid = req.result_id or _active_result_id
+    if req.refine or req.propagate_similar:
+        await asyncio.to_thread(_free_interactive_gpu_caches)
+    result = _get_result(rid)
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
     xmap, px_idx, phase_id, sht_path, det, pg = _spherical_pixel_ctx(result, req.row, req.col)
@@ -6408,6 +7113,9 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
     from orix.quaternion import Rotation as _R
 
     n_rows, n_cols = result.original_shape
+    # What a neighbour is on this result's scan (six on a hexagonal one): the stamp the result carries.
+    # A stamp that does not describe the map is a 409 here, before anything is computed or written.
+    topology = _result_topology(result, (n_rows, n_cols))
     flat_mask = result.selection_mask.ravel()
     n_xmap = xmap.rotations.size
     qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
@@ -6433,7 +7141,7 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
     grain, new_q_map, snap_stats = grain_snap_floodfill(
         full_q, phase_full, n_rows, n_cols, (req.row, req.col), phase_id, pg,
         q_target, threshold_deg=float(req.threshold_deg),
-        max_total_deg=float(req.max_total_deg))
+        max_total_deg=float(req.max_total_deg), topology=topology)
 
     # Optional guarded Newton polish (fail-safe: snap results kept on any issue).
     refine_summary = None
@@ -6442,10 +7150,7 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
             refine_summary = {"status": "skipped",
                               "reason": f"grain > {MAX_REFINE_GRAIN_PX} px"}
         else:
-            # Self-heal the OOM: free the interactive variant-render VRAM right
-            # before the refine allocates, so the user never has to press
-            # 'Release GPU' first. Cost is one grid rebuild on the next render.
-            _free_interactive_gpu_caches()
+            # The interactive render VRAM was freed at the top of the route.
             refined, refine_summary = _grain_newton_refine(
                 result, det, sht_path, pg, grain, new_q_map)
             if refined:
@@ -6500,6 +7205,7 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
             tol_deg=float(req.propagate_tol_deg),
             xmap_index_of=xmap_index_of, qdata=qdata,
             new_q=new_q, undo_idx=undo_idx, undo_old=undo_old,
+            topology=topology,
         )
         changed += int(propagate_summary.get("n_pixels", 0))
 
@@ -6551,6 +7257,15 @@ async def unify_pseudosym_variants(req: UnifyVariantsRequest):
         raise HTTPException(status_code=400,
                             detail="Result missing SHT/detector metadata; re-run indexing")
 
+    # Free the interactive Pattern-Match / variant-render VRAM ONCE before the
+    # unification renders (each phase's build_render_score_fn allocates its own
+    # SHT grid). On a GPU left near-full by earlier interactive use this is what
+    # keeps the whole run from OOM-ing away with no visible effect — the same
+    # self-heal the refine path (apply-to-grain) uses. Not per phase. It runs
+    # BEFORE the orientations are read, so the wait for the compute worker does
+    # not widen the window between that read and the write-back.
+    await asyncio.to_thread(_free_interactive_gpu_caches)
+
     from backend.spherical_gpu.pipeline.variant_unification import (
         build_render_score_fn, unify_map,
     )
@@ -6576,6 +7291,9 @@ async def unify_pseudosym_variants(req: UnifyVariantsRequest):
     phase_full = np.full(n_rows * n_cols, -1, dtype=np.int64)
     phase_full[flat_of_row] = pid
 
+    # What a neighbour is on this result's scan (six on a hexagonal one): the stamp the result carries.
+    topology = _result_topology(result, (n_rows, n_cols))
+
     def _get_pattern(flat):
         r, c = divmod(int(flat), n_cols)
         p = get_experimental_pattern(result, r, c)
@@ -6587,7 +7305,10 @@ async def unify_pseudosym_variants(req: UnifyVariantsRequest):
         changed = False
         for phase_id_val in sorted({int(x) for x in np.unique(pid)}):
             try:
-                pg = xmap.phases[phase_id_val].point_group.name
+                from crystal_symmetry import phase_point_group_key
+                pg = phase_point_group_key(xmap.phases[phase_id_val])
+                if pg is None:
+                    continue
             except Exception:
                 continue
             sht = sht_map.get(phase_id_val) or sht_map.get(str(phase_id_val))
@@ -6596,7 +7317,7 @@ async def unify_pseudosym_variants(req: UnifyVariantsRequest):
             try:
                 score_fn = build_render_score_fn(str(sht), det, _get_pattern)
                 new_full, rep = unify_map(cur, phase_full, n_rows, n_cols,
-                                          phase_id_val, pg, score_fn)
+                                          phase_id_val, pg, score_fn, topology=topology)
             except Exception as e:  # fail safe per phase
                 logger.warning("[unify] phase %s failed: %s", phase_id_val, e,
                                exc_info=True)
@@ -6607,13 +7328,6 @@ async def unify_pseudosym_variants(req: UnifyVariantsRequest):
                 cur = new_full
                 changed = True
         return cur, changed, reports
-
-    # Free the interactive Pattern-Match / variant-render VRAM ONCE before the
-    # unification renders (each phase's build_render_score_fn allocates its own
-    # SHT grid). On a GPU left near-full by earlier interactive use this is what
-    # keeps the whole run from OOM-ing away with no visible effect — the same
-    # self-heal the refine path (apply-to-grain) uses. Not per phase.
-    _free_interactive_gpu_caches()
 
     new_full_q, changed, reports = await asyncio.to_thread(_work)
 
@@ -6719,7 +7433,9 @@ def _hough_indexer_for(cif_path, det_params, n_bands: int = 12):
     valid and are wrong — silent, and far worse than the rebuild it saves.
     """
     from orix.crystal_map import PhaseList
-    from ebsd_utils import hough_phase_from_cif, prepare_reflectors, create_indexer
+    from ebsd_utils import (
+        hough_phase_from_cif, prepare_reflectors, create_indexer, phase_reflector_limits)
+    from hough_reflectors import registry_version
     from kikuchipy.detectors import EBSDDetector
 
     p = Path(cif_path)
@@ -6734,6 +7450,10 @@ def _hough_indexer_for(cif_path, det_params, n_bands: int = 12):
         float(det_params.get("tilt", 0.0)),
         float(det_params["pc_x"]), float(det_params["pc_y"]), float(det_params["pc_z"]),
         int(det_params.get("binning", 1)), int(n_bands),
+        # the reflector choice (a one-click list, a hand selection) and the row limits
+        # decide which reflectors the indexer is built from: a cached indexer must not
+        # outlive a change of them
+        registry_version(), tuple(sorted((phase_reflector_limits() or {}).items())),
     )
     with _HOUGH_INDEXER_LOCK:
         hit = _HOUGH_INDEXER_CACHE.get(key)
@@ -6799,8 +7519,9 @@ def _describe_hough_failure(exc, cif_path) -> str:
     try:
         from crystal_symmetry import FramePhase as Phase
         from ebsd_utils import sanitize_cif
+        from crystal_symmetry import phase_point_group_key
         ph = Phase.from_cif(sanitize_cif(str(cif_path)))
-        sym = ph.point_group.name if ph.point_group is not None else None
+        sym = phase_point_group_key(ph)
     except Exception:  # noqa: BLE001 — diagnosis must not fail the diagnosis
         pass
 
@@ -6831,6 +7552,15 @@ def _describe_hough_failure(exc, cif_path) -> str:
         lead += (" This CIF carries NO symmetry (P 1), which makes that index "
                  "tens of GiB — re-export it in its real space group and this "
                  "becomes small.")
+        # Where the atoms have more symmetry than the header says, name it and
+        # the action that fixes it (one analyser call, error path only).
+        try:
+            from backend.api.services.cif_symmetry import analyse_p1, hough_hint
+            sentence = hough_hint(analyse_p1(cif_path))
+            if sentence:
+                lead += " " + sentence
+        except Exception:  # noqa: BLE001 — the hint is a bonus, not the error
+            pass
     return lead + (" Free memory (or close other programs) and try again; "
                    "band-triplet libraries are sized from the reflector count, "
                    "which grows steeply as symmetry drops.")
@@ -6929,11 +7659,14 @@ def _hough_quats_for_phase_batch(patterns, cif_path, det_params, err_out=None):
     return out
 
 
-def _phase_check_ctx(result, build_scorers: bool = True):
+def _phase_check_ctx(result, build_scorers: bool = True, with_topology: bool = True):
     """Shared setup for the phase-check / reassign routes: full-grid arrays,
     per-phase point groups, render scorers, and the Hough candidate fn.
     ``build_scorers=False`` skips the (GPU-costly) render-scorer construction —
     the reassign path only needs the Hough candidate fn.
+    The dict's ``"topology"`` is the hexagonal ``Topology`` of the geometry stamped on the result, or None
+    (square, unstamped, or ``with_topology=False`` for a caller that looks at no neighbour: a stamp that does not
+    describe the map is then not its concern). A stamp that does not is a 409 before any scorer is built.
     Raises HTTPException on missing metadata."""
     md = getattr(result, "metadata", None) or {}
     if md.get("indexing_method") != "spherical":
@@ -6952,6 +7685,7 @@ def _phase_check_ctx(result, build_scorers: bool = True):
 
     xmap = result.xmap
     n_rows, n_cols = result.original_shape
+    topology = _result_topology(result, (n_rows, n_cols)) if with_topology else None
     n_xmap = xmap.rotations.size
     qdata = np.asarray(xmap.rotations.data).reshape(-1, 4).astype(np.float64)
     pid = np.asarray(xmap.phase_id).reshape(-1)
@@ -6983,7 +7717,10 @@ def _phase_check_ctx(result, build_scorers: bool = True):
     phases: dict[int, str] = {}
     for p in sorted(known):
         try:
-            phases[p] = xmap.phases[p].point_group.name
+            from crystal_symmetry import phase_point_group_key
+            phases[p] = phase_point_group_key(xmap.phases[p])
+            if phases[p] is None:
+                raise AttributeError("phase without a point group")
         except Exception:
             # orix prunes zero-pixel phases from the xmap's PhaseList — keep
             # the id known (it has an SHT and is a legitimate assign target);
@@ -7027,7 +7764,11 @@ def _phase_check_ctx(result, build_scorers: bool = True):
         flats = np.asarray(flats, dtype=np.int64).reshape(-1)
         pats, have = [], []
         for i, f in enumerate(flats):
-            p = _get_pattern(int(f))
+            # Hough gets the pattern as the map run saw it (an int16 scan rescaled by the
+            # range of the whole scan); the render scorers above only correlate and keep
+            # the raw values.
+            r_, c_ = divmod(int(f), n_cols)
+            p = get_experimental_pattern(result, r_, c_, for_indexer=True)
             if p is not None:
                 pats.append(p); have.append(i)
         out = np.full((flats.size, 4), np.nan, dtype=np.float64)
@@ -7049,7 +7790,7 @@ def _phase_check_ctx(result, build_scorers: bool = True):
         "flat_of_row": flat_of_row, "full_q": full_q, "phase_full": phase_full,
         "qdata": qdata, "pid": pid, "phases": phases, "cifs": cifs,
         "score_fns": score_fns, "hough_quats_fn": _hough_quats_fn,
-        "Rotation": _R,
+        "Rotation": _R, "topology": topology,
     }
 
 
@@ -7096,9 +7837,10 @@ async def island_check(req: IslandCheckRequest):
         raise HTTPException(status_code=400, detail="No indexing result available")
     ctx = _phase_check_ctx(result)
 
-    _free_interactive_gpu_caches()
+    # Flag first, release inside the try: see grain_phase_assign.
     _phase_check_busy = True
     try:
+        await asyncio.to_thread(_free_interactive_gpu_caches)
         report = await asyncio.to_thread(
             _island_work, ctx,
             max_island_px=int(req.max_island_px),
@@ -7151,6 +7893,7 @@ def _island_work(ctx, *, max_island_px: int = 8, margin_clear: float = 0.05,
             max_island_px=int(max_island_px),
             margin_clear=float(margin_clear),
             max_variants=int(max_variants),
+            topology=ctx.get("topology"),
         )
 
 
@@ -7232,11 +7975,13 @@ async def phase_check(req: PhaseCheckRequest):
                 sample_px_max=int(req.sample_px_max),
                 score_floor=float(req.score_floor),
                 margin_clear=float(req.margin_clear),
+                topology=ctx["topology"],
             )
 
-    _free_interactive_gpu_caches()
+    # Flag first, release inside the try: see grain_phase_assign.
     _phase_check_busy = True
     try:
+        await asyncio.to_thread(_free_interactive_gpu_caches)
         report, margin_full = await asyncio.to_thread(_work)
     finally:
         _phase_check_busy = False
@@ -7337,6 +8082,19 @@ async def phase_reassign(req: PhaseReassignRequest):
     if not pc or not isinstance(pc.get("report"), dict):
         raise HTTPException(status_code=400,
                             detail="Run the phase check first")
+    # Free the interactive render VRAM before the orientations are read (ctx),
+    # so the wait for the compute worker does not widen the window between that
+    # read and the write-back.
+    await asyncio.to_thread(_free_interactive_gpu_caches)
+    # The check above ran before the wait. An apply-to-grain, an undo or a new
+    # phase check that landed during the wait replaced or dropped it, and the
+    # orientations read below no longer match its grain ids.
+    if md.get("phase_check") is not pc:
+        raise HTTPException(
+            status_code=409,
+            detail="The phase check is out of date: the result changed while "
+                   "the compute worker was being released. Run the phase "
+                   "check again")
     # Scorers are needed at APPLY time now: every pixel of a reassigned grain
     # is verified on its own before it is written (see apply_reassignment).
     ctx = _phase_check_ctx(result, build_scorers=True)
@@ -7350,7 +8108,7 @@ async def phase_reassign(req: PhaseReassignRequest):
             pf, q, applied, skipped = apply_reassignment(
                 ctx["full_q"], ctx["phase_full"], ctx["n_rows"], ctx["n_cols"],
                 report, ctx["phases"], ctx["hough_quats_fn"],
-                score_fns=ctx["score_fns"],
+                score_fns=ctx["score_fns"], topology=ctx["topology"],
             )
             # Stage 2 on top of stage 1, in the same pass and the same undo.
             # The island findings carry their own winning orientations, so this
@@ -7368,7 +8126,6 @@ async def phase_reassign(req: PhaseReassignRequest):
                     q, pf, ctx["n_rows"], ctx["n_cols"], island_report)
             return pf, q, applied, skipped, isl_applied
 
-    _free_interactive_gpu_caches()
     new_pf, new_q, applied, skipped, isl_applied = await asyncio.to_thread(_work)
 
     n = ctx["n_rows"] * ctx["n_cols"]
@@ -7578,7 +8335,11 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
                 ctx["xmap"]._phases = new_pl
             if ctx["phases"].get(tpid) is None:
                 try:
-                    ctx["phases"][tpid] = ph.point_group.name
+                    from crystal_symmetry import phase_point_group_key
+                    key = phase_point_group_key(ph)
+                    if key is None:
+                        raise AttributeError("phase without a point group")
+                    ctx["phases"][tpid] = key
                 except Exception:
                     pass
         except HTTPException:
@@ -7595,7 +8356,7 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
 
     labels = segment_supergroup_grains(
         ctx["full_q"], ctx["phase_full"], n_rows, n_cols, cur_pid, pg,
-        threshold_deg=float(req.threshold_deg))
+        threshold_deg=float(req.threshold_deg), topology=ctx["topology"])
     g0 = int(labels[flat])
     if g0 < 0:
         raise HTTPException(status_code=400, detail="No grain at the clicked pixel")
@@ -7614,7 +8375,8 @@ async def assign_phase_to_grain(req: AssignPhaseRequest):
         with _silence_console():
             return apply_reassignment(
                 ctx["full_q"], ctx["phase_full"], n_rows, n_cols,
-                report, ctx["phases"], ctx["hough_quats_fn"])
+                report, ctx["phases"], ctx["hough_quats_fn"],
+                topology=ctx["topology"])
 
     new_pf, new_q, applied, skipped = await asyncio.to_thread(_work)
 
@@ -8354,12 +9116,7 @@ async def single_pixel_phase_test(req: SinglePixelPhaseTestRequest):
         pixel_index=req.pixel_index, use_pixel_pc=req.use_pixel_pc)
     if det_params is None:
         raise HTTPException(status_code=400, detail="No detector/calibration for the active dataset")
-    if entry is not None and getattr(entry, "pc_source", None) == "missing":
-        raise HTTPException(
-            status_code=400,
-            detail="Pattern Center is not set for this dataset. Set/refine the PC "
-                   "first (EBSD Viewer / PC Refinement) — a simulated pattern with "
-                   "a placeholder PC would be misleading.")
+    _require_pc_for_phase_test(entry)
 
     n_cols = int(det_params["n_cols"]); n_rows = int(det_params["n_rows"])
     if req.pixel_index >= n_rows * n_cols:
@@ -8367,7 +9124,11 @@ async def single_pixel_phase_test(req: SinglePixelPhaseTestRequest):
     row, col = divmod(req.pixel_index, n_cols)
 
     try:
-        exp = np.asarray(signal.data[row, col], dtype=np.float32)
+        # The pattern as the map run sees this pixel (an int16 scan rescaled by the range of
+        # the whole scan): everything below, the indexers and the NCC, works on it. The first
+        # click on a signal reads the scan's range, so it runs off the event loop.
+        from backend.api.services.load_choices import signal_pattern
+        exp = np.asarray(await asyncio.to_thread(signal_pattern, signal, row, col), dtype=np.float32)
     except Exception:
         raise HTTPException(status_code=400, detail=f"Could not read pattern at ({row},{col})")
 
@@ -8566,14 +9327,17 @@ async def single_pixel_phase_test_start(req: SinglePixelPhaseTestRequest):
         pixel_index=req.pixel_index, use_pixel_pc=req.use_pixel_pc)
     if det_params is None:
         raise HTTPException(status_code=400, detail="No detector/calibration for the active dataset")
-    if entry is not None and getattr(entry, "pc_source", None) == "missing":
-        raise HTTPException(status_code=400, detail="Pattern Center is not set for this dataset. Set/refine the PC first.")
+    _require_pc_for_phase_test(entry)
     n_cols = int(det_params["n_cols"]); n_rows = int(det_params["n_rows"])
     if req.pixel_index >= n_rows * n_cols:
         raise HTTPException(status_code=400, detail="pixel_index out of range")
     row, col = divmod(req.pixel_index, n_cols)
     try:
-        exp = np.asarray(signal.data[row, col], dtype=np.float32)
+        # The pattern as the map run sees this pixel (an int16 scan rescaled by the range of
+        # the whole scan): everything below, the indexers and the NCC, works on it. The first
+        # click on a signal reads the scan's range, so it runs off the event loop.
+        from backend.api.services.load_choices import signal_pattern
+        exp = np.asarray(await asyncio.to_thread(signal_pattern, signal, row, col), dtype=np.float32)
     except Exception:
         raise HTTPException(status_code=400, detail=f"Could not read pattern at ({row},{col})")
     # Dynamic-background-remove the measured pattern (band-vs-band NCC + clean preview).
@@ -9029,7 +9793,15 @@ async def get_last_result():
         "original_shape": list(active.original_shape),
         "method": active.method.value,
         "has_confidence": active.confidence_scores is not None,
+        # the geometry stamped on THIS result (None: it states none), which the exports offered
+        # for a hexagonal scan follow
+        "scan_geometry": _stored_scan_geometry(active),
     }
+    # What the page shows after a run (the status answer carries the same key); absent
+    # when the result has no notes.
+    _caveats = _caveats_record(active)
+    if _caveats:
+        resp["caveats"] = _caveats
     if active.confidence_scores is not None:
         # Defensive collapse for 2D pyebsdindex cm — same fix as
         # commit c474f41 (/results) and 1a2c123 (/start completion).
@@ -9106,16 +9878,47 @@ def _selection_bbox(res) -> dict | None:
     }
 
 
+def _activation_loads(res, source_file) -> bool:
+    """Whether activating ``res`` has to load its file: the viewer holds another file or another
+    variant of this one (``_ebsd_variant_key`` is None for the default). A light export holds no
+    patterns, so there is nothing to load."""
+    from backend.api.routes import ebsd_viewer as _ev
+    meta = res.metadata if isinstance(getattr(res, "metadata", None), dict) else {}
+    if not source_file or meta.get("imported_without_patterns"):
+        return False
+    return (str(_ev._ebsd_file_path) != str(source_file)
+            or _stamp_key(variant_registry.file_stamp_of_result(res)) != _ev._ebsd_variant_key)
+
+
+def _variant_parts_of_result(res, source_file, listed: dict) -> list:
+    """Which patterns a result ran on, in the words of a dataset name: nothing for the default variant.
+    ``listed`` keeps the files already asked. A file that no longer lists its variants (gone, a light
+    export) still has the stamp, and the stamp says the pattern source."""
+    from backend.api.routes import ebsd_viewer as _ev
+    variant = variant_registry.variant_of_result(res)
+    if variant is None:
+        return []
+    if source_file not in listed:
+        listed[source_file] = _ev._inspect_for_load(source_file) if source_file else None
+    if listed[source_file] is None:
+        return ["unprocessed"] if variant.pattern_source == load_choices.UNPROCESSED else []
+    return _ev.variant_parts(variant, listed[source_file])
+
+
 @router.get("/results")
 async def list_results():
     """List all stored indexing results with metadata."""
     results = []
+    listed_files = {}
     for rid, res in _result_registry.items():
         meta = res.metadata if isinstance(getattr(res, "metadata", None), dict) else {}
         source_file = meta.get("source_file")
         entry = {
             "id": rid,
             "method": res.method.value,
+            "variant_parts": _variant_parts_of_result(res, source_file, listed_files),
+            # a page visit adopts a stored result only when that loads nothing (autoAdoptGuard)
+            "activation_loads": _activation_loads(res, source_file),
             "n_indexed": int(res.selection_mask.sum()),
             "original_shape": list(res.original_shape),
             # The rectangle the indexed pixels live in, or None when the run
@@ -9132,6 +9935,8 @@ async def list_results():
             # none of the three keys and gets the no-crop answer — correct by
             # construction, since nothing could be cropped back then.
             **_stored_scan_provenance(res),
+            "scan_geometry": _stored_scan_geometry(res),
+            "hex_resampled": _stored_hex_resampled(res),
             "is_active": rid == _active_result_id,
             # A joint R+PC refinement stores its refined result next to the
             # original; the gallery says which card is which.
@@ -9189,9 +9994,13 @@ async def activate_result(result_id: str):
     source_file = None
     if hasattr(res, "metadata") and isinstance(res.metadata, dict):
         source_file = res.metadata.get("source_file")
+    reloaded = None
     if source_file:
         from backend.api.routes import ebsd_viewer as _ev
-        if str(_ev._ebsd_file_path) != str(source_file):
+        # The result belongs to one variant of its file (missing stamp = the default): the file
+        # loaded as another variant is not its file.
+        stamp = variant_registry.file_stamp_of_result(res)
+        if _activation_loads(res, source_file):
             # Auto-switch the file so render/pattern-match see the right
             # xmap. We MUST set _active_result_id AFTER the load, because
             # load_ebsd resets it to None on every file change.
@@ -9206,8 +10015,34 @@ async def activate_result(result_id: str):
                     },
                 )
             try:
-                await _ev.load_ebsd(_ev.LoadEBSDRequest(path=source_file))
+                # No stamp = the default, which is what a plain load takes, unless the file records
+                # another variant: then the default is asked for by name. A pattern file the user
+                # paired with a measurement is loaded with that pairing again, never with the one it
+                # was last loaded with.
+                variant = (_ev.VariantRef(measurement=stamp.get("measurement"),
+                                          pattern_source=stamp["pattern_source"])
+                           if isinstance(stamp, dict) and stamp.get("pattern_source")
+                           else _ev.default_variant_ref(source_file))
+                # A stamp that names its measurement but lost its metadata file is completed from what
+                # the viewer remembers, or refused: never loaded without the pairing it ran on.
+                pairing = _ev.complete_apex_pairing(source_file, variant_registry.apex_of_stamp(stamp))
+                reloaded = await _ev.load_ebsd(_ev.LoadEBSDRequest(
+                    path=source_file, variant=variant,
+                    apex=(_ev.ApexRef(h5_path=pairing["h5_path"], measurement_id=pairing["measurement_id"])
+                          if pairing else None)))
+                # What came up must be the variant of the result: a result is never active on a file
+                # loaded any other way (the load may have fallen back to another measurement). The
+                # file IS known and did load, only as another variant: the refusal says that, and
+                # that the viewer now shows the other one (it is not switched back).
+                if _ev._ebsd_variant_key != _stamp_key(stamp):
+                    raise problem(400, "loadCameUpAsOther",
+                                  "The file opened as another measurement or pattern source than the one "
+                                  "this result was created on, so the result is not activated; the viewer "
+                                  "now shows the other one.")
             except Exception as e:
+                # A variant the file no longer holds is refused with its code: say that, not "500".
+                if isinstance(e, HTTPException) and (e.headers or {}).get("X-Orienta-Code"):
+                    raise
                 logger.exception("auto-switch failed during activate_result")
                 raise HTTPException(
                     status_code=500,
@@ -9215,7 +10050,8 @@ async def activate_result(result_id: str):
                 )
     _active_result_id = result_id
     state_version.bump()
-    return {"status": "ok", "active_id": result_id, "auto_switched_file": source_file}
+    # ``reloaded``: the load answer when this brought up another file or variant, else None.
+    return {"status": "ok", "active_id": result_id, "reloaded": reloaded}
 
 
 @router.post("/results/deactivate")
@@ -9258,7 +10094,7 @@ def _h5_any_pattern_dataset(f) -> bool:
             grp = f.get(f"{key}/EBSD/Data")
             if grp is None:
                 continue
-            for dn in ("Pattern", "Patterns", "Processed Patterns"):
+            for dn in ("Pattern", "Patterns", "Processed Patterns", "Unprocessed Patterns"):
                 ds = grp.get(dn)
                 if getattr(ds, "ndim", 0) == 3:
                     return True
@@ -9383,6 +10219,15 @@ def _match_library_shts_for_xmap(xmap, stored_hints: dict | None = None) -> dict
     return out
 
 
+def _file_holds_patterns(path: str, found: bool) -> bool:
+    """Whether an imported file has patterns to bring up. ``found`` is what the import saw (Oxford,
+    EDAX layouts); the load choices also know the other vendors' datasets and 4-D ones."""
+    from backend.api.routes import ebsd_viewer as _ev
+    choices = _ev._inspect_for_load(path)
+    return found or (choices is not None
+                     and any(s.loadable for m in choices.measurements for s in m.sources))
+
+
 @router.post("/import-h5")
 async def import_h5_result(req: ImportH5Request):
     """Import a rich/light .h5 export back into the active indexing session.
@@ -9434,6 +10279,8 @@ async def import_h5_result(req: ImportH5Request):
             status_code=400, detail=f"Cannot open as HDF5: {e}"
         )
 
+    capabilities["patterns"] = _file_holds_patterns(str(p), capabilities["patterns"])
+
     if not capabilities["indexing"]:
         raise HTTPException(
             status_code=400,
@@ -9443,8 +10290,12 @@ async def import_h5_result(req: ImportH5Request):
             ),
         )
 
+    # The grid the file states on /Indexing (None: it states none). A damaged stamp is a 400 here,
+    # before anything is stored: a hexagonal file must never come back as a square result.
+    from backend.api.routes.analysis import _load_kikuchipy_rich_h5, read_index_stamp
+    file_geometry = read_index_stamp(str(p))
+
     # Build the CrystalMap via the same loader Phase Map uses today.
-    from backend.api.routes.analysis import _load_kikuchipy_rich_h5
     try:
         xmap = _load_kikuchipy_rich_h5(str(p))
     except Exception as e:
@@ -9558,6 +10409,7 @@ async def import_h5_result(req: ImportH5Request):
         # enum. Without it an imported spherical result rendered as
         # "Dictionary Indexing" with all SHT tools disabled.
         metadata={"source_file": str(p), "imported_from_h5": True,
+                  "imported_without_patterns": not capabilities["patterns"],
                   "indexing_method": method.value},
     )
 
@@ -9575,6 +10427,31 @@ async def import_h5_result(req: ImportH5Request):
     # stamp whatever crop is active in this session onto a result the user
     # merely loaded, which is the failure the source_file tagging already had.
     result.metadata.update(_read_scan_provenance(p))
+    # The vendor whose frame the file's Euler angles are in, as the file states it (nothing for a
+    # file written before it was recorded): the exports of this result put them into that frame
+    # again, whatever file is open then.
+    _file_vendor = _read_source_vendor(p)
+    if _file_vendor is not None:
+        result.metadata["source_vendor"] = _file_vendor
+    # The patterns its original scan was indexed on, as the file says (nothing = the default). A key
+    # of its own: ``load_variant`` says which variant of ``source_file`` (this file) a result belongs
+    # to, and that is what loading this file gives, or the load would deactivate the result: the
+    # default, or the variant the file records.
+    _file_variant = _read_variant_provenance(p)
+    if _file_variant is not None:
+        result.metadata["indexed_variant"] = _file_variant
+    from backend.api.routes import ebsd_viewer as _ev_import
+    _file_choices = _ev_import._inspect_for_load(str(p))
+    if (_file_choices is not None and _file_choices.suggested is not None
+            and not _file_choices.suggested.is_default(_file_choices)):
+        result.metadata["load_variant"] = _file_choices.suggested.to_dict()
+    # The geometry of an imported result is what its file states on /Indexing, and unknown (None)
+    # when it states none; never the geometry of whatever is loaded now, which _store_result's
+    # setdefault would stamp on an unseeded key. A file with a stamp was written for the scan's own
+    # grid (the writers give a resampled map none), so it is not a resampled map; a file without
+    # one cannot say, and there is no signal behind the result to ask.
+    result.metadata["scan_geometry"] = None if file_geometry is None else file_geometry.to_dict()
+    result.metadata["hex_resampled"] = None if file_geometry is None else False
 
     # Restore the citation trail the export wrote, so a re-imported result
     # cites the same steps as the run that produced it.
@@ -9583,6 +10460,12 @@ async def import_h5_result(req: ImportH5Request):
     _steps = _read_citations(p)
     if _steps:
         ensure_provenance(result)["steps"] = _steps
+    _hough = _read_hough_reflectors(p)
+    if _hough:
+        result.metadata["hough_reflectors"] = _hough
+    _caveats = _read_caveats(p)
+    if _caveats:
+        result.metadata["caveats"] = _caveats
 
     # Carry per-phase CI maps over from the xmap (loader stashes them) so
     # subsequent re-exports re-emit /Indexing/PerPhase/ unchanged.
@@ -9600,6 +10483,14 @@ async def import_h5_result(req: ImportH5Request):
     _file_lat = getattr(xmap, "_recorded_lattices", None)
     if _file_lat:
         result.metadata["recorded_lattices"] = dict(_file_lat)
+
+    # The PC and tilts the run was indexed at, as the export stated them in /Detector:
+    # the imported result keeps them (its exports state them again), whatever the
+    # header of the file says about the live PC. A file that states none (indexed
+    # before the record existed, or "not recorded") leaves the result without one.
+    _run_rec = _pc_record_from_export(str(p))
+    if _run_rec is not None:
+        result.metadata["pc_at_run"] = _run_rec
 
     result_id = _store_result(result, method.value)
 
@@ -9641,12 +10532,14 @@ async def import_h5_result(req: ImportH5Request):
                 e,
             )
         try:
-            from backend.api.routes.ebsd_viewer import _get_active_signal
+            from backend.api.routes import ebsd_viewer as _ev_cal
             from backend.api.services.calibration_store import calibration_store
-            signal = _get_active_signal()
+            signal = _ev_cal._get_active_signal()
             if signal is not None:
                 calibration_store.clear()
-                calibration_store.register(_stem(p), signal)
+                # the dataset the load brought up: a variant of the file is not named by the stem
+                calibration_store.register(_ev_cal._active_dataset or _stem(p), signal,
+                                           file_key=_ev_cal._canonical_path(str(p)))
         except Exception as e:
             logger.warning(
                 "import-h5: calibration_store register failed (%s) — detector PC "
@@ -9700,10 +10593,19 @@ async def import_h5_result(req: ImportH5Request):
                            exc_info=True)
         if ebsd_signal_loaded and "detector_geometry" not in result.metadata:
             try:
-                from backend.api.routes.ebsd_viewer import _get_active_signal
+                from backend.api.routes.ebsd_viewer import _get_active_signal, _active_dataset
+                from backend.api.services.pc_guard import is_pc_missing
                 signal = _get_active_signal()
                 detector = getattr(signal, "detector", None)
-                if signal is not None and detector is not None:
+                if is_pc_missing(_active_dataset, calibration_store, signal):
+                    # The loaded file carries no PC: its detector holds kikuchipy's
+                    # placeholder, and a geometry built from it would let the pattern
+                    # match and the forward diagnostics render at (0.5, 0.5, 0.5) as if
+                    # that were the geometry of the run. Mark it instead.
+                    result.metadata["pc_missing"] = True
+                    logger.warning("import-h5: %s carries no pattern centre; no detector "
+                                   "geometry is rebuilt for rendering", _active_dataset)
+                elif signal is not None and detector is not None:
                     result.metadata["detector_geometry"] = dict(
                         build_spherical_det_params(signal, detector, str(p)))
             except Exception:
@@ -9737,6 +10639,25 @@ async def import_h5_result(req: ImportH5Request):
         f"— CI: {ci_mean:.3f} — {int(np.sum(selection_mask))} px"
     )
 
+    # What the PC is NOW for the file the import loaded (the store's state, a hint when
+    # the export's /Detector/pc differs from the header PC that wins), next to the PC
+    # the imported result was indexed at.
+    pc_state = {}
+    if ebsd_signal_loaded:
+        try:
+            from backend.api.routes.ebsd_viewer import (
+                _active_dataset as _imp_ds, _get_active_signal as _imp_sig,
+                _pc_state_for_response)
+            _s = _imp_sig()
+            _tag = None
+            try:
+                _tag = _s.metadata.get_item("Signal.pc_source", None)
+            except Exception:  # noqa: BLE001
+                _tag = None
+            pc_state = _pc_state_for_response(_imp_ds, _tag, _s)
+        except Exception:
+            logger.warning("import-h5: PC state of the loaded file unavailable", exc_info=True)
+
     return {
         "result_id": result_id,
         "label": label,
@@ -9747,6 +10668,10 @@ async def import_h5_result(req: ImportH5Request):
         "capabilities": capabilities,
         "ebsd_signal_loaded": ebsd_signal_loaded,
         "source_path": str(p),
+        # the geometry the file states, as stored on the result (None: the file states none)
+        "scan_geometry": _stored_scan_geometry(result),
+        **pc_state,
+        "pc_at_run": result.metadata.get("pc_at_run"),
     }
 
 
@@ -9792,7 +10717,7 @@ async def phase_check_phases(result_id: str | None = None):
     result = _get_result(result_id)
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available")
-    ctx = _phase_check_ctx(result, build_scorers=False)
+    ctx = _phase_check_ctx(result, build_scorers=False, with_topology=False)
     from ebsd_utils import phase_reflector_limits
     limits = phase_reflector_limits()
     xmap = ctx["xmap"]
@@ -9975,7 +10900,8 @@ async def phase_file_from_path(req: PhasePathRequest):
 
 
 class ExportRequest(BaseModel):
-    format: str = "ang"  # "ang", "ctf", "h5", "h5_light"
+    # "ang", "ang_square" (a hexagonal scan resampled to a square grid), "ctf" (the same), "h5", "h5_light"
+    format: str = "ang"
     filename: Optional[str] = None  # auto-generated if not provided
     include_eds: bool = True
     include_detector: bool = True
@@ -9990,38 +10916,227 @@ def _is_hdf5_file(path) -> bool:
         return False
 
 
-def _signal_patterns_3d(signal):
-    """(n_patterns, sy, sx) uint8/uint16 array from an EBSD signal.
+#: What an export states for a result that has no ``pc_at_run`` record: not a PC from the
+#: store (that may have changed since the run), but "not recorded".
+_NOT_RECORDED = "not_recorded"
 
-    Materialises lazy/memmap data. Returns (patterns, (ny, nx, sy, sx)).
+
+def _pc_for_export(dataset_name, detector, result=None):
+    """The PC (Bruker, 3 numbers) an export states in ``/Detector/pc``, or None.
+
+    The calibration store's PC, so a refined one; the detector's mean when the
+    store has no entry. ``None`` when the dataset's file carries no PC and nobody
+    has set one (``pc_source == "missing"``): the signal's detector then holds
+    kikuchipy's placeholder, and stating it would turn a guess into a recorded
+    measurement - which a later load of the export takes it for.
+
+    With ``result`` the PC is the one the RUN was indexed at (``pc_at_run``, taken when
+    it started), not the store's now: a PC typed afterwards is not the PC of these
+    orientations. A result without the record gives ``_NOT_RECORDED``.
     """
+    if result is not None:
+        from backend.api.services.pc_record import record_of
+        rec = record_of(result)
+        if rec is None:
+            return _NOT_RECORDED
+        if rec.get("pc") is None:
+            return None
+        return np.asarray(rec["pc"], dtype=float).ravel()[:3]
+    entry = calibration_store.get_entry(dataset_name)
+    if entry is not None and entry.pc_source == "missing":
+        return None
+    store_pc = calibration_store.get_pc(dataset_name)
+    if store_pc is not None:
+        return np.asarray(store_pc, dtype=float).ravel()[:3]
+    return np.asarray(detector.pc, dtype=float).reshape(-1, 3).mean(axis=0)
+
+
+def _geometry_for_export(dataset_name, detector, result=None):
+    """The tilts (degrees) an export states: ``sample_tilt``, ``tilt``, ``azimuthal``.
+
+    The calibration store's, from the same source as the PC (:func:`_pc_for_export`):
+    a tilt edited on the PC page is written there, while the signal's own detector
+    still holds the file's values, so an export that read them from the signal
+    stated a geometry the run did not use. The detector's values when the dataset is
+    not in the store. With ``result``: the tilts the run was indexed at (``pc_at_run``);
+    ``None`` for a result without the record.
+    """
+    if result is not None:
+        from backend.api.services.pc_record import record_of
+        rec = record_of(result)
+        if rec is None:
+            return None
+        # a tilt the record does not know (an imported export from before the record
+        # existed) is None: not recorded, not the store's
+        return {k: (None if rec.get(k) is None else float(rec[k]))
+                for k in ("sample_tilt", "tilt", "azimuthal")}
+    entry = calibration_store.get_entry(dataset_name)
+    if entry is not None:
+        return {"sample_tilt": float(entry.sample_tilt), "tilt": float(entry.tilt),
+                "azimuthal": float(entry.azimuthal)}
+    return {"sample_tilt": float(getattr(detector, "sample_tilt", 70.0)),
+            "tilt": float(getattr(detector, "tilt", 0.0)),
+            "azimuthal": float(getattr(detector, "azimuthal", 0.0))}
+
+
+def _pc_record_from_render_geometry(f):
+    """The record for an export with no ``/Detector``: an older spherical export keeps the
+    geometry it rendered at in ``/Indexing`` attrs ``detector_geometry`` (JSON: pc_x, pc_y,
+    pc_z, tilt, sample_tilt). That is the PC and tilts of the run - source ``"render_geometry"``,
+    so a reader sees where it comes from. ``None`` when the file has no such attribute."""
+    import json
+    idx = f.get("Indexing")
+    raw = idx.attrs.get("detector_geometry") if idx is not None else None
+    if raw is None:
+        return None
+    dg = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+    if not all(k in dg for k in ("pc_x", "pc_y", "pc_z")):
+        return None
+
+    def _f(key):
+        return float(dg[key]) if dg.get(key) is not None else None
+
+    return {
+        "pc": [float(dg["pc_x"]), float(dg["pc_y"]), float(dg["pc_z"])],
+        "pc_source": "render_geometry",
+        "per_pixel": False,
+        "map_shape": None,
+        "sample_tilt": _f("sample_tilt"),
+        "tilt": _f("tilt"),
+        "azimuthal": _f("azimuthal"),
+    }
+
+
+def _pc_record_from_export(h5_path: str):
+    """The ``pc_at_run`` record an Orienta export states in its ``/Detector`` group.
+
+    ``/Detector/pc`` with the ``pc_source`` / ``pc_is_map_mean`` and tilt attributes
+    written by :func:`_write_detector_facts`; ``pc_missing`` gives a record without a PC
+    (the file carried none). ``None`` for an export that says ``pc_not_recorded`` or
+    ``geometry_not_recorded``, or states nothing: no PC is invented for such a result.
+
+    An export written before the record existed has the PC and ``sample_tilt`` but no
+    ``camera_tilt`` (nor ``azimuthal``, ``pc_source``): its PC is taken from the file
+    (source ``"export"``, the PC the export stated), and a tilt the file does not give is
+    ``None`` in the record - "not recorded" - instead of the whole record being dropped.
+    """
+    import h5py
+    try:
+        with h5py.File(h5_path, "r") as f:
+            if "Detector" not in f:
+                return _pc_record_from_render_geometry(f)
+            g = f["Detector"]
+            a = g.attrs
+            if a.get("pc_not_recorded", False) or a.get("geometry_not_recorded", False):
+                return None
+            if a.get("pc_missing", False):
+                pc = None
+            elif "pc" in g:
+                pc = [float(v) for v in np.asarray(g["pc"][()], dtype=float).ravel()[:3]]
+            else:
+                return _pc_record_from_render_geometry(f)
+            src = a.get("pc_source", "export")
+
+            def _tilt(key):
+                return float(a[key]) if key in a else None
+
+            return {
+                "pc": pc,
+                "pc_source": src.decode() if isinstance(src, bytes) else str(src),
+                "per_pixel": bool(a.get("pc_is_map_mean", False)),
+                "map_shape": None,
+                "sample_tilt": _tilt("sample_tilt"),
+                "tilt": _tilt("camera_tilt"),
+                "azimuthal": _tilt("azimuthal"),
+            }
+    except Exception:  # noqa: BLE001 - an unreadable /Detector is not a record
+        logger.debug("import-h5: no PC record in %s", h5_path, exc_info=True)
+        return None
+
+
+def _write_detector_facts(det_grp, dataset_name, detector, result=None) -> None:
+    """The PC and tilts of the run, written to an export's ``/Detector`` group.
+
+    One routine for the interactive rich and light exports and the batch export, so
+    they state the same facts from the same source (the calibration store, see
+    :func:`_pc_for_export` and :func:`_geometry_for_export`): ``pc`` (or
+    ``pc_missing`` for a file that has none), ``sample_tilt`` and ``camera_tilt``.
+    An existing ``pc`` of the group (a copied source file's) is not overwritten.
+
+    With ``result`` the facts are the ones the run was indexed at (``pc_at_run``);
+    ``pc_source`` and ``pc_is_map_mean`` (a per-pixel map is stated by its mean) say
+    what the PC is. A result without the record gets ``pc_not_recorded`` and
+    ``geometry_not_recorded``: no PC and no tilts from the store, which may have changed.
+    """
+    pc_out = _pc_for_export(dataset_name, detector, result)
+    if isinstance(pc_out, str):                    # _NOT_RECORDED
+        det_grp.attrs["pc_not_recorded"] = True
+    elif pc_out is None:
+        det_grp.attrs["pc_missing"] = True   # the file carries no PC
+    elif "pc" not in det_grp:
+        det_grp.create_dataset("pc", data=pc_out)
+    if result is not None:
+        from backend.api.services.pc_record import record_of
+        rec = record_of(result)
+        if rec is not None:
+            det_grp.attrs["pc_source"] = str(rec.get("pc_source", ""))
+            det_grp.attrs["pc_is_map_mean"] = bool(rec.get("per_pixel"))
+    geo = _geometry_for_export(dataset_name, detector, result)
+    if geo is None:
+        det_grp.attrs["geometry_not_recorded"] = True
+        return
+    for key, attr in (("sample_tilt", "sample_tilt"), ("tilt", "camera_tilt"), ("azimuthal", "azimuthal")):
+        if geo.get(key) is None:
+            det_grp.attrs[f"{attr}_not_recorded"] = True
+        else:
+            det_grp.attrs[attr] = geo[key]
+
+
+#: ``_signal_patterns_3d(signal)`` -> ``(n_patterns, sy, sx)`` uint8/uint16 array and
+#: ``(ny, nx, sy, sx)``. The one implementation lives with the writer of the fresh rich file
+#: (``orienta_hex_h5.signal_patterns_3d``); it is imported at the top under this name.
+
+
+def _signal_patterns_native(signal):
+    """Like ``_signal_patterns_3d`` but in the signal's own dtype: the caller owns the cast, because
+    the int16 counts of an unprocessed source must not wrap modulo 256."""
     nav = signal.axes_manager.navigation_shape          # (nx, ny)
     sig = signal.axes_manager.signal_shape              # (sx, sy)
     nx = int(nav[0]); ny = int(nav[1]) if len(nav) > 1 else 1
     sx = int(sig[0]); sy = int(sig[1]) if len(sig) > 1 else int(sig[0])
     data = np.ascontiguousarray(np.asarray(signal.data))
-    pats = data.reshape(ny * nx, sy, sx)
-    if pats.dtype not in (np.uint8, np.uint16):
-        pats = pats.astype(np.uint8)
-    return np.ascontiguousarray(pats), (ny, nx, sy, sx)
+    return data.reshape(ny * nx, sy, sx), (ny, nx, sy, sx)
 
 
-def _overwrite_patterns_with_processed(out_path: str, signal) -> bool:
+def _overwrite_patterns_with_processed(out_path: str, signal, variant=None) -> bool:
     """Overwrite the pattern dataset of an HDF5 export with the (processed)
     signal patterns, so the saved patterns match what was indexed.
 
     Preserves the whole source structure (header, EDS, electron images) and only
     swaps the pixel values in the existing ``.../EBSD/Data/Pattern[s]`` dataset.
     Returns True on success; on any mismatch/failure it leaves the raw copy in
-    place and logs (fail-soft — a raw pattern is still a valid pattern).
+    place and logs (fail-soft — a raw pattern is still a valid pattern). The one exception is a
+    failure AFTER the old dataset was removed: the copy is then missing its patterns, which
+    nothing downstream could tell from a file that never had any, so the file is removed and the
+    error is raised. The new values are always computed BEFORE the old dataset is touched.
+
+    ``variant`` is the measurement and pattern source the signal was loaded as
+    (``None``: the default, found by the search below). The values go into THAT
+    variant's dataset (``variantNotSupported`` when the layout cannot name it),
+    keep its dtype (int16 counts are not squeezed through uint8) and the other
+    sources of the copy are left as they are.
     """
     import h5py
+    variant_ds = (load_choices.reread_dataset_path(out_path, variant, "_overwrite_patterns_with_processed")
+                  if variant is not None else None)
     try:
-        pats, (ny, nx, sy, sx) = _signal_patterns_3d(signal)
+        pats, (ny, nx, sy, sx) = (_signal_patterns_3d(signal) if variant is None
+                                  else _signal_patterns_native(signal))
     except Exception:
         logger.warning("export: could not materialise processed patterns — "
                        "keeping raw source patterns", exc_info=True)
         return False
+    removed_old = False
     try:
         with h5py.File(out_path, "a") as f:
             # Find the experimental pattern dataset. Names vary by vendor:
@@ -10043,7 +11158,10 @@ def _overwrite_patterns_with_processed(out_path: str, signal) -> bool:
                     return
                 hits.append(n)
 
-            f.visititems(_collect)
+            if variant_ds is None:
+                f.visititems(_collect)
+            elif variant_ds in f and isinstance(f[variant_ds], h5py.Dataset) and f[variant_ds].ndim == 3:
+                hits.append(variant_ds)          # the variant's own dataset, whatever its name
             if not hits:
                 logger.warning("export: no pattern dataset found in %s — cannot "
                                "write processed patterns", out_path)
@@ -10060,8 +11178,11 @@ def _overwrite_patterns_with_processed(out_path: str, signal) -> bool:
                     "keeping raw patterns", pats.shape, tuple(old.shape), ds_path)
                 return False
             dtype = old.dtype
+            values = (load_choices.fit_to_dtype(pats, dtype) if variant is not None
+                      else pats.astype(dtype))
             del f[ds_path]
-            new = f.create_dataset(ds_path, data=pats.astype(dtype),
+            removed_old = True
+            new = f.create_dataset(ds_path, data=values,
                                    compression="gzip", chunks=(1, sy, sx))
             new.attrs["patterns_processed"] = True
             new.attrs["processed_note"] = (
@@ -10070,19 +11191,105 @@ def _overwrite_patterns_with_processed(out_path: str, signal) -> bool:
         logger.info("export: wrote processed patterns to %s (%s)", ds_path, out_path)
         return True
     except Exception:
+        if removed_old:
+            # The old dataset is gone and the new one was not written: not a file to hand out.
+            logger.error("export: the patterns could not be written after the source dataset "
+                         "was removed — removing the incomplete file %s", out_path, exc_info=True)
+            try:
+                Path(out_path).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("could not remove the incomplete file %s", out_path)
+            raise
         logger.warning("export: overwriting patterns failed — keeping raw source "
                        "patterns", exc_info=True)
         return False
 
 
-def _write_fresh_edax_h5(out_path: str, signal) -> None:
+def _same_variant_of_file(path, a, b) -> bool:
+    """Whether two variants (``LoadVariant`` or None = no choice) name the same measurement and
+    pattern source of the file at ``path``. No choice is the file's default variant."""
+    def key(v):
+        return None if v is None else (v.measurement, v.pattern_source)
+    if key(a) == key(b):
+        return True
+    if (a is None) == (b is None):
+        return False
+    try:
+        choices = load_choices.inspect_file(str(path))
+        default = choices.default_variant() if choices is not None else None
+    except Exception:  # noqa: BLE001 - unknown default: the two are not shown to be the same
+        return False
+    return default is not None and key(a if a is not None else b) == key(default)
+
+
+def _mark_pattern_source(out_path: str, variant, processed: bool) -> None:
+    """Say on the pattern dataset of a rich export which variant it holds.
+
+    ``pattern_source`` (``processed`` / ``unprocessed`` / ``single``), ``measurement`` when it is
+    not the file's default one, and ``patterns_processed``: True when the values are the viewer's
+    edits (``_overwrite_patterns_with_processed`` wrote them), False when the dataset is the
+    source's own. Written only for a variant the user chose: an export of the default variant is
+    what it was before (``variant`` None).
+
+    The export is a copy of its source, and a source that is itself a rich export brings that
+    export's mark along. A file says one variant, so the earlier mark goes. A copy of a crop keeps
+    the crop's record, so an export of the default variant of a crop cut from another one is marked
+    after all: nothing else says what it holds."""
+    import h5py
+    ds_path = None if variant is None else load_choices.reread_dataset_path(
+        out_path, variant, "_mark_pattern_source")
+    from backend.api.routes import ebsd_viewer as _ev
+    choices = _ev._inspect_for_load(out_path)
+    if choices is None:                 # reached without a variant only: no dataset here takes a mark
+        return
+    with h5py.File(out_path, "a") as f:
+        for source in (s for m in choices.measurements for s in m.sources if s.loadable):
+            f[source.dataset].attrs.pop("pattern_source", None)
+            f[source.dataset].attrs.pop("measurement", None)
+        if ds_path is None:
+            cut_from = load_choices.crop_variant(f, choices.measurements)
+            if cut_from is None or cut_from.is_default(choices):
+                return
+            variant = choices.default_variant()
+            ds_path = load_choices.pattern_dataset_path(out_path, variant)
+        default = choices.default_variant()
+        attrs = f[ds_path].attrs
+        attrs["patterns_processed"] = bool(processed)
+        attrs["pattern_source"] = variant.pattern_source
+        if variant.measurement is not None and (default is None or variant.measurement != default.measurement):
+            attrs["measurement"] = str(variant.measurement)
+
+
+def _write_fresh_edax_h5(out_path: str, signal, pc_bruker=None, geometry=None,
+                         scan_geometry=None) -> None:
     """Write a minimal EDAX-format h5 (Manufacturer='EDAX', /Scan1/EBSD/...) from
     an EBSD signal, so a non-HDF5 source (EDAX .up1/.up2) can still be rich-
     exported and re-loaded by kikuchipy. Writes whatever the signal currently
     holds — the viewer-processed patterns when the user processed them.
+
+    ``pc_bruker`` is the pattern centre to state (the calibration store's, so a
+    refined one): it goes into the header in the EDAX TSL convention, which is what
+    kikuchipy's EDAX reader takes it as, together with the camera tilt. Without
+    them the reader sets the PC to (0.5, 0.5, 0.5) and the tilt to 0 and says
+    nothing. ``None`` writes no PC (a PC nobody supplied is not made up here).
+    ``geometry`` (``sample_tilt`` / ``tilt`` / ``azimuthal``, see
+    :func:`_geometry_for_export`) is the tilts to state; the signal detector's are
+    used without it, and they do not follow an edit made on the PC page.
+
+    ``scan_geometry`` (a ``ScanGeometry``, normally the one registered for the dataset) is the
+    grid the patterns sit on. A hexagonal one is written as the hexagonal header block of
+    :mod:`orienta_hex_h5`, with its own steps; a square one, or none, gives the square header with
+    the step read off the signal's navigation axes, as before. It must have the signal's grid:
+    ``GeometryMismatchError`` otherwise, before anything is written.
     """
-    import h5py
+    from backend.api.services import scan_geometry as _scan_geometry
+    from backend.api.services.orienta_hex_h5 import write_fresh_file
     pats, (ny, nx, sy, sx) = _signal_patterns_3d(signal)
+    if scan_geometry is not None and scan_geometry.grid_shape != (ny, nx):
+        raise _scan_geometry.GeometryMismatchError(
+            f"the scan geometry is {scan_geometry.n_rows} x {scan_geometry.n_cols} points, "
+            f"the signal's navigation grid is {ny} x {nx}")
+    geometry = geometry or {}
     nav = signal.axes_manager.navigation_axes
     step_x = float(nav[0].scale) if len(nav) >= 1 else 1.0
     step_y = float(nav[1].scale) if len(nav) >= 2 else step_x
@@ -10302,6 +11509,115 @@ def _read_scan_provenance(h5_path) -> dict:
     return out
 
 
+def _read_source_vendor(h5_path) -> "str | None":
+    """The vendor (``"oxford"``, ``"edax"``, ``"bruker"``) an export's /Indexing group states in
+    ``source_vendor``, or None for a file that states none or ``"unknown"`` (every file written
+    before the attribute existed). The Euler angles of such a file are in that vendor's frame, and
+    a result restored from it must be exported in the same one: not in the frame of whatever file
+    is open then. A trust boundary: only the three names are taken."""
+    import h5py
+    try:
+        with h5py.File(str(h5_path), "r") as f:
+            idxg = f.get("Indexing")
+            raw = idxg.attrs.get("source_vendor") if idxg is not None else None
+    except Exception:
+        logger.debug("import: could not read the source vendor from %s", h5_path, exc_info=True)
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    name = _vendor_name(raw) if isinstance(raw, str) else ""
+    return name or None
+
+
+def _read_variant_provenance(h5_path) -> "dict | None":
+    """The variant (``{"measurement", "pattern_source"}``) an export's /Indexing group says the result
+    was indexed on, or None for a file that says nothing (the default variant, and every file written
+    before the attributes existed). A trust boundary like the citation trail: only strings are taken."""
+    import h5py
+
+    def _text(value):
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "replace")
+        return value if isinstance(value, str) and value else None
+
+    try:
+        with h5py.File(str(h5_path), "r") as f:
+            idxg = f.get("Indexing")
+            if idxg is None:
+                return None
+            source = _text(idxg.attrs.get("pattern_source"))
+            measurement = _text(idxg.attrs.get("measurement"))
+    except Exception:
+        logger.debug("import: could not read the variant from %s", h5_path, exc_info=True)
+        return None
+    if source is None:
+        return None
+    return {"measurement": measurement, "pattern_source": source}
+
+
+def _hough_record(result):
+    """``result.metadata["hough_reflectors"]`` (which reflector list each Hough phase
+    was indexed with) or None."""
+    md = getattr(result, "metadata", None)
+    rec = md.get("hough_reflectors") if isinstance(md, dict) else None
+    return rec if isinstance(rec, dict) and rec else None
+
+
+def _caveats_record(result):
+    """``result.metadata["caveats"]`` (the notes a result carries about itself, see
+    ``hough_caveats``) or None."""
+    md = getattr(result, "metadata", None)
+    rec = md.get("caveats") if isinstance(md, dict) else None
+    return rec if isinstance(rec, list) and rec else None
+
+
+def _read_caveats(h5_path):
+    """The caveats an export wrote, or None. Like the citation trail the file is a
+    trust boundary: only a list of ``{"code", "phases", "text"}`` is accepted."""
+    import json as _json
+
+    import h5py
+
+    from hough_caveats import clean_caveats
+
+    try:
+        with h5py.File(h5_path, "r") as f:
+            grp = f.get("Indexing/Citations")
+            if grp is None or "caveats" not in grp.attrs:
+                return None
+            raw = _json.loads(grp.attrs["caveats"])
+    except Exception:
+        logger.debug("no caveats record in %s", h5_path, exc_info=True)
+        return None
+    cleaned = clean_caveats(raw)
+    if cleaned is None:
+        logger.warning("caveats record in %s is malformed - ignored.", h5_path)
+    return cleaned
+
+
+def _read_hough_reflectors(h5_path):
+    """The record an export wrote, or None. The file is a trust boundary like the
+    citation trail: only a dict of dicts is accepted."""
+    import json as _json
+
+    import h5py
+
+    try:
+        with h5py.File(h5_path, "r") as f:
+            grp = f.get("Indexing/Citations")
+            if grp is None or "hough_reflectors" not in grp.attrs:
+                return None
+            raw = _json.loads(grp.attrs["hough_reflectors"])
+    except Exception:
+        logger.debug("no hough_reflectors record in %s", h5_path, exc_info=True)
+        return None
+    if not isinstance(raw, dict) or not all(
+            isinstance(k, str) and isinstance(v, dict) for k, v in raw.items()):
+        logger.warning("hough_reflectors record in %s is malformed - ignored.", h5_path)
+        return None
+    return raw
+
+
 def _read_citations(h5_path) -> list:
     """Read back the citation trail an export wrote. Absent → empty.
 
@@ -10349,6 +11665,17 @@ def _read_citations(h5_path) -> list:
     return steps
 
 
+def _detector_shape_stated_by(result) -> "tuple[int, int] | None":
+    """``(rows, columns)`` of the detector a result states in ``metadata["detector_geometry"]``
+    (``pat_height``, ``pat_width``), or None when it states none."""
+    dg = (getattr(result, "metadata", None) or {}).get("detector_geometry")
+    try:
+        rows, cols = int(dg["pat_height"]), int(dg["pat_width"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (rows, cols) if rows > 0 and cols > 0 else None
+
+
 def _export_context(active, source_path, vendor: str) -> dict:
     """The facts every export states about a result, gathered once.
 
@@ -10361,12 +11688,15 @@ def _export_context(active, source_path, vendor: str) -> dict:
     from backend.api.services import ang_export
     from backend.api.services.citations.provenance import get_steps
 
+    from backend.api.services import variant_registry
     ctx = {
-        "geometry": ang_export.read_source_geometry(source_path),
+        # the header of the measurement the result was indexed on (its stamp; none = the first)
+        "geometry": ang_export.read_source_geometry(source_path, variant_registry.variant_for_source(active, source_path)),
         "provenance": ang_export.assignment_provenance(get_steps(active)),
         "vendor": vendor,
         "detector_tilt_deg": None,
         "pc_bruker": None,
+        "pc_not_recorded": False,
         "detector_shape": None,
     }
     try:
@@ -10376,15 +11706,29 @@ def _export_context(active, source_path, vendor: str) -> dict:
         signal = _get_active_signal()
         det = getattr(signal, "detector", None) if signal is not None else None
         if det is not None:
-            ctx["detector_shape"] = tuple(int(v) for v in det.shape)
-            tilt = getattr(det, "tilt", None)
-            if tilt is not None:
-                ctx["detector_tilt_deg"] = float(tilt)
-            store_pc = calibration_store.get_pc(_active_dataset)
-            pc = store_pc if store_pc is not None else np.array(det.pc).flatten()[:3]
-            ctx["pc_bruker"] = [float(v) for v in np.asarray(pc, dtype=float).flatten()[:3]]
-            if "sample_tilt_deg" not in ctx["geometry"]:
-                ctx["geometry"]["sample_tilt_deg"] = float(det.sample_tilt)
+            # The shape of the detector the result was indexed with: the open file's when that is
+            # the result's own source (``source_path`` is None for another file), else the one the
+            # result states (``detector_geometry``), else none: the TSL values then stay unwritten.
+            if source_path:
+                ctx["detector_shape"] = tuple(int(v) for v in det.shape)
+            else:
+                ctx["detector_shape"] = _detector_shape_stated_by(active)
+            # The tilts the run used (the calibration store's, like the PC), not the
+            # file's header values the signal's detector still holds after an edit.
+            geo = _geometry_for_export(_active_dataset, det, active)
+            if geo is not None and geo.get("tilt") is not None:
+                ctx["detector_tilt_deg"] = geo["tilt"]
+            # The PC the run used, from the same source as the h5 exports; None for a
+            # file whose PC nobody supplied, so the .ang does not state kikuchipy's
+            # placeholder (0.5, 0.5, 0.5) as if it had been measured.
+            pc = _pc_for_export(_active_dataset, det, active)
+            if isinstance(pc, str):                       # _NOT_RECORDED
+                ctx["pc_not_recorded"] = True
+                pc = None
+            ctx["pc_bruker"] = (None if pc is None
+                                else [float(v) for v in np.asarray(pc, dtype=float).flatten()[:3]])
+            if geo is not None and geo.get("sample_tilt") is not None:
+                ctx["geometry"]["sample_tilt_deg"] = geo["sample_tilt"]
     except Exception:
         logger.debug("export: detector facts unavailable", exc_info=True)
     return ctx
@@ -10410,11 +11754,111 @@ def _stated_in_every_export(f, idx, active, source_path, vendor: str) -> None:
         f, ctx["geometry"], detector_tilt_deg=ctx["detector_tilt_deg"])
 
 
+#: The formats that hold a hexagonal scan resampled to a square grid (OIM's nearest-neighbour rule),
+#: with the end of the default file name each gets.
+_RESAMPLED_EXPORTS = {"ctf": ".ctf", "ang_square": "_square.ang"}
+#: The answer of such an export is a file, so the facts of the resampling ride in this header.
+RESAMPLED_HEADER = "X-Orienta-Resampled"
+#: The coded refusal of a resampled export for a result that is not from a hexagonal scan.
+EXPORT_NEEDS_HEX_SCAN = "export_needs_hex_scan"
+
+
+def _resampling_for_export(active, fmt: str):
+    """``(ScanGeometry, SquareResampling)`` of a hexagonal result for ``ctf`` and ``ang_square``.
+
+    A result that is not from a hexagonal scan (square or no stamp, or a map that was resampled to a
+    square grid already) gets the coded 400 ``export_needs_hex_scan``; a hexagonal stamp that cannot be
+    used is refused by ``_stored_hex_geometry``. Every step the files state comes from the resampling."""
+    geometry = _stored_hex_geometry(active)
+    if geometry is None:
+        raise problem(400, EXPORT_NEEDS_HEX_SCAN, (
+            f"The '{fmt}' export holds a hexagonal scan resampled to a square grid, and this result "
+            "was already resampled to a square grid, or is not from a hexagonal scan, so there is "
+            "nothing to resample. Nothing was written."))
+    from backend.api.services.hex_resample import square_resampling
+    try:
+        resampling = square_resampling(geometry)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=(
+            f"The hexagonal scan of this result cannot be resampled to a square grid ({exc}). "
+            "Nothing was written."))
+    if min(resampling.n_rows, resampling.n_cols) < 2:
+        # orix takes a map of one row or one column for a one-dimensional one: it keeps no position
+        # along the missing axis, which neither writer can state
+        raise HTTPException(status_code=400, detail=(
+            f"The square grid of this scan is {resampling.n_rows} x {resampling.n_cols} cells: a map "
+            "of one row or one column is one-dimensional and cannot be written as a 2-D grid. "
+            "Nothing was written."))
+    return geometry, resampling
+
+
+def _resampled_header_value(resampling, geometry) -> str:
+    """The facts of the resampling as ASCII JSON, for ``X-Orienta-Resampled``."""
+    import json
+    return json.dumps({
+        "step_um": float(resampling.step), "rows": int(resampling.n_rows), "cols": int(resampling.n_cols),
+        "source_points": int(resampling.n_source), "points": int(resampling.n_out),
+        "unused": int(resampling.n_unused), "shift_confirmed": bool(geometry.shift_confirmed),
+    }, ensure_ascii=True, separators=(",", ":"))
+
+
+def _write_resampled_export(fmt, out_path, *, active, hex_grid, resampling, export_xmap, ctx, vendor,
+                            source_path, scan, pc_tsl, pc_state, notes) -> None:
+    """Write the ``.ctf`` or the square ``.ang`` of a hexagonal result.
+
+    ``export_xmap`` is the map ``build_export_xmap`` made on the index-space rectangle; the cells of the
+    square grid take the points OIM's rule gives. ``notes`` are the ``.ang`` notes of the result (the
+    note of the resampling is added here). The batch (``result_exporter.export_ang_ctf``) writes the
+    same two files from a checkpoint."""
+    from backend.api.services import ang_export
+    from backend.api.services.hex_resample import resample_xmap
+    from backend.api.services.result_exporter import _tsl_codes_of_map, _write_ctf
+
+    square_xmap = resample_xmap(export_xmap, resampling)
+    note = ang_export.resampling_note(resampling, hex_grid)
+    geometry = ctx["geometry"]
+    # the phases the file holds (a phase no cell takes is not in it), which still hold their space group
+    phases = ang_export.map_phases(square_xmap)
+    if fmt == "ctf":
+        source = str(source_path) if source_path and _is_hdf5_file(source_path) else None
+        variant = None
+        if source is not None:
+            from backend.api.services import variant_registry
+            variant = variant_registry.variant_for_source(active, source)
+        # the quality of a resampled map is not exported: the map carries no `iq`, so the Band Contrast
+        # column is the honest zero one
+        _write_ctf(
+            str(out_path), square_xmap, [], resampling.step,
+            source_h5_path=source, sample_tilt=geometry.get("sample_tilt_deg"),
+            vendor=vendor, variant=variant, resampled=True, resampled_quality=None,
+            prj_note=ang_export.ctf_project_note(
+                vendor=vendor, provenance=ctx["provenance"], scan=scan, step_um=resampling.step,
+                geometry=geometry, notes=(note,), resampled_from=hex_grid, phases=phases))
+        return
+    step_line = f"{resampling.step:.6f}"
+    replace = ang_export.header_replacements(geometry=geometry, pc_tsl=pc_tsl, pc_state=pc_state)
+    replace["# XSTEP:"] = f"# XSTEP: {step_line}"
+    replace["# YSTEP:"] = f"# YSTEP: {step_line}"
+    ang_export.write_ang(
+        str(out_path), square_xmap,
+        # numbered by the map the file is written from: a phase no cell takes has dropped out of it
+        symmetry_codes=_tsl_codes_of_map(square_xmap), replace=replace,
+        comments=ang_export.header_comments(
+            method=active.method.value, vendor=vendor, provenance=ctx["provenance"], scan=scan,
+            step_um=resampling.step, geometry=geometry, detector_tilt_deg=ctx["detector_tilt_deg"],
+            pc_bruker=ctx["pc_bruker"], notes=list(notes) + [note], resampled_from=hex_grid,
+            phases=phases))
+
+
 @router.post("/export")
 async def export_indexing_result(req: ExportRequest):
-    """Export indexing result as .ang, rich .h5, or light .h5.
+    """Export indexing result as .ang, a square .ang or .ctf of a hexagonal scan, rich .h5, or light .h5.
 
     .ang:      Standard orientation file via orix (MTEX compatible).
+    ang_square, ctf:
+               A hexagonal scan resampled to a square grid by OIM's nearest-neighbour rule
+               (400 ``export_needs_hex_scan`` for a result that is not from a hexagonal scan). The
+               answer carries the facts of the resampling in the ``X-Orienta-Resampled`` header.
     .h5:       Copies original h5oina + adds /Indexing/ with per-phase Euler/CI.
                Multi-GB if the source is multi-GB. Inherits source's HDF5
                superblock version — can be unreadable in MATLAB < R2020a.
@@ -10463,15 +11907,21 @@ async def export_indexing_result(req: ExportRequest):
         # collide on the same default path.
         if fmt == "ang":
             tail = ".ang"
+        elif fmt in _RESAMPLED_EXPORTS:
+            tail = _RESAMPLED_EXPORTS[fmt]
         elif fmt == "h5_light":
             tail = "_light.h5"
         else:
             tail = ".h5"
         out_path = Path(tempfile.mkdtemp()) / f"indexing_result_{active.method.value}{tail}"
 
+    # Facts of the resampling of a hexagonal scan (``ctf`` and ``ang_square``), for the response header.
+    _resampled_header = None
+
     try:
-        if fmt == "ang":
-            # EDAX TSL .ang -- MTEX / orix compatible
+        if fmt == "ang" or fmt in _RESAMPLED_EXPORTS:
+            # EDAX TSL .ang -- MTEX / orix compatible; ``ctf`` and ``ang_square`` go the same way and
+            # hold the hexagonal scan resampled to a square grid.
             # KNOWN LIMITATION (loud, not silent): the orix .ang writer is
             # called directly and does NOT compose the per-file coordinate-
             # system rotation (_r_user). Only the .h5 / Light .h5 paths thread
@@ -10482,16 +11932,17 @@ async def export_indexing_result(req: ExportRequest):
             # the discrepancy is never silent. Default path (_r_user is None)
             # leaves _frame_warning None → response byte-identical to today.
             if _r_user is not None:
+                _label = ".ctf" if fmt == "ctf" else ".ang"
                 _frame_warning = (
-                    ".ang export does not apply the coordinate-system "
+                    f"{_label} export does not apply the coordinate-system "
                     "rotation; use Light .h5 for coordinate-system-correct "
                     "orientations, or disable 'Apply to exports'."
                 )
                 logger.warning(
-                    "Export: .ang format does not yet honor the per-file "
+                    "Export: %s format does not yet honor the per-file "
                     "coordinate-system rotation (apply_to_export=True); only "
-                    ".h5 exports are rotated. The exported .ang stays in the "
-                    "vendor frame."
+                    ".h5 exports are rotated. The exported %s stays in the "
+                    "vendor frame.", _label, _label
                 )
 
             # Inject confidence_scores into xmap.prop BEFORE the orix .ang
@@ -10518,7 +11969,21 @@ async def export_indexing_result(req: ExportRequest):
             # indexer left it -- see backend/api/services/ang_export.py.
             from backend.api.services import ang_export
 
-            _step_um = _resolve_step_size_um(active)
+            _md = getattr(active, "metadata", None) or {}
+            # A hexagonal scan is written as a HexGrid file from the geometry stamped on THIS
+            # result (never the dataset that is active now); a square or unstamped one as before.
+            _resampling = None
+            if fmt in _RESAMPLED_EXPORTS:
+                # the file holds the square grid of the resampling: its step is the only step stated
+                _hex_grid, _resampling = _resampling_for_export(active, fmt)
+            else:
+                try:
+                    _hex_grid = ang_export.hex_geometry_for_export(
+                        _stored_scan_geometry(active), active.original_shape,
+                        _md.get("step_size_um"), hex_resampled=_stored_hex_resampled(active))
+                except ang_export.ExportRefused as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+            _step_um = _hex_grid.step_x if _hex_grid is not None else _resolve_step_size_um(active)
             if _step_um is None:
                 raise HTTPException(
                     status_code=400,
@@ -10532,13 +11997,17 @@ async def export_indexing_result(req: ExportRequest):
                 from backend.api.routes.ebsd_viewer import _ebsd_file_path as _src_ang
             except Exception:
                 _src_ang = None
+            # The vendor, the acquisition header and the detector shape come from the result or its
+            # own source file, never from another file that happens to be open. (The scan's step,
+            # taken above, follows the same rule inside ``_resolve_step_size_um``.)
+            _src_ang = _own_source_path(active, _src_ang)
             _vendor_ang = _resolve_source_vendor(active, str(_src_ang) if _src_ang else None)
             _ctx = _export_context(active, _src_ang, _vendor_ang)
-            _md = getattr(active, "metadata", None) or {}
             try:
                 _export_xmap, _tsl_codes = ang_export.build_export_xmap(
                     active.xmap, active.original_shape, active.selection_mask,
                     _step_um, active.confidence_scores,
+                    step_y_um=_hex_grid.step_y if _hex_grid is not None else None,
                     phase_files={int(k): v for k, v in
                                  (_md.get("sht_paths_by_phase") or {}).items()},
                     recorded_lattices={int(k): v for k, v in
@@ -10553,26 +12022,53 @@ async def export_indexing_result(req: ExportRequest):
             _scan = _stored_scan_provenance(active)
             _pc_tsl = ang_export.pc_tsl_from_bruker(
                 _ctx["pc_bruker"], _ctx["detector_shape"])
-            ang_export.write_ang(
-                str(out_path), _export_xmap, symmetry_codes=_tsl_codes,
-                replace=ang_export.header_replacements(
-                    geometry=_ctx["geometry"], pc_tsl=_pc_tsl),
-                comments=ang_export.header_comments(
-                    method=active.method.value, vendor=_vendor_ang,
-                    provenance=_ctx["provenance"],
-                    scan=_scan, step_um=_step_um,
-                    geometry=_ctx["geometry"],
-                    detector_tilt_deg=_ctx["detector_tilt_deg"],
-                    pc_bruker=_ctx["pc_bruker"],
-                    notes=["IQ column is 0: no band contrast is exported to .ang."]
-                    + (["x-star, y-star, z-star are zero: the pattern centre of "
-                        "this result is not known here."] if _pc_tsl is None else []),
-                ),
-            )
+            # x/y/z-star hold no PC: say so right above the three lines (and machine-readably)
+            _pc_state = None
+            if _pc_tsl is None and _ctx["pc_not_recorded"]:
+                _pc_state = ("not recorded",
+                             "x-star, y-star, z-star are zero: the PC this result was indexed at "
+                             "was not recorded with it (indexed before that was kept), "
+                             "so none is stated.")
+            elif _pc_tsl is None and _ctx["pc_bruker"] is None:
+                _pc_state = ("not calibrated",
+                             "x-star, y-star, z-star are zero: the pattern centre was never "
+                             "calibrated (the scan file carries none and none was set), so "
+                             "none is stated.")
+            _ang_notes = (["IQ column is 0: no band contrast is exported to .ang."]
+                          + ([] if _pc_state is not None else
+                             ["x-star, y-star, z-star are zero: the TSL values need the detector "
+                              "shape, which was not known here."] if _pc_tsl is None else []))
+            if _resampling is not None:
+                _write_resampled_export(
+                    fmt, out_path, active=active, hex_grid=_hex_grid, resampling=_resampling,
+                    export_xmap=_export_xmap, ctx=_ctx, vendor=_vendor_ang, source_path=_src_ang,
+                    scan=_scan, pc_tsl=_pc_tsl, pc_state=_pc_state, notes=_ang_notes)
+                _resampled_header = _resampled_header_value(_resampling, _hex_grid)
+            else:
+                ang_export.write_ang(
+                    str(out_path), _export_xmap, symmetry_codes=_tsl_codes,
+                    geometry=_hex_grid,
+                    replace=ang_export.header_replacements(
+                        geometry=_ctx["geometry"], pc_tsl=_pc_tsl, pc_state=_pc_state),
+                    comments=ang_export.header_comments(
+                        method=active.method.value, vendor=_vendor_ang,
+                        provenance=_ctx["provenance"],
+                        scan=_scan, step_um=_step_um, grid=_hex_grid,
+                        geometry=_ctx["geometry"],
+                        detector_tilt_deg=_ctx["detector_tilt_deg"],
+                        pc_bruker=_ctx["pc_bruker"],
+                        notes=_ang_notes,
+                        phases=ang_export.map_phases(_export_xmap),
+                    ),
+                )
 
         elif fmt == "h5":
             # Rich H5 export: original data + per-phase indexing results
             import h5py
+
+            # The hexagonal grid this result ran on (None for a square one). Asked before any file
+            # is made: a stamp that cannot be used refuses the export with nothing left on disk.
+            _hex_geometry = _stored_hex_geometry(active)
 
             # Get source file path for copying original data
             source_path = None
@@ -10602,11 +12098,47 @@ async def export_indexing_result(req: ExportRequest):
                 # (header, EDS, electron images), then swap in the processed
                 # patterns when the signal was processed.
                 import shutil
+                # The variant (measurement x pattern source) the RESULT was indexed on, as the light
+                # export takes it: the file says which dataset of the copy is the result's.
+                # Asked of the source before anything is copied, so a refusal leaves no file behind.
+                from backend.api.routes.ebsd_viewer import _active_dataset as _ds_variant_name
+                from backend.api.services import variant_registry as _variant_registry
+                _export_variant = _variant_registry.variant_for_source(active, source_path)
+                if _export_variant is not None:
+                    load_choices.reread_dataset_path(
+                        str(source_path), _export_variant, "export_indexing_result")
+                # The copy keeps the source's own header. A source that is a hexagonal Orienta file
+                # under a result without a hexagonal stamp would leave a file whose header and
+                # /Indexing state two different scans: refused before anything is copied (the
+                # batch writer ``export_result_h5`` refuses the same pair).
+                from backend.api.services.orienta_hex_h5 import is_native_hex_file
+                if _hex_geometry is None and is_native_hex_file(str(source_path)):
+                    raise HTTPException(status_code=400, detail=(
+                        f"{Path(source_path).name} is a hexagonal Orienta file, but the scan stored "
+                        "with this result is not hexagonal; refusing to copy a hexagonal header "
+                        "under a square result. Nothing was written."))
+                # A hexagonal stamp needs the open file to be that scan (or the scan the result's
+                # window was cut from): the copy keeps its header and patterns.
+                if _hex_geometry is not None:
+                    _refuse_source_that_is_not_the_scan_of_the_stamp(
+                        source_path, _hex_geometry, active)
                 shutil.copy2(str(source_path), str(out_path))
-                if _patterns_dirty:
+                _wrote_processed = False
+                # The viewer's edits are of the dataset the viewer holds. They go into the result's
+                # dataset only when that is the same variant (the viewer can hold another measurement
+                # than the result was indexed on); otherwise the copy keeps the source's own patterns.
+                _viewer_variant = _variant_registry.variant_for(_ds_variant_name)
+                if _patterns_dirty and not _same_variant_of_file(
+                        source_path, _viewer_variant, _export_variant):
+                    logger.warning(
+                        "export: the viewer holds another variant than the result was indexed on, so "
+                        "its processed patterns are not written into the result's dataset")
+                elif _patterns_dirty:
                     _sig = _gas()
                     if _sig is not None:
-                        _overwrite_patterns_with_processed(str(out_path), _sig)
+                        _wrote_processed = bool(_overwrite_patterns_with_processed(
+                            str(out_path), _sig, _export_variant))
+                _mark_pattern_source(str(out_path), _export_variant, _wrote_processed)
             else:
                 # Non-HDF5 source (EDAX .up1/.up2) or none: shutil.copy2 of a
                 # .up1 would corrupt the .h5, so build a fresh EDAX-format file
@@ -10615,7 +12147,18 @@ async def export_indexing_result(req: ExportRequest):
                 # export as a side effect.
                 _sig = _gas()
                 if _sig is not None:
-                    _write_fresh_edax_h5(str(out_path), _sig)
+                    # The PC the run used (the store's, refined if it was; None for
+                    # a file that carries none), not the signal detector's copy.
+                    from backend.api.routes.ebsd_viewer import _active_dataset as _ds_name
+                    _pc_run = _pc_for_export(_ds_name, _sig.detector, active)
+                    from backend.api.services import scan_geometry as _sg
+                    _refuse_header_that_disagrees_with_stamp(_sg.geometry_for(_ds_name), _hex_geometry)
+                    _write_fresh_edax_h5(str(out_path), _sig,
+                                         pc_bruker=None if isinstance(_pc_run, str) else _pc_run,
+                                         geometry={k: v for k, v in (
+                                             _geometry_for_export(_ds_name, _sig.detector, active) or {}).items()
+                                             if v is not None},
+                                         scan_geometry=_sg.geometry_for(_ds_name))
                 else:
                     with h5py.File(str(out_path), "w") as f:
                         pass
@@ -10646,13 +12189,19 @@ async def export_indexing_result(req: ExportRequest):
                     _write_scan_provenance,
                 )
                 _write_scan_provenance(idx, _stored_scan_provenance(active))
+                # A hexagonal scan: the five attributes of the checkpoint stamp (nothing for a
+                # square one), so a reader knows where the index-order points sit.
+                from backend.api.services.orienta_hex_h5 import write_index_block
+                if _hex_geometry is not None:
+                    write_index_block(idx, _hex_geometry)
                 from backend.api.services.result_exporter import (
                     _write_citations,
                 )
                 from backend.api.services.citations.provenance import (
                     get_steps,
                 )
-                _write_citations(idx, get_steps(active))
+                _write_citations(idx, get_steps(active), _hough_record(active),
+                                 _caveats_record(active))
 
                 # Export-frame conversion (see orientation_frame): write Euler
                 # in the source vendor's stored frame so MTEX/Aztec read it
@@ -10665,6 +12214,8 @@ async def export_indexing_result(req: ExportRequest):
                     active, str(source_path) if source_path else None
                 )
                 idx.attrs["source_vendor"] = _export_vendor or "unknown"
+                # Which patterns were indexed (measurement, pattern source): none for the default.
+                _write_variant_attrs(idx, active)
                 from backend.api.services.ang_export import (
                     FRAME_LABEL_NATIVE, FRAME_LABEL_VENDOR)
                 idx.attrs["orientation_reference_frame"] = (
@@ -10672,7 +12223,9 @@ async def export_indexing_result(req: ExportRequest):
                     if float(_export_frame_offset(_export_vendor).angle.max()) > 1e-6
                     else FRAME_LABEL_NATIVE
                 )
-                _stated_in_every_export(f, idx, active, source_path, _export_vendor)
+                # the acquisition header is the result's own source file's, not the open file's
+                _stated_in_every_export(f, idx, active, _own_source_path(active, source_path),
+                                        _export_vendor)
 
                 n_rows, n_cols = active.original_shape
                 per_phase_data = active.metadata.get('per_phase_data', {})
@@ -10846,21 +12399,17 @@ async def export_indexing_result(req: ExportRequest):
                                 # REFINED PC (a Global PC Refine writes the store; signal.detector
                                 # is a separate channel and would be stale). Mean for a per-pixel
                                 # map, matching batch export; fall back to signal.detector.
-                                store_pc = calibration_store.get_pc(_active_dataset)
-                                pc_out = store_pc if store_pc is not None else np.array(det.pc).flatten()[:3]
-                                if "pc" not in det_grp:
-                                    det_grp.create_dataset("pc", data=np.asarray(pc_out, dtype=float).flatten()[:3])
-                                det_grp.attrs["sample_tilt"] = float(det.sample_tilt)
+                                _write_detector_facts(det_grp, _active_dataset, det, active)
                                 det_grp.attrs["shape"] = list(det.shape)
                     except Exception as e:
                         logger.warning("Export: detector info failed: %s", e)
 
                 # Documentation
                 if "Documentation" not in f:
-                    from backend.api.services.result_exporter import README_TEXT
+                    from backend.api.services.result_exporter import readme_text
                     doc = f.create_group("Documentation")
                     doc.attrs["format_version"] = "1.0"
-                    doc.create_dataset("README", data=README_TEXT)
+                    doc.create_dataset("README", data=readme_text(_hex_geometry))
 
         elif fmt == "h5_light":
             # Light H5 export — fresh file, NO source copy. Same /Indexing
@@ -10878,7 +12427,7 @@ async def export_indexing_result(req: ExportRequest):
             import h5py
             from backend.api.services.result_exporter import (
                 FORMAT_VERSION as _LIGHT_FMT_VERSION,
-                README_TEXT as _LIGHT_README,
+                readme_text as _light_readme_text,
                 _copy_quality_fields,
             )
             from datetime import datetime, timezone
@@ -10893,12 +12442,20 @@ async def export_indexing_result(req: ExportRequest):
                 src_path_str = _ebsd_file_path
             except Exception:
                 pass
+            # Its vendor, header values and quality channels belong to the scan the result was
+            # computed on: another open file contributes nothing (and is not named as the source).
+            src_path_str = _own_source_path(active, src_path_str)
 
             # Resolve step size BEFORE opening the file so a failure here
             # doesn't leave a stray partial .h5 on disk. Fail loud rather than
             # write a 0-step file that silently mis-scales the map in MTEX
             # (Irmi's 2026-06-02 feedback).
+            # The hexagonal grid this result ran on (None for a square one): its step_x IS the step
+            # of the file, and an unusable stamp refuses here, before any file is made.
+            _hex_geometry = _stored_hex_geometry(active)
             step_size_um = _resolve_step_size_um(active)
+            if _hex_geometry is not None:
+                step_size_um = _hex_geometry.step_x
             if step_size_um is None:
                 raise HTTPException(
                     status_code=400,
@@ -10918,6 +12475,15 @@ async def export_indexing_result(req: ExportRequest):
                 export_frame_offset as _export_frame_offset,
             )
             _export_vendor = _resolve_source_vendor(active, src_path_str)
+
+            # The measurement the result was indexed on: its quality fields are copied from that
+            # measurement. A source that does not hold it refuses here, before any file is created.
+            from backend.api.services import variant_registry as _light_registry
+            _light_variant = _light_registry.variant_for_source(active, src_path_str)
+            if (_light_variant is not None and src_path_str and Path(src_path_str).is_file()
+                    and _is_hdf5_file(src_path_str)):
+                with h5py.File(str(src_path_str), "r") as _light_src:
+                    load_choices.measurement_groups(_light_src, _light_variant)
 
             with h5py.File(str(out_path), "w", libver="earliest") as f:
                 now = datetime.now(timezone.utc).isoformat()
@@ -10964,31 +12530,46 @@ async def export_indexing_result(req: ExportRequest):
                 from backend.api.services.citations.provenance import (
                     get_steps,
                 )
-                _write_citations(idx, get_steps(active))
+                _write_citations(idx, get_steps(active), _hough_record(active),
+                                 _caveats_record(active))
                 idx.attrs["format_version"] = _LIGHT_FMT_VERSION
 
                 # step_size_um resolved above (before the file was opened).
                 # Per-pixel X/Y µm coordinates let MTEX place the orientations
                 # on a grid without the source h5oina.
                 idx.attrs["step_size_um"] = float(step_size_um)
+                from backend.api.services.orienta_hex_h5 import write_index_block
+                if _hex_geometry is not None:
+                    write_index_block(idx, _hex_geometry)
                 _n_rows, _n_cols = active.original_shape
-                _cc, _rr = np.meshgrid(
-                    np.arange(_n_cols), np.arange(_n_rows)
-                )
-                # X varies with column, Y with row — same convention as the
-                # .ang writer (result_exporter.py): coord = index · step.
-                X_ds = idx.create_dataset(
-                    "X", data=(_cc * step_size_um).astype(np.float32),
-                    compression="gzip",
-                )
+                if _hex_geometry is not None:
+                    # A hexagonal scan: the positions of the points, float64, as the geometry
+                    # states them (the odd rows sit half a step aside; negatives are allowed).
+                    _x_pos, _y_pos = _hex_geometry.positions()
+                    X_ds = idx.create_dataset("X", data=_x_pos, compression="gzip")
+                    Y_ds = idx.create_dataset("Y", data=_y_pos, compression="gzip")
+                    X_ds.attrs["description"] = (
+                        "Sample X position in um (column * step_x, plus half a step_x on the "
+                        "shifted rows of the hexagonal scan)")
+                    Y_ds.attrs["description"] = "Sample Y position in um (row * step_y)"
+                else:
+                    _cc, _rr = np.meshgrid(
+                        np.arange(_n_cols), np.arange(_n_rows)
+                    )
+                    # X varies with column, Y with row — same convention as the
+                    # .ang writer (result_exporter.py): coord = index · step.
+                    X_ds = idx.create_dataset(
+                        "X", data=(_cc * step_size_um).astype(np.float32),
+                        compression="gzip",
+                    )
+                    X_ds.attrs["description"] = "Sample X (column · step_size_um)"
+                    Y_ds = idx.create_dataset(
+                        "Y", data=(_rr * step_size_um).astype(np.float32),
+                        compression="gzip",
+                    )
+                    Y_ds.attrs["description"] = "Sample Y (row · step_size_um)"
                 X_ds.attrs["unit"] = "um"
-                X_ds.attrs["description"] = "Sample X (column · step_size_um)"
-                Y_ds = idx.create_dataset(
-                    "Y", data=(_rr * step_size_um).astype(np.float32),
-                    compression="gzip",
-                )
                 Y_ds.attrs["unit"] = "um"
-                Y_ds.attrs["description"] = "Sample Y (row · step_size_um)"
 
                 # Orientation reference-frame tag. Euler datasets below are
                 # written in the vendor's stored frame so a raw read (MTEX
@@ -10999,6 +12580,8 @@ async def export_indexing_result(req: ExportRequest):
                     _export_frame_offset(_export_vendor).angle.max() > 1e-6
                 )
                 idx.attrs["source_vendor"] = _export_vendor or "unknown"
+                # Which patterns were indexed (measurement, pattern source): none for the default.
+                _write_variant_attrs(idx, active)
                 from backend.api.services.ang_export import (
                     FRAME_LABEL_NATIVE, FRAME_LABEL_VENDOR)
                 idx.attrs["orientation_reference_frame"] = (
@@ -11176,7 +12759,8 @@ async def export_indexing_result(req: ExportRequest):
                     if target_grp is not None:
                         try:
                             _copy_quality_fields(
-                                src_path_str, target_grp, active.original_shape
+                                src_path_str, target_grp, active.original_shape,
+                                _light_variant,
                             )
                         except Exception as e:
                             logger.warning(
@@ -11197,12 +12781,7 @@ async def export_indexing_result(req: ExportRequest):
                             det = getattr(signal, "detector", None)
                             if det is not None:
                                 # Refined PC from the store (see rich export above).
-                                store_pc = calibration_store.get_pc(_active_dataset)
-                                pc_out = store_pc if store_pc is not None else np.array(det.pc).flatten()[:3]
-                                det_grp.create_dataset(
-                                    "pc", data=np.asarray(pc_out, dtype=float).flatten()[:3]
-                                )
-                                det_grp.attrs["sample_tilt"] = float(det.sample_tilt)
+                                _write_detector_facts(det_grp, _active_dataset, det, active)
                                 det_grp.attrs["shape"] = list(det.shape)
                     except Exception as e:
                         logger.warning(
@@ -11215,14 +12794,15 @@ async def export_indexing_result(req: ExportRequest):
                     "Lightweight EBSD indexing results — no source patterns "
                     "copied. Superblock v0 for MATLAB compatibility."
                 )
-                doc.create_dataset("README", data=_LIGHT_README)
+                doc.create_dataset("README", data=_light_readme_text(_hex_geometry))
 
         else:
             raise HTTPException(
                 status_code=400,
                 detail=(
                     f"Unsupported format '{fmt}'. "
-                    "Use 'ang', 'h5' (rich), or 'h5_light' (compact)."
+                    "Use 'ang', 'ang_square' or 'ctf' (a hexagonal scan resampled to a square "
+                    "grid), 'h5' (rich), or 'h5_light' (compact)."
                 ),
             )
 
@@ -11230,11 +12810,12 @@ async def export_indexing_result(req: ExportRequest):
         # The endpoint streams the file itself (no JSON body), so the
         # user-facing frame_warning rides along as a response header. Only
         # set on the .ang opt-in case; otherwise headers are unchanged.
-        _resp_headers = (
-            {"X-Frame-Warning": _frame_warning}
-            if _frame_warning is not None
-            else None
-        )
+        _resp_headers = {}
+        if _frame_warning is not None:
+            _resp_headers["X-Frame-Warning"] = _frame_warning
+        if _resampled_header is not None:
+            _resp_headers[RESAMPLED_HEADER] = _resampled_header
+        _resp_headers = _resp_headers or None
         return FileResponse(
             path=str(out_path),
             filename=out_path.name,
@@ -11244,6 +12825,9 @@ async def export_indexing_result(req: ExportRequest):
 
     except HTTPException:
         raise
+    except load_choices.LoadChoiceError as e:
+        # The file's layout cannot name the variant the viewer holds: a coded refusal, not a 500.
+        raise problem(400, e.code, str(e))
     except Exception as e:
         logger.exception("Export failed")
         raise HTTPException(status_code=500, detail=str(e))
@@ -11368,6 +12952,150 @@ _batch_state = {
     "log": [],
 }
 
+def _write_batch_indexed_h5(export_path, result, *, dataset_name, detector, source_file, n_indexed) -> None:
+    """Write ``export_path`` (see ``_fill_batch_indexed_h5``) so that a failure leaves no half file.
+
+    The file is built under a ``.part`` name and renamed when it is complete, as the light export does:
+    a writer that fails half way leaves nothing under the final name (and an earlier file of that name
+    stays as it was), so ``export_path`` is only ever a whole file."""
+    from backend.api.services.atomic_result import AtomicResultFile
+    with AtomicResultFile(export_path) as part_path:
+        _fill_batch_indexed_h5(part_path, result, dataset_name=dataset_name, detector=detector,
+                               source_file=source_file, n_indexed=n_indexed)
+
+
+def _fill_batch_indexed_h5(export_path, result, *, dataset_name, detector, source_file, n_indexed) -> None:
+    """The ``<dataset>_indexed.h5`` the indexing batch writes beside (or into the folder of) each file.
+
+    The layout is the one ``analysis._load_kikuchipy_rich_h5`` reads, as the light export writes it: grid-shaped
+    arrays under ``/Indexing`` (``euler_angles`` in the source vendor's frame, ``phase_id`` 1-based with 0 for
+    unindexed, ``confidence_index``, ``selection_mask``), a ``Phases`` table with the space group of each
+    phase and ``grid_shape``. A result that ran on part of the scan (a region or a mask) has fewer rows than
+    the grid has points; they are placed by its selection mask and the other points stay unindexed.
+    A hexagonal scan also carries the five attributes of its geometry stamp and the positions of its points.
+
+    A hexagonal stamp that cannot be used is refused (``HTTPException``) before the file is made."""
+    import h5py
+    from backend.api.services import ang_export as _ang
+    from backend.api.services.citations.provenance import get_steps
+    from backend.api.services.orientation_frame import (
+        export_frame_offset as _export_frame_offset, to_vendor_export_frame as _to_vendor_frame)
+    from backend.api.services.orienta_hex_h5 import write_index_block
+    from backend.api.services.result_exporter import (
+        _write_citations, _write_scan_provenance, confidence_rows_for_export as _ci_rows,
+        map_phase_ids_for_export as _map_pids, place_rows_on_grid as _place_rows,
+        xmap_phase_write_table as _phase_table)
+
+    hex_geometry = _stored_hex_geometry(result)
+    shape = tuple(int(v) for v in result.original_shape)
+    vendor = _resolve_source_vendor(result, source_file)
+    step_um = hex_geometry.step_x if hex_geometry is not None else _resolve_step_size_um(result)
+    xmap = result.xmap
+    with h5py.File(export_path, "w") as f:
+        idx = f.create_group("Indexing")
+        idx.attrs["method"] = result.method.value
+        idx.attrs["software"] = "Orienta"
+        idx.attrs["n_indexed"] = n_indexed
+        idx.attrs["original_shape"] = list(shape)
+        idx.attrs["grid_shape"] = list(shape)
+        _write_scan_provenance(idx, _stored_scan_provenance(result))
+        _write_citations(idx, get_steps(result), _hough_record(result), _caveats_record(result))
+        _write_variant_attrs(idx, result)
+        idx.attrs["source_vendor"] = vendor or "unknown"
+        idx.attrs["orientation_reference_frame"] = (
+            _ang.FRAME_LABEL_VENDOR if float(_export_frame_offset(vendor).angle.max()) > 1e-6
+            else _ang.FRAME_LABEL_NATIVE)
+        if step_um is not None:
+            idx.attrs["step_size_um"] = float(step_um)
+        if hex_geometry is not None:
+            write_index_block(idx, hex_geometry)
+            x_pos, y_pos = hex_geometry.positions()
+            idx.create_dataset("X", data=x_pos, compression="gzip").attrs["unit"] = "um"
+            idx.create_dataset("Y", data=y_pos, compression="gzip").attrs["unit"] = "um"
+        elif step_um is not None:
+            cols, rows = np.meshgrid(np.arange(shape[1]), np.arange(shape[0]))
+            idx.create_dataset("X", data=(cols * step_um).astype(np.float32),
+                               compression="gzip").attrs["unit"] = "um"
+            idx.create_dataset("Y", data=(rows * step_um).astype(np.float32),
+                               compression="gzip").attrs["unit"] = "um"
+
+        if hasattr(xmap, "rotations"):
+            euler = _to_vendor_frame(xmap.rotations, vendor).to_euler(degrees=False)
+            ds = idx.create_dataset(
+                "euler_angles",
+                data=_place_rows(np.asarray(euler).reshape(-1, 3), shape, result.selection_mask
+                                 ).astype(np.float32),
+                compression="gzip")
+            ds.attrs["unit"] = "radians"
+            ds.attrs["convention"] = "Bunge (ZXZ)"
+        if hasattr(xmap, "phase_id"):
+            idx.create_dataset(
+                "phase_id",
+                data=_place_rows(_map_pids(xmap.phase_id, xmap), shape, result.selection_mask,
+                                 fill=0, dtype=np.uint8),
+                compression="gzip")
+        if result.confidence_scores is not None:
+            idx.create_dataset(
+                "confidence_index",
+                data=_place_rows(_ci_rows(result.confidence_scores, shape), shape, result.selection_mask
+                                 ).astype(np.float32),
+                compression="gzip")
+        idx.create_dataset("selection_mask", data=result.selection_mask.astype(np.uint8), compression="gzip")
+
+        # /Indexing/Phases/<n>: the table the loader takes names and symmetry from (n = the on-disk phase id).
+        # A failure is the failure of the file: without the table it reloads triclinic or with too few phases.
+        try:
+            table, id_map = _phase_table(xmap)
+            written_to_actual = {w: a for a, w in id_map.items()}
+            md = getattr(result, "metadata", None) or {}
+            phases = idx.create_group("Phases")
+            for n, phase in table:
+                pg = phases.create_group(str(n))
+                pg.attrs["name"] = str(getattr(phase, "name", "") or f"phase_{n}")
+                space_group = getattr(phase, "space_group", None)
+                if space_group is not None:
+                    try:
+                        pg.attrs["space_group"] = int(getattr(space_group, "number", space_group))
+                    except (TypeError, ValueError):
+                        pass
+                point_group = getattr(phase, "point_group", None)
+                if point_group is not None:
+                    pg.attrs["point_group"] = str(getattr(point_group, "name", point_group))
+                actual = written_to_actual.get(n)
+                for key, value in _ang.phase_table_attrs(
+                        phase, sht_path=None,
+                        recorded_lattice=(md.get("recorded_lattices") or {}).get(actual),
+                        structure_unit="nm" if result.method.value == "dictionary" else "angstrom").items():
+                    pg.attrs[key] = value
+        except Exception as exc:
+            raise RuntimeError(f"the phase table of the file could not be written: {exc}") from exc
+
+        # EDS maps of the dataset (an unreadable /EDS group is left out, never another scan's maps)
+        try:
+            from backend.api.services.h5_session import get_active_extractor, is_open
+            if is_open():
+                ext = get_active_extractor()
+                elements = ext.get_available_elements()
+                if elements:
+                    eds_grp = f.create_group("EDS")
+                    eds_grp.attrs["elements"] = elements
+                    for el_name in elements:
+                        data = ext.get_element_map(el_name)
+                        if data is not None:
+                            eds_grp.create_dataset(el_name.replace(" ", "_"), data=data, compression="gzip")
+        except Exception:
+            logger.debug("Batch export: no /EDS group", exc_info=True)
+            if "EDS" in f:
+                del f["EDS"]
+        det_grp = f.create_group("Detector")
+        det_grp.attrs["shape"] = list(detector.shape)
+        # the PC of the run (the refined one if it was), as every other export states it
+        _write_detector_facts(det_grp, dataset_name, detector, result)
+        scan = f.create_group("Scan")
+        scan.attrs["grid_shape"] = list(shape)
+        scan.attrs["source_file"] = source_file
+
+
 class BatchDatasetConfig(IndexingParams):
     """Configuration for one dataset in a batch job.
 
@@ -11411,6 +13139,14 @@ async def start_batch_indexing(req: BatchRequest):
     if _batch_state["running"]:
         raise HTTPException(status_code=409, detail="A batch job is already running")
 
+    # Files already registered without a PC (and given none in the request) would
+    # be indexed at the placeholder; the others are checked when they are loaded.
+    from backend.api.services.pc_guard import require_pc
+    for _ds in req.datasets:
+        if not (_ds.pc and len(_ds.pc) == 3):
+            from backend.api.routes.ebsd_viewer import _canonical_path as _canon, loaded_dataset_name
+            require_pc(loaded_dataset_name(_ds.file_path), calibration_store, file_key=_canon(_ds.file_path))
+
     job_id = str(uuid.uuid4())
     _batch_state.update({
         "running": True,
@@ -11443,7 +13179,10 @@ async def start_batch_indexing(req: BatchRequest):
         _log(f"Starting batch job {job_id}: {len(req.datasets)} datasets")
 
         for i, ds_config in enumerate(req.datasets):
-            dataset_name = _stem(ds_config.file_path)
+            # the name the file's load gives (a variant other than the default carries its parts,
+            # and load_ebsd_file loads the variant the file was last loaded as)
+            from backend.api.routes.ebsd_viewer import loaded_dataset_name
+            dataset_name = loaded_dataset_name(ds_config.file_path)
             _batch_state["current_dataset"] = dataset_name
             _batch_state["completed"] = i
             _log(f"[{i+1}/{len(req.datasets)}] Loading {dataset_name}...")
@@ -11455,7 +13194,9 @@ async def start_batch_indexing(req: BatchRequest):
                 "n_indexed": 0,
                 "mean_ci": None,
                 "export_path": None,
+                "export_error": None,     # why the auto-export wrote no file (None: it did, or was not asked for)
                 "error": None,
+                "error_code": None,       # what the interface translates on
             }
 
             try:
@@ -11478,16 +13219,38 @@ async def start_batch_indexing(req: BatchRequest):
                 if signal is None:
                     raise RuntimeError("No signal after loading")
 
+                # What this item's dataset is and where it sits, taken right after its own load
+                # (which just re-pointed the active dataset at this file and its crop) and before
+                # the run can be disturbed; seeded onto the result before it is stored.
+                from backend.api.routes import ebsd_viewer as _ev_item
+                _item_scan_stamp = _scan_stamp_at_run_start(_ev_item._active_dataset, signal)
+                # load_ebsd_file reloaded the variant this file was remembered with: its re-reads
+                # (the ROI read, the stream, the EMSphInx file) take that one (None: the default).
+                from backend.api.services import variant_registry as _variant_registry
+                _item_variant = _variant_registry.variant_for(_ev_item._active_dataset)
+                _item_variant_stamp = _variant_stamp_at_run_start()
+
                 nav_shape = signal.axes_manager.navigation_shape
                 if len(nav_shape) >= 2:
                     n_rows, n_cols = nav_shape[1], nav_shape[0]
                 else:
                     n_rows, n_cols = nav_shape[0], 1
 
+                # A file without a PC and without one in the request is not indexed.
+                from backend.api.services.pc_guard import PcMissingError, is_pc_missing, pc_missing_message
+                from backend.api.routes.ebsd_viewer import _canonical_path as _canon
+                if not (ds_config.pc and len(ds_config.pc) == 3) and is_pc_missing(
+                        dataset_name, calibration_store, signal, _canon(ds_config.file_path)):
+                    raise PcMissingError(pc_missing_message(dataset_name))
+
                 # Get detector: explicit config PC > CalibrationStore > signal.detector > default
                 detector = calibration_store.get_detector(dataset_name)
                 # Origin of this file's PC, taken now (see the single-file run).
                 _run_pc_refinement = _pc_refinement_snapshot(dataset_name)
+                from backend.api.services.pc_record import pc_run_record
+                _run_pc_record = pc_run_record(
+                    dataset_name, calibration_store,
+                    typed_pc=ds_config.pc if (ds_config.pc and len(ds_config.pc) == 3) else None)
                 if detector is None:
                     detector = getattr(signal, 'detector', None)
                 if detector is None:
@@ -11627,6 +13390,9 @@ async def start_batch_indexing(req: BatchRequest):
                             config=config, detector_params=det_params,
                             selection_mask=selection_mask,
                             progress_callback=lambda msg, pct=None: _log(f"  {msg}"),
+                            scan_geometry=_item_scan_stamp["scan_geometry"],
+                            signal=signal,
+                            variant=_item_variant,
                         )
                     else:
                         from indexing_controller import spherical_index_patterns
@@ -11635,6 +13401,8 @@ async def start_batch_indexing(req: BatchRequest):
                             config=config, detector_params=det_params,
                             selection_mask=selection_mask,
                             progress_callback=lambda msg, pct=None: _log(f"  {msg}"),
+                            scan_geometry=_item_scan_stamp["scan_geometry"],
+                            variant=_item_variant,
                         )
 
                 if result is None:
@@ -11655,18 +13423,22 @@ async def start_batch_indexing(req: BatchRequest):
                         or getattr(ds_config, "master_h5_paths", None)
                         or getattr(ds_config, "sht_paths", None)),
                     pc_refinement=_run_pc_refinement,
+                    pc_at_run=_run_pc_record,
                 )
 
-                # No scan-provenance seed here, deliberately. The loop's own
-                # load_ebsd_file (above) re-points _active_dataset at the file
-                # it is about to index, together with THAT file's crop if it
-                # has one — so _store_result's setdefault already describes the
-                # dataset that was actually indexed. Measured both ways: a
-                # batch over another file sees window=None; a batch over a file
-                # the user cropped sees that crop AND indexes it (active signal
-                # nav shape 4x4, not 90x120), so its offsets are the right
-                # answer. Forcing zeros here would erase true provenance.
-
+                # The stamp is the one taken right after this item's own load
+                # (above), not the live state when the result is stored. The
+                # loop's own load_ebsd_file re-points _active_dataset at the
+                # file it is about to index, together with THAT file's crop if
+                # it has one — so the stamp describes the dataset that was
+                # actually indexed, and it is taken before the run can be
+                # disturbed. Measured both ways: a batch over another file sees
+                # window=None; a batch over a file the user cropped sees that
+                # crop AND indexes it (active signal nav shape 4x4, not
+                # 90x120), so its offsets are the right answer. Forcing zeros
+                # here would erase true provenance.
+                _seed_scan_stamp(result, _item_scan_stamp)
+                _seed_variant_stamp(result, _item_variant_stamp)
                 _store_result(result, ds_config.method)
                 n_indexed = int(result.selection_mask.sum())
                 mean_ci = None
@@ -11679,82 +13451,22 @@ async def start_batch_indexing(req: BatchRequest):
                 result_entry["mean_ci"] = mean_ci
                 _log(f"  Indexed {n_indexed} pixels, mean CI={mean_ci:.4f}" if mean_ci else f"  Indexed {n_indexed} pixels")
 
-                # 5. Auto-export
+                # 5. Auto-export: one grid-shaped file the app reads back, for a square and a
+                # hexagonal scan alike (the result carries the grid it ran on).
                 if req.auto_export:
                     export_dir = req.export_dir or str(Path(ds_config.file_path).parent)
                     export_path = str(Path(export_dir) / f"{dataset_name}_indexed.h5")
                     try:
-                        # Reuse the H5 export logic
-                        import h5py
-                        with h5py.File(export_path, "w") as f:
-                            idx_grp = f.create_group("Indexing")
-                            idx_grp.attrs["method"] = result.method.value
-                            idx_grp.attrs["n_indexed"] = n_indexed
-                            idx_grp.attrs["original_shape"] = list(result.original_shape)
-                            from backend.api.services.result_exporter import (
-                                _write_citations,
-                            )
-                            from backend.api.services.citations.provenance import (
-                                get_steps,
-                            )
-                            _write_citations(idx_grp, get_steps(result))
-                            if hasattr(result.xmap, "rotations"):
-                                euler = result.xmap.rotations.to_euler(degrees=False)
-                                idx_grp.create_dataset("euler_angles", data=np.array(euler))
-                            if hasattr(result.xmap, "phase_id"):
-                                idx_grp.create_dataset("phase_id", data=result.xmap.phase_id)
-                            if result.confidence_scores is not None:
-                                idx_grp.create_dataset("confidence", data=np.array(result.confidence_scores))
-                            idx_grp.create_dataset("selection_mask", data=result.selection_mask.astype(np.uint8))
-                            if hasattr(result.xmap, "x") and result.xmap.x is not None:
-                                idx_grp.create_dataset("x", data=np.array(result.xmap.x))
-                                idx_grp.create_dataset("y", data=np.array(result.xmap.y))
-                            # EDS
-                            try:
-                                # The EDS maps written here sit next to an
-                                # indexing result on the dataset's grid, so
-                                # they must be that dataset's maps — cropped
-                                # when it is a crop.
-                                from backend.api.services.h5_session import get_active_extractor, is_open
-                                if is_open():
-                                    # If this raises the crop/file grid
-                                    # mismatch, the surrounding except drops
-                                    # the /EDS group. That is deliberate here:
-                                    # a batch run can have the h5 session on a
-                                    # different file than the viewer's crop,
-                                    # and a missing /EDS group beats writing
-                                    # another scan's maps beside this result.
-                                    ext = get_active_extractor()
-                                    elements = ext.get_available_elements()
-                                    if elements:
-                                        eds_grp = f.create_group("EDS")
-                                        eds_grp.attrs["elements"] = elements
-                                        for el_name in elements:
-                                            data = ext.get_element_map(el_name)
-                                            if data is not None:
-                                                eds_grp.create_dataset(el_name.replace(" ", "_"), data=data, compression="gzip")
-                            except Exception:
-                                pass
-                            # Detector
-                            det_grp = f.create_group("Detector")
-                            det_grp.attrs["shape"] = list(detector.shape)
-                            # Refined PC from the store (mean for a per-pixel map) — same
-                            # source as the interactive export, so both H5 export paths
-                            # carry an identical /Detector/pc; fall back to the detector.
-                            _bpc = calibration_store.get_pc(dataset_name)
-                            det_grp.create_dataset("pc", data=np.asarray(
-                                _bpc if _bpc is not None else detector.pc.flatten()[:3],
-                                dtype=float).flatten()[:3])
-                            det_grp.attrs["sample_tilt"] = float(detector.sample_tilt)
-                            # Scan metadata
-                            meta = f.create_group("Scan")
-                            meta.attrs["grid_shape"] = [n_rows, n_cols]
-                            meta.attrs["source_file"] = ds_config.file_path
-
+                        _write_batch_indexed_h5(
+                            export_path, result, dataset_name=dataset_name, detector=detector,
+                            source_file=ds_config.file_path, n_indexed=n_indexed)
                         result_entry["export_path"] = export_path
                         _log(f"  Exported to {export_path}")
                     except Exception as ex:
-                        _log(f"  Export failed: {ex}")
+                        # the record says the file is missing (the interface shows it), not only the log
+                        result_entry["export_error"] = str(getattr(ex, "detail", None) or ex)
+                        _log(f"  Export failed: {result_entry['export_error']}")
+                        logger.exception("Batch export failed for %s", dataset_name)
 
                 # 6. Memory cleanup
                 if req.cleanup_after_export and req.auto_export:
@@ -11770,6 +13482,7 @@ async def start_batch_indexing(req: BatchRequest):
             except Exception as ex:
                 import traceback
                 result_entry["error"] = str(ex)
+                result_entry["error_code"] = getattr(ex, "code", None)
                 _log(f"  ERROR: {ex}")
                 logger.exception(f"Batch indexing failed for {dataset_name}")
 

@@ -22,6 +22,7 @@ export function pathAdapter(cifPath, nBands = 12) {
     load: (extended = false) => indexApi.houghReflectors(cifPath, extended),
     change: (spec, extended = false) => indexApi.setHoughReflectors(cifPath, spec, extended),
     validate: (hkl, spec) => indexApi.validateHoughReflector(cifPath, hkl, spec),
+    fit: (extended = false) => indexApi.fitHoughReflectors(cifPath, extended),
     cost: () => indexApi.houghReflectorsCost(cifPath, nBands),
     stored: () => indexApi.houghReflectorSpecs(),
   };
@@ -34,6 +35,7 @@ export function loadedPhaseAdapter(phaseName, nBands = 12) {
     load: (extended = false) => pcApi.phaseReflectors(phaseName, extended),
     change: (spec, extended = false) => pcApi.setPhaseReflectors(phaseName, spec, extended),
     validate: (hkl, spec) => pcApi.validatePhaseReflector(phaseName, hkl, spec),
+    fit: (extended = false) => pcApi.fitPhaseReflectors(phaseName, extended),
     cost: () => pcApi.phaseReflectorCost(phaseName, nBands),
     stored: () => indexApi.houghReflectorSpecs(),
   };

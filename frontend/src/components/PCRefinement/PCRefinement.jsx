@@ -11,7 +11,6 @@
  *               Load Phase from CIF
  *               Index Pattern
  *               Global PC Refine
- *               PC Drift Analysis
  *               GroupBox: Pixel-wise PC Correction
  *               GroupBox: Indexing Settings
  *               GroupBox: Detector Settings
@@ -21,8 +20,9 @@
 import { localiseParams } from '../../i18n/formatDateTime';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { pcApi, ebsdApi, calibrationApi, indexApi } from '../../services/api';
+import { pcApi, ebsdApi, calibrationApi, indexApi, pcCalibrationsApi } from '../../services/api';
 import useDataStore from '../../stores/useDataStore';
+import useLoadedFilesStore from '../../stores/useLoadedFilesStore';
 import PhaseDropdown from '../Indexing/PhaseDropdown';
 import { useImageExport, exportStem } from '../common/useImageExport';
 import { buildPanelSheet } from '../common/imageExport';
@@ -31,7 +31,27 @@ import {
   checkPixelSize, plausibleWidthMm, TYPICAL_MIN_UM, TYPICAL_MAX_UM,
 } from './pixelSizeCheck';
 import { pickShtForPhase } from './previewSht';
+import { createSelectionGuard, createLatestRequest } from './selectionGuard';
+import { problemText, problemCode } from '../../services/problemText';
+import { pcMapInfoOf, pcMapActionOf, pcMapNote } from './pcMapNote';
+import PcFileHead from './PcFileHead';
+import PcFields, { PcBadge } from './PcFields';
+import { preselectedConvention } from './pcConvention';
+import { PcUndoDone } from './PcGrant';
+import CalibrationPanel from './Calibration/CalibrationPanel';
+import SaveCalibrationDialog from './Calibration/SaveCalibrationDialog';
+import ApplyToFilesDialog from './Calibration/ApplyToFilesDialog';
+import FollowerQuestion from './Calibration/FollowerQuestion';
+import { questionKey } from './Calibration/calibrationText';
+import OlderResults from './Calibration/OlderResults';
+import useApplyFlow from './Calibration/applyFlow';
+import PcResult from './PcResult';
+import { formatPc, samePc } from './pcFormat';
+import { PhaseLoadedContext } from './phaseContext';
+import { needsDecision } from './pcResultFacts';
 import { phaseFitsTooltip } from './phaseFits';
+import { isPcJobRunning, pcJobRunningText } from './jobRunning';
+import { toast } from '../../stores/useToastStore';
 import {
   MAX_PC_PHASES, phaseLabelFor, loadedPaths, planPhaseSync, loadedPhaseFor, sameNameOtherFile,
   summarisePatternPhases, previewPhaseName, createSerialQueue, shortSpaceGroup,
@@ -40,6 +60,7 @@ import {
   phaseStem, pathErrorFrom, samePath, asRecord, resolvePhasePath,
 } from '../Indexing/phasePath';
 import ReflectorFamilies from '../Indexing/ReflectorFamilies';
+import HoughRefusal, { refusalFrom } from '../Indexing/HoughRefusal';
 import { loadedPhaseAdapter } from '../Indexing/reflectorSpec';
 import {
   colors,
@@ -58,6 +79,10 @@ import {
   usePrompt,
   PromptDialog,
 } from '../../theme/components';
+
+// "Find PC" needs this many calibration patterns on the list (the backend refuses fewer); below it, nine
+// are picked from the scan first. NORDIF's calibration set has exactly five.
+const FIND_MIN_PATTERNS = 5;
 
 // ---------------------------------------------------------------------------
 // Small inline helpers
@@ -86,6 +111,7 @@ function StatusMsg({ msg, isError }) {
         color: isError ? colors.red : colors.green,
         fontSize: '9pt',
         wordBreak: 'break-word',
+        whiteSpace: 'pre-line',   // the lines of a Find PC run stand one under the other
         animation: 'fadeSlideIn 0.2s ease-out',
         transition: 'background 0.2s, border-color 0.2s, color 0.2s',
       }}
@@ -169,7 +195,7 @@ function cornersAreBlack(ctx, w, h) {
 
 // Pattern canvas with PC crosshair overlay
 // ---------------------------------------------------------------------------
-function PatternCanvas({ patternBase64, pcx, pcy, hideLines, segments, exportName }) {
+function PatternCanvas({ patternBase64, pcx, pcy, hideLines, segments, exportName, testId = 'pc-pattern-canvas' }) {
   const { t } = useTranslation('pcrefinement');
   const canvasRef = useRef(null);
   const imageExport = useImageExport();
@@ -258,6 +284,8 @@ function PatternCanvas({ patternBase64, pcx, pcy, hideLines, segments, exportNam
     <>
     <canvas
       ref={canvasRef}
+      data-testid={testId}
+      data-segment-count={segments ? segments.length : 0}
       aria-label={t('pcrefinement:canvas.ariaLabel')}
       onContextMenu={(e) => {
         if (!patternBase64) return;
@@ -287,6 +315,32 @@ function PatternCanvas({ patternBase64, pcx, pcy, hideLines, segments, exportNam
   );
 }
 
+// The pattern the page shows (the selected calibration pattern) with the bands drawn from the PC in use:
+// the same canvas and the same drawing as the preview on the left, beside a result so that it can be
+// judged where it is given, with a switch to take the bands off the pattern.
+function BandsPane({ patternBase64, pcx, pcy, segments, caption, exportName }) {
+  const { t } = useTranslation('pcrefinement');
+  const [on, setOn] = useState(true);
+  return (
+    <div data-testid="pc-bands-pane" style={{ display: 'flex', flexDirection: 'column', gap: 4, maxWidth: 320 }}>
+      <PatternCanvas
+        patternBase64={patternBase64}
+        pcx={pcx}
+        pcy={pcy}
+        segments={segments}
+        hideLines={!on}
+        exportName={exportName}
+        testId="pc-bands-canvas"
+      />
+      <label style={{ fontSize: '9pt', color: colors.text }}>
+        <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} />{' '}
+        {t('decide.bandsSwitch')}
+      </label>
+      <div style={{ fontSize: '9pt', color: colors.textSecondary }}>{caption}</div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Left preview panel — matches _create_preview_panel()
 // ---------------------------------------------------------------------------
@@ -305,6 +359,7 @@ function PreviewPanel({
   // --- Forward-sim preview props ---
   simulatedB64 = null,
   simulatedNcc = null,
+  simulatedNccReason = null,
   simulatedLoading = false,
   simulatedError = null,
   simulatedOrientation = null,
@@ -317,9 +372,14 @@ function PreviewPanel({
   // --- Several phases ---
   multiPhase = false,
   simulatedIndexedPhase = null,
+  // The phase the preview is for; named when the library has no master of its own.
+  previewPhase = null,
 }) {
   const { t } = useTranslation(['pcrefinement', 'common']);
   const [hideLines, setHideLines] = useState(false);
+  // No master is this phase's own (pickShtForPhase gave none): say so instead of
+  // letting the dropdown show its first entry as if it had been chosen.
+  const noOwnMaster = shtChoices.length > 0 && !shtPath && !!previewPhase;
   const simExport = useImageExport();
   // The two forward-simulation panels: each on its own, or both side by side —
   // the pair is what makes the comparison readable in a document.
@@ -361,14 +421,22 @@ function PreviewPanel({
   };
 
   return (
+    // The column scrolls as a whole. It used to clip (`overflow: hidden`): on a
+    // laptop window the canvas and the forward preview filled it, and the
+    // selected-pattern list and the Remove button fell below the edge with no
+    // way to reach them.
     <div
+      className="thin-scrollbar"
+      data-testid="pc-preview-column"
       style={{
         display: 'flex',
         flexDirection: 'column',
         height: '100%',
+        minHeight: 0,
         padding: spacing.outerMargin,
         boxSizing: 'border-box',
-        overflow: 'hidden',
+        overflowY: 'auto',
+        overflowX: 'hidden',
       }}
     >
       {simExport.node}
@@ -468,6 +536,16 @@ function PreviewPanel({
                 {t('pcrefinement:preview.ncc', { value: simulatedNcc.toFixed(4) })}
               </span>
             )}
+            {/* No orientation could be indexed here: a pattern rendered from the
+                fallback orientation has no NCC worth showing. Say why instead. */}
+            {!simulatedLoading && simulatedNcc == null && simulatedNccReason === 'no_orientation' && (
+              <span
+                data-testid="pc-ncc-none"
+                style={{ fontSize: '8pt', marginLeft: 'auto', color: '#ffb86c' }}
+              >
+                {t('pcrefinement:preview.nccNoOrientation')}
+              </span>
+            )}
           </div>
 
           {/* SHT picker + bandwidth */}
@@ -488,6 +566,11 @@ function PreviewPanel({
               }}
             >
               {shtChoices.length === 0 && <option value="">{t('pcrefinement:preview.noShtFiles')}</option>}
+              {noOwnMaster && (
+                <option value="" data-testid="pc-sht-no-own-master">
+                  {t('pcrefinement:preview.noOwnMaster', { phase: previewPhase })}
+                </option>
+              )}
               {shtChoices.map(f => (
                 <option key={f.path} value={f.path}>
                   {f.display_label || f.filename || f.path}
@@ -559,7 +642,10 @@ function PreviewPanel({
                   border: `1px solid ${colors.border}`, borderRadius: 3, background: colors.bg,
                   padding: 6,
                 }}>
-                  {simulatedError ? simulatedError : (simulatedLoading ? '…' : t('pcrefinement:preview.pickSht'))}
+                  {simulatedError ? simulatedError : (simulatedLoading ? '…'
+                    : (noOwnMaster
+                      ? t('pcrefinement:preview.noOwnMaster', { phase: previewPhase })
+                      : t('pcrefinement:preview.pickSht')))}
                 </div>
               )}
               <div style={{ fontSize: '8pt', color: colors.textSecondary, marginTop: 2 }}>
@@ -738,7 +824,7 @@ function PreviewPanel({
 // ---------------------------------------------------------------------------
 // Pixel-wise PC Correction group — matches _create_pixelwise_pc_group()
 // ---------------------------------------------------------------------------
-function PixelwisePCGroup({ canRun }) {
+function PixelwisePCGroup({ canRun, onCalibrated }) {
   const { t } = useTranslation('pcrefinement');
   const [mode, setMode] = useState('Global (single PC)');
   const [gridStep, setGridStep] = useState(10);
@@ -748,6 +834,8 @@ function PixelwisePCGroup({ canRun }) {
   const [pcResult, setPcResult] = useState(null);
   const [showMap, setShowMap] = useState(false);
   const [msg, setMsg] = useState('');
+  // The coded refusal of an oversized Hough library, shown with its one-click answer.
+  const [refusal, setRefusal] = useState(null);
 
   const gs = useDataStore.getState().gridShape || [90, 120];
   const estimatedPoints = gridStep > 0
@@ -766,6 +854,7 @@ function PixelwisePCGroup({ canRun }) {
     setProgress(0);
     setPcResult(null);
     setShowMap(false);
+    setRefusal(null);
     setMsg(t('pcrefinement:pixelwise.refiningMsg', { count: estimatedPoints }));
     try {
       const { data } = await pcApi.runGridCalibration(gridStep, backendMode);
@@ -776,8 +865,13 @@ function PixelwisePCGroup({ canRun }) {
         await new Promise((r) => setTimeout(r, 1000));
         const { data: st } = await pcApi.getOptimizeStatus(taskId);
         if (typeof st.progress === 'number') setProgress(st.progress);
+        if (st.status === 'completed' && st.result?.dataset_changed) {
+          setMsg(t('pcrefinement:pixelwise.doneOtherFile', { dataset: st.result.dataset }));
+          break;
+        }
         if (st.status === 'completed') {
           setCalibrated(true);
+          if (onCalibrated) onCalibrated();     // the map is now in the controller
           setPcResult(st.result);
           const s = st.result?.pc_stats;
           setMsg(
@@ -791,13 +885,31 @@ function PixelwisePCGroup({ canRun }) {
           );
           break;
         }
+        if (st.status === 'cancelled') {
+          // The run can be cancelled through the backend's cancel route; without
+          // this the loop never ended and the panel stayed "running".
+          setMsg(t('pcrefinement:controls.optimizationCancelled'));
+          break;
+        }
         if (st.status === 'failed') {
-          setMsg(t('pcrefinement:pixelwise.errorMsg', { detail: st.error || t('pcrefinement:pixelwise.calibrationFailed') }));
+          const coded = refusalFrom(st);
+          if (coded) {
+            // A refused Hough library: worded by the notice below with its one-click
+            // answer, not by the English text of the backend.
+            setRefusal(coded);
+            setMsg('');
+            break;
+          }
+          // The file changed under the search: nothing was written; the words are ours, not the backend's English.
+          const detail = st.code === 'fileChanged'
+            ? t('pcrefinement:controls.searchFileChanged')
+            : (st.error || t('pcrefinement:pixelwise.calibrationFailed'));
+          setMsg(t('pcrefinement:pixelwise.errorMsg', { detail }));
           break;
         }
       }
     } catch (err) {
-      setMsg(t('pcrefinement:pixelwise.errorMsg', { detail: err.response?.data?.detail || err.message }));
+      setMsg(t('pcrefinement:pixelwise.errorMsg', { detail: problemText(err, t, 'pcrefinement') || err.message }));
     } finally {
       setRunning(false);
     }
@@ -960,6 +1072,13 @@ function PixelwisePCGroup({ canRun }) {
           {msg}
         </div>
       )}
+      {refusal && (
+        <HoughRefusal
+          problem={refusal}
+          fit={(name) => pcApi.fitPhaseReflectors(name)}
+          onFitted={() => setRefusal(null)}
+        />
+      )}
     </GroupBox>
   );
 }
@@ -1086,7 +1205,7 @@ function IndexingSettingsGroup({
 // Pixel Size & Binning sub-group — matches _create_pixel_binning_group()
 // ---------------------------------------------------------------------------
 function PixelBinningGroup({ binning, setBinning, detWidthMm, setDetWidthMm, shapeW,
-                             detWidthFromFile = false }) {
+                             detWidthFromFile = false, onApplied }) {
   const { t } = useTranslation('pcrefinement');
   const binVal = parseInt(binning, 10) || 1;
   const unbinnedW = (parseInt(shapeW, 10) || 0) * binVal;
@@ -1102,6 +1221,8 @@ function PixelBinningGroup({ binning, setBinning, detWidthMm, setDetWidthMm, sha
         binning: binVal,
         detector_width_mm: detWidthMmVal,
       });
+      // The forward preview renders with the same pixel size and binning.
+      if (onApplied && umPerPx != null) onApplied({ binning: binVal, pixelSize: umPerPx });
     } catch { /* ignore */ }
   };
 
@@ -1198,7 +1319,9 @@ function PixelBinningGroup({ binning, setBinning, detWidthMm, setDetWidthMm, sha
 // ---------------------------------------------------------------------------
 // Detector Settings group — matches _create_detector_settings_group()
 // ---------------------------------------------------------------------------
-function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, externalPc }) {
+function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, externalPc,
+                                 onPixelSizeApplied, onPcMapAction, datasetName, usedPc, pcInUse,
+                                 onUndoPc, onGoToIndexing, renderBands, onSavePc = null }) {
   const { t } = useTranslation('pcrefinement');
   const [shapeH, setShapeH] = useState('');
   const [shapeW, setShapeW] = useState('');
@@ -1218,22 +1341,17 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
   const [msg, setMsg] = useState(null);
   const [isError, setIsError] = useState(false);
 
-  // Debounce timers for reactive PC/tilt changes
-  const pcTimerRef = useRef(null);
+  // Debounce timer for reactive tilt changes
   const tiltTimerRef = useRef(null);
   const initialLoadRef = useRef(true);
-
-  // Reactive PC change — mirrors PyQt5 apply_detector_pc()
-  // Debounced 500ms so rapid spinbox clicks don't flood the backend
-  const triggerPcChange = useCallback((x, y, z) => {
-    if (pcTimerRef.current) clearTimeout(pcTimerRef.current);
-    pcTimerRef.current = setTimeout(() => {
-      const px = parseFloat(x), py = parseFloat(y), pz = parseFloat(z);
-      if (!isNaN(px) && !isNaN(py) && !isNaN(pz) && onPcChanged) {
-        onPcChanged(px, py, pz);
-      }
-    }, 500);
-  }, [onPcChanged]);
+  // Nothing typed into the PC fields applies by itself: "Use these numbers" (PcFields) is the only way a typed
+  // PC reaches the backend, and it comes back here with the answer. `pcx..pcz` below are the PC in use as this
+  // group last knew it (Bruker's), which Apply Detector Settings sends along.
+  const [pcBadge, setPcBadge] = useState(null);
+  // Apply Detector Settings was pressed while typed numbers were waiting for "Use these numbers": nothing typed
+  // went out, and the page says so for as long as the numbers are still waiting.
+  const [typedLeftOut, setTypedLeftOut] = useState(false);
+  useEffect(() => { if (pcBadge !== 'unused') setTypedLeftOut(false); }, [pcBadge]);
 
   // Reactive tilt change — mirrors PyQt5 apply_tilt_settings()
   const triggerTiltChange = useCallback((st, dt, az) => {
@@ -1246,10 +1364,16 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
     }, 500);
   }, [onTiltChanged]);
 
-  // PC setters that also trigger reactive update
-  const handlePcxChange = (e) => { setPcx(e.target.value); triggerPcChange(e.target.value, pcy, pcz); };
-  const handlePcyChange = (e) => { setPcy(e.target.value); triggerPcChange(pcx, e.target.value, pcz); };
-  const handlePczChange = (e) => { setPcz(e.target.value); triggerPcChange(pcx, pcy, e.target.value); };
+  // "Use these numbers": the typed PC (already Bruker's) goes to the backend. What the group keeps for Apply
+  // follows only when the backend took it.
+  const typedPressRef = useRef(0);
+  const useTypedPc = async (pc) => {
+    const mine = ++typedPressRef.current;
+    const forFile = openKeyRef.current;
+    const answer = onPcChanged ? await onPcChanged(pc[0], pc[1], pc[2]) : { error: t('pcrefinement:detector.failed') };
+    if (answer?.data && mine === typedPressRef.current && forFile === openKeyRef.current) { setPcx(String(pc[0])); setPcy(String(pc[1])); setPcz(String(pc[2])); }
+    return answer;
+  };
 
   // Tilt setters that also trigger reactive update
   const handleSampleTiltChange = (e) => { setSampleTilt(e.target.value); triggerTiltChange(e.target.value, detTilt, azimuthal); };
@@ -1262,9 +1386,19 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
   // the flag stayed true between loads and the effect never re-fired,
   // so the panel kept showing the previous file's sample_tilt + tilt
   // (bug fix 2026-05-22).
+  //
+  // The path alone does not tell: two pattern sources of one file have the same path and a PC each.
+  // The name of the loaded entry says the variant.
   const { ebsdLoaded, filePath } = useDataStore();
+  const loadedName = useLoadedFilesStore((s) => s.files.find((f) => f.active)?.name || '');
+  // Which file the group shows now (the fields start again with it); a press of "Use these numbers" is for the
+  // file it was pressed on.
+  const openKeyRef = useRef('');
+  openKeyRef.current = `${filePath || ''}|${loadedName}|${datasetName || ''}`;
   useEffect(() => {
     initialLoadRef.current = true;
+    setMsg(null);
+    setTypedLeftOut(false);
     ebsdApi.getDetector().then((res) => {
       const d = res.data;
       if (!d) return;
@@ -1304,7 +1438,7 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
       }
       initialLoadRef.current = false;
     }).catch(() => { initialLoadRef.current = false; });
-  }, [ebsdLoaded, filePath]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [ebsdLoaded, filePath, loadedName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update PC spinboxes when optimization changes PC externally
   useEffect(() => {
@@ -1334,8 +1468,12 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
       });
       setMsg(t('pcrefinement:detector.detectorSet'));
       setIsError(false);
+      setTypedLeftOut(pcBadge === 'unused');
       if (res.data?.repr) setDetectorText(res.data.repr);
       if (res.data?.axes_repr) setAxesText(res.data.axes_repr);
+      // What Apply did to a per-pixel PC map: replaced by the PC shown (it was
+      // changed), or kept (it was pressed for a tilt, the binning, ...).
+      if (onPcMapAction) onPcMapAction(res.data?.pc_map_action);
       onDetectorApplied(pc, parseFloat(sampleTilt), parseFloat(detTilt));
     } catch (err) {
       setMsg(err.response?.data?.detail || err.message || t('pcrefinement:detector.failed'));
@@ -1344,33 +1482,21 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
   };
 
   return (
-    <GroupBox title={t('pcrefinement:detector.title')}>
-      <FormRow label={t('pcrefinement:detector.pcXLabel')}>
-        <NumberInput
-          value={pcx}
-          onChange={handlePcxChange}
-          min={0.0} max={1.0} step={0.01}
-          title={t('pcrefinement:detector.pcXTooltip')}
-        />
-      </FormRow>
-
-      <FormRow label={t('pcrefinement:detector.pcYLabel')}>
-        <NumberInput
-          value={pcy}
-          onChange={handlePcyChange}
-          min={0.0} max={1.0} step={0.01}
-          title={t('pcrefinement:detector.pcYTooltip')}
-        />
-      </FormRow>
-
-      <FormRow label={t('pcrefinement:detector.pcZLabel')}>
-        <NumberInput
-          value={pcz}
-          onChange={handlePczChange}
-          min={0.0} max={1.0} step={0.01}
-          title={t('pcrefinement:detector.pcZTooltip')}
-        />
-      </FormRow>
+    <GroupBox title={<>{t('pcrefinement:detector.title')}<PcBadge state={pcBadge} /></>}>
+      <PcFields
+        fileName={datasetName}
+        resetKey={`${filePath || ''}|${loadedName}|${datasetName || ''}`}
+        rows={shapeH}
+        cols={shapeW}
+        usedPc={usedPc}
+        fileConvention={preselectedConvention(pcInUse)}
+        onBadge={setPcBadge}
+        onUse={useTypedPc}
+        onUndo={onUndoPc}
+        onGoToIndexing={onGoToIndexing}
+        renderBands={renderBands}
+        onSave={onSavePc}
+      />
 
       {/* Pixel Size & Binning sub-group */}
       <PixelBinningGroup
@@ -1380,6 +1506,7 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
         detWidthFromFile={detWidthFromFile}
         setDetWidthMm={setDetWidthMm}
         shapeW={shapeW}
+        onApplied={onPixelSizeApplied}
       />
 
       {/* Sample tilt */}
@@ -1448,6 +1575,11 @@ function DetectorSettingsGroup({ onDetectorApplied, onPcChanged, onTiltChanged, 
       </Button>
 
       <StatusMsg msg={msg} isError={isError} />
+      {msg && !isError && typedLeftOut && pcBadge === 'unused' && (
+        <div data-testid="pc-typed-not-used" role="status" style={{ fontSize: '9pt', color: colors.orange, margin: '2px 0', wordBreak: 'break-word' }}>
+          {t('pcrefinement:detector.typedNotUsed')}
+        </div>
+      )}
     </GroupBox>
   );
 }
@@ -1467,6 +1599,8 @@ function phaseOpErrorText(t, error) {
 
 function ControlsPanel({
   phaseLoaded,
+  // Counts the visits on which the page found the session without a phase.
+  sessionReset = 0,
   phases = [],
   onPhasesChanged,
   detectorReady,
@@ -1481,26 +1615,74 @@ function ControlsPanel({
   globalCi,
   setGlobalCi,
   onSegmentsUpdate,
+  getSelectedIdx,
   onPatternsIndexed,
   onSelectPattern,
   onPcChanged,
   onTiltChanged,
+  pcMapInfo,
+  pcSource,
+  pcMapAction,
+  onPcMapAction,
+  onGridCalibrated,
+  onPixelSizeApplied,
   externalPc,
   onOptimizedPc,
   parentName,
   activeDatasetName,
   propagated,
   setPropagated,
+  usedPc,          // the PC in use for the open file (Bruker x, y, z), null when the file has none
+  pcStatusSeen,    // the backend has said what the PC is (before that the head shows nothing)
+  usedPcIsMap,     // the PC in use is a per-pixel map: usedPc is its mean
+  typedPcNotStored, // a typed PC the calibration store did not take: indexing will not use it
+  pcInUse,         // `pc_in_use` of /api/pc/status: where the PC came from and the open file's convention
+  onNavigate,      // the app's own page switch ('indexing', ...); null: the page cannot switch
+  onPcRestored,    // the PC changed behind the page's back (a step back): load it again from the backend
+  patternBase64,
+  segments,
+  pcx,
+  pcy,
 }) {
   const { t } = useTranslation(['pcrefinement', 'common']);
   // This panel calls askPrompt() for the browser fallback of "Load CIF";
   // the hook lived only in the parent, so that path threw ReferenceError.
   const [askPrompt, promptProps] = usePrompt();
+  // "Take PC from..." (a saved calibration or another file): opened from the hint of a file without a PC and from
+  // the row of Pick patterns; the window itself is mounted by the calibration panel.
+  const [takePcOpen, setTakePcOpen] = useState(false);
+  // The file picker for "Another file" is the one the page uses for a CIF: the app's own dialog in the desktop
+  // app, the themed prompt for a path in the browser. `done(path)` is called with the chosen path.
+  const pickPcFile = (current, done) => {
+    if (window.electronAPI?.openFile) {
+      Promise.resolve(window.electronAPI.openFile({
+        filters: [{ name: t('pcrefinement:takePc.fileFilter'), extensions: ['ang', 'osc', 'h5', 'h5oina', 'hdf5'] }],
+      })).then((p) => { if (typeof p === 'string' && p.trim()) done(p.trim()); }).catch(() => {});
+      return;
+    }
+    askPrompt({
+      title: t('pcrefinement:takePc.promptTitle'),
+      message: t('pcrefinement:takePc.promptMessage'),
+      defaultValue: current,
+      placeholder: t('pcrefinement:takePc.promptPlaceholder'),
+      submitLabel: t('pcrefinement:takePc.promptSubmit'),
+      onSubmit: (val) => { if (val.trim()) done(val.trim()); },
+    });
+  };
   // Progress / cancel
   const [progress, setProgress] = useState(0);
   const [isRunning, setIsRunning] = useState(false);
   const [taskId, setTaskId] = useState(null);
+  const [cancelling, setCancelling] = useState(false);   // Cancel pressed, the run is winding down
   const pollRef = useRef(null);
+  // Find PC has steps before the job exists (picking patterns, the request that starts it): Cancel pressed
+  // in one of them cannot stop a job yet, so it is noted here and the step in flight ends the run itself.
+  const inFlightRef = useRef(null);                       // 'pick' | 'start' | null
+  const cancelRequestedRef = useRef(false);
+  const [picking, setPicking] = useState(false);          // patterns are being picked from the scan
+  // The lines the page says about a Find PC run (picking, searching, finished), one under the other.
+  const statusLinesRef = useRef([]);
+  const [msgScope, setMsgScope] = useState('refine');     // which button the status line belongs to
 
   // Phase state
   const [cifPath, setCifPath] = useState('');
@@ -1535,13 +1717,31 @@ function ControlsPanel({
   // Index pattern state
   const [indexMsg, setIndexMsg] = useState(null);
   const [indexError, setIndexError] = useState(false);
+  // The coded refusal of an oversized Hough library, shown with its one-click answer.
+  const [refusal, setRefusal] = useState(null);
+  // One place for what a failed Index Pattern / Index All says: a refused Hough library
+  // is worded by the notice below with its one-click answer, anything else is the
+  // detail of the backend as before.
+  const reportIndexFailure = (err) => {
+    const coded = refusalFrom(err);
+    if (coded) {
+      setRefusal(coded);
+      setIndexMsg(null);
+      setIndexError(false);
+      return;
+    }
+    setRefusal(null);
+    const detail = err.response?.data?.detail;
+    const msg = typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : err.message || t('pcrefinement:controls.indexFailed');
+    setIndexMsg(msg);
+    setIndexError(true);
+  };
 
   // Global refine state
   const [globalMsg, setGlobalMsg] = useState(null);
   const [globalError, setGlobalError] = useState(false);
 
-  // Drift state — calibration-pattern based (existing) + source-h5oina based (new)
-  const [driftMsg, setDriftMsg] = useState(null);
+  // Source PC drift: the Aztec per-pixel PC map of the loaded dataset
   const [sourceDriftLoading, setSourceDriftLoading] = useState(false);
   const [sourceDriftImage, setSourceDriftImage] = useState(null);
   const [sourceDriftStats, setSourceDriftStats] = useState(null);
@@ -1553,6 +1753,42 @@ function ControlsPanel({
   // Results
   const [result, setResult] = useState(null);
   const [resultMsg, setResultMsg] = useState(null);
+  const [bandsShown, setBandsShown] = useState(false);    // "Show the bands over a pattern" is open
+  const [keptFor, setKeptFor] = useState(null);           // "Keep this PC anyway" was pressed for this file
+  // Where the patterns of the shown result came from ({kind: 'pick' | 'all' | 'user', noQuality}), and the
+  // pick the page made last: its positions as flat indices and what the pick said about itself.
+  const [resultFrom, setResultFrom] = useState({ kind: 'user' });
+  const searchFromRef = useRef({ kind: 'user' });
+  const pickedRef = useRef(null);
+  // The positions "Find PC again with other patterns" has given up so far, so a third press does not
+  // come back to the first list. A new Find PC or Pick patterns starts the count again.
+  const givenUpRef = useRef([]);
+  const [inConvention, setInConvention] = useState(null); // the result's PC in the file's own convention
+  const [undone, setUndone] = useState(null);             // the step back was made: {file, previous, notRestored}
+
+  // The page found the session without a phase on a visit (a processed copy of
+  // the data is a new dataset with a session of its own): "Phase loaded: Al",
+  // its info card, the last refine's result card and the run messages describe
+  // the old session and must not stay on screen. Not tied to phaseLoaded itself:
+  // a phase the user removes here keeps its "removed" message.
+  useEffect(() => {
+    if (!sessionReset) return;
+    setPhaseInfo(null);
+    setPhaseMsg(null);
+    setPhaseError(false);
+    setIndexMsg(null);
+    setIndexError(false);
+    setGlobalMsg(null);
+    setGlobalError(false);
+    setResult(null);
+    setResultMsg(null);
+    setBandsShown(false);
+    setKeptFor(null);
+    setUndone(null);
+    setSeedMsg(null);
+    setSeedError(false);
+    setRefusal(null);
+  }, [sessionReset]);
   const [pcCopied, setPcCopied] = useState(false);
 
   // Indexing params forwarded from IndexingSettingsGroup
@@ -1566,9 +1802,33 @@ function ControlsPanel({
   // CI, and the CI and phase of each pattern, are the ones at that PC. An
   // answer without them (an older backend) leaves no stale number behind.
   const applyRefinedCis = (r) => {
+    if (onPcMapAction) onPcMapAction(r?.pc_map_action);
     setGlobalCi(r?.global_ci ?? null);
     setIndexMsg(null);  // "Indexed N patterns — Global CI: x" belongs to the old PC
     if (Array.isArray(r?.pattern_results) && onPatternsIndexed) onPatternsIndexed(r.pattern_results);
+  };
+
+  // A refine indexed every calibration pattern at the refined PC. Draw the lines
+  // of the pattern that is selected NOW (the run takes a while, the user may
+  // have picked another one), not those of the first pattern.
+  const showRefinedSegments = (r) => {
+    if (!onSegmentsUpdate) return;
+    const sel = getSelectedIdx ? getSelectedIdx() : null;
+    const entry = sel != null && Array.isArray(r?.pattern_results)
+      ? r.pattern_results.find((e) => e.index === sel) : null;
+    if (entry && Array.isArray(entry.segments)) onSegmentsUpdate(entry.segments, sel);
+    else if (sel == null && r?.segments) onSegmentsUpdate(r.segments);
+  };
+
+  // The CI that goes with the lines drawn by showRefinedSegments: the selected
+  // pattern's. The top-level `ci` of a refine result is pattern 0's, so with
+  // pattern 3 selected the header showed pattern 0's CI next to pattern 3's lines.
+  const refinedCiOf = (r) => {
+    const sel = getSelectedIdx ? getSelectedIdx() : null;
+    if (sel == null) return r?.ci ?? null;
+    const entry = Array.isArray(r?.pattern_results)
+      ? r.pattern_results.find((e) => e.index === sel) : null;
+    return entry?.ci ?? null;
   };
 
   const stopPolling = () => {
@@ -1584,18 +1844,45 @@ function ControlsPanel({
         const res = await pcApi.getOptimizeStatus(taskId);
         pollFailCountRef.current = 0; // reset on success
         const d = res.data;
-        if (d.progress !== undefined) setProgress(d.progress);
+        // the backend reports a fraction of the run, the bar counts percent
+        if (typeof d.progress === 'number') setProgress(d.progress * 100);
         if (d.status === 'done' || d.status === 'completed') {
           stopPolling();
           setIsRunning(false);
+          setCancelling(false);    // Cancel came too late: the run had finished and its result stands
+          cancelRequestedRef.current = false;
           setTaskId(null);
           setProgress(100);
+          setGlobalMsg(null);      // "Cancelling..." / "running" no longer describe it
+          if (d.result?.dataset_changed) {
+            // The file was switched while the refine ran: its PC went to ITS dataset (the
+            // store), and is not shown here as the PC of the file in front of the user.
+            // A PC the store did not take (pc_stored false) is said not to be stored.
+            setGlobalMsg(t(d.result.pc_stored === false
+              ? 'pcrefinement:controls.optimizationOtherFileNotStored'
+              : 'pcrefinement:controls.optimizationOtherFile', { dataset: d.result.dataset }));
+            setGlobalError(false);
+            return;
+          }
           setResult(d.result || d);
-          setResultMsg(t('pcrefinement:controls.optimizationComplete'));
-          if (d.result?.ci != null) setCiValue(d.result.ci);
+          setResultFrom(searchFromRef.current);
+          setBandsShown(false);
+          setKeptFor(null);
+          setUndone(null);
+          if (d.result?.mode === 'find') {
+            setGlobalMsg([...statusLinesRef.current, t('pcrefinement:find.finished')].join('\n'));
+          }
+          setResultMsg(d.result?.mode === 'find' ? null : t('pcrefinement:controls.optimizationComplete'));
+          setCiValue(refinedCiOf(d.result));
+          // A Find PC result, and one that asks what to do, shows a pattern with its bands: one must be
+          // selected for that.
+          if ((d.result?.mode === 'find' || needsDecision(d.result)) && onSelectPattern
+              && getSelectedIdx && getSelectedIdx() == null && patternsRef.current.length > 0) {
+            onSelectPattern(0);
+          }
           // Update segments + detector PC spinboxes with optimized values
-          if (d.result?.segments && onSegmentsUpdate) onSegmentsUpdate(d.result.segments);
-          if (d.result?.mean_pc?.length === 3 && onOptimizedPc) onOptimizedPc(d.result.mean_pc);
+          showRefinedSegments(d.result);
+          if (d.result?.mean_pc?.length === 3 && onOptimizedPc) onOptimizedPc(d.result.mean_pc, d.result.mode);
           // Several phases: which one each refined pattern is indexed as. The
           // result lists them in the order the patterns were sent.
           if (Array.isArray(d.result?.pattern_phases) && onPatternsIndexed) {
@@ -1608,11 +1895,37 @@ function ControlsPanel({
             }));
           }
           applyRefinedCis(d.result);
+        } else if (d.status === 'cancelled') {
+          stopPolling();
+          setIsRunning(false);
+          setTaskId(null);
+          setProgress(0);
+          setCancelling(false);
+          cancelRequestedRef.current = false;
+          setGlobalMsg(t('pcrefinement:controls.optimizationCancelled'));
+          setGlobalError(false);
         } else if (d.status === 'error' || d.status === 'failed') {
           stopPolling();
           setIsRunning(false);
           setTaskId(null);
-          setResultMsg(d.error || d.message || t('pcrefinement:controls.optimizationFailed'));
+          setCancelling(false);
+          cancelRequestedRef.current = false;
+          const coded = refusalFrom(d);
+          if (coded) {
+            // A refused Hough library: worded by the notice below with its one-click
+            // answer, not by the English text of the backend.
+            setRefusal(coded);
+            setGlobalMsg(null);
+            setGlobalError(false);
+            return;
+          }
+          // The file was replaced under the same name while the search ran: nothing was written.
+          const failure = d.code === 'fileChanged'
+            ? t('pcrefinement:controls.searchFileChanged')
+            : (d.error || d.message || t('pcrefinement:controls.optimizationFailed'));
+          setResultMsg(failure);
+          // The result panel is only there after a result: a failed search must be said where the run was started.
+          setGlobalMsg(failure);
           setGlobalError(true);
         }
       } catch {
@@ -1622,6 +1935,7 @@ function ControlsPanel({
           stopPolling();
           setIsRunning(false);
           setTaskId(null);
+          setCancelling(false);
           setGlobalMsg(t('pcrefinement:controls.backendConnectionLost'));
           setGlobalError(true);
         }
@@ -1844,6 +2158,7 @@ function ControlsPanel({
     setProgress(0);
     setIndexMsg(t('pcrefinement:controls.indexingN', { count: patterns.length }));
     setIndexError(false);
+    setRefusal(null);
     try {
       const res = await pcApi.indexAll();
       const d = res.data;
@@ -1862,18 +2177,20 @@ function ControlsPanel({
 
       // Show overlay for currently selected pattern (or first if none selected)
       if (d.results && d.results.length > 0) {
-        const targetIdx = currentPatternIdx != null ? currentPatternIdx : 0;
+        // The pattern selected when the run FINISHES (it takes a while).
+        const selNow = getSelectedIdx ? getSelectedIdx() : currentPatternIdx;
+        const targetIdx = selNow != null ? selNow : 0;
         const currentResult = d.results.find(r => r.index === targetIdx) || d.results[0];
         if (currentResult.ci != null) {
           setCiValue(currentResult.ci);
         }
         if (currentResult.segments && onSegmentsUpdate) {
-          onSegmentsUpdate(currentResult.segments);
+          onSegmentsUpdate(currentResult.segments, selNow != null ? currentResult.index : undefined);
         }
         // Nothing was selected: the overlay shown is the first pattern's, so
         // select it. The picture, the CI and the forward-sim preview (which needs
         // a selected pattern, and follows its winning phase) belong to it.
-        if (currentPatternIdx == null && onSelectPattern) {
+        if (selNow == null && onSelectPattern) {
           const pos = patterns.findIndex((p) => p.index === currentResult.index);
           if (pos >= 0) onSelectPattern(pos);
         }
@@ -1888,10 +2205,7 @@ function ControlsPanel({
       }));
     } catch (err) {
       setIsRunning(false);
-      const detail = err.response?.data?.detail;
-      const msg = typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : err.message || t('pcrefinement:controls.indexFailed');
-      setIndexMsg(msg);
-      setIndexError(true);
+      reportIndexFailure(err);
     }
   };
 
@@ -1908,6 +2222,8 @@ function ControlsPanel({
     setProgress(0);
     setIndexMsg(t('pcrefinement:controls.indexing'));
     setIndexError(false);
+    setRefusal(null);
+    const forPatternIdx = currentPatternIdx;   // the pattern this request is about
     try {
       const res = await pcApi.indexPattern(pat.row, pat.col);
       const d = res.data;
@@ -1926,7 +2242,7 @@ function ControlsPanel({
       }
 
       if (d.segments && onSegmentsUpdate) {
-        onSegmentsUpdate(d.segments);
+        onSegmentsUpdate(d.segments, forPatternIdx);
       }
 
       // Update CI in the pattern list (mirrors handlePatternsIndexed for Index All)
@@ -1935,10 +2251,7 @@ function ControlsPanel({
       }
     } catch (err) {
       setIsRunning(false);
-      const detail = err.response?.data?.detail;
-      const msg = typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : err.message || t('pcrefinement:controls.indexFailed');
-      setIndexMsg(msg);
-      setIndexError(true);
+      reportIndexFailure(err);
     }
   };
 
@@ -1951,58 +2264,229 @@ function ControlsPanel({
   };
   const handleIndexingChanged = useCallback(() => indexingChangedRef.current?.(), []);
 
-  // Global PC Refine
+  // The flat scan indices of calibration patterns (the job takes positions as row * columns + column).
+  const flatIndices = (list) => {
+    const gs = useDataStore.getState().gridShape || [1, 1];
+    const nCols = gs[1] || 1;
+    return list.map((pt) => pt.row * nCols + pt.col);
+  };
+
+  // What the page says about a Find PC run so far: its lines, one under the other.
+  const sayLines = (lines) => {
+    statusLinesRef.current = lines;
+    setGlobalMsg(lines.join('\n'));
+    setGlobalError(false);
+  };
+
+  // One run of the background search for Find PC and for Global PC Refine: the same job, the same progress
+  // bar, the same result panel. `mode` is 'find' or 'refine'; `lines` are the lines already said (Find PC).
+  const runSearch = async (mode, indices, count, lines = []) => {
+    inFlightRef.current = 'start';
+    setIsRunning(true);
+    setCancelling(cancelRequestedRef.current);
+    setProgress(0);
+    setRefusal(null);
+    setUndone(null);
+    setKeptFor(null);
+    setMsgScope(mode === 'find' ? 'find' : 'refine');
+    // where the patterns come from: the page's own pick (same positions), or a list somebody made
+    const picked = pickedRef.current;
+    const same = !!picked && picked.key === [...indices].sort((a, b) => a - b).join(',');
+    searchFromRef.current = same && picked.blocks
+      ? { kind: 'pick', noQuality: picked.noQuality, excluded: picked.excluded }
+      : same ? { kind: 'all' } : { kind: 'user' };
+    if (mode === 'find') sayLines([...lines, t('pcrefinement:find.searching', { count })]);
+    else { setGlobalMsg(t('pcrefinement:controls.runningGlobalRefine')); setGlobalError(false); }
+    const p = paramsRef.current;
+    try {
+      const res = await pcApi.optimize(indices, p.method || 'Nelder-Mead', p.searchLimit || 0.05, mode);
+      const d = res.data;
+      if (d.task_id) {
+        setTaskId(d.task_id);
+        if (cancelRequestedRef.current) {
+          // Cancel was pressed while the job was being started: stop it now that it has a name. The
+          // polling reports "cancelled" when the run has ended.
+          setCancelling(true);
+          setGlobalMsg(t('pcrefinement:controls.optimizationCancelling'));
+          try { await pcApi.cancelOptimize(d.task_id); } catch { /* the polling tells how it ended */ }
+        } else if (mode === 'find') {
+          // the "Searching ..." line stands
+        } else {
+          setGlobalMsg(t('pcrefinement:controls.globalRefineStarted', { count }));
+        }
+      } else {
+        setIsRunning(false);
+        setProgress(100);
+        setResult(d.result || d);
+        setResultFrom(searchFromRef.current);
+        setBandsShown(false);
+        setGlobalMsg(t('pcrefinement:controls.globalRefineComplete'));
+        const r = d.result || d;
+        setCiValue(refinedCiOf(r));
+        applyRefinedCis(r);
+        // Update segments + detector PC spinboxes with optimized values
+        showRefinedSegments(r);
+        if (r?.mean_pc?.length === 3 && onOptimizedPc) onOptimizedPc(r.mean_pc, r.mode);
+      }
+    } catch (err) {
+      setIsRunning(false);
+      setCancelling(false);
+      const detail = err.response?.data?.detail;
+      // a coded refusal ("Find PC needs 5 patterns") in the reader's language, else the backend's sentence
+      const gMsg = isPcJobRunning(err) ? pcJobRunningText(t)
+        : (typeof detail === 'string' ? problemText(err, t, 'pcrefinement') : '')
+          || (detail ? (typeof detail === 'string' ? detail : JSON.stringify(detail))
+            : err.message || t('pcrefinement:controls.globalRefineFailed'));
+      setGlobalMsg(gMsg);
+      setGlobalError(true);
+    } finally {
+      inFlightRef.current = null;
+    }
+  };
+
+  // Global PC Refine: starts at the PC the page holds, over the calibration patterns on the list.
   const handleGlobalRefine = async () => {
+    setMsgScope('refine');
     if (patterns.length === 0) {
       setGlobalMsg(t('pcrefinement:controls.addPatternsFirst'));
       setGlobalError(true);
       return;
     }
-    setIsRunning(true);
-    setProgress(0);
-    setGlobalMsg(t('pcrefinement:controls.runningGlobalRefine'));
-    setGlobalError(false);
-    const p = paramsRef.current;
-    const gs = useDataStore.getState().gridShape || [1, 1];
-    const nCols = gs[1] || 1;
-    const flatIndices = patterns.map((pt) => pt.row * nCols + pt.col);
+    cancelRequestedRef.current = false;
+    await runSearch('refine', flatIndices(patterns), patterns.length);
+  };
+
+  // The open file's name, asked of the backend: a file switch during the seconds a pick takes would
+  // otherwise search the new file at positions picked in the old one.
+  const openFileName = async () => {
     try {
-      const res = await pcApi.optimize(flatIndices, p.method || 'Nelder-Mead', p.searchLimit || 0.05);
-      const d = res.data;
-      if (d.task_id) {
-        setTaskId(d.task_id);
-        setGlobalMsg(t('pcrefinement:controls.globalRefineStarted', { count: patterns.length }));
-      } else {
-        setIsRunning(false);
-        setProgress(100);
-        setResult(d.result || d);
-        setGlobalMsg(t('pcrefinement:controls.globalRefineComplete'));
-        const r = d.result || d;
-        if (r?.ci != null) setCiValue(r.ci);
-        applyRefinedCis(r);
-        // Update segments + detector PC spinboxes with optimized values
-        if (r?.segments && onSegmentsUpdate) onSegmentsUpdate(r.segments);
-        if (r?.mean_pc?.length === 3 && onOptimizedPc) onOptimizedPc(r.mean_pc);
-      }
-    } catch (err) {
-      setIsRunning(false);
-      const detail = err.response?.data?.detail;
-      const gMsg = typeof detail === 'string' ? detail : detail ? JSON.stringify(detail) : err.message || t('pcrefinement:controls.globalRefineFailed');
-      setGlobalMsg(gMsg);
-      setGlobalError(true);
+      return (await ebsdApi.info()).data?.active_dataset ?? null;
+    } catch {
+      return null;
     }
   };
 
-  // PC Drift Analysis (calibration-pattern based — existing flow)
-  const handleDriftAnalysis = async () => {
-    setDriftMsg(t('pcrefinement:controls.analyzingDrift'));
+  // Calibration patterns from the whole scan, one per ninth; they replace the list. Returns the picked
+  // positions ({row, col, ...}). The page's list follows through the 'pc-patterns-updated' event.
+  // `lines` are the lines already said by a Find PC run; the answer replaces the "Picking" line.
+  const pickPatterns = async (lines = [], exclude = []) => {
+    setPicking(true);
+    setMsgScope('find');
+    sayLines([...lines, t('pcrefinement:find.picking')]);
     try {
-      const indices = patterns.map((p) => p.index);
-      const res = await pcApi.analyzeDrift(indices);
-      setDriftMsg(t('pcrefinement:controls.driftResult', { data: JSON.stringify(res.data) }));
+      const d = (await (exclude.length ? pcApi.autoPick(true, exclude) : pcApi.autoPick(true))).data || {};
+      // what this pick was, to word where a later search's patterns came from: a scan of nine patterns or
+      // fewer is used completely, a larger one is split into 3 x 3 blocks
+      const notes = Array.isArray(d.notes) ? d.notes : [];
+      pickedRef.current = {
+        key: flatIndices(d.patterns || []).sort((a, b) => a - b).join(','),
+        blocks: Number(d.n_sampled) > 9, noQuality: notes.includes('blockWithoutQuality'),
+        // "other patterns": the positions of earlier lists were left out, so these are the next best ones
+        excluded: exclude.length > 0,
+      };
+      window.dispatchEvent(new Event('pc-patterns-updated'));
+      const how = { mean: 'backgroundMean', file: 'backgroundFile', none: 'backgroundNone' }[d.background] || 'backgroundNone';
+      const noteLines = notes
+        .map((code) => t(`pcrefinement:find.pickNote.${code}`, { defaultValue: '' }))
+        .filter(Boolean);
+      sayLines([...lines, [
+        t('pcrefinement:find.picked', { count: d.n_patterns, background: t(`pcrefinement:find.${how}`) }),
+        ...noteLines,
+      ].join(' ')]);
+      return d.patterns || [];
     } catch (err) {
-      setDriftMsg(t('pcrefinement:pixelwise.errorMsg', { detail: err.response?.data?.detail || err.message }));
+      // a search is running (the backend refuses to change the list under it): said in words
+      setGlobalMsg(isPcJobRunning(err) ? pcJobRunningText(t) : (problemText(err, t, 'pcrefinement') || err.message));
+      setGlobalError(true);
+      throw err;
+    } finally {
+      setPicking(false);
     }
+  };
+
+  // Find PC: needs no starting value. With fewer than FIND_MIN_PATTERNS patterns on the list, nine
+  // are picked from the scan first (and stay on the list, where they can be looked at and removed).
+  // `exclude` ([[row, col], ...]) is "other patterns": the pick leaves those positions out, always.
+  const startFind = async (exclude) => {
+    cancelRequestedRef.current = false;
+    statusLinesRef.current = [];
+    let list = patterns;
+    let lines = [];
+    if (patterns.length < FIND_MIN_PATTERNS || exclude.length > 0) {
+      inFlightRef.current = 'pick';
+      setIsRunning(true);
+      setCancelling(false);
+      setProgress(0);
+      setRefusal(null);
+      setUndone(null);
+      setKeptFor(null);
+      try {
+        const before = await openFileName();
+        list = await pickPatterns([], exclude);
+        lines = statusLinesRef.current;
+        const after = await openFileName();
+        if (cancelRequestedRef.current) {
+          cancelRequestedRef.current = false;
+          setCancelling(false);
+          setIsRunning(false);
+          sayLines([...lines, t('pcrefinement:find.cancelledBeforeSearch')]);
+          return;
+        }
+        if (after !== before) {
+          setIsRunning(false);
+          setGlobalMsg(t('pcrefinement:find.fileChanged'));
+          setGlobalError(true);
+          return;
+        }
+      } catch {
+        cancelRequestedRef.current = false;
+        setCancelling(false);
+        setIsRunning(false);
+        return;
+      } finally {
+        inFlightRef.current = null;
+      }
+    }
+    await runSearch('find', flatIndices(list), list.length, lines);
+  };
+  const handleFindPc = () => { givenUpRef.current = []; return startFind([]); };
+  // "Find PC again with other patterns": the pick is deterministic, so the positions of the list (and of the
+  // lists given up before it) are left out and the next best pattern of each block comes.
+  const handleFindAgain = () => {
+    const seen = new Set(givenUpRef.current.map(([r, c]) => `${r},${c}`));
+    patterns.forEach((pt) => {
+      if (!seen.has(`${pt.row},${pt.col}`)) givenUpRef.current.push([pt.row, pt.col]);
+    });
+    return startFind(givenUpRef.current.map((pos) => [...pos]));
+  };
+
+  // One step back for the file the result was given to: the backend puts the PC of before back, the page
+  // loads it again from there. Returns what PcUndoLine needs to show a refusal.
+  // `{data}` when the step was taken back (the page then loads the PC again from the backend), `{gone: true}` when
+  // there is no step any more, `{error}` for a refusal in words.
+  const putBackFile = async (file) => {
+    try {
+      const d = (await pcApi.putBack(file)).data || {};
+      if (onPcRestored) onPcRestored();
+      return { data: d };
+    } catch (err) {
+      if (problemCode(err) === 'nothingToPutBack') return { gone: true };
+      if (isPcJobRunning(err)) return { error: pcJobRunningText(t) };
+      return { error: problemText(err, t, 'pcrefinement') || err?.message || String(err) };
+    }
+  };
+  const handleUndo = async (file) => {
+    const answer = await putBackFile(file);
+    if (!answer.data) return answer;
+    const d = answer.data;
+    setUndone({
+      file,
+      previous: { pc: d.pc ?? null, had_pc: !!d.had_pc },
+      notRestored: Array.isArray(d.not_restored) ? d.not_restored : [],
+    });
+    setBandsShown(false);
+    setKeptFor(null);
+    return undefined;
   };
 
   // Source PC Drift — visualize Aztec's per-pixel PC from the loaded
@@ -2044,6 +2528,8 @@ function ControlsPanel({
       const res = await analysisApi.pcDriftToSeed(null);
       const d = res.data || {};
       const mean = d.mean_pc || [];
+      // An open page works on its own copy of the PC: show what the backend gave it.
+      if (d.pc_page_updated) onGridCalibrated?.();
       setSeedMsg(
         t('pcrefinement:controls.seedPushed', {
           mean: mean.map((v) => v.toFixed(4)).join(', '),
@@ -2058,15 +2544,102 @@ function ControlsPanel({
     }
   };
 
-  const handleCancel = () => {
-    stopPolling();
-    setIsRunning(false);
-    setTaskId(null);
-    setProgress(0);
+  // Cancel asks the backend to stop the run. It used to stop only the polling:
+  // the run went on, wrote its PC later unseen, and every new run or phase
+  // change got a 409 until it ended. The page now keeps polling until the
+  // backend reports "cancelled" (the run stops after its current pattern and
+  // writes nothing). A run the backend no longer knows is ended here.
+  const handleCancel = async () => {
+    if (!taskId && inFlightRef.current) {
+      // Find PC is still picking patterns, or the request that starts the job is on its way: there is no
+      // job to stop yet. Note it; the step in flight ends the run (or stops the job as soon as it has a name).
+      cancelRequestedRef.current = true;
+      setCancelling(true);
+      setGlobalMsg(t('pcrefinement:controls.optimizationCancelling'));
+      setGlobalError(false);
+      return;
+    }
+    if (!taskId) {
+      stopPolling(); setIsRunning(false); setProgress(0);
+      return;
+    }
+    setCancelling(true);
+    setGlobalMsg(t('pcrefinement:controls.optimizationCancelling'));
+    setGlobalError(false);
+    try {
+      await pcApi.cancelOptimize(taskId);
+    } catch (err) {
+      if (err?.response?.status === 404) {
+        stopPolling(); setIsRunning(false); setTaskId(null); setProgress(0); setCancelling(false);
+        return;
+      }
+      // The request did not arrive: the run goes on; let the user try again.
+      setCancelling(false);
+      setGlobalMsg(t('pcrefinement:controls.runningGlobalRefine'));
+      toast.warning(err?.response?.data?.detail?.message || err?.message || String(err));
+    }
   };
 
-  const canRun = detectorReady && phaseLoaded && !isRunning;
+  const canRun = detectorReady && phaseLoaded && !isRunning && !picking;
   const driftExport = useImageExport();
+  // The result is the PC in use only while nothing else has changed it since (a typed PC, another file,
+  // a step back): otherwise "PC in use for ..." would say something that is no longer true.
+  const resultPc = result && Array.isArray(result.mean_pc) && result.mean_pc.length === 3 ? result.mean_pc : null;
+  // ...and only when the calibration store took it: a PC that lives on this page only is not "in use".
+  const resultInUse = !!resultPc && samePc(resultPc, usedPc) && result.pc_stored !== false;
+  // The result in the convention of the open file (Oxford, EDAX/TSL): the backend converts. A Bruker file, or
+  // one whose format does not say, gets no such line.
+  const fileConvention = pcInUse?.convention_known && ['oxford', 'tsl'].includes(pcInUse.convention)
+    ? pcInUse.convention : null;
+  const patternSize = Array.isArray(result?.pattern_size) && result.pattern_size.length === 2
+    ? result.pattern_size : null;
+  const resultKey = resultPc ? resultPc.join(',') : '';
+  const sizeKey = patternSize ? patternSize.join('x') : '';
+  useEffect(() => {
+    setInConvention(null);                    // nothing stale: the old numbers go before the new ones come
+    if (!resultKey || !resultInUse || !fileConvention || !patternSize) return undefined;
+    let live = true;
+    pcApi.convert(resultKey.split(',').map(Number), 'bruker', fileConvention, patternSize).then((res) => {
+      const out = res.data?.pc;
+      if (live && Array.isArray(out) && out.length === 3) setInConvention({ convention: fileConvention, pc: out });
+    }).catch(() => {});
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resultKey, resultInUse, fileConvention, sizeKey]);
+
+  // ---- Save as calibration, Apply to other files, the question after a search, "Compare with a saved calibration"
+  const [saveFor, setSaveFor] = useState(null);          // {dataset, pc, quality, fromFar, forQuestion}
+  const [savedFar, setSavedFar] = useState(null);        // {dataset, name}: the far file's result was saved
+  const [asked, setAsked] = useState(null);              // {key, state}: the question after a search was answered
+  const [hasCalibrations, setHasCalibrations] = useState(false);
+  // "Only this file" leaves the calibration for good: its card is not offered to this file again until the file is
+  // loaded again (the mark of the load is the one the calibration panel uses for the offers put off with "Not now")
+  const loadMark = useDataStore((s) => s.ebsdInfo?.request_id ?? s.ebsdInfo?.file_path ?? null);
+  const [leftCalibration, setLeftCalibration] = useState(null);   // {mark, dataset, id}
+  const silencedIds = leftCalibration && leftCalibration.mark === loadMark && leftCalibration.dataset === activeDatasetName
+    ? [leftCalibration.id] : null;
+  const applyFlow = useApplyFlow((st) => st.flow);
+  const openSave = (opts = {}) => setSaveFor({
+    dataset: opts.dataset || activeDatasetName, pc: opts.pc || usedPc, quality: opts.quality ?? null,
+    fromFar: !!opts.fromFar, forQuestion: !!opts.forQuestion,
+  });
+  const openTakePc = () => setTakePcOpen(true);
+  const openApplyFlow = (calibration, origin) => useApplyFlow.getState().open(calibration, origin);
+  const asking = questionKey(result);
+  const questionOpen = !!asking && asked?.key !== asking;
+  // One main button at a time: while the result panel shows the PC with its own main button, Global PC Refine and
+  // Index All take the plain style
+  const resultHasMainButton = !!result && !undone && !!resultPc && !!result.dataset && resultInUse;
+  // the decision box offers the saved calibrations only when there is one
+  const needsDecisionNow = !!result && needsDecision(result);
+  useEffect(() => {
+    if (!needsDecisionNow) { setHasCalibrations(false); return undefined; }
+    let live = true;
+    pcCalibrationsApi.list().then((res) => {
+      if (live) setHasCalibrations((res.data?.calibrations || []).length > 0);
+    }).catch(() => {});
+    return () => { live = false; };
+  }, [needsDecisionNow, result]);
 
   return (
     <div
@@ -2083,6 +2656,47 @@ function ControlsPanel({
     >
       {driftExport.node}
 
+      {/* Which file is open and which PC is in use for it: on every state of the page */}
+      {pcStatusSeen && <PcFileHead file={activeDatasetName} pc={usedPc} perPixel={usedPcIsMap} origin={pcInUse} showConvention />}
+
+      {/* A saved calibration is offered for the open file, and "Take PC from..." opens from here. Nothing
+          changes without a button. The seams for what comes next (grantActions, renderAfterUse) are empty. */}
+      <CalibrationPanel
+        dataset={activeDatasetName}
+        usedPc={pcStatusSeen ? usedPc : undefined}
+        pcInUse={pcInUse}
+        takePcOpen={takePcOpen}
+        onTakePcOpenChange={setTakePcOpen}
+        onPcChanged={onPcRestored}
+        onUsePc={(pc) => onPcChanged(pc[0], pc[1], pc[2])}
+        onUndo={putBackFile}
+        onGoToIndexing={onNavigate ? () => onNavigate('indexing') : null}
+        renderBands={(caption) => (
+          <BandsPane
+            patternBase64={patternBase64} pcx={pcx} pcy={pcy} segments={segments}
+            caption={caption} exportName="pc-bands"
+          />
+        )}
+        onFindPc={handleFindPc}
+        canFindPc={canRun}
+        pickFile={pickPcFile}
+        grantActions={[{ key: 'save', label: t('pcrefinement:grant.saveAsCalibration'), onClick: () => openSave() }]}
+        onApplyToOthers={(calibration) => openApplyFlow(calibration, activeDatasetName)}
+        silenced={silencedIds}
+        renderAfterUse={({ offer }) => (
+          <div style={{ marginTop: 4 }}>
+            <Button small onClick={() => openApplyFlow(offer, activeDatasetName)}>{t('pcrefinement:calibration.applyToOthers')}</Button>
+          </div>
+        )}
+      />
+      {pcInUse?.kind === 'calibration' && pcInUse.calibration?.id && (
+        <OlderResults
+          calibrationId={pcInUse.calibration.id}
+          refreshKey={String(pcInUse.calibration.version)}
+          onGoToIndexing={onNavigate ? () => onNavigate('indexing') : null}
+        />
+      )}
+
       {/* Progress bar + Cancel — initially hidden (visible when running) */}
       {isRunning && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, animation: 'fadeSlideIn 0.2s ease-out' }}>
@@ -2094,6 +2708,7 @@ function ControlsPanel({
             variant="danger"
             style={{ width: 60, flexShrink: 0 }}
             onClick={handleCancel}
+            disabled={cancelling}
             title={t('pcrefinement:hoverTips.cancelRun')}
           >
             {t('common:cancel')}
@@ -2275,25 +2890,211 @@ function ControlsPanel({
       <Button
         disabled={!canRun || patterns.length === 0}
         style={{ width: '100%' }}
-        variant="purple"
+        variant={resultHasMainButton ? 'default' : 'purple'}
         onClick={handleIndexAll}
         title={t('pcrefinement:controls.indexAllTooltip')}
       >
         {t('pcrefinement:controls.indexAll', { count: patterns.length })}
       </Button>
       <StatusMsg msg={indexMsg} isError={indexError} />
+      {refusal && (
+        <HoughRefusal
+          problem={refusal}
+          fit={(name) => pcApi.fitPhaseReflectors(name)}
+          onFitted={() => { setRefusal(null); indexingChangedRef.current?.(); }}
+        />
+      )}
+
+      {/* A file that carries no PC and none was set: the fields show a placeholder */}
+      {pcSource === 'missing' && (
+        <div data-testid="pc-missing-hint" role="alert" style={{ margin: '4px 2px 2px' }}>
+          <div style={{ fontSize: '9.5pt', color: colors.red }}><b>{t('pcrefinement:pcMissingTitle')}</b></div>
+          <div style={{ fontSize: '9pt', color: colors.textSecondary }}>{t('pcrefinement:pcMissingHint')}</div>
+          <Button small style={{ marginTop: 4 }} onClick={() => setTakePcOpen(true)}>{t('pcrefinement:takePc.button')}</Button>
+        </div>
+      )}
+
+      {/* Find PC: no starting value needed */}
+      <div style={{ fontSize: '9pt', color: colors.textSecondary }}>{t('pcrefinement:find.conventionNote')}</div>
+      {phaseNames.length > 0 && (
+        <div data-testid="pc-searches-with" style={{ fontSize: '9pt', color: colors.textSecondary }}>
+          {t(phaseNames.length > 1 ? 'pcrefinement:find.searchesWithMany' : 'pcrefinement:find.searchesWithOne',
+            { names: phaseNames.join(', ') })}
+        </div>
+      )}
+      <Button
+        disabled={!canRun}
+        style={{ width: '100%' }}
+        variant="primary"
+        onClick={handleFindPc}
+        title={t('pcrefinement:find.buttonTooltip')}
+      >
+        {t('pcrefinement:find.button')}
+      </Button>
+      <div style={{ fontSize: '9pt', color: colors.textSecondary }}>{t('pcrefinement:find.note')}</div>
+      {!phaseLoaded && (
+        <div data-testid="pc-find-needs-phase" role="status" style={{ fontSize: '9pt', color: colors.orange }}>
+          {t('pcrefinement:find.needPhase')}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <Button
+          small
+          disabled={isRunning || picking}
+          onClick={() => { givenUpRef.current = []; pickPatterns().catch(() => {}); }}
+          title={t('pcrefinement:find.pickTooltip')}
+        >
+          {t('pcrefinement:find.pickButton')}
+        </Button>
+        <Button small onClick={() => setTakePcOpen(true)} title={t('pcrefinement:takePc.tooltip')}>
+          {t('pcrefinement:takePc.button')}
+        </Button>
+      </div>
+      {patterns.length > 0 && (
+        <div data-testid="pc-patterns-used" style={{ fontSize: '9pt', color: colors.textSecondary }}>
+          <b>{t('pcrefinement:find.patternsUsed')}</b>
+          <ul style={{ margin: '4px 0', paddingLeft: 18 }}>
+            {patterns.slice(0, 2).map((pt) => <li key={`${pt.row},${pt.col}`}>({pt.row}, {pt.col})</li>)}
+            {patterns.length > 2 && <li>{t('pcrefinement:find.andMore', { count: patterns.length - 2 })}</li>}
+          </ul>
+        </div>
+      )}
+      <StatusMsg msg={msgScope === 'find' ? globalMsg : null} isError={globalError} />
+
+      {/* Result: how the search ended, the PC with the facts to judge it, what the page does with it. After a
+          step back the panel says what happened instead of the numbers. */}
+      {result && undone && (
+        <GroupBox title={t('pcrefinement:result.title')} style={{ animation: 'fadeSlideIn 0.2s ease-out' }}>
+          <PcUndoDone file={undone.file} previous={undone.previous} notRestored={undone.notRestored} />
+        </GroupBox>
+      )}
+      {result && !undone && (
+        <GroupBox title={t('pcrefinement:result.title')} style={{ animation: 'fadeSlideIn 0.2s ease-out' }}>
+          <FollowerQuestion
+            key={asking || 'none'}
+            result={result}
+            savedNew={asked?.key === asking && asked?.state === 'saveNew'}
+            onAnswered={(state) => setAsked({ key: asking, state })}
+            onOnlyThis={(calibration) => setLeftCalibration({ mark: loadMark, dataset: result.dataset, id: calibration.id })}
+            onSaveNew={() => openSave({ dataset: result.dataset, pc: resultPc, quality: result.quality, forQuestion: true })}
+            onApplyToOthers={(made) => openApplyFlow(made, result.dataset)}
+            onPcChanged={onPcRestored}
+            onUndo={putBackFile}
+          />
+          {resultPc && (
+            <PcResult
+              result={result}
+              file={result.dataset}
+              pc={resultPc}
+              inUse={!!result.dataset && resultInUse}
+              inConvention={inConvention}
+              patternsFrom={resultFrom}
+              mapAction={pcMapActionOf(result.pc_map_action)}
+              busy={isRunning || picking}
+              bandsShown={bandsShown}
+              onToggleBands={() => setBandsShown((v) => !v)}
+              renderBands={(caption) => (
+                <BandsPane
+                  patternBase64={patternBase64} pcx={pcx} pcy={pcy} segments={segments}
+                  caption={caption} exportName="pc-bands"
+                />
+              )}
+              onUndo={handleUndo}
+              onFindAgain={handleFindAgain}
+              onKeep={() => setKeptFor(result.dataset)}
+              keptFor={keptFor}
+              onGoToIndexing={onNavigate ? () => onNavigate('indexing') : null}
+              warningText={pcWarningText(result, t)}
+              warningItems={pcWarningItems(result, t)}
+              onSave={questionOpen ? null : () => openSave({ dataset: result.dataset, pc: resultPc, quality: result.quality })}
+              onCompare={hasCalibrations ? openTakePc : null}
+            />
+          )}
+          {/* The PC in use for the file the search was run for is the line every way of giving a PC has */}
+          {result.dataset && resultPc && !resultInUse && result.pc_stored !== false && (
+            <div data-testid="pc-result-not-in-use" style={{ fontSize: '9pt', color: colors.textSecondary, margin: '4px 0' }}>
+              {t('pcrefinement:find.notInUse')}
+            </div>
+          )}
+          {/* Several phases: how the calibration patterns split between them. */}
+          {Array.isArray(result.pattern_phases) && result.pattern_phases.length > 0 && (
+            <FormRow label={t('pcrefinement:controls.phasePerPattern')}>
+              <Label style={{ color: colors.accent, fontSize: '9pt' }}>
+                <span data-testid="pc-phase-summary">
+                  {summarisePatternPhases(result.pattern_phases, t('pcrefinement:controls.phaseNone'))
+                    .map((s) => `${s.name} ×${s.count}`).join(', ')}
+                </span>
+              </Label>
+            </FormRow>
+          )}
+          <Button
+            small
+            style={{ width: '100%', marginBottom: 4 }}
+            title={t('pcrefinement:hoverTips.copyPcValues')}
+            onClick={() => {
+              const keys = ['pc_x', 'pc_y', 'pc_z'];
+              const vals = keys.map((k, i) => {
+                const v = result[k] ?? (result.mean_pc ? result.mean_pc[i] : result.pc?.[i]);
+                return v !== undefined ? v.toFixed(5) : '—';
+              });
+              const text = `PCx: ${vals[0]}\nPCy: ${vals[1]}\nPCz: ${vals[2]}`;
+              navigator.clipboard.writeText(text).then(() => {
+                setPcCopied(true);
+                setTimeout(() => setPcCopied(false), 1200);
+              }).catch(() => {});
+            }}
+          >
+            {pcCopied ? t('pcrefinement:controls.copied') : t('pcrefinement:controls.copyPcValues')}
+          </Button>
+          {parentName && activeDatasetName && (
+            <Button
+              small
+              disabled={propagated}
+              style={{ width: '100%', marginBottom: 4, marginTop: 4 }}
+              title={t('pcrefinement:controls.applyPcToParentTooltip', { parent: parentName })}
+              onClick={async () => {
+                try {
+                  const res = await calibrationApi.propagateToParent(activeDatasetName);
+                  if (res.data?.success) {
+                    setPropagated(true);
+                    setResultMsg(t('pcrefinement:controls.pcAppliedMsg', { parent: parentName }));
+                    setTimeout(() => setPropagated(false), 3000);
+                  }
+                } catch (err) {
+                  console.error('PC propagation failed:', err);
+                  setResultMsg(t('pcrefinement:controls.pcPropagationFailed'));
+                }
+              }}
+            >
+              {propagated
+                ? t('pcrefinement:controls.pcAppliedToParent', { parent: parentName })
+                : t('pcrefinement:controls.applyPcToParent', { parent: parentName })}
+            </Button>
+          )}
+          <StatusMsg msg={resultMsg} isError={false} />
+          <Separator />
+          <Button
+            small
+            disabled
+            title={t('pcrefinement:controls.gridCalibrationTooltip')}
+            style={{ width: '100%' }}
+          >
+            {t('pcrefinement:controls.gridCalibration')}
+          </Button>
+        </GroupBox>
+      )}
 
       {/* Global PC Refine */}
       <Button
         disabled={!canRun || patterns.length === 0}
         style={{ width: '100%' }}
-        variant="primary"
+        variant={resultHasMainButton ? 'default' : 'primary'}
         onClick={handleGlobalRefine}
         title={t('pcrefinement:controls.globalRefineTooltip')}
       >
         {t('pcrefinement:controls.globalRefine')}
       </Button>
-      <StatusMsg msg={globalMsg} isError={globalError} />
+      <StatusMsg msg={msgScope === 'find' ? null : globalMsg} isError={globalError} />
 
       {/* Source PC Drift — render Aztec's per-pixel PC across the whole
           scan (read from xmap.prop.pc_x/pc_y/dd of the active analysis
@@ -2367,150 +3168,11 @@ function ControlsPanel({
         )}
       </GroupBox>
 
-      {/* PC Drift Analysis */}
-      <Button
-        disabled={!canRun || patterns.length < 2}
-        style={{ width: '100%' }}
-        onClick={handleDriftAnalysis}
-        title={t('pcrefinement:controls.driftAnalysisTooltip')}
-      >
-        {t('pcrefinement:controls.driftAnalysis')}
-      </Button>
-      {driftMsg && (
-        <div
-          style={{
-            fontSize: '9pt',
-            color: colors.textSecondary,
-            padding: '3px 6px',
-            background: colors.bgSecondary,
-            border: `1px solid ${colors.border}`,
-            borderRadius: 3,
-            wordBreak: 'break-word',
-            animation: 'fadeSlideIn 0.2s ease-out',
-          }}
-        >
-          {driftMsg}
-        </div>
-      )}
-
-      {/* Result display */}
-      {result && (
-        <GroupBox title={t('pcrefinement:controls.resultsTitle')} style={{ animation: 'fadeSlideIn 0.2s ease-out' }}>
-          {[
-            { key: 'PCx', label: t('pcrefinement:controls.pcxLabel') },
-            { key: 'PCy', label: t('pcrefinement:controls.pcyLabel') },
-            { key: 'PCz', label: t('pcrefinement:controls.pczLabel') },
-          ].map(({ key, label }, i) => {
-            const keys = ['pc_x', 'pc_y', 'pc_z'];
-            const val = result[keys[i]] ?? (result.mean_pc ? result.mean_pc[i] : result.pc?.[i]);
-            return (
-              <FormRow key={key} label={label}>
-                <Label style={{ fontFamily: 'monospace', color: colors.green }}>
-                  {val !== undefined ? val.toFixed(5) : '—'}
-                </Label>
-              </FormRow>
-            );
-          })}
-          {result.mean_pc && (
-            <FormRow label={t('pcrefinement:controls.meanPcLabel')}>
-              <Label style={{ fontFamily: 'monospace', color: colors.accent, fontSize: '9pt' }}>
-                {result.mean_pc.map((v) => v.toFixed(4)).join(', ')}
-              </Label>
-            </FormRow>
-          )}
-          {/* Several phases: how the calibration patterns split between them. */}
-          {Array.isArray(result.pattern_phases) && result.pattern_phases.length > 0 && (
-            <FormRow label={t('pcrefinement:controls.phasePerPattern')}>
-              <Label style={{ color: colors.accent, fontSize: '9pt' }}>
-                <span data-testid="pc-phase-summary">
-                  {summarisePatternPhases(result.pattern_phases, t('pcrefinement:controls.phaseNone'))
-                    .map((s) => `${s.name} ×${s.count}`).join(', ')}
-                </span>
-              </Label>
-            </FormRow>
-          )}
-          {/* Reliability guard: Hough-based PC refine is unreliable on small
-              (low-res) patterns and can drift far from the vendor/.osc PC. */}
-          {result.pc_warning && (
-            <div style={{
-              marginTop: 6, marginBottom: 6, padding: '8px 10px',
-              background: 'rgba(224,160,32,0.12)',
-              border: '1px solid #e0a020', borderRadius: 4,
-              color: colors.text, fontSize: '8.5pt', lineHeight: 1.4,
-            }}>
-              ⚠ {pcWarningText(result, t)}
-            </div>
-          )}
-          <Button
-            small
-            style={{ width: '100%', marginBottom: 4 }}
-            title={t('pcrefinement:hoverTips.copyPcValues')}
-            onClick={() => {
-              const keys = ['pc_x', 'pc_y', 'pc_z'];
-              const vals = keys.map((k, i) => {
-                const v = result[k] ?? (result.mean_pc ? result.mean_pc[i] : result.pc?.[i]);
-                return v !== undefined ? v.toFixed(5) : '—';
-              });
-              const text = `PCx: ${vals[0]}\nPCy: ${vals[1]}\nPCz: ${vals[2]}`;
-              navigator.clipboard.writeText(text).then(() => {
-                setPcCopied(true);
-                setTimeout(() => setPcCopied(false), 1200);
-              }).catch(() => {});
-            }}
-          >
-            {pcCopied ? t('pcrefinement:controls.copied') : t('pcrefinement:controls.copyPcValues')}
-          </Button>
-          {parentName && activeDatasetName && (
-            <Button
-              small
-              disabled={propagated}
-              style={{ width: '100%', marginBottom: 4, marginTop: 4 }}
-              title={t('pcrefinement:controls.applyPcToParentTooltip', { parent: parentName })}
-              onClick={async () => {
-                try {
-                  const res = await calibrationApi.propagateToParent(activeDatasetName);
-                  if (res.data?.success) {
-                    setPropagated(true);
-                    setResultMsg(t('pcrefinement:controls.pcAppliedMsg', { parent: parentName }));
-                    setTimeout(() => setPropagated(false), 3000);
-                  }
-                } catch (err) {
-                  console.error('PC propagation failed:', err);
-                  setResultMsg(t('pcrefinement:controls.pcPropagationFailed'));
-                }
-              }}
-            >
-              {propagated
-                ? t('pcrefinement:controls.pcAppliedToParent', { parent: parentName })
-                : t('pcrefinement:controls.applyPcToParent', { parent: parentName })}
-            </Button>
-          )}
-          <StatusMsg msg={resultMsg} isError={false} />
-          <Separator />
-          <Button
-            small
-            disabled={!canRun || patterns.length < 2}
-            style={{ width: '100%', marginBottom: 4 }}
-            onClick={handleDriftAnalysis}
-            title={t('pcrefinement:hoverTips.driftAnalysisShort')}
-          >
-            {t('pcrefinement:controls.driftAnalysisShort')}
-          </Button>
-          <Button
-            small
-            disabled
-            title={t('pcrefinement:controls.gridCalibrationTooltip')}
-            style={{ width: '100%' }}
-          >
-            {t('pcrefinement:controls.gridCalibration')}
-          </Button>
-        </GroupBox>
-      )}
 
       <Separator />
 
       {/* Pixel-wise PC Correction */}
-      <PixelwisePCGroup canRun={canRun} />
+      <PixelwisePCGroup canRun={canRun} onCalibrated={onGridCalibrated} />
 
       {/* Indexing Settings */}
       <IndexingSettingsGroup
@@ -2522,13 +3184,74 @@ function ControlsPanel({
         onIndexingChanged={handleIndexingChanged}
       />
 
+      {/* A per-pixel PC map: what the fields show, and what the last edit did to it */}
+      {(() => {
+        const note = pcMapNote(pcMapInfo, pcMapAction);
+        return note ? (
+          <div data-testid="pc-map-note" role="status"
+               style={{ fontSize: '9pt', color: colors.textSecondary, margin: '4px 2px 6px' }}>
+            {t(`pcrefinement:pixelwise.${note.key}`, note.params)}
+          </div>
+        ) : null;
+      })()}
+
+      {/* A typed PC the calibration store did not take: indexing would use the file's, not this one */}
+      {typedPcNotStored && (
+        <div data-testid="pc-not-stored" role="status"
+             style={{ fontSize: '9pt', color: colors.orange, margin: '4px 2px 6px' }}>
+          {t('pcrefinement:warnings.pcNotStored')}
+        </div>
+      )}
+
       {/* Detector Settings */}
       <DetectorSettingsGroup
         onDetectorApplied={onDetectorApplied}
         onPcChanged={onPcChanged}
         onTiltChanged={onTiltChanged}
         externalPc={externalPc}
+        onPixelSizeApplied={onPixelSizeApplied}
+        onPcMapAction={onPcMapAction}
+        datasetName={activeDatasetName}
+        usedPc={pcStatusSeen ? usedPc : undefined}
+        pcInUse={pcInUse}
+        onUndoPc={putBackFile}
+        onGoToIndexing={onNavigate ? () => onNavigate('indexing') : null}
+        renderBands={(caption) => (
+          <BandsPane
+            patternBase64={patternBase64} pcx={pcx} pcy={pcy} segments={segments}
+            caption={caption} exportName="pc-bands"
+          />
+        )}
+        onSavePc={(pc) => openSave({ pc })}
       />
+      {saveFor && (
+        <SaveCalibrationDialog
+          dataset={saveFor.dataset}
+          pc={saveFor.pc}
+          quality={saveFor.quality}
+          perPixel={!!pcInUse?.per_pixel}
+          onClose={() => setSaveFor(null)}
+          onSaved={(created) => {
+            if (saveFor.fromFar) setSavedFar({ dataset: saveFor.dataset, name: created.name });
+            if (saveFor.forQuestion) setAsked({ key: asking, state: 'saveNew' });
+          }}
+          onApplyToOthers={saveFor.fromFar ? null : (created) => { setSaveFor(null); openApplyFlow(created, saveFor.dataset); }}
+        />
+      )}
+      {applyFlow && (
+        <ApplyToFilesDialog
+          onClose={() => useApplyFlow.getState().close()}
+          onPcChanged={onPcRestored}
+          onUndo={putBackFile}
+          onSave={openSave}
+          onFindPc={handleFindPc}
+          canFindPc={canRun}
+          pageReady={pcStatusSeen && activeDatasetName != null}
+          findStatus={{ running: isRunning || picking, message: msgScope === 'find' ? globalMsg : null, error: globalError }}
+          findResult={result}
+          savedFar={savedFar}
+        />
+      )}
       <PromptDialog {...promptProps} />
     </div>
   );
@@ -2562,6 +3285,18 @@ export function pcWarningText(result, t) {
   return result?.pc_warning || '';
 }
 
+/**
+ * Every warning of a result worded on its own: `[{code, text}]`, in the order the backend sent them. A code
+ * this build has no text for is left out (its English sentence is only available joined with the others).
+ */
+export function pcWarningItems(result, t) {
+  const codes = result?.pc_warning_codes;
+  if (!Array.isArray(codes)) return [];
+  return codes
+    .map((c) => ({ code: c.code, text: t(`warnings.${c.code}`, { ...localiseParams(c.params), defaultValue: I18N_MISS }) }))
+    .filter((w) => w.text && w.text !== I18N_MISS);
+}
+
 export default function PCRefinement({ onNavigate }) {
   const { t } = useTranslation('pcrefinement');
   const [askPrompt, promptProps] = usePrompt();
@@ -2574,6 +3309,15 @@ export default function PCRefinement({ onNavigate }) {
   // Readiness flags
   const [detectorReady, setDetectorReady] = useState(false);
   const [phaseLoaded, setPhaseLoaded] = useState(false);
+  // syncPatterns is created once; it reads whether a phase WAS loaded through this ref.
+  const phaseLoadedRef = useRef(phaseLoaded);
+  phaseLoadedRef.current = phaseLoaded;
+  const [sessionReset, setSessionReset] = useState(0);
+  // syncPatterns is created once: the current translator, and a counter that
+  // voids status answers asked before a newer change (see syncPatterns).
+  const tRef = useRef(t);
+  tRef.current = t;
+  const syncSeqRef = useRef(0);
   // The loaded phases ({name, space_group?, lattice?}); several when calibrating
   // a multi-phase sample. `phaseLabel` is their joined name for the header.
   const [phases, setPhases] = useState([]);
@@ -2594,6 +3338,24 @@ export default function PCRefinement({ onNavigate }) {
   // Kikuchi line segments from indexing (for overlay)
   const [kikuchiSegments, setKikuchiSegments] = useState([]);
 
+  // Which pattern is selected, and which late answers may still be drawn on it
+  // (see selectionGuard.js). Updated synchronously by the handlers, not by the
+  // render, so an answer that arrives between a click and its re-render is
+  // already judged against the new selection.
+  const selectionRef = useRef(null);
+  if (selectionRef.current === null) selectionRef.current = createSelectionGuard();
+  // Re-index requests (PC / tilt edits) of the selected pattern: only the newest draws.
+  const reindexRef = useRef(null);
+  if (reindexRef.current === null) reindexRef.current = createLatestRequest();
+  // The latest list / phase count / list-update handler, for callbacks that must
+  // keep a stable identity (showPattern is called from effects and event listeners).
+  const patternsRef = useRef([]);
+  patternsRef.current = patterns;
+  const multiPhaseRef = useRef(false);
+  multiPhaseRef.current = multiPhase;
+  const handlePatternsIndexedRef = useRef(null);
+  const pcEditSeqRef = useRef(0);      // the newest "Use these numbers" (see handlePcChanged)
+
   // --- Forward-simulation preview (closes the PC/sample_tilt/det_tilt
   // degeneracy that Hough band-fitting alone can't break) ---
   const [trialGeometry, setTrialGeometry] = useState({
@@ -2603,8 +3365,11 @@ export default function PCRefinement({ onNavigate }) {
   });
   const [shtPath, setShtPath] = useState(null);
   const [shtChoices, setShtChoices] = useState([]);
+  const [shtRefresh, setShtRefresh] = useState(0);   // bumped on every visit: re-list the masters
+  const shtPhaseRef = useRef(null);                  // the phase the master list was last picked for
   const [simulatedB64, setSimulatedB64] = useState(null);
   const [simulatedNcc, setSimulatedNcc] = useState(null);
+  const [simulatedNccReason, setSimulatedNccReason] = useState(null);
   const [simulatedLoading, setSimulatedLoading] = useState(false);
   const [simulatedError, setSimulatedError] = useState(null);
   const [simulatedOrientation, setSimulatedOrientation] = useState(null);
@@ -2615,17 +3380,100 @@ export default function PCRefinement({ onNavigate }) {
   // Optimized PC values (passed to DetectorSettingsGroup to update spinboxes)
   const [optimizedPc, setOptimizedPc] = useState(null);
 
+  // A per-pixel PC map (grid calibration): {rows, cols}, or null. The fields show
+  // its mean. And what the last write of one PC did to it ("shifted" | "replaced").
+  const [pcMapInfo, setPcMapInfo] = useState(null);
+  // Where the active dataset's PC comes from ("missing": the file carries none and
+  // nobody set one, the fields show a placeholder).
+  const [pcSource, setPcSource] = useState(null);
+  // The PC in use for the open file as the backend reports it (null for a file without one), and whether
+  // the backend has answered yet: the head of the page says nothing before that rather than a wrong "none".
+  const [usedPc, setUsedPc] = useState(null);
+  const [pcStatusSeen, setPcStatusSeen] = useState(false);
+  // The PC in use is a per-pixel map (usedPc is then its mean): the head of the page must not read as one PC.
+  const [usedPcIsMap, setUsedPcIsMap] = useState(false);
+  // `pc_in_use` of the status: where that PC came from (file, Find PC, refine, typed, grid, a calibration) and
+  // the convention of the open file's vendor. The head of the page names the origin on every state.
+  const [pcInUse, setPcInUse] = useState(null);
+  // A typed PC the calibration store did not take (the backend answered pc_stored false): said on the page.
+  const [typedPcNotStored, setTypedPcNotStored] = useState(false);
+  const noteStatusPc = useCallback((d) => {
+    setPcStatusSeen(true);
+    const has = d?.pc_source !== 'missing' && Array.isArray(d?.pc) && d.pc.length === 3;
+    setUsedPc(has ? d.pc.map(Number) : null);
+    // the head says what the FILE uses (the store's PC), not what the page's own detector holds
+    setUsedPcIsMap(has && !!d?.pc_in_use?.per_pixel);
+    setPcInUse(d?.pc_in_use ?? null);
+  }, []);
+  const refreshPcSource = useCallback(() => {
+    pcApi.status().then((res) => {
+      setPcSource(res.data?.pc_source ?? null);
+      noteStatusPc(res.data);
+    }).catch(() => {});
+  }, [noteStatusPc]);
+  const [pcMapAction, setPcMapAction] = useState(null);
+  const handlePcMapAction = useCallback((value) => {
+    const action = pcMapActionOf(value);
+    if (action === 'replaced') setPcMapInfo(null);   // one PC for the whole scan now
+    if (action) setPcMapAction(action);
+  }, []);
+  const refreshPcMap = useCallback(() => {
+    pcApi.status().then((res) => {
+      setPcMapInfo(pcMapInfoOf(res.data));
+      setPcSource(res.data?.pc_source ?? null);
+      noteStatusPc(res.data);
+      setPcMapAction(null);
+      const pc = res.data?.pc;
+      if (Array.isArray(pc) && pc.length === 3) {
+        setOptimizedPc(pc);   // the fields: the map mean
+        // ...and the forward preview, whose NCC is the page's own check of that PC.
+        setTrialGeometry((g) => ({ ...g, pcx: pc[0], pcy: pc[1], pcz: pc[2] }));
+      }
+    }).catch(() => {});
+  }, [noteStatusPc]);
+
+  // The status bar at the bottom shows the PC of the data store's detector, which only a load fills. Every way of
+  // giving a file a PC, or of putting one back, ends in a new `usedPc` here; when that is not the PC the bar shows,
+  // the bar is given the file's metadata again (the backend answers it from the same store as the status).
+  const usedPcKey = usedPc ? usedPc.join(',') : '';
+  useEffect(() => {
+    if (!pcStatusSeen) return undefined;
+    const store = useDataStore.getState();
+    if (!store.isFileOpen) return undefined;
+    const shown = store.detector;
+    if (usedPc ? (shown?.has_detector && samePc(shown.pc, usedPc)) : !(shown?.has_detector && shown.pc?.length === 3)) return undefined;
+    let live = true;
+    const forFile = store.filePath;
+    ebsdApi.getMetadata().then((res) => {
+      if (live && res?.data?.detector && useDataStore.getState().filePath === forFile) useDataStore.getState().setMetadata(res.data);
+    }).catch(() => {});
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usedPcKey, pcStatusSeen]);
+
   // Parent dataset info for PC propagation
   const [parentName, setParentName] = useState(null);
   const [activeDatasetName, setActiveDatasetName] = useState(null);
   const [propagated, setPropagated] = useState(false);
+  // "This PC is on this page only" was said about the file typed for: another file does not carry it.
+  useEffect(() => { setTypedPcNotStored(false); }, [activeDatasetName]);
+  // Which file is open now, for the answer of a "Use these numbers" that was pressed on another one.
+  const openFilePath = useDataStore((s) => s.filePath);
+  const openLoadedName = useLoadedFilesStore((s) => s.files.find((f) => f.active)?.name || '');
+  const openFileRef = useRef('');
+  openFileRef.current = `${openFilePath || ''}|${openLoadedName}|${activeDatasetName || ''}`;
 
   // Indexing params (forwarded from IndexingSettingsGroup)
   const indexingParamsRef = useRef({});
 
   // Check backend status on mount and sync patterns + PC values
   useEffect(() => {
+    // Void if anything newer happened before it answers (a sync, a Remove, a
+    // phase change): those bump syncSeqRef. This one does not bump it, so it
+    // never voids a sync of its own.
+    const asked = syncSeqRef.current;
     pcApi.status().then((res) => {
+      if (asked !== syncSeqRef.current) return;
       const d = res.data;
       if (d?.has_detector || d?.detector_set) setDetectorReady(true);
       if (d?.has_phase || d?.phase_loaded) {
@@ -2642,57 +3490,147 @@ export default function PCRefinement({ onNavigate }) {
         setCurrentPcy(d.pc[1]);
         setOptimizedPc(d.pc);  // Feed to DetectorSettingsGroup spinboxes
       }
+      setPcMapInfo(pcMapInfoOf(d));
+      setPcSource(d?.pc_source ?? null);
+      noteStatusPc(d);
     }).catch(() => {});
-  }, []);
+  }, [noteStatusPc]);
 
-  // Fetch calibration entry to check if active dataset has a parent
-  useEffect(() => {
+  // Which dataset is active and whether it has a parent ("Apply PC to parent").
+  // Asked again on every visit: processing in the viewer can make a new active
+  // dataset while this page stays mounted, and "apply to parent" must not
+  // target the dataset that was active when the page first opened.
+  const refreshDatasetInfo = useCallback(() => {
     ebsdApi.info().then((res) => {
-      const dsName = res.data?.active_dataset;
-      if (!dsName) return;
+      const dsName = res.data?.active_dataset || null;
       setActiveDatasetName(dsName);
+      if (!dsName) { setParentName(null); return; }
       calibrationApi.getEntry(dsName).then((calRes) => {
-        if (calRes.data?.parent_name) {
-          setParentName(calRes.data.parent_name);
-        }
-      }).catch(() => {}); // No calibration entry — not a derived dataset
+        setParentName(calRes.data?.parent_name || null);
+      }).catch(() => setParentName(null)); // No calibration entry — not a derived dataset
     }).catch(() => {});
   }, []);
+  useEffect(() => { refreshDatasetInfo(); }, [refreshDatasetInfo]);
 
-  // Sync patterns from backend (called on mount and can be re-triggered)
-  const syncPatterns = useCallback(() => {
-    pcApi.status().then((res) => {
+  // Show calibration pattern `idx` of `list`: its stored image and its cached
+  // (or freshly computed) overlay. The ONE place a selection starts, so every
+  // way of selecting - the list, the slider, Index All, a re-sync of the page -
+  // clears the lines of the pattern shown before at once and ignores whatever
+  // that pattern's requests answer later.
+  const showPattern = useCallback((idx, list) => {
+    const guard = selectionRef.current;
+    const token = guard.select(idx);
+    reindexRef.current.next();           // a re-index of the previous pattern is void too
+    setSelectedPatternIdx(idx);
+    setKikuchiSegments([]);              // those lines belong to the previous pattern
+    const pat = idx == null ? null : (list ?? patternsRef.current)[idx];
+    if (!pat) {
+      // Nothing selected (a removal, a deselect, an empty list): the picture and
+      // the CI of the pattern shown before must go with its lines.
+      setPatternBase64(null);
+      setCiValue(null);
+      return;
+    }
+    // Load the STORED pattern image (captured at add-time, not current active signal)
+    // This is critical for DeepCopy/FrameAvg workflows where the active signal may differ
+    pcApi.getPatternImage(idx).then((res) => {
+      if (!guard.isCurrent(token)) return;
+      setPatternBase64(res.data?.image || null);
+    }).catch(() => {
+      if (!guard.isCurrent(token)) return;
+      // Fallback: load from active signal if stored image endpoint fails
+      ebsdApi.getPattern(pat.row ?? 0, pat.col ?? 0).then((res2) => {
+        if (!guard.isCurrent(token)) return;
+        setPatternBase64(res2.data?.image || res2.data?.image_base64 || null);
+      }).catch(() => {});
+    });
+    // Load cached overlay (auto-indexes if not cached)
+    pcApi.getPatternResult(idx).then((res) => {
+      if (!guard.isCurrent(token)) return;
       const d = res.data;
-      if (d?.patterns && d.patterns.length > 0) {
-        setPatterns(d.patterns); // patterns now include CI from backend cache
-        // Auto-select last pattern and load its image for preview
-        const last = d.patterns[d.patterns.length - 1];
-        setSelectedPatternIdx(d.patterns.length - 1);
-        if (last) {
-          ebsdApi.getPattern(last.row, last.col).then((pRes) => {
-            const img = pRes.data?.image || pRes.data?.image_base64 || null;
-            setPatternBase64(img);
-          }).catch(() => {});
+      if (d?.success && d.segments) {
+        setKikuchiSegments(d.segments);
+        if (d.ci != null) setCiValue(d.ci);
+        // Several phases: remember which one this pattern was indexed as
+        // (the list shows it, and the preview picks its master by it).
+        if (multiPhaseRef.current && d.phase_name) {
+          handlePatternsIndexedRef.current?.([{ index: pat.index, phase_name: d.phase_name, phase_fits: d.phase_fits }]);
         }
+      } else {
+        setKikuchiSegments([]);
+        // Fall back to local CI when backend cache is lost
+        if (pat.ci != null) setCiValue(pat.ci);
       }
-      if (d?.has_detector) setDetectorReady(true);
-      if (d?.has_phase) {
-        setPhaseLoaded(true);
-        applyStatusPhases(d);
+    }).catch(() => {
+      if (!guard.isCurrent(token)) return;
+      setKikuchiSegments([]);
+      // Fall back to local CI when backend cache is lost
+      if (pat.ci != null) setCiValue(pat.ci);
+    });
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Sync with the backend (on every visit and after the viewer adds a pattern).
+  // The backend's answer is the truth, also when it is EMPTY: the PC session
+  // belongs to the active dataset, and processing in the viewer (deep copy on)
+  // makes a new dataset with a session of its own - no patterns, no phase. The
+  // page used to keep the old list and "phase loaded", and every action then
+  // failed against the empty session, which read as a hang.
+  const syncPatterns = useCallback(() => {
+    refreshDatasetInfo();
+    // An answer to an older question never overwrites a newer state: a status
+    // asked before a Remove or a phase change (both bump this) is dropped.
+    const asked = ++syncSeqRef.current;
+    pcApi.status().then((res) => {
+      if (asked !== syncSeqRef.current) return;
+      const tt = tRef.current;   // syncPatterns is created once; the language may have changed
+      const d = res.data || {};
+      const list = Array.isArray(d.patterns) ? d.patterns : [];
+      setPatterns(list); // patterns include CI from the backend cache
+      // Auto-select the last pattern: its stored image and ITS lines (not those
+      // of whatever was shown when the page was left); none when the list is empty.
+      showPattern(list.length > 0 ? list.length - 1 : null, list);
+      setDetectorReady(!!(d.has_detector || d.detector_set));
+      const hasPhase = !!(d.has_phase || d.phase_loaded);
+      setPhaseLoaded(hasPhase);
+      if (hasPhase) applyStatusPhases(d);
+      else {
+        setPhases([]);
+        setPhaseLabel(tt('pcrefinement:header.noPhaseLoaded'));
+        setPhaseInfoText('');           // the header card of the old session's phase
+        if (phaseLoadedRef.current) setSessionReset((n) => n + 1);   // it had one before
       }
       setGlobalCi(d?.global_ci ?? null);
       if (d?.pc?.length === 3) {
+        // The PC of THIS session everywhere it is shown: the crosshair, the PC
+        // fields and the forward preview (a processed copy may carry another PC;
+        // the fields and the preview used to keep the old one, and the preview's
+        // NCC then judged a good PC as bad).
         setCurrentPcx(d.pc[0]);
         setCurrentPcy(d.pc[1]);
+        setOptimizedPc(d.pc);
+        setTrialGeometry((g) => ({ ...g, pcx: d.pc[0], pcy: d.pc[1], pcz: d.pc[2] }));
       }
+      setPcMapInfo(pcMapInfoOf(d));
+      setPcSource(d?.pc_source ?? null);
+      noteStatusPc(d);
     }).catch(() => {});
-  }, []);
+  }, [noteStatusPc]);
+
+  // The PC came back from the backend after a step back: what the last write did to a map is history now
+  // (the restored map is in use again), and a typed PC that was not stored is gone with the step.
+  const handlePcRestored = useCallback(() => {
+    setPcMapAction(null);
+    setTypedPcNotStored(false);
+    syncPatterns();
+  }, [syncPatterns]);
 
   // Re-sync when PC Refinement page becomes visible OR when patterns are updated
   const containerRef = useRef(null);
   useEffect(() => {
     const onPageChange = (e) => {
-      if (e.detail?.page === 'pcrefinement') syncPatterns();
+      if (e.detail?.page !== 'pcrefinement') return;
+      syncPatterns();
+      setShtRefresh((n) => n + 1);
     };
     const onPatternsUpdated = () => syncPatterns();
     window.addEventListener('page-changed', onPageChange);
@@ -2705,16 +3643,26 @@ export default function PCRefinement({ onNavigate }) {
 
   const handleRemovePattern = async () => {
     if (selectedPatternIdx === null) return;
+    syncSeqRef.current += 1;   // a status asked before this removal must not bring the pattern back
     try {
       await pcApi.removePattern(selectedPatternIdx);
-    } catch {
-      // Backend removal failed — still remove locally to stay responsive
+    } catch (err) {
+      // The backend kept the pattern (e.g. a refine is running, or the list
+      // changed under us): show its list, never a local one that differs from
+      // it - the indices of every later action would point at other patterns.
+      // And say why, instead of a Remove that silently did nothing.
+      const detail = err?.response?.data?.detail;
+      toast.warning(isPcJobRunning(err) ? pcJobRunningText(t)
+        : (typeof detail === 'string' ? detail : detail?.message || err?.message || String(err)));
+      syncPatterns();
+      return;
     }
     setPatterns((prev) => {
       const next = prev.filter((_, i) => i !== selectedPatternIdx);
       return next.map((p, i) => ({ ...p, index: i }));
     });
-    setSelectedPatternIdx(null);
+    setGlobalCi(null);       // it was the mean over a set that included this pattern
+    showPattern(null);       // nothing selected: its picture, lines and CI go, its pending answers are void
   };
 
   // The names a status reply carries: with several phases the header shows them
@@ -2730,6 +3678,7 @@ export default function PCRefinement({ onNavigate }) {
   // Everything computed for the old set (CI, per-pattern phase, overlay) is
   // stale — the backend dropped its caches — so clear it here too.
   const handlePhasesChanged = (list) => {
+    syncSeqRef.current += 1;   // a status asked before this change must not undo it
     setPhases(list);
     setPhaseLoaded(list.length > 0);
     setPhaseLabel(phaseLabelFor(list.map((p) => p.name), t('pcrefinement:header.noPhaseLoaded')));
@@ -2745,6 +3694,7 @@ export default function PCRefinement({ onNavigate }) {
   };
 
   const handlePhaseLoaded = (info) => {
+    syncSeqRef.current += 1;   // a status asked before this load must not mark the phase gone
     setPhaseLoaded(true);
     const name = info.phase_name || info.name || t('pcrefinement:phaseInfo.unknown');
     setPhaseLabel(name);
@@ -2760,6 +3710,7 @@ export default function PCRefinement({ onNavigate }) {
 
   const handleDetectorApplied = (pc, sampleTilt, detTilt) => {
     setDetectorReady(true);
+    refreshPcSource();
     if (pc) {
       setCurrentPcx(parseFloat(pc[0]) || 0.5);
       setCurrentPcy(parseFloat(pc[1]) || 0.5);
@@ -2799,26 +3750,65 @@ export default function PCRefinement({ onNavigate }) {
     );
   }, []);
 
-  // Reactive PC change — mirrors PyQt5 apply_detector_pc()
-  // Updates detector, clears caches, re-indexes current pattern, re-overlays
+  handlePatternsIndexedRef.current = handlePatternsIndexed;
+
+  // "Use these numbers": the typed PC (Bruker's numbers) becomes the PC of the open file. Updates the detector,
+  // clears caches, re-indexes the current pattern, re-overlays. Typing alone never gets here.
+  // Answers `{data}` when the backend took it and `{error: text}` when not, so the fields can say it; the
+  // crosshair and the forward preview follow the PC only then, never a typed number that was refused.
   const handlePcChanged = useCallback(async (pcx, pcy, pcz) => {
-    setCurrentPcx(pcx);
-    setCurrentPcy(pcy);
-    // Update trialGeometry so the forward-sim preview re-renders. This
-    // is the geometry knob most users will sweep when calibrating.
-    setTrialGeometry((g) => ({ ...g, pcx, pcy, pcz }));
+    // The answer describes the pattern that was selected NOW, at THIS request:
+    // another pick (or removal), or a newer edit, before it returns voids it.
+    const forIdx = selectedPatternIdx;
+    const seq = reindexRef.current.next();
+    // Two presses of "Use these numbers" can overlap: the answer of the older one must not put its PC on the page
+    // after the newer one has (the status below then corrects whatever the backend ended with).
+    const mine = ++pcEditSeqRef.current;
+    // The press is for the file that was open when it was made: if another file is open when the answer comes,
+    // the old file's PC does not go into the crosshair, the preview or the head (the backend keeps it for its
+    // own dataset; the next status shows the PC of the file in front of the person).
+    const forFile = openFileRef.current;
+    const newest = () => mine === pcEditSeqRef.current && forFile === openFileRef.current;
     try {
-      const res = await pcApi.updatePC(pcx, pcy, pcz, selectedPatternIdx);
+      const res = await pcApi.updatePC(pcx, pcy, pcz, forIdx);
       const d = res.data;
-      if (d?.ci != null) setCiValue(d.ci);
+      if (newest()) {
+        setCurrentPcx(pcx);
+        setCurrentPcy(pcy);
+        // The forward-sim preview renders at the PC now in use (its NCC is the check of that PC).
+        setTrialGeometry((g) => ({ ...g, pcx, pcy, pcz }));
+      }
+      handlePcMapAction(d?.pc_map_action);
+      if (newest()) setTypedPcNotStored(d?.pc_stored === false);   // on this page only: say so, never silently
+      if (newest() && d?.pc_stored !== false) {
+        // until the status below confirms it: the head names this PC and where it came from
+        setPcStatusSeen(true);
+        setUsedPc([pcx, pcy, pcz]);
+        setPcInUse((prev) => ({ ...(prev || {}), kind: 'typed', calibration: null }));
+      }
+      refreshPcSource();                       // a typed PC is a PC: the "no PC" hint goes
       // Only the selected pattern was indexed at the new PC: no global value
       // until all of them are (Index All, Global PC Refine).
       setGlobalCi(d?.global_ci ?? null);
-      if (d?.segments) setKikuchiSegments(d.segments);
-    } catch {
-      // Ignore errors during reactive update
+      // (picking another pattern also starts a new "request": showPattern)
+      const stillShown = reindexRef.current.isLatest(seq) && forFile === openFileRef.current;
+      if (stillShown) {
+        if (d?.ci != null) setCiValue(d.ci);
+        if (d?.segments) setKikuchiSegments(d.segments);
+      }
+      return { data: d || {} };
+    } catch (err) {
+      // The backend did not take the PC (a refine is running, the file changed, ...): nothing on the page moved,
+      // and the person is told, where the fields used to stay silent about everything but a running refine.
+      if (isPcJobRunning(err)) {
+        const text = t('pcrefinement:controls.pcEditNotApplied', { reason: pcJobRunningText(t) });
+        toast.warning(text);
+        refreshPcMap();
+        return { error: text };
+      }
+      return { error: problemText(err, t, 'pcrefinement') || err?.message || t('pcrefinement:detector.failed') };
     }
-  }, [selectedPatternIdx, setCiValue, setGlobalCi]);
+  }, [selectedPatternIdx, setCiValue, setGlobalCi, handlePcMapAction, refreshPcSource, refreshPcMap, t]);
 
   // Sample / detector tilt + azimuthal changes — keep trialGeometry in
   // sync. The existing handleTiltChanged callback below posts to the
@@ -2838,16 +3828,27 @@ export default function PCRefinement({ onNavigate }) {
     // refreshes whenever the user nudges a tilt — that's the parameter
     // most likely to be miscalibrated (header values are unreliable).
     handleTrialTiltChanged(sampleTilt, detTilt, azimuthal);
+    const forIdx = selectedPatternIdx;
+    const seq = reindexRef.current.next();
     try {
-      const res = await pcApi.updateTilt(sampleTilt, detTilt, azimuthal, selectedPatternIdx);
+      const res = await pcApi.updateTilt(sampleTilt, detTilt, azimuthal, forIdx);
       const d = res.data;
-      if (d?.ci != null) setCiValue(d.ci);
       setGlobalCi(d?.global_ci ?? null);  // other patterns were not re-indexed
-      if (d?.segments) setKikuchiSegments(d.segments);
-    } catch {
-      // Ignore errors during reactive update
+      // (picking another pattern also starts a new "request": showPattern)
+      const stillShown = reindexRef.current.isLatest(seq);
+      if (stillShown) {
+        if (d?.ci != null) setCiValue(d.ci);
+        if (d?.segments) setKikuchiSegments(d.segments);
+      }
+    } catch (err) {
+      // Refused while a refine runs: say so rather than look applied. The tilt
+      // fields keep their own state, so the text tells the user to enter it again.
+      if (isPcJobRunning(err)) {
+        toast.warning(t('pcrefinement:controls.tiltEditNotApplied', { reason: pcJobRunningText(t) }));
+      }
+      // Other errors during a reactive update stay quiet, as before.
     }
-  }, [selectedPatternIdx, setCiValue, setGlobalCi, handleTrialTiltChanged]);
+  }, [selectedPatternIdx, setCiValue, setGlobalCi, handleTrialTiltChanged, t]);
 
   // Which phase's master the preview uses: the loaded phase, or with several
   // phases the one the selected pattern was indexed as (see phaseSet.js).
@@ -2871,19 +3872,28 @@ export default function PCRefinement({ onNavigate }) {
     // typed wrapper for the indexing/files endpoint.
     // A later phase change must not be overwritten by an earlier, slower reply.
     let stale = false;
+    // Asked again on every visit too (shtRefresh): a master simulated meanwhile
+    // on another page must appear, since a phase without one gets no stand-in.
+    // A visit keeps a master the user chose while it is still listed; a phase
+    // change picks the new phase's own.
+    // Noted only when the answer is applied: a run voided by a newer one must not
+    // mark the phase as handled, or the next run keeps the old phase's master.
+    const phaseChanged = shtPhaseRef.current !== phaseLabel;
     fetch('/api/indexing/files/spherical')
       .then(r => r.json())
       .then(d => {
         if (stale) return;
+        shtPhaseRef.current = phaseLabel;
         const files = Array.isArray(d?.files) ? d.files : [];
         setShtChoices(files);
         // The master of the LOADED phase: the first file was Al while Ni was
         // being calibrated, and the preview reported a good PC as NCC 0.03.
-        setShtPath(pickShtForPhase(files, previewPhaseRef.current));
+        setShtPath((current) => (!phaseChanged && current && files.some((f) => f.path === current)
+          ? current : pickShtForPhase(files, previewPhaseRef.current)));
       })
       .catch(() => { if (!stale) setShtChoices([]); });
     return () => { stale = true; };
-  }, [phaseLoaded, phaseLabel]);
+  }, [phaseLoaded, phaseLabel, shtRefresh]);
 
   // Several phases: the master must be the one of the phase the SELECTED
   // pattern was indexed as, so follow the selection. (With one phase the effect
@@ -2903,6 +3913,7 @@ export default function PCRefinement({ onNavigate }) {
     if (selectedPatternIdx == null || !shtPath || !phaseLoaded) {
       setSimulatedB64(null);
       setSimulatedNcc(null);
+      setSimulatedNccReason(null);
       setSimulatedError(null);
       return;
     }
@@ -2925,6 +3936,7 @@ export default function PCRefinement({ onNavigate }) {
           if (cancelled) return;
           setSimulatedB64(r.data?.simulated_b64 || null);
           setSimulatedNcc(typeof r.data?.ncc === 'number' ? r.data.ncc : null);
+          setSimulatedNccReason(r.data?.ncc_reason || null);
           setSimulatedOrientation(r.data?.orientation_euler_deg || null);
           setSimulatedOrientationSource(r.data?.orientation_source || null);
           setSimulatedIndexedPhase(r.data?.indexed_phase || null);
@@ -2933,6 +3945,7 @@ export default function PCRefinement({ onNavigate }) {
           if (cancelled) return;
           setSimulatedB64(null);
           setSimulatedNcc(null);
+          setSimulatedNccReason(null);
           setSimulatedError(err?.response?.data?.detail || err?.message || 'render failed');
         })
         .finally(() => { if (!cancelled) setSimulatedLoading(false); });
@@ -2947,49 +3960,7 @@ export default function PCRefinement({ onNavigate }) {
 
   // Select a pattern from the list — load image + cached overlay
   // Mirrors PyQt5 on_pattern_changed() with cache-first logic
-  const handleSelectPatternIdx = (idx) => {
-    setSelectedPatternIdx(idx);
-    const pat = patterns[idx];
-    if (pat) {
-      // Load the STORED pattern image (captured at add-time, not current active signal)
-      // This is critical for DeepCopy/FrameAvg workflows where the active signal may differ
-      pcApi.getPatternImage(idx).then((res) => {
-        const img = res.data?.image || null;
-        setPatternBase64(img);
-      }).catch(() => {
-        // Fallback: load from active signal if stored image endpoint fails
-        const r = pat.row ?? 0;
-        const c = pat.col ?? 0;
-        ebsdApi.getPattern(r, c).then((res2) => {
-          const img = res2.data?.image || res2.data?.image_base64 || null;
-          setPatternBase64(img);
-        }).catch(() => {});
-      });
-      // Load cached overlay (auto-indexes if not cached)
-      if (idx != null) {
-        pcApi.getPatternResult(idx).then((res) => {
-          const d = res.data;
-          if (d?.success && d.segments) {
-            setKikuchiSegments(d.segments);
-            if (d.ci != null) setCiValue(d.ci);
-            // Several phases: remember which one this pattern was indexed as
-            // (the list shows it, and the preview picks its master by it).
-            if (multiPhase && d.phase_name) {
-              handlePatternsIndexed([{ index: pat.index, phase_name: d.phase_name, phase_fits: d.phase_fits }]);
-            }
-          } else {
-            setKikuchiSegments([]);
-            // Fall back to local CI when backend cache is lost
-            if (patterns[idx]?.ci != null) setCiValue(patterns[idx].ci);
-          }
-        }).catch(() => {
-          setKikuchiSegments([]);
-          // Fall back to local CI when backend cache is lost
-          if (patterns[idx]?.ci != null) setCiValue(patterns[idx].ci);
-        });
-      }
-    }
-  };
+  const handleSelectPatternIdx = (idx) => showPattern(idx, patterns);
 
   return (
     <div
@@ -3150,6 +4121,7 @@ export default function PCRefinement({ onNavigate }) {
               // --- Forward-Sim preview ---
               simulatedB64={simulatedB64}
               simulatedNcc={simulatedNcc}
+              simulatedNccReason={simulatedNccReason}
               simulatedLoading={simulatedLoading}
               simulatedError={simulatedError}
               simulatedOrientation={simulatedOrientation}
@@ -3158,14 +4130,17 @@ export default function PCRefinement({ onNavigate }) {
               simulatedIndexedPhase={simulatedIndexedPhase}
               shtChoices={shtChoices}
               shtPath={shtPath}
+              previewPhase={previewPhase}
               onShtPathChange={setShtPath}
               previewBandwidth={previewBandwidth}
               onPreviewBandwidthChange={setPreviewBandwidth}
             />
           }
           right={
+            <PhaseLoadedContext.Provider value={phaseLoaded}>
             <ControlsPanel
               phaseLoaded={phaseLoaded}
+              sessionReset={sessionReset}
               phases={phases}
               onPhasesChanged={handlePhasesChanged}
               detectorReady={detectorReady}
@@ -3178,24 +4153,58 @@ export default function PCRefinement({ onNavigate }) {
               setCiValue={setCiValue}
               globalCi={globalCi}
               setGlobalCi={setGlobalCi}
-              onSegmentsUpdate={setKikuchiSegments}
+              onSegmentsUpdate={(segs, forIdx) => {
+                // Lines for a pattern that is no longer the selected one are not drawn.
+                if (forIdx == null || selectionRef.current.isSelected(forIdx)) setKikuchiSegments(segs);
+              }}
+              getSelectedIdx={() => selectionRef.current.selected()}
               onPatternsIndexed={handlePatternsIndexed}
               onSelectPattern={handleSelectPatternIdx}
               onPcChanged={handlePcChanged}
               onTiltChanged={handleTiltChanged}
+              pcMapInfo={pcMapInfo}
+              pcSource={pcSource}
+              pcMapAction={pcMapAction}
+              onPcMapAction={handlePcMapAction}
+              onGridCalibrated={refreshPcMap}
+              onPixelSizeApplied={({ binning, pixelSize }) =>
+                setTrialGeometry((g) => ({ ...g, binning, pixelSize }))}
               externalPc={optimizedPc}
               parentName={parentName}
               activeDatasetName={activeDatasetName}
               propagated={propagated}
               setPropagated={setPropagated}
-              onOptimizedPc={(pc) => {
+              usedPc={usedPc}
+              pcStatusSeen={pcStatusSeen}
+              onPcRestored={handlePcRestored}
+              usedPcIsMap={usedPcIsMap}
+              pcInUse={pcInUse}
+              onNavigate={onNavigate}
+              typedPcNotStored={typedPcNotStored}
+              patternBase64={patternBase64}
+              segments={kikuchiSegments}
+              pcx={currentPcx}
+              pcy={currentPcy}
+              onOptimizedPc={(pc, mode) => {
                 setOptimizedPc(pc);
+                if (pc.length === 3) {   // until the status below confirms it
+                  setUsedPc(pc.map(Number));
+                  setUsedPcIsMap(false);   // a run gives ONE PC
+                  // ...and its origin is the run's own, not the file's
+                  setPcInUse((prev) => ({ ...(prev || {}), kind: mode === 'find' ? 'find' : 'refine', calibration: null }));
+                  setTypedPcNotStored(false);   // the run's own answer says what the store took
+                }
+                refreshPcSource();
                 if (pc.length === 3) {
                   setCurrentPcx(pc[0]);
                   setCurrentPcy(pc[1]);
+                  // The forward preview renders at the refined PC too: its NCC is
+                  // the check of that PC, not of the one before the refine.
+                  setTrialGeometry((g) => ({ ...g, pcx: pc[0], pcy: pc[1], pcz: pc[2] }));
                 }
               }}
             />
+            </PhaseLoadedContext.Provider>
           }
           style={{ height: '100%' }}
         />

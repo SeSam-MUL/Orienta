@@ -97,7 +97,8 @@ const defaultConfig = () => ({
   nregions_ahe: 10,
   // Export
   auto_export: true,
-  // export_formats: subset of {'h5_rich', 'h5_light', 'ang', 'ctf'}.
+  // export_formats: subset of {'h5_rich', 'h5_light', 'ang', 'ctf', 'ang_square'} ('ang_square' is
+  // offered for hexagonal scans only).
   // Default is the "safe" set: light h5 (for in-app viewers) + .ang/.ctf
   // (for MTEX). 'h5_rich' duplicates the source file so it is opt-in.
   export_formats: ['h5_light', 'ang', 'ctf'],
@@ -258,16 +259,29 @@ const useBatchConfigStore = create((set, get) => ({
 
   /**
    * Set the global indexing method and propagate it to every file's config.
+   *
+   * A phase's `path` is resolved from a method-dependent discovery list (SHT masters for
+   * 'spherical'/'dictionary', CIFs for 'hough') and frozen onto the phase object when it is
+   * applied — it is never re-resolved later. Switching the method therefore clears any already
+   * applied phases instead of leaving them in place: their path and method field would refer to
+   * the OLD method's candidate list, and silently sending that stale pair to the backend indexed
+   * a file against the wrong phase (e.g. a cubic SHT master instead of the hexagonal CIF the user
+   * actually selected) without any error. The phases must be picked again under the new method.
    * @param {'hough' | 'spherical' | 'dictionary'} method
    */
   setMethod: (method) => {
-    set((state) => ({
-      method,
-      files: state.files.map((f) => ({
-        ...f,
-        config: { ...f.config, method },
-      })),
-    }));
+    set((state) => {
+      const samePhases = method === state.method;
+      return {
+        method,
+        globalPhases: samePhases ? state.globalPhases : [],
+        files: state.files.map((f) => {
+          if (samePhases) return { ...f, config: { ...f.config, method } };
+          const config = { ...f.config, method, phases: [] };
+          return { ...f, config, phases_configured: false, ready: isReady({ ...f, config }) };
+        }),
+      };
+    });
   },
 
   // ---------------------------------------------------------------------------
@@ -325,11 +339,13 @@ const useBatchConfigStore = create((set, get) => ({
    * Update file metadata that becomes available after a quick-load scan
    * (e.g. whether EDS data exists, grid dimensions, pattern shape).
    * @param {number} index
-   * @param {{ loaded?: boolean, eds_available?: boolean, eds_elements?: string[], grid_shape?: number[], pattern_shape?: number[] }} metadata
+   * `grid_kind` ('hex' | 'square'), `grid_dims` ([rows, cols]) and `apex` (the APEX measurement the file
+   * was paired with, or null) are what the page shows under the file name.
+   * @param {{ loaded?: boolean, eds_available?: boolean, eds_elements?: string[], grid_shape?: number[], pattern_shape?: number[], grid_kind?: string, grid_dims?: number[], apex?: object|null, convention?: string, convention_known?: boolean }} metadata
    */
   updateFileMetadata: (
     index,
-    { loaded, eds_available, eds_elements, grid_shape, pattern_shape, size_mb }
+    { loaded, eds_available, eds_elements, grid_shape, pattern_shape, size_mb, grid_kind, grid_dims, apex, convention, convention_known }
   ) => {
     set((state) => {
       if (index < 0 || index >= state.files.length) return state;
@@ -347,6 +363,12 @@ const useBatchConfigStore = create((set, get) => ({
           pattern_shape:
             pattern_shape !== undefined ? pattern_shape : f.pattern_shape,
           size_mb: size_mb !== undefined ? size_mb : f.size_mb,
+          grid_kind: grid_kind !== undefined ? grid_kind : f.grid_kind,
+          grid_dims: grid_dims !== undefined ? grid_dims : f.grid_dims,
+          apex: apex !== undefined ? apex : f.apex,
+          convention: convention !== undefined ? convention : f.convention,
+          convention_known:
+            convention_known !== undefined ? convention_known : f.convention_known,
         };
         return { ...updated, ready: isReady(updated) };
       });

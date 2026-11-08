@@ -10,6 +10,7 @@ Manages the local crystal structure database:
 - LRU cache status
 """
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -23,7 +24,7 @@ from typing import Optional
 import re
 import sys as _sys
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from pydantic import BaseModel
 
 # Ensure project root is on sys.path so path_utils is importable
@@ -672,6 +673,129 @@ async def browse(category: str = "all", material: str = ""):
     return {"entries": result, "category_counts": counts}
 
 
+# Warning codes of a CIF. The interface translates them (en/de/ja/zh); the
+# English text is kept beside each code as the fallback and for logs.
+WARN_NO_REFERENCE = "no_reference"
+WARN_NO_ATOMS = "no_atoms"
+WARN_NO_SPACE_GROUP = "no_space_group"
+WARN_DISORDERED = "disordered"
+WARN_P1_HIDDEN_SYMMETRY = "p1_hidden_symmetry"
+WARN_P1_AMBIGUOUS = "p1_ambiguous_symmetry"
+WARN_CONTRADICTORY_HEADER = "contradictory_header"
+WARN_P1_CHECK_FAILED = "p1_check_failed"
+
+_WARNING_TEXT = {
+    WARN_NO_REFERENCE: "No reference or DOI found.",
+    WARN_NO_ATOMS: "No atomic sites.",
+    WARN_NO_SPACE_GROUP: "No space group.",
+    WARN_DISORDERED: "Disordered structure.",
+    WARN_P1_HIDDEN_SYMMETRY: (
+        "Stored as space group P 1, but the atom positions have the symmetry "
+        "{symbol} ({number}) at every tolerance from 0.01 to 0.1 A. A symmetrised copy can be saved."
+    ),
+    WARN_CONTRADICTORY_HEADER: (
+        "The header contradicts itself: space group number {number}, but the space group "
+        "symbol {symbol}. No symmetrised copy is offered; correct the header first."
+    ),
+    WARN_P1_CHECK_FAILED: (
+        "Stored as space group P 1; the check for hidden symmetry could not be completed "
+        "({detail}), so no symmetrised copy is offered."
+    ),
+    WARN_P1_AMBIGUOUS: (
+        "Stored as space group P 1; the symmetry of the atom positions depends on the "
+        "tolerance ({ladder}). Choose a tolerance to save a symmetrised copy."
+    ),
+}
+
+# What `useReference` of a .xtal says when the user declared the data unpublished.
+UNPUBLISHED_REFERENCE = "unpublished (declared by user)"
+REFERENCE_STATUS_ATTR = "orienta_reference_status"
+REFERENCE_STATUS_DECLARED = "declared_unpublished"
+
+
+def _check_failed(detail: str) -> dict:
+    return {
+        "p1_check_error": detail,
+        "warning": {
+            "code": WARN_P1_CHECK_FAILED,
+            "text": _WARNING_TEXT[WARN_P1_CHECK_FAILED].format(detail=detail),
+        },
+    }
+
+
+def _p1_finding(cif_path: Path) -> Optional[dict]:
+    """What the symmetry check found in a P 1 file, or None.
+
+    ``{"warning": {code, text}, "detected_space_group": {...}}`` where the group
+    is the same at every tolerance of the ladder, or ``{"warning": ...,
+    "symmetry_ladder": [...]}`` where it changes along it (the user then chooses
+    a tolerance). Never raises, and never fails silently: a check that could not be
+    completed is logged as a warning and reported as ``p1_check_failed`` with the
+    reason."""
+    try:
+        from backend.api.services.cif_symmetry import (
+            AMBIGUOUS_TOLERANCE, CONTRADICTORY_HEADER, UNREADABLE, _failure, analyse_p1, ladder_text, may_be_p1,
+        )
+
+        # A text check first: the analysis below takes seconds for some files.
+        if not may_be_p1(cif_path):
+            return None
+        v = analyse_p1(cif_path)
+    except Exception as exc:
+        logger.warning("P1 symmetry check failed for %s", cif_path.name, exc_info=True)
+        return _check_failed(_failure(exc))
+    if v.reason == UNREADABLE and v.detail:
+        return _check_failed(v.detail)
+    if v.applicable:
+        return {
+            "detected_space_group": {
+                "number": v.space_group_number,
+                "symbol": v.space_group_symbol,
+                "crystal_system": v.crystal_system,
+                "symprec": v.symprec,
+            },
+            "symmetry_ladder": v.ladder,
+            "warning": {
+                "code": WARN_P1_HIDDEN_SYMMETRY,
+                "text": _WARNING_TEXT[WARN_P1_HIDDEN_SYMMETRY].format(
+                    symbol=v.space_group_symbol, number=v.space_group_number
+                ),
+            },
+        }
+    if v.reason == CONTRADICTORY_HEADER:
+        return {
+            "header_contradiction": v.header,
+            "warning": {
+                "code": WARN_CONTRADICTORY_HEADER,
+                "text": _WARNING_TEXT[WARN_CONTRADICTORY_HEADER].format(**v.header),
+            },
+        }
+    if v.reason == AMBIGUOUS_TOLERANCE:
+        return {
+            "symmetry_ladder": v.ladder,
+            "p1_ambiguous": True,
+            "warning": {
+                "code": WARN_P1_AMBIGUOUS,
+                "text": _WARNING_TEXT[WARN_P1_AMBIGUOUS].format(ladder=ladder_text(v.ladder)),
+            },
+        }
+    return None
+
+
+def _apply_p1_finding(target: dict, finding: dict) -> None:
+    for key in ("detected_space_group", "symmetry_ladder", "p1_ambiguous", "header_contradiction", "p1_check_error"):
+        if key in finding:
+            target[key] = finding[key]
+
+
+def _attach_p1_finding(result: dict, cif_path: Path) -> None:
+    """Add the finding and a coded warning to an import result."""
+    finding = _p1_finding(cif_path)
+    if finding:
+        _apply_p1_finding(result, finding)
+        result["warnings"] = [finding["warning"]]
+
+
 @router.post("/add-cif")
 async def add_cif(req: AddCifRequest):
     """Copy a CIF file into the local CIF library, with duplicate detection."""
@@ -714,13 +838,17 @@ async def add_cif(req: AddCifRequest):
         target_dir.mkdir(parents=True, exist_ok=True)
         dest = target_dir / src.name
         shutil.copy2(str(src), str(dest))
-        return {
+        result = {
             "success": True,
             "name": src.name,
             "path": str(dest),
             "category": "cif",
             "duplicate": False,
         }
+        # Off the event loop: the analysis takes seconds, and the whole backend
+        # (progress polling, websocket) would wait for it.
+        await asyncio.to_thread(_attach_p1_finding, result, dest)
+        return result
     except Exception as e:
         logger.exception("Failed to add CIF file")
         raise HTTPException(status_code=500, detail=str(e))
@@ -843,23 +971,36 @@ def _cif_info_sync(filename: str):
     except Exception as exc:
         info["atoms_warning"] = str(exc)
 
-    # --- Compute fit_for_xtal (same criteria as cif_database_builder) ---
-    fit_warnings = []
+    # --- Compute fit_for_xtal ---
+    # Hard gates only: no atoms, no space group. A missing reference is NOT a
+    # gate any more: it is a warning plus ``reference_missing``, and the
+    # conversion asks the user to supply or declare one (never "unknown").
+    fit_codes = []
     fit = True
-    if not info.get("doi") and not info.get("reference") and not info.get("url"):
-        fit = False
-        fit_warnings.append("No reference or DOI found.")
+    reference_missing = not info.get("doi") and not info.get("reference") and not info.get("url")
+    info["reference_missing"] = reference_missing
+    if reference_missing:
+        fit_codes.append(WARN_NO_REFERENCE)
     if not info.get("n_atoms"):
         fit = False
-        fit_warnings.append("No atomic sites.")
+        fit_codes.append(WARN_NO_ATOMS)
     sg_num = info.get("space_group_number")
     if sg_num is None or sg_num < 1:
         fit = False
-        fit_warnings.append("No space group.")
+        fit_codes.append(WARN_NO_SPACE_GROUP)
     if not is_ordered:
-        fit_warnings.append("Disordered structure.")
+        fit_codes.append(WARN_DISORDERED)
+    fit_texts = [_WARNING_TEXT[c] for c in fit_codes]
+    # A file stored as P 1 whose atoms have more symmetry (see cif_symmetry).
+    if sg_num == 1 and (info.get("n_atoms") or 0) >= 1:
+        finding = _p1_finding(cif_path)
+        if finding:
+            _apply_p1_finding(info, finding)
+            fit_codes.append(finding["warning"]["code"])
+            fit_texts.append(finding["warning"]["text"])
     info["fit_for_xtal"] = fit
-    info["fit_warnings"] = fit_warnings
+    info["fit_warnings"] = fit_texts          # English text, kept for old readers
+    info["fit_warning_codes"] = fit_codes     # same order; the interface translates these
 
     return info
 
@@ -872,8 +1013,6 @@ class UpdateCifMetaRequest(BaseModel):
 @router.patch("/cif/{filename}/meta")
 async def update_cif_meta(filename: str, req: UpdateCifMetaRequest):
     """Write DOI and/or reference text into a CIF file."""
-    import re as _re
-
     cif_dir = _db_dir("cif")
     matches = list(cif_dir.rglob(filename))
     if not matches:
@@ -881,18 +1020,15 @@ async def update_cif_meta(filename: str, req: UpdateCifMetaRequest):
 
     cif_path = matches[0]
     try:
+        from backend.api.services.cif_citation import CitationError, apply_citation, normalise_doi
+
         content = cif_path.read_text(encoding="utf-8", errors="ignore")
-        updated = False
-
-        # ONE writer, the counterpart of the reader (phase_library.set_cif_source):
-        # it updates every DOI tag the reader looks at and finds the reference
-        # block with the reader's own pattern. The Materials Project download
-        # (inject_cif_reference) calls the same function.
-        from backend.api.services.phase_library import set_cif_source  # noqa: PLC0415
-
-        if req.doi.strip() or req.reference.strip():
-            content = set_cif_source(content, doi=req.doi, reference=req.reference)
-            updated = True
+        try:
+            content, updated = apply_citation(content, doi=req.doi, reference=req.reference)
+        except CitationError as exc:
+            # A "DOI" the reader would never read back, or a text too long for the
+            # SHT header, is refused, not written.
+            raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc)})
 
         if updated:
             cif_path.write_text(content, encoding="utf-8")
@@ -913,7 +1049,7 @@ async def update_cif_meta(filename: str, req: UpdateCifMetaRequest):
                         mask = df[name_col].astype(str) == filename
                         if mask.any():
                             if req.doi.strip() and "DOI" in df.columns:
-                                df.loc[mask, "DOI"] = req.doi.strip()
+                                df.loc[mask, "DOI"] = normalise_doi(req.doi)
                             if req.reference.strip() and "Reference Text" in df.columns:
                                 df.loc[mask, "Reference Text"] = req.reference.strip()
                             df.to_excel(str(xlsx_path), index=False)
@@ -922,8 +1058,40 @@ async def update_cif_meta(filename: str, req: UpdateCifMetaRequest):
                     logger.warning(f"Failed to update crystal_database.xlsx: {exc}")
 
         return {"updated": updated, "filename": filename}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class SymmetriseRequest(BaseModel):
+    #: One of the ladder's tolerances (0.01, 0.02, 0.05, 0.1 A), chosen by the user
+    #: when the group of the atom positions depends on the tolerance.
+    symprec: Optional[float] = None
+
+
+@router.post("/cif/{filename}/symmetrise")
+async def symmetrise_cif(filename: str, req: Optional[SymmetriseRequest] = None):
+    """Save a symmetrised COPY of a CIF stored as space group P 1.
+
+    The original is never touched; the copy is ``<stem>_sym.cif`` (numbered if
+    that name exists), carries its provenance and the original's citation.
+    """
+    from backend.api.services.cif_symmetry import SymmetriseError, save_symmetrised_copy
+
+    matches = list(_db_dir("cif").rglob(filename))
+    if not matches:
+        raise HTTPException(status_code=404, detail=f"CIF file '{filename}' not found")
+    try:
+        result = await asyncio.to_thread(
+            save_symmetrised_copy, matches[0], None, req.symprec if req else None)
+    except SymmetriseError as exc:
+        raise HTTPException(status_code=422, detail={"code": exc.code, "message": str(exc), **exc.extra})
+    except Exception:
+        # Not str(exc): an OS error names the full local path.
+        logger.exception("Failed to symmetrise CIF")
+        raise HTTPException(status_code=500, detail="Could not save a symmetrised copy.")
+    return {"success": True, **result}
 
 
 @router.get("/xtal/{stem}/info")
@@ -1028,6 +1196,18 @@ async def xtal_info(stem: str):
                     if isinstance(val, bytes):
                         val = val.decode("utf-8", errors="replace")
                     info[key] = str(val)
+            ref_ds = cd.get("useReference")
+            if ref_ds is not None:
+                status = ref_ds.attrs.get(REFERENCE_STATUS_ATTR)
+                if isinstance(status, bytes):
+                    status = status.decode("utf-8", errors="replace")
+                if status:
+                    info["reference_status"] = str(status)
+                elif info.get("useReference", "").strip().lower() in ("", "none found"):
+                    # Written by a converter that put a placeholder where a citation belongs.
+                    info["reference_status"] = "missing"
+                else:
+                    info["reference_status"] = "found"
 
         # Crystal system name
         csys_names = {1: "Cubic", 2: "Tetragonal", 3: "Orthorhombic",
@@ -1074,6 +1254,11 @@ class ConvertCifRequest(BaseModel):
     cif_path: str
     output_dir: str = ""  # If empty, uses default XTAL library
     dwf_overrides: dict = {}  # Element symbol -> DWF value overrides
+    # "" (default) or "unpublished". A CIF without DOI or reference text is not
+    # converted with an invented "none found": the caller either adds a
+    # citation to the CIF first or declares the data unpublished here, and that
+    # declaration is what ends up in the file (and is flagged as a declaration).
+    reference_declaration: str = ""
 
 
 @router.post("/convert-cif-to-xtal")
@@ -1092,6 +1277,12 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
             cif_path = matches[0]
         else:
             raise HTTPException(status_code=400, detail=f"CIF file not found: {req.cif_path}")
+
+    if req.reference_declaration not in ("", "unpublished"):
+        raise HTTPException(
+            status_code=400,
+            detail="reference_declaration must be empty or 'unpublished'.",
+        )
 
     # --- Pre-flight fit check: block conversion for unfit CIF files ---
     try:
@@ -1145,21 +1336,35 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
         # feed spglib, whose only consumer was the origin_shift heuristic that
         # this commit's parent removed. _build_xtal_atomdata handles partial
         # occupancies directly.)
-        # --- Reference extraction (matching PyQt5 lines 404-419) ---
+        # --- Reference extraction ---
         # Through phase_library's readers -- the same ones the phase card and the
-        # CIF info panel use, so the .xtal's useReference says what they say.
-        # (The converter used to carry its own regexes: they accepted a DOI tag
-        # only if quoted, and cut a citation at its first ';' -- 'Romming, C.'
-        # for a three-author reference.) Order as before: an explicit DOI tag,
-        # else the formatted reference, else a DOI stated inside the references
-        # text, else a bare link.
+        # CIF info panel use, so the .xtal's useReference says what they say. Order:
+        # an explicit DOI tag, else the formatted reference, else a DOI stated
+        # inside the references text, else a bare link. A file with none of them is
+        # converted only with an explicit declaration; the converter never writes a
+        # silent "unknown".
         from backend.api.services.phase_library import cif_source, read_doi_tag  # noqa: PLC0415
         raw_text = cif_path.read_text(encoding="utf8", errors="ignore")
         src = cif_source(raw_text)
         found_refs = [v for v in (read_doi_tag(raw_text), src["reference"],
                                   src["doi"], src["url"]) if v]
-        if not found_refs:
-            found_refs.append("none found")
+        reference_status = "found"
+        if found_refs:
+            ref_str = found_refs[0]
+        elif req.reference_declaration == "unpublished":
+            ref_str = UNPUBLISHED_REFERENCE
+            reference_status = REFERENCE_STATUS_DECLARED
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "reference_missing",
+                    "message": (
+                        f"{cif_path.name} has no DOI or reference. Add one to the CIF, or "
+                        "declare the data unpublished (reference_declaration='unpublished')."
+                    ),
+                },
+            )
 
         # --- DWF lookup (matching PyQt5 line 421) ---
         dwf_xlsx = _project_root() / "crystal-structures-for-ebsd-main" / "calculationxtal" / "DWF.xlsx"
@@ -1213,7 +1418,6 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
         )
         N = int(Z_arr.shape[0])
 
-        ref_str = found_refs[0]
         ref_bytes = ref_str.encode("utf-8", errors="ignore")
 
         # --- Write .xtal HDF5 (matching PyQt5 lines 541-569) ---
@@ -1247,11 +1451,15 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
             cd.create_dataset("Natomtypes", data=[N])
             cd.create_dataset("Atomtypes", data=Z_arr)
             cd.create_dataset("AtomData", data=atomdata)
-            cd.create_dataset(
+            ref_ds = cd.create_dataset(
                 "useReference",
                 data=[ref_bytes],
                 dtype=h5py.special_dtype(vlen=bytes),
             )
+            if reference_status == REFERENCE_STATUS_DECLARED:
+                # EMsoft ignores dataset attributes; Orienta shows this as
+                # "declared by the user" rather than as a citation.
+                ref_ds.attrs[REFERENCE_STATUS_ATTR] = REFERENCE_STATUS_DECLARED
             for name, val in [
                 ("CreationDate", date.today().isoformat().encode("utf-8")),
                 ("CreationTime", datetime.now().strftime("%H:%M:%S").encode("utf-8")),
@@ -1285,6 +1493,7 @@ async def convert_cif_to_xtal(req: ConvertCifRequest):
             "n_atoms": N,
             "lattice": {"a": a, "b": b, "c": c, "alpha": alpha, "beta": beta, "gamma": gamma},
             "reference": ref_str,
+            "reference_status": reference_status,
             "warnings": disorder_warnings,
             "origin": {
                 "block": origin_report.block_key,
@@ -1661,7 +1870,7 @@ async def preview_file(filename: str):
 # --- SHT master-pattern SPHERE (interactive 3D viewer in the Database Browser) ---
 
 @router.get("/sphere/{filename:path}")
-async def sphere_file(filename: str, max_bandwidth: int = 128, target_size: int = 128):
+async def sphere_file(request: Request, filename: str, max_bandwidth: int = 128, target_size: int = 128):
     """Return the master pattern of a ``.sht`` reconstructed onto a sphere grid.
 
     Used by the Database Browser's interactive (rotatable) master-pattern sphere
@@ -1671,24 +1880,90 @@ async def sphere_file(filename: str, max_bandwidth: int = 128, target_size: int 
 
     Returns ``{filename, grid, phi[], theta[], bandwidth, file_bandwidth, meta}``.
     404 if the file is absent; 422 if it exists but cannot be reconstructed.
+
+    Reconstructions run one at a time (identical requests share one), and a
+    request whose client has gone before its turn is dropped with 499 instead
+    of being computed: the browser aborts the old request when the user picks
+    another file or resolution.
     """
     import asyncio  # noqa: PLC0415
-    from backend.api.services.sht_sphere import sphere_from_sht, SphereError  # noqa: PLC0415
+    import functools  # noqa: PLC0415
+    import threading  # noqa: PLC0415
+    from backend.api.problem import problem  # noqa: PLC0415
+    from backend.api.services.sht_sphere import (  # noqa: PLC0415
+        SPHERE_EXECUTOR, cached_sphere, sphere_from_sht, SphereCancelled, SphereError,
+        SphereOutOfMemoryError,
+    )
+    from backend.worker.manager import WorkerError, WorkerStartFailed  # noqa: PLC0415
+
+    oom = ("Not enough memory for the sphere at this resolution. "
+           "Choose a lower resolution (Standard).")
 
     # Clamp params defensively (bandwidth must be sane; target a reasonable surface).
     bw = max(16, min(384, int(max_bandwidth)))
     tgt = max(32, min(256, int(target_size)))
+    # A finished sphere is answered right here, not sent through the queue.
+    hit = cached_sphere(filename, bw, tgt)
+    if hit is not None:
+        return hit
+    # The worker thread cannot ask the request whether its client is still
+    # there (that is a coroutine), so a small task on the loop does and flips a
+    # flag the thread reads.
+    #
+    # It waits on ``receive()`` for the ``http.disconnect`` message instead of
+    # polling ``request.is_disconnected()``: behind the app's
+    # ``BaseHTTPMiddleware`` (HTTPTimingMiddleware) ``is_disconnected()`` never
+    # turns true in Starlette 1.0 -- proven against the real app, a client that
+    # closed its socket was still served -- while ``receive()`` delivers the
+    # message. A GET has no body, so the first message is the empty request
+    # and nothing the route needs is consumed.
+    gone = threading.Event()
+
+    async def _watch_client():
+        while True:
+            message = await request.receive()
+            if message["type"] == "http.disconnect":
+                gone.set()
+                return
+
+    watcher = asyncio.create_task(_watch_client())
     try:
-        return await asyncio.to_thread(
-            sphere_from_sht, filename, max_bandwidth=bw, target_size=tgt
+        # The sphere's own executor, not asyncio.to_thread: see SPHERE_EXECUTOR.
+        return await asyncio.get_running_loop().run_in_executor(
+            SPHERE_EXECUTOR,
+            functools.partial(
+                sphere_from_sht, filename, max_bandwidth=bw, target_size=tgt,
+                cancelled=gone.is_set,
+            ),
         )
+    except SphereCancelled:
+        return Response(status_code=499)     # nobody is listening; not an error to log
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except SphereOutOfMemoryError:
+        raise problem(422, "sphereOutOfMemory", oom)
     except SphereError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except WorkerError as e:
+        # Crashed or never started: the code reaches the interface, the
+        # stderr trace is already in the log (manager).
+        # A backend that is shutting down is "try again", not "the file is bad".
+        unavailable = isinstance(e, WorkerStartFailed) or e.code == "workerStopped"
+        raise problem(503 if unavailable else 422, e.code, e.message)
     except Exception as e:  # fail loud with an actionable message, never a blank
         logger.exception("sphere_file: failed for %s", filename)
-        raise HTTPException(status_code=422, detail=f"sphere reconstruction failed: {e}")
+        from backend.api.services.sht_pattern_renderer import is_out_of_memory  # noqa: PLC0415
+        if is_out_of_memory(e):
+            # A real OOM can reach here as a RuntimeError carrying a whole
+            # TorchScript trace; the trace is in the log, not on the screen.
+            raise problem(422, "sphereOutOfMemory", oom)
+        # Whatever else it is, one line: a multi-line trace in `detail` is
+        # unreadable in the panel that shows it.
+        first = (str(e).strip().splitlines() or [type(e).__name__])[0][:300]
+        raise HTTPException(status_code=422, detail=f"sphere reconstruction failed: {first}")
+    finally:
+        gone.set()          # ends the watcher on every way out
+        watcher.cancel()
 
 
 @router.get("/structure/{filename:path}")
@@ -2049,6 +2324,8 @@ def _cif_batch_info_sync(req: BatchInfoRequest):
                 info["doi"] = ""
                 info["reference"] = ""
                 info["url"] = ""
+            # The list asks this before a batch conversion (one dialog for all).
+            info["reference_missing"] = not info["doi"] and not info["reference"] and not info["url"]
 
         except Exception as exc:
             info["error"] = str(exc)

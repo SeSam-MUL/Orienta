@@ -9,6 +9,7 @@ Supports multiple named datasets with deepcopy and processing operations.
 import asyncio
 import logging
 import os
+import sys
 import threading
 import time
 from typing import Optional, List
@@ -21,10 +22,17 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from backend.api.services.image_utils import array_to_base64_raw, array_to_base64_png
-from backend.api.services.calibration_store import calibration_store
+from backend.api.services.calibration_store import calibration_store, pc_origin_of
 from backend.api.services import crop_window as crop_window_service
+from backend.api.services import frame_average as frame_average_service
+from backend.api.services import hex_raster
+from backend.api.services import scan_geometry as scan_geometry_service
+from backend.api.services import scan_neighbours
 from backend.api.services import state_version
 from backend.api.services import static_background
+from backend.api.services import variant_registry
+from backend.api.services import load_choices
+from backend.api.services.load_choices import LoadChoiceError, LoadVariant
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -32,6 +40,16 @@ router = APIRouter()
 # Module-level state: primary signal (for backward compat) + named datasets
 _ebsd_signal = None
 _ebsd_file_path = None
+# The stash key part of the variant the loaded file holds (None = the file's default variant).
+# Set with ``_ebsd_file_path``; the stash of the outgoing file reads it before the next load.
+_ebsd_variant_key = None
+# The metadata pairing the loaded file was loaded with (``scan_geometry.apex_of_signal`` of its signal, None for a
+# file without one). Set in the same step as ``_ebsd_signal`` and ``_ebsd_variant_key``, so it always
+# describes the file the key describes. A result's stamp takes its metadata file from here, never from
+# the loaded-files entry, which is written late (end of a load) and emptied by "Clear all".
+_ebsd_apex = None
+# canonical path -> the vendor label the last load of that file gave (``/metadata`` repeats it)
+_format_types: dict = {}
 
 # Multi-dataset state
 _raw_signals: dict = {}   # name -> kikuchipy EBSD signal
@@ -40,7 +58,8 @@ _active_dataset: str = "" # name of currently active dataset
 
 # Loaded-files registry — remembers every file path the user has loaded so
 # the UI can offer a switcher. Switching re-loads from disk (see /switch-file).
-# Each entry: {"path": str, "name": str}. Order = load order.
+# Each entry: {"path": str, "name": str, "apex"?: dict, "variant"?: {"measurement", "pattern_source"}}.
+# Order = load order. ``variant`` is what the file was last loaded as (absent: its default variant).
 _loaded_files: list = []
 
 # Datasets whose in-memory patterns were modified in the viewer (frame
@@ -67,6 +86,14 @@ _signal_masks: dict = {}  # name -> {"enabled": bool, "radius_fraction": float}
 # kikuchipy signal keeps its own h5 handle open, so stashed datasets stay
 # readable on restore.
 _registry_by_file: dict = {}
+# Canonical paths of the loads that are running (``load_ebsd``). ``_ebsd_file_path`` changes only
+# when a load worker finishes; a route that must not touch the stash of the file about to become
+# active (clear, clear-all) reads this. Appended and removed on the event loop only.
+_loading_paths: list = []
+
+#: What the last restore of a stash decided about a dataset's PC (``"user_pc_kept"`` or
+#: ``"file_pc_wins"``, see ``CalibrationStore.restore``), read once by the load response.
+_pc_load_notice: dict = {}
 
 # Stage-based load progress, keyed by client-supplied request_id (UUID4).
 # Updated by _load_ebsd_blocking as it advances through 4 named stages,
@@ -220,18 +247,301 @@ def _canonical_path(path: str) -> str:
         return str(path)
 
 
+def _geometry_dict(name) -> Optional[dict]:
+    """The registered scan geometry of dataset ``name`` as the API reports it, or None."""
+    geometry = scan_geometry_service.geometry_for(name) if name else None
+    return geometry.to_dict() if geometry is not None else None
+
+
+def _signal_is_hex_resampled(signal) -> bool:
+    """``Signal.hex_resampled``: set by ``edax_hex`` on the square map it builds from a hexagonal file."""
+    try:
+        return bool(signal.metadata.get_item("Signal.hex_resampled", False))
+    except Exception:  # noqa: BLE001 - a stand-in signal without metadata
+        return False
+
+
+#: Why a stored pairing may be dropped: the metadata file is gone or unreadable, no longer lists the
+#: measurement, lists none at all, or has a malformed id. Anything else is a real conflict.
+_STALE_PAIRING_CODES = ("apexUnreadable", "apexMeasurementNotFound", "apexNoMeasurement", "apexBadId")
+
+
+def _loaded_entry(path: str) -> Optional[dict]:
+    canon = _canonical_path(path)
+    return next((e for e in _loaded_files if _canonical_path(e["path"]) == canon), None)
+
+
+def _usable_stored_pairing(path: str, stored: Optional[dict]):
+    """Decide what to do with the pairing stored for ``path``: ``(pairing, None)`` to use it,
+    ``(None, None)`` when there is none, ``(None, code)`` to drop it, or an ``HTTPException``.
+
+    The metadata file may be gone (an unplugged drive, a moved folder), rewritten without the
+    measurement, or unreadable; the file is then loaded without the pairing (the folder search may
+    still find a sidecar) and the log names the files. A conflict - the pattern file names another
+    measurement, or holds another number of patterns - is not decided here: the load refuses with
+    its own code, because loading without the pairing could silently pick another measurement.
+    Shared by ``switch-file`` and the batch helper ``load_ebsd_file``."""
+    if not stored:
+        return None, None
+    from edax_apex import ApexError, read_measurement, safe_text
+    try:
+        read_measurement(stored["h5_path"], stored["measurement_id"])
+    except ApexError as exc:
+        if exc.code not in _STALE_PAIRING_CODES:
+            from backend.api.problem import problem
+            raise problem(400, exc.code, safe_text(exc))
+        logger.warning("Loading %s: its remembered APEX pairing (metadata file %s, %s) is no longer "
+                       "usable; loading without it", Path(path).name, Path(stored["h5_path"]).name,
+                       exc.code)
+        return None, exc.code
+    return stored, None
+
+
+def complete_apex_pairing(path: str, pairing: Optional[dict]) -> Optional[dict]:
+    """``pairing`` (``{"h5_path", "measurement_id"}``, as a result's stamp names it) with its metadata file.
+
+    A pairing that carries the file is returned as it is. One that names only the measurement takes the
+    file the viewer remembers for ``path`` when that is the SAME measurement. With nothing to take, the
+    pairing is lost: the answer is a refusal with its code (``apexPairingLost``), because loading the
+    pattern file without it would pick another measurement, or refuse it as a hexagonal scan for a
+    reason that has nothing to do with the cause."""
+    if not pairing or pairing.get("h5_path"):
+        return pairing
+    entry = _loaded_entry(path)
+    remembered = (entry.get("apex") if entry else None) or {}
+    if remembered.get("h5_path") and remembered.get("measurement_id") == pairing.get("measurement_id"):
+        return {"h5_path": remembered["h5_path"], "measurement_id": pairing["measurement_id"]}
+    from backend.api.problem import problem
+    raise problem(400, "apexPairingLost",
+                  f"The metadata file that {Path(path).name} was paired with a measurement from is not known "
+                  f"any more, so it cannot be read with that measurement. Load the pattern file again and "
+                  f"choose its measurement.")
+
+
+def remembered_apex_pairing(path: str, prefer: Optional[dict] = None) -> Optional[dict]:
+    """The APEX pairing remembered for ``path``, as ``load_ebsd_safe(path, apex=...)`` takes it
+    (``{"h5_path", "measurement_id"}``), or None when the file has none or it can no longer be used.
+
+    For a loader that re-opens a loaded file by path (the cross-file Pattern Match, the image-quality
+    fallback): without the pairing a measurement paired from another folder is read with the pattern
+    file's own header, or refused as a hexagonal scan. The drop-or-refuse rule is a switch's
+    (``_usable_stored_pairing``): a pairing that is gone is dropped, a conflicting one raises.
+
+    ``prefer`` is a pairing the caller knows better than the entry of the file, which holds the one
+    the file was LAST loaded with: the pairing a result ran on (``variant_registry.apex_of_stamp``).
+    It goes through the same rule. A ``prefer`` without its metadata file is completed from the entry
+    when that is the same measurement, else refused with a code (``complete_apex_pairing``)."""
+    entry = _loaded_entry(path)
+    stored = complete_apex_pairing(path, prefer) if prefer else (entry.get("apex") if entry else None)
+    pairing, _dropped = _usable_stored_pairing(path, stored)
+    if not pairing:
+        return None
+    return {"h5_path": pairing["h5_path"], "measurement_id": pairing["measurement_id"]}
+
+
+def _remember_apex_pairing(path: str, apex: Optional[dict]) -> None:
+    """Keep on the loaded-files entry the pairing the file was LAST loaded with, as its signal records
+    it (``Signal.apex``: the user's choice, or the one found by GUID in the folder), so that a switch
+    back reloads it with the same metadata. A successful load whose signal records none clears it:
+    what is remembered is what the loaded file says, never what an earlier request asked."""
+    canon = _canonical_path(path)
+    for entry in _loaded_files:
+        if _canonical_path(entry["path"]) == canon:
+            if apex:
+                entry["apex"] = apex
+            else:
+                entry.pop("apex", None)
+            return
+
+
 def _register_loaded_file(path: str) -> None:
     """Add a file path to the loaded-files registry (idempotent, order-preserving).
 
     De-duplication is by *canonical* path (see ``_canonical_path``) so the
     same file loaded under different spellings is registered once.
     """
-    from pathlib import Path as _P
     canon = _canonical_path(path)
     for entry in _loaded_files:
         if _canonical_path(entry["path"]) == canon:
             return
     _loaded_files.append({"path": path, "name": display_stem(path)})
+
+
+def _remember_variant(path: str, variant: Optional[LoadVariant], name: Optional[str] = None) -> None:
+    """Keep on the loaded-files entry the variant the file was LAST loaded as, as the loader says
+    it (``variant_registry.peek_mirror``), so that a switch back reloads the same one, and the
+    dataset name of that load (the stem plus the variant parts). A load that recorded no variant
+    clears it: what is remembered is what the loaded file says."""
+    entry = _loaded_entry(path)
+    if entry is None:
+        return
+    if name:
+        entry["name"] = name
+    if variant is None:
+        entry.pop("variant", None)
+    else:
+        entry["variant"] = variant.to_dict()
+
+
+def loaded_dataset_name(path: str) -> str:
+    """The dataset name a load of ``path`` gets: that of the file's entry (it carries the variant
+    parts the file was last loaded with, which a batch load takes up again), else the stem."""
+    entry = _loaded_entry(path)
+    return entry["name"] if entry is not None and entry.get("name") else display_stem(path)
+
+
+def active_variant(path: Optional[str] = None) -> Optional[LoadVariant]:
+    """The variant (measurement x pattern source) the ACTIVE dataset was loaded as, or None (loaded
+    without a choice: the file's default).
+
+    With ``path``: only when that is the file the viewer holds. A reader that opens some other file
+    (a result's own source, a file the HDF5 viewer page has open) must not apply the viewer's
+    measurement to it; a result brings its own stamp (``variant_registry.variant_of_result``)."""
+    if path is not None:
+        if not _ebsd_file_path or _canonical_path(str(path)) != _canonical_path(str(_ebsd_file_path)):
+            return None
+    return variant_registry.variant_for(_active_dataset)
+
+
+def _inspect_for_load(path: str):
+    """The measurements and sources of ``path``, or None (no choices by construction, or the
+    file cannot be listed: a load then goes the ordinary way, and the loader says what is wrong)."""
+    try:
+        return load_choices.inspect_file(path)
+    except Exception:  # noqa: BLE001 - a malformed group must not stop a load that may still work
+        logger.warning("Could not list the measurements of %s", path, exc_info=True)
+        return None
+
+
+def _requested_variant(raw: Optional[dict], choices) -> Optional[LoadVariant]:
+    """The variant to hand the loader: only one the request (or the file's entry) carries, and only
+    for a file ``inspect_file`` lists (EDAX hex, NORDIF and UP files ignore it: one variant by
+    construction). The measurement is always named, so the loader never takes its own "first group".
+    Raises ``LoadChoiceError`` only for an unknown pattern source (``LoadVariant.from_dict``); a
+    measurement the file does not hold is refused by the loader, which checks the variant against
+    the file.
+
+    No request at all: a file that records its variant (``choices.suggested``: a crop's
+    ``CropProvenance``, the mark of a rich export) loads as that variant; every other file loads as
+    it always did (None: the loader's default)."""
+    if choices is None:
+        return None
+    if raw is None:
+        return choices.suggested
+    variant = LoadVariant.from_dict(raw)
+    if variant.measurement is None:
+        # a source without a measurement is completed with the file's own: the one the file records
+        # (what a load without a choice takes), else the default
+        own = choices.suggested or choices.default_variant()
+        variant = LoadVariant(own.measurement, variant.pattern_source)
+    return variant
+
+
+def default_variant_ref(path: str) -> "Optional[VariantRef]":
+    """The default variant of ``path`` as a request, for a file that loads as another one without
+    a choice (``choices.suggested``); else None, a plain load is the default."""
+    choices = _inspect_for_load(path)
+    if choices is None or choices.suggested is None:
+        return None
+    default = choices.default_variant()
+    return VariantRef(measurement=default.measurement, pattern_source=default.pattern_source)
+
+
+def _pairing_id(apex: Optional[dict]) -> Optional[str]:
+    """The measurement a user paired a pattern file with, when that pairing is part of which variant of
+    the file is loaded; else None.
+
+    A pattern file whose header names its measurement (GUID) can only be that measurement: nothing
+    to tell apart. A file that does not (pairing ``"count"``: it fits by its number of patterns) can
+    be paired with any measurement of the metadata file that has the same number, and "this file with
+    measurement 2" is then another variant than "this file with measurement 1": its crops, its PC, its
+    analysis dataset and its results are its own. ``apex`` is ``Signal.apex`` (``scan_geometry.apex_of_signal``)."""
+    if not apex or apex.get("pairing") != "count" or not apex.get("measurement_id"):
+        return None
+    return str(apex["measurement_id"])
+
+
+def _variant_key(variant: Optional[LoadVariant], choices, apex: Optional[dict] = None):
+    """Stash key part: None for the default variant (a plain load and the default named in full
+    share their stash, and the key stays today's plain path), else ``(measurement, source)``, and a
+    third part, the measurement a pattern file was paired with (``_pairing_id``), when there is one
+    (``(None, None, id)`` for a pattern file whose variant is the default)."""
+    key = (None if variant is None or choices is None or variant.is_default(choices)
+           else (variant.measurement, variant.pattern_source))
+    pairing = _pairing_id(apex)
+    if pairing is None:
+        return key
+    return (key or (None, None)) + (pairing,)
+
+
+def variant_parts(variant: Optional[LoadVariant], choices) -> List[str]:
+    """What ``variant`` says beyond the file's default: ``<measurement>`` and ``unprocessed``."""
+    if variant is None or choices is None:
+        return []
+    try:
+        default = choices.default_variant()
+    except ValueError:
+        return []
+    parts = []
+    if variant.measurement not in (None, default.measurement):
+        parts.append(next((m.label for m in choices.measurements if m.name == variant.measurement),
+                          variant.measurement))
+    if variant.pattern_source == load_choices.UNPROCESSED and default.pattern_source != load_choices.UNPROCESSED:
+        parts.append("unprocessed")
+    return parts
+
+
+def _dataset_name_for(path: str, variant: Optional[LoadVariant], choices) -> str:
+    """The file stem, plus `` \u00b7 <measurement>`` and `` \u00b7 unprocessed`` for what differs from
+    the default variant. The parts are English; the interface translates them from ``variant``."""
+    return display_stem(path) + "".join(f" \u00b7 {p}" for p in variant_parts(variant, choices))
+
+
+def _variant_answer(variant: Optional[LoadVariant], choices) -> Optional[dict]:
+    """``variant`` of a load answer: what was loaded (a plain load: the file's default, said out),
+    with ``is_default``; None for a file without choices."""
+    if choices is None:
+        return None
+    try:
+        shown = variant or choices.default_variant()
+    except ValueError:
+        return None
+    return {**shown.to_dict(), "is_default": shown.is_default(choices)}
+
+
+def _has_raw_patterns(variant: Optional[LoadVariant], choices) -> bool:
+    """True only when the loaded measurement holds ``Unprocessed Patterns``."""
+    if choices is None:
+        return False
+    try:
+        shown = variant or choices.default_variant()
+    except ValueError:
+        return False
+    for m in choices.measurements:
+        if shown.measurement in (None, m.name):
+            return any(s.key == load_choices.UNPROCESSED and s.loadable for s in m.sources)
+    return False
+
+
+#: ``detect_format`` layouts the viewer labels differently from before (the label steers the
+#: circular-mask default: EDAX files are masked, Oxford and Bruker store the full frame). Every
+#: other layout keeps the label it always had.
+_VENDOR_LABELS = {"oxford": "Oxford", "bruker": "Bruker"}
+
+
+def _legacy_format_type(path) -> str:
+    return "Oxford" if path and 'h5oina' in str(path).lower() else "EDAX"
+
+
+def _format_type_of(path: str, choices=None) -> str:
+    fmt = choices.format if choices is not None else load_choices.detect_format(path)
+    return _VENDOR_LABELS.get(fmt) or _legacy_format_type(path)
+
+
+def _known_format_type(path) -> str:
+    """The label the last load of ``path`` gave; the extension rule for a path never loaded."""
+    return _format_types.get(_canonical_path(path)) if path and _canonical_path(path) in _format_types \
+        else _legacy_format_type(path)
 
 
 def _update_progress(request_id: Optional[str], **state) -> None:
@@ -280,22 +590,41 @@ def load_ebsd_file(path: str) -> bool:
     Used by batch indexing to load files without going through the async route.
     Returns True on success, False on failure.
     """
-    global _ebsd_signal, _ebsd_file_path, _active_dataset
+    global _ebsd_signal, _ebsd_file_path, _active_dataset, _ebsd_variant_key, _ebsd_apex
     try:
         from safe_loader import load_ebsd_safe
-        signal = load_ebsd_safe(path)
+        # The user's pairing for this file (a metadata file in another folder, say) is used here as
+        # in the interactive load, under the same drop-or-refuse rule as a switch; a refusal is a
+        # failed load. What is remembered afterwards is what the loaded signal says.
+        apex = remembered_apex_pairing(path)
+        # The variant the file was last loaded as (a file never loaded with a choice has none).
+        entry = _loaded_entry(path)
+        choices = _inspect_for_load(path)
+        variant = _requested_variant(entry.get("variant") if entry else None, choices)
+        load_kwargs = {}
+        if apex:
+            load_kwargs["apex"] = apex
+        if variant is not None:
+            load_kwargs["variant"] = variant
+        signal = load_ebsd_safe(path, **load_kwargs)
+        loaded = variant_registry.peek_mirror(signal)
+        dataset_name = _dataset_name_for(path, loaded, choices)
+        variant_key = _variant_key(loaded, choices, scan_geometry_service.apex_of_signal(signal))
         # Same non-destructive contract as the interactive load path: stash the
         # outgoing file's processed datasets before clearing so batch indexing
-        # can never silently wipe a user's BG/CLAHE/frame-average work. The
-        # stash guard above skips raw-only files, so a pure batch run (raw
-        # files, no processing) stays lightweight.
+        # can never silently wipe a user's BG/CLAHE/frame-average work. A raw-only
+        # file keeps no signal in its stash (no h5 handle piles up over a batch
+        # run) and no per-pixel header map, only its calibration (a few numbers
+        # per file, ``_stash_registry_for_file``).
         _prev = _ebsd_file_path
         try:
-            _stash_registry_for_file(_prev)
+            _stash_leaving_file(_prev, path)
         except Exception:
             logger.warning("Could not stash registry for %s", _prev, exc_info=True)
         _ebsd_signal = signal
         _ebsd_file_path = path
+        _ebsd_variant_key = variant_key
+        _ebsd_apex = scan_geometry_service.apex_of_signal(signal)
         _raw_signals.clear()
         _positions.clear()
         _dirty_datasets.clear()
@@ -306,17 +635,38 @@ def load_ebsd_file(path: str) -> bool:
         # _restore_registry_for_file re-registers the windows that belong to
         # THIS file a few lines below.
         crop_window_service.clear_all()
-        dataset_name = display_stem(path)
+        scan_geometry_service.clear_all()
+        variant_registry.clear_all()
         _raw_signals[dataset_name] = signal
         _positions[dataset_name] = (0, 0)
         _active_dataset = dataset_name
+        # The scan geometry too, for the same reason: a hexagonal scan loaded here must not look
+        # like a square one to the first guard that asks.
+        scan_geometry_service.register_from_signal(dataset_name, signal)
+        variant_registry.register_from_signal(dataset_name, signal)
+        _format_types[_canonical_path(path)] = _format_type_of(path, choices)
+        # Register the file's calibration (PC + geometry) exactly as the interactive
+        # load does. Without an entry a file that carries no PC looked like any other
+        # to every guard and was indexed at kikuchipy's placeholder (0.5, 0.5, 0.5);
+        # restoring a stash then also had no entry to put a typed PC back into.
+        calibration_store.clear()
+        calibration_store.register(dataset_name, signal, file_key=_canonical_path(path))
         try:
-            _restore_registry_for_file(path, dataset_name)
+            _restore_registry_for_file(path, dataset_name, variant_key)
         except Exception:
             logger.warning("Could not restore stashed datasets for %s", path, exc_info=True)
             _active_dataset = dataset_name
             _ebsd_signal = signal
+        _pc_load_notice.pop(dataset_name, None)     # nobody reads it on this path
+        _resync_pc_sessions()
         _register_loaded_file(path)
+        _remember_apex_pairing(path, scan_geometry_service.apex_of_signal(signal))
+        _remember_variant(path, loaded, dataset_name)
+        try:
+            from backend.api.services.h5_session import sync_phase_map_store
+            sync_phase_map_store()
+        except Exception:
+            logger.warning("Could not match the phase map to the loaded measurement", exc_info=True)
         return True
     except Exception as e:
         logger.exception(f"Failed to load EBSD file: {path}")
@@ -354,9 +704,25 @@ def _mark_active_dirty() -> None:
 
     Also invalidates the overview cache for this dataset — any in-memory
     edit (BG removal, autocontrast, CLAHE) changes the pixel values so
-    the cached navigation map is no longer correct.
+    the cached navigation map is no longer correct. The same goes for the value
+    range of an int16 scan that single-pattern reads rescale by: an edit in place
+    keeps the array, so the range kept on the signal would go stale (see
+    ``load_choices.scan_value_range``). Every loaded signal forgets its range, not
+    only the active one: the crop of an eager signal is a view of its parent's
+    array, so an edit in place on one writes into the other.
     """
     if _active_dataset:
+        from backend.api.services.load_choices import forget_scan_range
+        active_signal = _get_active_signal()
+        forget_scan_range(active_signal)
+        active_data = getattr(active_signal, "data", None)
+        for other_name, other in list(_raw_signals.items()):
+            forget_scan_range(other, keep_file_source=other is not active_signal)
+            # the edit landed in the other dataset's array as well: it differs from its file too
+            other_data = getattr(other, "data", None)
+            if (isinstance(active_data, np.ndarray) and isinstance(other_data, np.ndarray)
+                    and np.may_share_memory(active_data, other_data)):
+                _dirty_datasets.add(other_name)
         _dirty_datasets.add(_active_dataset)
         # Drop every cached overview that's keyed to this dataset (one
         # per mode). Done explicitly here rather than at cache-read time
@@ -366,10 +732,40 @@ def _mark_active_dirty() -> None:
             _overview_cache.pop(key, None)
 
 
+def _mark_active_dirty_after_edit(signal, data_before) -> None:
+    """``_mark_active_dirty`` for the ``finally`` of an in-place edit. One case stays clean: the edit
+    FAILED and the signal is lazy with the very data object it had before. A lazy signal's data is
+    replaced by the new graph only when the call succeeds, so nothing was edited and the file is still
+    the truth; flagged dirty, a lazy scan above the memory ceiling would be refused by Spherical
+    indexing until the file is loaded again. An eager array is written in place (a failed run may have
+    half edited it), and a cancelled request leaves a worker that may still replace the data."""
+    failed = sys.exc_info()[0]
+    if (failed is not None and issubclass(failed, Exception)
+            and getattr(signal, "data", None) is data_before
+            and not isinstance(data_before, np.ndarray)):
+        return
+    _mark_active_dirty()
+
+
+class ApexRef(BaseModel):
+    """The metadata file and measurement the user chose for an EDAX pattern file."""
+    h5_path: str
+    measurement_id: str
+
+
+class VariantRef(BaseModel):
+    """The measurement (HDF5 scan group) and pattern source the user chose for a file that offers
+    several (see ``load_choices.inspect_file``). ``measurement`` None: the file's first loadable one."""
+    measurement: Optional[str] = None
+    pattern_source: str = "processed"     # "processed" | "unprocessed" | "single"
+
+
 class LoadEBSDRequest(BaseModel):
     path: str
     use_kikuchipy: bool = True
     request_id: Optional[str] = None  # client-supplied UUID for progress tracking
+    apex: Optional[ApexRef] = None    # only for .up1/.up2; without it the folder is searched
+    variant: Optional[VariantRef] = None  # only for files with several; without it the file's default
 
 
 class SwitchFileRequest(BaseModel):
@@ -493,7 +889,48 @@ def _materialise_for_stash(name: str, sig):
     return sig
 
 
-def _stash_registry_for_file(file_path) -> None:
+_CURRENT_VARIANT = object()
+
+
+def _stash_key(file_path, variant_key=None):
+    """Key of a file's stash: its canonical path for the default variant (as it always was), and
+    ``(canonical path, (measurement, source))`` for any other. Work done on one variant's patterns
+    is never offered to another variant of the same file."""
+    canon = _canonical_path(file_path)
+    return canon if variant_key is None else (canon, variant_key)
+
+
+def _stash_path(key):
+    """The canonical path a stash key belongs to: the key itself for the default variant, the first
+    part of ``(path, variant)`` for another one."""
+    return key[0] if isinstance(key, tuple) else key
+
+
+def file_scope(canon: str, variant_key=None) -> str:
+    """What a file's memory elsewhere (the calibration it was given, the step back of its PC) is kept under: its
+    canonical path, and the variant it is loaded as when that is not the default (``_variant_key``), so that two
+    measurements of one file do not share it."""
+    return canon if variant_key is None else f"{canon}|{variant_key!r}"
+
+
+def open_file_scope(file_key) -> str:
+    """``file_scope`` of ``file_key`` (a canonical path) as the store of the open file sees it: with the variant the
+    open file is loaded as when ``file_key`` is the open file."""
+    if _ebsd_file_path and file_key == _canonical_path(_ebsd_file_path):
+        return file_scope(file_key, _ebsd_variant_key)
+    return str(file_key)
+
+
+def _stash_pairing(key) -> Optional[str]:
+    """The measurement a stash key's pattern file was paired with (the third part of the variant, see
+    ``_variant_key``), or None for a key without one."""
+    if not isinstance(key, tuple):
+        return None
+    variant = key[1]
+    return variant[2] if isinstance(variant, tuple) and len(variant) == 3 else None
+
+
+def _stash_registry_for_file(file_path, variant_key=_CURRENT_VARIANT) -> None:
     """Snapshot the current in-memory dataset registry under ``file_path``.
 
     Called just before the load pipeline clears the live registries, so a
@@ -502,18 +939,42 @@ def _stash_registry_for_file(file_path) -> None:
     (so we never stash an empty registry that would later 'restore' over real
     data). Stores signal objects by reference — cheap, and they stay alive
     (and their h5 handles open) for as long as the stash holds them.
+
+    The stash is keyed by file AND variant (see ``_stash_key``). ``variant_key`` defaults to the
+    one the loaded file was loaded as (``_ebsd_variant_key``).
     """
     if not file_path or not _raw_signals:
         return
-    # Only worth stashing when there is NON-REPRODUCIBLE work to preserve —
-    # i.e. derived/processed datasets beyond the raw one (BG removal, CLAHE,
-    # frame-average). A raw-only file just reloads from disk on switch-back,
-    # so skip it; that also stops batch indexing (which loads many raw files
-    # in a loop) from piling up open h5 handles in the stash.
+    if variant_key is _CURRENT_VARIANT:
+        same_file = bool(_ebsd_file_path) and _canonical_path(_ebsd_file_path) == _canonical_path(file_path)
+        variant_key = _ebsd_variant_key if same_file else None
+    key = _stash_key(file_path, variant_key)
+    # Signals are only worth stashing when there is NON-REPRODUCIBLE work to
+    # preserve — i.e. derived/processed datasets beyond the raw one (BG removal,
+    # CLAHE, frame-average). A raw-only file just reloads from disk on
+    # switch-back, so its signal is not kept; that also stops batch indexing
+    # (which loads many raw files in a loop) from piling up open h5 handles in
+    # the stash.
     has_derived = len(_raw_signals) > 1 or bool(_dirty_datasets)
     if not has_derived:
+        # ... but its calibration is kept: a PC the user made (a refine, a grid calibration,
+        # a typed value) cannot be read from the file again, and the PC page lists the files
+        # that were left (to give them a calibration) with the settings and the PC they have.
+        # Only the calibration is kept - no signal, so no h5 handle is held, and no per-pixel map the file's header
+        # brought either (it is read from the file again; a stash of many files would hold one map each). The entry
+        # says it dropped one (``map_dropped``); a map the user made stays.
+        calibration = calibration_store.without_header_maps(calibration_store.snapshot(list(_raw_signals.keys())))
+        if calibration:
+            _registry_by_file[key] = {
+                "raw_signals": {}, "positions": {}, "dirty": set(), "masks": {},
+                "active": _active_dataset,
+                "calibration": calibration,
+                "crops": {}, "crop_masks": {},
+                "geometries": scan_geometry_service.snapshot(list(_raw_signals.keys())),
+                "variants": variant_registry.snapshot(list(_raw_signals.keys())),
+            }
+            logger.info("Stashed the calibration of %s", file_path)
         return
-    key = _canonical_path(file_path)
     # Materialise the PROCESSED (dirty) datasets so they survive the source
     # file being closed on switch. The raw dataset is NOT materialised — it is
     # dropped on restore and re-read fresh from disk anyway.
@@ -547,6 +1008,8 @@ def _stash_registry_for_file(file_path) -> None:
         "calibration": calibration_store.snapshot(list(_raw_signals.keys())),
         "crops": crops,
         "crop_masks": crop_masks,
+        "geometries": scan_geometry_service.snapshot(list(_raw_signals.keys())),
+        "variants": variant_registry.snapshot(list(_raw_signals.keys())),
     }
     logger.info(
         "Stashed %d dataset(s) for %s (derived: %s)",
@@ -555,8 +1018,80 @@ def _stash_registry_for_file(file_path) -> None:
     )
 
 
-def _restore_registry_for_file(file_path, fresh_raw_name: str) -> bool:
-    """Restore a previously stashed registry for ``file_path``.
+def _resync_pc_sessions() -> None:
+    """Make the PC Refinement page agree with the calibration store after a load."""
+    try:
+        from backend.api.routes import pcrefinement
+        # A load can change the store behind a stored step (an .osc beside the file now wins); one
+        # step back belongs to the page in front of the user, so a load ends it.
+        pcrefinement._pc_before.clear()
+        pcrefinement.resync_sessions_with_store()
+    except Exception:
+        logger.warning("Could not bring the PC page in line with the store", exc_info=True)
+
+
+def _pc_state_for_response(dataset_name: str, loader_tag, signal=None, notice_name=None) -> dict:
+    """What a load response says about the PC: the STORE's state, which indexing uses.
+
+    The loader's own tag (``Signal.pc_source``) describes the file only. After a
+    restore the store may hold the user's calibration of a file that carries no PC,
+    and the response must not call that file "defaulted" (the page warns the user
+    that indexing uses the placeholder) while indexing uses the typed PC; nor may it
+    say "osc" when the store kept an older typed PC. ``pc_source`` keeps its meaning
+    for a PC from the file ("osc", "default", None) and names the store's source for
+    the user's own calibration; ``pc`` is the PC indexing will use (None when there
+    is none); ``pc_notice`` says what a restore decided ("user_pc_kept",
+    "file_pc_wins"), once.
+
+    ``dataset_name`` is the dataset the state is asked for (after a restore the active one, which
+    may be a crop). The restore files its notice under the file's raw dataset, so a caller that asks
+    for another dataset says where the notice is with ``notice_name``.
+    """
+    notice, discarded = _pc_load_notice.pop(notice_name or dataset_name, (None, None))
+    if notice == "user_pc_kept" and notice_name and notice_name != dataset_name:
+        # "The PC you set was kept" is the restore's decision about the file's raw dataset. For
+        # another active dataset (a crop) the answer carries that dataset's own PC, which the
+        # decision did not touch, and the note would read as a statement about it. ("file_pc_wins"
+        # stays: it reports that the file's PC replaced the user's, with the PC to type again.)
+        notice = None
+    entry = calibration_store.get_entry(dataset_name)
+    # An Orienta export that states another PC in /Detector/pc than its header: the
+    # header wins on load (the manufacturer's value), and the user is told.
+    export_pc = None
+    try:
+        raw = signal.metadata.get_item("Signal.export_pc_ignored", None) if signal is not None else None
+        if raw is not None:
+            export_pc = [float(v) for v in raw]
+            notice = notice or "export_pc_ignored"
+    except Exception:  # noqa: BLE001 - a stand-in signal without metadata
+        export_pc = None
+    if entry is None:
+        return {"pc_source": loader_tag, "pc_defaulted": loader_tag == "default",
+                "pc_origin": pc_origin_of(signal) if signal is not None else None,
+                "pc": None, "pc_store_source": None, "pc_notice": notice,
+                "pc_discarded": discarded, "pc_export_ignored": export_pc}
+    own = entry.pc_source in calibration_store.USER_MADE_SOURCES
+    if entry.pc_source == "missing":
+        tag = "default"
+    elif own:
+        tag = entry.pc_source
+    else:
+        tag = loader_tag
+    return {
+        "pc_source": tag,
+        "pc_origin": entry.pc_origin,
+        "pc_defaulted": entry.pc_source == "missing",
+        "pc": None if entry.pc_source == "missing" else [float(v) for v in entry.pc_single],
+        "pc_store_source": entry.pc_source,
+        "pc_notice": notice,
+        "pc_discarded": discarded,        # the typed PC a file's own PC replaced, to type again
+        "pc_export_ignored": export_pc,
+    }
+
+
+def _restore_registry_for_file(file_path, fresh_raw_name: str, variant_key=None) -> bool:
+    """Restore a previously stashed registry for ``file_path`` and the variant it was loaded as
+    (``variant_key``, see ``_stash_key``: the stash of another variant is never taken).
 
     Merges the stashed derived datasets back on top of the freshly re-read raw
     dataset (already registered under ``fresh_raw_name``). The fresh raw signal
@@ -568,22 +1103,32 @@ def _restore_registry_for_file(file_path, fresh_raw_name: str) -> bool:
     otherwise (a first-time-visited file — nothing to restore).
     """
     global _active_dataset, _ebsd_signal
-    key = _canonical_path(file_path)
+    key = _stash_key(file_path, variant_key)
     snap = _registry_by_file.pop(key, None)
     if not snap:
         return False
 
+    def _is_fresh_raw(name):
+        # the file opened under another spelling of its name is the same raw dataset, not a twin of it
+        return name.casefold() == fresh_raw_name.casefold()
+
     for name, sig in snap["raw_signals"].items():
-        if name == fresh_raw_name:
+        if _is_fresh_raw(name):
             continue  # keep the freshly re-read raw signal
         _raw_signals[name] = sig
     for name, pos in snap["positions"].items():
         # Don't clobber the fresh raw's reset position; fill in the rest.
-        _positions.setdefault(name, pos)
-    _dirty_datasets.update(n for n in snap["dirty"] if n != fresh_raw_name)
+        if not _is_fresh_raw(name) or name == fresh_raw_name:
+            _positions.setdefault(name, pos)
+    _dirty_datasets.update(n for n in snap["dirty"] if not _is_fresh_raw(n))
     for name, mask in snap["masks"].items():
-        _signal_masks[name] = dict(mask)
-    calibration_store.restore(snap["calibration"], skip=fresh_raw_name)
+        if not _is_fresh_raw(name) or name == fresh_raw_name:
+            _signal_masks[name] = dict(mask)
+    _notice, _discarded = calibration_store.restore(snap["calibration"], skip=fresh_raw_name)
+    if _notice:
+        _pc_load_notice[fresh_raw_name] = (_notice, _discarded)
+    else:
+        _pc_load_notice.pop(fresh_raw_name, None)
     for name, window in snap["crops"].items():
         if name != fresh_raw_name:
             crop_window_service.set_crop(name, window)
@@ -592,6 +1137,11 @@ def _restore_registry_for_file(file_path, fresh_raw_name: str) -> bool:
         name: mask for name, mask in (snap.get("crop_masks") or {}).items()
         if name != fresh_raw_name
     })
+    # The raw dataset's geometry was registered from the fresh signal; the stash brings back the
+    # derived datasets' (crops, copies). .get(): a stash from before geometries existed has none.
+    scan_geometry_service.restore(snap.get("geometries") or {}, skip=fresh_raw_name)
+    # Same for the variants of the derived datasets (the raw one was registered from its signal).
+    variant_registry.restore(snap.get("variants") or {}, skip=fresh_raw_name)
 
     # Restore the previously-active dataset selection if it still exists
     # (e.g. the user was viewing 'Scan1_bg_clahe' when they switched away).
@@ -615,15 +1165,16 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
     and ``content_mode: "eds_only"`` so the UI can explain the missing pattern
     views instead of looking broken.
     """
-    global _ebsd_signal, _ebsd_file_path, _active_dataset
+    global _ebsd_signal, _ebsd_file_path, _active_dataset, _ebsd_variant_key, _ebsd_apex
 
     _update_progress(request_id, stage="building_signal", stage_idx=2,
                      stage_total=4, started_at=started_at,
                      message="No diffraction patterns — opening EDS data")
 
     _prev_file_path = _ebsd_file_path
+    _prev_variant_key = _ebsd_variant_key
     try:
-        _stash_registry_for_file(_prev_file_path)
+        _stash_leaving_file(_prev_file_path, path)
     except Exception:
         logger.warning("Could not stash dataset registry for %s", _prev_file_path,
                        exc_info=True)
@@ -633,6 +1184,8 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
     # shape is far worse than an empty one.
     _ebsd_signal = None
     _ebsd_file_path = path
+    _ebsd_variant_key = None
+    _ebsd_apex = None
     _raw_signals.clear()
     _positions.clear()
     _dirty_datasets.clear()
@@ -640,6 +1193,8 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
     _overview_cache.clear()
     static_background.clear_cache()
     crop_window_service.clear_all()
+    scan_geometry_service.clear_all()
+    variant_registry.clear_all()
     _active_dataset = None
     calibration_store.clear()
 
@@ -651,7 +1206,7 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
                        exc_info=True)
     try:
         from backend.api.routes import analysis as _ana_mod
-        _ana_mod.stash_dataset_for_file(_prev_file_path)
+        _ana_mod.stash_dataset_for_file(_prev_file_path, _prev_variant_key)
         _ana_mod.restore_dataset_for_file(path)
     except Exception:
         logger.warning("Could not stash/restore analysis dataset on EDS-only load",
@@ -704,14 +1259,22 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
     _update_progress(request_id, stage="finalising", stage_idx=4,
                      stage_total=4, started_at=started_at, message="Finalising")
     _register_loaded_file(path)
+    _remember_variant(path, None, display_stem(path))
+    _format_types[_canonical_path(path)] = _legacy_format_type(path)
 
     response = {
         "success": True,
         "dataset_name": display_stem(path),
         "file_path": path,
-        "format_type": "Oxford" if 'h5oina' in path.lower() else "EDAX",
+        "format_type": _legacy_format_type(path),
+        "variant": None,
         "pc_source": None,
         "pc_defaulted": False,
+        # No patterns, so no pattern centre of any origin ("missing" would say a placeholder is in
+        # use). None is also what a load answers when it has no signal to ask (_pc_state_for_response).
+        "pc_origin": None,
+        "scan_geometry": None,
+        "hex_resampled": None,   # no signal to ask, like pc_origin
         "content_mode": "eds_only",
         "data_shape": [],
         "navigation_shape": [],
@@ -735,7 +1298,8 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
     return response
 
 
-def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
+def _load_ebsd_blocking(path: str, request_id: Optional[str] = None,
+                        apex: Optional[dict] = None, variant: Optional[dict] = None) -> dict:
     """Synchronous portion of the EBSD load.
 
     Extracted from the route so it can be dispatched via asyncio.to_thread
@@ -749,7 +1313,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     building_signal, detecting_features, finalising) plus a final 'complete'
     state. Read by GET /load/progress/{request_id}.
     """
-    global _ebsd_signal, _ebsd_file_path, _active_dataset
+    global _ebsd_signal, _ebsd_file_path, _active_dataset, _ebsd_variant_key, _ebsd_apex
 
     started_at = time.time()
     _update_progress(request_id, stage="reading_metadata", stage_idx=1,
@@ -773,13 +1337,28 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
         )
         return _load_eds_only_blocking(path, _probe, request_id, started_at)
 
-    signal = load_ebsd_safe(path)
+    # The ordinary call stays exactly as it was; only an explicit choice adds the argument. A variant
+    # the file does not hold is refused here, with a code, before anything is touched.
+    choices = _inspect_for_load(path)
+    requested = _requested_variant(variant, choices)
+    load_kwargs = {}
+    if apex:
+        load_kwargs["apex"] = apex
+    if requested is not None:
+        load_kwargs["variant"] = requested
+    signal = load_ebsd_safe(path, **load_kwargs)
+    # What the loader says it loaded is what the dataset is called and registered as; which variant of
+    # the file it is (a stash key) also names the measurement a pattern file was paired with.
+    loaded = variant_registry.peek_mirror(signal)
+    dataset_name = _dataset_name_for(path, loaded, choices)
+    variant_key = _variant_key(loaded, choices, scan_geometry_service.apex_of_signal(signal))
 
     _update_progress(request_id, stage="building_signal", stage_idx=2,
                      stage_total=4, started_at=started_at,
                      message="Building lazy signal")
 
     _prev_file_path = _ebsd_file_path  # capture BEFORE overwrite (for analysis stash)
+    _prev_variant_key = _ebsd_variant_key
 
     # STASH the outgoing file's processed-dataset registry BEFORE clearing it,
     # so a switch-back restores the user's BG-removal / CLAHE / frame-average
@@ -788,7 +1367,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     # disappeared after switching files" data-loss bug. Guarded so a stash
     # failure can never break the load itself.
     try:
-        _stash_registry_for_file(_prev_file_path)
+        _stash_leaving_file(_prev_file_path, path)
     except Exception:
         logger.warning("Could not stash dataset registry for %s — that file's "
                        "processed datasets may be lost", _prev_file_path,
@@ -796,6 +1375,8 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
 
     _ebsd_signal = signal
     _ebsd_file_path = path
+    _ebsd_variant_key = variant_key
+    _ebsd_apex = scan_geometry_service.apex_of_signal(signal)
 
     # Clear the live registries and register the freshly-read raw dataset.
     # (The previous file's datasets are NOT lost — they were stashed above.)
@@ -806,6 +1387,8 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     _overview_cache.clear()
     static_background.clear_cache()
     crop_window_service.clear_all()
+    scan_geometry_service.clear_all()
+    variant_registry.clear_all()
     # The per-pixel EDS chemistry service warns once per cause so that a
     # systematic problem (a window it cannot price, a grid mismatch) does not
     # write one line per pixel. "Once" has to mean once per DATASET, or the
@@ -821,14 +1404,20 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
         reset_prior_warning_dedupe()
     except Exception:  # pragma: no cover - never block a load on this
         logger.debug("could not re-arm the EDS chemistry warnings", exc_info=True)
-    dataset_name = display_stem(path)
     _raw_signals[dataset_name] = signal
     _positions[dataset_name] = (0, 0)
     _active_dataset = dataset_name
 
+    # The scan geometry of the freshly read raw dataset (hexagonal or square). Registered before
+    # the stash is restored, so a stashed copy can never overwrite what the file says.
+    scan_geometry_service.register_from_signal(dataset_name, signal)
+    # Likewise the variant (measurement x pattern source) the raw dataset holds.
+    variant_registry.register_from_signal(dataset_name, signal)
+    _format_types[_canonical_path(path)] = _format_type_of(path, choices)
+
     # Register calibration (PC + detector geometry) in central store
     calibration_store.clear()  # New file → fresh store
-    calibration_store.register(dataset_name, signal)
+    calibration_store.register(dataset_name, signal, file_key=_canonical_path(path))
 
     # RESTORE this file's previously-stashed processed datasets (if we've
     # visited it before). Merges the derived datasets + their calibration +
@@ -838,7 +1427,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     # raw so the viewer ALWAYS has a readable active dataset (never "nothing
     # loads"). Worst case is the old behaviour (raw only), never a broken load.
     try:
-        _restore_registry_for_file(path, dataset_name)
+        _restore_registry_for_file(path, dataset_name, variant_key)
     except Exception:
         logger.warning("Could not restore stashed datasets for %s — showing "
                        "the raw dataset only", path, exc_info=True)
@@ -876,21 +1465,30 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
     # defaults instead of a stale (wrong-shape) xmap.
     try:
         from backend.api.routes import analysis as _ana_mod
-        _ana_mod.stash_dataset_for_file(_prev_file_path)
-        _ana_mod.restore_dataset_for_file(path)
+        _ana_mod.stash_dataset_for_file(_prev_file_path, _prev_variant_key)
+        _ana_mod.restore_dataset_for_file(path, variant_key)
     except Exception:
         logger.warning("Could not stash/restore analysis dataset on file load", exc_info=True)
 
-    # PC refinement state is now PER-FILE (see ``pcrefinement._sessions``,
-    # 2026-05-26). We do NOT clear it on /load — switching files swaps
-    # to that file's own session (patterns, detector, phase) which was
-    # preserved from any previous time the user worked with the file.
-    # The session-bound design means there is no risk of cross-file
-    # state leak that the old global-controller path had.
+    # PC refinement state is per file (see ``pcrefinement._sessions``):
+    # switching files swaps to that file's own session (patterns, detector, phase). A
+    # session is bound to its file's canonical path (two folders can hold the same
+    # stem), and after the restore above the store may hold another PC than the page
+    # was built with (a restored calibration, a header PC that now wins): the page
+    # follows the store.
+    _resync_pc_sessions()
 
-    shape = signal.data.shape
-    nav_shape = signal.axes_manager.navigation_shape
-    sig_shape = signal.axes_manager.signal_shape
+    # The answer describes the dataset the backend ends up with. A restore (above) may have made a
+    # stashed derived dataset - a crop - the active one again, and the viewer writes the answer into
+    # its grid, its geometry and the data store: the freshly read raw signal would put the parent's
+    # grid next to a crop's data. What the FILE says (path, format, pattern-centre tag, APEX pairing,
+    # EDS features) stays the file's.
+    answer_name = _active_dataset if _active_dataset in _raw_signals else dataset_name
+    answer_signal = _raw_signals.get(answer_name, signal)
+
+    shape = answer_signal.data.shape
+    nav_shape = answer_signal.axes_manager.navigation_shape
+    sig_shape = answer_signal.axes_manager.signal_shape
 
     # navigation_shape is (cols, rows) in hyperspy convention
     # grid_shape is (rows, cols) for the frontend
@@ -953,6 +1551,16 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
                      message="Finalising")
 
     _register_loaded_file(path)
+    apex_used = scan_geometry_service.apex_of_signal(signal)     # the explicit choice, or the one found in the folder
+    _remember_apex_pairing(path, apex_used)
+    _remember_variant(path, loaded, dataset_name)
+    # Another measurement of the SAME file does not reopen the HDF5 session: the phase map of the
+    # measurement that was left must not stay in the store as this one's.
+    try:
+        from backend.api.services.h5_session import sync_phase_map_store
+        sync_phase_map_store()
+    except Exception:
+        logger.warning("Could not match the phase map to the loaded measurement", exc_info=True)
 
     # Pattern-centre provenance: EDAX UP1/UP2 files carry no PC, so we either
     # recovered the real one from the .osc sidecar ('osc') or fell back to
@@ -964,23 +1572,31 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None) -> dict:
         pc_source = signal.metadata.get_item("Signal.pc_source")
     except Exception:
         pc_source = None
+    pc_state = _pc_state_for_response(answer_name, pc_source, signal, notice_name=dataset_name)
 
     response = {
         "success": True,
-        "dataset_name": dataset_name,
+        "dataset_name": answer_name,
         "file_path": path,
-        "format_type": "Oxford" if 'h5oina' in path.lower() else "EDAX",
-        "pc_source": pc_source,
-        "pc_defaulted": pc_source == "default",
+        "format_type": _format_type_of(path, choices),
+        "variant": _variant_answer(loaded, choices),
+        **pc_state,
         "data_shape": list(shape),
         "navigation_shape": list(nav_shape),
         "signal_shape": list(sig_shape),
         "grid_shape": [int(n_rows), int(n_cols)],
+        "scan_geometry": _geometry_dict(answer_name),
+        "apex": apex_used,
         "pattern_shape": [int(pat_h), int(pat_w)],
         "pattern_count": int(n_rows * n_cols),
         "n_patterns": int(n_rows * n_cols),
         "has_patterns": True,
-        "has_raw_patterns": True,
+        "has_raw_patterns": _has_raw_patterns(loaded, choices),
+        # True when the loader turned an OIM-form hexagonal file into a square map by nearest-point
+        # resampling (edax_hex): its scan_geometry is "square", which is true of what is held, and
+        # this says it is not what was measured. Every answer that states the geometry carries the
+        # flag next to it, so the interface can tell the user.
+        "hex_resampled": _signal_is_hex_resampled(answer_signal),
         "has_eds": has_eds,
         "has_electron_images": has_electron,
         "eds_elements": eds_elements,
@@ -1012,8 +1628,13 @@ async def load_ebsd(req: LoadEBSDRequest):
     register, calibration_store between clear() and register()). This
     is intentional — locking would re-block the loop.
     """
+    loading = _canonical_path(req.path)
+    _loading_paths.append(loading)
     try:
-        return await asyncio.to_thread(_load_ebsd_blocking, req.path, req.request_id)
+        return await asyncio.to_thread(
+            _load_ebsd_blocking, req.path, req.request_id,
+            req.apex.model_dump() if req.apex else None,
+            req.variant.model_dump() if req.variant else None)
     except Exception as e:
         if req.request_id:
             # Preserve started_at from earlier stages if it exists; only seed it
@@ -1026,20 +1647,26 @@ async def load_ebsd(req: LoadEBSDRequest):
                     req.request_id in _load_progress
                     and "started_at" in _load_progress[req.request_id]
                 )
-            err_kwargs = dict(stage="error", error=str(e),
+            from edax_apex import safe_text
+            err_kwargs = dict(stage="error", error=safe_text(e),
                               stage_idx=0, stage_total=4,
-                              message=f"Load failed: {e}")
+                              message=safe_text(f"Load failed: {e}"))
             if not had_started:
                 err_kwargs["started_at"] = time.time()
             _update_progress(req.request_id, **err_kwargs)
         logger.exception("Failed to load EBSD: %s", req.path)
         # A hexagonal UP1/UP2 scan is refused with a stable code that travels
         # in the header; the prose stays the detail.
+        # (A file name that is not valid UTF-8 may be in the sentence; ``safe_text`` keeps the answer JSON.)
+        from edax_apex import ApexError, safe_text
         from edax_up1 import EdaxHexUpError
-        if isinstance(e, EdaxHexUpError):
+        from safe_loader import NordifSettingError
+        if isinstance(e, (EdaxHexUpError, ApexError, NordifSettingError, LoadChoiceError)):
             from backend.api.problem import problem
-            raise problem(400, e.code, str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+            raise problem(400, e.code, safe_text(e))
+        raise HTTPException(status_code=400, detail=safe_text(e))
+    finally:
+        _loading_paths.remove(loading)
 
 
 @router.get("/info")
@@ -1052,14 +1679,21 @@ async def ebsd_info():
     """
     signal = _get_active_signal()
     if signal is None:
-        return {"loaded": False}
+        # An EDS-only file is open without a signal: not "nothing to lose" for a page that adopts.
+        return {"loaded": False, **({"open_file": _ebsd_file_path} if _ebsd_file_path else {})}
 
+    # as in the load answer: whether the measurement on screen holds unprocessed patterns (the page
+    # fills its store from here after a reload)
+    choices = await asyncio.to_thread(_inspect_for_load, _ebsd_file_path) if _ebsd_file_path else None
     return {
         "loaded": True,
         "file_path": _ebsd_file_path,
         "active_dataset": _active_dataset,
         "data_shape": [int(v) for v in signal.data.shape],
         "dtype": str(signal.data.dtype),
+        "scan_geometry": _geometry_dict(_active_dataset),
+        "hex_resampled": _signal_is_hex_resampled(signal),
+        "has_raw_patterns": _has_raw_patterns(variant_registry.variant_for(_active_dataset), choices),
     }
 
 
@@ -1402,8 +2036,10 @@ def _extract_step_size(signal, file_path=None):
         try:
             import h5py
             with h5py.File(fp, 'r') as f:
+                # The measurement the viewer holds, when this is its file (never the first one's step).
+                _groups = load_choices.measurement_groups(f, active_variant(fp))
                 for area in ('EBSD', 'EDS', 'Electron Image'):
-                    for entry in f.keys():
+                    for entry in _groups:
                         hdr = f.get(f'{entry}/{area}/Header')
                         if hdr is None:
                             continue
@@ -1414,6 +2050,8 @@ def _extract_step_size(signal, file_path=None):
                                 sy = float(np.ravel(sy_val[()])[0]) if sy_val is not None else sx
                                 if sx > 0:
                                     return {"x": sx, "y": sy, "units": "um"}
+        except LoadChoiceError:
+            raise
         except Exception:
             pass
 
@@ -1474,7 +2112,7 @@ def _eds_only_metadata(path: str) -> dict:
         "pattern_shape": [0, 0],
         "pattern_count": 0,
         "beam_energy": _extract_beam_energy(path),
-        "format_type": "Oxford" if 'h5oina' in path.lower() else "EDAX",
+        "format_type": _legacy_format_type(path),
         "file_path": path,
         "has_eds": has_eds,
         "eds_elements": eds_elements,
@@ -1482,13 +2120,20 @@ def _eds_only_metadata(path: str) -> dict:
     }
 
 
-def _extract_beam_energy(file_path):
-    """Try to extract beam energy (kV) from H5OINA header."""
+def _extract_beam_energy(file_path, signal=None, variant=None):
+    """Beam energy (kV): the H5OINA header, else what the loader put on ``signal``.
+
+    ``variant``: the measurement the energy is wanted for (a ``LoadVariant``; None = the first
+    measurement that has a header, as before). A measurement of the file is never answered with
+    another's header.
+
+    NORDIF writes it into ``Setting.txt`` and APEX into the measurement; their readers store it
+    as ``Acquisition_instrument.SEM.beam_energy``, which is the only place it survives."""
     try:
         import h5py
         with h5py.File(file_path, 'r') as f:
             # Oxford H5OINA: /1/EBSD/Header/Beam Voltage or similar
-            for key in f.keys():
+            for key in load_choices.measurement_groups(f, variant):
                 header = f.get(f'{key}/EBSD/Header')
                 if header is None:
                     continue
@@ -1498,8 +2143,17 @@ def _extract_beam_energy(file_path):
                         if hasattr(val, 'item'):
                             val = val.item()
                         return float(val)
+    except LoadChoiceError:
+        raise
     except Exception:
         pass
+    if signal is not None:
+        try:
+            value = signal.metadata.get_item("Acquisition_instrument.SEM.beam_energy", None)
+            if value is not None and float(value) > 0:
+                return float(value)
+        except Exception:  # noqa: BLE001 - a signal without metadata has no energy to give
+            pass
     return None
 
 
@@ -1574,7 +2228,8 @@ async def get_metadata():
     pat_w = sig_shape[0] if len(sig_shape) >= 2 else 0
 
     # Beam energy from H5 file
-    beam_energy = _extract_beam_energy(_ebsd_file_path) if _ebsd_file_path else None
+    beam_energy = (_extract_beam_energy(_ebsd_file_path, signal, active_variant(_ebsd_file_path))
+                   if _ebsd_file_path else None)
 
     # EDS / features from H5 session
     has_eds = False
@@ -1610,10 +2265,12 @@ async def get_metadata():
         # scale bar must use the area its image came from, not `step_size`.
         "pixel_sizes": _pixel_sizes_from_session(),
         "grid_shape": [int(n_rows), int(n_cols)],
+        "scan_geometry": _geometry_dict(_active_dataset),
+        "hex_resampled": _signal_is_hex_resampled(signal),
         "pattern_shape": [int(pat_h), int(pat_w)],
         "pattern_count": int(n_rows * n_cols),
         "beam_energy": beam_energy,
-        "format_type": "Oxford" if _ebsd_file_path and 'h5oina' in _ebsd_file_path.lower() else "EDAX",
+        "format_type": _known_format_type(_ebsd_file_path),
         "file_path": _ebsd_file_path,
         "has_eds": has_eds,
         "eds_elements": eds_elements,
@@ -1644,19 +2301,135 @@ async def get_loaded_files():
 async def switch_file(req: SwitchFileRequest):
     """Switch the active file by re-loading it from disk.
 
-    Re-uses the full load_ebsd pipeline (which resets indexing results,
-    analysis dataset, calibration, PC controller, and the h5_session).
-    The file must already be in the loaded-files registry — otherwise
-    use POST /load.
+    Re-uses the full load_ebsd pipeline (which resets indexing results, analysis dataset,
+    calibration, PC controller, and the h5_session). The file must already be in the loaded-files
+    registry - otherwise use POST /load. A file that was loaded with an EDAX APEX measurement is
+    reloaded with the pairing stored on its entry (``apex`` of ``/loaded-files``).
+
+    The answer is the ``/load`` answer plus ``apex_pairing_dropped`` (bool) and
+    ``apex_pairing_dropped_reason`` (``None``, or the code why the stored pairing was not used:
+    ``apexUnreadable``, ``apexMeasurementNotFound``, ``apexNoMeasurement``, ``apexBadId``). A
+    dropped pairing means the file was loaded without it; a pairing that now conflicts with the
+    pattern file (``apexGuidMismatch``, ``apexPatternCountMismatch``) is refused with its code.
     """
-    req_canon = _canonical_path(req.path)
-    known = any(_canonical_path(e["path"]) == req_canon for e in _loaded_files)
-    if not known:
+    entry = _loaded_entry(req.path)
+    if entry is None:
         raise HTTPException(
             status_code=404,
             detail=f"File not in loaded-files registry: {req.path}. Use /load for new files.",
         )
-    return await load_ebsd(LoadEBSDRequest(path=req.path))
+    stored, reason = await asyncio.to_thread(_usable_stored_pairing, req.path, entry.get("apex"))
+    apex = (ApexRef(h5_path=stored["h5_path"], measurement_id=stored["measurement_id"])
+            if stored else None)
+    # the variant it was last loaded as: a switch back brings back what the user saw, not the default
+    try:
+        answer = await load_ebsd(LoadEBSDRequest(path=req.path, apex=apex, variant=entry.get("variant")))
+    except HTTPException as exc:
+        # A remembered variant the file no longer holds would refuse every further switch until a
+        # fresh load: forget it (and its suffixed name), keep the coded refusal for this one.
+        if entry.get("variant") and (exc.headers or {}).get("X-Orienta-Code") in load_choices.LOAD_CODES:
+            entry.pop("variant", None)
+            entry["name"] = display_stem(req.path)
+        raise
+    return {**answer, "apex_pairing_dropped": reason is not None,
+            "apex_pairing_dropped_reason": reason}
+
+
+def stashed_file_entries() -> list:
+    """The files that were left behind, for the code that works on calibrations: one record per file that is in
+    the loaded-files list, is not the open one, and has a stash holding its calibration.
+
+    Each record is ``{"path": the path as the file was loaded, "canonical", "key": the stash key, "dataset": the
+    name of the file's raw dataset, "entry": its ``CalibrationEntry``, "calibration": the stash's dict of entries}``.
+    ``calibration`` is the dict itself, not a copy: a store made over it (``CalibrationStore.over``) reads and writes
+    what a later load of the file restores. Of the stashes a file has (one per variant it was loaded as) only the
+    one of the variant it was last loaded as is listed: the entry of the loaded-files list names that dataset
+    (a measurement or a pattern source other than the file's default is in the name) and the measurement a pattern
+    file was paired with (``_pairing_id`` of the entry's ``apex``: two pairings of one file have one name).
+    A file that left the list is not listed, whatever its stash still keeps (``_drop_stash``)."""
+    open_canon = _canonical_path(_ebsd_file_path) if _ebsd_file_path else None
+    out = []
+    for key in list(_registry_by_file):
+        stash = _registry_by_file.get(key)
+        canon = _stash_path(key)
+        if not stash or canon == open_canon:
+            continue
+        listed = _loaded_entry(canon)
+        calibration = stash.get("calibration")
+        if listed is None or not calibration:
+            continue
+        if _stash_pairing(key) != _pairing_id(listed.get("apex")):
+            continue
+        wanted = listed.get("name") or display_stem(listed["path"])
+        entry = calibration.get(wanted)
+        if entry is None or entry.is_view_of_parent or entry.file_key != canon:
+            continue
+        out.append({"path": listed["path"], "canonical": canon, "key": key, "dataset": wanted,
+                    "entry": entry, "calibration": calibration})
+    return out
+
+
+def _drop_stash(path) -> None:
+    """Forget the stashed datasets of a file that has left the loaded-files list.
+
+    The stash keeps the file's lazy signals, and with them its memory-mapped pattern file: on
+    Windows a mapped file can be neither replaced nor moved until the map is gone. A file that is
+    no longer in the list cannot be switched back to, so no dataset is restored from the stash.
+    (Loading it again by path starts from the file, without its crops and derived datasets: a
+    window is cheap to redo, a background-removed or CLAHE dataset is not on disk and is lost.)
+
+    A PC the user made (typed, refined, grid-calibrated) is not lost: it cannot be read from the
+    file again and holds no signal and no file lock, so it stays as a calibration-only stash of the
+    shape ``_stash_registry_for_file`` writes for a raw-only file. Only with nothing user-made left
+    is the stash deleted.
+
+    A file has one stash per variant it was loaded as (``_stash_key``: its plain path for the default
+    variant, ``(path, variant)`` for another one), and each of them holds the file open: all of them
+    are let go of, each by the rule above.
+    """
+    canon = _canonical_path(path)
+    for key in [k for k in list(_registry_by_file) if _stash_path(k) == canon]:
+        stash = _registry_by_file.get(key)
+        if not stash:
+            _registry_by_file.pop(key, None)
+            continue
+        kept = calibration_store.user_made_of(stash.get("calibration") or {})
+        if not kept:
+            _registry_by_file.pop(key, None)
+            continue
+        geometries = stash.get("geometries") or {}
+        _registry_by_file[key] = {
+            "raw_signals": {}, "positions": {}, "dirty": set(), "masks": {},
+            "active": stash.get("active") if stash.get("active") in kept else next(iter(kept)),
+            "calibration": kept,
+            "crops": {}, "crop_masks": {},
+            "geometries": {n: g for n, g in geometries.items() if n in kept},
+        }
+
+
+def _drop_stashes_except(keep) -> None:
+    """``_drop_stash`` for every stash but those of ``keep`` (canonical paths).
+
+    ``keep`` is the active file and the file a running load is about to make active: the worker
+    thread restores (and so pops) that stash when it finishes. The keys are copied once, because
+    the worker may insert a stash (a file it just left) while this runs on the event loop.
+    Every variant of a file that is in ``keep`` stays; every variant of any other file goes.
+    """
+    for canon in {_stash_path(k) for k in list(_registry_by_file)} - set(keep):
+        _drop_stash(canon)
+
+
+def _stash_leaving_file(file_path, new_path) -> None:
+    """``_stash_registry_for_file`` for the file a load of ``new_path`` is about to leave. A file that
+    is not in the loaded-files list any more (``clear-all`` empties the list and keeps the active file
+    open; a load that was running at that moment then leaves it) is stashed and the stash released again
+    by the rule for files that left the list (``_drop_stash``): nothing can switch back to it, and the
+    stash would hold its pattern file open until the backend ends. Another measurement of the same file
+    is not leaving it: the stashes of the file stay for the load that is about to restore one."""
+    _stash_registry_for_file(file_path)
+    if (file_path and _loaded_entry(file_path) is None
+            and _canonical_path(file_path) != _canonical_path(new_path)):
+        _drop_stash(file_path)
 
 
 @router.post("/loaded-files/remove")
@@ -1684,6 +2457,10 @@ async def remove_loaded_file(req: SwitchFileRequest):
             status_code=404,
             detail=f"File not in loaded-files registry: {req.path}",
         )
+    # A switch to this file that is running right now restores its stash when the worker finishes
+    # (``_loading_paths``, as in clear and clear-all): dropping it here would load the file raw.
+    if req_canon not in _loading_paths:
+        _drop_stash(req.path)
     return {"success": True, "removed": req.path, "remaining": len(_loaded_files)}
 
 
@@ -1698,6 +2475,7 @@ async def clear_loaded_files():
     _loaded_files[:] = [
         e for e in _loaded_files if _canonical_path(e["path"]) == active_canon
     ]
+    _drop_stashes_except({active_canon, *_loading_paths})
     return {"success": True, "remaining": len(_loaded_files)}
 
 
@@ -1712,9 +2490,13 @@ async def clear_all_loaded_files():
 
     The active file stays *open* in the viewer (its in-memory signal, indexing
     results, etc. are untouched); it simply no longer appears in the switcher
-    list until it is loaded again.
+    list until it is loaded again. What the other pairings and variants of the active file left
+    behind (the crops of measurement 1 while measurement 2 is on screen) belong to that file, and
+    stay with it, as after /loaded-files/clear.
     """
+    active_canon = _canonical_path(_ebsd_file_path) if _ebsd_file_path else None
     _loaded_files.clear()
+    _drop_stashes_except({active_canon, *_loading_paths})
     return {"success": True, "remaining": 0}
 
 
@@ -1749,6 +2531,8 @@ async def list_datasets():
             "signal_shape": list(sig_shape),
             "n_patterns": int(np.prod(nav_shape)) if nav_shape else sig.data.shape[0],
             "dtype": str(sig.data.dtype),
+            "scan_geometry": _geometry_dict(name),
+            "hex_resampled": _signal_is_hex_resampled(sig),
             "has_eds": has_eds and is_active,
             "eds_elements": eds_elements if is_active else [],
         })
@@ -1836,6 +2620,8 @@ async def deepcopy_dataset(req: DeepCopyRequest):
         # the identity — window.apply() would hand back the same values by a
         # longer route. Verbatim inheritance is what a copy means.
         calibration_store.register_derived(new_name, parent_name)
+        scan_geometry_service.derive(new_name, parent_name)
+        variant_registry.copy_to(parent_name, new_name)
 
         nav_shape = new_signal.axes_manager.navigation_shape
         logger.info("Created deepcopy: '%s' from '%s'", new_name, _active_dataset)
@@ -1843,6 +2629,8 @@ async def deepcopy_dataset(req: DeepCopyRequest):
             "success": True,
             "name": new_name,
             "parent": _active_dataset,
+            "scan_geometry": _geometry_dict(new_name),
+            "hex_resampled": _signal_is_hex_resampled(new_signal),
             "navigation_shape": list(nav_shape),
             "n_patterns": int(np.prod(nav_shape)) if nav_shape else new_signal.data.shape[0],
         }
@@ -1854,6 +2642,11 @@ async def deepcopy_dataset(req: DeepCopyRequest):
 # A crop pulled into RAM must not blow the process up. Same ceiling the
 # per-file stash uses, from the same constant, so the two limits cannot drift.
 _CROP_MATERIALIZE_MAX_BYTES = _STASH_MATERIALIZE_MAX_BYTES
+
+# The ceiling on the patterns and the largest window of a hexagonal frame average live in
+# ``services/frame_average`` (``HEX_MAX_BYTES``, ``HEX_MAX_WINDOW``): the batch averages on the same limits.
+# One hexagonal run at a time: a second one would hold a second copy of the patterns.
+_frame_average_hex_lock = threading.Lock()
 
 
 @router.post("/crop")
@@ -1903,6 +2696,16 @@ async def crop_dataset(req: CropRequest):
     parent_name = _active_dataset
     parent_window = crop_window_service.get_crop(parent_name)
 
+    # Refuse a parent without a recorded scan geometry BEFORE the cut: the cut can materialise a
+    # large crop, and the refusal below (after ``derive_cropped``) is only the safety net.
+    if scan_geometry_service.geometry_for(parent_name) is None:
+        from backend.api.problem import problem
+        logger.warning("Crop refused: '%s' has no recorded scan geometry", parent_name)
+        raise problem(
+            400, "crop_geometry_unknown",
+            f"'{parent_name}' has no recorded scan geometry, so a part of it cannot be cut out "
+            f"safely. Load the file again.")
+
     def _cut():
         # hyperspy indexes navigation as [x, y] — columns first.
         new = signal.inav[c0:c0 + cols, r0:r0 + rows]
@@ -1943,15 +2746,37 @@ async def crop_dataset(req: CropRequest):
     window = (crop_window_service.compose(parent_window, local_window)
               if parent_window is not None else local_window)
 
-    # Register BEFORE publishing the dataset. register_cropped cuts the
-    # parent's per-pixel PC map and raises when that map is not on the grid
-    # this window was cut from; publishing first would leave a dataset in
-    # _raw_signals that IS a crop but carries no crop window — the "looks
-    # like a full scan" state the whole window registry exists to prevent.
-    # Everything after this point is dict writes, which cannot fail.
+    # Register BEFORE publishing the dataset. Two calls can refuse the window and are made first,
+    # in this order: the scan geometry (cut on the PARENT's grid; a window that starts on an odd
+    # row of a hexagonal scan reverses the offset of the odd rows; it registers nothing when it
+    # raises) and register_cropped, which cuts the parent's per-pixel PC map and raises when that
+    # map is not on the grid this window was cut from. Publishing first would leave a dataset in
+    # _raw_signals that IS a crop but carries no crop window — the "looks like a full scan" state
+    # the whole window registry exists to prevent. Everything after these two is dict writes,
+    # which cannot fail; when the second refuses, the geometry the first registered is dropped.
+    try:
+        cut_geometry = scan_geometry_service.derive_cropped(new_name, parent_name, local_window)
+    except ValueError as e:
+        logger.warning("Crop refused for '%s': %s", new_name, e)
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The selection does not fit the scan geometry of '{parent_name}': {e}"),
+        )
+    if cut_geometry is None:
+        # Every load path registers a geometry, so a parent without one is a broken contract. The
+        # cut-out's geometry would be unknown, and an unknown geometry passes the hexagonal gate:
+        # refuse by name, before anything is published (nothing has been registered yet).
+        from backend.api.problem import problem
+        logger.warning("Crop refused for '%s': '%s' has no recorded scan geometry", new_name, parent_name)
+        raise problem(
+            400, "crop_geometry_unknown",
+            f"'{parent_name}' has no recorded scan geometry, so a part of it cannot be cut out "
+            f"safely. Load the file again.")
     try:
         calibration_store.register_cropped(new_name, parent_name, local_window)
     except ValueError as e:
+        scan_geometry_service.clear(new_name)
+        variant_registry.drop(new_name)
         parent_entry = calibration_store.get_entry(parent_name)
         pc_grid = (tuple(np.shape(parent_entry.pc_map)[:2])
                    if parent_entry is not None and parent_entry.pc_map is not None
@@ -1965,6 +2790,7 @@ async def crop_dataset(req: CropRequest):
                     f"before cropping"),
         )
     crop_window_service.set_crop(new_name, window)
+    variant_registry.copy_to(parent_name, new_name)
 
     _raw_signals[new_name] = new_signal
     _positions[new_name] = (0, 0)
@@ -1995,6 +2821,8 @@ async def crop_dataset(req: CropRequest):
         "name": new_name,
         "parent": parent_name,
         "window": window.to_dict(),
+        "scan_geometry": _geometry_dict(new_name),
+        "hex_resampled": _signal_is_hex_resampled(new_signal),
         "n_patterns": rows * cols,
         "n_selected": window.n_selected,
         "materialised": materialised,
@@ -2084,6 +2912,14 @@ async def export_crop(req: CropExportRequest):
                     f"reason. Crop a smaller region to save it to a file."),
         )
 
+    # A crop of a hexagonal scan is written from the signal in memory as an Orienta .h5: the patterns
+    # come from the signal, so the file the crop was cut from need not be there. The h5oina path
+    # below cuts a square grid out of its source file.
+    dataset = _active_dataset
+    geometry = scan_geometry_service.geometry_for(dataset)
+    if geometry is not None and geometry.kind == "hex":
+        return await _export_hex_crop(req.path, dataset, signal, window, geometry)
+
     # The window's row0/col0 are indices into the file it was cut from, so
     # that file is the only one they mean anything in. _ebsd_file_path is the
     # fallback for a window that never recorded one; it is NOT preferred, or a
@@ -2097,14 +2933,21 @@ async def export_crop(req: CropExportRequest):
                     f"{source_path or '(unknown)'}"),
         )
 
+    # The crop holds the variant (measurement x pattern source) its parent was loaded as: its
+    # patterns go back into that variant's dataset of the file, and nowhere else.
+    variant = variant_registry.variant_for(_active_dataset)
+
     def _write():
         # The crop's own patterns, not the source's. asarray computes a lazy
         # crop; the ceiling checked above is what bounds that allocation.
         data = np.asarray(signal.data)
-        return write_cropped_h5oina(source_path, req.path, window, patterns=data)
+        return write_cropped_h5oina(source_path, req.path, window, patterns=data, variant=variant)
 
     try:
         report = await asyncio.to_thread(_write)
+    except LoadChoiceError as e:
+        from backend.api.problem import problem
+        raise problem(400, e.code, str(e))
     except ValueError as e:
         # The writer's own refusals — a hex scan, patterns whose detector
         # shape no longer matches the file's — are all user-facing.
@@ -2126,6 +2969,58 @@ async def export_crop(req: CropExportRequest):
             "n_selected": int(window.n_selected), **report}
 
 
+async def _export_hex_crop(path: str, dataset: str, signal, window, geometry) -> dict:
+    """Save the crop ``dataset`` of a hexagonal scan as an Orienta ``.h5`` (``write_cropped_hex_h5``).
+
+    The geometry is the one registered for the crop, so a crop that starts on an odd row of its
+    parent is written with the reversed row offset. The pattern centre and the tilts are what an
+    export of the dataset states (``indexing._pc_for_export``). The answer is the writer's report
+    with the same ``success`` / ``dataset`` / ``n_selected`` keys as a square crop."""
+    from backend.api.routes import indexing as _idx_mod
+    from backend.api.problem import problem
+    from backend.api.services.crop_export import write_cropped_hex_h5
+
+    # An .h5oina would be opened as an Oxford file: the file this writes must keep an .h5 name.
+    if not str(path).lower().endswith(".h5"):
+        raise problem(400, "cropHexExtension",
+                      "A hexagonal crop is saved as an Orienta .h5 file; give the file a .h5 name.")
+
+    # Points without a measurement cannot be written: the file cannot state which points were measured.
+    if geometry.valid_mask is not None:
+        raise problem(400, "cropHexValidMask",
+                      "This hexagonal scan has points without a measurement, and a crop file cannot "
+                      "state which points were measured. Nothing was written.")
+
+    entry = calibration_store.get_entry(dataset)
+    pc_map_present = entry is not None and entry.pc_map is not None
+    detector = getattr(signal, "detector", None)
+    try:
+        pc_bruker = _idx_mod._pc_for_export(dataset, detector)
+        tilts = _idx_mod._geometry_for_export(dataset, detector)
+    except AttributeError:
+        # Neither the calibration store nor the signal holds a detector: the pattern centre has no source.
+        if detector is not None:
+            raise
+        raise problem(400, "cropHexNoDetector",
+                      "This dataset has no detector geometry and no pattern centre, so the crop file "
+                      "cannot state one. Nothing was written.")
+
+    def _write():
+        return write_cropped_hex_h5(signal, path, window, geometry, pc_bruker=pc_bruker,
+                                    tilts=tilts, pc_map_present=pc_map_present)
+
+    try:
+        report = await asyncio.to_thread(_write)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"Could not write '{path}': {e}")
+    except Exception as e:
+        logger.exception("Hexagonal crop export failed")
+        raise HTTPException(status_code=500, detail=str(e))
+    return {"success": True, "dataset": dataset, "n_selected": int(window.n_selected), **report}
+
+
 @router.delete("/dataset/{name}")
 async def delete_dataset(name: str):
     """Remove a dataset from memory to free RAM."""
@@ -2139,6 +3034,11 @@ async def delete_dataset(name: str):
     _dirty_datasets.discard(name)
     calibration_store.remove(name)
     crop_window_service.clear_crop(name)
+    scan_geometry_service.clear(name)
+    variant_registry.drop(name)
+    # The PC page's session of this name goes too: names are recycled (deepcopy, crop).
+    from backend.api.routes import pcrefinement
+    pcrefinement.drop_session(name)
     logger.info("Deleted dataset: '%s'", name)
 
     # If deleted the active dataset, switch to the first remaining one
@@ -2167,6 +3067,54 @@ async def frame_average(req: FrameAverageRequest):
 
     size = max(1, req.window_size)
 
+    # A hexagonal scan has six neighbours, and which two of the adjacent rows' points they are changes with the
+    # parity of the row, so kikuchipy's one window over the grid is wrong there: average on the neighbour table.
+    # A square or unknown dataset takes the call it always had.
+    geometry = scan_geometry_service.geometry_for(_active_dataset)
+    topology = scan_neighbours.hex_topology(geometry)
+    if topology is not None:
+        nav = tuple(int(v) for v in signal.axes_manager.navigation_shape)    # (n_cols, n_rows)
+        if len(nav) != 2 or (topology.n_rows, topology.n_cols) != (nav[1], nav[0]):
+            have = f"{nav[1]} x {nav[0]}" if len(nav) == 2 else f"{len(nav)}-dimensional"
+            raise HTTPException(
+                status_code=409,
+                detail=(f"The scan geometry of '{_active_dataset}' is {topology.n_rows} x {topology.n_cols}, "
+                        f"but its navigation is {have}; load the file again."))
+        max_window = frame_average_service.HEX_MAX_WINDOW
+        if size > max_window:
+            # The points of a neighbourhood grow with the square of the window; the dialog stops at 50.
+            raise HTTPException(
+                status_code=400,
+                detail=(f"A window of {size} is too large for a hexagonal scan: the largest is "
+                        f"{max_window}, which averages a point with the "
+                        f"{3 * ((max_window - 1) // 2) * ((max_window + 1) // 2)} "
+                        f"points within {(max_window - 1) // 2} steps."))
+        if size > 1 and size % 2 == 0:
+            # The neighbourhood of a hexagonal point grows by whole rings (3 = the point and its 6 neighbours,
+            # 5 = 19 points, 7 = 37): an even window has no ring of its own and must not be rounded quietly.
+            raise HTTPException(
+                status_code=400,
+                detail=(f"A window of {size} is not available on a hexagonal scan: the neighbourhood grows by "
+                        f"whole rings around a point. Use an odd size: 3 averages a point with its 6 neighbours, "
+                        f"5 with the 18 points within two steps, 7 within three."))
+        nbytes = int(np.prod(signal.data.shape, dtype=np.int64)) * int(signal.data.dtype.itemsize)
+        max_bytes = frame_average_service.HEX_MAX_BYTES
+        if size > 1 and nbytes > max_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=(f"Averaging a hexagonal scan holds its {nbytes / 1024 ** 3:.2f} GiB of patterns twice in "
+                        f"memory, more than the {max_bytes / 1024 ** 3:.2f} GiB allowed. "
+                        f"Crop the scan to the part you need first."))
+        rings = (size - 1) // 2
+        valid = geometry.valid_mask                                       # None: every point was measured
+
+    def _run_hex():
+        if rings < 1:
+            return                                                        # a window of one averages nothing
+        if getattr(signal, "_lazy", False):
+            signal.compute(show_progressbar=False)                        # materialise in place, as the cropping does
+        signal.data[...] = frame_average_service.average_neighbour_patterns(signal.data, topology, rings, valid)
+
     def _run():
         # kikuchipy API: average_neighbour_patterns (British spelling in kp 0.11+)
         if hasattr(signal, 'average_neighbour_patterns'):
@@ -2174,15 +3122,27 @@ async def frame_average(req: FrameAverageRequest):
         else:
             signal.average_neighbor_patterns(window="rectangular", window_shape=(size, size), show_progressbar=False)
 
+    hex_run = topology is not None and rings >= 1
+    if hex_run and not _frame_average_hex_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Another frame averaging of a hexagonal scan is still running; wait for it to finish.")
     try:
         # Full-dataset neighbour averaging — run off the event loop.
-        await asyncio.to_thread(_run)
+        data_before = signal.data
+        try:
+            await asyncio.to_thread(_run_hex if topology is not None else _run)
+        finally:
+            if hex_run:
+                _frame_average_hex_lock.release()
+            # also after a failure: an eager array is written in place, so a failed run may have
+            # left it half edited (and the kept value range, and the "unmodified" flag, stale)
+            _mark_active_dirty_after_edit(signal, data_before)
 
         # Keep legacy reference in sync
         if _active_dataset and _active_dataset in _raw_signals:
             _ebsd_signal = _raw_signals[_active_dataset]
 
-        _mark_active_dirty()
         return {"success": True, "window_size": size}
     except Exception as e:
         logger.exception("Frame averaging failed")
@@ -2283,12 +3243,15 @@ async def background_removal(req: BackgroundRemovalRequest):
 
     try:
         # Full-dataset dask op — run off the event loop (mirrors /clahe).
-        await asyncio.to_thread(_run)
+        data_before = signal.data
+        try:
+            await asyncio.to_thread(_run)
+        finally:
+            _mark_active_dirty_after_edit(signal, data_before)   # also after a failure: see /frame-average
 
         if _active_dataset and _active_dataset in _raw_signals:
             _ebsd_signal = _raw_signals[_active_dataset]
 
-        _mark_active_dirty()
         elapsed = time.perf_counter() - t0
         rate = n_patterns / max(elapsed, 1e-6)
         logger.info("BG-%s done: %d patterns in %.1fs (%.0f patterns/s)",
@@ -2351,12 +3314,15 @@ async def autocontrast():
 
     try:
         # Full-dataset percentile + rescale — run off the event loop.
-        await asyncio.to_thread(_run)
+        data_before = signal.data
+        try:
+            await asyncio.to_thread(_run)
+        finally:
+            _mark_active_dirty_after_edit(signal, data_before)   # also after a failure: see /frame-average
 
         if _active_dataset and _active_dataset in _raw_signals:
             _ebsd_signal = _raw_signals[_active_dataset]
 
-        _mark_active_dirty()
         return {"success": True, "masked": include_mask is not None}
     except Exception as e:
         logger.exception("Autocontrast failed")
@@ -2402,10 +3368,13 @@ async def clahe(req: ClaheRequest):
             signal.adaptive_histogram_equalization(kernel_size=(k, k))
 
     try:
-        await asyncio.to_thread(_run)
+        data_before = signal.data
+        try:
+            await asyncio.to_thread(_run)
+        finally:
+            _mark_active_dirty_after_edit(signal, data_before)   # also after a failure: see /frame-average
         if _active_dataset and _active_dataset in _raw_signals:
             _ebsd_signal = _raw_signals[_active_dataset]
-        _mark_active_dirty()
         elapsed = time.perf_counter() - t0
         rate = n_patterns / max(elapsed, 1e-6)
         logger.info("CLAHE done: %d patterns in %.1fs (%.0f patterns/s)",
@@ -2492,13 +3461,17 @@ _STORED_OVERVIEW_DATASETS = {
 _OVERVIEW_PATTERN_CAP = 4000
 
 
-def _read_stored_quality_map(file_path, mode, n_rows, n_cols):
+def _read_stored_quality_map(file_path, mode, n_rows, n_cols, variant=None):
     """Read Aztec's precomputed per-pixel quality array for ``mode`` from the
     source H5OINA and return it shaped ``(n_rows, n_cols)`` as float.
 
-    Returns ``None`` (never raises) when the file/vendor/dataset doesn't
-    provide it or the shape doesn't match — callers fall back to computing
-    the overview from the patterns.
+    ``variant``: the measurement the map is wanted for (a ``LoadVariant``; None = the first
+    measurement that has the channel, as before). Only that measurement's array is read.
+
+    Returns ``None`` when the file/vendor/dataset doesn't provide it or the
+    shape doesn't match — callers fall back to computing the overview from the
+    patterns. The one thing it raises is the coded ``LoadChoiceError`` for a
+    ``variant`` whose measurement the file does not hold.
     """
     candidates = _STORED_OVERVIEW_DATASETS.get(mode)
     if not candidates or not file_path:
@@ -2507,7 +3480,7 @@ def _read_stored_quality_map(file_path, mode, n_rows, n_cols):
         import h5py
         with h5py.File(file_path, "r") as f:
             # Header group name varies by vendor/version ('1', '2', ...).
-            for top in f:
+            for top in load_choices.measurement_groups(f, variant):
                 grp = f.get(f"{top}/EBSD/Data")
                 if grp is None:
                     continue
@@ -2518,6 +3491,8 @@ def _read_stored_quality_map(file_path, mode, n_rows, n_cols):
                             return None
                         return arr.reshape(n_rows, n_cols)
         return None
+    except LoadChoiceError:
+        raise
     except Exception:
         logger.debug("stored quality map read failed", exc_info=True)
         return None
@@ -2558,11 +3533,30 @@ def _upscale_nearest(small, n_rows, n_cols):
     return small[np.ix_(ri, ci)]
 
 
+async def _overview_view(result: dict, geometry) -> dict:
+    """The (cached, index-grid) overview as the caller asked for it: itself, or redrawn on the display raster.
+    A new dict, so the cached one is never touched. ``shape`` stays the index grid; ``display.shape`` is the
+    picture's."""
+    if geometry is None:
+        return result
+
+    def _convert() -> dict:
+        return {**result, "image": hex_raster.png_to_display(result["image"], geometry),
+                "display": hex_raster.display_info(geometry)}
+
+    return await asyncio.to_thread(_convert)
+
+
 @router.get("/overview")
-async def overview(mode: str = "mean"):
+async def overview(mode: str = "mean", display: Optional[str] = None):
     """
     Get an overview map of the scan (mean/std/max intensity per pixel).
     Returns a base64-encoded PNG image of the navigation map.
+
+    ``display=raster``: on a hexagonal scan the picture is drawn on the display raster (RGBA, transparent
+    outside the hexagons) and the answer carries a ``display`` field describing it; ``shape`` stays the
+    index grid. A square or unknown scan ignores the parameter. Without it the answer is the index-grid
+    picture, as always.
 
     For lazy-loaded signals the reductions below read every pattern from
     disk (350 MB+ for a 25k-pattern dataset) and force a dask compute.
@@ -2579,13 +3573,18 @@ async def overview(mode: str = "mean"):
         raise HTTPException(status_code=400, detail="No EBSD data loaded")
 
     active_dataset = _active_dataset
+    # The geometry of the dataset the cached answer is made for, asked on every request (never remembered
+    # per name: two measurements of one pattern file share a dataset name).
+    geometry = scan_geometry_service.geometry_for(active_dataset) if display == "raster" else None
+    if geometry is not None and geometry.kind != "hex":
+        geometry = None
 
     # Cache lookup — invalidated by _mark_active_dirty() on every
     # processing op and by _overview_cache.clear() on /load + /switch-file.
     cache_key = (active_dataset, mode)
     cached = _overview_cache.get(cache_key)
     if cached is not None:
-        return cached
+        return await _overview_view(cached, geometry)
 
     def _compute_overview() -> dict:
         nav_shape = signal.axes_manager.navigation_shape  # (cols, rows)
@@ -2600,7 +3599,8 @@ async def overview(mode: str = "mean"):
         if (_ebsd_file_path
                 and active_dataset == display_stem(_ebsd_file_path)
                 and active_dataset not in _dirty_datasets):
-            nav_map = _read_stored_quality_map(_ebsd_file_path, mode, n_rows, n_cols)
+            nav_map = _read_stored_quality_map(_ebsd_file_path, mode, n_rows, n_cols,
+                                               variant_registry.variant_for(active_dataset))
         native_hit = nav_map is not None
 
         # --- Computed Band Contrast: native BC else kikuchipy FFT image quality.
@@ -2666,12 +3666,15 @@ async def overview(mode: str = "mean"):
 
     try:
         result = await asyncio.to_thread(_compute_overview)
-        # Only cache successful results — failures shouldn't get pinned.
-        _overview_cache[cache_key] = result
-        return result
+        # Only cache successful results — failures shouldn't get pinned. And only while the signal this was
+        # computed from is still the active one: a load that ran meanwhile has cleared the cache, and the
+        # picture of the old measurement must not reappear under a name the new one may share.
+        if _get_active_signal() is signal:
+            _overview_cache[cache_key] = result
     except Exception as e:
         logger.exception("Overview failed")
         raise HTTPException(status_code=500, detail=str(e))
+    return await _overview_view(result, geometry)
 
 
 @router.get("/load/progress/{request_id}")

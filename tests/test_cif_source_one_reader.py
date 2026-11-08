@@ -318,10 +318,83 @@ def test_the_builder_does_not_skip_every_file_when_the_shared_reader_is_missing(
 
 
 def test_the_real_alpha_almnsi_file_round_trips_a_doi_edit(client):
-    """The reviewer's replay, on the library file itself (skipped without it)."""
+    """The same round trip on the library file itself (skipped without it)."""
     src = (Path(__file__).resolve().parents[1] / "Database" / "CIF_Library" / "α-(AlMnSi).cif")
     if not src.is_file():
         pytest.skip("library CIF not on this machine")
     _info(client, "alpha.cif", src.read_text(encoding="utf-8", errors="ignore"))
     _patch(client, "alpha.cif", doi="10.1234/edited")
     assert _info(client, "alpha.cif", _file(client, "alpha.cif"))["doi"] == "10.1234/edited"
+
+
+# --- the one reader stands on cif_citation: what it adds reaches every consumer ---------
+
+_COD_FIELDS = (f"data_a\n_publ_author_name 'Smith, J.'\n_journal_name_full 'Acta Cryst.'\n"
+               f"_journal_year 1999\n_journal_volume 12\n_journal_page_first 34\n{_CELL}")
+
+_TEX_CITATION = r"Cern\'y, R. Studies of Universit\'e alloys. J. Test 1 (2000) 1-9."
+_TEX_PLAIN = "Cerný, R. Studies of Université alloys. J. Test 1 (2000) 1-9."
+
+
+def test_a_file_with_only_journal_fields_is_cited_in_the_panel_and_in_the_xtal(client):
+    info = _info(client, "cod.cif", _COD_FIELDS)
+    assert info["reference"] == "Smith, J.: Acta Cryst. 12 (1999) 34"
+    assert info["reference_missing"] is False
+    assert _use_reference(client, "cod2.cif", _COD_FIELDS) == info["reference"]
+
+
+def test_a_doi_column_of_a_loop_reaches_panel_and_card(client):
+    from backend.api.services.phase_library import read_doi
+    text = f"data_a\nloop_\n_citation_id\n_citation_doi\n1 10.1234/looped\n{_CELL}"
+    assert _info(client, "loop.cif", text)["doi"] == read_doi(text) == "10.1234/looped"
+
+
+def test_panel_and_card_answer_alike_when_the_later_doi_tag_differs(client):
+    from backend.api.services.phase_library import read_doi
+    text = (f"data_a\n_publ_section_doi '10.1234/first'\n"
+            f"_journal_paper_doi '10.1234/second'\n{_CELL}")
+    assert _info(client, "two.cif", text)["doi"] == read_doi(text) == "10.1234/first"
+
+
+def test_panel_and_card_clean_a_citation_with_tex_accents_alike(client):
+    from backend.api.services.phase_library import read_reference
+    text = f"data_a\n{_CELL}_publ_section_references\n;\n{_TEX_CITATION}\n;\n"
+    assert _info(client, "tex.cif", text)["reference"] == _TEX_PLAIN
+    assert read_reference(text) == (_TEX_PLAIN, None)
+
+
+def test_a_cif_tag_where_the_citation_should_be_is_no_citation(client):
+    from backend.api.services.phase_library import read_reference
+    text = f"data_a\n{_CELL}_publ_section_references\n;\n_publ_author_address\n;\n"
+    info = _info(client, "tag.cif", text)
+    assert info["reference"] == "" and info["reference_missing"] is True
+    assert read_reference(text) == (None, "cif_tag")
+
+
+def test_a_closing_semicolon_that_is_indented_still_ends_the_citation(client):
+    text = f"data_a\n{_CELL}_publ_section_references\n;\n{_CITATION}\n  ;\n"
+    assert _info(client, "indent.cif", text)["reference"] == _CITATION
+
+
+def test_a_doi_edit_with_no_doi_in_it_is_refused_with_its_code(client):
+    c, _root = client
+    _info(client, "bad.cif", CIF_SEMICOLONS)
+    r = c.patch("/api/database/cif/bad.cif/meta", json={"doi": "not-a-doi"})
+    assert r.status_code == 422
+    assert r.json()["detail"]["code"] == "invalid_doi"
+    assert _file(client, "bad.cif") == CIF_SEMICOLONS
+
+
+def test_an_edit_replaces_a_citation_with_an_indented_closing_semicolon(client):
+    new = "Lee, K. Another study of aluminium alloys. J. Alloys 5 (2001) 9-10."
+    _info(client, "i2.cif", f"data_a\n{_CELL}_publ_section_references\n;\n{_CITATION}\n  ;\n")
+    _patch(client, "i2.cif", reference=new)
+    text = _file(client, "i2.cif")
+    assert text.count("_publ_section_references") == 1 and "Gjonnes" not in text
+    assert _info(client, "i2.cif", text)["reference"] == new
+
+
+def test_the_card_shows_the_composed_citation_the_panel_shows(client):
+    from backend.api.services.phase_library import read_reference
+    assert read_reference(_COD_FIELDS) == ("Smith, J.: Acta Cryst. 12 (1999) 34", None)
+    assert _info(client, "cod3.cif", _COD_FIELDS)["reference"] == read_reference(_COD_FIELDS)[0]

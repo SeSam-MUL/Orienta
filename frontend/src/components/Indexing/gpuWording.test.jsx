@@ -131,6 +131,14 @@ describe('the wiring (source checks — the weak kind, listed on purpose)', () =
     expect(src).toMatch(/t\('actions\.releaseCaches'\)/);
     expect(src).toMatch(/t\('messages\.cachesReleased'/);
   });
+
+  it('the no-GPU message names an ended compute process, like the GPU one', () => {
+    // The endpoint ends the idle compute process on every machine; a message
+    // that stays silent about it reports less than what was freed.
+    const src = read('./IndexingPage.jsx');
+    expect(src).toMatch(
+      /t\('messages\.cachesReleased',\s*\{[^}]*\}\)\s*\+\s*\(d\.workers_released \? t\('messages\.gpuReleasedWorker'\) : ''\)/);
+  });
 });
 
 describe('the compute path is untouched', () => {

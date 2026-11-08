@@ -6,9 +6,10 @@
  * Supports drag-to-select for region mode with bidirectional NumberInput sync.
  */
 
-import { useRef, useEffect, useCallback, useState } from 'react';
+import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors as C } from '../../theme/tokens';
+import { regionFromDrag, regionFrame, maskToRaster } from './hexNavMap';
 
 export default function NavigationCanvas({
   navImage,
@@ -20,6 +21,8 @@ export default function NavigationCanvas({
   onRegionChange,
   edsLayers = [],
   maskData = null,
+  hexMap = null,   // makeHexMap() of a hexagonal scan: the picture is then the display raster; null = square scan
+  notice = null,   // why there is no picture: 'loading' (answer on its way), 'mismatch', 'failed'; null = no data
 }) {
   const { t } = useTranslation('indexing');
   const canvasRef = useRef(null);
@@ -81,6 +84,16 @@ export default function NavigationCanvas({
     };
   }, [nRows, nCols, getImageRect]);
 
+  // Convert canvas pixel to fractions {rx, ry} of the picture (null outside it)
+  const canvasToFraction = useCallback((cx, cy) => {
+    const ir = getImageRect();
+    if (!ir) return null;
+    const rx = (cx - ir.dx) / ir.dw;
+    const ry = (cy - ir.dy) / ir.dh;
+    if (!(rx >= 0 && rx <= 1 && ry >= 0 && ry <= 1)) return null;
+    return { rx, ry };
+  }, [getImageRect]);
+
   // Convert grid coordinate to canvas pixel
   const gridToCanvas = useCallback((row, col) => {
     const ir = getImageRect();
@@ -91,6 +104,29 @@ export default function NavigationCanvas({
       y: dy + (row / nRows) * dh,
     };
   }, [nRows, nCols, getImageRect]);
+
+  // The canvas rectangle {x, y, w, h} of a region: between its grid lines on a square scan, around its hexagons
+  // on a hexagonal one.
+  const regionRect = useCallback((r) => {
+    if (hexMap) {
+      const ir = getImageRect();
+      if (!ir) return null;
+      const f = regionFrame(hexMap, r);
+      return {
+        x: ir.dx + f.x0 * ir.dw, y: ir.dy + f.y0 * ir.dh,
+        w: (f.x1 - f.x0) * ir.dw, h: (f.y1 - f.y0) * ir.dh,
+      };
+    }
+    const tl = gridToCanvas(r.rowStart, r.colStart);
+    const br = gridToCanvas(r.rowEnd, r.colEnd);
+    return tl && br ? { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y } : null;
+  }, [hexMap, getImageRect, gridToCanvas]);
+
+  // The chemistry mask on the raster, once per mask (a hexagonal picture has more pixels than the grid has cells)
+  const drawnMask = useMemo(
+    () => (hexMap && maskData?.mask2d ? maskToRaster(hexMap, maskData) : maskData),
+    [hexMap, maskData],
+  );
 
   // Get mouse position relative to canvas
   const getCanvasPos = useCallback((e) => {
@@ -108,12 +144,12 @@ export default function NavigationCanvas({
     if (selectionMode !== 'region') return;
     e.preventDefault();
     const pos = getCanvasPos(e);
-    const grid = canvasToGrid(pos.x, pos.y);
+    const grid = hexMap ? canvasToFraction(pos.x, pos.y) : canvasToGrid(pos.x, pos.y);
     if (!grid) return;
     setIsSelecting(true);
     setDragStart(pos);
     setDragEnd(pos);
-  }, [selectionMode, getCanvasPos, canvasToGrid]);
+  }, [selectionMode, hexMap, getCanvasPos, canvasToGrid, canvasToFraction]);
 
   const handleMouseMove = useCallback((e) => {
     if (!isSelecting) return;
@@ -126,6 +162,16 @@ export default function NavigationCanvas({
     e.preventDefault();
     setIsSelecting(false);
     const endPos = getCanvasPos(e);
+    if (hexMap) {
+      // The dragged rectangle is a rectangle on the sample: the box of the cells whose centres it contains.
+      const a = canvasToFraction(dragStart.x, dragStart.y);
+      const b = canvasToFraction(endPos.x, endPos.y);
+      const picked = a && b ? regionFromDrag(hexMap, a, b) : null;
+      if (picked) onRegionChange(picked);
+      setDragStart(null);
+      setDragEnd(null);
+      return;
+    }
     const startGrid = canvasToGrid(dragStart.x, dragStart.y);
     const endGrid = canvasToGrid(endPos.x, endPos.y);
     if (!startGrid || !endGrid) { setDragStart(null); setDragEnd(null); return; }
@@ -136,7 +182,7 @@ export default function NavigationCanvas({
     onRegionChange({ rowStart, rowEnd, colStart, colEnd });
     setDragStart(null);
     setDragEnd(null);
-  }, [isSelecting, dragStart, getCanvasPos, canvasToGrid, onRegionChange]);
+  }, [isSelecting, dragStart, hexMap, getCanvasPos, canvasToGrid, canvasToFraction, onRegionChange]);
 
   const handleMouseLeave = useCallback(() => {
     if (isSelecting) {
@@ -162,9 +208,18 @@ export default function NavigationCanvas({
       ctx.fillStyle = C.textSecondary;
       ctx.font = '12px sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText(t('navMap.noImage'), canvas.width / 2, canvas.height / 2);
-      ctx.font = '10px sans-serif';
-      ctx.fillText(t('navMap.loadFirst'), canvas.width / 2, canvas.height / 2 + 18);
+      if (notice === 'loading') {
+        // the data is loaded and the picture is coming: not the hint that nothing is
+        ctx.fillText(t('ebsdviewer:overview.computing'), canvas.width / 2, canvas.height / 2);
+      } else if (notice === 'mismatch') {
+        drawWrapped(ctx, t('ebsdviewer:overview.rasterMismatch'), canvas.width / 2, canvas.height / 2, canvas.width - 24);
+      } else if (notice === 'failed') {
+        ctx.fillText(t('ebsdviewer:overview.failed'), canvas.width / 2, canvas.height / 2);
+      } else {
+        ctx.fillText(t('navMap.noImage'), canvas.width / 2, canvas.height / 2);
+        ctx.font = '10px sans-serif';
+        ctx.fillText(t('navMap.loadFirst'), canvas.width / 2, canvas.height / 2 + 18);
+      }
       return;
     }
 
@@ -176,8 +231,8 @@ export default function NavigationCanvas({
     const dy = (canvas.height - dh) / 2;
     ctx.drawImage(img, dx, dy, dw, dh);
 
-    // Draw EDS overlay layers
-    for (const layer of edsLayers) {
+    // Draw EDS overlay layers (their images are index-grid pictures: never laid over a display raster)
+    for (const layer of hexMap ? [] : edsLayers) {
       if (layer.image) {
         ctx.save();
         ctx.globalAlpha = layer.opacity;
@@ -187,22 +242,23 @@ export default function NavigationCanvas({
     }
 
     // Draw mask dimming (A+C): darken non-masked pixels
-    if (maskData && maskData.mask2d && selectionMode === 'mask') {
-      drawMaskOverlay(ctx, maskData, dx, dy, dw, dh);
+    if (drawnMask && drawnMask.mask2d && selectionMode === 'mask') {
+      drawMaskOverlay(ctx, drawnMask, dx, dy, dw, dh);
     }
 
     // Draw region selection overlay
     if (selectionMode === 'region') {
       // Draw saved regions
       for (const sr of savedRegions) {
-        const tl = gridToCanvas(sr.rowStart, sr.colStart);
-        const br = gridToCanvas(sr.rowEnd, sr.colEnd);
-        if (tl && br) {
+        // an empty region has no hexagons to frame (its frame would run across the whole picture)
+        if (hexMap && !(sr.rowEnd > sr.rowStart && sr.colEnd > sr.colStart)) continue;
+        const box = regionRect(sr);
+        if (box) {
           ctx.save();
           ctx.strokeStyle = 'rgba(100,150,255,0.6)';
           ctx.lineWidth = 1;
           ctx.setLineDash([4, 4]);
-          ctx.strokeRect(tl.x, tl.y, br.x - tl.x, br.y - tl.y);
+          ctx.strokeRect(box.x, box.y, box.w, box.h);
           ctx.setLineDash([]);
           ctx.restore();
         }
@@ -214,15 +270,11 @@ export default function NavigationCanvas({
         const y1 = Math.min(dragStart.y, dragEnd.y);
         const rw = Math.abs(dragEnd.x - dragStart.x);
         const rh = Math.abs(dragEnd.y - dragStart.y);
-        drawDimmedRegion(ctx, { x: x1, y: y1, w: rw, h: rh }, dx, dy, dw, dh, img, edsLayers);
+        drawDimmedRegion(ctx, { x: x1, y: y1, w: rw, h: rh }, dx, dy, dw, dh, img, hexMap ? [] : edsLayers);
       } else if (region.rowEnd > region.rowStart && region.colEnd > region.colStart) {
         // Draw from NumberInput values
-        const tl = gridToCanvas(region.rowStart, region.colStart);
-        const br = gridToCanvas(region.rowEnd, region.colEnd);
-        if (tl && br) {
-          const rect = { x: tl.x, y: tl.y, w: br.x - tl.x, h: br.y - tl.y };
-          drawDimmedRegion(ctx, rect, dx, dy, dw, dh, img, edsLayers);
-        }
+        const rect = regionRect(region);
+        if (rect) drawDimmedRegion(ctx, rect, dx, dy, dw, dh, img, hexMap ? [] : edsLayers);
       }
     }
 
@@ -238,7 +290,7 @@ export default function NavigationCanvas({
       ctx.fillText(label, dx + 7, dy + 14);
       ctx.restore();
     }
-  }, [canvasSize, edsLayers, maskData, selectionMode, region, savedRegions, isSelecting, dragStart, dragEnd, nRows, nCols, gridToCanvas, imgVersion, t]);
+  }, [canvasSize, edsLayers, drawnMask, selectionMode, region, savedRegions, isSelecting, dragStart, dragEnd, nRows, nCols, regionRect, hexMap, imgVersion, notice, t]);
 
   // Redraw on any state change
   useEffect(() => { drawCanvas(); }, [drawCanvas]);
@@ -279,6 +331,18 @@ export default function NavigationCanvas({
 
 /* ---- Drawing helpers ---- */
 
+// A line of text broken at spaces to fit `maxWidth`, centred on x, the first line at y.
+function drawWrapped(ctx, text, x, y, maxWidth) {
+  const lines = [];
+  let line = '';
+  for (const word of String(text).split(' ')) {
+    const next = line ? `${line} ${word}` : word;
+    if (line && ctx.measureText(next).width > maxWidth) { lines.push(line); line = word; } else line = next;
+  }
+  lines.push(line);
+  lines.forEach((l, k) => ctx.fillText(l, x, y + k * 16));
+}
+
 function drawDimmedRegion(ctx, rect, dx, dy, dw, dh, baseImg, edsLayers) {
   // Dim entire image area
   ctx.save();
@@ -311,7 +375,7 @@ function drawDimmedRegion(ctx, rect, dx, dy, dw, dh, baseImg, edsLayers) {
 }
 
 function drawMaskOverlay(ctx, maskData, dx, dy, dw, dh) {
-  const { mask2d, shape } = maskData;
+  const { mask2d, shape, skip } = maskData;       // skip: pixels that are not part of the scan (hexagonal raster)
   const [rows, cols] = shape;
 
   // --- Layer 1: Excluded pixels get red-tinted diagonal hatching ---
@@ -323,7 +387,7 @@ function drawMaskOverlay(ctx, maskData, dx, dy, dw, dh) {
 
   for (let i = 0; i < rows * cols; i++) {
     const masked = mask2d[i];
-    if (!masked) {
+    if (!masked && !(skip && skip[i])) {
       const r = Math.floor(i / cols);
       const c = i % cols;
       // Diagonal hatching: every 3rd diagonal gets a red line
@@ -363,15 +427,17 @@ function drawMaskOverlay(ctx, maskData, dx, dy, dw, dh) {
   const bctx = borderCanvas.getContext('2d');
   const borderData = bctx.createImageData(cols, rows);
 
+  // A pixel no hexagon covers (`skip`, hexagonal raster only) is not an excluded one: it is no mask edge.
+  const outside = (i) => !mask2d[i] && !(skip && skip[i]);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
       if (!mask2d[idx]) continue;
       const isEdge = (
-        (r > 0 && !mask2d[(r - 1) * cols + c]) ||
-        (r < rows - 1 && !mask2d[(r + 1) * cols + c]) ||
-        (c > 0 && !mask2d[r * cols + c - 1]) ||
-        (c < cols - 1 && !mask2d[r * cols + c + 1])
+        (r > 0 && outside((r - 1) * cols + c)) ||
+        (r < rows - 1 && outside((r + 1) * cols + c)) ||
+        (c > 0 && outside(r * cols + c - 1)) ||
+        (c < cols - 1 && outside(r * cols + c + 1))
       );
       if (isEdge) {
         borderData.data[idx * 4 + 0] = 139;  // cyan

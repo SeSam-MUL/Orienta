@@ -233,8 +233,8 @@ function orientaHome({ platformName = process.platform, env = process.env } = {}
  * would be left behind with no explanation. UTF-8 is still accepted on the way
  * in, so a hand-edited file works.
  */
-function readPointer(file) {
-  const raw = fs.readFileSync(file);
+function readPointer(file, io = fs) {
+  const raw = io.readFileSync(file);
   let text;
   if (raw.length >= 2 && raw[0] === 0xff && raw[1] === 0xfe) {
     text = raw.subarray(2).toString('utf16le');
@@ -261,12 +261,14 @@ function overlaps(a, b) {
  * application uninstaller removes wholesale.
  */
 function setOrientaHome(dir, {
-  forbidden = [], platformName = process.platform, env = process.env,
+  forbidden = [], platformName = process.platform, env = process.env, volumeSerial,
 } = {}) {
   const file = homePointerFile({ platformName, env });
+  const volumeId = require('./volume_id');
   fs.mkdirSync(path.dirname(file), { recursive: true });
   if (!dir) {
     fs.rmSync(file, { force: true });
+    fs.rmSync(volumeId.volumeRecordFile(file), { force: true });
     return orientaHome({ platformName, env });
   }
   if (!path.isAbsolute(dir)) throw new Error(`the folder must be an absolute path: ${dir}`);
@@ -293,6 +295,11 @@ function setOrientaHome(dir, {
     Buffer.from([0xff, 0xfe]),
     Buffer.from(`${dir}\r\n`, 'utf16le'),
   ]));
+  // Which volume that drive letter is, for the day the letter belongs to another
+  // disk (volume_id.js). Windows only; best effort; never a reason to refuse.
+  if (platformName === 'win32') {
+    volumeId.writeVolumeRecord(file, dir, volumeSerial ? { volumeSerial } : {});
+  }
   return dir;
 }
 

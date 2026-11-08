@@ -17,6 +17,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { dictionaryGpuApi } from '../../services/api';
+import { problemText } from '../../services/problemText';
 import { colors, spacing, Button } from '../../theme/components';
 import MasterSelector from './MasterSelector';
 import DetectorSettings from './DetectorSettings';
@@ -168,7 +169,7 @@ export default function DictionaryGPUPage() {
       setProgress({ status: 'pending', progress: 0, message: t('progress.submitting') });
       setTaskId(newTaskId);
     } catch (e) {
-      const detail = e?.response?.data?.detail || e?.message || String(e);
+      const detail = problemText(e, t, 'dictionarygpu') || e?.message || String(e);
       setSubmitError(t('errors.generateFailed', { detail }));
     }
   };

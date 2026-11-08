@@ -176,6 +176,8 @@ def test_sht_point_group_table_is_otherwise_unchanged():
     from backend.spherical_gpu.pipeline.sht_io import _SG_TO_POINT_GROUP
 
     for n in range(1, 231):
+        if n in cs.TRIGONAL_Y_SETTING_SPACE_GROUPS:
+            continue          # these seven carry a text of their own (trigonal tests)
         if cs.monoclinic_class_of_space_group(n) is None:
             assert _SG_TO_POINT_GROUP[n] == get_point_group(n).name or n in range(1, 3)
 

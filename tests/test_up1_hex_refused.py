@@ -77,7 +77,8 @@ def test_a_v3_file_with_the_hex_flag_is_refused(tmp_path):
     msg = str(ei.value)
     assert "hex.up1" in msg
     assert "hexagonal grid" in msg
-    assert "EDAX H5" in msg and "export the scan as H5 from OIM" in msg
+    assert "metadata file" in msg and "APEX" in msg          # the way out: the measurement's .h5
+    assert "export the scan as H5 from OIM" not in msg       # the old dead end
 
 
 def test_a_v1_file_beside_a_hexagonal_osc_is_refused_even_if_the_count_is_square(tmp_path):

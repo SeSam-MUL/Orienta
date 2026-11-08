@@ -30,9 +30,14 @@
     "scanning": "スキャン中...",
     "filesLoaded": "{{count}} 件のファイルを読み込み済み",
     "hint": "「フォルダーを追加」をクリックして EBSD ファイルをスキャンします",
+    "patternSource": "バッチは、読み込みダイアログでどの測定やパターンを選んでいても、各ファイルの既定のパターン（最初の測定、処理済みパターンがあればそれ）を指数付けします。",
     "enterFolderPrompt": "フォルダーのパスを入力:",
     "noFilesFound": "EBSD ファイルが見つかりません",
-    "scanFailed": "スキャンに失敗しました"
+    "scanFailed": "スキャンに失敗しました",
+    "gridHex": "六方格子、{{rows}} x {{cols}}",
+    "gridSquare": "正方格子、{{rows}} x {{cols}}",
+    "pairingPaired": "メタデータ: {{file}}、測定 {{name}}",
+    "pairingNone": "メタデータが見つかりません"
   },
   "step2": {
     "title": "パターン中心 (PC)",
@@ -80,6 +85,9 @@
     "ctf": ".ctf",
     "ctfDesc": "Oxford/MTEX 形式",
     "ctfTooltip": "結果を Oxford/MTEX の .ctf 形式でエクスポートします。",
+    "angSquare": ".ang（正方格子）",
+    "angSquareDesc": "六方格子のスキャンのみ、再サンプリング",
+    "angSquareTooltip": "六方格子のスキャンの結果を正方格子に再サンプリングし、正方格子の .ang としてエクスポートします（各セルは最も近い測定点の値を取ります）。",
     "richH5": "リッチ .h5",
     "richH5Desc": "ソースファイルをコピー — サイズは結果ごとにソースサイズと同じ！",
     "richH5Tooltip": "ソースファイルをコピーした完全な HDF5 をエクスポートします — サイズは結果ごとにソースと同じです。",
@@ -112,7 +120,8 @@
     "phaseChipTooltip": "この相を指数付けの対象として選択／解除します。",
     "selected": "{{count}} 件選択中",
     "applyToAll": "すべてのファイルに適用",
-    "applyToAllTooltip": "選択した相をバッチ内のすべてのファイルに割り当てます。"
+    "applyToAllTooltip": "選択した相をバッチ内のすべてのファイルに割り当てます。",
+    "methodChangedClearedPhases": "手法が変更されました。手法ごとに相ファイルが異なるため、相を再度選択してください。"
   },
   "step5": {
     "sphericalTitle": "Spherical",
@@ -175,14 +184,19 @@
     "manualPcTitle": "手動パターン中心",
     "manualPcFile": "ファイル: {{name}}",
     "manualPcFractional": "値は検出器に対する比率 (0〜1) です。",
+    "pcConvention": "規則:",
     "pcx": "PCx:",
     "pcy": "PCy:",
     "pcz": "PCz:",
+    "manualPcApplying": "適用中…",
+    "msgPcConventionNeedsSize": "このファイルのパターンサイズがまだ分からないため、この規則の数値を変換できません。Bruker を選択するか、先にこのファイルをクイックロードしてください。",
+    "msgPcConversionFailed": "これらの数値を Bruker の規則に変換できませんでした。",
     "msgPcCopied": "{{count}} 件のファイルに PC をコピーしました",
     "msgPcCopyPartial": "{{failed}}/{{total}} 件の対象が失敗しました: {{error}}",
     "msgCopyPcFailed": "PC のコピーに失敗しました: {{detail}}",
     "msgApplyAllLackedPc": "すべて適用: {{failed}}/{{total}} 件の対象に PC がありませんでした",
     "msgAppliedTo": "{{count}} 件のファイルに適用しました",
+    "msgSkippedSource": "{{count}} 件をスキップしました（コピー元 = コピー先）",
     "msgApplyAllFailed": "すべて適用に失敗しました: {{detail}}",
     "msgInvalidPc": "無効な PC 値 — 3 つの数値である必要があります",
     "msgManualPcSet": "手動 PC を設定しました",
@@ -283,6 +297,7 @@
     "startBatch": "バッチ開始 ({{files}} × {{phases}})"
   },
   "hoverTips": {
+    "pcConventionSelect": "以下に入力する数値の種類 — Bruker（Orienta 独自）、EDAX/TSL、または Oxford。",
     "pcXInput": "アクティブファイルのパターン中心 PCx (検出器に対する比率, 0〜1)。",
     "pcYInput": "アクティブファイルのパターン中心 PCy (検出器に対する比率, 0〜1)。",
     "pcZInput": "アクティブファイルのパターン中心 PCz／検出器距離 (検出器に対する比率, 0〜1)。",
@@ -295,5 +310,48 @@
     "openRefinement": "このファイルを精密化で開きます (ソースの隣の _multiphase.h5 チェックポイントを読み込みます)。",
     "openAnalysis": "このファイルを解析で開きます (.ang/.ctf/軽量 .h5 エクスポートを読み込みます)。",
     "openPhaseMap": "このファイルを相分布図で開きます (.ang/.ctf/軽量 .h5 エクスポートを読み込みます)。"
+  },
+  "formats": {
+    "hexResampled": "六方格子のスキャンの .ctf と正方格子の .ang は、正方格子に再サンプリングされます。"
+  },
+  "exports": {
+    "title": "書き出されたファイル",
+    "gridHex": "グリッド: 六方格子",
+    "gridSquare": "グリッド: 正方格子",
+    "missing": "書き込まれませんでした（{{format}}）: {{reason}}",
+    "formats": {
+      "h5_light": "軽量 .h5",
+      "h5_rich": "完全版 .h5",
+      "ang": ".ang",
+      "ctf": ".ctf",
+      "ang_square": "正方格子に再サンプリングした .ang",
+      "ang_ctf": ".ang / .ctf",
+      "export": "このスキャンのすべてのファイル"
+    },
+    "notes": {
+      "resampledFromHex": "六方格子のスキャンから最近傍法で正方格子に再サンプリングしました（ステップ {{step}} µm、元の点 {{sourcePoints}}、書き出した点 {{written}}、使われなかった元の点 {{unused}}）。補間は行っていません。",
+      "rowOffsetAssumedRight": "行のずれの向きは仮定です（どのファイルにも記載がありません）: 奇数行は偶数行より半ステップ右に置かれています。",
+      "rowOffsetAssumedLeft": "行のずれの向きは仮定です（どのファイルにも記載がありません）: 奇数行は偶数行より半ステップ左に置かれています。",
+      "noSquareAngForSquareScan": "正方格子に再サンプリングした .ang は書き出されませんでした: このスキャンはすでに正方格子です。",
+      "edsNotCopied": "軽量 .h5 には EDS データが含まれていません: このスキャンのパターンは別のファイル形式で保存されており、その形式に EDS データはありません。",
+      "cleanupFailed": "相マップのクリーンアップに失敗したため、ファイルにはクリーンアップ前のマップが保存されています。技術的な詳細: {{detail}}",
+      "autoAssignmentFailed": "各点の最良の相を割り当てられなかったため、このスキャンのファイルには期待どおりの割り当てが含まれていない可能性があります。技術的な詳細: {{detail}}"
+    },
+    "errors": {
+      "fileNotWritten": "ファイルは書き込まれませんでした。理由はプログラムのログにあります。",
+      "writerFailed": "ファイルを書き込めませんでした。技術的な詳細: {{detail}}",
+      "exportFailed": "エクスポートがエラーで停止しました。技術的な詳細: {{detail}}",
+      "richNeedsHdf5Source": "完全版 .h5 には HDF5 形式のソースが必要です。このスキャンのパターンは別のファイル形式で保存されています。軽量 .h5 を使用してください。"
+    }
+  },
+  "errors": {
+    "edaxHexUpUnsupported": "メタデータのない六方格子スキャンです。APEX の .h5 を同じフォルダーに置いてください。",
+    "apexNeedsMeasurement": "これはメタデータファイルです。対応する .up1/.up2 ファイルを追加してください。",
+    "emsphinxSourceRefused": "EMSphInx (CPU) ではこのファイルを指数付けできません。GPU、Hough、または Dictionary を使用してください。",
+    "checkpointPairingChanged": "チェックポイントは別のメタデータまたは別のグリッドのものです。削除してください。",
+    "hexFrameAverageRefused": "この六方格子スキャンではフレーム平均を実行できませんでした。上限未満の奇数のウィンドウを使用してください。",
+    "checkpointUnreadable": "このファイルのチェックポイントを読み取れません。削除してください。",
+    "pc_missing": "このファイルにはパターンセンター (PC) がありません。kikuchipy の仮の値では誤った方位になります。PC リファインメントで PC を較正するか、PC を含む .osc／メタデータファイルをスキャンの隣に置いてから、もう一度開始してください。",
+    "detector_shape_mismatch": "このファイルに保持されている較正は、パターンとは別の検出器（パターンサイズが異なる）のものです。別のファイルの較正です。ファイルを読み込み直すか PC を設定してから、もう一度開始してください。"
   }
 }

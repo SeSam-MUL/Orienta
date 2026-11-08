@@ -64,7 +64,7 @@ describe('the scan answer on the Simulation page', () => {
     render(<SimulationPage isActive />);
     const button = await screen.findByRole('button', { name: /fehlende/i });
     await act(async () => { fireEvent.click(button); });
-    expect(await screen.findByText(/Simulieren Sie sie erneut/)).toBeInTheDocument();
+    expect(await screen.findByText(/Löschen Sie die Datei und simulieren Sie die Phase neu/)).toBeInTheDocument();
     await act(async () => { await i18n.changeLanguage('en'); });
   });
 });

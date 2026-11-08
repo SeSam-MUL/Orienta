@@ -34,8 +34,6 @@
       "notSetUp": "未設定"
     },
     "warnings": {
-      "gpuBlocksizeReduced": "GPU のメモリは {{gb}} GB です。GPU マスターパターンのブロックサイズを {{blocksize}} にします（メモリに収めるため 32 から縮小）。",
-      "gpuBlocksizeMinimal": "GPU のメモリは {{gb}} GB です。GPU マスターパターンのブロックサイズを最小の {{blocksize}} にします。原子数が 20 を超える複雑な結晶ではメモリが不足することがあります。",
       "emsoftNotOffered": "このコンピュータには EMsoft が設定されていません。EMsoft は任意です。Orienta Engine は EMsoft を必要としません。"
     }
   },

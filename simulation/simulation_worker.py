@@ -384,22 +384,6 @@ class SimulationWorker(QThread):
             self.config.set(section, "uniform",
                             ".TRUE." if self.params.uniform else ".FALSE.")
 
-            # Update GPU Master pattern parameters (EMEBSDmasterOpenCL)
-            is_gpu_master = self.params.master_program == "EMEBSDmasterOpenCL"
-            if is_gpu_master:
-                section_gpu = "DefaultSimulationParametersEMEBSDmasterOpenCL"
-                if not self.config.has_section(section_gpu):
-                    self.config.add_section(section_gpu)
-                self.config.set(section_gpu, "dmin", str(self.params.dmin))
-                self.config.set(section_gpu, "npx", str(self.params.npx))
-                self.config.set(section_gpu, "nthreads", str(self.params.nthreads))
-                self.config.set(section_gpu, "platid", str(self.params.platid))
-                self.config.set(section_gpu, "devid", str(self.params.devid))
-                self.config.set(section_gpu, "globalworkgrpsz",
-                                str(self.params.globalworkgrpsz))
-                self.config.set(section_gpu, "blocksize", str(self.params.blocksize))
-                self.config.set(section_gpu, "Notify", "off")
-
             # Update output type
             if not self.config.has_section("OutputOptions"):
                 self.config.add_section("OutputOptions")

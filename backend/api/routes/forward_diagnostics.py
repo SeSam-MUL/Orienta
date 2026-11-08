@@ -1,6 +1,4 @@
 """On-demand forward-NCC + PC sensitivity + pattern-residual diagnostics.
-
-Spec: docs/superpowers/specs/2026-05-13-forward-ncc-diagnose-layer-design.md
 """
 from __future__ import annotations
 
@@ -40,6 +38,11 @@ def compute(req: ComputeRequest):
     if result is None:
         raise HTTPException(status_code=404,
                             detail={"error": f"no indexing result for id '{req.result_id}'"})
+    if (result.metadata or {}).get("pc_missing"):
+        # an imported result of a file that carries no PC: nothing to render at
+        from backend.api.problem import problem
+        from backend.api.services.pc_guard import PC_MISSING_CODE, pc_missing_message
+        raise problem(400, PC_MISSING_CODE, pc_missing_message(None))
     if req.max_bandwidth not in (128, 256, 384):
         raise HTTPException(status_code=400,
                             detail={"error": f"max_bandwidth must be 128, 256, or 384 (got {req.max_bandwidth})"})

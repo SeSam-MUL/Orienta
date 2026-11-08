@@ -598,13 +598,32 @@ _source_signal_cache: "dict[str, object]" = {}
 _SOURCE_CACHE_MAX = 3
 
 
-def _get_source_signal(source_file):
-    """Lazily load (and cache) the EBSD signal for a result's source file."""
+def _refusal_code(exc) -> Optional[str]:
+    """The code a refusal carries: ``X-Orienta-Code`` of a coded HTTP error, ``code`` of a load
+    refusal (``LoadChoiceError``); None for anything else."""
+    code = (getattr(exc, "headers", None) or {}).get("X-Orienta-Code")
+    code = code or getattr(exc, "code", None)
+    return code if isinstance(code, str) and code else None
+
+
+def _get_source_signal(source_file, variant=None, apex=None, refusals=None):
+    """Lazily load (and cache) the EBSD signal for a result's source file.
+
+    ``variant`` is the measurement and pattern source the result ran on (a ``LoadVariant``; None:
+    the file's default): the file is read as that one, never as another source of the same file.
+    ``apex`` is the metadata pairing of the result (``{"h5_path", "measurement_id"}``); without
+    one the pairing the viewer remembers for the file is used. A file with neither is loaded exactly
+    as it always was, and cached under its plain path. ``refusals`` (a list, optional) receives the
+    code of a refusal that has one (see :func:`get_experimental_pattern`)."""
     import os
     if not source_file:
         return None
     key = os.path.abspath(str(source_file))
-    cached = _source_signal_cache.get(key)
+    cache_key = key
+    if variant is not None or apex:
+        cache_key = (key, None if variant is None else (variant.measurement, variant.pattern_source),
+                     None if not apex else apex.get("measurement_id"))
+    cached = _source_signal_cache.get(cache_key)
     if cached is not None:
         return cached
     if not os.path.isfile(key):
@@ -612,19 +631,33 @@ def _get_source_signal(source_file):
         return None
     try:
         from safe_loader import load_ebsd_safe
-        sig = load_ebsd_safe(key, verbose=False)
-    except Exception:
+        # A measurement of an EDAX APEX file paired by hand with a metadata file in another folder
+        # is read with that pairing (the viewer remembers it), or it would be refused as hexagonal.
+        from backend.api.routes.ebsd_viewer import remembered_apex_pairing
+        pairing = remembered_apex_pairing(key, prefer=apex)
+        load_kwargs = {}
+        if pairing:
+            load_kwargs["apex"] = pairing
+        if variant is not None:
+            load_kwargs["variant"] = variant
+        sig = load_ebsd_safe(key, verbose=False, **load_kwargs)
+    except Exception as exc:
         logger.warning("Could not load result source file %s for experimental "
                        "pattern", key, exc_info=True)
+        code = _refusal_code(exc)
+        if refusals is not None and code:
+            refusals.append(code)
         return None
     # Bounded FIFO eviction — this dialog only ever compares a handful of files.
     if len(_source_signal_cache) >= _SOURCE_CACHE_MAX:
         _source_signal_cache.pop(next(iter(_source_signal_cache)))
-    _source_signal_cache[key] = sig
+    _source_signal_cache[cache_key] = sig
     return sig
 
 
-def get_experimental_pattern(result, row: int, col: int) -> Optional[np.ndarray]:
+def get_experimental_pattern(result, row: int, col: int, *,
+                             for_indexer: bool = False,
+                             refusals: Optional[list] = None) -> Optional[np.ndarray]:
     """Return experimental pattern at (row, col) from the indexed signal.
 
     Resolution order:
@@ -644,6 +677,16 @@ def get_experimental_pattern(result, row: int, col: int) -> Optional[np.ndarray]
     ----------
     result : IndexingResult
     row, col : int
+    for_indexer : bool
+        The pattern as an INDEXER must see it (``load_choices.signal_pattern``): a
+        signed-integer scan is rescaled to 0..255 by the range of the whole scan, the
+        values the map run gave this pixel. Everything that only compares or draws
+        (NCC, residuals, PNGs) leaves it False and keeps the raw values.
+    refusals : list, optional
+        When the result's own source file is refused with a code (its metadata pairing is lost, the
+        measurement or pattern source is not in the file), the code is appended here and the answer
+        is None as ever, so a caller that can word it (the Pattern Match window) says why the panel
+        is empty. Nothing is appended for an error without a code.
 
     Returns
     -------
@@ -668,6 +711,17 @@ def get_experimental_pattern(result, row: int, col: int) -> Optional[np.ndarray]
             source_file and active_path
             and os.path.abspath(str(source_file)) != os.path.abspath(str(active_path))
         )
+        if source_file and active_path and not differs:
+            # The same file, but the result may belong to another measurement or pattern source of it
+            # than the one the viewer holds (the rule that activating a result follows): the viewer's
+            # patterns are then another scan's.
+            try:
+                from backend.api.routes import ebsd_viewer as _ev
+                from backend.api.routes.indexing import _stamp_key
+                from backend.api.services import variant_registry as _vr
+                differs = _stamp_key(_vr.file_stamp_of_result(result)) != _ev._ebsd_variant_key
+            except Exception:
+                logger.debug("variant of the viewer's file not comparable", exc_info=True)
         if differs:
             # This result belongs to a file that is NOT the one on screen.
             # Read its patterns from its own source so we never show a
@@ -676,7 +730,12 @@ def get_experimental_pattern(result, row: int, col: int) -> Optional[np.ndarray]
             # active signal: showing the wrong file's patterns is exactly the
             # bug this method fixes, and a silent wrong pattern is worse than an
             # empty panel. Fail loud so the reason is visible in the log.
-            signal = _get_source_signal(source_file)
+            # ... as the variant (measurement x pattern source) it ran on, by the one rule every
+            # reader of a result's file follows, and with the metadata pairing it ran on.
+            from backend.api.services import variant_registry
+            signal = _get_source_signal(
+                source_file, variant_registry.variant_for_source(result, source_file),
+                variant_registry.apex_of_result(result), refusals=refusals)
             if signal is None:
                 logger.warning(
                     "Pattern Match: result's source file %r is not the active "
@@ -689,12 +748,18 @@ def get_experimental_pattern(result, row: int, col: int) -> Optional[np.ndarray]
     if signal is None:
         return None
     try:
+        if for_indexer:
+            from backend.api.services.load_choices import signal_pattern
+            return np.asarray(signal_pattern(signal, row, col), dtype=np.float32)
         pat = np.asarray(signal.data[row, col], dtype=np.float32)
         return pat
     except (IndexError, AttributeError) as e:
         logger.debug(f"signal.data[{row},{col}] failed ({e}), trying signal.inav[{col},{row}]")
     # Fallback: kikuchipy uses (col, row) navigation axes in some signal types
     try:
+        if for_indexer:
+            from backend.api.services.load_choices import for_signal_indexer
+            return np.asarray(for_signal_indexer(signal, signal.inav[col, row].data), dtype=np.float32)
         pat = np.asarray(signal.inav[col, row].data, dtype=np.float32)
         return pat
     except Exception as e2:

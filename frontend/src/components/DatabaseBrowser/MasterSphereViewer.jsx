@@ -5,12 +5,11 @@
  * reconstructed sphere grid from GET /api/database/sphere/{filename} and renders it
  * as a Plotly Surface (drag = rotate, scroll = zoom, toolbar = reset). Plotly is
  * lazy-loaded so its (large) bundle does not bloat the Database page's initial load.
- *
- * See docs/superpowers/specs/2026-06-22-sht-sphere-viewer-design.md
  */
 import { useState, useEffect, useMemo, useRef, useCallback, Suspense, lazy } from 'react';
 import { useTranslation } from 'react-i18next';
-import { dbApi } from '../../services/api';
+import { dbApi, jobsApi } from '../../services/api';
+import { problemText } from '../../services/problemText';
 import { colors } from '../../theme/components';
 import { useImageExport, exportStem } from '../common/useImageExport';
 import { trimUniformBackground } from '../common/imageExport';
@@ -39,6 +38,9 @@ function resolveCssVar(value, fallback) {
     return fallback;
   }
 }
+
+/** axios gives up after its own deadline: no response, code ECONNABORTED (or ETIMEDOUT). */
+const isClientTimeout = (err) => err?.code === 'ECONNABORTED' || err?.code === 'ETIMEDOUT';
 
 /**
  * Resolution presets for the sphere reconstruction. Standard sends no params so the
@@ -92,7 +94,21 @@ function buildSurface(payload) {
   return { X, Y, Z, C };
 }
 
-export default function MasterSphereViewer({ filename, isLocal }) {
+/**
+ * The resolution is chosen per file, and a new file starts at Standard.
+ *
+ * The preset used to live on after a file switch, so one file that failed at
+ * High made every following .sht request High as well -- and the error state
+ * had no selector to leave it. High and Max cost seconds and gigabytes of GPU
+ * memory; asking for them is a deliberate step on one file, not a mode the
+ * whole browser stays in. Keying the inner viewer on the filename is what
+ * resets it (and drops the old file's error with it).
+ */
+export default function MasterSphereViewer(props) {
+  return <MasterSphereViewerInner key={props.filename} {...props} />;
+}
+
+function MasterSphereViewerInner({ filename, isLocal }) {
   // 'common' too: the fullscreen label lives there, shared with the other viewers.
   const { t } = useTranslation(['databasebrowser', 'common']);
   const imageExport = useImageExport();
@@ -153,25 +169,88 @@ export default function MasterSphereViewer({ filename, isLocal }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [preset, setPreset] = useState('standard');
+  // Bumped by the Retry button: picking the same resolution again fires no change
+  // event, so a failed Standard request needs its own way to run again.
+  const [attempt, setAttempt] = useState(0);
+  const controllerRef = useRef(null);
+  const userCancelRef = useRef(false);
+  const [cancelledByUser, setCancelledByUser] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [slowStart, setSlowStart] = useState(false);
 
   useEffect(() => {
-    if (!filename || !isLocal) { setPayload(null); setError(null); return; }
+    if (!filename || !isLocal) {
+      // Leaving a request in flight (the cleanup below aborts it and marks it
+      // cancelled, so its .finally never clears `loading`) must not leave the
+      // clock and the jobs poll running for a sphere nobody is waiting for.
+      setPayload(null); setError(null); setLoading(false); setCancelledByUser(false);
+      return;
+    }
     let cancelled = false;
-    setLoading(true); setError(null); setPayload(null);
+    // One controller per request: leaving it (another resolution, another file,
+    // unmounting) aborts the request in flight. The server drops a reconstruction
+    // that is still queued when its client is gone; without this every click
+    // left a job behind that nobody was waiting for.
+    const controller = new AbortController();
+    controllerRef.current = controller;
+    userCancelRef.current = false;
+    setLoading(true); setError(null); setPayload(null); setCancelledByUser(false);
     const p = RES_PRESETS[preset] || RES_PRESETS.standard;
-    // Standard sends NO second arg → keeps the backend defaults and the original
-    // single-arg `dbApi.sphere(filename)` contract; Hoch/Max request a sharper sphere.
-    const fetchSphere = preset === 'standard'
-      ? dbApi.sphere(filename)
-      : dbApi.sphere(filename, { max_bandwidth: p.max_bandwidth, target_size: p.target_size });
-    fetchSphere
+    // Standard sends no resolution params, so the backend keeps its own defaults
+    // (128/128); High/Max request a sharper sphere.
+    const params = preset === 'standard'
+      ? {}
+      : { max_bandwidth: p.max_bandwidth, target_size: p.target_size };
+    dbApi.sphere(filename, params, { signal: controller.signal })
       .then((r) => { if (!cancelled) setPayload(r.data); })
       .catch((err) => {
-        if (!cancelled) setError(err?.response?.data?.detail || err?.message || t('databasebrowser:sphere.loadErrorFallback'));
+        if (cancelled) return;
+        if (userCancelRef.current) {
+          // A deliberate cancel is not a load error: no red frame,
+          // no "Could not load sphere".
+          setCancelledByUser(true);
+          return;
+        }
+        // The client's own deadline counts the time spent waiting for the queue
+        // as well: "timeout of 300000ms exceeded" says nothing a user can act on,
+        // "still busy" does (and Retry is right there).
+        if (isClientTimeout(err)) {
+          setError(t('databasebrowser:sphere.timeout'));
+          return;
+        }
+        setError(problemText(err, t, 'databasebrowser') || t('databasebrowser:sphere.loadErrorFallback'));
       })
       .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
-  }, [filename, isLocal, preset]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [filename, isLocal, preset, attempt]);
+
+  // While a sphere is computed: seconds on the clock, and every 2 s a look at
+  // whether the compute process is still starting (first start, virus scanner).
+  // Keyed on the request (resolution, retry) as well as on `loading`: a new
+  // request made while another is still running leaves `loading` true, and
+  // must start its own clock and drop the note of the one before.
+  useEffect(() => {
+    setElapsed(0); setSlowStart(false);
+    if (!loading) return undefined;
+    const t0 = Date.now();
+    const clock = setInterval(() => setElapsed(Math.floor((Date.now() - t0) / 1000)), 1000);
+    let stop = false;
+    const poll = () => jobsApi.list({ job: 'sphere' })
+      .then((r) => {
+        if (stop) return;
+        const jobs = r?.data?.jobs || [];
+        setSlowStart(jobs.some((j) => j.message_code === 'workerSlowStart'));
+      })
+      .catch(() => {});
+    poll();
+    const timer = setInterval(poll, 2000);
+    return () => { stop = true; clearInterval(clock); clearInterval(timer); };
+  }, [loading, preset, attempt]);
+
+  const cancelSphere = useCallback(() => {
+    userCancelRef.current = true;
+    controllerRef.current?.abort();
+  }, []);
 
   const surface = useMemo(() => (payload ? buildSurface(payload) : null), [payload]);
 
@@ -181,9 +260,6 @@ export default function MasterSphereViewer({ filename, isLocal }) {
   const bgColor = useMemo(() => resolveCssVar(colors.bgSecondary, '#21222c'), []);
 
   if (!isLocal) return <div style={BOX}>{t('databasebrowser:sphere.downloadFirst')}</div>;
-  if (loading) return <div style={BOX}>{t('databasebrowser:sphere.reconstructing')}</div>;
-  if (error) return <div style={{ ...BOX, color: colors.red }}>{t('databasebrowser:sphere.loadError', { error })}</div>;
-  if (!surface) return <div style={BOX}>{t('databasebrowser:sphere.selectLocal')}</div>;
 
   // Fullscreen as a modebar icon rather than a button floating over the plot:
   // same size, same hover, same alignment as the zoom/pan/reset icons, and it
@@ -200,13 +276,132 @@ export default function MasterSphereViewer({ filename, isLocal }) {
     }],
   };
 
-  const meta = payload.meta || {};
+  const meta = payload?.meta || {};
   const metaLine = [
     meta.formula,
     meta.space_group != null ? t('databasebrowser:sphere.spaceGroupShort', { sg: meta.space_group }) : null,
     meta.point_group,
     meta.voltage_kV != null ? `${meta.voltage_kV} kV` : null,
   ].filter(Boolean).join(' · ');
+
+  // The selector and its label are ALWAYS rendered: it is the only way out of
+  // an error at High/Max. (They used to sit below the early returns, so the
+  // error state removed the one control that could fix it.) Only the content
+  // area below switches between loading, error and the plot.
+  const selector = (
+    <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 4 }}>
+      <label style={{ fontSize: '8pt', color: colors.textSecondary, marginRight: 4 }}
+             htmlFor="sphere-res">{t('databasebrowser:sphere.resolutionLabel')}</label>
+      <select id="sphere-res" aria-label={t('databasebrowser:sphere.resolutionLabel')}
+              title={t('databasebrowser:sphere.resolutionTooltip')} value={preset}
+              onChange={(e) => setPreset(e.target.value)}
+              style={{ fontSize: '8pt' }}>
+        {Object.entries(RES_PRESETS).map(([k, v]) => (
+          <option key={k} value={k}>{t(`databasebrowser:${v.labelKey}`)}</option>
+        ))}
+      </select>
+    </div>
+  );
+
+  let content;
+  if (loading) {
+    content = (
+      <div style={{ ...BOX, flexDirection: 'column', gap: 8, textAlign: 'center' }}>
+        <div>{t('databasebrowser:sphere.reconstructingElapsed', { s: elapsed })}</div>
+        {slowStart && <div style={{ fontSize: '8pt', color: colors.textSecondary }}>{t('databasebrowser:sphere.workerSlowStart')}</div>}
+        <button type="button" onClick={cancelSphere} style={{ fontSize: '8pt' }}>
+          {t('databasebrowser:sphere.cancel')}
+        </button>
+      </div>
+    );
+  } else if (cancelledByUser) {
+    content = (
+      <div style={{ ...BOX, flexDirection: 'column', gap: 8, textAlign: 'center' }}>
+        <div>{t('databasebrowser:sphere.cancelled')}</div>
+        <button type="button" onClick={() => setAttempt((n) => n + 1)} style={{ fontSize: '8pt' }}>
+          {t('databasebrowser:sphere.retry')}
+        </button>
+      </div>
+    );
+  } else if (error) {
+    content = (
+      <div role="alert" style={{ ...BOX, color: colors.red, flexDirection: 'column', gap: 8, padding: 12, textAlign: 'center' }}>
+        <div>{t('databasebrowser:sphere.loadError', { error })}</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {preset !== 'standard' && (
+            <button type="button" onClick={() => setPreset('standard')} style={{ fontSize: '8pt' }}>
+              {t('databasebrowser:sphere.useStandard')}
+            </button>
+          )}
+          {/* At every resolution: a High request that failed for a passing reason
+              (memory taken by another program) deserves a second try as it is. */}
+          <button type="button" onClick={() => setAttempt((n) => n + 1)} style={{ fontSize: '8pt' }}>
+            {t('databasebrowser:sphere.retry')}
+          </button>
+        </div>
+      </div>
+    );
+  } else if (!surface) {
+    content = <div style={BOX}>{t('databasebrowser:sphere.selectLocal')}</div>;
+  } else {
+    content = (
+      <>
+        <div
+          ref={boxRef}
+          style={{
+            position: 'relative',
+            // Fullscreen replaces the fixed 360 px preview height, otherwise the
+            // sphere would sit as a small box in the middle of a black screen.
+            height: fs.active ? '100%' : undefined,
+            background: fs.active ? bgColor : undefined,
+          }}
+        >
+        <Suspense fallback={<div style={BOX}>{t('databasebrowser:sphere.loadingViewer')}</div>}>
+          <Plot
+            data={[{
+              type: 'surface',
+              x: surface.X, y: surface.Y, z: surface.Z,
+              surfacecolor: surface.C,
+              // high intensity → bright (white); low → dark.
+              colorscale: [[0, 'rgb(0,0,0)'], [1, 'rgb(255,255,255)']],
+              showscale: false,
+              lighting: { ambient: 1.0, diffuse: 0.0, specular: 0.0, roughness: 1.0, fresnel: 0.0 },
+              contours: { x: { highlight: false }, y: { highlight: false }, z: { highlight: false } },
+              hoverinfo: 'skip',
+            }]}
+            layout={{
+              autosize: true,
+              // In fullscreen the height comes from the box, not from a constant.
+              height: fs.active ? undefined : 360,
+              margin: { l: 0, r: 0, t: 0, b: 0 },
+              paper_bgcolor: bgColor,
+              plot_bgcolor: bgColor,
+              scene: {
+                xaxis: { visible: false }, yaxis: { visible: false }, zaxis: { visible: false },
+                aspectmode: 'data',
+                bgcolor: bgColor,
+                dragmode: 'orbit',
+              },
+            }}
+            style={{ width: '100%', height: fs.active ? '100%' : undefined }}
+            config={plotConfig}
+            useResizeHandler
+            onInitialized={(fig, gd) => { gdRef.current = gd; }}
+          />
+        </Suspense>
+        </div>
+        {metaLine && (
+          <div style={{ fontSize: '8pt', color: colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
+            {metaLine}
+            <span style={{ opacity: 0.6 }}>{` · ${t('databasebrowser:sphere.bandwidthSuffix', { bw: payload.bandwidth })}`}</span>
+          </div>
+        )}
+        <div style={{ fontSize: '8pt', color: colors.textSecondary, textAlign: 'center', marginTop: 2, opacity: 0.7 }}>
+          {t('databasebrowser:sphere.hint')}
+        </div>
+      </>
+    );
+  }
 
   return (
     <div
@@ -219,71 +414,8 @@ export default function MasterSphereViewer({ filename, isLocal }) {
         });
       }}
     >
-      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 4 }}>
-        <label style={{ fontSize: '8pt', color: colors.textSecondary, marginRight: 4 }}
-               htmlFor="sphere-res">{t('databasebrowser:sphere.resolutionLabel')}</label>
-        <select id="sphere-res" aria-label={t('databasebrowser:sphere.resolutionLabel')}
-                title={t('databasebrowser:sphere.resolutionTooltip')} value={preset}
-                onChange={(e) => setPreset(e.target.value)}
-                style={{ fontSize: '8pt' }}>
-          {Object.entries(RES_PRESETS).map(([k, v]) => (
-            <option key={k} value={k}>{t(`databasebrowser:${v.labelKey}`)}</option>
-          ))}
-        </select>
-      </div>
-      <div
-        ref={boxRef}
-        style={{
-          position: 'relative',
-          // Fullscreen replaces the fixed 360 px preview height, otherwise the
-          // sphere would sit as a small box in the middle of a black screen.
-          height: fs.active ? '100%' : undefined,
-          background: fs.active ? bgColor : undefined,
-        }}
-      >
-      <Suspense fallback={<div style={BOX}>{t('databasebrowser:sphere.loadingViewer')}</div>}>
-        <Plot
-          data={[{
-            type: 'surface',
-            x: surface.X, y: surface.Y, z: surface.Z,
-            surfacecolor: surface.C,
-            // high intensity → bright (white); low → dark.
-            colorscale: [[0, 'rgb(0,0,0)'], [1, 'rgb(255,255,255)']],
-            showscale: false,
-            lighting: { ambient: 1.0, diffuse: 0.0, specular: 0.0, roughness: 1.0, fresnel: 0.0 },
-            contours: { x: { highlight: false }, y: { highlight: false }, z: { highlight: false } },
-            hoverinfo: 'skip',
-          }]}
-          layout={{
-            autosize: true,
-            // In fullscreen the height comes from the box, not from a constant.
-            height: fs.active ? undefined : 360,
-            margin: { l: 0, r: 0, t: 0, b: 0 },
-            paper_bgcolor: bgColor,
-            plot_bgcolor: bgColor,
-            scene: {
-              xaxis: { visible: false }, yaxis: { visible: false }, zaxis: { visible: false },
-              aspectmode: 'data',
-              bgcolor: bgColor,
-              dragmode: 'orbit',
-            },
-          }}
-          style={{ width: '100%', height: fs.active ? '100%' : undefined }}
-          config={plotConfig}
-          useResizeHandler
-          onInitialized={(fig, gd) => { gdRef.current = gd; }}
-        />
-      </Suspense>
-      </div>
-      {metaLine && (
-        <div style={{ fontSize: '8pt', color: colors.textSecondary, textAlign: 'center', marginTop: 4 }}>
-          {metaLine}
-          <span style={{ opacity: 0.6 }}>{` · ${t('databasebrowser:sphere.bandwidthSuffix', { bw: payload.bandwidth })}`}</span>
-        </div>
-      )}
-      <div style={{ fontSize: '8pt', color: colors.textSecondary, textAlign: 'center', marginTop: 2, opacity: 0.7 }}>
-        {t('databasebrowser:sphere.hint')}
-      </div>
+      {selector}
+      {content}
       {imageExport.node}
     </div>
   );

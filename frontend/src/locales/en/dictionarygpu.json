@@ -17,7 +17,8 @@
     "noTaskId": "Backend did not return a task_id.",
     "generateFailed": "Generate failed: {{detail}}",
     "deleteFailed": "Delete failed: {{detail}}",
-    "progressPollFailed": "Progress poll failed: {{message}}"
+    "progressPollFailed": "Progress poll failed: {{message}}",
+    "pc_missing": "This file carries no pattern centre (PC); kikuchipy's placeholder would give wrong orientations. Calibrate the PC in PC Refinement, or put the .osc / metadata file that holds it next to the scan, then start again."
   },
   "master": {
     "groupTitle": "Master Pattern",

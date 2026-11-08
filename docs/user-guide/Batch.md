@@ -59,6 +59,11 @@ across the top. You can click any step to jump to it.
    (compact, recommended), **.ang** / **.ctf** (for MTEX), or **Rich H5** (full,
    large — a size warning is shown). Optionally **include EDS** in the light H5,
    and set an output directory. A live **estimated total output size** is shown.
+   When a file of the batch is a hexagonal scan, **.ang (square grid)** also
+   appears, and a note says that the `.ctf` and the square `.ang` of hexagonal
+   scans are resampled onto a square grid (each point takes the nearest measured
+   point); the plain `.ang` and the `.h5` files keep the hexagonal grid. After the
+   run, the list of files written says which files were resampled.
 
 ### Step 4 — Method & Phases
 

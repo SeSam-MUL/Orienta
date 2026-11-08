@@ -1,7 +1,6 @@
 """The frontend watchdog must not kill a backend that is being used.
 
-Measured, from the M5 tester's diagnostics bundle
-(tasks/mac-test-m5-2026-09-25/, logs/orienta.log):
+Measured, from the log of a diagnostics bundle (logs/orienta.log):
 
     09:33:26  Frontend watchdog enabled, grace period = 600s
     09:33:26  Parent watchdog enabled - exiting when PID 3350 goes away
@@ -160,6 +159,53 @@ class TestTheMiddlewareRecordsEveryRequest:
     def test_health_really_is_excluded_from_the_log(self):
         # If this ever changes, the reasoning above changes with it.
         assert "/api/health" in api_main.HTTPTimingMiddleware._EXCLUDED_PREFIXES
+
+
+class TestTheJobsListPollStaysOutOfTheDevLog:
+    """The sphere viewer asks GET /api/jobs?job=sphere every 2 s while a sphere
+    computes; a Max sphere takes minutes, which would be the whole dev log.
+    Only that exact call is left out: submit (POST /api/jobs), wait, cancel and
+    a lookup by id are real events and stay logged."""
+
+    @staticmethod
+    def _logged_paths(monkeypatch, requests):
+        from fastapi.testclient import TestClient
+
+        sent = []
+
+        async def _done():
+            return None
+
+        class _Ws:
+            active_connections = [object()]
+
+            def broadcast(self, payload):
+                sent.append((payload["method"], payload["path"]))
+                return _done()
+
+        monkeypatch.setattr(api_main, "ws_manager", _Ws())
+        client = TestClient(api_main.app)
+        for method, url in requests:
+            client.request(method, url)
+        return sent
+
+    def test_the_list_poll_is_not_logged_but_other_job_calls_are(self, monkeypatch):
+        sent = self._logged_paths(monkeypatch, [
+            ("GET", "/api/jobs?job=sphere"),
+            ("GET", "/api/jobs"),
+            ("GET", "/api/jobs/no-such-job"),
+            ("POST", "/api/jobs/no-such-job/cancel"),
+        ])
+        assert ("GET", "/api/jobs") not in sent
+        assert ("GET", "/api/jobs/no-such-job") in sent
+        assert ("POST", "/api/jobs/no-such-job/cancel") in sent
+
+    def test_the_list_poll_still_counts_as_a_sign_of_life(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        api_main._last_http_activity = time.monotonic() - 3600
+        TestClient(api_main.app).get("/api/jobs?job=sphere")
+        assert api_main.seconds_since_http_activity() < 5.0
 
 
 class TestTheWatchdogAsksBothBeforeExiting:

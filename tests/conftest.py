@@ -21,9 +21,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # installs a rotating file handler at import time). Tests that exercise the
 # file logging itself delete this variable and use a tmp_path log dir.
 os.environ.setdefault("ORIENTA_NO_FILE_LOG", "1")
+# The unit suite computes in-process; the worker tests switch this off for
+# themselves. The app never sets it (backend.worker.manager.worker_enabled).
+os.environ.setdefault("ORIENTA_NO_WORKER", "1")
 # Same idea for the per-phase Hough reflector limits: a test run must
 # neither read nor overwrite the developer's own stored preferences.
 os.environ.setdefault("ORIENTA_NO_PHASE_LIMIT_STORE", "1")
+# The backend's startup reaper kills every EMsoft process in WSL. A test that
+# enters the app lifespan (`with TestClient(app)`) would end a simulation that
+# someone else is running; tests/test_startup_reaper_switch.py covers the switch.
+os.environ.setdefault("ORIENTA_NO_STARTUP_REAPER", "1")
 # Starlette's TestClient sends `Host: testserver` from client address
 # ("testclient", 50000); the backend's local-only guard (backend/api/security.py)
 # would otherwise refuse every request. Set unconditionally: a developer who

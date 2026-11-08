@@ -14,6 +14,7 @@ import { useTranslation } from 'react-i18next';
 import { colors, Select } from '../../../theme/components';
 import HistogramPanel from './HistogramPanel';
 import GalleryList from './GalleryList';
+import { problemText, CODE_HEADER } from '../../../services/problemText';
 import {
   useDiagnosticsSummary,
   useDiagnosticsBrowser,
@@ -31,6 +32,26 @@ const METRIC_TABS = [
 
 const N_OPTIONS = [25, 50, 100, 200];
 const W = 480;
+
+/**
+ * Why a request could not be loaded, in the language of the page.
+ *
+ * `forwardDiagApi` is fetch-based: its errors are plain `Error`s with the refusal's code in
+ * `err.code` (`_fwdDiagError`), not axios errors with `response.headers`, which is the shape
+ * `problemText` reads. The code is handed over in that shape, so the lookup (the page's own text,
+ * then `common:errors`, then the server's words) is the same one every other page uses.
+ */
+const browserErrorText = (err, t) => problemText(
+  {
+    message: err?.message,
+    response: {
+      headers: err?.code ? { [CODE_HEADER]: err.code } : {},
+      data: { detail: err?.message },
+    },
+  },
+  t,
+  'phasemap',
+) || String(err);
 
 /**
  * GalleryListWrapper - measures available height for the virtualized
@@ -115,7 +136,7 @@ export default function AnomalyBrowserDrawer({
     }),
     [sort, n, range],
   );
-  const { data } = useDiagnosticsBrowser(resultId, browserOpts);
+  const { data, error } = useDiagnosticsBrowser(resultId, browserOpts, refreshKey);
 
   if (!open) return null;
   return (
@@ -221,14 +242,20 @@ export default function AnomalyBrowserDrawer({
 
       {/* Virtualized gallery (fills remaining height) */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-        <GalleryListWrapper
-          items={data?.items}
-          resultId={resultId}
-          width={W}
-          onClick={onSelectPixel}
-          onHover={onHoverPixel}
-          onLeave={onLeavePixel}
-        />
+        {error ? (
+          <div role="alert" style={{ padding: 12, color: colors.red, fontSize: 13 }}>
+            {browserErrorText(error, t)}
+          </div>
+        ) : (
+          <GalleryListWrapper
+            items={data?.items}
+            resultId={resultId}
+            width={W}
+            onClick={onSelectPixel}
+            onHover={onHoverPixel}
+            onLeave={onLeavePixel}
+          />
+        )}
       </div>
     </div>
   );

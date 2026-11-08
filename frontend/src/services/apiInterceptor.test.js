@@ -120,6 +120,12 @@ describe('api response interceptor', () => {
     expect(files[0].message).toBe('loaded Ni.h5');
   });
 
+  it('does not note a removal from the loaded-files list as a load', async () => {
+    api.defaults.adapter = respondWith(200, {});
+    await api.post('/api/ebsd/loaded-files/remove', { path: 'D:/data/EBSD_SampleB.h5oina' });
+    expect(getBreadcrumbs().filter((c) => c.type === 'file')).toHaveLength(0);
+  });
+
   it('stays silent for polling endpoints so a down backend cannot flood', async () => {
     api.defaults.adapter = networkError();
     await expect(healthCheck()).rejects.toBeTruthy();

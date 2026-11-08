@@ -186,7 +186,8 @@ def test_single_phase_result_has_no_phase_index(duplex_cifs, nickel):
     ctrl.add_phase(duplex_cifs[0])
     ctrl.add_pattern((0, 0), np.asarray(nickel.data[0, 0]).copy())
     r = _index_and_simulate(ctrl, 0)
-    assert set(r) == {"ci", "phase_name", "segments", "n_bands"}
+    # `pc`: the PC the pattern was indexed at. No multi-phase keys for one phase.
+    assert set(r) == {"ci", "phase_name", "segments", "n_bands", "pc"}
     _sim_cache.clear()
 
 
@@ -277,20 +278,15 @@ class _Cal:
 
 
 def _run(monkeypatch, ctrl, patterns, pcs):
-    """Drive `_run_optimization` with a stubbed optimiser; return (task, calls)."""
-    import ebsd_utils
+    """Drive `_run_optimization` with a stubbed search; return (task, calls).
+
+    The stub (tests/pc_engine_stub.py) answers with the mean of ``pcs`` as the joint PC and with
+    ``pcs`` as what each pattern prefers on its own; ``calls`` has one entry per search."""
     import backend.api.routes.pcrefinement as pcr
     from backend.api.routes import ebsd_viewer
+    from tests.pc_engine_stub import stub_search
 
-    calls = []
-
-    def fake_optimize_pc(detector, indexer, pattern, method, search_limit, batch):
-        calls.append({"indexer": indexer, "method": method,
-                      "search_limit": search_limit, "batch": batch,
-                      "pattern_shape": np.asarray(pattern).shape})
-        return pcs[len(calls) - 1], None
-
-    monkeypatch.setattr(ebsd_utils, "optimize_pc", fake_optimize_pc)
+    calls = stub_search(monkeypatch, pcs)
     monkeypatch.setattr(pcr, "_get_controller", lambda: ctrl)
     monkeypatch.setattr(pcr, "_writeback_refined_pc", lambda *a, **k: None)
     monkeypatch.setattr(ebsd_viewer, "_active_dataset", "unit", raising=False)
@@ -316,13 +312,14 @@ def test_single_phase_optimisation_payload_is_unchanged(monkeypatch, duplex_cifs
     res = task["result"]
     assert set(res) == {"pc_values", "mean_pc", "ci", "global_ci", "pattern_results",
                         "segments", "pc_warning", "pc_warning_codes", "pc_deviation",
-                        "pattern_size"}
+                        "pattern_size", "pc_map_action", "pc_map_actions", "dataset",
+                        "dataset_changed", "mode", "search", "file_pc", "file_pc_deviation",
+                        "calibration", "previous", "pc_stored", "quality"}
     assert res["pc_values"] == [list(p) for p in pcs]
     np.testing.assert_allclose(res["mean_pc"], [0.4251, 0.2131, 0.5002])
-    # one optimiser call per pattern, all on the SAME single-phase indexer
-    assert [c["method"] for c in calls] == ["Nelder-Mead"] * 2
-    assert all(c["batch"] is True and c["search_limit"] == 0.05 for c in calls)
-    assert len({id(c["indexer"]) for c in calls}) == 1
+    # ONE search over both patterns together, on the single-phase indexer
+    assert len(calls) == 1 and len(calls[0]["patterns"]) == 2
+    assert (calls[0]["mode"], calls[0]["method"], calls[0]["search_limit"]) == ("refine", "Nelder-Mead", 0.05)
     assert len(calls[0]["indexer"].phaseLib) == 1
 
 

@@ -7,8 +7,6 @@ Produces 4 per-pixel maps and a summary statistics block, all stored on
 - ``local_anomaly_map``     ``ncc - median_filter(ncc, 5)`` (post-process)
 - ``pc_sensitivity_map``    L2 magnitude of NCC gradient under (1px, 1px, 50um) PC perturbations
 - ``pattern_residual_map``  Mean per-pixel ``|I_exp - I_sim|`` after unit-normalization
-
-See spec: docs/superpowers/specs/2026-05-13-forward-ncc-diagnose-layer-design.md
 """
 from __future__ import annotations
 
@@ -18,6 +16,7 @@ import io as _io
 import logging
 import threading
 import uuid
+import warnings
 from collections import OrderedDict
 from pathlib import Path
 from typing import Callable, Optional
@@ -27,6 +26,7 @@ import torch
 from orix.quaternion import Rotation
 from scipy.ndimage import generic_filter
 
+from backend.api.services.scan_neighbours import topology_of_stamp
 from backend.api.services.sht_pattern_renderer import (
     SHTRenderError,
     get_renderer,
@@ -36,10 +36,14 @@ from backend.spherical_gpu.pipeline.detector import convert_pc_to_emsoft
 
 logger = logging.getLogger(__name__)
 
+#: Points per block when the hexagonal local-anomaly median is taken (bounds the temporaries, not the result).
+_LOCAL_ANOMALY_BLOCK = 1 << 16
+
 
 def compute_local_anomaly_map(
     ncc_map: np.ndarray,
     window: int = 5,
+    topology=None,
 ) -> np.ndarray:
     """Return ``ncc - nanmedian(ncc, window x window)`` per pixel.
 
@@ -52,13 +56,38 @@ def compute_local_anomaly_map(
         (H, W) float32 array. NaN where pixel is not indexed.
     window
         Side length of the square neighborhood. Default 5.
+    topology
+        A hexagonal ``scan_neighbours.Topology`` of the scan, or None (the square filter above, unchanged).
+        On a hexagonal scan a 5 x 5 block of the index grid is not a neighbourhood: the window is the
+        points within ``(window - 1) // 2`` steps on the lattice (19 for the default), the point itself
+        included, found on the neighbour table. The border is clipped, since a lattice has no reflection
+        to pad with. NaN stays NaN, and a window with nothing indexed in it is NaN (no warning).
     """
+    if topology is not None and (topology.n_rows, topology.n_cols) != tuple(ncc_map.shape):
+        raise ValueError(
+            f"the topology is for a {topology.n_rows} x {topology.n_cols} grid, "
+            f"but the map is {ncc_map.shape[0]} x {ncc_map.shape[1]}")
+
     if ncc_map.shape[0] < window or ncc_map.shape[1] < window:
         logger.info(
             "compute_local_anomaly_map: map %s smaller than window=%d, returning zeros",
             ncc_map.shape, window,
         )
         return np.zeros_like(ncc_map, dtype=np.float32)
+
+    if topology is not None:
+        table = topology.table(rings=max(1, (window - 1) // 2), include_self=True)
+        flat = ncc_map.astype(np.float32, copy=False).ravel()
+        median = np.full(flat.size, np.nan, dtype=np.float32)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)         # an all-NaN window is NaN, not a warning
+            # In blocks of rows: the gathered values and the index copy of a whole 1.2-million-point scan are
+            # several times the size of the (cached) table itself, the rows are independent of one another.
+            for start in range(0, flat.size, _LOCAL_ANOMALY_BLOCK):
+                block = table[start:start + _LOCAL_ANOMALY_BLOCK]
+                gathered = np.where(block >= 0, flat[np.maximum(block, 0)], np.nan)
+                median[start:start + _LOCAL_ANOMALY_BLOCK] = np.nanmedian(gathered, axis=1)
+        return (ncc_map - median.reshape(ncc_map.shape)).astype(np.float32)
 
     def _nanmedian(values: np.ndarray) -> float:
         # generic_filter passes a flat window; reduce to nanmedian
@@ -447,6 +476,10 @@ def compute_full_diagnostics(
 
     deltas = dict(_DEFAULT_DELTAS) if deltas is None else dict(deltas)
     n_rows, n_cols = result.original_shape
+    # What a neighbour is on this result's scan (the stamp it carries from when it was indexed): a hexagonal
+    # topology, or None for a square or unknown scan (the 5 x 5 filter as before). A stamp of another grid
+    # is refused here, before the long part of the pass, and the job reports the ValueError.
+    topology = topology_of_stamp(metadata.get("scan_geometry"), (n_rows, n_cols))
     pat_h = int(det["pat_height"])
     pat_w = int(det["pat_width"])
     pixel_size_um = float(det.get("pixel_size", 70.0))
@@ -667,7 +700,7 @@ def compute_full_diagnostics(
                     pass
 
     # Post-process
-    local_anom = compute_local_anomaly_map(ncc_map, window=5)
+    local_anom = compute_local_anomaly_map(ncc_map, window=5, topology=topology)
 
     # Summary
     summary = {

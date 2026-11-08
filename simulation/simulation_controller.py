@@ -73,10 +73,13 @@ def _master_gate(path):
 def master_readability_warnings(result_files) -> List[Dict[str, Any]]:
     """Coded warnings for a produced master that Dictionary indexing cannot read.
 
-    EMsoft's GPU master program (``EMEBSDmasterOpenCL``, the default on every
-    machine with a GPU) writes a file kikuchipy refuses to load; the phase
-    library therefore does not offer it. Without this the job ends "completed"
-    and the user finds out only when the master is missing from the picker.
+    EMsoft's GPU master program (``EMEBSDmasterOpenCL``) writes a file
+    kikuchipy refuses to load; the phase library therefore does not offer it.
+    This program is no longer started (the master is always computed on the
+    CPU), but earlier versions used it by default on every machine with a GPU,
+    and those files are still on disk. A job whose master turns out to be such
+    a file still gets the warning; without it the job ends "completed" and the
+    user finds out only when the master is missing from the picker.
     Uses the library's own gate (``phase_library.master_status``), so the two
     cannot disagree. Best effort: a check that fails never fails the job.
     """
@@ -157,14 +160,13 @@ class SimulationParameters:
     platid: int = 1             # OpenCL platform ID
     devid: int = 1              # OpenCL device ID
     globalworkgrpsz: int = 150  # OpenCL work group size
-    blocksize: int = 16             # k-vector block size for EMEBSDmasterOpenCL (power of 2)
 
     # Compute mode: "auto", "gpu", "cpu"
     compute_mode: str = "auto"
 
     # Program selection (filled by auto_select_programs)
     mc_program: str = ""        # EMMCOpenCL or EMMC
-    master_program: str = ""    # EMEBSDmaster, EMEBSDmasterOpenCL
+    master_program: str = ""    # EMEBSDmaster (always the CPU program)
     sht_program: str = ""       # EMEBSDmasterSHT
 
     # Advanced: EMMCOpenCL parameters
@@ -204,28 +206,6 @@ class SimulationParameters:
         if self.nthreads < 1:
             self.nthreads = 1
             warnings.append("nthreads must be >= 1 — set to 1")
-
-        # For GPU master pattern (EMEBSDmasterOpenCL): nthreads must be 4N+3
-        # form (7, 11, 15, 19, 23, ...) and >= 7
-        if self.master_program and "OpenCL" in self.master_program:
-            if self.nthreads < 7:
-                self.nthreads = 7
-                warnings.append("GPU master pattern requires nthreads >= 7 — set to 7")
-            elif (self.nthreads - 3) % 4 != 0:
-                # Round up to next valid 4N+3 value
-                n = (self.nthreads - 3 + 3) // 4  # ceiling division
-                self.nthreads = 4 * n + 3
-                if self.nthreads < 7:
-                    self.nthreads = 7
-                warnings.append(
-                    f"GPU master pattern requires nthreads in 4N+3 form — adjusted to {self.nthreads}"
-                )
-
-        # blocksize must be power of 2
-        if self.blocksize > 0 and (self.blocksize & (self.blocksize - 1)) != 0:
-            # Round up to next power of 2
-            self.blocksize = 1 << (self.blocksize - 1).bit_length()
-            warnings.append(f"blocksize must be power of 2 — adjusted to {self.blocksize}")
 
         # totnum_el should be reasonable
         if self.totnum_el < 1000:
@@ -629,7 +609,6 @@ class SimulationController:
         try:
             from simulation.opencl_detector import (
                 detect_opencl, recommend_device, validate_globalworkgrpsz,
-                auto_detect_nthreads, auto_detect_nthreads_4n3,
             )
 
             ocl_status = detect_opencl()
@@ -659,12 +638,8 @@ class SimulationController:
                 params.globalworkgrpsz = validate_globalworkgrpsz(
                     params.globalworkgrpsz, gpu_dev
                 )
-                # Blocksize for GPU master pattern (auto-scaled by VRAM)
-                params.blocksize = rec.get("blocksize", 16)
-                # nthreads for GPU master must be 4N+3
-                if params.master_program == "EMEBSDmasterOpenCL":
-                    params.nthreads = rec.get("nthreads_master_opencl",
-                                              auto_detect_nthreads_4n3())
+                # The master is computed on the CPU (rec["master_program"] is
+                # EMEBSDmaster), so params.nthreads stays as the caller set it.
             else:
                 params.mc_program = "EMMC"
                 params.master_program = "EMEBSDmaster"
@@ -965,7 +940,8 @@ class SimulationController:
                         f"Warning [{w['code']}]: {w['file']} was written by "
                         f"{w['program'] or 'an unknown program'} and kikuchipy cannot "
                         "load it, so Dictionary indexing will not offer it. "
-                        "Re-run the master with the CPU program (EMEBSDmaster).")
+                        "Delete the file and simulate the phase again; the "
+                        "simulation now uses the CPU master program (EMEBSDmaster).")
 
                 # Provenance sidecar for the EMsoft .sht (mirrors the GPU "Ours"
                 # path) so BOTH engines are uniformly traceable: source xtal/cif +
@@ -1016,8 +992,7 @@ class SimulationController:
                     f"GPU out of memory: {e}\n\n"
                     "The GPU ran out of VRAM during simulation. Try:\n"
                     "1. Set Compute Mode to 'CPU' and re-run\n"
-                    "2. Reduce blocksize (e.g. 8 instead of 16)\n"
-                    "3. Use a simpler crystal structure"
+                    "2. Use a simpler crystal structure"
                 )
                 job.progress_message = "GPU out of memory — switch to CPU mode"
             else:
@@ -1119,21 +1094,8 @@ class SimulationController:
         self.config.set(sec, "Esel", str(params.Esel))
         self.config.set(sec, "uniform", ".TRUE." if params.uniform else ".FALSE.")
 
-        # Master (GPU) — only written when GPU master is selected
-        if params.master_program == "EMEBSDmasterOpenCL":
-            sec = "DefaultSimulationParametersEMEBSDmasterOpenCL"
-            if not self.config.has_section(sec):
-                self.config.add_section(sec)
-            self.config.set(sec, "dmin", str(params.dmin))
-            self.config.set(sec, "npx", str(params.npx))
-            self.config.set(sec, "nthreads", str(params.nthreads))
-            self.config.set(sec, "platid", str(params.platid))
-            self.config.set(sec, "devid", str(params.devid))
-            self.config.set(sec, "globalworkgrpsz", str(params.globalworkgrpsz))
-            self.config.set(sec, "blocksize", str(params.blocksize))
-            self.config.set(sec, "Notify", "off")
-
-        # Output options (needed by automation to pick GPU vs CPU master)
+        # Output options (the automation reads master_program from here; Orienta
+        # always writes the CPU program)
         if not self.config.has_section("OutputOptions"):
             self.config.add_section("OutputOptions")
         self.config.set("OutputOptions", "output_type", params.output_type)
@@ -1330,7 +1292,7 @@ class SimulationController:
 
         A phase whose ONLY master is one kikuchipy cannot load (EMsoft's GPU
         master program writes those) is not "missing" -- the file is there, and
-        simulating again with the same program would write the same file -- but
+        a new run would not replace it (the automation keeps a cached master) -- but
         it is not "done" either. Such phases are appended to ``unreadable_out``
         when it is given: ``{"xtal_path", "stem", "code", "file", "program"}``.
 

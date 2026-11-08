@@ -24,5 +24,20 @@
   "fullscreen": {
     "enter": "Fullscreen",
     "exit": "Leave fullscreen"
+  },
+  "errors": {
+    "crop_geometry_unknown": "This dataset has no recorded scan geometry, so a part of it cannot be cut out safely. Load the file again.",
+    "export_needs_hex_scan": "A .ctf file and a square .ang file hold a hexagonal scan resampled to a square grid. This result was already resampled to a square grid, or is not from a hexagonal scan, so there is nothing to resample. Nothing was written.",
+    "export_other_dataset": "The scan open in the viewer is not the scan this result was computed on, so the file would hold the patterns of one scan under the result of another. Select the dataset this result was computed on, then save again. Nothing was written.",
+    "hex_analysis_page_pending": "The maps of the Analysis page cannot be drawn for a hexagonal scan yet: the page draws every map on the index grid, which puts every second row half a step off.",
+    "hex_ang_unreadable": "This .ang file has a hexagonal grid that Orienta cannot read: its rows differ in length or its positions are irregular. Convert the scan to a square grid in OIM Analysis, or load the scan's .h5 file instead.",
+    "hex_neighbourhood_unsupported": "This evaluation compares each point with its four neighbours on the index grid. A hexagonal scan has six neighbours per point, so the result would be silently distorted. It is not available for hexagonal scans yet.",
+    "hex_pc_grid_pending": "The pixel-wise pattern-centre calibration places its grid points on the index grid, which is half a step off on every second row of a hexagonal scan. Use a single global pattern centre for now.",
+    "loadCameUpAsOther": "The file opened, but as another measurement or pattern source than the one this result was created on. The result was not activated, and the viewer now shows the other one.",
+    "loadInspectFailed": "The measurements of this file could not be read: a group inside it is damaged or incomplete. Check that the file is intact and not still being written, then open it again.",
+    "loadNoPatterns": "This file or measurement holds no diffraction patterns, so there is nothing to load.",
+    "loadVariantNeedsNativeReader": "The chosen measurement or pattern source can only be read by the standard reader, and that reader failed on this file. Choose the first measurement with its processed patterns, or check that the file is intact.",
+    "loadVariantUnknown": "The file does not hold the chosen measurement or pattern source. Open the file again and choose from the list.",
+    "variantNotSupported": "The chosen measurement or pattern source cannot be read here: this step reopens the file itself, and the layout of this file does not name its pattern sources, so it would have had to use a different one. Choose the first measurement with its processed patterns."
   }
 }

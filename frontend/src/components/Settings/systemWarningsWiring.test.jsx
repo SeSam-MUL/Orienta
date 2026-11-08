@@ -29,13 +29,13 @@ vi.mock('./AboutSection', () => ({ default: () => null }));
 import { simApi } from '../../services/api';
 import SettingsPage from './SettingsPage';
 
-const CODED = 'GPU has 7.9 GB — using blocksize=8 for EMEBSDmasterOpenCL. Complex crystals (>20 atoms) may still fail.';
+const CODED = "EMsoft is not set up on this computer. It is optional — Orienta's own simulation engine needs no EMsoft.";
 const PROSE = 'EMMCOpenCL not found';
 
 const STATUS = {
   warnings: [PROSE, CODED],
   warning_items: [
-    { code: 'gpuBlocksizeMinimal', values: { gb: '7.9', blocksize: 8 }, message: CODED },
+    { code: 'emsoftNotOffered', values: {}, message: CODED },
   ],
   errors: [],
   checks: [],
@@ -55,9 +55,8 @@ describe('SettingsPage shows the warning in the user language', () => {
 
   it('German shows the German sentence, not the English one', async () => {
     await renderIn('de');
-    await screen.findByText(/Blockgr/);
-    expect(document.body.textContent).toContain('7.9 GB');
-    expect(document.body.textContent).not.toContain('using blocksize=8');
+    await screen.findByText(/nicht eingerichtet/);
+    expect(document.body.textContent).not.toContain('simulation engine needs no EMsoft');
   });
 
   it('a warning without a code stays exactly as the backend wrote it', async () => {
@@ -81,9 +80,8 @@ describe('SettingsPage shows the warning in the user language', () => {
     expect(document.body.textContent).not.toContain('systemStatus.warnings');
   });
 
-  it('English gets the English sentence, with the same number', async () => {
+  it('English gets the English sentence', async () => {
     await renderIn('en');
-    await waitFor(() => expect(document.body.textContent).toContain('smallest blocksize 8'));
-    expect(document.body.textContent).toContain('7.9 GB');
+    await waitFor(() => expect(document.body.textContent).toContain('the Orienta Engine needs no EMsoft'));
   });
 });

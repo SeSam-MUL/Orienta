@@ -16,9 +16,9 @@
       "fast": "快速 (bw=128)",
       "fastDesc": "约 225 MB，略模糊",
       "standard": "标准 (bw=256)",
-      "standardDesc": "更清晰的模拟花样（约 1.7 GB 显存）。仅影响渲染——“Compare phases”的重新标定始终使用 128，这是其 Legendre 表在数值上唯一有效的带宽。",
+      "standardDesc": "更清晰的模拟花样（约 1.8 GB 显存）。仅影响渲染——“Compare phases”的重新标定始终使用 128，这是其 Legendre 表在数值上唯一有效的带宽。",
       "high": "高 (bw=384)",
-      "highDesc": "最清晰的模拟花样（约 5.7 GB 显存；GPU 空闲不足时将拒绝）。仅影响渲染——“Compare phases”的重新标定始终使用 128。"
+      "highDesc": "最清晰的模拟花样（约 5.9 GB 显存；GPU 空闲不足时将拒绝）。仅影响渲染——“Compare phases”的重新标定始终使用 128。"
     },
     "aperture": "光阑：",
     "apertureTooltip": "用于 R/NCC 评分的圆形探测器光阑。“Circular”强制启用边角掩膜——用于自动检测漏掉灰色边角的 EDAX 荧光屏花样。",
@@ -149,8 +149,8 @@
     "forwardNccBody": "为每个已标定像素渲染 SHT 前向模拟花样，并计算其与实验花样的归一化互相关。提供一张（独立于 Spherical CI 的）“真值”质量图。",
     "bandwidth": "带宽：",
     "bandwidthFast": "快速 (bw=128, 约225 MB)",
-    "bandwidthStandard": "标准 (bw=256, 约1.7 GB)",
-    "bandwidthHigh": "高 (bw=384, 约5.7 GB)",
+    "bandwidthStandard": "标准 (bw=256, 约1.8 GB)",
+    "bandwidthHigh": "高 (bw=384, 约5.9 GB)",
     "computing": "计算中...",
     "computeForwardNcc": "计算 Forward NCC 图",
     "forwardNccHint": "视图大小和 GPU 而定，预计约 10–60 秒。结果会被缓存，直到重新标定。",
@@ -168,6 +168,8 @@
     "saveCancelled": "已取消保存。",
     "loadCancelled": "已取消加载。",
     "saved": "已保存“{{label}}” → {{path}}",
+    "savedResampled": "已保存“{{label}}” → {{path}}。已重采样到 {{rows}} × {{cols}} 点的方形网格；每个点取最近的实测点。",
+    "savedResampledPlain": "已保存“{{label}}” → {{path}}。已重采样到方形网格；每个点取最近的实测点。",
     "saveFailed": "保存失败：{{msg}}",
     "loaded": "已加载 {{name}}：{{features}}。",
     "noRecognisedData": "无可识别的数据",
@@ -211,6 +213,10 @@
     "ang": "MTEX .ang",
     "angLine1": "标准取向文件。可在 MTEX、Aztec、OIM 中原生读取。",
     "angLine2": "无 HDF5——没有 MATLAB 兼容性意外。",
+    "angSquare": ".ang（方形网格，已重采样）",
+    "angSquareLine1": "把六方扫描重采样到方形网格：每个单元取最近的实测点，文件中会注明这一点。",
+    "ctf": ".ctf（方形网格，已重采样）",
+    "ctfLine1": "Oxford/MTEX 格式。它需要方形网格，因此六方扫描会被重采样：每个单元取最近的实测点，文件中会注明这一点。",
     "h5Light": "Light .h5",
     "recommended": "推荐",
     "h5LightLine1": "无论源大小约 5–50 MB。不复制原始花样。",
@@ -222,6 +228,8 @@
     "h5RichLine2": "继承源 Superblock——旧版 MATLAB 可能拒绝打开。",
     "h5RichLine3": "当你希望将所有内容放在一个文件中以供归档时使用。",
     "filterAng": "MTEX .ang（取向文件）",
+    "filterAngSquare": "MTEX .ang（方形网格，已重采样）",
+    "filterCtf": "Oxford .ctf（方形网格，已重采样）",
     "filterH5Light": "Light .h5（紧凑，MATLAB 友好）",
     "filterH5Rich": "Rich .h5（完整源副本 + 结果）",
     "promptTitle": "将结果另存为 {{format}}…",
@@ -269,11 +277,13 @@
   "renamePrompt": "新名称：",
   "errors": {
     "couldntLoadResult": "无法加载此结果：{{detail}}。切换文件会从磁盘重新加载并重置活动结果——如果它已丢失，请对该数据集重新运行标定/分析。",
-    "noResultOrDataset": "尚未加载标定结果或分析数据集。请先加载数据。"
+    "noResultOrDataset": "尚未加载标定结果或分析数据集。请先加载数据。",
+    "pc_missing": "此文件不含花样中心 (PC)；kikuchipy 的占位值会得出错误的取向。请在 PC 精修页面校准 PC，或将含 PC 的 .osc／元数据文件放在扫描文件旁，然后重新开始。"
   },
   "pc": {
     "label": "PC",
-    "value": "（活动探测器）：({{x}}, {{y}}, {{z}})"
+    "value": "（活动探测器）：({{x}}, {{y}}, {{z}})",
+    "mapMean": " (PC 图的均值)"
   },
   "linescan": {
     "title": "线扫描剖面"
@@ -339,7 +349,8 @@
     "stepX": "步长 X：",
     "stepY": "步长 Y：",
     "micron": "µm",
-    "stepHint": "可用时从已加载的 EBSD 文件自动填充。决定比例尺长度。"
+    "stepHint": "可用时从已加载的 EBSD 文件自动填充。决定比例尺长度。",
+    "stepHintHex": "六方扫描的步长来自地图的扫描几何，无法在此更改。比例尺随之变化。"
   },
   "poleFigure": {
     "openButton": "打开极图 ⧉"
@@ -421,14 +432,17 @@
     "showUnavailableN": "显示不可用图层 ({{n}})",
     "title": "图层",
     "toggleVisibilityAria": "切换 {{label}} 可见性",
-    "unavailable": "尚不可用"
+    "unavailable": "尚不可用",
+    "gateHexGrid": "尚不支持六方网格扫描",
+    "notOnHexRaster": "此图层未绘制在六方网格显示栅格上，因此无法与此扫描一起显示。",
+    "hexRasterNotExpected": "此图层绘制在与此扫描不一致的六方网格显示栅格上，因此无法与此扫描一起显示。"
   },
   "diagnostics": {
     "title": "Forward 诊断",
     "bandwidth": "带宽：",
     "bwFast": "快速 (128, 更模糊)",
-    "bwStandard": "标准 (256, 约1.7 GB VRAM)",
-    "bwSharp": "锐利 (384, 约5.7 GB VRAM)",
+    "bwStandard": "标准 (256, 约1.8 GB VRAM)",
+    "bwSharp": "锐利 (384, 约5.9 GB VRAM)",
     "compute": "计算诊断",
     "recompute": "重新计算",
     "noActiveResult": "没有活动的标定结果",

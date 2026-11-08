@@ -909,3 +909,262 @@ def test_the_last_result_summary_reports_the_euler_angles_of_one_pixel(monkeypat
     body = TestClient(app).get("/api/indexing/result/last").json()
     assert body["n_indexed"] == 1
     assert len(body["euler_deg"]) == 3
+
+
+def test_a_hexagonal_space_group_phase_has_no_lattice_of_its_own():
+    """orix gives a phase made from a hexagonal or trigonal space group the lattice
+    1 1 1 90 90 120 (edges 0.99999999999962 after the round trip). That is as much a
+    placeholder as 1 1 1 90 90 90; taken for a measured lattice it made the export
+    refuse the phase although the run had recorded the real one."""
+    from backend.api.services import ang_export
+    for space_group in (162, 194):
+        assert ang_export.lattice_from_structure(Phase(name="x", space_group=space_group)) is None
+    assert ang_export.is_placeholder_lattice((1.0, 0.9999999999996201, 1.0, 90.0, 90.0, 120.0))
+    assert not ang_export.is_placeholder_lattice((3.21, 3.21, 5.21, 90.0, 90.0, 120.0))
+
+
+# ---------------------------------------------------------------------------
+# the crystal frame of the Euler angles
+#
+# By the International Tables the space groups 1-2 are triclinic, 3-15 monoclinic, 16-74
+# orthorhombic, 75-142 tetragonal, 143-167 trigonal, 168-194 hexagonal and 195-230 cubic. The
+# frame X||a, Z||c* differs from MTEX's default for the first, second, fifth and sixth system only.
+# The seven space groups whose two-fold axes or mirror normals lie along Y (not along X as orix has
+# them) are 149, 151, 153 (point group 312), 157, 159 (31m) and 162, 163 (-31m).
+# ---------------------------------------------------------------------------
+
+Y_SETTING_POINT_GROUP = {149: "312", 151: "312", 153: "312", 157: "31m", 159: "31m",
+                         162: "-31m", 163: "-31m"}
+FRAME_KEY = "# ORIENTA_CRYSTAL_FRAME: "
+
+
+def _comments(phases=None):
+    from backend.api.services import ang_export
+    kw = {} if phases is None else {"phases": phases}
+    return ang_export.header_comments(
+        method=None, vendor="edax", provenance={"text": "assigned"}, step_um=1.0, **kw)
+
+
+def _frame_lines(lines):
+    return [ln for ln in lines if ln.startswith(FRAME_KEY)]
+
+
+def _prj_note(phases=None):
+    from backend.api.services import ang_export
+    kw = {} if phases is None else {"phases": phases}
+    return ang_export.ctf_project_note(
+        vendor="edax", provenance={"text": "assigned"}, scan=None, step_um=1.0, **kw)
+
+
+def test_frame_line_only_for_non_cubic():
+    ti = Phase(name="Ti", space_group=194)
+    lines = _frame_lines(_comments([ti]))
+    assert len(lines) == 1 and "X||a" in lines[0] and "Z||c*" in lines[0]
+    # a cubic phase: nothing is added, the lines are the ones written without phases
+    al = Phase(name="Al", space_group=225)
+    assert _comments([al]) == _comments() == _comments([])
+    # a cubic phase next to a hexagonal one: one frame line, for the file
+    assert len(_frame_lines(_comments([al, ti]))) == 1
+    # the .ctf project text: the same statement, and unchanged for cubic phases
+    assert "X||a" in _prj_note([ti])
+    assert _prj_note([al]) == _prj_note() == _prj_note([])
+    # every one of the 230 space groups: triclinic, monoclinic, trigonal and hexagonal get the line
+    got = {n for n in range(1, 231)
+           if _frame_lines(_comments([Phase(name="p", space_group=n)]))}
+    assert got == set(range(1, 16)) | set(range(143, 195))
+    got_ctf = {n for n in range(1, 231)
+               if "X||a" in _prj_note([Phase(name="p", space_group=n)])}
+    assert got_ctf == got
+
+
+def test_frame_line_for_a_phase_given_by_its_point_group_only():
+    # what a spherical result holds for the groups that need no space group
+    for pg, want in (("6/mmm", True), ("-3m", True), ("2/m", True), ("1", True),
+                     ("m-3m", False), ("4/mmm", False), ("mmm", False), ("432", False)):
+        assert bool(_frame_lines(_comments([Phase(name="p", point_group=pg)]))) is want, pg
+
+
+def test_the_frame_line_is_one_ascii_comment_line_that_does_not_claim_a_vendor_setting():
+    lines = _frame_lines(_comments([Phase(name="Ti", space_group=194)]))
+    text = lines[0][len(FRAME_KEY):]
+    assert lines[0].isascii() and "\n" not in lines[0] and "\t" not in lines[0]
+    assert "not converted" in text and "no field" in text
+    prj = _prj_note([Phase(name="Ti", space_group=194)])
+    assert prj.isascii() and "\t" not in prj and "\n" not in prj
+    # short: the Prj field of a .ctf is long already
+    assert len(text) < 200
+
+
+def test_y_setting_line_only_for_the_seven_groups():
+    for n in range(1, 231):
+        lines = _frame_lines(_comments([Phase(name="Tr", space_group=n)]))
+        second = [ln for ln in lines if "along Y" in ln]
+        if n in Y_SETTING_POINT_GROUP:
+            assert len(lines) == 2 and second == [lines[1]], n
+            text = lines[1]
+            assert f"space group {n}," in text and f"point group {Y_SETTING_POINT_GROUP[n]}" in text
+            assert "TSL Symmetry code 32" in text and "# Symmetry" not in text and "Tr" in text
+            assert text.isascii() and "\n" not in text
+        else:
+            assert second == [], n
+    # 162: -31m, both kinds of operator along Y; 164 (the other setting) has no second line
+    lines = _frame_lines(_comments([Phase(name="Tr", space_group=162)]))
+    assert "space group 162" in lines[1] and "-31m" in lines[1] and "two-fold axes" in lines[1]
+    assert "mirror normals" in lines[1]
+    assert len(_frame_lines(_comments([Phase(name="Tr", space_group=164)]))) == 1
+    # 312 has two-fold axes only, 31m mirror normals only
+    assert "mirror" not in _frame_lines(_comments([Phase(name="T", space_group=149)]))[1]
+    assert "two-fold" not in _frame_lines(_comments([Phase(name="T", space_group=157)]))[1]
+
+
+def test_the_y_setting_is_stated_for_a_point_group_given_as_312_and_not_for_32_or_3m():
+    # a checkpoint without a space group records "312"; orix' own "32" and "-3m" are the X setting
+    lines = _frame_lines(_comments([Phase(name="T", point_group="312")]))
+    assert len(lines) == 2 and "point group 312" in lines[1] and "space group" not in lines[1]
+    for pg in ("32", "3m", "-3m"):
+        assert len(_frame_lines(_comments([Phase(name="T", point_group=pg)]))) == 1, pg
+
+
+def test_one_y_line_per_phase_that_needs_it():
+    phases = [Phase(name="A", space_group=162), Phase(name="Ti", space_group=194),
+              Phase(name="B", space_group=157), Phase(name="C", space_group=164)]
+    lines = _frame_lines(_comments(phases))
+    assert len(lines) == 3
+    assert "Phase A:" in lines[1] and "-31m" in lines[1]
+    assert "Phase B:" in lines[2] and "31m" in lines[2] and "-31m" not in lines[2]
+
+
+def test_a_phase_name_cannot_break_the_comment_line():
+    line = _frame_lines(_comments([Phase(name="T\tr\néx", space_group=162)]))[1]
+    assert line.isascii() and "\t" not in line and "\n" not in line
+
+
+def test_the_ctf_note_names_the_point_group_of_the_y_setting_but_not_the_space_group():
+    prj = _prj_note([Phase(name="Tr", space_group=162)])
+    assert "X||a" in prj and "Phase Tr" in prj and "-31m" in prj and "along Y" in prj
+    assert "162" not in prj                   # the space group is a field of the phase table
+    # 164 is the other setting: the frame statement only
+    assert "along Y" not in _prj_note([Phase(name="Tr", space_group=164)])
+    assert "\t" not in prj and "\n" not in prj and prj.isascii()
+
+
+def _phase_result(second):
+    """The result of ``_make_result`` with a hexagonal phase instead of Fe4Al13 (``second`` is a
+    ``Phase``), and the same stubs; the .sht lattice stub knows no file for it, so the lattice is
+    recorded."""
+    result = _make_result()
+    n = N_ROWS * N_COLS
+    from diffpy.structure import Lattice, Structure
+    second.structure = Structure(lattice=Lattice(4.0, 4.0, 5.0, 90, 90, 120))
+    al = Phase(name="Al", point_group="m-3m")
+    result.xmap = CrystalMap(
+        rotations=Rotation.from_euler(_euler_rad()), phase_id=np.where(np.arange(n) % 3 == 0, 2, 1),
+        x=np.tile(np.arange(N_COLS, dtype=float), N_ROWS),
+        y=np.repeat(np.arange(N_ROWS, dtype=float), N_COLS),
+        phase_list=PhaseList(phases=[al, second], ids=[1, 2]))
+    result.metadata["sht_paths_by_phase"] = {1: "/lib/Al/al.sht"}
+    result.metadata["recorded_lattices"] = {2: [4.0, 4.0, 5.0, 90.0, 90.0, 120.0]}
+    return result
+
+
+def test_the_route_ang_states_the_frame_and_the_y_setting(monkeypatch, tmp_path):
+    _activate(monkeypatch, _phase_result(Phase(name="Hx", space_group=162)))
+    out = tmp_path / "r.ang"
+    assert _export(TestClient(app), "ang", out).status_code == 200
+    lines = _frame_lines(_header(out))
+    assert len(lines) == 2 and "X||a" in lines[0]
+    assert "space group 162" in lines[1] and "-31m" in lines[1] and "Phase Hx" in lines[1]
+    # the Euler angles are the ones the result holds: no frame was applied
+    np.testing.assert_allclose(_data(out)[:, :3], _euler_rad(), atol=2e-5)
+
+
+def test_the_route_ang_of_a_cubic_only_result_has_no_frame_line(monkeypatch, tmp_path):
+    result = _make_result()
+    n = N_ROWS * N_COLS
+    result.xmap = CrystalMap(
+        rotations=Rotation.from_euler(_euler_rad()), phase_id=np.ones(n, dtype=int),
+        x=np.tile(np.arange(N_COLS, dtype=float), N_ROWS),
+        y=np.repeat(np.arange(N_ROWS, dtype=float), N_COLS),
+        phase_list=PhaseList(phases=[Phase(name="Al", point_group="m-3m")], ids=[1]))
+    _activate(monkeypatch, result)
+    out = tmp_path / "r.ang"
+    assert _export(TestClient(app), "ang", out).status_code == 200
+    assert not [ln for ln in _header(out) if "CRYSTAL_FRAME" in ln or "X||a" in ln]
+
+
+def test_the_route_ang_states_the_frame_exactly_when_the_file_holds_the_phase(monkeypatch, tmp_path):
+    """No point is the hexagonal phase: it is in the table of the result, and the file either holds
+    it (and states the frame) or has dropped it (and states nothing)."""
+    result = _phase_result(Phase(name="Hx", space_group=162))
+    old = result.xmap
+    result.xmap = CrystalMap(
+        rotations=old.rotations, phase_id=np.ones(N_ROWS * N_COLS, dtype=int), x=old.x, y=old.y,
+        phase_list=PhaseList(phases=[Phase(name="Al", point_group="m-3m"), old.phases[2]], ids=[1, 2]))
+    _activate(monkeypatch, result)
+    out = tmp_path / "r.ang"
+    assert _export(TestClient(app), "ang", out).status_code == 200
+    names = [ln.split()[-1] for ln in _header(out) if ln.startswith("# MaterialName")]
+    assert bool(_frame_lines(_header(out))) == ("Hx" in names)
+
+
+def test_the_route_ang_with_a_monoclinic_phase_states_the_frame_only(monkeypatch, tmp_path):
+    # the default result holds Fe4Al13 (2/m, no space group): the frame line, no Y line
+    _activate(monkeypatch, _make_result())
+    out = tmp_path / "r.ang"
+    assert _export(TestClient(app), "ang", out).status_code == 200
+    lines = _frame_lines(_header(out))
+    assert len(lines) == 1 and "X||a" in lines[0]
+
+
+# ---------------------------------------------------------------------------
+# orix reads every header line of a .ang for the phase table. The patterns are those of
+# `_get_phases_from_header` in orix 0.14.1 and 0.15.0 (orix/io/plugins/ang.py), searched in every line
+# that starts with "#" and applied with `re.search`, so a comment that holds one of them counts as a
+# phase line: "# Symmetry 32" in a comment made `orix.io.load` fail on every .ang of the seven groups.
+# The header is also searched for the footprints of the vendors (EMsoft, ACOM, and the orix line
+# "Column names: phi1, Phi, phi2", whose text after the first colon is split into the extra columns).
+# ---------------------------------------------------------------------------
+
+ORIX_HEADER_PATTERNS = [
+    r"# Phase([ \t]+)([0-9 ]+)",
+    r"# MaterialName([ \t]+)([A-z0-9 ]+)",
+    r"# Formula([ \t]+)([A-z0-9 ]+)",
+    r"# Symmetry([ \t]+)([A-z0-9 ]+)",
+    r"# LatticeConstants([ \t+])(.*)",
+]
+ORIX_COLUMNS_FOOTPRINT = "Column names: phi1, Phi, phi2"
+HOSTILE_NAME = ("T# Symmetry 32 # Phase 7 # MaterialName x # Formula y # LatticeConstants 1 2 3 "
+                "Column names: phi1, Phi, phi2 \u00e9\n\t")
+
+
+def test_no_crystal_frame_line_holds_what_orix_searches_a_header_for():
+    from backend.api.services import ang_export
+    for n in Y_SETTING_POINT_GROUP:
+        for with_space_group in (True, False):
+            phase = Phase(name=HOSTILE_NAME, space_group=n)
+            texts = ang_export.crystal_frame_texts([phase], space_group=with_space_group)
+            assert len(texts) == 2, n
+            for text in texts:
+                line = FRAME_KEY + text
+                for pattern in ORIX_HEADER_PATTERNS:
+                    assert re.search(pattern, line) is None, (n, pattern, line)
+                assert ORIX_COLUMNS_FOOTPRINT not in line and "#" not in text, line
+                assert line.isascii() and "\n" not in line and "\t" not in line
+    # the same through the header of a .ang and the Prj text of a .ctf
+    phases = [Phase(name=HOSTILE_NAME, space_group=n) for n in Y_SETTING_POINT_GROUP]
+    for line in _frame_lines(_comments(phases)) + [_prj_note(phases)]:
+        body = line.split(":", 1)[1] if line.startswith(FRAME_KEY) else line
+        assert "#" not in body, line
+        assert ORIX_COLUMNS_FOOTPRINT not in line
+
+
+@pytest.mark.parametrize("space_group", [162, 149])
+def test_orix_loads_the_route_ang_of_a_phase_with_the_y_setting(monkeypatch, tmp_path, space_group):
+    _activate(monkeypatch, _phase_result(Phase(name="Hx", space_group=space_group)))
+    out = tmp_path / "r.ang"
+    assert _export(TestClient(app), "ang", out).status_code == 200
+    assert len(_frame_lines(_header(out))) == 2                   # the statement and the Y line
+    xmap = orix_load(str(out))
+    assert xmap.size == N_ROWS * N_COLS
+    assert {p.name for _i, p in xmap.phases if _i >= 0} == {"Al", "Hx"}
+    np.testing.assert_allclose(xmap.rotations.to_euler(), _euler_rad(), atol=2e-5)

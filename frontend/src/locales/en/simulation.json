@@ -32,7 +32,7 @@
   "pipeline": {
     "label": "Pipeline:",
     "mcTooltip": "Monte Carlo (EMMCOpenCL) — always runs",
-    "masterTooltip": "Master Pattern (EMEBSDmaster/OpenCL)",
+    "masterTooltip": "Master Pattern (EMEBSDmaster, CPU)",
     "shtTooltip": "Spherical Harmonics (EMEBSDmasterSHT)",
     "gpuDetecting": "Detecting...",
     "gpuCpuOnly": "CPU only"
@@ -116,15 +116,12 @@
     "gpuDetected": "GPU detected",
     "vram": "{{gb}} GB VRAM",
     "platform": "Platform: OpenCL via PoCL-CUDA",
-    "blockSize": "Block size: {{size}}",
-    "lowVramWarning": "GPU has {{gb}} GB — using reduced block size for Master Pattern",
+    "masterOnCpuNote": "Monte Carlo runs on the GPU; the master pattern is computed on the CPU.",
     "cpuModeTitle": "CPU Mode (OpenMP)",
     "coresAvailable": "{{count}} cores available",
     "threadsLabel": "Threads:",
     "threadsTooltip": "Number of CPU threads for EMsoft programs",
-    "autoDetected": "auto-detected",
-    "cpuHelperThreadsLabel": "CPU helper threads:",
-    "helperThreadsNote": "(4N+3 format, auto-optimized for GPU pipeline)"
+    "autoDetected": "auto-detected"
   },
   "advanced": {
     "groupTitle": "Advanced Options",
@@ -178,8 +175,8 @@
     "errorPrefix": "Error: {{message}}",
     "scanningMissing": "Scanning XTAL Library for missing materials...",
     "allHaveResults": "All materials already have simulation results.",
-    "unreadableMasters_one": "Nothing is missing, but {{count}} phase has a master that cannot be used for Dictionary indexing (kikuchipy cannot load it): {{names}}. Simulate it again with the CPU master program.",
-    "unreadableMasters_other": "Nothing is missing, but {{count}} phases have a master that cannot be used for Dictionary indexing (kikuchipy cannot load it): {{names}}. Simulate them again with the CPU master program.",
+    "unreadableMasters_one": "Nothing is missing, but {{count}} phase has a master that cannot be used for Dictionary indexing (kikuchipy cannot load it): {{names}}. Delete the file, then simulate the phase again; the simulation now uses the CPU master program.",
+    "unreadableMasters_other": "Nothing is missing, but {{count}} phases have a master that cannot be used for Dictionary indexing (kikuchipy cannot load it): {{names}}. Delete those files, then simulate the phases again; the simulation now uses the CPU master program.",
     "errorScanningMissing": "Error scanning for missing materials.",
     "startingBatch": "Starting batch...",
     "batchStarted": "Batch started: {{count}} job(s) queued.",
@@ -214,7 +211,7 @@
     "viewMasterTooltipNotReady": "Available after a simulation is started"
   },
   "jobWarnings": {
-    "masterUnreadableByKikuchipy": "{{file}} cannot be used for Dictionary indexing: kikuchipy cannot load it (it was written by {{program}}), so the phase library does not offer it. Simulate it again with the CPU master program.",
+    "masterUnreadableByKikuchipy": "{{file}} cannot be used for Dictionary indexing: kikuchipy cannot load it (it was written by {{program}}), so the phase library does not offer it. Delete the file, then simulate the phase again; the simulation now uses the CPU master program.",
     "unknownProgram": "an unknown program",
     "unknown": "Warning {{code}}: {{file}}"
   },
@@ -278,7 +275,7 @@
     "select": "Select"
   },
   "missingDialog": {
-    "unreadableMaster": "{{stem}}: master unreadable (written by {{program}}) — {{file}} cannot be used for Dictionary indexing. Not listed above because simulating it again with the same program would write the same file; use the CPU master program.",
+    "unreadableMaster": "{{stem}}: master unreadable (written by {{program}}) — {{file}} cannot be used for Dictionary indexing. Not listed above because the file is already in the library and a new run does not replace an existing file. Delete it, then simulate the phase again (the CPU master program is used).",
     "titlePhases": "Simulate All Missing — {{count}} phase(s)",
     "pipelineOurs": "✨ Orienta Engine",
     "pipelineEmsoft": "⚙ EMsoft pipeline",
@@ -319,8 +316,8 @@
     "testConnection": "Check whether the configured Database root is reachable",
     "saveServerConfig": "Save the server-mode settings",
     "crystalFileInput": "Path to the input .xtal crystal-structure file to simulate",
-    "computeModeAuto": "Use GPU (OpenCL) if available, else fall back to CPU (OpenMP)",
-    "computeModeGpu": "Force GPU computation via OpenCL only",
+    "computeModeAuto": "Run Monte Carlo on the GPU (OpenCL) if available, else on the CPU (OpenMP); the master pattern always runs on the CPU",
+    "computeModeGpu": "Force Monte Carlo on the GPU via OpenCL; the master pattern still runs on the CPU",
     "computeModeCpu": "Force CPU computation via OpenMP only",
     "checkSystem": "Probe EMsoft install, GPU, and OpenCL devices on this machine",
     "stopJob": "Stop this running or queued simulation job",

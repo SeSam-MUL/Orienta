@@ -5,6 +5,7 @@ Each phase result is appended incrementally for crash recovery.
 """
 import json
 import logging
+import math
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,7 +15,105 @@ from typing import Dict, List, Optional
 import h5py
 import numpy as np
 
+from backend.api.services.scan_geometry import (
+    ScanGeometry, geometry_from_attrs, geometry_to_attrs,
+)
+
 logger = logging.getLogger(__name__)
+
+
+def read_checkpoint_geometry(path) -> Optional[ScanGeometry]:
+    """The grid a checkpoint was written for, or ``None`` for a checkpoint without ``grid_type``.
+
+    A checkpoint without it predates hexagonal batches, so it is a square scan. A stamped one is
+    never defaulted: a ``HexGrid`` that lacks an attribute, an unknown ``grid_type`` or a stamp that
+    disagrees with ``/metadata/grid_shape`` raises ``ValueError``."""
+    with h5py.File(str(path), "r") as f:
+        if "metadata" not in f:
+            raise ValueError(f"{path} has no /metadata group")
+        attrs = f["metadata"].attrs
+        if "grid_type" not in attrs:
+            return None
+        if "grid_shape" not in attrs:
+            raise ValueError(f"{path} has a grid_type but no grid_shape")
+        return geometry_from_attrs(attrs, tuple(int(v) for v in attrs["grid_shape"]))
+
+
+def checkpoint_topology(path, shape=None):
+    """What a neighbour is on the scan a checkpoint was written for: the hexagonal ``Topology`` of its stamp,
+    or ``None`` for a square scan and for a checkpoint without ``grid_type`` (4-connectivity, as always).
+
+    The stamp is read from the file, never taken from whatever result is active. ``ValueError`` for a stamp
+    that cannot be read or does not describe ``shape`` (see :func:`read_checkpoint_geometry` and
+    ``scan_neighbours.topology_of_stamp``)."""
+    from backend.api.services.scan_neighbours import topology_of_stamp
+    return topology_of_stamp(read_checkpoint_geometry(path), shape)
+
+
+class CheckpointPairingChanged(ValueError):
+    """A checkpoint on disk was written for another grid or another APEX measurement than the run that
+    would resume it. ``code`` is what the batch stores on the file's jobs and the interface translates."""
+
+    code = "checkpointPairingChanged"
+
+
+def _apex_fields(apex: Optional[dict]) -> Dict[str, str]:
+    """The three texts a checkpoint stores about the APEX measurement its file was paired with (empty: none)."""
+    apex = apex or {}
+    h5_path = str(apex.get("h5_path") or "")
+    return {
+        # the file's name only: the folder belongs to the machine that ran the batch
+        "apex_h5_name": Path(h5_path).name if h5_path else "",
+        "apex_measurement_id": str(apex.get("measurement_id") or ""),
+        "apex_measurement_name": str(apex.get("measurement_name") or ""),
+    }
+
+
+def _stored_measurement_id(path) -> Optional[str]:
+    """The measurement id a checkpoint was written for (``""``: none), or ``None`` for a checkpoint that
+    predates the record and so cannot say."""
+    with h5py.File(str(path), "r") as f:
+        attrs = f["metadata"].attrs if "metadata" in f else {}
+        if "apex_measurement_id" not in attrs:
+            return None
+        value = attrs["apex_measurement_id"]
+        return value.decode() if isinstance(value, bytes) else str(value)
+
+
+def read_checkpoint_pairing(path) -> Optional[Dict[str, str]]:
+    """The APEX measurement a checkpoint was written for: ``{"h5_name", "measurement_id",
+    "measurement_name"}``, or ``None`` for a checkpoint of a file that had none (and for one that
+    predates the record). The file's name only: the folder belongs to the machine that ran the batch."""
+    with h5py.File(str(path), "r") as f:
+        attrs = f["metadata"].attrs if "metadata" in f else {}
+
+        def text(key: str) -> str:
+            value = attrs.get(key, "")
+            return value.decode() if isinstance(value, bytes) else str(value)
+
+        pairing = {"h5_name": text("apex_h5_name"), "measurement_id": text("apex_measurement_id"),
+                   "measurement_name": text("apex_measurement_name")}
+    return pairing if pairing["measurement_id"] else None
+
+
+def _same_geometry(stored: Optional[ScanGeometry], incoming: ScanGeometry) -> bool:
+    """Whether a run with ``incoming`` may resume a checkpoint that holds ``stored``
+    (``None`` = a legacy checkpoint, which is square)."""
+    if stored is None:
+        return incoming.kind == "square"
+    return (stored.kind == incoming.kind
+            and stored.grid_shape == incoming.grid_shape
+            and stored.odd_row_shift == incoming.odd_row_shift
+            and stored.shift_confirmed == incoming.shift_confirmed
+            and math.isclose(stored.step_x, incoming.step_x, rel_tol=1e-9)
+            and math.isclose(stored.step_y, incoming.step_y, rel_tol=1e-9))
+
+
+def _describe(g: Optional[ScanGeometry]) -> str:
+    if g is None:
+        return "square (legacy, no grid_type)"
+    return (f"{g.kind} {g.n_rows}x{g.n_cols}, step {g.step_x:g}/{g.step_y:g} um, "
+            f"odd-row shift {g.odd_row_shift:+g}, confirmed={g.shift_confirmed}")
 
 
 @dataclass
@@ -55,9 +154,55 @@ class CheckpointWriter:
         return os.path.isfile(self.checkpoint_path)
 
     def init_metadata(self, grid_shape: tuple, batch_id: str, method: str,
-                      step_size_um: float = 0.0):
-        """Initialize the checkpoint file with metadata. Idempotent."""
+                      step_size_um: float = 0.0, geometry: Optional[ScanGeometry] = None,
+                      apex: Optional[dict] = None):
+        """Initialize the checkpoint file with metadata. Idempotent.
+
+        ``geometry`` is the grid of the scan. It is stamped on ``/metadata`` (``grid_type``,
+        ``odd_row_shift``, ``shift_confirmed``, ``step_x``, ``step_y``) and read back by
+        :func:`read_checkpoint_geometry`; without it the checkpoint reads as a square scan.
+        ``step_size_um`` stays equal to ``step_x``. ``apex`` is the APEX measurement the file was
+        paired with (``Signal.apex``: ``h5_path``, ``measurement_id``, ``measurement_name``), or
+        ``None`` for a file without one; it is stored as ``apex_h5_name``, ``apex_measurement_id``
+        and ``apex_measurement_name`` (empty texts when there is none).
+
+        Raises ``ValueError`` when the geometry does not fit ``grid_shape`` or ``step_size_um``,
+        and :class:`CheckpointPairingChanged` (a ``ValueError``) when an existing checkpoint was
+        written for another geometry or another measurement. Without a ``geometry`` the kind is
+        still compared: a hexagonal checkpoint is refused. A checkpoint that predates the
+        measurement record is not refused for it."""
+        if geometry is not None:
+            if tuple(int(v) for v in grid_shape) != geometry.grid_shape:
+                raise ValueError(
+                    f"geometry is {geometry.grid_shape}, the grid_shape given is {tuple(grid_shape)}")
+            if step_size_um == 0.0:
+                step_size_um = geometry.step_x
+            elif not math.isclose(float(step_size_um), geometry.step_x, rel_tol=1e-9):
+                raise ValueError(
+                    f"step_size_um {step_size_um} is not the geometry's step_x {geometry.step_x}")
         if self.checkpoint_path_exists():
+            if geometry is not None:
+                stored = read_checkpoint_geometry(self.checkpoint_path)
+                if not _same_geometry(stored, geometry):
+                    raise CheckpointPairingChanged(
+                        f"the checkpoint holds geometry {_describe(stored)}, this run has "
+                        f"{_describe(geometry)}: delete the checkpoint or use the original scan")
+            else:
+                # No geometry stamped by this run: the file is not a hexagonal scan (a square one whose step
+                # came from elsewhere). Its kind is still compared, or a hexagonal checkpoint of the same name
+                # and grid would resume silently and be cleaned as a square run.
+                stored = read_checkpoint_geometry(self.checkpoint_path)
+                if stored is not None and stored.is_hex:
+                    raise CheckpointPairingChanged(
+                        f"the checkpoint holds geometry {_describe(stored)}, this run has a scan that is not "
+                        "hexagonal: delete the checkpoint or use the original scan")
+            fields = _apex_fields(apex)
+            stored_id = _stored_measurement_id(self.checkpoint_path)
+            if stored_id is not None and stored_id != fields["apex_measurement_id"]:
+                raise CheckpointPairingChanged(
+                    f"the checkpoint was written for APEX measurement {stored_id or '(none)'}, this run has "
+                    f"{fields['apex_measurement_id'] or '(none)'}: delete the checkpoint or use the original "
+                    "metadata file")
             # Already initialized — just update last_modified
             with h5py.File(self.checkpoint_path, "a") as f:
                 if "metadata" in f:
@@ -73,6 +218,11 @@ class CheckpointWriter:
             meta.attrs["last_modified"] = datetime.now(timezone.utc).isoformat()
             meta.attrs["grid_shape"] = list(grid_shape)
             meta.attrs["step_size_um"] = step_size_um
+            if geometry is not None:
+                for key, value in geometry_to_attrs(geometry).items():
+                    meta.attrs[key] = value
+            for key, value in _apex_fields(apex).items():
+                meta.attrs[key] = value
             meta.attrs["method"] = method
             meta.attrs["version"] = 1
             f.create_group("phases")
@@ -176,6 +326,18 @@ class CheckpointWriter:
                 grp.attrs["lattice_constants"] = np.asarray(lattice, dtype=float)
             if "indexing_params" in metadata:
                 grp.attrs["indexing_params"] = json.dumps(metadata["indexing_params"])
+            # What the run recorded about itself: the citation steps and, for Hough,
+            # which reflector list each phase was indexed with. The exports read them
+            # back from here (``read_run_record``), so a phase resumed from an earlier
+            # run keeps its record and nothing is computed again at export time.
+            if metadata.get("citation_steps"):
+                grp.attrs["citation_steps"] = json.dumps(metadata["citation_steps"])
+            if metadata.get("hough_reflectors"):
+                grp.attrs["hough_reflectors"] = json.dumps(
+                    metadata["hough_reflectors"], ensure_ascii=False)
+            # The notes the result carries about itself (``hough_caveats``).
+            if metadata.get("caveats"):
+                grp.attrs["caveats"] = json.dumps(metadata["caveats"], ensure_ascii=False)
 
             # Update metadata
             f["metadata"].attrs["last_modified"] = datetime.now(timezone.utc).isoformat()
@@ -195,6 +357,7 @@ class CheckpointWriter:
         min_cluster_size: int = 0,
         fill_unindexed: bool = False,
         modal_filter_size: int = 0,
+        topology=None,
     ) -> np.ndarray:
         """Apply MTEX-style post-processing filters to a phase assignment map.
 
@@ -226,6 +389,10 @@ class CheckpointWriter:
             common phase ID in its neighbourhood — the standard salt-and-pepper
             removal for EBSD phase maps. Only votes from indexed neighbours
             count; pixels with no indexed neighbour are left at -1.
+        topology : scan_neighbours.Topology, optional
+            What a neighbour is. ``None`` is the square index grid with
+            4-connectivity and a square window, exactly as before; a hexagonal
+            scan passes its own (see ``scan_filters``).
         """
         from scipy import ndimage as ndi
 
@@ -245,6 +412,17 @@ class CheckpointWriter:
                 if pid < 0:
                     continue
                 mask = out == pid
+                if topology is not None:
+                    from backend.api.services.scan_filters import cluster_sizes, nearest_valid
+                    small_mask = mask & (cluster_sizes(mask, topology) < min_cluster_size)
+                    if not small_mask.any():
+                        continue
+                    valid = ~small_mask
+                    if valid.any():
+                        out[small_mask] = out.ravel()[nearest_valid(valid, topology, small_mask)]
+                    else:
+                        out[small_mask] = -1
+                    continue
                 labeled, n_labels = ndi.label(mask)
                 if n_labels == 0:
                     continue
@@ -266,7 +444,10 @@ class CheckpointWriter:
                     out[small_mask] = -1
 
         # 4. Modal (majority-vote) filter — MTEX-style salt-and-pepper removal
-        if modal_filter_size and modal_filter_size >= 3:
+        if modal_filter_size and modal_filter_size >= 3 and topology is not None:
+            from backend.api.services.scan_filters import modal_vote
+            out = modal_vote(out, topology, int(modal_filter_size))
+        elif modal_filter_size and modal_filter_size >= 3:
             size = int(modal_filter_size)
             # Build a per-phase vote stack: one binary map per phase, then
             # convolve each with a uniform kernel to count neighbours of that
@@ -290,10 +471,14 @@ class CheckpointWriter:
         # 5. Fill remaining unindexed pixels from nearest indexed neighbour
         if fill_unindexed and (out == -1).any() and (out >= 0).any():
             valid = out >= 0
-            idx_valid = ndi.distance_transform_edt(
-                ~valid, return_distances=False, return_indices=True
-            )
-            out[~valid] = out[tuple(idx_valid[:, ~valid])]
+            if topology is not None:
+                from backend.api.services.scan_filters import nearest_valid
+                out[~valid] = out.ravel()[nearest_valid(valid, topology, ~valid)]
+            else:
+                idx_valid = ndi.distance_transform_edt(
+                    ~valid, return_distances=False, return_indices=True
+                )
+                out[~valid] = out[tuple(idx_valid[:, ~valid])]
 
         return out
 
@@ -310,14 +495,23 @@ class CheckpointWriter:
         so cleanup can be re-applied with different thresholds without
         cascading information loss.
 
+        What a neighbour is comes from the checkpoint itself: the stamp it was written with
+        (:func:`checkpoint_topology`). A hexagonal scan is cleaned on its six neighbours, a square
+        one (or a checkpoint without a stamp) on four. A stamp that cannot be read raises
+        ``ValueError`` before anything is written.
+
         Returns counts: {before, after_unindexed, moved}
         """
         if not self.checkpoint_path_exists():
             return {"before": 0, "after_unindexed": 0, "moved": 0}
+        with h5py.File(self.checkpoint_path, "r") as f:
+            has_assignment = "auto_assignment" in f
+            grid = tuple(f["auto_assignment/best_phase_id"].shape) if has_assignment else None
+        if not has_assignment:
+            return {"before": 0, "after_unindexed": 0, "moved": 0}
+        topology = checkpoint_topology(self.checkpoint_path, grid)
         with h5py.File(self.checkpoint_path, "a") as f:
-            aa = f.get("auto_assignment")
-            if aa is None:
-                return {"before": 0, "after_unindexed": 0, "moved": 0}
+            aa = f["auto_assignment"]
             best_phase_id = np.array(aa["best_phase_id"])
             best_ci       = np.array(aa["best_ci"])
             uncertainty   = np.array(aa["uncertainty"])
@@ -326,6 +520,7 @@ class CheckpointWriter:
                 ci_threshold=ci_threshold,
                 uncertainty_threshold=uncertainty_threshold,
                 min_cluster_size=min_cluster_size,
+                topology=topology,
             )
             if "cleaned_phase_id" in aa:
                 del aa["cleaned_phase_id"]
@@ -415,6 +610,58 @@ class CheckpointWriter:
                 if phases_grp[name].attrs.get("status") == "done":
                     result[name] = np.array(phases_grp[name]["ci"])
         return result
+
+    def read_run_record(self) -> Dict:
+        """The citation steps and the Hough reflector record of the finished phases.
+
+        ``{"citation_steps": [...] or None, "hough_reflectors": {...} or None}``,
+        merged over the phases the way a multi-phase result merges its sub-results
+        (``merge_provenance`` / ``merge_build_records``): identical steps once, one
+        reflector entry per phase name. A phase written before this existed, or a
+        record that is not valid JSON, contributes nothing.
+        """
+        from types import SimpleNamespace
+        from backend.api.services.citations.provenance import (
+            get_steps, merge_provenance,
+        )
+        from hough_reflectors import merge_build_records
+
+        parts = []
+        if self.checkpoint_path_exists():
+            with h5py.File(self.checkpoint_path, "r") as f:
+                phases_grp = f.get("phases")
+                for name in (phases_grp if phases_grp is not None else []):
+                    attrs = phases_grp[name].attrs
+                    if attrs.get("status", "") != "done":
+                        continue
+                    md = {}
+                    for key, kind in (("citation_steps", list), ("hough_reflectors", dict),
+                                      ("caveats", list)):
+                        if key not in attrs:
+                            continue
+                        try:
+                            value = json.loads(attrs[key])
+                        except (TypeError, ValueError):
+                            logger.warning("%s of phase %s in %s is not valid JSON - ignored.",
+                                           key, name, self.checkpoint_path)
+                            continue
+                        if isinstance(value, kind):
+                            md[key] = value
+                    parts.append(md)
+        merged = SimpleNamespace(metadata={})
+        merge_provenance(merged, (SimpleNamespace(
+            metadata={"provenance": {"steps": md.get("citation_steps", [])}}) for md in parts))
+        merge_build_records(merged, (SimpleNamespace(
+            metadata={"hough_reflectors": md.get("hough_reflectors"),
+                      "caveats": md.get("caveats")}) for md in parts))
+        record = {
+            "citation_steps": get_steps(merged) or None,
+            "hough_reflectors": merged.metadata.get("hough_reflectors") or None,
+        }
+        # only when a phase has some: a record without notes stays what it was
+        if merged.metadata.get("caveats"):
+            record["caveats"] = merged.metadata["caveats"]
+        return record
 
     def write_preprocessing_meta(self, requested: Dict, applied: Dict) -> None:
         """Record which preprocessing steps were requested vs. actually applied.

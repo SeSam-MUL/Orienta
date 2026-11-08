@@ -1,0 +1,23 @@
+{
+  "codes": [
+    "apexBadId",
+    "apexBadPath",
+    "apexFileNotFound",
+    "apexFileUnreadable",
+    "apexFolderUnreadable",
+    "apexGridMismatch",
+    "apexGuidMismatch",
+    "apexInvalidGrid",
+    "apexMeasurementNotFound",
+    "apexNeedsMeasurement",
+    "apexNoMeasurement",
+    "apexNoPatternFile",
+    "apexNoPreview",
+    "apexPairingLost",
+    "apexPatternCountMismatch",
+    "apexPatternFileUnreadable",
+    "apexUnexpectedLattice",
+    "apexUnknownGrid",
+    "apexUnreadable"
+  ]
+}

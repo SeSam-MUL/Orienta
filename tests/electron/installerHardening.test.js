@@ -24,7 +24,7 @@ const endpointsModule = await import(
 
 const {
   pipIndexArgs, measureFree, chooseRecommendation, verifyCudaFromOutput,
-  classify, CODES, tarExe, GPU_BYTES_NEEDED, CPU_BYTES_NEEDED, redirectVerdict,
+  classify, classifyOn, CODES, tarExe, GPU_BYTES_NEEDED, CPU_BYTES_NEEDED, redirectVerdict,
   localPackage, compareTagsDesc,
 } = installer;
 
@@ -157,9 +157,39 @@ describe('classifying a failure', () => {
       .toBe(CODES.timeout);
   });
 
+  const errno = (code) => Object.assign(new Error(`${code}: nope`), { code });
+
+  it('calls a locked file "in use", not something unexpected', () => {
+    // An orphaned backend python.exe, or Orienta itself, holding a file.
+    expect(classifyOn(errno('EBUSY'), undefined, 'win32')).toBe(CODES.inUse);
+    expect(classifyOn(errno('EBUSY'), undefined, 'linux')).toBe(CODES.inUse);
+    expect(classifyOn(errno('EPERM'), undefined, 'win32')).toBe(CODES.inUse);
+    expect(classifyOn(new Error('something else entirely'), undefined, 'win32')).toBe(CODES.unexpected);
+  });
+
+  it('classify() asks about the platform it runs on', () => {
+    // On a Windows host the two forms agree for any 'win32' stand-in, so the
+    // behaviour is checked on the host (it bites on macOS and Linux runners) and
+    // the source is pinned for the Windows one.
+    for (const code of ['EBUSY', 'EPERM', 'EACCES']) {
+      expect(classify(errno(code), 'python')).toBe(classifyOn(errno(code), 'python', process.platform));
+    }
+    expect(SOURCE).toMatch(/return classifyOn\(err, step, process\.platform\);/);
+  });
+
+  it('calls a refused write "no access" off Windows, where EPERM is not a locked file', () => {
+    // The in-use sentence is about Task Manager and python.exe; sending a Mac
+    // user whose Files and Folders permission is off there is no help.
+    expect(classifyOn(errno('EPERM'), undefined, 'darwin')).toBe(CODES.noAccess);
+    expect(classifyOn(errno('EPERM'), undefined, 'linux')).toBe(CODES.noAccess);
+    for (const platformName of ['win32', 'darwin', 'linux']) {
+      expect(classifyOn(errno('EACCES'), undefined, platformName), platformName).toBe(CODES.noAccess);
+    }
+  });
+
   it('has a distinct code for each thing the wizard must say differently', () => {
     for (const key of ['blocked', 'network', 'notFound', 'rateLimited', 'checksum',
-      'timeout', 'inUse', 'package', 'pip', 'cuda', 'interrupted', 'unexpected']) {
+      'timeout', 'inUse', 'noAccess', 'package', 'pip', 'cuda', 'interrupted', 'unexpected']) {
       expect(typeof CODES[key], key).toBe('string');
     }
     const values = Object.values(CODES);
@@ -675,13 +705,21 @@ describe('the data folder', () => {
     expect(body).toMatch(/path\.isAbsolute\(recorded\)/);
   });
 
-  it('puts Orienta in its own subfolder of whatever was picked', () => {
+  it('puts Orienta in its own subfolder of whatever was picked — once', () => {
     // Someone who chooses D:\ must not get python/, runtime/ and logs/ across
     // the root of their drive — and an uninstall has to know what is ours.
+    // This used to pin the line that appended 'Orienta' to every pick, which
+    // is the line that nested the folder a level deeper per click (0.4.6).
+    // The behaviour is run in homeChoice.test.js; here, that the shell routes
+    // the pick through it.
+    const choice = createRequire(import.meta.url)('../../electron/home_choice.js');
+    expect(choice.homeFromPick(path.join(os.tmpdir(), 'D'))).toBe(path.join(os.tmpdir(), 'D', 'Orienta'));
+    expect(choice.homeFromPick(path.join(os.tmpdir(), 'D', 'Orienta')))
+      .toBe(path.join(os.tmpdir(), 'D', 'Orienta'));
     const main = fs.readFileSync(
       path.resolve(import.meta.dirname, '..', '..', 'electron', 'main.js'), 'utf8');
     const body = main.slice(main.indexOf("handleSetup('setup:pickHome'"));
-    expect(body.slice(0, 900)).toMatch(/path\.join\(answer\.filePaths\[0\], 'Orienta'\)/);
+    expect(body.slice(0, 1600)).toMatch(/homeChoice\.decidePick\(answer\.filePaths\[0\]/);
   });
 });
 
@@ -734,7 +772,60 @@ describe('a data folder that already holds other files', () => {
     fs.mkdirSync(path.join(dir, 'logs'));
     fs.writeFileSync(path.join(dir, 'thesis.docx'), 'x');
     fs.mkdirSync(path.join(dir, 'measurements'));
+    fs.writeFileSync(path.join(dir, 'measurements', 'scan1.h5oina'), 'x');
     expect(installer.foreignEntries(dir).sort()).toEqual(['measurements', 'thesis.docx']);
+  });
+
+  it('does not count a folder with no file anywhere inside it', () => {
+    // The leftover of a data folder picked repeatedly (0.4.6): Orienta/Orienta,
+    // no file in it. A reinstall used to refuse because of it.
+    fs.mkdirSync(path.join(dir, 'Orienta', 'Orienta', 'Orienta'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'empty'));
+    expect(installer.foreignEntries(dir)).toEqual([]);
+  });
+
+  it.each(['.DS_Store', 'Thumbs.db', 'desktop.ini', 'THUMBS.DB'])(
+    'does not count %s: a file the operating system wrote does not make an empty leftover foreign', (name) => {
+      fs.mkdirSync(path.join(dir, 'Orienta', 'Orienta'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'Orienta', name), 'x');
+      fs.writeFileSync(path.join(dir, 'Orienta', 'Orienta', name), 'x');
+      fs.writeFileSync(path.join(dir, name), 'x');
+      expect(installer.foreignEntries(dir)).toEqual([]);
+    });
+
+  it('but a real file beside that litter, or a FOLDER named like it, still counts', () => {
+    fs.mkdirSync(path.join(dir, 'Orienta'));
+    fs.writeFileSync(path.join(dir, 'Orienta', '.DS_Store'), 'x');
+    fs.writeFileSync(path.join(dir, 'Orienta', 'results.ang'), 'x');
+    expect(installer.foreignEntries(dir)).toEqual(['Orienta']);
+    fs.rmSync(path.join(dir, 'Orienta'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'Thumbs.db'));                       // a folder, holding a file
+    fs.writeFileSync(path.join(dir, 'Thumbs.db', 'x.txt'), 'x');
+    expect(installer.foreignEntries(dir)).toEqual(['Thumbs.db']);
+  });
+
+  it('counts the chain as soon as one file is in it, however deep', () => {
+    fs.mkdirSync(path.join(dir, 'Orienta', 'Orienta', 'Orienta'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Orienta', 'Orienta', 'Orienta', 'results.ang'), 'x');
+    expect(installer.foreignEntries(dir)).toEqual(['Orienta']);
+  });
+
+  it('never calls a link empty: what is behind it is not ours to judge', () => {
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'orienta-link-target-'));
+    try {
+      try {
+        fs.symlinkSync(target, path.join(dir, 'Orienta'), 'junction');
+      } catch { return; }   // cannot create a link here: nothing to assert
+      expect(installer.foreignEntries(dir)).toEqual(['Orienta']);
+    } finally {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('gives up after a bounded look, and says "not empty"', () => {
+    for (let i = 0; i < 12; i++) fs.mkdirSync(path.join(dir, 'many', `d${i}`), { recursive: true });
+    expect(installer.isEmptyDirTree(path.join(dir, 'many'), { left: 5 })).toBe(false);
+    expect(installer.isEmptyDirTree(path.join(dir, 'many'))).toBe(true);
   });
 
   it('stops the setup before the marker is written — run, not read', async () => {
@@ -751,6 +842,42 @@ describe('a data folder that already holds other files', () => {
     expect(fs.existsSync(path.join(dir, 'thesis.docx'))).toBe(true);
   });
 
+  it('names the folder and the entries as values for the sentence the user reads', async () => {
+    fs.writeFileSync(path.join(dir, 'thesis.docx'), 'x');
+    fs.mkdirSync(path.join(dir, 'Orienta'));            // empty: not named
+    fs.mkdirSync(path.join(dir, 'measurements'));
+    fs.writeFileSync(path.join(dir, 'measurements', 'a.h5'), 'x');
+    const result = await installer.runSetup(
+      { mode: 'cpu', home: dir, releaseTag: 'v0.0.0-test' }, () => {});
+    expect(result.code).toBe(CODES.homeNotEmpty);        // a folder somebody chose
+    expect(result.values.dir).toBe(dir);
+    expect(result.values.entries.split(', ').sort()).toEqual(['measurements', 'thesis.docx']);
+  });
+
+  it('says "default folder" when the folder is the one nobody chose', async () => {
+    // On macOS the default is keyed on the real home directory, which a test
+    // must not write into.
+    if (process.platform === 'darwin') return;
+    const saved = process.env.LOCALAPPDATA;
+    const savedXdg = process.env.XDG_DATA_HOME;
+    // defaultDataFolder() reads these at call time; one of them is the answer
+    // on each platform, so all three are pointed into the sandbox.
+    process.env.LOCALAPPDATA = dir;
+    process.env.XDG_DATA_HOME = dir;
+    try {
+      const home = createRequire(import.meta.url)('../../electron/platform.js').defaultDataFolder(process.platform);
+      fs.mkdirSync(home, { recursive: true });
+      fs.writeFileSync(path.join(home, 'thesis.docx'), 'x');
+      const result = await installer.runSetup(
+        { mode: 'cpu', home, releaseTag: 'v0.0.0-test' }, () => {});
+      expect(result.code).toBe(CODES.homeNotEmptyDefault);
+      expect(result.values).toEqual({ dir: home, entries: 'thesis.docx' });
+    } finally {
+      if (saved === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = saved;
+      if (savedXdg === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = savedXdg;
+    }
+  });
+
   it('goes ahead in a folder that only holds what the shell wrote at startup', async () => {
     fs.mkdirSync(path.join(dir, 'electron'));
     fs.mkdirSync(path.join(dir, 'logs'));
@@ -759,5 +886,132 @@ describe('a data folder that already holds other files', () => {
     // It fails later, for want of a network in this process — but not here.
     expect(result.code).not.toBe(CODES.homeNotEmpty);
     expect(fs.existsSync(path.join(dir, '.orienta-home'))).toBe(true);
+  });
+});
+
+describe('a refusal that must not advise destroying a library', () => {
+  let dir;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orienta-holds-')); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  it('knows an earlier installation or a library when it sees one, however deep', () => {
+    fs.mkdirSync(path.join(dir, 'Orienta', 'Orienta', 'runtime'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Orienta', 'Orienta', 'runtime', 'VERSION'), 'v0.4.6');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+  });
+
+  it.each([5, 6, 8, 16])('follows a chain of %i Orienta folders to the installation at its end', (levels) => {
+    // One level per click on "change..."; the installation sits at the END.
+    // A fixed look-ahead of four was one click too short for anybody who
+    // clicked five times -- and then said "remove the files".
+    const end = path.join(dir, ...Array(levels).fill('Orienta'));
+    fs.mkdirSync(path.join(end, 'runtime', 'Database', 'CIF_Library'), { recursive: true });
+    fs.writeFileSync(path.join(end, 'runtime', 'Database', 'CIF_Library', 'mine.cif'), 'irreplaceable');
+    fs.writeFileSync(path.join(end, '.orienta-home'), 'x');
+    const refusal = installer.homeRefusal(dir);
+    expect(refusal.code).toBe(CODES.homeHoldsData);
+    expect(refusal.values.entries).toBe('Orienta');
+  });
+
+  it('never advises removal past the limit of a chain either: 17 levels still "may hold data"', () => {
+    const end = path.join(dir, ...Array(17).fill('Orienta'));
+    fs.mkdirSync(path.join(end, 'runtime', 'Database'), { recursive: true });
+    fs.writeFileSync(path.join(end, 'runtime', 'Database', 'mine.cif'), 'x');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+  });
+
+  it('says the same for the DEFAULT folder, which is where the reporter stood', () => {
+    if (process.platform === 'darwin') return;   // keyed on the real home directory there
+    const saved = { l: process.env.LOCALAPPDATA, x: process.env.XDG_DATA_HOME };
+    process.env.LOCALAPPDATA = dir;
+    process.env.XDG_DATA_HOME = dir;
+    try {
+      const home = createRequire(import.meta.url)('../../electron/platform.js')
+        .defaultDataFolder(process.platform);
+      const end = path.join(home, ...Array(6).fill('Orienta'));
+      fs.mkdirSync(path.join(end, 'runtime', 'Database'), { recursive: true });
+      fs.writeFileSync(path.join(end, 'runtime', 'Database', 'mine.cif'), 'x');
+      expect(installer.homeRefusal(home).code).toBe(CODES.homeHoldsData);
+    } finally {
+      if (saved.l === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = saved.l;
+      if (saved.x === undefined) delete process.env.XDG_DATA_HOME; else process.env.XDG_DATA_HOME = saved.x;
+    }
+  });
+
+  it('looks four ordinary levels into a folder and gives a plain refusal for plain files there', () => {
+    fs.mkdirSync(path.join(dir, 'a', 'b', 'c', 'd'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a', 'b', 'c', 'd', 'x.txt'), 'x');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeNotEmpty);
+  });
+
+  it('past that, a non-empty folder is assumed to hold data: Database under five ordinary levels', () => {
+    // The sentence for a "no" says to remove the files; a Database that was
+    // merely out of range must not be answered with that.
+    fs.mkdirSync(path.join(dir, 'a', 'b', 'c', 'd', 'e', 'Database'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a', 'b', 'c', 'd', 'e', 'Database', 'x.cif'), 'x');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+  });
+
+  it('and so is any non-empty folder at the limit, whatever is in it', () => {
+    fs.mkdirSync(path.join(dir, 'a', 'b', 'c', 'd', 'e'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a', 'b', 'c', 'd', 'e', 'x.txt'), 'x');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+  });
+
+  it('an empty folder at the limit is nothing', () => {
+    fs.mkdirSync(path.join(dir, 'a', 'b', 'c', 'd', 'e'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'a', 'x.txt'), 'x');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeNotEmpty);
+  });
+
+  it('a folder too big to judge counts as data, not as nothing', () => {
+    fs.mkdirSync(path.join(dir, 'a'));
+    for (let i = 0; i < 450; i++) fs.writeFileSync(path.join(dir, 'a', `f${i}.txt`), 'x');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+  });
+
+  it('a link of any name is assumed to lead to somebody\'s data, and is not followed', () => {
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'orienta-holds-target-'));
+    try {
+      fs.writeFileSync(path.join(target, 'x.txt'), 'x');
+      try {
+        fs.symlinkSync(target, path.join(dir, 'shortcut'), 'junction');
+      } catch { return; }    // cannot create a link here: nothing to assert
+      expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+      fs.rmSync(path.join(dir, 'shortcut'), { force: true });
+      fs.mkdirSync(path.join(dir, 'a', 'b'), { recursive: true });
+      fs.symlinkSync(target, path.join(dir, 'a', 'b', 'inner'), 'junction');
+      expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+    } finally {
+      fs.rmSync(target, { recursive: true, force: true });
+    }
+  });
+
+  it('knows a Database folder at any depth up to four, and one at the top', () => {
+    fs.mkdirSync(path.join(dir, 'backup', 'old', 'Database'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'backup', 'old', 'Database', 'mine.cif'), 'x');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+    fs.rmSync(path.join(dir, 'backup'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'Database'));
+    fs.writeFileSync(path.join(dir, 'Database', 'mine.cif'), 'x');
+    expect(installer.homeRefusal(dir).code).toBe(CODES.homeHoldsData);
+  });
+
+  it('keeps the plain refusal for plain files', () => {
+    fs.writeFileSync(path.join(dir, 'thesis.docx'), 'x');
+    const refusal = installer.homeRefusal(dir);
+    expect(refusal.code).toBe(CODES.homeNotEmpty);
+    expect(refusal.values).toEqual({ dir, entries: 'thesis.docx' });
+    expect(installer.homeRefusal(path.join(dir, 'nowhere'))).toBeNull();
+  });
+
+  it('is what runSetup answers, too', async () => {
+    fs.mkdirSync(path.join(dir, 'Orienta', 'Orienta', 'runtime', 'Database'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'Orienta', 'Orienta', 'runtime', 'Database', 'mine.cif'), 'x');
+    const result = await installer.runSetup(
+      { mode: 'cpu', home: dir, releaseTag: 'v0.0.0-test' }, () => {});
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe(CODES.homeHoldsData);
+    expect(fs.existsSync(path.join(dir, '.orienta-home'))).toBe(false);
   });
 });

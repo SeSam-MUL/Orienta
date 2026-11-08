@@ -28,7 +28,10 @@ from backend.api.services.image_utils import colormap_array_to_base64, element_c
 # EDS is per-dataset data: when the active dataset is a crop, every map here
 # must be the cropped map. h5_session.get_active_extractor() is the raw
 # extractor when nothing is cropped, so this is a no-op off the crop path.
-from backend.api.services.h5_session import get_active_extractor as get_extractor, is_open
+from backend.api.services.h5_session import (
+    active_measurement, get_active_extractor as get_extractor, is_open,
+    sync_phase_map_store,
+)
 from backend.api.services.cif_phase_library import (
     auto_classify_pixels,
     candidates_for,
@@ -257,11 +260,11 @@ def _crystal_db_path() -> Path:
 
 # A field a request model does not declare is a TYPO, not an extension.
 #
-# A PhD tester sent ``{"mode": "cluster", "scale_px": 3}`` to
-# ``POST /api/eds/auto-classify``, got a 200, and got back
-# ``scale_px_used = 5`` -- the default. The field is called ``scale``; his
-# smoothing width was silently dropped, and he runs 60 scans in batches, so
-# the wrong analysis is one he would never have looked at twice. A junk field
+# Regression: a request ``{"mode": "cluster", "scale_px": 3}`` to
+# ``POST /api/eds/auto-classify`` got a 200 and ``scale_px_used = 5`` -- the
+# default. The field is called ``scale``; the smoothing width was silently
+# dropped, and in batch runs over many scans the wrong analysis would never
+# be looked at twice. A junk field
 # went through just as quietly.
 #
 # ``extra="forbid"`` turns that into a 422 naming the field. It costs a caller
@@ -573,7 +576,7 @@ def _map_phase_at(row: int, col: int) -> Optional[dict]:
     The suggestion list ranks THIS ONE PIXEL. The map, in its default
     cluster mode, assigns by the mean of the pixel's whole composition
     group. Both are internally correct and they disagree on roughly half
-    the pixels of SampleB (measured: 53 % in cluster mode, 1 % in pixel
+    the pixels of the Oxford reference scan (measured: 53 % in cluster mode, 1 % in pixel
     mode) — because they answer different questions.
 
     Nothing on screen used to say so, so the panel appeared to contradict
@@ -1030,7 +1033,7 @@ class AutoClassifyRequest(BaseModel):
 
 #: Mean C+O over the map, in at%, above which the drop is worth saying out
 #: loud. Calibrated to stay quiet on a clean metal scan and to fire on a real
-#: oxide: on the SampleB export (a 6xxx aluminium extrusion, no oxide phase)
+#: oxide: on the Oxford reference scan export (a 6xxx aluminium extrusion, no oxide phase)
 #: the per-pixel at% sum EXCLUDING C and O runs 91.30-100.00 with mean 98.44,
 #: i.e. C+O carries 1.56 at% on average and 8.70 at% in its worst pixel. Ten
 #: at% is above that whole range, and it is also the point at which a tenth of
@@ -1368,6 +1371,7 @@ def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
 
 def _state_to_response(include_image: bool = True) -> dict:
     """Serialise the current PhaseMapStore state for the frontend."""
+    sync_phase_map_store()           # the map of the measurement that is loaded, not of the one left
     store = get_phase_map_store()
     state = store.get_state()
     if state is None:
@@ -1569,6 +1573,11 @@ async def auto_classify(req: AutoClassifyRequest):
 def _auto_classify_blocking(req, cif_library, mode: str,
                             library_skipped=None) -> dict:
     """The CPU-bound body of :func:`auto_classify`, run off the event loop."""
+    # Which measurement the maps are, taken BEFORE the read: the read chooses its extractor first and
+    # then takes seconds on a big file, so a label taken after it would be the one of a viewer that
+    # has been switched meanwhile. The map below is classified on THAT measurement even if the viewer
+    # is switched while the clustering runs.
+    classified_measurement = active_measurement()
     at_maps, n_rows, n_cols, file_path = _build_at_pct_maps_for_loaded_file()
 
     clusters_payload: List[dict] = []
@@ -1762,6 +1771,8 @@ def _auto_classify_blocking(req, cif_library, mode: str,
         tolerance=req.tolerance,
         min_score=req.min_score,
         file_path=file_path,
+        # the map is made of THIS measurement's chemistry (None: the file's default one)
+        measurement=classified_measurement,
         preserve_locked=bool(req.keep_manual_edits),
         region_grid=region_grid,
         region_phase=region_phase,
@@ -2062,8 +2073,11 @@ def _read_native_bc_safe() -> Optional[np.ndarray]:
     not open, BC group missing, IO error) — the tooltip just shows ``BC: --``.
     """
     try:
+        from backend.api.routes.ebsd_viewer import active_variant
         from backend.api.routes.virtual_images import _read_native_band_contrast
-        return _read_native_band_contrast()
+        from backend.api.services.h5_session import get_current_path
+        # the measurement the viewer holds, when the open file is the viewer's
+        return _read_native_band_contrast(active_variant(get_current_path()))
     except Exception:
         return None
 
@@ -2776,7 +2790,7 @@ def _region_detail(state, sid: int) -> dict:
 
     # The same region measured the way a WINDOW will be read: the classifier
     # evaluates definitions on the smoothed composition, and on a small
-    # feature that differs enough to matter. Measured on the SampleB silicon
+    # feature that differs enough to matter. Measured on the Oxford reference scan silicon
     # particle: 40.97 at% raw against 36.88 smoothed, so a threshold copied
     # off the raw reading catches nothing. Seeding uses these instead.
     from backend.api.services.eds_clustering import DEFAULT_SCALE, _smooth_maps
@@ -2888,7 +2902,7 @@ class SeedFromPixelRequest(BaseModel):
     #: an interaction volume far larger than the features, so a small
     #: particle reads as a DILUTION GRADIENT rather than a plateau. A window
     #: seeded tightly around the core therefore catches only the core.
-    #: Measured on the SampleB silicon particle, whose full extent is 202 px:
+    #: Measured on the Oxford reference scan silicon particle, whose full extent is 202 px:
     #:
     #:   tolerance | 0.25   0.40   0.50   0.60   0.70
     #:   claimed   |  75    126    157    196    225

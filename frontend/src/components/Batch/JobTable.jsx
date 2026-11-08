@@ -1,5 +1,9 @@
+import { Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors } from '../../theme/tokens';
+import { failureText } from '../../services/problemText';
+import { indexApi } from '../../services/api';
+import HoughRefusal, { REFUSAL_CODE } from '../Indexing/HoughRefusal';
 
 // ↺ (U+21BA) = circular arrow — "resumed / reused" is clearer than the
 // em-dash we used to render for jobs whose result came from a pre-existing
@@ -37,8 +41,11 @@ export default function JobTable({ jobs }) {
         <tbody>
           {jobs.map((j, i) => {
             const s = STATUS_STYLE[j.status] || STATUS_STYLE.pending;
+            const refused = j.status === 'failed' && j.error_code === REFUSAL_CODE;
+            const reason = j.status === 'failed' ? failureText(j, t, 'batch') : '';
             return (
-              <tr key={i} style={{ borderBottom: `1px solid ${colors.border}22` }}>
+              <Fragment key={i}>
+              <tr style={{ borderBottom: reason ? 'none' : `1px solid ${colors.border}22` }}>
                 <td
                   style={{
                     padding: '3px 8px', color: colors.text,
@@ -51,7 +58,8 @@ export default function JobTable({ jobs }) {
                 </td>
                 <td style={{ padding: '3px 8px', color: colors.accent }}>{j.phase_name}</td>
                 <td style={{ padding: '3px 8px', textAlign: 'center', color: s.color, fontWeight: 'bold' }}
-                  title={STATUS_TIP_KEY[j.status] ? t(STATUS_TIP_KEY[j.status]) : ''}
+                  title={(refused ? t('indexing:houghRefusal.title') : reason)
+                    || (STATUS_TIP_KEY[j.status] ? t(STATUS_TIP_KEY[j.status]) : '')}
                 >
                   {j.status === 'skipped' ? '↺' : s.label}
                 </td>
@@ -62,6 +70,22 @@ export default function JobTable({ jobs }) {
                   {j.duration_sec != null ? `${j.duration_sec.toFixed(0)}s` : '\u2014'}
                 </td>
               </tr>
+              {reason && (
+                <tr data-testid="job-failure" style={{ borderBottom: `1px solid ${colors.border}22` }}>
+                  <td colSpan={5} style={{ padding: '0 8px 4px', color: colors.red, whiteSpace: 'normal' }}>
+                    {refused ? (
+                      // a refused Hough library: worded in the user's language, with the
+                      // one-click answer for this job's phase (the same notice as on the
+                      // Indexing and PC Refinement pages)
+                      <HoughRefusal
+                        problem={{ code: j.error_code, params: j.error_params || {} }}
+                        fit={() => indexApi.fitHoughReflectors(j.phase_path)}
+                      />
+                    ) : reason}
+                  </td>
+                </tr>
+              )}
+              </Fragment>
             );
           })}
         </tbody>

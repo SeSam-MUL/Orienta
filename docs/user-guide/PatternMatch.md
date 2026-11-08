@@ -58,7 +58,7 @@ Use Pattern Match **after indexing**, to:
 ### Quality and aperture controls
 
 5. For **Spherical** results choose the **Quality** (SHT bandwidth) — *Fast* (128,
-   ~225 MB VRAM), *Standard* (256, ~1.7 GB), or *High* (384, ~5.7 GB) — for a
+   ~225 MB VRAM), *Standard* (256, ~1.8 GB), or *High* (384, ~5.9 GB) — for a
    sharper simulated pattern.
 6. Set the **Aperture**: *Auto* (detects black-cornered detectors), *Circular*
    (force a round mask — needed for EDAX phosphor patterns whose corners are

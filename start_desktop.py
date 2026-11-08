@@ -104,7 +104,18 @@ def _port_owner(port: int):
         try:
             if not conn.laddr or conn.laddr.port != port:
                 continue
-            if conn.status != psutil.CONN_LISTEN or not conn.pid:
+            # A listener is a socket with no peer and an owning PID. The status
+            # is deliberately not read: on Windows 11 build 26300 with psutil
+            # 7.2.2 it says nothing. One and the same listener of ours read
+            # LISTEN, NONE or FIN_WAIT1 depending on the moment and the port
+            # (ports 8137-8181 read FIN_WAIT1, 8182 upwards NONE, earlier 8137
+            # read LISTEN), and Get-NetTCPConnection shows an empty state.
+            # Asking for LISTEN, then for LISTEN or NONE, each found no owner
+            # on some run, so the backend outlived the closed launcher.
+            # Among 140 sockets without a peer none belonged to a dead PID, so
+            # there is no torn-down socket to filter out by status; a PID that
+            # is gone anyway raises in psutil.Process() below and is skipped.
+            if conn.raddr or not conn.pid:
                 continue
             return (conn.pid, psutil.Process(conn.pid).create_time())
         except (psutil.Error, AttributeError, IndexError):

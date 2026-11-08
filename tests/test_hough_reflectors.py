@@ -339,12 +339,13 @@ def test_a_phase_with_a_spec_is_not_cut_by_the_row_limit(tmp_path):
 
 
 def test_a_selection_the_library_builder_cannot_use_says_so(tmp_path):
-    """Mg {0002} + {2-1-11} is an IndexError inside PyEBSDIndex; one family alone
-    is a ValueError there. For a phase with a selection the run says what it
-    means instead of surfacing the array error."""
+    """Mg {0002} + {10-11} is an IndexError inside PyEBSDIndex; one family alone
+    is an error there too. For a phase with a selection the run says what it
+    means instead of surfacing the array error. ({2-1-11}, which this test used
+    before, is a reflection hcp forbids and is refused earlier.)"""
     mg, _ = _phase(tmp_path, MG_CIF, "Mg")
     pl = _plist(mg)
-    for fams in ([[0, 0, 2], [2, -1, 1]], [[0, 0, 2]]):
+    for fams in ([[0, 0, 2], [1, 0, 1]], [[0, 0, 2]]):
         hr.set_spec("Mg", {"mode": "custom", "families": fams})
         with pytest.raises(ValueError, match="reflector selection of Mg") as e:
             eu.create_indexer(_detector(), pl, eu.prepare_reflectors(pl))
@@ -761,10 +762,13 @@ _LIBRARY = ["Al", "Ni", "Si", "MgZn2_sd_0261233", "ZnO_sd_1400158",
 
 
 @pytest.mark.parametrize("name", _LIBRARY)
-def test_library_phase_table_matches_the_real_indexer_and_the_default_roundtrips(name):
+def test_library_phase_table_matches_the_real_indexer_and_the_default_roundtrips(name, monkeypatch):
     cif = LIB / f"{name}.cif"
     if not cif.exists():
         pytest.skip("crystal library file not present")
+    # ZnO's default list needs a 1.4 GiB library: the refusal (half of the memory free
+    # at that moment) must not decide whether this test runs on a busy machine
+    monkeypatch.setenv("ORIENTA_HOUGH_LIBRARY_BUDGET_MB", str(64 * 1024))
     ph = hr.phase_from_cif(cif)
     pl = _plist(ph)
     base = eu.create_indexer(_detector(), pl, eu.prepare_reflectors(pl))

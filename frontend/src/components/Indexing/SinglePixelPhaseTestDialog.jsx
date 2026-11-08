@@ -1,7 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { indexApi, ebsdApi, edsApi } from '../../services/api';
+import { problemText } from '../../services/problemText';
 import useDataStore from '../../stores/useDataStore';
+import { makeHexMap } from '../../services/hexMap';
+import {
+  pickerAspect, pickAt, markerAt, rowColOf, shownPicture, pictureProblem, pictureEntry, pictureAfterFailure,
+  pickerRect, pickerInner, PICKER_BORDER,
+} from '../common/scanPickerGeometry';
 import useCollectionStore from '../../stores/useCollectionStore';
 import { activeKeySet, activeKeySignature, narrowSelection } from '../PhaseCollections/collectionFilter';
 import { omissions } from './phaseTestOmissions';
@@ -37,6 +43,9 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   const zoom = useZoomViews(SYNC_SINGLE);
   const currentIndex = useDataStore((s) => s.currentIndex) || 0;
   const gridShape = useDataStore((s) => s.gridShape) || [0, 0];
+  // A hexagonal scan is clicked through its display raster (null for a square scan).
+  const scanGeometry = useDataStore((s) => s.scanGeometry);
+  const hexMap = useMemo(() => makeHexMap(scanGeometry), [scanGeometry]);
   const setPosition = useDataStore((s) => s.setPosition);
   const fileLoaded = useDataStore((s) => s.ebsdLoaded || s.isFileOpen);
   const filePath = useDataStore((s) => s.filePath);
@@ -144,7 +153,11 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   // Indexing Navigation Map / EBSD Viewer overview (native Oxford BC, with a
   // computed FFT image-quality fallback), instead of a washed-out per-pixel
   // mean-intensity map.
-  const [overviewB64, setOverviewB64] = useState(null);
+  // The answer, with the map it was fetched for: shownPicture() shows it only while the dialog still holds that
+  // map and the answer carries that map's raster.
+  const [overview, setOverview] = useState(null);
+  const shownOverview = shownPicture(hexMap, overview);
+  const overviewProblem = pictureProblem(hexMap, overview);
   // Measured pattern at the active pixel — fetched whenever pixelIndex
   // changes so the user SEES the pattern before running the test.
   const [previewB64, setPreviewB64] = useState(null);
@@ -178,11 +191,19 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   useEffect(() => {
     if (!open || !fileLoaded) return;
     let cancelled = false;
-    ebsdApi.overview('bc')
-      .then((r) => { if (!cancelled) setOverviewB64(r?.data?.image || null); })
-      .catch(() => { /* silently fall back to the empty picker */ });
+    ebsdApi.overview('bc', { display: 'raster' })
+      .then((r) => {
+        if (cancelled) return;
+        setOverview((prev) => pictureEntry(prev, hexMap, r?.data?.image, r?.data?.display));
+      })
+      .catch(() => {
+        // a square scan silently falls back to the empty picker, unless it held a hexagonal picture before; a
+        // hexagonal one says the picture failed
+        if (!cancelled) setOverview((prev) => pictureAfterFailure(prev, hexMap));
+      });
     return () => { cancelled = true; };
-  }, [open, fileLoaded, filePath]);
+    // another measurement, a crop or a dataset switch changes the map without changing the file
+  }, [open, fileLoaded, filePath, hexMap]);
 
   // Fetch the testable library phases once when the dialog opens. Default
   // the selection to ALL of them (so the run tests every phase by default).
@@ -341,14 +362,17 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
 
   // Fetch the list of EDS elements once when the dialog opens, to populate the
   // scan-picker overlay selector. Empty list → the overlay control hides.
+  // A hexagonal scan's picture is the display raster, not the index grid an element map is drawn on: no overlay
+  // control there, so nothing is fetched for it.
+  const isHex = !!hexMap;
   useEffect(() => {
-    if (!open || !fileLoaded) { setEdsElements([]); return; }
+    if (!open || !fileLoaded || isHex) { setEdsElements([]); return; }
     let cancelled = false;
     edsApi.elements()
       .then((r) => { if (!cancelled) setEdsElements(Array.isArray(r?.data?.elements) ? r.data.elements : []); })
       .catch(() => { if (!cancelled) setEdsElements([]); });
     return () => { cancelled = true; };
-  }, [open, fileLoaded, filePath]);
+  }, [open, fileLoaded, filePath, isHex]);
 
   // Toggle an EDS element overlay on/off. On first activation, fetch its
   // colour-tinted element map (cached in edsOverlayMaps; tint is stable per
@@ -370,7 +394,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   useEffect(() => {
     runIdRef.current += 1; stopPolling();
     setResult(null); setSelected(null); setProgress(null); setError(null);
-    setPreviewB64(null); setPreviewError(null); setOverviewB64(null);
+    setPreviewB64(null); setPreviewError(null); setOverview(null);
     setEdsOverlaySel([]); setEdsOverlayMaps({}); setEdsElements([]);
     // Blank to empty here only. The phaseTestPhases fetch effect above also
     // has `filePath` in its deps and fires on the same render, but its
@@ -499,7 +523,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
         } catch (err) {
           if (myRun !== runIdRef.current) return;
           stopPolling();
-          setError(err?.response?.data?.detail || err?.message || t('phaseTest.failed'));
+          setError(problemText(err, t, 'indexing') || err?.message || t('phaseTest.failed'));
           jobIdRef.current = null;
         }
       };
@@ -509,7 +533,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
       pollRef.current = setInterval(tick, 500);
     } catch (err) {
       if (myRun !== runIdRef.current) return;
-      setError(err?.response?.data?.detail || err?.message || t('phaseTest.failed'));
+      setError(problemText(err, t, 'indexing') || err?.message || t('phaseTest.failed'));
       setResult(null); setSelected(null); setProgress(null);
     } finally {
       if (myRun === runIdRef.current) setLoading(false);
@@ -610,9 +634,11 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
               onPan={(dx, dy) => zoom.pan(SCAN_VIEW, dx, dy)}
               onResetView={() => zoom.resetOne(SCAN_VIEW)}
                 gridShape={gridShape}
+                hexMap={hexMap}
                 pixelIndex={pixelIndex}
-                overviewB64={overviewB64}
-                edsOverlays={edsOverlaySel.map((s) => edsOverlayMaps[s]).filter(Boolean)}
+                overviewB64={shownOverview}
+                overviewProblem={overviewProblem ? t(`ebsdviewer:overview.${overviewProblem}`) : null}
+                edsOverlays={hexMap ? [] : edsOverlaySel.map((s) => edsOverlayMaps[s]).filter(Boolean)}
                 edsOpacity={edsOpacity}
                 t={t}
                 onPick={(r, c) => {
@@ -637,7 +663,7 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
                 style={{ width: 90, background: C.bg, color: C.text, border: `1px solid ${C.border}`,
                   borderRadius: 4, padding: '3px 8px', fontSize: 12 }} />
             </div>
-            {edsElements.length > 0 && (
+            {!isHex && edsElements.length > 0 && (
               <div style={{ marginTop: 8 }}>
                 <div style={{ fontSize: 11, color: C.textSecondary, marginBottom: 4 }}>{t('phaseTest.edsOverlay')}</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }} title={t('hoverTips.phaseTestEdsOverlay')}>
@@ -1090,8 +1116,8 @@ function Bar({ value, label, color }) {
  * CrystalHint SinglePixelMode picker. Falls back to an empty box (the
  * crosshair + click logic still works) until the overview loads.
  */
-function ScanPicker({
-  gridShape, pixelIndex, overviewB64, onPick, t, edsOverlays = [], edsOpacity = 0.6,
+export function ScanPicker({
+  gridShape, hexMap = null, pixelIndex, overviewB64, overviewProblem = null, onPick, t, edsOverlays = [], edsOpacity = 0.6,
   view = null, onZoomAt, onPan, onResetView,
 }) {
   const [nRows, nCols] = gridShape;
@@ -1102,16 +1128,16 @@ function ScanPicker({
   const movedRef = useRef(false);
   const maxW = 280;
   const maxH = 240;
-  const aspect = nCols / Math.max(nRows, 1);
+  const aspect = pickerAspect(hexMap, nRows, nCols);
   const w = aspect >= maxW / maxH ? maxW : Math.round(maxH * aspect);
   const h = aspect >= maxW / maxH ? Math.round(maxW / aspect) : maxH;
-  const cy = Math.floor(pixelIndex / Math.max(nCols, 1));
-  const cx = pixelIndex % Math.max(nCols, 1);
+  const { row: cy, col: cx } = rowColOf(nCols, pixelIndex);
   const handleClick = (ev) => {
     // A drag that panned the view is not a pick — otherwise letting go after
     // moving the map would silently jump to another pixel.
     if (movedRef.current) { movedRef.current = false; return; }
-    const box = ev.currentTarget.getBoundingClientRect();
+    // On a hexagonal scan the box is the area inside the frame, where the picture lies.
+    const box = pickerRect(ev.currentTarget, hexMap);
     // The picture is drawn through a CSS transform, so the box is NOT where
     // the content is once zoomed. `zoomedRect` gives the rectangle the content
     // actually occupies; measuring the box instead would pick the wrong pixel
@@ -1119,9 +1145,9 @@ function ScanPicker({
     const rect = zoomedRect(box, zoomView);
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
-    const c = Math.max(0, Math.min(nCols - 1, Math.floor((x / rect.width) * nCols)));
-    const r = Math.max(0, Math.min(nRows - 1, Math.floor((y / rect.height) * nRows)));
-    onPick(r, c);
+    // none in a corner no hexagon covers
+    const hit = pickAt(hexMap, nRows, nCols, x / rect.width, y / rect.height);
+    if (hit) onPick(hit[0], hit[1]);
   };
 
   const startPan = (ev) => {
@@ -1139,8 +1165,11 @@ function ScanPicker({
     onPan(-dx / (p.w * zoomView.scale), -dy / (p.h * zoomView.scale));
   };
   const endPan = () => { panRef.current = null; };
-  const px = ((cx + 0.5) / nCols) * w;
-  const py = ((cy + 0.5) / nRows) * h;
+  const marker = markerAt(hexMap, nRows, nCols, pixelIndex);
+  // the crosshair is drawn over the same area the click is measured against
+  const { w: sw, h: sh } = pickerInner(hexMap, w, h);
+  const px = marker.fx * sw;
+  const py = marker.fy * sh;
   return (
     <div
       ref={bindWheel}
@@ -1152,7 +1181,8 @@ function ScanPicker({
       onMouseLeave={endPan}
       style={{
         position: 'relative', width: w, height: h,
-        background: C.bgSecondary, border: `1px solid ${C.border}`,
+        boxSizing: hexMap ? 'border-box' : undefined,   // a square scan is drawn as before: content-box
+        background: C.bgSecondary, border: `${PICKER_BORDER}px solid ${C.border}`,
         borderRadius: 4, cursor: zoomed ? 'grab' : 'crosshair',
         // Non-negotiable: the zoomed picture stays inside its frame.
         overflow: 'hidden',
@@ -1189,9 +1219,9 @@ function ScanPicker({
         <div style={{
           position: 'absolute', inset: 0, display: 'flex',
           alignItems: 'center', justifyContent: 'center',
-          color: C.textSecondary, fontSize: 10, opacity: 0.5,
+          color: C.textSecondary, fontSize: 10, opacity: overviewProblem ? 1 : 0.5,
         }}>
-          {t('phaseTest.loadingOverview')}
+          {overviewProblem || t('phaseTest.loadingOverview')}
         </div>
       )}
       {edsOverlays.map((b64, i) => (
@@ -1206,11 +1236,11 @@ function ScanPicker({
           }}
         />
       ))}
-      <svg width={w} height={h} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
-        <line x1={px} y1={0} x2={px} y2={h} stroke={C.accent} strokeWidth="1" opacity="0.7" />
-        <line x1={0} y1={py} x2={w} y2={py} stroke={C.accent} strokeWidth="1" opacity="0.7" />
+      <svg width={sw} height={sh} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+        <line x1={px} y1={0} x2={px} y2={sh} stroke={C.accent} strokeWidth="1" opacity="0.7" />
+        <line x1={0} y1={py} x2={sw} y2={py} stroke={C.accent} strokeWidth="1" opacity="0.7" />
         <circle cx={px} cy={py} r={5} fill={C.accent} stroke="#fff" strokeWidth="1.5" />
-        <text x={4} y={h - 6} fill="#fff" fontSize="10" style={{
+        <text x={4} y={sh - 6} fill="#fff" fontSize="10" style={{
           paintOrder: 'stroke', stroke: '#000', strokeWidth: 2,
         }}>
           ({cy}, {cx})

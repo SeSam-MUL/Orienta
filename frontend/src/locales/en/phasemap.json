@@ -16,9 +16,9 @@
       "fast": "Fast (bw=128)",
       "fastDesc": "~225 MB, slightly blurry",
       "standard": "Standard (bw=256)",
-      "standardDesc": "Sharper simulated pattern (~1.7 GB VRAM). Render only — the Compare-phases re-index always runs at 128, the only bandwidth its Legendre tables are numerically valid for.",
+      "standardDesc": "Sharper simulated pattern (~1.8 GB VRAM). Render only — the Compare-phases re-index always runs at 128, the only bandwidth its Legendre tables are numerically valid for.",
       "high": "High (bw=384)",
-      "highDesc": "Sharpest simulated pattern (~5.7 GB VRAM; refused if the GPU cannot spare it). Render only — the Compare-phases re-index always runs at 128."
+      "highDesc": "Sharpest simulated pattern (~5.9 GB VRAM; refused if the GPU cannot spare it). Render only — the Compare-phases re-index always runs at 128."
     },
     "aperture": "Aperture:",
     "apertureTooltip": "Circular detector aperture for the R/NCC score. 'Circular' forces the corner mask on — use it for EDAX phosphor patterns whose grey corners auto-detection misses.",
@@ -149,8 +149,8 @@
     "forwardNccBody": "Renders the SHT-forward simulated pattern for every indexed pixel and computes the normalized cross-correlation against the experimental pattern. Gives a \"ground truth\" quality map (separate from the spherical CI).",
     "bandwidth": "Bandwidth:",
     "bandwidthFast": "Fast (bw=128, ~225 MB)",
-    "bandwidthStandard": "Standard (bw=256, ~1.7 GB)",
-    "bandwidthHigh": "High (bw=384, ~5.7 GB)",
+    "bandwidthStandard": "Standard (bw=256, ~1.8 GB)",
+    "bandwidthHigh": "High (bw=384, ~5.9 GB)",
     "computing": "Computing...",
     "computeForwardNcc": "Compute Forward NCC Map",
     "forwardNccHint": "Expect ~10–60 s depending on map size and GPU. Result is cached until you re-run indexing.",
@@ -168,6 +168,8 @@
     "saveCancelled": "Save cancelled.",
     "loadCancelled": "Load cancelled.",
     "saved": "Saved \"{{label}}\" → {{path}}",
+    "savedResampled": "Saved \"{{label}}\" → {{path}}. Resampled onto a square grid of {{rows}} × {{cols}} points; each took the nearest measured point.",
+    "savedResampledPlain": "Saved \"{{label}}\" → {{path}}. It was resampled onto a square grid; each point took the nearest measured point.",
     "saveFailed": "Save failed: {{msg}}",
     "loaded": "Loaded {{name}}: {{features}}.",
     "noRecognisedData": "no recognised data",
@@ -211,6 +213,10 @@
     "ang": "MTEX .ang",
     "angLine1": "Standard orientation file. Reads natively in MTEX, Aztec, OIM.",
     "angLine2": "No HDF5 — no MATLAB compatibility surprises.",
+    "angSquare": ".ang (square grid, resampled)",
+    "angSquareLine1": "The hexagonal scan resampled onto a square grid: each cell takes the nearest measured point, and the file says so.",
+    "ctf": ".ctf (square grid, resampled)",
+    "ctfLine1": "Oxford/MTEX format. It needs a square grid, so the hexagonal scan is resampled: each cell takes the nearest measured point, and the file says so.",
     "h5Light": "Light .h5",
     "recommended": "RECOMMENDED",
     "h5LightLine1": "~5–50 MB regardless of source size. No raw patterns copied.",
@@ -222,6 +228,8 @@
     "h5RichLine2": "Inherits source superblock — old MATLAB versions may refuse to open.",
     "h5RichLine3": "Use for archival when you want everything in one file.",
     "filterAng": "MTEX .ang (orientation file)",
+    "filterAngSquare": "MTEX .ang (square grid, resampled)",
+    "filterCtf": "Oxford .ctf (square grid, resampled)",
     "filterH5Light": "Light .h5 (compact, MATLAB-friendly)",
     "filterH5Rich": "Rich .h5 (full source copy + results)",
     "promptTitle": "Save result as {{format}}…",
@@ -269,11 +277,13 @@
   "renamePrompt": "New name:",
   "errors": {
     "couldntLoadResult": "Couldn't load this result: {{detail}}. Switching files reloads from disk and resets the active result — re-run indexing/analysis for this dataset if it's gone.",
-    "noResultOrDataset": "No indexing result or analysis dataset available. Load data first."
+    "noResultOrDataset": "No indexing result or analysis dataset available. Load data first.",
+    "pc_missing": "This file carries no pattern centre (PC); kikuchipy's placeholder would give wrong orientations. Calibrate the PC in PC Refinement, or put the .osc / metadata file that holds it next to the scan, then start again."
   },
   "pc": {
     "label": "PC",
-    "value": " (active detector): ({{x}}, {{y}}, {{z}})"
+    "value": " (active detector): ({{x}}, {{y}}, {{z}})",
+    "mapMean": " (mean of the PC map)"
   },
   "linescan": {
     "title": "Linescan Profile"
@@ -339,7 +349,8 @@
     "stepX": "Step X:",
     "stepY": "Step Y:",
     "micron": "µm",
-    "stepHint": "Auto-filled from the loaded EBSD file when available. Drives the scalebar length."
+    "stepHint": "Auto-filled from the loaded EBSD file when available. Drives the scalebar length.",
+    "stepHintHex": "On a hexagonal scan the step comes from the scan geometry of the map and cannot be changed here. The scale bar follows it."
   },
   "poleFigure": {
     "openButton": "Open Pole Figure ⧉"
@@ -421,14 +432,17 @@
     "showUnavailableN": "Show unavailable ({{n}})",
     "title": "Layers",
     "toggleVisibilityAria": "Toggle {{label}} visibility",
-    "unavailable": "Not available yet"
+    "unavailable": "Not available yet",
+    "gateHexGrid": "Not available for a hexagonal scan yet",
+    "notOnHexRaster": "This layer is not drawn on the hexagonal map grid, so it cannot be shown with this scan.",
+    "hexRasterNotExpected": "This layer is drawn on a hexagonal map grid that does not match this scan, so it cannot be shown with it."
   },
   "diagnostics": {
     "title": "Forward Diagnostics",
     "bandwidth": "Bandwidth:",
     "bwFast": "Fast (128, blurrier)",
-    "bwStandard": "Standard (256, ~1.7 GB VRAM)",
-    "bwSharp": "Sharp (384, ~5.7 GB VRAM)",
+    "bwStandard": "Standard (256, ~1.8 GB VRAM)",
+    "bwSharp": "Sharp (384, ~5.9 GB VRAM)",
     "compute": "Compute Diagnostics",
     "recompute": "Re-compute",
     "noActiveResult": "No active indexing result",

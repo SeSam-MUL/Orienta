@@ -3,7 +3,7 @@
 Singleton ``PatternRenderer`` + module-level LRU phase cache so that
 successive ``/api/indexing/pattern-match`` requests reuse loaded SHT grids.
 
-Fail-loud policy (per spec section 7): missing SHT files, OOM during render,
+Fail-loud policy: missing SHT files, OOM during render,
 or invalid metadata raise :class:`SHTRenderError` rather than silently
 substituting placeholders. The API layer converts these into explicit
 error messages in the JSON response.
@@ -11,9 +11,11 @@ error messages in the JSON response.
 from __future__ import annotations
 
 import base64
+import errno
 import io
 import logging
 import os
+import traceback
 from collections import OrderedDict
 from pathlib import Path
 from typing import Optional, Tuple
@@ -30,6 +32,75 @@ logger = logging.getLogger(__name__)
 
 class SHTRenderError(RuntimeError):
     """Raised when the service cannot produce a simulated pattern."""
+
+
+class SHTOutOfMemoryError(SHTRenderError):
+    """The grid did not fit: refused up front, or a real out-of-memory error.
+
+    A subclass, so every existing ``except SHTRenderError`` keeps catching it;
+    callers that want to tell "choose a lower quality" from "broken file" can
+    catch this one first.
+    """
+
+
+#: Substrings of the messages the runtimes use for an allocation that failed.
+#: "out of memory": CUDA (also inside a TorchScript trace). "not enough memory":
+#: torch's CPU allocator as raised by torch 2.11 on Windows
+#: ("DefaultCPUAllocator: not enough memory: you tried to allocate N bytes").
+#: "can't allocate memory": the Linux wording of the same allocator. The cuBLAS
+#: status is what a failed cuBLAS workspace allocation reports (also matched by
+#: ``spherical_gpu.runtime.is_oom_error``).
+_OOM_TEXT_MARKERS = (
+    "out of memory",
+    "not enough memory",
+    "can't allocate memory",
+    "cublas_status_alloc_failed",
+)
+
+
+#: Windows error codes for a failed allocation: ERROR_NOT_ENOUGH_MEMORY (8) and
+#: ERROR_OUTOFMEMORY (14), as they arrive on an OSError.
+_WIN_OOM_ERRORS = (8, 14)
+
+
+def is_out_of_memory(exc: BaseException) -> bool:
+    """True when ``exc`` (or the error it was explicitly raised from) is an
+    out-of-memory error.
+
+    A CUDA OOM arrives as ``torch.cuda.OutOfMemoryError``, but inside a
+    TorchScript call it can surface as a plain ``RuntimeError`` whose text is
+    the whole script trace -- so the text is checked too. CPU exhaustion is a
+    ``MemoryError`` or a ``DefaultCPUAllocator`` error; a failed cuBLAS
+    workspace is ``CUBLAS_STATUS_ALLOC_FAILED``; the operating system reports
+    ``ENOMEM`` / Windows error 8 or 14 on an ``OSError``. Our own
+    :class:`SHTOutOfMemoryError` counts by type: its text is a fixed sentence
+    that does not repeat torch's wording.
+
+    Only ``__cause__`` (``raise ... from``) is followed, not the implicit
+    ``__context__``: an unrelated error raised while an OOM was being handled
+    would otherwise be reported as one.
+    """
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, (MemoryError, SHTOutOfMemoryError)):
+            return True
+        oom_cls = getattr(getattr(torch, "cuda", None), "OutOfMemoryError", None)
+        if oom_cls is not None and isinstance(exc, oom_cls):
+            return True
+        if isinstance(exc, OSError) and (
+            getattr(exc, "winerror", None) in _WIN_OOM_ERRORS or exc.errno == errno.ENOMEM
+        ):
+            return True
+        # The wording is only trusted on a RuntimeError, which is what torch
+        # raises: any other exception that merely MENTIONS "not enough memory"
+        # (a file name, a message about something else) is not an OOM.
+        if isinstance(exc, RuntimeError):
+            text = str(exc).lower()
+            if any(marker in text for marker in _OOM_TEXT_MARKERS):
+                return True
+        exc = exc.__cause__
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -64,10 +135,19 @@ def get_renderer() -> PatternRenderer:
     return _RENDERER
 
 
-#: VRAM a render grid needs per bandwidth -- the same figures the UI has
-#: advertised next to the Quality presets ("~1.7 GB", "~5.7 GB"); 128 is
-#: small enough never to be the problem.
-_VRAM_NEEDED_GB = {256: 1.7, 384: 5.7}
+#: VRAM a render grid needs per bandwidth, in GiB (what ``mem_get_info`` reports).
+#:
+#: Measured (Windows, one machine with an RTX 4070, one process per run, the
+#: reserved memory capped with
+#: ``set_per_process_memory_fraction``): at bw 384 a budget of 5.8 GiB failed and
+#: 5.85 GiB ran; at bw 256 1.75 GiB failed and 1.8 GiB ran. The figures below are
+#: the smallest budgets that ran (5.85 and 1.8) rounded up to 0.1 (5.9, 1.8);
+#: the tensors alone are 5.56 and 1.66 GiB, and the
+#: allocator keeps up to 6.48 and 1.95 GiB when there is room, which is comfort,
+#: not need. One card only. The peak of about 7 GiB in ``nvidia-smi`` is the
+#: whole machine and not what the grid needs. These are also the figures shown
+#: next to the Quality presets. 128 is small enough never to be the problem.
+_VRAM_NEEDED_GB = {256: 1.8, 384: 5.9}
 _VRAM_HEADROOM = 1.15
 
 
@@ -89,7 +169,8 @@ def _check_vram_for_bandwidth(max_bandwidth) -> None:
     not fail -- it thrashed for five minutes at 100 % GPU with the server
     blocked, and the process then died (2026-09-07). Refusing up front with
     both numbers in the message is the honest outcome: the user picks 256 or
-    128 and keeps working. No-op on CPU and when torch cannot report memory.
+    128 and keeps working. On the CPU the same question is asked of the RAM
+    (:func:`_check_ram_for_bandwidth`). No-op when the memory cannot be read.
     """
     need = _vram_needed_gb(max_bandwidth)
     if need <= 0:
@@ -97,19 +178,132 @@ def _check_vram_for_bandwidth(max_bandwidth) -> None:
     try:
         import torch
         dev = get_renderer().device
-        if getattr(dev, "type", str(dev)) != "cuda" and "cuda" not in str(dev):
-            return
+    except Exception:  # noqa: BLE001 -- cannot tell, do not refuse
+        return
+    if getattr(dev, "type", str(dev)) != "cuda" and "cuda" not in str(dev):
+        # No VRAM here: the CPU path lives in RAM. Asked outside any ``try``, so
+        # a refusal is not swallowed by the blanket ``except`` of a measurement.
+        _check_ram_for_bandwidth(max_bandwidth)
+        return
+    try:
+        # ``mem_get_info`` asks the driver, and the driver counts every block
+        # PyTorch has cached after an earlier render as used: measured 4.3 GB
+        # "free" against 10.3 GB once the cache was returned. Return the free
+        # blocks first, so the figure is what a new grid can actually get.
+        # Live tensors (the cached phases) are not touched by this.
+        # Cost, measured on an RTX 4070: 0.02 ms with an empty cache, 47 ms with
+        # 2 GB cached, ~290 ms with kernels still in flight (empty_cache waits
+        # for them). It runs only here, i.e. for bw >= 256 on CUDA (``need`` is
+        # 0 below that, and the CPU is checked against RAM above), once per
+        # cache miss -- but it can briefly stall a parallel GPU user of this
+        # process.
+        torch.cuda.empty_cache()
         free_b, total_b = torch.cuda.mem_get_info(dev if dev.index is not None else 0)
     except Exception:  # noqa: BLE001 -- cannot measure, do not refuse
         return
     free_gb = free_b / 2**30
     if free_gb < need * _VRAM_HEADROOM:
-        raise SHTRenderError(
+        raise SHTOutOfMemoryError(
             f"Quality bw={int(max_bandwidth)} needs about {need:.1f} GB of GPU memory "
             f"and only {free_gb:.1f} GB is free (of {total_b / 2**30:.1f} GB). "
             f"Choose 256 or 128, or free the GPU (other programs, or Release "
             f"GPU memory in Settings) and try again."
         )
+
+
+#: RAM a CPU render grid needs per bandwidth, and the headroom asked for on top.
+#:
+#: Measured (Windows 11, torch 2.11.0+cu126 running on the CPU with CUDA hidden,
+#: the 50 KB hP28 .sht of the library, first request in a
+#: fresh backend, process RSS before -> after):
+#:   bw 256: 1.1 -> 3.3 GB (+2.2) with 24 threads; 0.65 -> 2.47 GB (+1.8) with 12.
+#:   bw 384: 1.1 -> 8.0 GB (+6.9); 0.65 -> 6.30 GB (+5.65) and 0.65 -> 7.8 GB (+7.1)
+#:           in two further runs; 4 threads: 1.0 -> 7.9 GB.
+#: Six simultaneous bw-256 requests for different files peaked at 13.7 GB
+#: (about 2.1 GB each), three bw-384 requests at 28.5 GB -- the reason the
+#: sphere route now runs them one at a time. The figures below are the upper
+#: ends of the single-request runs.
+_RAM_NEEDED_GB = {256: 2.2, 384: 7.0}
+_RAM_HEADROOM = 1.15
+
+#: (The sphere preview now computes in the compute worker, where this ledger
+#: starts empty in every fresh worker. The in-backend callers of
+#: load_or_get_phase -- pattern match, forward NCC, refinement -- still need it.)
+#:
+#: RSS growth a finished CPU load left behind, per bandwidth. A freed grid's
+#: memory stays with the process (the allocator keeps it; clearing every cache
+#: the project owns did not return it, measured), and the next load of the
+#: same size reuses it -- a second bw-384 file grew the process by 0.0 GB. That
+#: memory counts as available for the next load, or a 16 GB machine would
+#: refuse the second Max request that needs nothing new.
+_RAM_RETAINED_GB: "dict[int, float]" = {}
+
+#: The process RSS before the first tracked CPU load. What the process holds
+#: above it is the most that a load could have left behind NOW: the OS may have
+#: trimmed the working set since, or other programs taken the memory, and a
+#: credit recorded earlier must not outlive that.
+_RAM_RSS_BASELINE_GB: "Optional[float]" = None
+
+
+def _ram_needed_gb(max_bandwidth) -> float:
+    if max_bandwidth is None:
+        return 0.0
+    bw = int(max_bandwidth)
+    best = 0.0
+    for k, v in _RAM_NEEDED_GB.items():
+        if bw >= k:
+            best = max(best, v)
+    return best
+
+
+def _process_rss_gb() -> float:
+    import psutil
+    return psutil.Process().memory_info().rss / 2**30
+
+
+def _check_ram_for_bandwidth(max_bandwidth) -> None:
+    """Refuse a CPU render grid the machine has no RAM for, instead of letting it swap.
+
+    Without a GPU the inverse SHT builds its tables in RAM: ~2.2 GB at bw 256,
+    ~7 GB at bw 384 (see ``_RAM_NEEDED_GB``). On a 16 GB machine with other
+    programs open that is the difference between a clear message and a computer
+    that stops answering with no error at all. No-op when psutil cannot report.
+    """
+    need = _ram_needed_gb(max_bandwidth)
+    if need <= 0:
+        return
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        available_gb = vm.available / 2**30
+        total_gb = vm.total / 2**30
+    except Exception:  # noqa: BLE001 -- cannot measure, do not refuse
+        return
+    bw = int(max_bandwidth)
+    credit = max((g for b, g in _RAM_RETAINED_GB.items() if b >= bw), default=0.0)
+    if credit > 0:
+        # Only what the process still holds can be reused: cap the recorded
+        # credit by the RSS above the baseline as it is NOW.
+        try:
+            held = max(0.0, _process_rss_gb() - _RAM_RSS_BASELINE_GB)
+        except Exception:  # noqa: BLE001 -- unknown means no credit
+            held = 0.0
+        credit = min(credit, held)
+    if available_gb + credit < need * _RAM_HEADROOM:
+        raise SHTOutOfMemoryError(
+            f"Quality bw={bw} needs about {need:.1f} GB of free RAM "
+            f"and only {available_gb:.1f} GB is available (of {total_gb:.1f} GB). "
+            f"Choose a lower quality, or close other programs and try again."
+        )
+
+
+def _release_cuda_cache() -> None:
+    """Hand PyTorch's cached-but-free blocks back after a failed load."""
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 -- best effort, never mask the real error
+        pass
 
 
 def load_or_get_phase(
@@ -127,6 +321,7 @@ def load_or_get_phase(
     SHTRenderError
         If the file does not exist on disk.
     """
+    global _RAM_RSS_BASELINE_GB
     path_key = str(Path(sht_path).resolve())
     bw_key = -1 if max_bandwidth is None else int(max_bandwidth)
     key = (path_key, bw_key)
@@ -136,10 +331,52 @@ def load_or_get_phase(
     if not Path(path_key).is_file():
         raise SHTRenderError(f"SHT file not found: {path_key}")
     _check_vram_for_bandwidth(max_bandwidth)
+    failed_oom = False
+    track_ram = (max_bandwidth is not None and int(max_bandwidth) >= 256
+                 and getattr(get_renderer().device, "type", "") == "cpu")
+    rss_before = None
+    if track_ram:
+        try:
+            rss_before = _process_rss_gb()
+        except Exception:  # noqa: BLE001 -- bookkeeping only
+            rss_before = None
+        if rss_before is not None and _RAM_RSS_BASELINE_GB is None:
+            _RAM_RSS_BASELINE_GB = rss_before
     try:
         grid = get_renderer().load_phase(path_key, max_bandwidth=max_bandwidth)
     except SHTReadError as e:
         raise SHTRenderError(f"failed to read {path_key}: {e}") from e
+    except Exception as e:  # noqa: BLE001 -- only OOM is translated, the rest re-raised
+        if not is_out_of_memory(e):
+            raise
+        # The full trace goes to the log; the caller gets a short sentence. The
+        # trace is logged as TEXT: a LogRecord carrying ``exc_info`` keeps the
+        # traceback -- and with it the frames and tensors of the failed load --
+        # alive for as long as any handler holds the record.
+        logger.error("out of memory loading %s at bw=%s:\n%s",
+                     path_key, bw_key, traceback.format_exc())
+        failed_oom = True
+    if failed_oom:
+        # Outside the handler: while it runs, the traceback still references the
+        # frames -- and the tensors -- of the failed load, and empty_cache()
+        # cannot return what is still referenced.
+        _release_cuda_cache()
+        raise SHTOutOfMemoryError(
+            f"Not enough memory to load this phase at bandwidth {bw_key}."
+        )
+    if rss_before is not None:
+        try:
+            growth = _process_rss_gb() - rss_before
+        except Exception:  # noqa: BLE001 -- bookkeeping only
+            growth = 0.0
+        # Process-wide RSS also counts whatever ELSE the process allocated while
+        # this load ran (a parallel indexing job, a dataset being read): a
+        # parallel 3 GB allocation once inflated the credit to 4.8 GB and let a
+        # bw-256 load pass with 0.5 GB free. What a load can leave behind for
+        # the next one of its size is at most what such a load needs.
+        credited = min(growth, _ram_needed_gb(max_bandwidth))
+        if credited > _RAM_RETAINED_GB.get(int(max_bandwidth), 0.0):
+            _RAM_RETAINED_GB[int(max_bandwidth)] = credited
     _PHASE_CACHE[key] = grid
     while len(_PHASE_CACHE) > _CACHE_CAPACITY:
         _PHASE_CACHE.popitem(last=False)
@@ -155,10 +392,14 @@ def release_gpu_caches() -> int:
     the "Release GPU" button reports "0 MiB freed". Call this BEFORE empty_cache().
     Returns the number of cached phases dropped. Safe to call on a CPU-only box.
     """
-    global _RENDERER
+    global _RENDERER, _RAM_RSS_BASELINE_GB
     n = len(_PHASE_CACHE)
     _PHASE_CACHE.clear()
     _RENDERER = None
+    # The memory those loads left with the process is what the RAM preflight
+    # credits; once the caches are dropped on purpose, so is the credit.
+    _RAM_RETAINED_GB.clear()
+    _RAM_RSS_BASELINE_GB = None
     return n
 
 
@@ -416,8 +657,8 @@ def render_pattern_to_png_b64(
         on every EDAX dataset with non-zero detector tilt.
     max_bandwidth : Optional[int]
         Override the default truncation bandwidth (128). 256 gives
-        noticeably sharper patterns at ~1.7 GB VRAM; 384 the sharpest
-        at ~5.7 GB.
+        noticeably sharper patterns at ~1.8 GB VRAM; 384 the sharpest
+        at ~5.9 GB.
 
     Raises
     ------

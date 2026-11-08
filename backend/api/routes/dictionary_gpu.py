@@ -109,10 +109,33 @@ def _run_job(task_id: str, payload: GenerateRequest) -> None:
         _set(task_id, status="error", message=str(e))
 
 
+def _refuse_placeholder_pc(pc) -> None:
+    """Refuse a dictionary simulated at the placeholder PC of a file without one.
+
+    The pattern centre comes from the page. When the active dataset carries none
+    (``pc_missing``) the page holds the placeholder the store holds for it, and a
+    dictionary baked at it is wrong for every later run that reads it. "The
+    placeholder" is what the dataset's own entry says (``missing`` and its stored PC,
+    within 1e-6), not a hard-coded 0.5: a PC typed by hand, another PC, a dataset with
+    a PC, and a stand-alone use with no dataset open all go through.
+    """
+    import numpy as np
+    from backend.api.routes.ebsd_viewer import _active_dataset
+    from backend.api.services.calibration_store import calibration_store
+    entry = calibration_store.get_entry(_active_dataset) if _active_dataset else None
+    if entry is None or entry.pc_source != "missing":
+        return
+    if np.allclose(np.asarray(pc, dtype=float), np.asarray(entry.pc_single, dtype=float),
+                   rtol=0, atol=1e-6):
+        from backend.api.services.pc_guard import require_pc
+        require_pc(_active_dataset)
+
+
 @router.post("/generate")
 def generate(payload: GenerateRequest):
     if not Path(payload.master_path).is_file():
         raise HTTPException(404, f"master pattern not found: {payload.master_path}")
+    _refuse_placeholder_pc(payload.pc)
 
     if payload.save_to_library and not payload.output_path:
         # The energy is part of the filename, and a wrong energy in the name

@@ -35,7 +35,7 @@
     "converted": "Converted: {{name}} (SG #{{spaceGroup}}, {{atoms}} atoms)",
     "conversionFailed": "Conversion failed: {{error}}",
     "skippingUnfit": "Skipping {{count}} unfit file(s)...",
-    "noneFit": "No files fit for conversion ({{count}} skipped — missing DOI, atoms, or space group)",
+    "noneFit": "No files fit for conversion ({{count}} skipped — atoms or space group missing)",
     "convertingProgress": "Converting... {{done}}/{{total}}{{skipped}}",
     "convertingSkippedSuffix": " ({{count}} skipped)",
     "convertedCount": "{{count}} converted",
@@ -69,7 +69,16 @@
     "failed": "Failed: {{error}}",
     "savedChanges": "Saved {{count}} change(s)",
     "saveFailed": "Save failed: {{error}}",
-    "unknown": "unknown"
+    "unknown": "unknown",
+    "convertedDeclared": "Converted: {{name}} (SG #{{spaceGroup}}, {{atoms}} atoms) — reference declared unpublished",
+    "p1Hidden": "{{count}} stored as P 1 with hidden symmetry (select the file for details)",
+    "symmetrised": "Saved {{name}} ({{symbol}}, #{{number}}); cell and axes as in the original, which is unchanged",
+    "symmetriseFailed": "Could not save a symmetrised copy: {{error}}",
+    "skippedNoReference": "{{count}} skipped (no reference)",
+    "declaredUnpublishedCount": "{{count}} declared unpublished",
+    "symmetrisedConverted": "Saved {{name}} ({{symbol}}, #{{number}}); cell converted to the conventional standard setting (atoms per cell {{before}} → {{after}}{{axes}}); the original is unchanged",
+    "axesSuffix": ", axes {{axes}} (original → copy)",
+    "toleranceChosen": "; tolerance {{symprec}} Å chosen by you"
   },
   "counts": {
     "cifXtal": "{{cif}} CIF · {{xtal}} XTAL"
@@ -154,15 +163,30 @@
       "reference": "Reference",
       "file": "File",
       "size": "Size",
-      "kb": "{{value}} KB"
-    }
+      "kb": "{{value}} KB",
+      "referenceStatus": "Reference status",
+      "referenceStatuses": {
+        "found": "Citation taken from the CIF",
+        "declared_unpublished": "Declared unpublished by the user",
+        "missing": "None recorded"
+      }
+    },
+    "saveSymmetrised": "Save symmetrised copy",
+    "saveSymmetrisedTooltip": "Write a new CIF with the detected space group ({{symbol}}, #{{number}}). The original file is not changed.",
+    "symmetrising": "Saving copy...",
+    "invalidDoi": "That is not a DOI (expected 10.xxxx/...). Nothing was saved. Use the reference field for a citation.",
+    "copyExists": "A symmetrised copy exists: {{name}}",
+    "citationTooLong": "That text is too long (at most {{max}} characters). Nothing was saved.",
+    "chooseTolerance": "The group depends on the tolerance. Save a copy as:",
+    "saveSymmetrisedAt": "{{symbol}} (#{{number}}, {{symprec}} Å)",
+    "saveSymmetrisedAtTooltip": "Write a new CIF as {{symbol}} (#{{number}}), found at a tolerance of {{symprec}} Å. The original file is not changed."
   },
   "exportBar": {
     "convert": "Convert to .xtal",
     "converting": "Converting...",
     "convertTooltip": "Convert {{name}} to .xtal",
     "convertSelectFirst": "Select a CIF file first",
-    "convertNotFit": "Not fit for .xtal — fix warnings first (missing DOI, atoms, or space group)",
+    "convertNotFit": "Not fit for .xtal — fix warnings first (atoms or space group missing)",
     "batchConvert": "Convert Selected ({{count}})",
     "batchConverting": "Converting {{count}}...",
     "batchConvertTooltip_one": "Convert {{count}} selected CIF file to .xtal",
@@ -308,5 +332,46 @@
     "syncBulkKeepBoth": "Set every conflict to Keep Both (server copies renamed).",
     "syncBulkSkip": "Set every conflict to Skip (no file changed).",
     "syncResolveAll": "Apply the chosen action to every conflict and finish syncing."
+  },
+  "fitWarnings": {
+    "no_reference": "No DOI or reference found. Converting to .xtal will ask you to add one or to declare the data unpublished.",
+    "no_atoms": "No atomic sites.",
+    "no_space_group": "No space group.",
+    "disordered": "Disordered structure (partial occupancies).",
+    "p1_hidden_symmetry": "Stored as space group P 1, but the atom positions have the symmetry {{symbol}} (#{{number}}) at every tolerance from 0.01 to 0.1 Å. Hough indexing of a P 1 file can run out of memory; save a symmetrised copy.",
+    "p1_ambiguous_symmetry": "Stored as space group P 1; the symmetry of the atom positions depends on the tolerance ({{ladder}}). Choose a tolerance to save a symmetrised copy.",
+    "contradictory_header": "The header contradicts itself: it gives space group number {{headerNumber}}, but the space group symbol {{headerSymbol}}. No symmetrised copy is offered; correct the header first.",
+    "p1_check_failed": "Stored as space group P 1; the check for hidden symmetry could not be completed ({{detail}}), so no symmetrised copy is offered."
+  },
+  "referenceDialog": {
+    "title": "No reference for this crystal structure",
+    "messageOne": "{{name}} has no DOI or literature reference. The .xtal file records where its crystal data come from, so enter one here or say that the data are unpublished.",
+    "messageMany": "{{count}} selected CIF files have no DOI or literature reference. The .xtal files record where their crystal data come from.",
+    "andMore": "… and {{count}} more",
+    "inputLabel": "DOI or citation",
+    "inputPlaceholder": "10.1234/example or Author et al., Journal, Year",
+    "inputHint": "A DOI (10.…) is saved as the DOI, any other text as the reference.",
+    "willSaveDoi": "Will be saved into the CIF as its DOI.",
+    "willSaveCitation": "Will be saved into the CIF as its reference text.",
+    "unpublishedNote": "“Unpublished / own data” writes “unpublished (declared by user)” as the reference and marks it as your declaration. It is never left as “unknown”.",
+    "declareOne": "Unpublished / own data",
+    "declareMany": "Declare all {{count}} unpublished",
+    "declareTooltip": "Convert with the reference “unpublished (declared by user)”",
+    "skip": "Skip these {{count}}",
+    "skipTooltip": "Convert only the files that have a reference",
+    "saveAndConvert": "Save and convert",
+    "counter": "{{count}} / {{max}} characters"
+  },
+  "symmetriseReasons": {
+    "not_p1": "The file is not stored as space group P 1.",
+    "disordered": "The structure has partially occupied sites; a symmetry found from its positions would be a guess about the sample.",
+    "no_symmetry": "No symmetry above P 1 was found at any tolerance from 0.01 to 0.1 Å.",
+    "changed_structure": "The symmetrised structure no longer matches the file within tolerance, so nothing was written.",
+    "unreadable": "The file could not be read as a crystal structure.",
+    "not_writable": "The folder of this CIF file is not writable, so no copy was saved.",
+    "same_content_exists": "The same crystal is already in this folder as {{existing}}; no second copy was written.",
+    "ambiguous_tolerance": "The group of the atom positions depends on the tolerance; choose one.",
+    "invalid_tolerance": "The tolerance must be one of 0.01, 0.02, 0.05 or 0.1 Å.",
+    "contradictory_header": "The header contradicts itself (the space group number and the symbol disagree about P 1), so no copy was written. Correct the header first."
   }
 }

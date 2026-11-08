@@ -7,6 +7,7 @@
 
 import { create } from 'zustand';
 import { ebsdApi, isFileLoadInFlight } from '../services/api';
+import { parseScanGeometry } from '../services/scanGeometry';
 
 const useDataStore = create((set, get) => ({
   // --- File State ---
@@ -14,6 +15,14 @@ const useDataStore = create((set, get) => ({
   filePath: null,
   formatType: null,
   gridShape: [0, 0],
+  // The scan geometry (square / hexagonal, steps, row offset) of the dataset `gridShape` is the
+  // grid of. Written by EVERY writer of gridShape in the same set() call, so the two cannot
+  // disagree; null = the backend did not say (not "square").
+  scanGeometry: null,
+  // True when the square map in `gridShape` was resampled from a hexagonal scan (an OIM-form
+  // hexagonal file is held as a square map, so `scanGeometry` is honestly square and cannot say
+  // it). Written next to the geometry by the same writers; null = the backend did not say.
+  hexResampled: null,
   patternCount: 0,
   patternShape: [0, 0],
 
@@ -44,7 +53,7 @@ const useDataStore = create((set, get) => ({
   diagnosticsComputed: {},                  // { [result_id]: { bandwidth, computed_at } }
   diagnosticsJob: null,                     // { result_id, job_id, progress, state, current_phase } | null
 
-  // --- Refinement state (Phase B) ---
+  // --- Refinement state ---
   refinementComputed: {},                   // { [result_id]: { lambda, computed_at, refined_result_id, summary?, stage_timings? } }
   refinementJob: null,                      // { result_id, job_id, state, current_stage, progress, outer_iter } | null
   refinementLambdaPending: 0.01,            // λ pending in the slider (log-scale UI)
@@ -67,6 +76,8 @@ const useDataStore = create((set, get) => ({
     filePath: data.file_path,
     formatType: data.format_type,
     gridShape: data.grid_shape,
+    scanGeometry: parseScanGeometry(data.scan_geometry),
+    hexResampled: data.hex_resampled ?? null,
     patternCount: data.pattern_count,
     patternShape: data.pattern_shape,
     hasPatterns: data.has_patterns,
@@ -82,6 +93,8 @@ const useDataStore = create((set, get) => ({
     filePath: null,
     formatType: null,
     gridShape: [0, 0],
+    scanGeometry: null,
+    hexResampled: null,
     patternCount: 0,
     patternShape: [0, 0],
     hasPatterns: false,
@@ -115,6 +128,11 @@ const useDataStore = create((set, get) => ({
     ebsdInfo: info,
   }),
 
+  // Counts the times the backend's dataset changed without the viewer asking (a result was activated
+  // on another page and brought up its file or variant). The viewer re-reads its own state on it.
+  fileChangedElsewhere: 0,
+  noteFileChangedElsewhere: () => set((s) => ({ fileChangedElsewhere: s.fileChangedElsewhere + 1 })),
+
   // The navigation grid alone, for when it changes WITHOUT the file changing.
   // Cropping is the first thing that does that: a deepcopy kept its parent's
   // grid, so `gridShape` used to be written once by setFileData and never
@@ -122,8 +140,15 @@ const useDataStore = create((set, get) => ({
   // filePath, the EDS/electron-image flags or anything else about the file,
   // and staying narrow means a field added to setFileData later cannot be
   // silently cleared here.
-  setNavigationGrid: ({ gridShape, patternShape, patternCount }) => set((st) => ({
+  //
+  // The geometry goes with the grid and is NOT kept when the caller has none: a crop of a
+  // hexagonal scan can start on an odd row and so has the opposite offset, and the parent's
+  // geometry left standing next to the crop's grid is exactly the stale copy to avoid.
+  // The resampled flag is the dataset's own, too (a crop of a resampled map is resampled).
+  setNavigationGrid: ({ gridShape, patternShape, patternCount, scanGeometry, hexResampled }) => set((st) => ({
     gridShape,
+    scanGeometry: scanGeometry ?? null,
+    hexResampled: hexResampled ?? null,
     patternCount,
     patternShape: patternShape || st.patternShape,
   })),
@@ -185,9 +210,12 @@ const useDataStore = create((set, get) => ({
    * the /info, /detector, /metadata endpoints now all return 200 empty
    * in that case (BUG-A fix).
    *
+   * `force` re-reads also when the path is the one in the store: another variant of the open file
+   * has the same path, and another measurement can have another grid.
+   *
    * Returns true if a file was synced, false if backend has nothing.
    */
-  syncFromBackend: async () => {
+  syncFromBackend: async ({ force = false } = {}) => {
     // A load or switch in flight is about to set this state itself; reading the
     // backend half-way through would race it.
     if (isFileLoadInFlight()) return false;
@@ -203,14 +231,14 @@ const useDataStore = create((set, get) => ({
       const meta = metaRes.data || {};
 
       if (!info.loaded) {
-        // Backend has no file → ensure store is empty
-        if (get().isFileOpen) get().clearFile();
+        // Backend has no file → ensure store is empty. An EDS-only file is open without a signal.
+        if (get().isFileOpen && !info.open_file) get().clearFile();
         return false;
       }
 
       // Only update if something actually differs — avoids a render loop
       const current = get();
-      if (current.isFileOpen && current.filePath === info.file_path) {
+      if (!force && current.isFileOpen && current.filePath === info.file_path) {
         return true; // already in sync
       }
 
@@ -227,12 +255,16 @@ const useDataStore = create((set, get) => ({
           ? info.data_shape[0] * info.data_shape[1] : 0,
         patternShape: (info.data_shape && info.data_shape.length >= 4)
           ? [info.data_shape[2], info.data_shape[3]] : [0, 0],
+        scanGeometry: parseScanGeometry(info.scan_geometry),
+        hexResampled: info.hex_resampled ?? null,
         hasPatterns: true,
-        hasRawPatterns: true,
+        hasRawPatterns: info.has_raw_patterns === true,
         hasEDS: Array.isArray(meta.eds_elements) && meta.eds_elements.length > 0,
-        hasElectronImages: Array.isArray(meta.electron_images) && meta.electron_images.length > 0,
+        // /metadata does not list them: a forced re-read of the open file keeps what it has
+        hasElectronImages: force ? current.hasElectronImages
+          : Array.isArray(meta.electron_images) && meta.electron_images.length > 0,
         edsElements: meta.eds_elements || [],
-        electronImages: meta.electron_images || [],
+        electronImages: force ? current.electronImages : (meta.electron_images || []),
       });
 
       if (meta.detector || meta.step_size || meta.phases) {

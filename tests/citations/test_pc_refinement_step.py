@@ -279,15 +279,26 @@ def test_propagating_a_typed_pc_does_not_claim_a_refinement(api):
 
 
 def test_copying_a_pc_to_other_files_carries_the_origin_only_if_it_has_one(api):
+    from backend.api.services.batch_manager import _canonical_file
+
     client, (raw, _, other) = api
-    calibration_store.register(raw, _Sig())
-    calibration_store.register(other, _Sig())
-    body = {"source_dataset": raw, "target_datasets": [other]}
-    client.post("/api/batch-v2/copy-pc", json=body)
+    # the route addresses FILES: each dataset is registered under the key of its file
+    paths = {raw: "/d/pcr_raw.up1", other: "/d/pcr_other.up1"}
+    for name, path in paths.items():
+        calibration_store.register(name, _Sig(), file_key=_canonical_file(path))
+
+    def copy_to(target):
+        resp = client.post("/api/batch-v2/copy-pc", json={
+            "source_dataset": raw, "target_datasets": [target],
+            "source_file_path": paths[raw], "target_file_paths": [paths[target]]})
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["results"][0]["success"] is True, resp.text
+
+    copy_to(other)                                        # the source has no refinement
     assert calibration_store.get_entry(other).pc_refinement is None
     calibration_store.update_pc(raw, [0.52, 0.32, 0.82], source="refined",
                                 refinement=REFINED)
-    client.post("/api/batch-v2/copy-pc", json=body)
+    copy_to(other)                                        # the same file again, now with one
     assert calibration_store.get_entry(other).pc_refinement == REFINED
 
 
@@ -300,7 +311,8 @@ def test_the_refine_routes_hand_their_origin_to_the_store():
     from backend.api.routes import pcrefinement
 
     src = Path(pcrefinement.__file__).read_text(encoding="utf-8")
-    assert re.search(r"_writeback_refined_pc\(\s*_active_dataset,\s*mean_pc,\s*"
+    # the first argument is the dataset the run was started on (whatever it is called)
+    assert re.search(r"_writeback_refined_pc\(\s*\w+,\s*mean_pc,\s*"
                      r"refinement=_refinement_record\(", src)
-    assert re.search(r"update_pc_map\(\s*_grid_ds,.{0,120}refinement=_refinement_record\(",
+    assert re.search(r"update_pc_map\(\s*\w+,.{0,120}refinement=_refinement_record\(",
                      src, re.S)

@@ -17,26 +17,19 @@ function makeT(dict) {
   };
 }
 
-// Shaped like the real backend payload: `gb` is a preformatted string, so a
-// whole number cannot lose its decimal on the way through JSON + i18next.
+// Shaped like the real backend payload (simulation/system_check.py): the one
+// coded warning the backend sends today.
 const ITEM = {
-  code: 'gpuBlocksizeMinimal',
-  values: { gb: '7.9', blocksize: 8 },
-  message: 'GPU has 7.9 GB — using blocksize=8 for EMEBSDmasterOpenCL. Complex crystals (>20 atoms) may still fail.',
-};
-
-const WHOLE = {
-  code: 'gpuBlocksizeReduced',
-  values: { gb: '8.0', blocksize: 16 },
-  message: 'GPU has 8.0 GB — using blocksize=16 for EMEBSDmasterOpenCL (reduced from 32).',
+  code: 'emsoftNotOffered',
+  values: {},
+  message: "EMsoft is not set up on this computer. It is optional — Orienta's own simulation engine needs no EMsoft.",
 };
 
 describe('translateSystemWarnings', () => {
   it('replaces a coded warning with the translated sentence', () => {
     const out = translateSystemWarnings([ITEM.message], [ITEM], makeT(de));
     expect(out).toHaveLength(1);
-    expect(out[0]).toContain('Blockgröße 8');
-    expect(out[0]).toContain('7.9 GB');
+    expect(out[0]).toContain('nicht eingerichtet');
     expect(out[0]).not.toBe(ITEM.message);
   });
 
@@ -49,7 +42,7 @@ describe('translateSystemWarnings', () => {
     const out = translateSystemWarnings(
       ['No GPU found — using CPU-only pipeline', ITEM.message], [ITEM], makeT(de));
     expect(out[0]).toBe('No GPU found — using CPU-only pipeline');
-    expect(out[1]).toContain('Blockgröße');
+    expect(out[1]).toContain('nicht eingerichtet');
   });
 
   it('an unknown code falls back to the English message, never to the key', () => {
@@ -70,25 +63,19 @@ describe('translateSystemWarnings', () => {
   });
 });
 
-describe('the four languages carry both sentences', () => {
-  const codes = ['gpuBlocksizeReduced', 'gpuBlocksizeMinimal'];
-
+describe('the four languages carry the sentence', () => {
   it.each([['en', en], ['de', de], ['ja', ja], ['zh', zh]])(
-    '%s has every code, with both placeholders', (lang, dict) => {
-      for (const code of codes) {
-        const text = dict.systemStatus?.warnings?.[code];
-        expect(text, `${lang}.${code}`).toBeTruthy();
-        expect(text, `${lang}.${code} must name the memory`).toContain('{{gb}}');
-        expect(text, `${lang}.${code} must name the blocksize`).toContain('{{blocksize}}');
-      }
+    '%s has the code', (lang, dict) => {
+      expect(dict.systemStatus?.warnings?.emsoftNotOffered, `${lang}.emsoftNotOffered`).toBeTruthy();
     });
 
-  it('a whole number keeps its decimal all the way to the screen', () => {
-    // The GPU-memory row one line away prints toFixed(1); a JSON 8.0 would
-    // arrive here as `8` and the two lines would disagree.
+  it('the retired GPU blocksize sentences are gone from every language', () => {
+    // The backend no longer sends them (the master is always computed on the
+    // CPU); a leftover string would be dead text in four files.
     for (const [lang, dict] of [['en', en], ['de', de], ['ja', ja], ['zh', zh]]) {
-      const out = translateSystemWarnings([WHOLE.message], [WHOLE], makeT(dict));
-      expect(out[0], lang).toContain('8.0');
+      const warnings = dict.systemStatus?.warnings ?? {};
+      expect(warnings.gpuBlocksizeReduced, lang).toBeUndefined();
+      expect(warnings.gpuBlocksizeMinimal, lang).toBeUndefined();
     }
   });
 
@@ -98,8 +85,7 @@ describe('the four languages carry both sentences', () => {
   });
 
   it('the key helper matches where the sentences actually live', () => {
-    expect(warningKey('gpuBlocksizeMinimal')).toBe('settings:systemStatus.warnings.gpuBlocksizeMinimal');
-    expect(makeT(en)(warningKey('gpuBlocksizeMinimal'), { gb: 7.9, blocksize: 8 }))
-      .toContain('7.9 GB');
+    expect(warningKey('emsoftNotOffered')).toBe('settings:systemStatus.warnings.emsoftNotOffered');
+    expect(makeT(en)(warningKey('emsoftNotOffered'))).toContain('needs no EMsoft');
   });
 });

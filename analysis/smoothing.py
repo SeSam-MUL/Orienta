@@ -14,6 +14,8 @@ Reference:
     matlab_testskripts/ImportAndModify_MTEX6.m lines 115-124
 """
 
+import copy
+
 import numpy as np
 
 try:
@@ -321,4 +323,6 @@ def apply_smoothing(
         prop=dict(dataset.xmap.prop),
     )
 
-    return EBSDDataset(new_xmap, dataset.step_size, dataset.source)
+    smoothed = EBSDDataset(new_xmap, dataset.step_size, dataset.source)
+    smoothed.scan_geometry = copy.deepcopy(dataset.scan_geometry)      # same grid, its own copy
+    return smoothed

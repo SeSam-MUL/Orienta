@@ -614,6 +614,10 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
     ? colors.textSecondary
     : oclInfo.ok ? colors.green : colors.red;
 
+  // True when the backend will run Monte Carlo on the GPU (auto or forced
+  // "gpu"): its recommendation, not mere OpenCL availability.
+  const gpuRuns = oclInfo?.raw?.recommended_mode === 'gpu';
+
   // Output preview
   const preview = outputPreviewText(params, t);
 
@@ -910,7 +914,11 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
         </div>
 
         {/* Context card — changes based on mode */}
-        {(params.computeMode === 'gpu' || (params.computeMode === 'auto' && oclInfo?.ok)) && (
+        {/* The backend runs Monte Carlo on the GPU only when it recommends "gpu"
+            (a GPU device exists AND EMMCOpenCL is installed). OpenCL alone, e.g. a
+            CPU-only platform, makes it choose EMMC, so no GPU card and no "Monte
+            Carlo runs on the GPU" note there. Same fallback for a forced "gpu". */}
+        {params.computeMode !== 'cpu' && gpuRuns && (
           <div style={{
             padding: '10px 14px',
             borderRadius: 6,
@@ -932,17 +940,26 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
             </div>
             <div style={{ color: colors.textSecondary, display: 'flex', gap: 16 }}>
               <span>{t('compute.platform')}</span>
-              <span>{t('compute.blockSize', { size: oclInfo?.raw?.gpu_memory_gb >= 16 ? 32 : oclInfo?.raw?.gpu_memory_gb >= 8 ? 16 : 8 })}</span>
             </div>
-            {oclInfo?.raw?.gpu_memory_gb > 0 && oclInfo.raw.gpu_memory_gb < 16 && (
-              <div style={{ color: colors.yellow, marginTop: 6, fontSize: '8.5pt' }}>
-                {t('compute.lowVramWarning', { gb: oclInfo.raw.gpu_memory_gb.toFixed(0) })}
-              </div>
-            )}
+            {/* The master pattern is computed on the CPU, so the thread count
+                below is what it uses; the GPU runs Monte Carlo only. */}
+            <div style={{ color: colors.textSecondary, marginTop: 6 }}>
+              {t('compute.masterOnCpuNote')}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+              <Label secondary small>{t('compute.threadsLabel')}</Label>
+              <NumberInput
+                value={params.nthreads}
+                onChange={e => set('nthreads', e.target.value)}
+                min={1} max={128} step={1}
+                style={{ width: 70 }}
+                title={t('compute.threadsTooltip')}
+              />
+            </div>
           </div>
         )}
 
-        {(params.computeMode === 'cpu' || (params.computeMode === 'auto' && !oclInfo?.ok)) && (
+        {(params.computeMode === 'cpu' || !gpuRuns) && (
           <div style={{
             padding: '10px 14px',
             borderRadius: 6,
@@ -972,21 +989,6 @@ function ConfigureTab({ onStarted, isActive = false, onShowQueue, engine = 'ours
           </div>
         )}
 
-        {/* GPU mode: show threads info (read-only, auto-adjusted to 4N+3) */}
-        {params.computeMode === 'gpu' && (
-          <div style={{ fontSize: '9pt', color: colors.textSecondary, display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Label secondary small>{t('compute.cpuHelperThreadsLabel')}</Label>
-            <span style={{ fontFamily: 'monospace', color: colors.cyan }}>
-              {(() => {
-                const c = oclInfo?.raw?.cpu_count || 24;
-                const base = Math.max(7, c - 2);
-                for (let n = base; n >= 7; n--) { if ((n - 3) % 4 === 0) return n; }
-                return 7;
-              })()}
-            </span>
-            <Label secondary small>{t('compute.helperThreadsNote')}</Label>
-          </div>
-        )}
       </GroupBox>
       )}
 

@@ -18,6 +18,8 @@ from typing import Optional
 
 import numpy as np
 
+from backend.api.services.load_choices import LoadChoiceError, measurement_groups
+
 logger = logging.getLogger(__name__)
 
 LABEL_NATIVE = "Band Contrast (native)"
@@ -99,10 +101,16 @@ def read_native_band_contrast(
     source_file: Optional[str],
     n_rows: Optional[int] = None,
     n_cols: Optional[int] = None,
+    variant=None,
 ) -> Optional[np.ndarray]:
     """Read native Band Contrast from an explicit H5OINA path via a PRIVATE
     read-only handle (never touches the shared h5_session). Returns a 2D
-    float array or ``None`` (EDAX / stripped / unreadable)."""
+    float array or ``None`` (EDAX / stripped / unreadable).
+
+    ``variant`` (a ``LoadVariant``, None = the first measurement that has the channel, as
+    before) names the measurement the map is wanted for: only that measurement's Band Contrast
+    is read, so a measurement without one answers ``None`` instead of the first one's map. A
+    file without the measurement refuses with the coded ``LoadChoiceError``."""
     if not source_file:
         return None
     try:
@@ -111,7 +119,7 @@ def read_native_band_contrast(
         return None
     try:
         with h5py.File(source_file, "r") as h5:
-            for scan_key in list(h5.keys()):
+            for scan_key in measurement_groups(h5, variant):
                 try:
                     grp = h5[scan_key]
                     bc = np.asarray(grp["EBSD/Data/Band Contrast"][...])
@@ -133,6 +141,8 @@ def read_native_band_contrast(
                         continue
                 return _cut_to_active_crop(
                     bc.astype(np.float64), source_file, n_rows, n_cols)
+    except LoadChoiceError:
+        raise
     except Exception:
         logger.debug("native BC read failed for %s", source_file, exc_info=True)
         return None
@@ -160,6 +170,7 @@ def read_native_image_quality(
     source_file: Optional[str],
     n_rows: Optional[int] = None,
     n_cols: Optional[int] = None,
+    variant=None,
 ) -> Optional[np.ndarray]:
     """Read the EDAX-style ``IQ`` channel, the same way as Oxford's BC.
 
@@ -170,7 +181,8 @@ def read_native_image_quality(
     honest reading "this file has no band contrast" was of no use to someone
     holding a perfectly good quality channel.
 
-    Returns the raw values (EDAX IQ has no fixed range) or ``None``.
+    Returns the raw values (EDAX IQ has no fixed range) or ``None``. ``variant`` names the
+    measurement, as for :func:`read_native_band_contrast`.
     """
     if not source_file:
         return None
@@ -180,7 +192,7 @@ def read_native_image_quality(
         return None
     try:
         with h5py.File(source_file, "r") as h5:
-            for scan_key in list(h5.keys()):
+            for scan_key in measurement_groups(h5, variant):
                 try:
                     grp = h5[scan_key]
                     iq = np.asarray(grp["EBSD/Data/IQ"][...])
@@ -210,6 +222,8 @@ def read_native_image_quality(
                     iq = iq.reshape(r, c)
                 return _cut_to_active_crop(
                     iq.astype(np.float64), source_file, n_rows, n_cols)
+    except LoadChoiceError:
+        raise
     except Exception:
         logger.debug("native IQ read failed for %s", source_file, exc_info=True)
         return None
@@ -235,11 +249,16 @@ def compute_image_quality(signal) -> np.ndarray:
     return np.asarray(signal.get_image_quality(), dtype=np.float64)
 
 
-def image_quality_from_file(source_file, n_rows=None, n_cols=None):
+def image_quality_from_file(source_file, n_rows=None, n_cols=None, variant=None):
     """Best-effort FFT image quality (0..1) computed by LOADING the patterns
     from ``source_file`` via the app's safe loader. Returns a 2D array
     (n_rows,n_cols) when the shape is known and matches, else a 1D/native-shaped
     array, or ``None`` on ANY failure.
+
+    ``variant`` is the measurement and pattern source the quality is wanted for (a
+    ``LoadVariant``; ``None``: the file's default, as before). The patterns are loaded as that
+    variant, never as another source. A file that cannot give it is "not available" (``None``,
+    like any other failure here): the quality of the wrong patterns is not a fallback.
 
     HEAVY: loads the whole signal + runs an FFT per pattern. This is an opt-in
     SLOW path (export column / minimap last-resort), never a hot path. Callers
@@ -249,7 +268,18 @@ def image_quality_from_file(source_file, n_rows=None, n_cols=None):
         return None
     try:
         from safe_loader import load_ebsd_safe
-        sig = load_ebsd_safe(source_file, verbose=False)
+        # A measurement of an EDAX APEX file paired by hand with a metadata file in another folder
+        # is read with that pairing (the viewer remembers it), or it would be refused as hexagonal;
+        # a file loaded as another measurement or pattern source is read as that one. Both are
+        # handed to the loader only when there is one: the ordinary call stays as it was.
+        from backend.api.routes.ebsd_viewer import remembered_apex_pairing
+        load_kwargs = {}
+        apex = remembered_apex_pairing(str(source_file))
+        if apex:
+            load_kwargs["apex"] = apex
+        if variant is not None:
+            load_kwargs["variant"] = variant
+        sig = load_ebsd_safe(source_file, verbose=False, **load_kwargs)
         iq = np.asarray(compute_image_quality(sig), dtype=np.float64)
         if n_rows and n_cols and iq.size == n_rows * n_cols:
             iq = iq.reshape(n_rows, n_cols)
@@ -267,10 +297,15 @@ def get_quality_map(
     signal=None,
     xmap=None,
     allow_compute: bool = True,
+    variant=None,
 ) -> Optional[QualityMap]:
     """Return the per-pixel quality map by precedence, or ``None`` when no
-    source is available (caller decides whether that is an error or a skip)."""
-    native = read_native_band_contrast(source_file, n_rows, n_cols)
+    source is available (caller decides whether that is an error or a skip).
+
+    ``variant``: the measurement of ``source_file`` the map belongs to (the loaded one, or the
+    one a result is stamped with; None = the file's first). The native readers read that
+    measurement only."""
+    native = read_native_band_contrast(source_file, n_rows, n_cols, variant)
     if native is None:
         native = _prop_bc(xmap, n_rows, n_cols)
     if native is not None:
@@ -278,7 +313,7 @@ def get_quality_map(
 
     # The vendor's own quality channel, when it is EDAX rather than Oxford.
     # Measured data beats anything computed here, so it comes before the FFT.
-    iq_native = read_native_image_quality(source_file, n_rows, n_cols)
+    iq_native = read_native_image_quality(source_file, n_rows, n_cols, variant)
     if iq_native is not None:
         lo = float(np.nanmin(iq_native))
         hi = float(np.nanmax(iq_native))

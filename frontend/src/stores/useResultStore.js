@@ -45,6 +45,7 @@ const useResultStore = create((set, get) => ({
       n_indexed: result.n_indexed ?? 0,
       timestamp: formatTime(),
       result_id: result.result_id || null,
+      scan_geometry: result.scan_geometry ?? undefined,
     };
     set((state) => ({
       indexingResult: result,

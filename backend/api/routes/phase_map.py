@@ -21,7 +21,7 @@ import io
 import base64
 import logging
 import threading
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -35,6 +35,8 @@ _mpl_lock = threading.Lock()
 
 from backend.api.services.image_utils import array_to_base64_png  # noqa: F401  (re-export kept for callers)
 from backend.api.services import state_version
+from backend.api.services import hex_raster
+from backend.api.services import scan_neighbours
 
 # Re-exported at module level so tests can patch them via
 # `backend.api.routes.phase_map.get_last_indexing_result`. Deferred imports
@@ -217,7 +219,7 @@ def _group_phases_by_symmetry(xmap, only_phase_id: int | None = None):
         name = getattr(phase_obj, "name", "") or ""
         if _is_unindexed_phase(name):
             continue
-        from crystal_symmetry import phase_point_group
+        from crystal_symmetry import phase_point_group, point_group_key
         pg = phase_point_group(phase_obj)
         if pg is None:
             continue
@@ -227,7 +229,10 @@ def _group_phases_by_symmetry(xmap, only_phase_id: int | None = None):
         # the familiar [001]-[101]-[111] triangle, because the fundamental
         # zone is twice as large when inversion is not implied.
         laue = getattr(pg, "laue", pg) or pg
-        laue_name = getattr(laue, "name", None) or str(laue)
+        # The key, not the name: the Laue classes of Cr2N (P-31m, two-folds
+        # along Y) and corundum (R-3c, along X) are both named "-3m" in orix but
+        # are different groups, and one IPF triangle serves one group.
+        laue_name = point_group_key(laue) if getattr(laue, "name", None) else str(laue)
         bucket = groups.setdefault(laue_name, {"symmetry": laue, "phases": []})
         if name not in bucket["phases"]:
             bucket["phases"].append(name)
@@ -340,6 +345,17 @@ def _draw_ipf_color_keys(fig, gs_cell, xmap, direction: str,
             logger.debug("IPF key render failed for %s: %s", pg_name, e)
 
 
+def _require_modal_size_within_limit(topology, modal_filter_size) -> None:
+    """400 when a hexagonal scan (``topology`` is not None) is asked for a modal filter window above
+    ``scan_filters.MAX_HEX_MODAL_FILTER_SIZE``. A square scan has no limit."""
+    from backend.api.services.scan_filters import MAX_HEX_MODAL_FILTER_SIZE
+    if topology is not None and modal_filter_size and int(modal_filter_size) > MAX_HEX_MODAL_FILTER_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The modal filter size {int(modal_filter_size)} is too large for a hexagonal scan; "
+                    f"the largest size is {MAX_HEX_MODAL_FILTER_SIZE}."))
+
+
 def _compute_effective_phase_ids_2d(
     xmap, n_rows: int, n_cols: int, mask,
     last_result,
@@ -349,10 +365,14 @@ def _compute_effective_phase_ids_2d(
     min_cluster_size: int,
     fill_unindexed: bool,
     modal_filter_size: int,
+    topology=None,
 ):
     """Compute cleanup state for every display mode.
 
     Returns ``(effective_pid_2d, ipf_valid_2d, had_cleanup)``.
+
+    ``topology`` is what a neighbour is for the live filters (``scan_neighbours.Topology`` of a hexagonal scan,
+    see ``_hex_topology_of``); ``None`` is the index grid with four neighbours, as it always was.
 
     * ``effective_pid_2d`` — (n_rows, n_cols) int16 with -1 wherever a
       pixel has been rejected by the live filters or was already
@@ -370,6 +390,9 @@ def _compute_effective_phase_ids_2d(
     so callers can skip the cleanup mask entirely.
     """
     import numpy as np
+
+    # Before any work, and outside the try below: a refusal must reach the caller, not become a warning.
+    _require_modal_size_within_limit(topology, modal_filter_size)
 
     # 1) Start from the raw xmap.phase_id so we can track what the
     #    user's original measurement said at each pixel. This original
@@ -421,6 +444,7 @@ def _compute_effective_phase_ids_2d(
                 min_cluster_size=min_cluster_size,
                 fill_unindexed=fill_unindexed,
                 modal_filter_size=modal_filter_size,
+                topology=topology,
             )
         except Exception as e:
             logger.warning("Live cleanup failed, falling back to raw: %s", e)
@@ -635,6 +659,35 @@ def build_phase_color_map(xmap, color_overrides: dict | None = None) -> dict:
     return out
 
 
+def _show_color_map(ax, color_map, hexctx):
+    """imshow of an (n_rows, n_cols, 3) colour map. On a hexagonal scan it is redrawn on the display raster
+    with the corners no hexagon covers transparent, so the axes background shows there."""
+    if hexctx is None:
+        return ax.imshow(color_map)
+    import numpy as np
+    geometry, spec = hexctx
+    rgb = hex_raster.to_display(np.asarray(color_map, dtype=np.float64), geometry, spec=spec)
+    covered = hex_raster.to_display(np.ones(np.shape(color_map)[:2], dtype=np.float64), geometry, spec=spec)
+    return ax.imshow(np.dstack([rgb, covered]))
+
+
+def _show_scalar(ax, data, cmap, hexctx, *, underlay=True, **imshow_kwargs):
+    """imshow of an (n_rows, n_cols) scalar map. On a hexagonal scan: first (``underlay``) the hexagons in the
+    unindexed grey, then the map over them with NaN transparent, so an unindexed hexagon stays grey and a
+    corner stays empty."""
+    if hexctx is None:
+        return ax.imshow(data, cmap=cmap, **imshow_kwargs)
+    import numpy as np
+    geometry, spec = hexctx
+    if underlay:
+        covered = hex_raster.to_display(np.ones(np.shape(data)[:2], dtype=bool), geometry, fill=False, spec=spec)
+        ax.imshow(np.where(covered[..., None], np.array([*UNINDEXED_COLOR, 1.0], dtype=np.float32), 0.0))
+    clear = cmap.copy()
+    clear.set_bad((0.0, 0.0, 0.0, 0.0))
+    shown = hex_raster.to_display(np.asarray(data, dtype=np.float32), geometry, fill=np.nan, spec=spec)
+    return ax.imshow(shown, cmap=clear, **imshow_kwargs)
+
+
 def _render_to_figure(
     *,
     direction: str,
@@ -704,6 +757,11 @@ def _render_to_figure(
         raise problem(400, "noResultOrDataset", "No indexing result or analysis dataset available. Load data first.")
 
     step_size = _get_step_size_from_signal(step_x)
+    # The scan of the crystal map drawn here (same precedence as above). On a hexagonal scan the figure is
+    # drawn on the display raster and the scale bar measures its pixels.
+    hexctx = _hex_scan_context(_last_result, _analysis_dataset)
+    if hexctx is not None:
+        step_size = hexctx[1].step_um
 
     # Compute the effective cleanup state ONCE — every display mode honours
     # it, so rejected pixels drop out of Phase, IPF *and* CI views the same
@@ -716,6 +774,7 @@ def _render_to_figure(
         min_cluster_size=min_cluster_size,
         fill_unindexed=fill_unindexed,
         modal_filter_size=modal_filter_size,
+        topology=_hex_topology_of(_last_result, _analysis_dataset, (n_rows, n_cols)),
     )
 
     # ------------------------------------------------------------------
@@ -729,7 +788,7 @@ def _render_to_figure(
             scalebar_font_size, scalebar_bar_color, scalebar_box_color,
             scalebar_box_alpha, show_legend, title,
             confidence_cmap, dpi,
-            ipf_valid_2d=ipf_valid_2d, had_cleanup=had_cleanup,
+            ipf_valid_2d=ipf_valid_2d, had_cleanup=had_cleanup, hexctx=hexctx,
         )
 
     # ------------------------------------------------------------------
@@ -742,7 +801,7 @@ def _render_to_figure(
             scalebar_enabled, scalebar_location, scalebar_length,
             scalebar_font_size, scalebar_bar_color, scalebar_box_color,
             scalebar_box_alpha, show_legend, title, dpi,
-            ipf_valid_2d=ipf_valid_2d, had_cleanup=had_cleanup,
+            ipf_valid_2d=ipf_valid_2d, had_cleanup=had_cleanup, hexctx=hexctx,
         )
 
     # ------------------------------------------------------------------
@@ -897,7 +956,7 @@ def _render_to_figure(
                                   orientation="vertical")
     else:
         fig, ax = plt.subplots(figsize=(8, 6), dpi=dpi)
-    ax.imshow(color_map)
+    _show_color_map(ax, color_map, hexctx)
 
     # Confidence overlay (only for phase / IPF modes; CI heatmap path handles
     # its own colorbar and doesn't use this overlay).
@@ -909,8 +968,13 @@ def _render_to_figure(
                 score_map[mask] = scores
             else:
                 score_map = np.asarray(scores).reshape(n_rows, n_cols)
-            ax.imshow(score_map, cmap=confidence_cmap, alpha=confidence_alpha,
-                      vmin=0, vmax=1)
+            if hexctx is None:
+                ax.imshow(score_map, cmap=confidence_cmap, alpha=confidence_alpha,
+                          vmin=0, vmax=1)
+            else:
+                # no grey underlay here: it would cover the map the overlay lies on
+                _show_scalar(ax, score_map, plt.get_cmap(confidence_cmap), hexctx, underlay=False,
+                             alpha=confidence_alpha, vmin=0, vmax=1)
         except Exception:
             pass
 
@@ -957,6 +1021,8 @@ def _render_to_figure(
         "shape": [n_rows, n_cols],
         "step_size": step_size,
     }
+    if hexctx is not None:
+        meta["display"] = hexctx[1].to_dict()
     return fig, meta
 
 
@@ -1311,7 +1377,7 @@ def _compute_layer_rgba(
         n_rows, n_cols = result.original_shape
         return _diag_rgba(kind, n_rows, n_cols, scale_out)
 
-    # Joint R+PC refinement dispatch (Phase B) — reads result.metadata["refinement"].
+    # Joint R+PC refinement dispatch — reads result.metadata["refinement"].
     if kind in _REF_KIND_TO_KEY:
         result = get_last_indexing_result()
         if result is None:
@@ -1427,11 +1493,18 @@ def _compute_layer_rgba(
         min_cluster_size=min_cluster_size,
         fill_unindexed=fill_unindexed,
         modal_filter_size=modal_filter_size,
+        topology=_hex_topology_of(result, dataset, (n_rows, n_cols)),
     )
 
     if kind == "grain-boundaries":
         from backend.api.services import grain_boundaries as _gb
-        angles = _gb.cached_boundary_angles(xmap, n_rows, n_cols, mask, result)
+        topology = _hex_topology_of(result, dataset, (n_rows, n_cols))
+        angles = _gb.cached_boundary_angles(xmap, n_rows, n_cols, mask, result, topology=topology)
+        if topology is not None:
+            # a hexagonal scan: along the shared hexagon edges, on the display raster (always, whatever ``display``
+            # says: an index-grid picture of these boundaries does not exist)
+            geometry, spec = _hex_scan_context(result, dataset)
+            return _gb.render_boundaries_hex(angles, geometry, spec, _gb.parse_bands(gb_bands))
         return _gb.render_boundaries(angles, n_rows, n_cols, _gb.parse_bands(gb_bands))
 
     rgba = np.zeros((n_rows, n_cols, 4), dtype=np.uint8)
@@ -1481,6 +1554,7 @@ def _compute_layer_rgba(
                 ipf_3d = compute_ipf_colors_grain_consistent(
                     xmap, direction, r_user=_active_r_user(),
                     n_rows=n_rows, n_cols=n_cols, mask=mask,
+                    topology=_hex_topology_of(result, dataset, (n_rows, n_cols)),
                 )
             else:
                 ipf_raw = compute_ipf_colors(
@@ -1519,6 +1593,9 @@ def _compute_layer_rgba(
         bc_2d = None
         if bc_factor is None:
             native_bc = None
+            # The measurement this result was indexed on (its stamp; none = the file's default):
+            # the native channel is read from that measurement of the file, never from the first.
+            from backend.api.services import variant_registry as _variant_registry
             # Prefer the result's OWN source file (read with a private handle —
             # no shared-session mutation), so BC works even when a different
             # file is currently open in the viewer/EDS page. This is the
@@ -1530,20 +1607,22 @@ def _compute_layer_rgba(
                        else None)
             except Exception:
                 src = None
+            # ... with the variant the rule gives for THAT file (an imported light export has no scan group)
+            _result_variant = _variant_registry.variant_for_source(result, src)
             if src:
                 try:
                     # Route the path-based native read through the central
                     # pattern-quality service (single source of truth). It uses
                     # a PRIVATE read-only handle, so no shared-session mutation.
                     from backend.api.services.pattern_quality import read_native_band_contrast
-                    native_bc = read_native_band_contrast(src, n_rows, n_cols)
+                    native_bc = read_native_band_contrast(src, n_rows, n_cols, variant=_result_variant)
                 except Exception:
                     native_bc = None
-            # Fall back to whatever file is currently open (legacy behaviour).
+            # Fall back to the file the shared session has open (legacy behaviour), when it is the
+            # result's file.
             if native_bc is None:
                 try:
-                    from backend.api.routes.virtual_images import _read_native_band_contrast
-                    native_bc = _read_native_band_contrast()
+                    native_bc = _band_contrast_of_open_file(result)
                 except Exception:
                     native_bc = None
             quality_label = None
@@ -1567,6 +1646,7 @@ def _compute_layer_rgba(
                         signal=sig,
                         xmap=xmap,
                         allow_compute=True,
+                        variant=_result_variant,
                     )
                 except Exception:
                     qm = None
@@ -1690,7 +1770,7 @@ def _render_ci_figure(
     scalebar_font_size, scalebar_bar_color, scalebar_box_color,
     scalebar_box_alpha, show_legend, title,
     cmap_name, dpi,
-    *, ipf_valid_2d=None, had_cleanup: bool = False,
+    *, ipf_valid_2d=None, had_cleanup: bool = False, hexctx=None,
 ):
     """Render a CI heatmap — returns (fig, meta)."""
     import numpy as np
@@ -1777,7 +1857,7 @@ def _render_ci_figure(
     fig, ax = plt.subplots(figsize=(8, 6), dpi=dpi)
     cmap = plt.get_cmap(cmap_name or 'RdYlGn').copy()
     cmap.set_bad(UNINDEXED_COLOR)
-    im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax)
+    im = _show_scalar(ax, data, cmap, hexctx, vmin=vmin, vmax=vmax)
     ax.axis('off')
     if show_legend:
         ax.set_title(map_title, color='white', fontsize=12)
@@ -1807,7 +1887,27 @@ def _render_ci_figure(
         "max_val": float(np.nanmax(data)),
         "mean_val": float(np.nanmean(data)),
     }
+    if hexctx is not None:
+        meta["display"] = hexctx[1].to_dict()
     return fig, meta
+
+
+def _band_contrast_of_open_file(result) -> "np.ndarray | None":
+    """The native Band Contrast of the file the shared HDF5 session has open, for ``result``.
+
+    The result's stamp names a measurement of ITS source file, so the open file is read with it only
+    when the open file is that source: with another file open the stamp would pick a measurement of a
+    file it does not describe. A result that records no source file keeps the old behaviour (whatever
+    is open, with the variant the rule gives)."""
+    from backend.api.routes.virtual_images import _read_native_band_contrast
+    from backend.api.services import h5_session, variant_registry
+    meta = getattr(result, "metadata", None)
+    src = meta.get("source_file") if isinstance(meta, dict) else None
+    if src:
+        current = h5_session.get_current_path()
+        if not current or not variant_registry.same_file(current, src):
+            return None
+    return _read_native_band_contrast(variant_registry.variant_for_source(result, src))
 
 
 def _bc_brightness_factor(xmap, n_rows: int, n_cols: int, mask) -> "np.ndarray | None":
@@ -1844,7 +1944,7 @@ def _render_bc_figure(
     scalebar_enabled, scalebar_location, scalebar_length,
     scalebar_font_size, scalebar_bar_color, scalebar_box_color,
     scalebar_box_alpha, show_legend, title, dpi,
-    *, ipf_valid_2d=None, had_cleanup: bool = False,
+    *, ipf_valid_2d=None, had_cleanup: bool = False, hexctx=None,
 ):
     """Render the Band Contrast quality map as a greyscale image.
 
@@ -1902,7 +2002,7 @@ def _render_bc_figure(
             vmin, vmax = float(finite.min()), float(finite.max() or 1.0)
     else:
         vmin, vmax = 0.0, 255.0
-    im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax)
+    im = _show_scalar(ax, data, cmap, hexctx, vmin=vmin, vmax=vmax)
     ax.axis('off')
     if show_legend:
         ax.set_title(title or "Band Contrast", color='white', fontsize=12)
@@ -1929,6 +2029,8 @@ def _render_bc_figure(
         "max_val": float(np.nanmax(data)),
         "mean_val": float(np.nanmean(data)),
     }
+    if hexctx is not None:
+        meta["display"] = hexctx[1].to_dict()
     return fig, meta
 
 
@@ -2058,6 +2160,101 @@ async def render_phase_map(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+#: Kinds that may arrive already drawn on the display raster: an array of the raster's shape is passed through
+#: for these. For every other kind it is refused, and so is an image that is neither the index grid nor the
+#: raster (the square grain-boundary overlay is drawn four times oversampled and is refused here; on a
+#: hexagonal scan that kind is drawn on the raster itself, see ``_compute_layer_rgba``).
+_DISPLAY_NATIVE_KINDS = frozenset({"grain-boundaries"})
+
+
+def _hex_scan_context(result, dataset):
+    """(geometry, spec) of the hexagonal scan a map of ``result`` / ``dataset`` is drawn for, or None.
+
+    The same precedence as _compute_layer_rgba and _render_to_figure: the result when it has a crystal map,
+    else the analysis dataset. For a kind that reads the result alone (_RESULT_ONLY_KINDS and the diagnostic
+    and refinement kinds) the caller passes dataset=None (see _hex_layer_context), so the result's stamp
+    decides even when the result holds no crystal map.
+    The geometry is the one STAMPED on the result when it ran (or the dataset's own), never the live one.
+    None for a square, unknown or missing stamp: unknown is not hexagonal, and those maps are drawn as they
+    always were. A hexagonal stamp that cannot be turned into a geometry (``_unusable_stamp``) is a 400."""
+    if getattr(result, "xmap", None) is not None or dataset is None:
+        stamp = (getattr(result, "metadata", None) or {}).get("scan_geometry")
+    else:
+        stamp = getattr(dataset, "scan_geometry", None)
+    try:
+        geometry = hex_raster.geometry_from_stamp(stamp)
+        if geometry is None:
+            return None
+        return geometry, hex_raster.raster_spec(geometry)
+    except (ValueError, KeyError, TypeError, OverflowError) as exc:      # OverflowError: int(inf)
+        raise _unusable_stamp(exc)
+
+
+def _unusable_stamp(exc) -> HTTPException:
+    """The 400 for a hexagonal stamp that cannot be turned into a geometry (a valid mask the dict cannot carry,
+    a shift of 0, a missing field): a broken contract between the result and this route, not a server fault."""
+    return HTTPException(
+        status_code=400,
+        detail=(f"The scan geometry stamped on this map is not usable ({type(exc).__name__}: {exc}); "
+                "load the file again."))
+
+
+def _unusable_checkpoint_stamp(exc) -> HTTPException:
+    """The 400 for a checkpoint whose own scan stamp cannot be read or does not fit its map. The checkpoint is
+    named, and so is the fact that nothing was written to it (the stamp is read before the first pass)."""
+    return HTTPException(
+        status_code=400,
+        detail=(f"The scan geometry stamped on this checkpoint cannot be used ({type(exc).__name__}: {exc}); "
+                "the checkpoint was not changed."))
+
+
+def _hex_topology_of(result, dataset, shape):
+    """What a neighbour is on the scan of ``result`` / ``dataset``: a hexagonal ``Topology``, or ``None`` for a
+    square or unknown scan (the code as it was). Pass the pair of objects the ROUTE draws, never the active result
+    alone: without a result that holds a crystal map the route draws the analysis dataset, and the stamp of the
+    dataset decides (``_hex_scan_context`` has the precedence). A route that reads the result alone passes
+    ``dataset=None`` (``apply_cleanup``). A stamp whose grid is not the map's grid is a broken contract and is
+    answered with 400, rather than letting the hexagonal rule run on a grid it does not describe."""
+    ctx = _hex_scan_context(result, dataset)
+    if ctx is None:
+        return None
+    topology = scan_neighbours.hex_topology(ctx[0])
+    if (topology.n_rows, topology.n_cols) != tuple(int(v) for v in shape):
+        raise HTTPException(
+            status_code=400,
+            detail=(f"The scan geometry stamped on this map is {topology.n_rows} x {topology.n_cols}, "
+                    f"but the map is {tuple(int(v) for v in shape)}; load the file again."))
+    return topology
+
+
+#: Layer kinds that `_compute_layer_rgba` reads from the result alone (never from the analysis dataset): the
+#: geometry is then the result's stamp even when the result holds no crystal map and a dataset is loaded.
+#: The diagnostic and refinement kinds are the other two groups that do so.
+_RESULT_ONLY_KINDS = frozenset({"phase_margin", "assignment_source"})
+
+
+def _hex_layer_context(kind=None):
+    """`_hex_scan_context` of the scan the route is drawing `kind` from (see its docstring for the precedence)."""
+    result, dataset = get_last_indexing_result(), get_analysis_dataset()
+    if kind in _DIAG_KIND_TO_KEY or kind in _REF_KIND_TO_KEY or kind in _RESULT_ONLY_KINDS:
+        dataset = None
+    return _hex_scan_context(result, dataset)
+
+
+def _to_layer_display(rgba, ctx, kind):
+    """The layer on the display raster. Never reshapes: an array that is neither the index grid nor (for a
+    kind that draws on the raster itself) the raster does not belong to this scan."""
+    geometry, spec = ctx
+    shape = tuple(rgba.shape[:2])
+    if kind in _DISPLAY_NATIVE_KINDS and shape == (spec.height, spec.width):
+        return rgba
+    if shape != tuple(geometry.grid_shape):
+        raise ValueError(
+            f"layer {kind!r} has shape {shape}, which is neither the index grid {tuple(geometry.grid_shape)} "
+            f"nor the display raster {(spec.height, spec.width)} of this hexagonal scan")
+    return hex_raster.to_display(rgba, geometry, spec=spec)
+
+
 @router.get("/layer")
 async def get_layer(
     kind: str,
@@ -2074,11 +2271,17 @@ async def get_layer(
     grain_stabilized: bool = False,
     phase_filter: int = -1,
     gb_bands: str = "",
+    display: Optional[Literal["index", "raster"]] = None,
 ):
     """Return a single layer as base64 RGBA PNG with transparent background.
 
     For frontend compositing. Unlike /render this returns native pixel
     resolution with NO scalebar / legend / IPF key — just the raw map.
+
+    A hexagonal scan is drawn on its square display raster (the answer then
+    carries ``display``, and ``shape`` is the raster's); ``display=index``
+    asks for the index grid instead, for callers that step by data pixels.
+    ``display`` accepts only ``index`` and ``raster``; any other value is a 422.
     """
     try:
         import io as _io
@@ -2116,17 +2319,25 @@ async def get_layer(
                     gb_bands=gb_bands,
                     scale_out=scale,
                 )
+                # a kind that is born on the raster has no index-grid picture, so ``display=index`` cannot undo it
+                ctx = (None if display == "index" and kind not in _DISPLAY_NATIVE_KINDS
+                       else _hex_layer_context(kind))
+                if ctx is not None:
+                    rgba = _to_layer_display(rgba, ctx, kind)
                 img = Image.fromarray(rgba)  # mode inferred from uint8 HxWx4 → RGBA
                 buf = _io.BytesIO()
                 img.save(buf, format="PNG", optimize=False)  # speed > size
                 buf.seek(0)
-                return {
+                payload = {
                     "image": base64.b64encode(buf.read()).decode("utf-8"),
                     "kind": kind,
                     "shape": [int(rgba.shape[0]), int(rgba.shape[1])],
                     # Present only for layers whose colours mean a number.
                     "scale": scale or None,
                 }
+                if ctx is not None:
+                    payload["display"] = ctx[1].to_dict()
+                return payload
 
         return await asyncio.to_thread(_work)
     except HTTPException:
@@ -2300,7 +2511,14 @@ async def get_available_maps():
                 "group": "Confidence",
             })
 
-    return {"maps": maps}
+    # The geometry of the analysis dataset when IT is what the map routes draw (no result with a crystal
+    # map): the page reads the pointer on a hexagonal dataset with it. A result's stamp reaches the page
+    # with the result list. A dataset without a crystal map is not drawn (the routes answer 400), so it
+    # names no geometry.
+    drawn = (_hex_scan_context(result, dataset)
+             if dataset is not None and getattr(dataset, "xmap", None) is not None
+             and getattr(result, "xmap", None) is None else None)
+    return {"maps": maps, "dataset_scan_geometry": drawn[0].to_dict() if drawn else None}
 
 
 class ApplyCleanupRequest(BaseModel):
@@ -2334,8 +2552,17 @@ async def apply_cleanup(req: ApplyCleanupRequest):
     import os
     import numpy as np
 
+    # A checkpoint is cleaned on the lattice it was written for: its own stamp decides (a hexagonal scan on six
+    # neighbours, a square one or a checkpoint without a stamp on four), never the active result
+    # (CheckpointWriter.apply_cleanup reads the stamp itself, and so does the second pass below).
+    # Which file is cleaned is another matter: nothing ties a checkpoint to the active result (the page sends the
+    # stem of its last batch), so `auto` keeps the result on screen when that is a hexagonal scan, and only an
+    # explicit `checkpoint` takes the file.
+    from backend.api.routes.indexing import get_last_indexing_result
+    hex_active = _hex_scan_context(get_last_indexing_result(), None) is not None
+
     cp_path = None
-    if req.target in ("auto", "checkpoint") and req.file_stem:
+    if req.target in ("auto", "checkpoint") and req.file_stem and not (hex_active and req.target == "auto"):
         candidates = []
         if req.search_dir:
             candidates.append(os.path.join(req.search_dir, f"{req.file_stem}_multiphase.h5"))
@@ -2352,16 +2579,32 @@ async def apply_cleanup(req: ApplyCleanupRequest):
         cw = CheckpointWriter(source_proxy)
         cw.checkpoint_path = cp_path
 
-        stats = cw.apply_cleanup(
-            ci_threshold=req.ci_threshold,
-            uncertainty_threshold=req.uncertainty_threshold,
-            min_cluster_size=req.min_cluster_size,
-        )
+        # The lattice of this checkpoint, read before anything is written: a stamp that cannot be read, or that
+        # does not describe the checkpoint's map, is a broken contract (400), and a modal window beyond what a
+        # hexagonal scan allows is refused here and not after the first pass has already been saved.
+        import h5py
+        from backend.api.services.checkpoint_writer import checkpoint_topology
+        with h5py.File(cp_path, "r") as f:
+            grid = (tuple(f["auto_assignment/best_phase_id"].shape)
+                    if "auto_assignment/best_phase_id" in f else None)
+        try:
+            topology = checkpoint_topology(cp_path, grid)
+        except ValueError as exc:
+            raise _unusable_checkpoint_stamp(exc)
+        _require_modal_size_within_limit(topology, req.modal_filter_size)
+
+        try:
+            stats = cw.apply_cleanup(
+                ci_threshold=req.ci_threshold,
+                uncertainty_threshold=req.uncertainty_threshold,
+                min_cluster_size=req.min_cluster_size,
+            )
+        except ValueError as exc:
+            raise _unusable_checkpoint_stamp(exc)
         # The checkpoint path only accepts the original three filters for now;
         # the new fill_unindexed / modal_filter_size run in a second pass
         # directly on the cleaned_phase_id dataset.
         if req.fill_unindexed or req.modal_filter_size:
-            import h5py
             with h5py.File(cp_path, "a") as f:
                 aa = f.get("auto_assignment")
                 if aa is not None and "cleaned_phase_id" in aa:
@@ -2375,6 +2618,7 @@ async def apply_cleanup(req: ApplyCleanupRequest):
                         min_cluster_size=0,
                         fill_unindexed=req.fill_unindexed,
                         modal_filter_size=req.modal_filter_size,
+                        topology=topology,
                     )
                     del aa["cleaned_phase_id"]
                     aa.create_dataset(
@@ -2394,7 +2638,6 @@ async def apply_cleanup(req: ApplyCleanupRequest):
     # ------------------------------------------------------------------
     # In-memory result cleanup (single-file workflow) — mutate xmap.phase_id
     # ------------------------------------------------------------------
-    from backend.api.routes.indexing import get_last_indexing_result
     active = get_last_indexing_result()
     if active is None:
         raise HTTPException(
@@ -2453,6 +2696,8 @@ async def apply_cleanup(req: ApplyCleanupRequest):
         unc = np.zeros_like(ci_2d)
 
     from backend.api.services.checkpoint_writer import CheckpointWriter as _CW
+    topology = _hex_topology_of(active, None, pid_2d.shape)
+    _require_modal_size_within_limit(topology, req.modal_filter_size)
     cleaned = _CW.clean_phase_assignment(
         pid_2d, ci_2d, unc,
         ci_threshold=req.ci_threshold,
@@ -2460,6 +2705,7 @@ async def apply_cleanup(req: ApplyCleanupRequest):
         min_cluster_size=req.min_cluster_size,
         fill_unindexed=req.fill_unindexed,
         modal_filter_size=req.modal_filter_size,
+        topology=topology,
     )
 
     before = int((pid_2d >= 0).sum())
@@ -2771,7 +3017,8 @@ async def get_phase_stats(color_overrides: str = "", include_empty: bool = False
 async def get_phase_adjacency():
     """Return a phase-pair adjacency (confusion) matrix for the active xmap.
 
-    For every 4-neighbour pixel pair where both ends are indexed AND the
+    For every neighbour pixel pair (four neighbours on a square scan, six on
+    a hexagonal one) where both ends are indexed AND the
     phases differ, increment ``adjacency[a][b]`` and ``adjacency[b][a]``.
     The resulting matrix reveals which phase pairs share borders most
     often — high counts on a chemically-similar pair (e.g. Al4FeSi ↔
@@ -2850,7 +3097,7 @@ async def get_phase_adjacency():
         adj = np.zeros((n, n), dtype=np.int64)
 
         if n >= 2:
-            # 4-neighbour pairs: horizontal (left, right) and vertical (up, down).
+            # Square scan: 4-neighbour pairs, horizontal (left, right) and vertical (up, down).
             # Both ends must be indexed (phase_id >= 0). Phase != phase to count.
             left  = phase_id_arr[:, :-1]
             right = phase_id_arr[:,  1:]
@@ -2873,8 +3120,15 @@ async def get_phase_adjacency():
                 np.add.at(adj, (ai, bi), 1)
                 np.add.at(adj, (bi, ai), 1)
 
-            _accumulate(left, right)
-            _accumulate(up, down)
+            topology = _hex_topology_of(result, dataset, phase_id_arr.shape)
+            if topology is None:
+                _accumulate(left, right)
+                _accumulate(up, down)
+            else:
+                # every unordered pair of the six-neighbour lattice, once
+                lo, hi = topology.pairs()
+                flat = phase_id_arr.ravel()
+                _accumulate(flat[lo], flat[hi])
 
         border_total_per_phase = adj.sum(axis=1).astype(int).tolist()
         total_borders = int(adj.sum() // 2)  # each border counted twice (i,j)+(j,i)
@@ -3061,8 +3315,7 @@ def _get_scalar_array_2d(name: str) -> "Optional['np.ndarray']":
             # Fall back to the raw H5OINA band-contrast grid the EBSD viewer
             # exposes — same source `_compute_layer_rgba` uses for BC.
             try:
-                from backend.api.routes.virtual_images import _read_native_band_contrast
-                native_bc = _read_native_band_contrast()
+                native_bc = _band_contrast_of_open_file(result)
             except Exception:
                 native_bc = None
             if native_bc is not None and native_bc.shape == (n_rows, n_cols):
@@ -3191,6 +3444,9 @@ class PhaseMapRegionStatsRequest(BaseModel):
     row_end: int
     col_start: int
     col_end: int
+    # Optional selection inside the rectangle: row-major over the normalised rectangle (both ends
+    # inclusive), True = the pixel counts. Absent = every pixel of the (clipped) rectangle.
+    mask: Optional[List[bool]] = None
 
 
 @router.post("/region-stats")
@@ -3213,6 +3469,12 @@ async def phasemap_region_stats(req: PhaseMapRegionStatsRequest):
 
     Reversed-drag rectangles (row_end < row_start, etc.) are normalised. A
     scalar with all-NaN pixels in the rectangle returns ``null``.
+
+    With ``mask`` the statistics are taken over the selected pixels only,
+    ``n_pixels`` counts them and the answer carries ``"masked": true``. A mask
+    cannot be clipped, so the rectangle must then lie inside the scan; a mask
+    whose length is not the rectangle's pixel count, or that selects nothing, is
+    refused with 422.
     """
     import numpy as np
 
@@ -3236,6 +3498,25 @@ async def phasemap_region_stats(req: PhaseMapRegionStatsRequest):
                    f"is empty after clipping to scan {n_rows}x{n_cols}",
         )
 
+    mask2d = None
+    if req.mask is not None:
+        lo_r, hi_r = sorted((int(req.row_start), int(req.row_end)))
+        lo_c, hi_c = sorted((int(req.col_start), int(req.col_end)))
+        if (lo_r, hi_r, lo_c, hi_c) != (r0, r1, c0, c1):
+            raise HTTPException(
+                status_code=422,
+                detail=f"a masked rectangle must lie inside the scan {n_rows}x{n_cols}",
+            )
+        want = (r1 - r0 + 1) * (c1 - c0 + 1)
+        if len(req.mask) != want:
+            raise HTTPException(
+                status_code=422,
+                detail=f"the mask has {len(req.mask)} entries, the rectangle {want}",
+            )
+        mask2d = np.asarray(req.mask, dtype=bool).reshape(r1 - r0 + 1, c1 - c0 + 1)
+        if not mask2d.any():
+            raise HTTPException(status_code=422, detail="the mask selects no pixel")
+
     # Phase histogram -----------------------------------------------------
     raw_ids = np.asarray(xmap.phase_id)
     if raw_ids.size == n_rows * n_cols:
@@ -3249,6 +3530,8 @@ async def phasemap_region_stats(req: PhaseMapRegionStatsRequest):
             pid_2d.flat[:raw_ids.size] = raw_ids
 
     sub = pid_2d[r0:r1 + 1, c0:c1 + 1]
+    if mask2d is not None:
+        sub = sub[mask2d]
     n_pixels = int(sub.size)
 
     ids, counts = np.unique(sub, return_counts=True)
@@ -3289,6 +3572,8 @@ async def phasemap_region_stats(req: PhaseMapRegionStatsRequest):
                 scalars[name] = None
                 continue
             sub_arr = arr[r0:r1 + 1, c0:c1 + 1]
+            if mask2d is not None:
+                sub_arr = sub_arr[mask2d]
             valid = np.isfinite(sub_arr)
             if not valid.any():
                 scalars[name] = None
@@ -3299,7 +3584,7 @@ async def phasemap_region_stats(req: PhaseMapRegionStatsRequest):
         except Exception:
             scalars[name] = None
 
-    return {
+    answer: Dict[str, object] = {
         "row_start": r0,
         "row_end": r1,
         "col_start": c0,
@@ -3308,18 +3593,24 @@ async def phasemap_region_stats(req: PhaseMapRegionStatsRequest):
         "phases": phases_list,
         "scalars": scalars,
     }
+    if mask2d is not None:
+        answer["masked"] = True
+    return answer
 
 
 # --- Linescan ---------------------------------------------------------------
 
 
 class PhaseMapLinescanRequest(BaseModel):
-    start_row: int
-    start_col: int
-    end_row: int
-    end_col: int
+    start_row: Optional[int] = None
+    start_col: Optional[int] = None
+    end_row: Optional[int] = None
+    end_col: Optional[int] = None
     n_samples: int = 128
     layers: List[str]
+    # Scan points [row, col] to sample instead of the straight line; when given, start/end and
+    # n_samples are ignored.
+    points: Optional[List[List[int]]] = None
 
 
 @router.post("/linescan")
@@ -3338,6 +3629,15 @@ async def phasemap_linescan(req: PhaseMapLinescanRequest):
     Sample count is clamped to ``[2, 512]`` to keep the response small. Uses
     bilinear ``scipy.ndimage.map_coordinates`` when available; falls back to
     nearest-neighbour otherwise.
+
+    With ``points`` (2 to 4096 ``[row, col]`` pairs) each layer is read at
+    exactly those scan pixels, without interpolation, and the start/end and
+    ``n_samples`` fields are ignored. A point outside the scan or a list of the
+    wrong shape is refused with 422.
+
+    The response carries neither distance nor length: a caller plotting the series
+    against the sample index gets a correct distance axis only if the points lie
+    evenly spaced along the path, and the caller is responsible for that.
     """
     import numpy as np
 
@@ -3345,26 +3645,49 @@ async def phasemap_linescan(req: PhaseMapLinescanRequest):
     if result is None:
         raise HTTPException(status_code=400, detail="No indexing result available.")
 
-    n = max(2, min(512, int(req.n_samples)))
+    if req.points is not None:
+        n_rows, n_cols = result.original_shape
+        # Ragged input is checked before numpy sees it (it would raise instead of refusing).
+        if not (2 <= len(req.points) <= 4096) or any(len(p) != 2 for p in req.points):
+            raise HTTPException(status_code=422, detail="points must be 2 to 4096 [row, col] pairs")
+        try:
+            pts = np.asarray(req.points, dtype=np.int64)
+        except OverflowError:       # an integer beyond 64 bits is far outside any scan
+            raise HTTPException(status_code=422, detail=f"a point lies outside the scan {n_rows}x{n_cols}")
+        if ((pts[:, 0] < 0).any() or (pts[:, 0] >= n_rows).any()
+                or (pts[:, 1] < 0).any() or (pts[:, 1] >= n_cols).any()):
+            raise HTTPException(status_code=422, detail=f"a point lies outside the scan {n_rows}x{n_cols}")
+        n = len(pts)
 
-    if not req.layers:
-        return {"samples": n, "series": {}}
-
-    rs = np.linspace(req.start_row, req.end_row, n)
-    cs = np.linspace(req.start_col, req.end_col, n)
-
-    try:
-        from scipy.ndimage import map_coordinates
+        if not req.layers:
+            return {"samples": n, "series": {}}
 
         def sample(arr2d):
-            return map_coordinates(
-                arr2d, np.vstack([rs, cs]), order=1, mode="nearest"
-            ).tolist()
-    except Exception:
-        def sample(arr2d):
-            ri = np.clip(np.round(rs).astype(int), 0, arr2d.shape[0] - 1)
-            ci = np.clip(np.round(cs).astype(int), 0, arr2d.shape[1] - 1)
-            return arr2d[ri, ci].tolist()
+            return arr2d[pts[:, 0], pts[:, 1]].tolist()    # the scan pixels themselves, no interpolation
+    else:
+        if None in (req.start_row, req.start_col, req.end_row, req.end_col):
+            raise HTTPException(status_code=422, detail="a line needs start and end, or points")
+
+        n = max(2, min(512, int(req.n_samples)))
+
+        if not req.layers:
+            return {"samples": n, "series": {}}
+
+        rs = np.linspace(req.start_row, req.end_row, n)
+        cs = np.linspace(req.start_col, req.end_col, n)
+
+        try:
+            from scipy.ndimage import map_coordinates
+
+            def sample(arr2d):
+                return map_coordinates(
+                    arr2d, np.vstack([rs, cs]), order=1, mode="nearest"
+                ).tolist()
+        except Exception:
+            def sample(arr2d):
+                ri = np.clip(np.round(rs).astype(int), 0, arr2d.shape[0] - 1)
+                ci = np.clip(np.round(cs).astype(int), 0, arr2d.shape[1] - 1)
+                return arr2d[ri, ci].tolist()
 
     # Layers we know how to sample. Anything outside this set (including
     # phase, ipf-x/y/z, eds-*, vbse, electron-*) falls through to the null

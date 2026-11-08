@@ -34,8 +34,6 @@
       "notSetUp": "Nicht eingerichtet"
     },
     "warnings": {
-      "gpuBlocksizeReduced": "Grafikkarte hat {{gb}} GB — Blockgröße {{blocksize}} für das GPU-Masterpattern (von 32 reduziert, damit es in den Speicher passt).",
-      "gpuBlocksizeMinimal": "Grafikkarte hat {{gb}} GB — kleinste Blockgröße {{blocksize}} für das GPU-Masterpattern. Bei komplexen Kristallen (mehr als 20 Atome) kann der Speicher trotzdem nicht reichen.",
       "emsoftNotOffered": "EMsoft ist auf diesem Rechner nicht eingerichtet. Es ist optional — die Orienta Engine braucht kein EMsoft."
     }
   },

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useTranslation, Trans } from 'react-i18next';
 import {
   estimateCpuSphericalSeconds, estimateGpuSphericalSeconds, formatRoughDuration, hasNoCudaDevice, isSphericalCpuFallback,
@@ -6,10 +6,12 @@ import {
 import { colors, spacing } from '../../theme/tokens';
 import { Button, GroupBox, Input } from '../../theme/components';
 import { batchV2Api, indexApi } from '../../services/api';
+import { problemText, problemCode } from '../../services/problemText';
 import useBatchConfigStore from '../../stores/useBatchConfigStore';
 import useBatchStore from '../../stores/useBatchStore';
 import BatchFileTree from './BatchFileTree';
 import BatchDashboard from './BatchDashboard';
+import { noteText, reasonText } from './exportRecordText';
 
 // ---------------------------------------------------------------------------
 const STEPS = [
@@ -128,6 +130,94 @@ function PhaseChip({ label, detail, selected, onToggle, title }) {
   );
 }
 
+const baseName = (p) => String(p || '').split(/[\\/]/).pop();
+
+/**
+ * The second line under a file of step 1: the grid the loader read (`grid_kind`, `grid_dims`) and the
+ * APEX measurement the file was paired with. A pattern file (.up1/.up2) has no grid of its own, so one
+ * that found no metadata says so; a file that carries its own grid (.h5oina, .h5) says nothing about
+ * metadata. Empty when quick-load told nothing.
+ */
+export function gridPairingLine(f, t) {
+  const parts = [];
+  if (f.grid_kind && Array.isArray(f.grid_dims) && f.grid_dims.length >= 2) {
+    parts.push(t(f.grid_kind === 'hex' ? 'step1.gridHex' : 'step1.gridSquare',
+      { rows: f.grid_dims[0], cols: f.grid_dims[1] }));
+  }
+  if (f.apex) {
+    parts.push(t('step1.pairingPaired', { file: baseName(f.apex.h5_path), name: f.apex.measurement_name }));
+  } else if (f.grid_kind && /\.up[12]$/i.test(f.file_path || '')) {
+    parts.push(t('step1.pairingNone'));
+  }
+  return parts.join(' · ');
+}
+
+// A batch has an export record once it has stopped running (finished, failed or stopped by the user).
+const FINISHED = ['completed', 'failed', 'paused'];
+
+/**
+ * What the export of a finished batch did, file by file: the grid the files hold, the APEX measurement
+ * the file ran on, what was not written and why, and what the resampled files did to the scan. The
+ * reasons and the notes come with a code and params and are worded here (`exportRecordText`); the
+ * backend's English sentence stays the fallback.
+ */
+function ExportRecord({ batchId, status }) {
+  const { t } = useTranslation('batch');
+  const [records, setRecords] = useState([]);
+  useEffect(() => {
+    if (!batchId || !FINISHED.includes(status)) { setRecords([]); return undefined; }
+    let cancelled = false;
+    batchV2Api.exports(batchId)
+      .then((res) => { if (!cancelled) setRecords(res.data?.exports ?? []); })
+      .catch((e) => {
+        console.warn('Could not read the export record of the batch', e);
+        if (!cancelled) setRecords([]);
+      });
+    return () => { cancelled = true; };
+  }, [batchId, status]);
+  if (records.length === 0) return null;
+  return (
+    <GroupBox title={t('exports.title')}>
+      <div data-testid="batch-export-record" style={{ fontSize: '9pt' }}>
+        {records.map((r) => {
+          const name = baseName(r.file_path);
+          return (
+            <div key={r.file_path} data-testid={`batch-export-${name}`}
+              style={{ padding: '3px 4px', borderBottom: `1px solid ${colors.border}` }}>
+              <strong>{name}</strong>
+              {r.grid_kind && (
+                <div style={{ color: colors.textSecondary }}>
+                  {t(r.grid_kind === 'hex' ? 'exports.gridHex' : 'exports.gridSquare')}
+                </div>
+              )}
+              {r.pairing && (
+                <div style={{ color: colors.textSecondary }}>
+                  {t('step1.pairingPaired', { file: r.pairing.h5_name, name: r.pairing.measurement_name })}
+                </div>
+              )}
+              {Object.entries(r.errors || {}).map(([format, sentence]) => {
+                // a record from a backend without items has only the sentence
+                const item = r.error_items?.[format];
+                const reason = item ? reasonText(item, t) : sentence;
+                return (
+                  <div key={format} style={{ color: '#ff5555' }}>
+                    {t('exports.missing', { format: t(`exports.formats.${format}`, { defaultValue: format }), reason })}
+                  </div>
+                );
+              })}
+              {(Array.isArray(r.note_items)
+                ? r.note_items.map((item) => noteText(item, t))
+                : (r.notes || [])).map((note, i) => (
+                  <div key={i} style={{ color: colors.textSecondary }}>{note}</div>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </GroupBox>
+  );
+}
+
 // ===========================================================================
 export default function BatchWorkflow({ isActive = true }) {
   // Two namespaces: the spherical engine text lives in `indexing` and is
@@ -139,6 +229,9 @@ export default function BatchWorkflow({ isActive = true }) {
 
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState(null);
+  // Files the batch cannot take (a hexagonal scan), with the reason in the page's language.
+  // Quick-load answers a coded 400; they are shown in step 1 and are not added to the batch.
+  const [refusals, setRefusals] = useState([]);
   const [discoveredPhases, setDiscoveredPhases] = useState([]);
   const [selectedPhaseIndices, setSelectedPhaseIndices] = useState(new Set());
   const [loadingPhases, setLoadingPhases] = useState(false);
@@ -152,12 +245,19 @@ export default function BatchWorkflow({ isActive = true }) {
   // becomes visible again — BatchPage uses display:none so a newly
   // simulated SHT/CIF won't appear until we actively re-scan when the
   // user navigates back here from e.g. the Simulation module.
+  // A later call's answer must never be overwritten by an earlier, slower one: a quick
+  // Hough->Spherical switch could otherwise land the CIF list on screen a moment after the
+  // SHT list it should have replaced, and a phase applied from it would carry a CIF path
+  // paired with method 'spherical' — exactly the stale {path, method} pair setMethod now
+  // guards the applied phases against, just one step earlier in the pipeline.
+  const phaseRequestSeq = useRef(0);
   const refreshPhases = useCallback(() => {
+    const seq = ++phaseRequestSeq.current;
     setLoadingPhases(true);
     indexApi.discoverFiles(method)
-      .then((res) => setDiscoveredPhases(res.data?.files ?? []))
+      .then((res) => { if (seq === phaseRequestSeq.current) setDiscoveredPhases(res.data?.files ?? []); })
       .catch(() => {/* keep what we had */})
-      .finally(() => setLoadingPhases(false));
+      .finally(() => { if (seq === phaseRequestSeq.current) setLoadingPhases(false); });
   }, [method]);
 
   useEffect(() => {
@@ -181,6 +281,18 @@ export default function BatchWorkflow({ isActive = true }) {
     setSelectedPhaseIndices(sel);
   }, [globalPhases, discoveredPhases]);
 
+  // setMethod (the store) clears globalPhases whenever the method actually changes, because a
+  // phase's path is only valid for the method it was discovered under. That clearing is silent
+  // in the store; this is the one place that notices it happened and tells the user why their
+  // phase picks vanished, instead of leaving them to wonder.
+  const prevMethodStateRef = useRef({ method, hadPhases: globalPhases.length > 0 });
+  const [methodChangeNotice, setMethodChangeNotice] = useState(false);
+  useEffect(() => {
+    const prev = prevMethodStateRef.current;
+    setMethodChangeNotice(prev.method !== method && prev.hadPhases);
+    prevMethodStateRef.current = { method, hadPhases: globalPhases.length > 0 };
+  }, [method, globalPhases]);
+
   // --- Handlers ---
   const handleAddFolder = async () => {
     let target = '';
@@ -193,6 +305,7 @@ export default function BatchWorkflow({ isActive = true }) {
     }
     setScanning(true);
     setError(null);
+    setRefusals([]);
     try {
       const res = await batchV2Api.scanFolder(target);
       const found = res.data?.files ?? [];
@@ -212,9 +325,25 @@ export default function BatchWorkflow({ isActive = true }) {
           const d = m.data;
           const idx = useBatchConfigStore.getState().files.findIndex((f) => f.file_path === fp);
           if (idx < 0) continue;
-          store.updateFileMetadata(idx, { loaded: true, eds_available: d.has_eds, eds_elements: d.eds_elements });
+          store.updateFileMetadata(idx, {
+            loaded: true, eds_available: d.has_eds, eds_elements: d.eds_elements,
+            // what the page shows under the name: the grid the loader read, the measurement it paired
+            grid_kind: d.grid_kind, grid_dims: d.grid_shape, apex: d.apex,
+            // the file's own PC convention and its pattern size, for the "set PC manually" dialog
+            pattern_shape: d.pattern_shape, convention: d.convention, convention_known: d.convention_known,
+          });
           if (d.pc) store.updateFilePCStatus(idx, { pc_value: d.pc, pc_status: d.pc_source || 'header' });
-        } catch { /* skip */ }
+        } catch (e) {
+          // A coded refusal is the file's verdict (it cannot run in a batch): say so now, in the
+          // page's language, and keep the file out of the batch. Any other failure is skipped
+          // as before (the file stays listed without a check mark).
+          if (problemCode(e)) {
+            const idx = useBatchConfigStore.getState().files.findIndex((f) => f.file_path === fp);
+            if (idx >= 0) store.removeFile(idx);
+            const name = fp.split(/[\\/]/).pop();
+            setRefusals((prev) => [...prev, { path: fp, name, text: problemText(e, t, 'batch') }]);
+          }
+        }
       }
     } catch (e) {
       setError(e.response?.data?.detail || e.message || t('step1.scanFailed'));
@@ -318,7 +447,7 @@ export default function BatchWorkflow({ isActive = true }) {
       await batchStore.startBatch();
       store.setStep(7);
     } catch (e) {
-      setError(e.response?.data?.detail || e.message || t('step6.startFailed'));
+      setError(problemText(e, t, 'batch') || e.message || t('step6.startFailed'));
     }
   };
 
@@ -331,13 +460,29 @@ export default function BatchWorkflow({ isActive = true }) {
       <div style={{ marginTop: 8, fontSize: '9pt', color: colors.textSecondary }}>
         {files.length > 0 ? t('step1.filesLoaded', { count: files.length }) : t('step1.hint')}
       </div>
+      <div data-testid="batch-pattern-source" style={{ marginTop: 4, fontSize: '9pt', color: colors.textSecondary }}>
+        {t('step1.patternSource')}
+      </div>
       {files.length > 0 && (
         <div style={{ maxHeight: 300, overflow: 'auto', marginTop: 8, fontSize: '9pt', border: `1px solid ${colors.border}`, borderRadius: 4, padding: 4 }}>
           {files.map((f) => (
-            <div key={f.file_path} style={{ padding: '2px 4px', borderBottom: `1px solid ${colors.border}`, color: f.loaded ? colors.text : colors.textSecondary }}>
+            <div key={f.file_path} data-testid={`batch-file-${f.file_name}`}
+              style={{ padding: '2px 4px', borderBottom: `1px solid ${colors.border}`, color: f.loaded ? colors.text : colors.textSecondary }}>
               {f.file_name}
               {f.loaded && <span style={{ color: '#50fa7b', marginLeft: 6, fontSize: '8pt' }}>{'\u2713'}</span>}
               {f.eds_available && <span style={{ color: colors.accent, marginLeft: 4, fontSize: '8pt' }}>EDS</span>}
+              {gridPairingLine(f, t) && (
+                <div style={{ fontSize: '8pt', color: colors.textSecondary }}>{gridPairingLine(f, t)}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {refusals.length > 0 && (
+        <div data-testid="batch-refusals" style={{ color: '#ff5555', fontSize: '9pt', marginTop: 8 }}>
+          {refusals.map((r) => (
+            <div key={r.path} data-testid="batch-refusal" style={{ marginTop: 4 }}>
+              <strong>{r.name}</strong>: {r.text}
             </div>
           ))}
         </div>
@@ -394,6 +539,10 @@ export default function BatchWorkflow({ isActive = true }) {
       files.forEach((_, i) => store.updateFileConfig(i, { export_formats: [...current] }));
     };
     const formats = new Set(cfg.export_formats || []);
+    // The square .ang exists for a hexagonal scan only (a square one is refused by the backend). It stays
+    // visible while it is ticked, so a list that lost its hexagonal files can still clear it.
+    const anyHex = files.some((f) => f.grid_kind === 'hex');
+    const showAngSquare = anyHex || formats.has('ang_square');
 
     // Size estimate (MB) — matches backend preflight math
     const nPhases = cfg.phases?.length || 0;
@@ -404,6 +553,7 @@ export default function BatchWorkflow({ isActive = true }) {
       if (formats.has('h5_light')) estMb += (nPhases * 5 + 5) * nFiles;
       if (formats.has('ang'))      estMb += 20 * nFiles;
       if (formats.has('ctf'))      estMb += 20 * nFiles;
+      if (formats.has('ang_square')) estMb += 20 * files.filter((f) => f.grid_kind === 'hex').length;
     }
     const estStr = estMb >= 1024
       ? `${(estMb / 1024).toFixed(1)} GB`
@@ -525,6 +675,18 @@ export default function BatchWorkflow({ isActive = true }) {
                   <span style={{ color: colors.textSecondary, marginLeft: 6 }}>{t('step3.ctfDesc')}</span>
                 </span>
               </label>
+              {showAngSquare && (
+                <label data-testid="batch-format-ang_square" style={{ display: 'flex', gap: 8, cursor: 'pointer' }}
+                  title={t('step3.angSquareTooltip')}>
+                  <input type="checkbox" checked={formats.has('ang_square')}
+                    onChange={(e) => toggleFormat('ang_square', e.target.checked)}
+                    style={{ accentColor: colors.accent }} />
+                  <span>
+                    <b>{t('step3.angSquare')}</b>
+                    <span style={{ color: colors.textSecondary, marginLeft: 6 }}>{t('step3.angSquareDesc')}</span>
+                  </span>
+                </label>
+              )}
               <label style={{ display: 'flex', gap: 8, cursor: 'pointer' }} title={t('step3.richH5Tooltip')}>
                 <input type="checkbox" checked={formats.has('h5_rich')}
                   onChange={(e) => toggleFormat('h5_rich', e.target.checked)}
@@ -542,6 +704,11 @@ export default function BatchWorkflow({ isActive = true }) {
                 </span>
               </label>
             </div>
+            {anyHex && (
+              <p data-testid="batch-hex-resampled" style={{ fontSize: '9pt', color: colors.textSecondary, margin: '6px 0 0 0' }}>
+                {t('formats.hexResampled')}
+              </p>
+            )}
 
             {/* EDS copy-through: copies per-element Window Integral + X/Y
                 + Header from the source h5oina into the light .h5. Raw
@@ -623,6 +790,14 @@ export default function BatchWorkflow({ isActive = true }) {
         </div>
       </GroupBox>
       <GroupBox title={t('step4.availablePhasesTitle')}>
+        {methodChangeNotice && (
+          <div style={{
+            padding: '4px 8px', marginBottom: 6, borderRadius: 4, fontSize: '9pt',
+            color: colors.red, background: `${colors.red}11`, border: `1px solid ${colors.red}33`,
+          }}>
+            {t('step4.methodChangedClearedPhases')}
+          </div>
+        )}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <Button small onClick={refreshPhases} disabled={loadingPhases}
             title={t('step4.refreshTooltip')}>
@@ -754,8 +929,13 @@ export default function BatchWorkflow({ isActive = true }) {
   };
 
   const renderStep7 = () => batchStore.batchId
-    ? <BatchDashboard />
-    : <div style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 40 }}>{t('step7.noBatchRunning')}</div>;
+    ? (
+      <>
+        <BatchDashboard />
+        <ExportRecord batchId={batchStore.batchId} status={batchStore.status} />
+      </>
+    )
+    :<div style={{ color: colors.textSecondary, textAlign: 'center', marginTop: 40 }}>{t('step7.noBatchRunning')}</div>;
 
   const stepRenderers = { 1: renderStep1, 2: renderStep2, 3: renderStep3, 4: renderStep4, 5: renderStep5, 6: renderStep6, 7: renderStep7 };
 

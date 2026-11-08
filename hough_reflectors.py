@@ -40,6 +40,9 @@ from pathlib import Path
 
 import numpy as np
 
+from crystal_symmetry import trigonal_frame_phase
+from phase_cell import calculate_structure_factors, sanitise_reflectors
+
 logger = logging.getLogger(__name__)
 
 #: The default construction of ``ebsd_utils.prepare_reflectors``.
@@ -68,6 +71,27 @@ MIN_FAMILIES = 2
 LIST_LIMIT = 400
 
 SPEC_STORE_FILE = "hough_reflector_specs.json"
+
+
+class HoughLibraryTooBig(MemoryError):
+    """The Hough band-triplet library of a reflector list does not fit the memory.
+
+    A ``MemoryError`` (existing callers that catch it keep working) that says what
+    it is: ``code``, ``params`` (per phase the rows, the predicted library, the
+    one-click count when there is one; the budget; the floor) and the English
+    ``str``. The indexing route and the PC refinement route pass it on as a
+    coded problem, so the pages can word it in the user's language and offer the
+    one-click answer where the failure is shown, instead of a generic "out of RAM".
+    """
+
+    code = "hough_library_too_big"
+
+    def __init__(self, message, params=None):
+        super().__init__(message)
+        self.params = dict(params or {})
+
+    def as_problem(self):
+        return {"code": self.code, "message": str(self), "params": self.params}
 
 
 class SpecError(ValueError):
@@ -250,9 +274,14 @@ def _point_group_key(phase):
     every axis and an untagged group reports the default axis, so the operations
     themselves are part of the key (as rotations, with ``q`` and ``-q`` the same).
     """
-    from crystal_symmetry import unique_axis
+    from crystal_symmetry import has_trigonal_y_setting, phase_point_group, unique_axis
 
-    pg = getattr(phase, "point_group", None)
+    # The seven trigonal groups are keyed by their true group whatever class the
+    # phase object is: a plain orix phase of the same crystal is turned into the
+    # frame-aware one before any family is built (``trigonal_frame_phase``), so
+    # both must find the same cache entries. Every other phase: its own group.
+    pg = (phase_point_group(phase) if has_trigonal_y_setting(phase)
+          else getattr(phase, "point_group", None))
     if pg is None:
         return None
     ops = []
@@ -514,7 +543,9 @@ def _lexmax_rep(rows):
 def _build_table(phase, min_d):
     R = _diffsims()
     _eu()._normalize_element_labels(phase)
-    phase = phase.deepcopy()      # sanitise_phase() below expands in place
+    # the seven trigonal groups: the families come from `phase.point_group`, so a
+    # plain phase gets its true group first (every other phase is copied as is)
+    phase = trigonal_frame_phase(phase).deepcopy()
     ref = R.from_min_dspacing(phase, float(min_d))
     # Primitive-hexagonal groups: diffsims cannot filter systematic absences;
     # the structure-factor filter below removes them.
@@ -523,8 +554,8 @@ def _build_table(phase, min_d):
     except NotImplementedError:
         pass
     ref = ref.unique(use_symmetry=True)
-    ref.sanitise_phase()
-    ref.calculate_structure_factor()
+    sanitise_reflectors(ref)
+    calculate_structure_factors(ref)
     f_all = np.abs(np.asarray(ref.structure_factor)).ravel()
     table = _Table()
     table.min_d = float(min_d)
@@ -559,6 +590,7 @@ def _orbit_rows_of(phase, rlv):
     """
     from orix.vector import Vector3d
     R = _diffsims()
+    phase = trigonal_frame_phase(phase)
     ops = phase.point_group
     xyz = np.asarray(rlv.data, dtype=float).reshape(-1, 3)
     v2 = ops.outer(Vector3d(xyz))
@@ -628,6 +660,9 @@ def _rule_rows(phase, rule):
     purpose: which member of a family diffsims reports as its representative can
     depend on it, and the representative decides the order of PyEBSDIndex's pole
     arrays.
+
+    The list depends on the crystal and the rule only (never on free memory), so
+    caching it on those is exact.
     """
     key = ("rows", _structure_hash(phase), rule["min_d"], rule["f_threshold"],
            rule["max_rows"])
@@ -653,10 +688,9 @@ def _extra_family(phase, rep):
     def build():
         R = _diffsims()
         _eu()._normalize_element_labels(phase)
-        p = phase.deepcopy()      # sanitise_phase() expands in place
-        r = R(p, hkl=np.array([rep], dtype=float))
-        r.sanitise_phase()
-        r.calculate_structure_factor()
+        r = R(phase.deepcopy(), hkl=np.array([rep], dtype=float))
+        sanitise_reflectors(r)
+        calculate_structure_factors(r)
         f = float(np.abs(np.asarray(r.structure_factor)).ravel()[0])
         d = float(np.asarray(r.dspacing).ravel()[0])
         # the orbit on the unexpanded phase: only the point group matters
@@ -765,9 +799,9 @@ def rlv_for_spec(phase, spec):
     hkl, _rows = spec_rows(phase, spec)
     R = _diffsims()
     _eu()._normalize_element_labels(phase)
-    rlv = R(phase.deepcopy(), hkl=hkl)       # sanitise_phase() expands in place
-    rlv.sanitise_phase()
-    rlv.calculate_structure_factor()
+    rlv = R(trigonal_frame_phase(phase).deepcopy(), hkl=hkl)
+    sanitise_reflectors(rlv)
+    calculate_structure_factors(rlv)
     return rlv
 
 
@@ -803,6 +837,44 @@ def specs_snapshot():
     with _LOCK:
         _load_locked()
         return {"version": _VERSION, "specs": json.loads(json.dumps(_SPECS))}
+
+
+def merge_build_records(target, sources):
+    """Carry ``metadata["hough_reflectors"]`` of per-phase sub-results onto the result
+    that merges them (the sites that build a fresh result, like ``merge_provenance``
+    for the citation steps). One entry per phase name; a source without a record, or
+    a result whose metadata is not a dict, contributes nothing.
+
+    The notes a result carries about itself (``metadata["caveats"]``, see
+    ``hough_caveats``) travel the same way, so they are merged here as well: every
+    site that merges per-phase results already calls this function."""
+    md = getattr(target, "metadata", None)
+    if not isinstance(md, dict):
+        return
+    sources = list(sources)
+    from hough_caveats import merge_caveats
+    merge_caveats(target, sources)
+    merged = dict(md.get("hough_reflectors") or {})
+    for source in sources:
+        smd = getattr(source, "metadata", None)
+        rec = smd.get("hough_reflectors") if isinstance(smd, dict) else None
+        if isinstance(rec, dict):
+            for phase, entry in rec.items():
+                merged.setdefault(phase, entry)
+    if merged:
+        md["hough_reflectors"] = merged
+
+
+def record_build_rows(per_phase_rows):
+    """The rows the most recent indexer of THIS thread was built with, one list
+    per phase (``ebsd_utils.create_indexer`` calls this after every limit and
+    selection has been applied)."""
+    _BUILD.rows = [list(r) for r in per_phase_rows]
+
+
+def last_build_rows():
+    """The rows of the most recent ``create_indexer`` of this thread (or None)."""
+    return getattr(_BUILD, "rows", None)
 
 
 def last_build_snapshot():
@@ -875,7 +947,8 @@ def effective_families(phase, rows):
     """
     from pyebsdindex.tripletvote import BandIndexer
     R = _diffsims()
-    u = R(phase, hkl=np.asarray(rows, dtype=float)).unique(use_symmetry=True)
+    u = R(trigonal_frame_phase(phase), hkl=np.asarray(rows, dtype=float)).unique(
+        use_symmetry=True)
     b = BandIndexer()
     b.setpolefamilies(u.hkl)
     kept = np.asarray(b.polefamilies).reshape(-1, 3)
@@ -889,6 +962,19 @@ def effective_families(phase, rows):
 
 def _row_key(row):
     return tuple(int(x) for x in row)
+
+
+def _point_group_label(phase):
+    """The name of the phase's point group as the panel shows it.
+
+    For the seven trigonal space groups the name of the true group ("312" for
+    149, 151, 153), whatever class the phase object is, so that a plain orix
+    phase and its frame-aware twin give the same description.
+    """
+    from crystal_symmetry import has_trigonal_y_setting, phase_point_group
+
+    pg = phase_point_group(phase) if has_trigonal_y_setting(phase) else phase.point_group
+    return pg.name if pg else None
 
 
 def describe(phase, spec=None, limit=LIST_LIMIT, extended=False):
@@ -992,7 +1078,7 @@ def describe(phase, spec=None, limit=LIST_LIMIT, extended=False):
     sg = getattr(phase.space_group, "short_name", None)
     return {
         "phase_name": str(phase.name),
-        "point_group": phase.point_group.name if phase.point_group else None,
+        "point_group": _point_group_label(phase),
         "space_group": sg,
         "hexagonal": hex4,
         "mode": "default" if spec is None else spec["mode"],
@@ -1090,38 +1176,200 @@ def expand_top_n(phase, n, rule=None):
     return spec_with_fingerprint(phase, {"mode": "custom", "families": picked})
 
 
-def selection_provenance(phase_list, snapshot=None):
-    """What a result has to say about the reflector families it was indexed with.
+#: Crystal systems (read from the point group) for which a shorter default list is NEVER
+#: offered as a one-click answer: monoclinic (Laue class 2/m) and triclinic (Laue class
+#: -1). The point group is the key, not the name of its Laue class: orix gives no name
+#: to the Laue class of point group ``m`` (space groups 6 to 9), so a test on the name
+#: would let Pm, Pc, Cm and Cc through. Measured on synthetic patterns with known
+#: orientations, 50 rows
+#: instead of 70 lose 5.8 (Al13Fe4) and 17.6 (beta-AlFeSi) percentage points of the
+#: orientations within 5 degrees for 2/m, and 13.4 against the 64-row list for -1;
+#: orthorhombic (mmm) and cubic phases stayed inside the limit. A phase in these
+#: classes whose default list does not fit stays refused; the other ways out are fewer
+#: phases at a time, free memory, Spherical or Dictionary indexing, or a shorter list
+#: by hand in the reflector panel, which the user then makes knowing it loses
+#: orientations.
+LOW_SYMMETRY_SYSTEMS = ("monoclinic", "triclinic")
 
-    One entry per phase that has a selection of its own (empty list when none):
-    the families PyEBSDIndex used, the ones ticked, the spec, and a short phrase
-    for a phase on the default list.
+
+def has_no_one_click(phase):
+    """True for a phase of Laue class 2/m or -1 (monoclinic, triclinic).
+
+    Read from the point group of the phase (its crystal system): point groups 1 and -1
+    are triclinic, 2, m and 2/m monoclinic.
+    """
+    try:
+        return phase.point_group.system in LOW_SYMMETRY_SYSTEMS
+    except Exception:  # noqa: BLE001 - no point group: not a low-symmetry phase
+        return False
+
+
+def largest_list_that_fits(phase, budget=None):
+    """The largest reflector count of the reflector ladder whose library fits.
+
+    The refusal of an oversized default list offers this as one click. It is the
+    default construction (``DEFAULT_RULE``) with ``max_rows`` set to the count:
+    the list is the same on every machine, only the count depends on the machine,
+    and the count is recorded with the spec.
+
+    The cost of each count is that of the strongest ``k`` rows of the default
+    list as the indexer would build them (``ebsd_utils._library_rows_for``, the
+    request of PyEBSDIndex's table allocation, also what
+    ``predict_triplet_library`` reports). Returns a dict:
+
+    * ``fits``: the full default list already fits, nothing to do;
+    * ``rows``: the count to use, ``None`` when no count on the ladder is
+      allowed (``reason``: ``"nothing_fits"``, ``"too_few_families"`` (fewer than
+      ``MIN_FIT_FAMILIES`` effective families, or fewer than ``MIN_FIT_ROWS`` rows,
+      is not offered) or ``"low_symmetry"``: a monoclinic or triclinic phase never
+      gets a shorter default list, see ``LOW_SYMMETRY_SYSTEMS``);
+    * ``families``, ``predicted_bytes`` (None: smaller than the 48 MiB probe),
+      ``full_bytes``, ``budget_bytes``.
+    """
+    eu = _eu()
+    budget = int(eu._triplet_library_budget_bytes() if budget is None else budget)
+    probe = max(1, min(eu._PREDICT_PROBE_ROWS, budget // eu._TRIPLET_ROW_BYTES))
+
+    def cost(max_rows):
+        rule = dict(DEFAULT_RULE, max_rows=int(max_rows))
+        hkl, _rows = _rule_rows(phase, rule)
+        return hkl, eu._library_rows_for(phase, hkl.tolist(), probe_rows=probe) \
+            * eu._TRIPLET_ROW_BYTES
+
+    full_hkl, full_bytes = cost(DEFAULT_RULE["max_rows"])
+    out = {"fits": full_bytes <= budget, "rows": None, "families": None,
+           "predicted_bytes": None, "full_bytes": int(full_bytes),
+           "full_rows": int(len(full_hkl)), "budget_bytes": budget, "reason": None}
+    if out["fits"]:
+        out["rows"] = int(len(full_hkl))
+        return out
+    if has_no_one_click(phase):
+        out["reason"] = "low_symmetry"
+        return out
+    out["reason"] = "nothing_fits"
+    for k in eu._REFLECTOR_LADDER:
+        if k >= len(full_hkl):
+            continue
+        if k < eu.MIN_FIT_ROWS:
+            break
+        hkl, nbytes = cost(k)
+        if nbytes > budget:
+            continue
+        families = len(effective_families(phase, hkl)[0])
+        if families < eu.MIN_FIT_FAMILIES:
+            out["reason"] = "too_few_families"
+            break
+        out.update(rows=int(k), families=int(families), reason=None,
+                   predicted_bytes=int(nbytes) or None)
+        break
+    return out
+
+
+def families_for_rows(phase, rows):
+    """Labels of the families PyEBSDIndex uses for these rows, largest spacing first.
+
+    The families of what was really built (rows after every limit), not of what
+    a table says the rule gives. The order is the table's (d, then |F|, then hkl),
+    which is what the family table, the methods sentence and the earlier results
+    list; PyEBSDIndex's own order is that of its pole arrays and says nothing to a
+    reader.
+    """
+    kept, _folded = effective_families(phase, rows)
+    hex4 = _is_hexagonal(phase)
+    infos = [_extra_family(phase, tuple(int(x) for x in r)) for r in kept]
+    infos.sort(key=lambda i: (-round(i["d"], 4), -round(i["f"], 4), i["rep"]))
+    return [family_label(i["rep"], hex4) for i in infos]
+
+
+def _library_bytes(phase, rows):
+    """Predicted band-triplet library of ``rows`` in bytes; ``None`` when it is
+    below the 48 MiB probe (small) or could not be predicted."""
+    eu = _eu()
+    try:
+        return int(eu._library_rows_for(phase, np.asarray(rows, float).tolist())
+                   * eu._TRIPLET_ROW_BYTES) or None
+    except Exception:  # noqa: BLE001 - a record must never fail the run
+        return None
+
+
+def _gib_text(nbytes):
+    gib = nbytes / 2 ** 30
+    if gib >= 0.1:
+        return f"{gib:.1f} GiB"
+    mib = nbytes / 2 ** 20
+    return f"{mib:.1f} MiB" if mib < 10 else f"{mib:.0f} MiB"
+
+
+def selection_provenance(phase_list, snapshot=None, built_rows=None):
+    """What a result has to say about the reflector list it was indexed with.
+
+    One entry per phase, the default included: the mode (``default``, ``auto`` or
+    ``custom``), the rule, the families PyEBSDIndex used (from the rows that were
+    built, in its order), the number of rows, the predicted band-triplet library
+    and the memory budget at the time. ``differs`` is True when the list is not the
+    full default one (a selection by hand, another rule, or fewer rows); only then
+    does the methods paragraph get a sentence.
 
     ``snapshot`` (``last_build_snapshot()``) is the registry the indexer was built
-    from; without it the registry as it is now is read.
+    from, ``built_rows`` (``last_build_rows()``) the rows it was built with; without
+    them the registry as it is now and the rows it would give are read.
     """
+    eu = _eu()
+    budget = int(eu._triplet_library_budget_bytes())
     out = []
-    for _pid, phase in phase_list:
+    for i, (_pid, phase) in enumerate(phase_list):
         key = getattr(phase, "name", "")
         spec = (snapshot["specs"].get(phase_key(key)) if snapshot is not None
                 else get_spec(key))
-        if spec is None:
-            continue
-        shown = describe(phase, spec)
-        if spec["mode"] == "custom":
-            source = "user selection"
+        mode = "default" if spec is None else spec["mode"]
+        rule = (dict(DEFAULT_RULE) if spec is None
+                else dict(spec["rule"]) if mode == "auto" else None)
+        if built_rows is not None and i < len(built_rows):
+            rows = np.asarray(built_rows[i], dtype=float)
+        elif spec is None:
+            rows = _rule_rows(phase, DEFAULT_RULE)[0]
         else:
-            r = spec["rule"]
-            source = (f"default construction with min d {r['min_d']:g} A "
-                      f"and |F| threshold {r['f_threshold']:g}")
-        out.append({
+            rows = spec_rows(phase, spec)[0]
+        full_rule = dict(rule or DEFAULT_RULE, max_rows=DEFAULT_RULE["max_rows"])
+        full_rows = _rule_rows(phase, full_rule)[0] if mode != "custom" else None
+        n_full = len(full_rows) if full_rows is not None else None
+        reduced = n_full is not None and len(rows) < n_full
+        differs = (mode == "custom" or reduced
+                   or (mode == "auto" and rule != DEFAULT_RULE))
+        full_bytes = _library_bytes(phase, full_rows) if reduced else None
+        if mode == "custom":
+            source = f"user selection of {len(rows)} rows"
+        else:
+            base = (f"default construction with min d {rule['min_d']:g} A "
+                    f"and |F| above {rule['f_threshold']:g} of the strongest reflection")
+            if rule["max_rows"] > DEFAULT_RULE["max_rows"]:
+                base += f", up to {rule['max_rows']} rows"
+            if reduced:
+                source = f"the {len(rows)} strongest rows of the {base}"
+                if full_bytes:
+                    source += (f"; the full {n_full}-row list would need a "
+                               f"{_gib_text(full_bytes)} band-triplet library")
+            else:
+                source = base
+        entry = {
             "phase": str(phase.name),
-            "mode": spec["mode"],
+            "mode": mode,
+            "rule": rule,
             "source": source,
-            "families_used": [f["label"] for f in shown["families"] if f["effective"]],
-            "families_ticked": [f["label"] for f in shown["families"] if f["selected"]],
+            "families_used": families_for_rows(phase, rows),
+            "families_ticked": None,
             "spec": spec,
-        })
+            "n_rows": int(len(rows)),
+            "predicted_library_bytes": _library_bytes(phase, rows),
+            "budget_bytes": budget,
+            "full_library_bytes": full_bytes,
+            "differs": bool(differs),
+        }
+        if spec is not None:
+            shown = describe(phase, spec)
+            entry["families_ticked"] = [f["label"] for f in shown["families"]
+                                        if f["selected"]]
+        out.append(entry)
     return out
 
 

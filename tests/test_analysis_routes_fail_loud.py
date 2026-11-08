@@ -138,7 +138,7 @@ def test_from_indexing_bridges_native_bc(client_from_indexing, monkeypatch):
 
     native = np.linspace(0, 230, ny * nx, dtype=float).reshape(ny, nx)
     monkeypatch.setattr(pq, "read_native_band_contrast",
-                        lambda src, n_rows=None, n_cols=None: native)
+                        lambda src, n_rows=None, n_cols=None, variant=None: native)
 
     r = client.post("/api/analysis/load", json={"xmap_path": "__from_indexing__"})
     assert r.status_code == 200, r.text
@@ -158,7 +158,7 @@ def test_from_indexing_no_native_bc_still_fails_loud(client_from_indexing, monke
     client, ar, _ = client_from_indexing
 
     monkeypatch.setattr(pq, "read_native_band_contrast",
-                        lambda src, n_rows=None, n_cols=None: None)
+                        lambda src, n_rows=None, n_cols=None, variant=None: None)
 
     r = client.post("/api/analysis/load", json={"xmap_path": "__from_indexing__"})
     assert r.status_code == 200, r.text

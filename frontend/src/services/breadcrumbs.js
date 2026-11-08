@@ -36,15 +36,37 @@ const IGNORED_PATH_PARTS = [
   // are gone" has it in the trail without the other fifty-eight entries
   // being pushed out by the retries.
   '/api/phase-library/index',
+  // The state-version poll (every 1.5 s while the Indexing page or the pole
+  // figure is open). Failed answers are filtered too: the filter sits in
+  // addHttpBreadcrumb, in front of the ok/error split.
+  '/api/state-version',
   '/progress',
   '/status',
 ];
+
+/**
+ * GET calls ignored by EXACT path (the query string does not count). The
+ * sphere viewer lists the compute jobs every 2 s while it computes, to see
+ * whether the compute process is still starting; a long Max sphere would fill
+ * the ring. Submit, wait, cancel and lookup by id live under the same prefix
+ * and are real events, so this cannot be a substring entry above.
+ */
+const IGNORED_GET_PATHS = ['/api/jobs'];
 
 const trail = [];
 
 function isIgnoredPath(url) {
   if (!url) return false;
   return IGNORED_PATH_PARTS.some((part) => url.includes(part));
+}
+
+function isIgnoredCall(method, url) {
+  if (!url) return false;
+  if ((method || 'GET').toUpperCase() === 'GET') {
+    const path = url.replace(/^https?:\/\/[^/]+/i, '').split('?')[0].replace(/\/+$/, '');
+    if (IGNORED_GET_PATHS.includes(path)) return true;
+  }
+  return isIgnoredPath(url);
 }
 
 /**
@@ -64,7 +86,7 @@ export function addBreadcrumb(type, message, data = {}) {
 
 /** Record an HTTP call. Returns false when the path was ignored. */
 export function addHttpBreadcrumb({ method, url, status, durationMs, detail }) {
-  if (isIgnoredPath(url)) return false;
+  if (isIgnoredCall(method, url)) return false;
   const failed = status === undefined || status === null || status >= 400;
   const parts = [`${(method || 'GET').toUpperCase()} ${url}`];
   parts.push(status ? `→ ${status}` : '→ (no response)');

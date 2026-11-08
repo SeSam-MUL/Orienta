@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -123,7 +124,7 @@ def _jsonable(value):
     return str(value)
 
 
-def _sidecar_path_for(file_path: str) -> Path:
+def _sidecar_path_for(file_path: str, measurement: Optional[str] = None) -> Path:
     """Return ``<file_path>.phase_map.npz`` — the canonical sidecar name.
 
     Sticking the suffix on the *full* filename (rather than swapping
@@ -131,9 +132,17 @@ def _sidecar_path_for(file_path: str) -> Path:
     ``foo.h5oina.phase_map.npz``, not ``foo.phase_map.npz``. That keeps
     multi-suffix files distinguishable and side-steps Path.with_suffix
     eating the leading ``.h5oina``.
+
+    A file can hold several measurements and the phase map belongs to one of them (its EDS
+    chemistry is that measurement's). ``measurement`` is None for the file's default measurement,
+    which keeps the name above (every existing sidecar loads as before); another measurement gets
+    ``foo.h5oina.measurement-2.phase_map.npz``.
     """
     p = Path(file_path)
-    return p.with_name(p.name + ".phase_map.npz")
+    if measurement is None:
+        return p.with_name(p.name + ".phase_map.npz")
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(measurement)) or "_"
+    return p.with_name(f"{p.name}.measurement-{safe}.phase_map.npz")
 
 logger = logging.getLogger(__name__)
 
@@ -280,6 +289,9 @@ class PhaseMapStore:
         self._lock = threading.RLock()
         self._state: Optional[PhaseMapState] = None
         self._file_path: Optional[str] = None  # tag so we can detect file switches
+        # ... and the measurement of that file the map was classified on (None: the file's default).
+        # The map is made of that measurement's EDS chemistry, so it belongs to it.
+        self._measurement: Optional[str] = None
         # The composition the regions were clustered on, as the same
         # feature matrix the clustering used (n_px x n_elements). Splitting a
         # region needs it; nothing else does, so it is held beside the
@@ -402,6 +414,7 @@ class PhaseMapStore:
             self._undo = None
             self._undo_label = None
             self._file_path = None
+            self._measurement = None
             self._region_features = None
 
     def is_set(self) -> bool:
@@ -411,6 +424,11 @@ class PhaseMapStore:
     def file_path(self) -> Optional[str]:
         with self._lock:
             return self._file_path
+
+    def measurement(self) -> Optional[str]:
+        """The measurement of ``file_path()`` the held map belongs to (None: the default one)."""
+        with self._lock:
+            return self._measurement
 
     # --- Set / get full state ---
 
@@ -429,8 +447,12 @@ class PhaseMapStore:
         region_defs: Optional[List[dict]] = None,
         element_weights: Optional[Dict[str, float]] = None,
         settings: Optional[Dict[str, Any]] = None,
+        measurement: Optional[str] = None,
     ) -> None:
         """Replace the stored classification with a freshly computed one.
+
+        ``measurement`` names the measurement of ``file_path`` the map is classified on (None: the
+        default one); it decides the sidecar the map is saved to.
 
         ``preserve_locked`` carries the user's hand-assigned pixels across
         the re-classify. ``locked_mask`` has been written on every manual
@@ -512,6 +534,7 @@ class PhaseMapStore:
                 if region_features is not None else None
             )
             self._file_path = file_path
+            self._measurement = measurement
         self._autosave()
 
     def get_state(self) -> Optional[PhaseMapState]:
@@ -997,13 +1020,15 @@ class PhaseMapStore:
             if self._state is None or not self._file_path:
                 return
             file_path = self._file_path
+            measurement = self._measurement
         try:
-            self.save_to_disk(file_path)
+            self.save_to_disk(file_path, measurement)
         except Exception:
             logger.exception("Phase-map sidecar autosave failed for %s", file_path)
 
-    def save_to_disk(self, file_path: str) -> Optional[Path]:
-        """Write the current state to ``<file_path>.phase_map.npz``.
+    def save_to_disk(self, file_path: str, measurement: Optional[str] = None) -> Optional[Path]:
+        """Write the current state to ``<file_path>.phase_map.npz`` (``measurement``: the name that
+        carries a non-default measurement, see ``_sidecar_path_for``).
 
         Returns the sidecar path on success, ``None`` if there is no
         state to save (the public API; ``_autosave`` already handled
@@ -1060,8 +1085,11 @@ class PhaseMapStore:
                 "edit_counts": {str(k): int(v)
                                 for k, v in (state.edit_counts or {}).items()},
                 "region_grid_edited": bool(state.region_grid_edited),
+                # OPTIONAL, like the keys above: which measurement of the file the map is for (absent
+                # = the default one, which is every sidecar written before it was recorded).
+                "measurement": measurement,
             }
-            sidecar = _sidecar_path_for(file_path)
+            sidecar = _sidecar_path_for(file_path, measurement)
             np.savez_compressed(
                 str(sidecar),
                 phase_grid=state.phase_grid,
@@ -1079,14 +1107,18 @@ class PhaseMapStore:
             )
         return sidecar
 
-    def load_from_disk(self, file_path: str) -> bool:
+    def load_from_disk(self, file_path: str, measurement: Optional[str] = None) -> bool:
         """Restore state from a sidecar if one exists. Returns True on hit.
 
         Schema mismatch / corrupt file / missing file all return False
         without touching the current state — callers (e.g. open_file)
         treat False as "nothing to restore" and continue normally.
+
+        ``measurement`` is the measurement of the file the map is wanted for (None: the default
+        one); only the sidecar of that measurement is read, and one that says it is for another
+        measurement is ignored.
         """
-        sidecar = _sidecar_path_for(file_path)
+        sidecar = _sidecar_path_for(file_path, measurement)
         if not sidecar.is_file():
             return False
         try:
@@ -1095,6 +1127,12 @@ class PhaseMapStore:
                 # ``np.array(json_str, dtype=str)`` produces a 0-d
                 # array; ``.item()`` unwraps it back to a Python str.
                 meta = json.loads(meta_raw.item() if meta_raw.ndim == 0 else str(meta_raw))
+                if meta.get("measurement") != measurement:
+                    logger.info(
+                        "Phase-map sidecar %s is for measurement %r, not %r — ignoring.",
+                        sidecar, meta.get("measurement"), measurement,
+                    )
+                    return False
                 if meta.get("schema") != _SIDECAR_SCHEMA:
                     logger.info(
                         "Phase-map sidecar %s has schema %s, expected %s — ignoring.",
@@ -1201,6 +1239,7 @@ class PhaseMapStore:
             # "re-run the classification" message rather than guessing.
             self._region_features = None
             self._file_path = file_path
+            self._measurement = measurement
         logger.info("Phase-map sidecar restored from %s (%d phases, %dx%d)",
                     sidecar, len(entries), n_rows, n_cols)
         return True

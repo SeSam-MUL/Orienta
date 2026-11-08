@@ -66,6 +66,15 @@ class BatchQueue:
                 CREATE INDEX IF NOT EXISTS idx_jobs_batch ON jobs(batch_id);
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
             """)
+            # error_code: the stable code the interface translates a failure on (added
+            # after the first release; an older database gets the column here).
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+            if "error_code" not in cols:
+                conn.execute("ALTER TABLE jobs ADD COLUMN error_code TEXT")
+            # error_params: the values a coded failure carries for its translated text
+            # (JSON; e.g. the phases, rows and one-click count of a refused Hough library)
+            if "error_params" not in cols:
+                conn.execute("ALTER TABLE jobs ADD COLUMN error_params TEXT")
 
     def create_batch(
         self,
@@ -136,6 +145,8 @@ class BatchQueue:
         ci_median: Optional[float] = None,
         error_msg: Optional[str] = None,
         duration_sec: Optional[float] = None,
+        error_code: Optional[str] = None,
+        error_params: Optional[Dict[str, Any]] = None,
     ):
         """Atomically update a job's status and recalculate batch counters."""
         now = datetime.now(timezone.utc).isoformat()
@@ -145,8 +156,11 @@ class BatchQueue:
             elif status in ("done", "failed", "skipped"):
                 conn.execute(
                     """UPDATE jobs SET status = ?, ci_mean = ?, ci_median = ?,
-                       error_msg = ?, finished_at = ?, duration_sec = ? WHERE id = ?""",
-                    (status, ci_mean, ci_median, error_msg, now, duration_sec, job_id),
+                       error_msg = ?, error_code = ?, error_params = ?, finished_at = ?,
+                       duration_sec = ? WHERE id = ?""",
+                    (status, ci_mean, ci_median, error_msg, error_code,
+                     json.dumps(error_params, default=str) if error_params else None,
+                     now, duration_sec, job_id),
                 )
             else:
                 conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (status, job_id))
@@ -183,13 +197,20 @@ class BatchQueue:
             rows = conn.execute(
                 "SELECT * FROM jobs WHERE batch_id = ? ORDER BY sort_order", (batch_id,)
             ).fetchall()
-            return [dict(r) for r in rows]
+        jobs = [dict(r) for r in rows]
+        for job in jobs:
+            raw = job.get("error_params")
+            try:
+                job["error_params"] = json.loads(raw) if raw else None
+            except ValueError:
+                job["error_params"] = None
+        return jobs
 
     def retry_failed(self, batch_id: str) -> int:
         """Reset all failed jobs to pending (increment retry_count). Returns count."""
         with self._connect() as conn:
             cursor = conn.execute(
-                "UPDATE jobs SET status = 'pending', error_msg = NULL, retry_count = retry_count + 1 "
+                "UPDATE jobs SET status = 'pending', error_msg = NULL, error_code = NULL, error_params = NULL, retry_count = retry_count + 1 "
                 "WHERE batch_id = ? AND status = 'failed'",
                 (batch_id,),
             )

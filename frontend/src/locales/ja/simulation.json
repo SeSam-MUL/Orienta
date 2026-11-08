@@ -32,7 +32,7 @@
   "pipeline": {
     "label": "パイプライン:",
     "mcTooltip": "モンテカルロ（EMMCOpenCL）— 常に実行されます",
-    "masterTooltip": "マスターパターン（EMEBSDmaster/OpenCL）",
+    "masterTooltip": "マスターパターン（EMEBSDmaster、CPU）",
     "shtTooltip": "球面調和関数（EMEBSDmasterSHT）",
     "gpuDetecting": "検出中...",
     "gpuCpuOnly": "CPU のみ"
@@ -116,15 +116,12 @@
     "gpuDetected": "GPU を検出",
     "vram": "{{gb}} GB VRAM",
     "platform": "プラットフォーム: PoCL-CUDA 経由の OpenCL",
-    "blockSize": "ブロックサイズ: {{size}}",
-    "lowVramWarning": "GPU は {{gb}} GB です — マスターパターンには縮小したブロックサイズを使用します",
+    "masterOnCpuNote": "モンテカルロは GPU で、マスターパターンは CPU で計算します。",
     "cpuModeTitle": "CPU モード（OpenMP）",
     "coresAvailable": "{{count}} コア利用可能",
     "threadsLabel": "スレッド:",
     "threadsTooltip": "EMsoft プログラム用の CPU スレッド数",
-    "autoDetected": "自動検出",
-    "cpuHelperThreadsLabel": "CPU 補助スレッド:",
-    "helperThreadsNote": "（4N+3 形式、GPU パイプライン用に自動最適化）"
+    "autoDetected": "自動検出"
   },
   "advanced": {
     "groupTitle": "詳細オプション",
@@ -178,8 +175,8 @@
     "errorPrefix": "エラー: {{message}}",
     "scanningMissing": "XTAL ライブラリで未生成の材料を検索しています...",
     "allHaveResults": "すべての材料に既にシミュレーション結果があります。",
-    "unreadableMasters_one": "不足しているものはありませんが、{{count}} 件の相のマスターは辞書インデックス法に使用できません (kikuchipy が読み込めません): {{names}}。CPU マスタープログラムで再度シミュレーションしてください。",
-    "unreadableMasters_other": "不足しているものはありませんが、{{count}} 件の相のマスターは辞書インデックス法に使用できません (kikuchipy が読み込めません): {{names}}。CPU マスタープログラムで再度シミュレーションしてください。",
+    "unreadableMasters_one": "不足しているものはありませんが、{{count}} 件の相のマスターは辞書インデックス法に使用できません (kikuchipy が読み込めません): {{names}}。ファイルを削除してから、該当する相を再度シミュレーションしてください。シミュレーションでは CPU マスタープログラムが使用されます。",
+    "unreadableMasters_other": "不足しているものはありませんが、{{count}} 件の相のマスターは辞書インデックス法に使用できません (kikuchipy が読み込めません): {{names}}。ファイルを削除してから、該当する相を再度シミュレーションしてください。シミュレーションでは CPU マスタープログラムが使用されます。",
     "errorScanningMissing": "未生成の材料の検索中にエラーが発生しました。",
     "startingBatch": "バッチを開始しています...",
     "batchStarted": "バッチを開始しました：{{count}} 件のジョブをキューに追加。",
@@ -214,7 +211,7 @@
     "viewMasterTooltipNotReady": "シミュレーション開始後に利用可能になります"
   },
   "jobWarnings": {
-    "masterUnreadableByKikuchipy": "{{file}} は辞書インデックス法に使用できません。kikuchipy が読み込めないファイルです ({{program}} が書き込みました)。そのため相ライブラリには表示されません。CPU マスタープログラムで再度シミュレーションしてください。",
+    "masterUnreadableByKikuchipy": "{{file}} は辞書インデックス法に使用できません。kikuchipy が読み込めないファイルです ({{program}} が書き込みました)。そのため相ライブラリには表示されません。ファイルを削除してから、この相を再度シミュレーションしてください。シミュレーションでは CPU マスタープログラムが使用されます。",
     "unknownProgram": "不明なプログラム",
     "unknown": "警告 {{code}}: {{file}}"
   },
@@ -278,7 +275,7 @@
     "select": "選択"
   },
   "missingDialog": {
-    "unreadableMaster": "{{stem}}: マスターを読み込めません ({{program}} が書き込みました) — {{file}} は辞書インデックス法に使用できません。同じプログラムで再度シミュレーションしても同じファイルが書き込まれるため、上の一覧には含めていません。CPU マスタープログラムを使用してください。",
+    "unreadableMaster": "{{stem}}: マスターを読み込めません ({{program}} が書き込みました) — {{file}} は辞書インデックス法に使用できません。ファイルはすでにライブラリにあり、新しい実行では既存のファイルが置き換えられないため、上の一覧には含めていません。ファイルを削除してから、この相を再度シミュレーションしてください (CPU マスタープログラムが使用されます)。",
     "titlePhases": "未生成をすべてシミュレート — {{count}} 相",
     "pipelineOurs": "✨ Orienta Engine",
     "pipelineEmsoft": "⚙ EMsoft パイプライン",
@@ -319,8 +316,8 @@
     "testConnection": "設定した Database ルートに到達できるか確認します",
     "saveServerConfig": "サーバーモードの設定を保存します",
     "crystalFileInput": "シミュレートする入力 .xtal 結晶構造ファイルへのパス",
-    "computeModeAuto": "利用可能なら GPU（OpenCL）を使用し、なければ CPU（OpenMP）にフォールバックします",
-    "computeModeGpu": "OpenCL による GPU 計算のみを強制します",
+    "computeModeAuto": "利用可能ならモンテカルロを GPU（OpenCL）で、なければ CPU（OpenMP）で計算します。マスターパターンは常に CPU で計算します",
+    "computeModeGpu": "モンテカルロを OpenCL による GPU 計算に固定します。マスターパターンは引き続き CPU で計算します",
     "computeModeCpu": "OpenMP による CPU 計算のみを強制します",
     "checkSystem": "このマシンの EMsoft インストール、GPU、OpenCL デバイスを調べます",
     "stopJob": "この実行中または待機中のシミュレーションジョブを停止します",

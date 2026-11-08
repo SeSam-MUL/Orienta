@@ -6,8 +6,7 @@ are supported, not HexGrid``) and our own fallback loader trips over the
 padding EDAX writes. This module makes those files openable by resampling
 them onto a square grid the same way OIM Analysis does it itself.
 
-How EDAX stores a hex scan (measured on real files, see
-``tasks/edax-hexgrid-format-facts.md``):
+How EDAX stores a hex scan (measured on real files):
 
 * Rows alternate. A *long* row holds ``nColumns`` points starting at x=0; a
   *short* row holds ``nColumns - 1`` points starting at x=step_x/2. Rows are
@@ -283,6 +282,19 @@ def _check_positions(xg, yg, valid, counts, is_long,
 # Hex -> square nearest neighbour
 # --------------------------------------------------------------------------
 
+def square_axes(n_cols: int, n_rows: int, step: float):
+    """The x and y coordinates of the square output grid, as float64 arrays.
+
+    They are generated the way OIM writes them: single precision, index
+    times step (verified bit-identical to the X/Y Position arrays in OIM's
+    own square export).
+    """
+    step32 = np.float32(step)
+    x_axis = (np.arange(n_cols, dtype=np.float32) * step32).astype(np.float64)
+    y_axis = (np.arange(n_rows, dtype=np.float32) * step32).astype(np.float64)
+    return x_axis, y_axis
+
+
 def build_square_map(layout: HexLayout, out_step: Optional[float] = None) -> SquareMap:
     """Map every point of a square grid onto its nearest hex measurement.
 
@@ -307,12 +319,7 @@ def build_square_map(layout: HexLayout, out_step: Optional[float] = None) -> Squ
     n_cols = int(round(x_max / step)) + 1
     n_rows = int(round(y_max / step)) + 1
 
-    # Generate the output coordinates the way OIM writes them: single
-    # precision, index times step (verified bit-identical to the X/Y
-    # Position arrays in OIM's own square export).
-    step32 = np.float32(step)
-    x_axis = (np.arange(n_cols, dtype=np.float32) * step32).astype(np.float64)
-    y_axis = (np.arange(n_rows, dtype=np.float32) * step32).astype(np.float64)
+    x_axis, y_axis = square_axes(n_cols, n_rows, step)
 
     rr, cc = np.divmod(np.arange(n_rows * n_cols, dtype=np.int64), n_cols)
     xs, ys = x_axis[cc], y_axis[rr]
@@ -511,6 +518,7 @@ def load_edax_hex(path, lazy: bool = False, verbose: bool = True):
     px_size = 1.0
 
     pc_cal = header.get("Pattern Center Calibration", {}) or {}
+    pc_values, pc_complete = _header_pc(pc_cal)
     scan_dict = {
         "data": data,
         "axes": H5EBSDReader.get_axes_list((ny, nx, sy, sx),
@@ -544,19 +552,50 @@ def load_edax_hex(path, lazy: bool = False, verbose: bool = True):
             tilt=header.get("Camera Elevation Angle", 0.0),
             azimuthal=header.get("Camera Azimuthal Angle", 0.0),
             sample_tilt=header.get("Sample Tilt", 70.0),
-            pc=(pc_cal.get("x-star", 0.5),
-                pc_cal.get("y-star", 0.5),
-                pc_cal.get("z-star", 0.5)),
+            pc=pc_values,
             convention="edax",
         ),
     }
 
     signal = _dict2signal(scan_dict, lazy=lazy)
+    _tag_incomplete_pc(signal, pc_complete, file_name)
     try:
         signal.metadata.set_item("Signal.hex_resampled", True)
     except Exception:  # pragma: no cover - metadata is best effort
         logger.debug("Could not tag hex_resampled on %s", file_name, exc_info=True)
     return signal
+
+
+def _header_pc(pc_cal):
+    """``((x*, y*, z*), complete)``: the EDAX/TSL pattern centre a ``Pattern Center Calibration`` header
+    states. A component that is missing or not finite is 0.5 (kikuchipy's placeholder) and the
+    result is not ``complete``."""
+    values = []
+    complete = True
+    for key in ("x-star", "y-star", "z-star"):
+        try:
+            value = float(np.asarray(pc_cal.get(key)).reshape(-1)[0])
+        except (TypeError, ValueError, IndexError):
+            value = float("nan")
+        if not np.isfinite(value):
+            complete = False
+            value = 0.5
+        values.append(value)
+    return tuple(values), complete
+
+
+def _tag_incomplete_pc(signal, complete, file_name):
+    """A header that does not state all three stars carries kikuchipy's placeholder 0.5 for the rest:
+    not the file's PC. Say so the way every loader does, so the file is registered as having no PC."""
+    if complete:
+        return
+    try:
+        signal.metadata.set_item("Signal.pc_source", "default")
+    except Exception:  # pragma: no cover - metadata is best effort
+        logger.warning("Could not tag the missing pattern centre of %s", file_name, exc_info=True)
+    logger.warning(
+        "%s carries no complete pattern centre; kikuchipy's placeholder is in use. "
+        "Calibrate the PC (PC refinement) before indexing.", file_name)
 
 
 def _safe_str(value):

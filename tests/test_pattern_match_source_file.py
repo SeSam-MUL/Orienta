@@ -113,3 +113,37 @@ def test_store_result_preserves_preset_source_file():
         assert fresh.metadata["source_file"] == "C:/active/scan.up1"
     finally:
         ev._ebsd_file_path = saved
+
+
+def test_a_result_of_another_measurement_of_the_viewers_file_reads_its_own_patterns(monkeypatch):
+    """One file, two measurements: the viewer holds measurement 2, the result ran on measurement 1.
+    The path is the same, the patterns are not; the result's patterns come from its own variant of the
+    file, never from the viewer's signal."""
+    import backend.api.routes.ebsd_viewer as ev
+    from tools import pattern_comparison as pc
+
+    viewer_signal = types.SimpleNamespace(data=np.full((2, 2, 3, 3), 2, np.uint8))     # measurement 2
+    own_signal = types.SimpleNamespace(data=np.full((2, 2, 3, 3), 1, np.uint8))        # measurement 1
+    asked = []
+
+    def fake_source(path, variant=None, apex=None, refusals=None):
+        asked.append((str(path), variant.measurement if variant else None))
+        return own_signal
+
+    monkeypatch.setattr(ev, "_ebsd_file_path", "C:/data/multi.h5")
+    monkeypatch.setattr(ev, "_ebsd_variant_key", ("2", "unprocessed"))
+    monkeypatch.setattr(ev, "_get_active_signal", lambda *a, **k: viewer_signal)
+    monkeypatch.setattr(pc, "_get_source_signal", fake_source)
+    other = types.SimpleNamespace(metadata={
+        "source_file": "C:/data/multi.h5",
+        "load_variant": {"measurement": "1", "pattern_source": "unprocessed"}})
+    pat = pc.get_experimental_pattern(other, 0, 1)
+    assert asked == [("C:/data/multi.h5", "1")]
+    assert pat.tolist() == np.full((3, 3), 1.0).tolist(), "the viewer's measurement-2 patterns were shown"
+    # the result of the viewer's own measurement is read from the viewer's signal, as before
+    asked.clear()
+    own = types.SimpleNamespace(metadata={
+        "source_file": "C:/data/multi.h5",
+        "load_variant": {"measurement": "2", "pattern_source": "unprocessed"}})
+    assert pc.get_experimental_pattern(own, 0, 1).tolist() == np.full((3, 3), 2.0).tolist()
+    assert asked == []

@@ -36,7 +36,7 @@ const ALLOWED = new Set([
   'musterquelle', 'neue', 'neuem', 'neuen', 'neuer', 'neuere', 'neues',
   'neueste', 'neuesten', 'neuexport', 'niederfrequenten', 'quell', 'quellcode',
   'quelldatei', 'quelle', 'quellen', 'quellgröße', 'quellkopie', 'quellordner',
-  'querrichtung', 'rescued', 'sauerstoff', 'sequenz', 'ungenauer', 'value',
+  'quellpunkte', 'querrichtung', 'rescued', 'sauerstoff', 'sequenz', 'ungenauer', 'value',
   'traue', 'trauen', 'values', 'vertraue', 'vertrauen',
   'vertrauensbereich', 'vertrauenswürdig',
   'virtuell', 'virtuelle', 'virtuellen', 'virtuelles',

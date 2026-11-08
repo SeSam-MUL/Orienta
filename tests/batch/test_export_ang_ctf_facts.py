@@ -38,7 +38,13 @@ Al1 Al 0 0 0 1
 """
 
 
-def _make(tmp_path, *, lattice=None, phase_file="Al.cif", vendor_oxford=True):
+def _make(tmp_path, *, lattice=None, phase_file="Al.cif", vendor_oxford=True,
+          geometry=None, step=0.4, band_contrast=None, name="Al", space_group=225,
+          point_group="m-3m"):
+    """A 3 x 4 checkpoint of one phase (Al unless ``name``, ``space_group`` and ``point_group`` say
+    otherwise). ``geometry`` is the grid it states (a hexagonal
+    ``ScanGeometry`` of 3 x 4 points; none: a legacy checkpoint, square) and ``band_contrast``
+    twelve uint8 values written as the source's Band Contrast, in the order of its points."""
     source = tmp_path / "Scan.h5oina"
     with h5py.File(source, "w") as f:
         f.create_dataset("Manufacturer", data=np.array([b"Oxford Instruments"]))
@@ -47,17 +53,19 @@ def _make(tmp_path, *, lattice=None, phase_file="Al.cif", vendor_oxford=True):
         h.create_dataset("Tilt Angle", data=np.float32(np.deg2rad(70.0)))
         h.create_dataset("Scanning Rotation Angle", data=np.float32(np.pi))
         h.create_dataset("Working Distance", data=np.float32(16.5))
-        f.create_group("1/EBSD/Data")
+        data = f.create_group("1/EBSD/Data")
+        if band_contrast is not None:
+            data.create_dataset("Band Contrast", data=np.asarray(band_contrast, dtype=np.uint8))
     cw = CheckpointWriter(str(source))
     cw.init_metadata(grid_shape=(3, 4), batch_id="facts", method="spherical",
-                     step_size_um=0.4)
+                     step_size_um=step, geometry=geometry)
     meta = {"phase_file": str(phase_file), "ci_mean": 0.7, "duration_sec": 1.0,
-            "space_group": 225, "point_group": "m-3m"}
+            "space_group": space_group, "point_group": point_group}
     if lattice is not None:
         meta["lattice_constants"] = lattice
     rng = np.random.default_rng(1)
     cw.write_phase_result(
-        "Al", np.full((3, 4), 0.7, np.float32),
+        name, np.full((3, 4), 0.7, np.float32),
         rng.uniform(0, 3, (3, 4, 3)).astype(np.float32), meta)
     cw.compute_auto_assignment(confidence_threshold=0.0)
     return source, cw
@@ -123,6 +131,55 @@ def test_headers_state_frame_origin_geometry_and_assignment(tmp_path):
     assert "\t" not in prj.split("\t", 1)[1], "the Prj text must stay one tab-free field"
     wd = [ln for ln in a.splitlines() if ln.startswith("# WorkingDistance")]
     assert float(wd[0].split()[-1]) == pytest.approx(16.5)
+
+
+def _prj_of(path):
+    return next(ln for ln in Path(path).read_text(encoding="utf-8").splitlines()
+                if ln.startswith("Prj\t"))
+
+
+def test_the_batch_files_of_a_cubic_phase_state_no_crystal_frame(tmp_path):
+    source, cw = _make(tmp_path, lattice=[4.0495] * 3 + [90.0] * 3)
+    ang, ctf = export_ang_ctf(cw.checkpoint_path, str(tmp_path / "o"), source_h5_path=str(source))
+    assert "CRYSTAL_FRAME" not in Path(ang).read_text(encoding="utf-8")
+    assert "X||a" not in _prj_of(ctf)
+
+
+@pytest.mark.parametrize("space_group, point_group, y_group", [
+    (194, "6/mmm", None),        # Ti: the frame line only
+    (164, "-3m", None),          # P-3m1: the X setting, which a Symmetry code can state
+    (162, "-3m", "-31m"),        # P-31m: two-fold axes and mirror normals along Y
+])
+def test_the_batch_ang_and_ctf_state_the_crystal_frame(tmp_path, space_group, point_group, y_group):
+    source, cw = _make(tmp_path, lattice=[2.95, 2.95, 4.68, 90.0, 90.0, 120.0], name="Hx",
+                       space_group=space_group, point_group=point_group)
+    ang, ctf = export_ang_ctf(cw.checkpoint_path, str(tmp_path / "o"), source_h5_path=str(source))
+    lines = [ln for ln in Path(ang).read_text(encoding="utf-8").splitlines()
+             if ln.startswith("# ORIENTA_CRYSTAL_FRAME: ")]
+    prj = _prj_of(ctf)
+    assert len(lines) == (1 if y_group is None else 2)
+    assert "X||a" in lines[0] and "Z||c*" in lines[0] and "X||a" in prj
+    if y_group is None:
+        assert "along Y" not in prj
+    else:
+        assert f"space group {space_group}" in lines[1] and f"point group {y_group}" in lines[1]
+        assert "Phase Hx" in prj and y_group in prj and "along Y" in prj
+    # the tab-separated header keeps its one free-text field
+    assert "\t" not in prj.split("\t", 1)[1]
+
+
+@pytest.mark.parametrize("space_group, point_group", [(162, "-3m"), (149, "312")])
+def test_orix_loads_the_batch_ang_of_a_phase_with_the_y_setting(tmp_path, space_group, point_group):
+    """A comment that holds orix' own header patterns (``# Symmetry ...``) is read as a phase line."""
+    from orix.io import load
+    source, cw = _make(tmp_path, lattice=[4.0, 4.0, 5.0, 90.0, 90.0, 120.0], name="Hx",
+                       space_group=space_group, point_group=point_group)
+    ang, _ctf = export_ang_ctf(cw.checkpoint_path, str(tmp_path / "o"), source_h5_path=str(source))
+    text = Path(ang).read_text(encoding="utf-8")
+    assert sum(ln.startswith("# ORIENTA_CRYSTAL_FRAME: ") for ln in text.splitlines()) == 2
+    xmap = load(ang)
+    assert xmap.size == 12 and xmap.shape == (3, 4)
+    assert [p.name for _i, p in xmap.phases if _i >= 0] == ["Hx"]
 
 
 def test_without_scan_provenance_the_origin_is_not_claimed(tmp_path):

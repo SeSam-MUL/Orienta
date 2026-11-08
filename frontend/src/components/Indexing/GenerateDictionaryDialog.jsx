@@ -35,6 +35,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { dictionaryGpuApi } from '../../services/api';
+import { problemText } from '../../services/problemText';
 import { colors, spacing, Button } from '../../theme/components';
 import MasterSelector from '../DictionaryGPU/MasterSelector';
 import DetectorSettings from '../DictionaryGPU/DetectorSettings';
@@ -206,7 +207,7 @@ export default function GenerateDictionaryDialog({
       });
       setTaskId(newTaskId);
     } catch (e) {
-      const detail = e?.response?.data?.detail || e?.message || String(e);
+      const detail = problemText(e, t, 'indexing') || e?.message || String(e);
       setSubmitError(t('genDictDialog.errGenerateFailed', { detail }));
     }
   };

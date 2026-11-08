@@ -42,8 +42,8 @@ export const LAYER_SOURCES = {
   analysis: {
     label: 'Analysis (xmap)', labelKey: 'layers.groupAnalysis',
     layers: [
-      { id: 'kam', label: 'KAM',   defaultBlend: 'normal', defaultOpacity: 0.6 },
-      { id: 'gos', label: 'GOS',   defaultBlend: 'normal', defaultOpacity: 0.6 },
+      { id: 'kam', label: 'KAM',   defaultBlend: 'normal', defaultOpacity: 0.6, requiresSquareGrid: true },
+      { id: 'gos', label: 'GOS',   defaultBlend: 'normal', defaultOpacity: 0.6, requiresSquareGrid: true },
     ],
   },
   ebsd: {
@@ -170,7 +170,8 @@ export function layerLabel(def, t, fallback = '') {
  *         `{ ok: boolean, reason?: string }`. Keys: the LAYER_SOURCES group
  *         names (`result`, `analysis`, `ebsd`, `diagnostics`, `refinement`,
  *         `h5`) plus `diagnosticsComputed`, `refinementComputed` and
- *         `assignmentSource`. A missing key means "no claim" — available.
+ *         `assignmentSource`, `squareGrid` (false on a hexagonal scan: the layers that
+ *         compare neighbours). A missing key means "no claim" — available.
  *  @returns {Array<{value, label, group, name, disabled, tip}>}
  */
 export function buildAddLayerOptions({
@@ -187,6 +188,9 @@ export function buildAddLayerOptions({
     const checks = [av[groupKey]];
     if (layer?.requiresCompute) checks.push(av.diagnosticsComputed);
     if (layer?.requiresRefinement) checks.push(av.refinementComputed);
+    // A layer that compares a point with its neighbours is wrong on a hexagonal scan (it would
+    // see four neighbours of six): held back with the reason, like a layer whose data is missing.
+    if (layer?.requiresSquareGrid) checks.push(av.squareGrid);
     if (layer?.id === 'assignment-source') checks.push(av.assignmentSource);
     for (const c of checks) {
       if (c && c.ok === false) return c;

@@ -15,8 +15,7 @@ This module reads exactly the two things we need for correct loading — the
 bar is right) — from the ``.osc`` sidecar. It deliberately does NOT decode the
 OSC's embedded OIM Hough orientations: we index the patterns ourselves.
 
-All byte offsets below are verified against real EDAX files; see
-``tasks/up1-osc-format-facts.md`` for the full, cross-checked format notes.
+All byte offsets below are verified against real EDAX files.
 The UP1/UP2 layout mirrors kikuchipy's authoritative reader
 (``kikuchipy/io/plugins/edax_binary/_api.py``).
 """
@@ -54,13 +53,12 @@ _OSC_HEX_PROBE_RECORDS = 4096
 
 
 class EdaxHexUpError(ValueError):
-    """An EDAX UP1/UP2 scan was acquired on a hexagonal grid.
+    """An EDAX UP1/UP2 scan was acquired on a hexagonal grid and no APEX metadata names it.
 
-    Hexagonal EDAX scans are resampled onto a square grid for the H5 format
-    only (``edax_hex``). A UP file stores the patterns in acquisition order with
-    no positions, so there is nothing to resample from and reading it as a
-    rectangular map would put every pixel at the wrong place. ``code`` is the
-    stable identifier the interface translates on.
+    A UP file stores the patterns in acquisition order with no positions. With the
+    APEX ``.h5`` of the measurement the grid is known (``edax_apex``); without it,
+    reading the file as a rectangular map would put every pixel at the wrong place.
+    ``code`` is the stable identifier the interface translates on.
     """
 
     code = "edaxHexUpUnsupported"
@@ -68,8 +66,9 @@ class EdaxHexUpError(ValueError):
     def __init__(self, path: str):
         self.path = path
         super().__init__(
-            f"{Path(path).name} was acquired on a hexagonal grid; resampling is "
-            "implemented for EDAX H5 only - export the scan as H5 from OIM."
+            f"{Path(path).name} was acquired on a hexagonal grid. A pattern file alone does "
+            "not say where its points lie: open the EDAX APEX metadata file (.h5) of the same "
+            "measurement from the same folder and choose the measurement there."
         )
 
 
@@ -119,7 +118,7 @@ class Up1Geometry:
 def _suffix_key(path: str) -> str:
     ext = Path(path).suffix[1:].lower()
     if ext not in _UP_DTYPE_NBYTES:
-        raise ValueError(f"Not an EDAX UP1/UP2 file: {path}")
+        raise ValueError(f"Not an EDAX UP1/UP2 file: {Path(path).name}")
     return ext
 
 
@@ -145,16 +144,16 @@ def read_up1_header(path: str) -> Up1Header:
     with open(path, "rb") as f:
         head = f.read(42)
     if len(head) < 16:
-        raise ValueError(f"UP file too small to contain a header: {path}")
+        raise ValueError(f"UP file too small to contain a header: {Path(path).name}")
 
     version, sx, sy, pattern_offset = struct.unpack_from("<4I", head, 0)
 
     if sx == 0 or sy == 0:
-        raise ValueError(f"UP file reports zero pattern size ({sx}x{sy}): {path}")
+        raise ValueError(f"UP file reports zero pattern size ({sx}x{sy}): {Path(path).name}")
 
     if version == 2:
         # kikuchipy: "Only files with version 1 or >= 3, not 2, can be read"
-        raise ValueError(f"Unsupported UP file version 2: {path}")
+        raise ValueError(f"Unsupported UP file version 2: {Path(path).name}")
 
     per_pattern = sx * sy * nbytes
     if version == 1:
@@ -164,7 +163,7 @@ def read_up1_header(path: str) -> Up1Header:
 
     # version >= 3
     if len(head) < 42:
-        raise ValueError(f"UP v{version} header truncated: {path}")
+        raise ValueError(f"UP v{version} header truncated: {Path(path).name}")
     nx, ny = struct.unpack_from("<2I", head, 17)
     is_hex = bool(head[25])
     if is_hex:
@@ -220,7 +219,7 @@ def read_osc_metadata(osc_path: str) -> OscMetadata:
     # files (Scan5/Scan57: 0.550/0.503/0.702; map: 0.576/0.649/0.644) and
     # confirmed correct: a joint orientation+PC refinement converges straight
     # back to these values, and using them ~2.5x's the match NCC vs the
-    # kikuchipy default (0.5,0.5,0.5). See tasks/up1-osc-format-facts.md.
+    # kikuchipy default (0.5,0.5,0.5).
     if len(raw) >= _OSC_PC_OFFSET + 12:
         vals = struct.unpack_from("<3f", raw, _OSC_PC_OFFSET)
         if all(_plausible_pc(v) for v in vals) and not _all_equal(vals):
@@ -356,3 +355,17 @@ def resolve_up1_geometry(up1_path: str) -> Up1Geometry:
         pc_edax=osc.pc,
         osc_path=osc_path,
     )
+
+
+def tsl_detector(shape, pc_tsl, sample_tilt=70.0, tilt=0.0, azimuthal=0.0, px_size=1.0, binning=1):
+    """The detector of an EDAX UP scan, whichever file the pattern centre came from.
+
+    ``pc_tsl`` is (x*, y*, z*) in EDAX/TSL convention; kikuchipy converts it to Bruker's on
+    construction (y* becomes 1 - y*), so ``detector.pc`` is Bruker everywhere downstream.
+    ``tilt`` is the camera elevation, ``sample_tilt`` the specimen tilt, both in degrees."""
+    from kikuchipy.detectors import EBSDDetector
+    return EBSDDetector(
+        shape=tuple(int(v) for v in shape),
+        pc=tuple(float(v) for v in pc_tsl),
+        sample_tilt=float(sample_tilt), tilt=float(tilt), azimuthal=float(azimuthal),
+        px_size=float(px_size), binning=int(binning), convention="tsl")

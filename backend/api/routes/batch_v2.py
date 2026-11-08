@@ -9,12 +9,14 @@ Provides endpoints for:
 import asyncio
 import gc
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.api.problem import problem
 from backend.api.services.batch_manager import BatchManager
 from backend.api.services.calibration_store import calibration_store
 from display_names import display_stem
@@ -25,8 +27,8 @@ router = APIRouter()
 # Module-level batch manager (singleton)
 _manager: BatchManager = None
 
-# Extensions considered as EBSD data files
-_EBSD_EXTENSIONS = {'.h5oina', '.h5', '.hdf5', '.hdf', '.ebsp'}
+# Extensions considered as EBSD data files (.up1/.up2: EDAX pattern files, placed by the APEX metadata beside them)
+_EBSD_EXTENSIONS = {'.h5oina', '.h5', '.hdf5', '.hdf', '.ebsp', '.up1', '.up2'}
 
 # Lightweight signal cache for quick-loaded files (avoid full loading)
 _quick_loaded: Dict[str, Any] = {}
@@ -50,10 +52,13 @@ class ScanFolderRequest(BaseModel):
 
 @router.post("/scan-folder")
 async def scan_folder(req: ScanFolderRequest):
-    """Scan a folder for EBSD data files (.h5oina, .h5, .hdf5, etc.).
+    """Scan a folder for EBSD data files (.h5oina, .h5, .hdf5, .up1, .up2, etc.).
 
-    Returns file list with basic metadata (size, extension).
+    Returns file list with basic metadata (size, extension). An EDAX APEX metadata file (an ``.h5``
+    that lists measurements and holds no patterns) is not a scan and is left out: its pattern files
+    (.up1/.up2) are the scans.
     """
+    from edax_apex import is_apex_file
     folder = Path(req.folder)
     if not folder.is_dir():
         raise HTTPException(400, f"Not a valid directory: {req.folder}")
@@ -64,6 +69,8 @@ async def scan_folder(req: ScanFolderRequest):
             continue
         # Skip checkpoint files from previous batch runs
         if '_multiphase' in p.stem or '_checkpoint' in p.stem:
+            continue
+        if is_apex_file(p):
             continue
         found.append({
                 "path": str(p),
@@ -82,6 +89,26 @@ class QuickLoadRequest(BaseModel):
     file_path: str
 
 
+def _inherit_viewer_calibration(dataset_name: str, fp: Path) -> None:
+    """Batch v2 reads the processed patterns, so its entry is its own; when the viewer holds the same
+    measurement as another pattern source, the PC the user made there (typed, refined) describes the
+    same acquisition and is handed over, marked ``inherited`` from the viewer's entry (the way copy-pc
+    marks it). Another measurement has a PC of its own and hands nothing over. The header PC stays when
+    the user made none. Only the single PC travels; a per-pixel map does not."""
+    from backend.api.services.batch_manager import holds_default_measurement, variant_entry_of_file
+    parent = variant_entry_of_file(fp, calibration_store)
+    if parent is None or not holds_default_measurement(parent, fp):
+        return
+    source = calibration_store.get_entry(parent)
+    own = calibration_store.get_entry(dataset_name)
+    if (source is None or own is None or source.pc_source not in calibration_store.USER_MADE_SOURCES
+            or tuple(int(v) for v in source.detector_shape) != tuple(int(v) for v in own.detector_shape)):
+        return
+    calibration_store.update_pc(dataset_name, source.pc_single, source="inherited",
+                                refinement=source.pc_refinement)
+    own.parent_name = parent
+
+
 @router.post("/quick-load")
 async def quick_load(req: QuickLoadRequest):
     """Quick-load an EBSD file: extract metadata and register PC in CalibrationStore.
@@ -89,18 +116,45 @@ async def quick_load(req: QuickLoadRequest):
     Does NOT build a full pattern cache. Just enough to get grid shape,
     pattern shape, PC, and EDS element availability.
     """
+    from edax_apex import ApexError, safe_text
+    from edax_up1 import EdaxHexUpError
     fp = Path(req.file_path)
     if not fp.is_file():
         raise HTTPException(400, f"File not found: {req.file_path}")
 
-    dataset_name = display_stem(fp)
+    # The name THIS FILE has in the store: its stem, or stem + path hash when an entry of
+    # that stem belongs to another file (the viewer's, say). The answer carries it, and the
+    # page uses it for pc-status and copy-pc.
+    from backend.api.services.batch_manager import store_name_for_file
+    dataset_name = store_name_for_file(fp)
+    file_key = os.path.normcase(os.path.abspath(str(fp)))
 
     try:
         from safe_loader import load_ebsd_safe
         signal = load_ebsd_safe(str(fp))
 
-        # Register in CalibrationStore
-        cal_entry = calibration_store.register(dataset_name, signal)
+        # What the page shows for the file: the grid the loader read and the APEX measurement it was
+        # paired with. Read before the loader's copy of the geometry is taken off (a kept signal must
+        # not carry it: it describes the whole scan and goes stale on a crop). The run loads the file
+        # again by path and pairs it the same way (by the GUID in its header), so what is shown here is
+        # what the run uses; the viewer's remembered pairing plays no part.
+        from backend.api.services.scan_geometry import apex_of_signal, drop_signal_mirror, geometry_of_signal
+        geometry = geometry_of_signal(signal)
+        apex = apex_of_signal(signal)
+        drop_signal_mirror(signal)
+
+        # Register in CalibrationStore - but never over a calibration the user made
+        # (typed, refined, a grid map) for THIS file: quick-load is only a look at the
+        # file. What the file itself gave (header, missing) is refreshed: the file may
+        # have changed (an .osc put beside it). An entry of another file is never touched
+        # or shown: this file has its own name.
+        existing = calibration_store.get_entry(dataset_name)
+        if (existing is not None and existing.file_key == file_key
+                and existing.pc_source in calibration_store.USER_MADE_SOURCES):
+            cal_entry = existing
+        else:
+            cal_entry = calibration_store.register(dataset_name, signal, file_key=file_key)
+            _inherit_viewer_calibration(dataset_name, fp)
 
         # Extract grid shape
         nav_shape = signal.axes_manager.navigation_shape[::-1]  # (rows, cols)
@@ -120,9 +174,11 @@ async def quick_load(req: QuickLoadRequest):
         # Get PC info
         pc_value = None
         pc_source = "none"
-        if cal_entry:
+        if cal_entry and cal_entry.pc_source != "missing":
             pc_value = [float(v) for v in cal_entry.pc_single]
             pc_source = cal_entry.pc_source
+        # A file whose PC nobody supplied ("missing": kikuchipy's placeholder is all
+        # there is) is "none" to the batch page, with no PC to show or to tick.
 
         # Store lightweight reference for later use
         _quick_loaded[dataset_name] = {
@@ -132,6 +188,12 @@ async def quick_load(req: QuickLoadRequest):
             "pattern_shape": list(sig_shape),
         }
 
+        # The convention the file's own vendor writes PC numbers in ("oxford", "tsl", "bruker"),
+        # as the PC-Refinement page's header already reads it — for the Batch page to preselect
+        # the same convention in its "set PC manually" dialog, instead of assuming Bruker.
+        convention = getattr(cal_entry, "convention", None) if cal_entry else None
+        convention_known = bool(convention) and bool(getattr(cal_entry, "convention_known", False))
+
         return {
             "dataset_name": dataset_name,
             "file_path": str(fp),
@@ -140,10 +202,19 @@ async def quick_load(req: QuickLoadRequest):
             "pattern_count": int(signal.axes_manager.navigation_size),
             "pc": pc_value,
             "pc_source": pc_source,
+            "convention": convention or "bruker",
+            "convention_known": convention_known,
             "has_eds": has_eds,
             "eds_elements": eds_elements,
+            "grid_kind": geometry.kind,
+            "scan_geometry": geometry.to_dict(),
+            "apex": apex,
         }
 
+    except (ApexError, EdaxHexUpError) as e:
+        # A coded refusal (a hexagonal pattern file no metadata names, an APEX metadata file added as
+        # a scan): the code travels in X-Orienta-Code and the page words it in its own language.
+        raise problem(400, e.code, safe_text(e))
     except Exception as e:
         logger.exception("Quick-load failed for %s", req.file_path)
         raise HTTPException(500, f"Failed to load: {e}")
@@ -156,6 +227,12 @@ async def quick_load(req: QuickLoadRequest):
 class CopyPCRequest(BaseModel):
     source_dataset: str
     target_datasets: List[str]
+    #: The files themselves (paths), parallel to ``source_dataset`` / ``target_datasets``.
+    #: Required: the entry is the one registered for THAT file. A stem names two files when
+    #: two folders hold a scan of one name. (Optional in the model only so that a request
+    #: without them gets the coded 400 instead of a bare 422.)
+    source_file_path: Optional[str] = None
+    target_file_paths: Optional[List[str]] = None
 
 
 def _resolve_dataset_name(name: str) -> str:
@@ -179,13 +256,37 @@ def _resolve_dataset_name(name: str) -> str:
 async def copy_pc(req: CopyPCRequest):
     """Copy PC from one dataset to one or more target datasets.
 
-    Source/target identifiers may be either dataset names (file stems) or
-    full filenames with extension — both are normalised to the stem.
-    Targets must already be registered in CalibrationStore (via quick-load).
+    The files are addressed by PATH (``source_file_path``, ``target_file_paths``), never by
+    name: a request without them is refused (400, code ``copy_pc_needs_files``). Source and
+    targets must already be registered in CalibrationStore (via quick-load).
     """
-    source_key = _resolve_dataset_name(req.source_dataset)
+    from backend.api.problem import problem
+    from backend.api.services.batch_manager import default_variant_entry_of_file
+    paths =req.target_file_paths or []
+    if (not req.source_file_path or len(paths) != len(req.target_datasets)
+            or not all(paths)):
+        raise problem(
+            400, "copy_pc_needs_files",
+            "copy-pc addresses files, not names: send source_file_path and one entry of "
+            "target_file_paths per target (two files with one stem share a name).")
+    # batch v2 reads the default variant: the entry of those patterns, not the viewer's entry of
+    # another variant of the same file
+    source_key = default_variant_entry_of_file(req.source_file_path, calibration_store)
+    if source_key is None:
+        raise HTTPException(
+            404,
+            f"Source file for '{req.source_dataset}' is not in the CalibrationStore. "
+            "Quick-load the file first via /api/batch-v2/quick-load.")
     source_pc = calibration_store.get_pc(source_key)
     source_entry = calibration_store.get_entry(source_key)
+    if source_pc is None and source_entry is not None:
+        # Registered, but the file carries no PC (the store answers None for it):
+        # copying the placeholder to other files would spread a made-up PC.
+        raise HTTPException(
+            400,
+            f"Source dataset '{req.source_dataset}' has no pattern centre (its file "
+            "carries none). Set or refine its PC first, then copy it.",
+        )
     if source_pc is None:
         raise HTTPException(
             404,
@@ -194,8 +295,23 @@ async def copy_pc(req: CopyPCRequest):
         )
 
     results = []
-    for target in req.target_datasets:
-        target_key = _resolve_dataset_name(target)
+    for target, target_path in zip(req.target_datasets, paths):
+        # the entry registered for this FILE; never the one a stem happens to name
+        target_key = default_variant_entry_of_file(target_path, calibration_store)
+        if target_key is not None and target_key == source_key:
+            # a file is not copied onto itself (it would become its own parent)
+            results.append({
+                "dataset": target, "key": target_key, "success": True, "skipped": True,
+                "pc": [float(v) for v in source_pc],
+                "note": "this is the source file: nothing to copy",
+            })
+            continue
+        if target_key is None:
+            results.append({
+                "dataset": target, "key": None, "success": False,
+                "error": "this file is not in the store (quick-load it first)",
+            })
+            continue
         entry = calibration_store.get_entry(target_key)
         if entry is None:
             results.append({
@@ -209,6 +325,13 @@ async def copy_pc(req: CopyPCRequest):
             target_key, source_pc, source="inherited",
             refinement=(source_entry.pc_refinement if source_entry else None))
         entry = calibration_store.get_entry(target_key)
+        # A family is a tree. When the target is an ancestor of the source (the source
+        # inherited from it, directly or through others: the copy back after "refine B,
+        # copy to A"), the source becomes the root first; otherwise parent_name would
+        # form a cycle and the family walks, which start at the refined file, would
+        # disagree about the root and miss copies of the other file.
+        if calibration_store.is_ancestor(target_key, source_key):
+            calibration_store.detach_from_parent(source_key)
         entry.parent_name = source_key
         results.append({
             "dataset": target,
@@ -223,6 +346,40 @@ async def copy_pc(req: CopyPCRequest):
         "pc": [float(v) for v in source_pc],
         "results": results,
     }
+
+
+class SetPCRequest(BaseModel):
+    file_path: str
+    #: Bruker convention, already converted (the frontend does the conversion the same way the
+    #: PC-Refinement page does, via /api/pc/convert — never a second formula here).
+    pc: List[float]
+
+
+@router.post("/set-pc")
+async def set_pc(req: SetPCRequest):
+    """Set a dataset's PC by typing it in, addressed by file path like ``copy-pc``.
+
+    Two files that share a stem are two different entries (see ``copy-pc``); addressing by name
+    would silently write the typed PC onto whichever of them the store happens to answer for,
+    the same hazard ``copy-pc`` was given a file path to avoid. The file must already be
+    registered in CalibrationStore (quick-load it first).
+    """
+    if len(req.pc) != 3:
+        raise HTTPException(400, "PC must have exactly 3 values [pcx, pcy, pcz]")
+    from backend.api.services.batch_manager import default_variant_entry_of_file
+    key = default_variant_entry_of_file(req.file_path, calibration_store)
+    if key is None:
+        raise HTTPException(
+            404,
+            f"'{req.file_path}' is not in the CalibrationStore. "
+            "Quick-load the file first via /api/batch-v2/quick-load.")
+    # on_refined_map="shift": a file with a per-pixel grid-calibrated PC map must not keep
+    # running on that map's old mean while the page tells the user their typed PC is in use —
+    # the map moves rigidly so its mean IS the typed PC, the same choice the PC-Refinement
+    # page's own manual-PC endpoint makes (see detector/update-pc's _writeback_refined_pc).
+    calibration_store.update_pc(key, req.pc, source="manual", on_refined_map="shift")
+    entry = calibration_store.get_entry(key)
+    return {"success": True, "dataset": key, "pc": [float(v) for v in entry.pc_single]}
 
 
 @router.get("/pc-status")
@@ -241,10 +398,11 @@ async def pc_status(files: str = ""):
     for name in names:
         entry = calibration_store.get_entry(name)
         if entry:
+            no_pc = entry.pc_source == "missing"
             results.append({
                 "dataset_name": name,
-                "pc": [float(v) for v in entry.pc_single],
-                "pc_source": entry.pc_source,
+                "pc": None if no_pc else [float(v) for v in entry.pc_single],
+                "pc_source": "none" if no_pc else entry.pc_source,
                 "parent_name": entry.parent_name,
                 "detector_shape": list(entry.detector_shape),
                 "sample_tilt": entry.sample_tilt,
@@ -311,11 +469,36 @@ async def start_batch(batch_id: str):
     if status["status"] == "running":
         raise HTTPException(409, "Batch already running")
 
+    # A file already registered without a PC would be indexed at the placeholder. Each
+    # file by its own name: files that share a stem with another file of the batch have no
+    # entry of their own yet (the store holds one entry per stem, and it may be the other
+    # file's); they are decided when they are loaded, from their own header.
+    from backend.api.services.batch_manager import assign_batch_dataset_names
+    from backend.api.services.pc_guard import require_pc
+    jobs = mgr.get_jobs(batch_id)
+    names = assign_batch_dataset_names([j["file_path"] for j in jobs])
+    for job in jobs:
+        key = os.path.normcase(os.path.abspath(str(job["file_path"])))
+        require_pc(names[key][0], calibration_store, file_key=key)
+
     def run():
         mgr.run_batch_sync(batch_id)
 
     asyncio.get_event_loop().run_in_executor(None, run)
     return {"status": "started", "batch_id": batch_id}
+
+
+@router.get("/{batch_id}/exports")
+async def batch_exports(batch_id: str):
+    """What each file of the batch exported, and under which name suffix (two files with
+    the same stem get ``__<hash>`` in their output names so they do not overwrite each
+    other)."""
+    mgr = _get_manager()
+    if mgr.get_status(batch_id) is None:
+        raise HTTPException(404, "Batch not found")
+    return {"batch_id": batch_id,
+            "exports": [{"file_path": fp, **info}
+                        for fp, info in (getattr(mgr, "exports", {}).get(batch_id) or {}).items()]}
 
 
 @router.post("/{batch_id}/pause")

@@ -42,10 +42,16 @@ Three things the generic rule alone would get wrong, each handled explicitly:
   blanket "rewrite every X Cells" rule would overwrite them with the scan
   crop's, describing a 1024-pixel-wide image as four pixels wide.
 
-Limitation, deliberate: SQUARE grids only. A hex scan's file holds the padded
-hex rectangle while the crop window is defined on the resampled square display
-grid, so a subset of the file is not well defined. We refuse instead of
-writing something wrong.
+Two kinds of scan, two writers. ``write_cropped_h5oina`` cuts a SQUARE grid out
+of its source file. A hexagonal scan in the OIM layout is refused there: that
+file holds the padded hex rectangle while the crop window is defined on the
+resampled square display grid, so a subset of the file is not well defined, and
+we refuse instead of writing something wrong. A hexagonal scan Orienta holds as
+its index rectangle (the crop window is a window of those index rows and
+columns) is saved by ``write_cropped_hex_h5``: a new Orienta ``.h5`` written
+from the crop's own patterns, which states the row offset of the crop (it
+reverses when the crop starts on an odd row) and reloads as a hexagonal scan.
+That file carries no EDS maps and no electron images of the source.
 
 Deliberate, not an oversight: the written file mixes two coordinate frames.
 ``Relative Offset`` / ``Relative Size`` and ``Bounding Box Size`` describe the
@@ -65,6 +71,7 @@ scan pixels -- so nothing is lost, it just is not in the site frame.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -72,6 +79,11 @@ import h5py
 import numpy as np
 
 from backend.api.services.crop_window import CropWindow, project_to_area
+from backend.api.services.load_choices import (
+    LoadChoiceError, LoadVariant, inspect_file, measurement_groups, reread_dataset_path,
+)
+from backend.api.services.orienta_hex_h5 import signal_patterns_3d, write_fresh_file
+from backend.api.services.scan_geometry import ScanGeometry
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +134,9 @@ _ROW_FIELDS = ("Y Cells", "YCells", "nRows")
 #: The same extent in micrometres: [width, height].
 _BBOX_FIELD = "Bounding Box Size"
 
-#: The dataset that holds "the patterns as the app currently has them".
+#: The dataset that holds "the patterns as the app currently has them" in a file whose layout
+#: the load choices cannot describe (a file they can describe names the dataset of the loaded
+#: variant, the default one included, so a second measurement's patterns are never overwritten).
 #: ``Unprocessed Patterns`` is deliberately NOT here -- it is the raw
 #: material, honestly labelled, and is cut from the source like any other
 #: channel even when processed patterns are supplied.
@@ -139,6 +153,7 @@ def write_cropped_h5oina(
     window: CropWindow,
     patterns: Optional[np.ndarray] = None,
     is_hex: bool = False,
+    variant: Optional[LoadVariant] = None,
 ) -> dict:
     """Write ``window`` of ``source_path`` to ``out_path`` as its own file.
 
@@ -156,6 +171,14 @@ def write_cropped_h5oina(
         header ``H5OINADataExtractor.hex_map`` reads), so this only exists for
         a caller that knows something the file does not say. Leaving it False
         is safe.
+    variant
+        The measurement and pattern source the window's dataset was loaded as
+        (``None``: the file's default, whose pattern leaf is one of
+        ``_PATTERN_LEAVES``). The supplied patterns are written into THAT
+        variant's dataset and no other, and the provenance names it, so a crop of
+        the unprocessed patterns reloads as unprocessed. A file whose layout
+        cannot name the variant is refused (``variantNotSupported``) before
+        anything is written.
 
     Returns
     -------
@@ -177,6 +200,13 @@ def write_cropped_h5oina(
 
     src_path = Path(source_path)
     dst_path = Path(out_path)
+    # The variant the window's dataset is: the caller's, else the file's default (what a load without
+    # a choice reads). Its measurement is the one whose header, electron image and pattern dataset
+    # the crop is placed against; a file the load choices cannot describe keeps the old leaf rule.
+    resolved = variant if variant is not None else _default_variant(src_path)
+    variant_path = (reread_dataset_path(str(src_path), resolved, "write_cropped_h5oina")
+                    if resolved is not None else None)
+    measurement = None if resolved is None else resolved.measurement
     dst_path.parent.mkdir(parents=True, exist_ok=True)
 
     n_points_full = int(window.original_shape[0]) * int(window.original_shape[1])
@@ -189,11 +219,11 @@ def write_cropped_h5oina(
         "electron_images_cut": 0, "electron_images_full": 0,
     }
 
-    _check_window_fits(src_path, window)
+    _check_window_fits(src_path, window, measurement)
 
     try:
         _write(src_path, dst_path, window, patterns, report,
-               n_points_full, n_cols_full, n_points)
+               n_points_full, n_cols_full, n_points, variant, variant_path, measurement)
     except BaseException:
         # A half-written .h5oina on disk is worse than none: it opens far
         # enough to look like a measurement. Take it away with the failure.
@@ -213,19 +243,135 @@ def write_cropped_h5oina(
     return report
 
 
+def _note(code: str, text: str, **params) -> dict:
+    """One sentence of the answer: the code and numbers the page words it with, and the English text."""
+    return {"code": code, "params": params, "text": text}
+
+
+def write_cropped_hex_h5(
+    signal,
+    out_path: str,
+    window: CropWindow,
+    scan_geometry: ScanGeometry,
+    pc_bruker=None,
+    tilts: Optional[dict] = None,
+    pc_map_present: bool = False,
+) -> dict:
+    """Write a crop of a hexagonal scan as an Orienta ``.h5`` that reloads as a hexagonal scan.
+
+    ``signal`` is the crop (its patterns as the app holds them now), ``scan_geometry`` the geometry
+    registered for the crop: the parent's geometry cut by the window, so its row offset is already
+    reversed when the crop starts on an odd row. It is written as it is, never recomputed here.
+    ``pc_bruker`` and ``tilts`` are what the file states (``orienta_hex_h5.write_fresh_file``);
+    ``pc_map_present`` says the scan had a pattern centre per pixel, of which one is written.
+
+    The whole box is saved: the window's drawn shape goes to ``CropProvenance/nav_mask`` as a
+    record and is not applied when the file is opened again. EDS maps and electron images of the
+    source are not carried. Patterns that are not uint8 or uint16 are rescaled to uint8.
+
+    ``ValueError`` for a square geometry, for a geometry with a valid mask (the file cannot state
+    which points were measured), and for a geometry that is not the grid of the signal; nothing is
+    left on disk then, or when the write fails.
+
+    Returns the keys of :func:`write_cropped_h5oina` (the counters are 0) plus ``hex``,
+    ``grid_shape``, ``odd_row_shift``, ``shift_confirmed``, ``pc_map_dropped``, ``patterns_converted``
+    and the sentences about what is not carried: ``notes`` and ``note_items``.
+    """
+    if not scan_geometry.is_hex:
+        raise ValueError("write_cropped_hex_h5 saves a hexagonal scan; this geometry is square")
+    if scan_geometry.valid_mask is not None:
+        raise ValueError(
+            "a hexagonal scan with a valid mask cannot be saved as a crop: the file cannot state "
+            "which points were measured")
+    if scan_geometry.grid_shape != (int(window.rows), int(window.cols)):
+        raise ValueError(
+            f"the scan geometry is {scan_geometry.n_rows} x {scan_geometry.n_cols} points but the "
+            f"crop window is {window.rows} x {window.cols}")
+
+    dst_path = Path(out_path)
+    part = dst_path.with_name(dst_path.name + ".part")
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    converted = np.dtype(signal.data.dtype) not in (np.dtype(np.uint8), np.dtype(np.uint16))
+    source_dtype = str(np.dtype(signal.data.dtype))
+    try:
+        patterns, _ = signal_patterns_3d(signal)
+        write_fresh_file(part, patterns, scan_geometry, pc_bruker=pc_bruker, tilts=tilts)
+        with h5py.File(part, "a") as dst:
+            # a crop cut from patterns held in memory may have no source file: say nothing, not "None"
+            _write_provenance(dst, window.source_file or "", window, True, None)
+        os.replace(part, dst_path)
+    except BaseException:
+        # Written under a .part name and renamed when whole: a failure takes the partial file away
+        # and leaves a file that was already at out_path as it was.
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("could not remove the partial file %s", part)
+        raise
+
+    n_points = int(scan_geometry.n_points)
+    notes = [_note(
+        "cropEdsNotCarried",
+        "EDS maps and electron images of the source are not carried; one pattern centre is written.")]
+    if pc_bruker is None:
+        notes.append(_note("cropNoPatternCentre",
+                           "The source states no pattern centre, so none is written."))
+    if pc_map_present:
+        notes.append(_note(
+            "cropPcMapDropped",
+            "The source holds a pattern centre for every pixel; only one is written."))
+    if converted:
+        notes.append(_note(
+            "cropPatternsConverted",
+            f"The patterns were {source_dtype} and are saved as 8 bit, rescaled to the crop's range.",
+            dtype=source_dtype))
+    if window.nav_mask is not None:
+        notes.append(_note(
+            "cropMaskRecorded",
+            f"The drawn shape is recorded, not applied on reopening; all {n_points} pixels are saved.",
+            points=n_points))
+    logger.info("Wrote cropped hexagonal file %s: %d x %d points, odd rows shifted %+.1f step",
+                dst_path, scan_geometry.n_rows, scan_geometry.n_cols, scan_geometry.odd_row_shift)
+    return {
+        "path": str(dst_path), "n_points": n_points,
+        "hex": True,
+        "grid_shape": [int(scan_geometry.n_rows), int(scan_geometry.n_cols)],
+        "odd_row_shift": float(scan_geometry.odd_row_shift) + 0.0,       # + 0.0: never -0.0
+        "shift_confirmed": bool(scan_geometry.shift_confirmed),
+        "pc_map_dropped": bool(pc_map_present),
+        "patterns_converted": bool(converted),
+        "datasets_cut": 0, "datasets_copied": 0,
+        "electron_images_cut": 0, "electron_images_full": 0,
+        "notes": [n["text"] for n in notes], "note_items": notes,
+    }
+
+
+def _default_variant(src_path) -> Optional[LoadVariant]:
+    """What loading ``src_path`` without a choice loads, or None for a file the load choices do not
+    describe (or one without patterns, which the writer then refuses in its own words)."""
+    choices = inspect_file(str(src_path))
+    if choices is None:
+        return None
+    try:
+        return choices.default_variant()
+    except LoadChoiceError:
+        return None
+
+
 def _write(src_path, dst_path, window, patterns, report,
-           n_points_full, n_cols_full, n_points) -> None:
+           n_points_full, n_cols_full, n_points, variant=None, variant_path=None,
+           measurement=None) -> None:
     """The walk itself. Split out so the caller owns the partial-file cleanup."""
     with h5py.File(src_path, "r") as src, h5py.File(dst_path, "w") as dst:
         for key, value in src.attrs.items():
             dst.attrs[key] = value
 
-        elec_grid = _electron_grid(src)
+        elec_grid = _electron_grid(src, measurement)
         elec_rect = None
         if elec_grid is not None:
             elec_rect = project_to_area(
-                window, _area_geom(src, ("EBSD", "EDS")),
-                _area_geom(src, ("Electron Image",)), elec_grid,
+                window, _area_geom(src, ("EBSD", "EDS"), measurement),
+                _area_geom(src, ("Electron Image",), measurement), elec_grid,
             )
             if elec_rect is not None and elec_rect["box"] != (
                     elec_rect["row0"], elec_rect["row0"] + elec_rect["rows"],
@@ -249,7 +395,7 @@ def _write(src_path, dst_path, window, patterns, report,
         # image' about an image that was cut to the map.
         frame = None
         if elec_rect is not None and elec_rect["mode"] == "header":
-            img_geom = _area_geom(src, ("Electron Image",)) or {}
+            img_geom = _area_geom(src, ("Electron Image",), measurement) or {}
             frame = {"Relative Offset": img_geom.get("relative_offset")
                      or [0.0, 0.0],
                      "Relative Size": img_geom.get("relative_size")
@@ -285,7 +431,8 @@ def _write(src_path, dst_path, window, patterns, report,
 
             if any(g in marked for g in _PER_PIXEL_GROUPS) \
                     and item.ndim >= 1 and item.shape[0] == n_points_full:
-                if supplied is not None and leaf in _PATTERN_LEAVES:
+                if supplied is not None and (path == variant_path if variant_path is not None
+                                             else leaf in _PATTERN_LEAVES):
                     if supplied.shape[1:] != item.shape[1:]:
                         raise ValueError(
                             f"supplied patterns are {supplied.shape[1:]} per point "
@@ -385,43 +532,67 @@ def _write(src_path, dst_path, window, patterns, report,
         if supplied is not None and not supplied_written:
             # The provenance would claim "processed" over patterns that were
             # never written. Refuse rather than mislabel the file.
+            where = (variant_path if variant_path is not None
+                     else f"{list(_PATTERN_LEAVES)} under the scan's Data group")
             raise ValueError(
                 "processed patterns were supplied but this file has no pattern "
-                f"dataset to put them in (looked for {list(_PATTERN_LEAVES)} "
-                "under the scan's Data group)"
+                f"dataset to put them in (looked for {where})"
             )
 
-        prov = dst.create_group("CropProvenance")
-        prov.attrs["format_version"] = FORMAT_VERSION
-        prov.attrs["source_file"] = str(src_path)
-        prov.attrs["row0"] = int(window.row0)
-        prov.attrs["col0"] = int(window.col0)
-        prov.attrs["rows"] = int(window.rows)
-        prov.attrs["cols"] = int(window.cols)
-        prov.attrs["original_shape"] = [int(v) for v in window.original_shape]
-        prov.attrs["shape_kind"] = str(window.shape_kind)
-        prov.attrs["n_selected"] = int(window.n_selected)
-        prov.attrs["patterns"] = "processed" if patterns is not None else "as-in-source"
-        if window.nav_mask is not None:
-            prov.create_dataset("nav_mask",
-                                data=np.asarray(window.nav_mask, dtype=bool))
+        # A crop of a rich export copied that export's mark. It says its variant below.
+        def _drop_mark(_name, item):
+            if isinstance(item, h5py.Dataset) and "pattern_source" in item.attrs:
+                item.attrs.pop("pattern_source")
+                item.attrs.pop("measurement", None)
+
+        dst.visititems(_drop_mark)
+
+        _write_provenance(dst, src_path, window, patterns is not None, variant)
+
+
+def _write_provenance(dst: h5py.File, source, window: CropWindow, processed: bool,
+                      variant: Optional[LoadVariant]) -> None:
+    """Add the ``CropProvenance`` group: where the crop sat in the file it was cut from.
+
+    ``source`` is what the crop was cut from (a path, or a description when it was cut from
+    patterns held in memory), ``processed`` whether the file holds the patterns as the app had
+    them, and ``variant`` the measurement and pattern source the crop is of (``None`` for none).
+    The drawn shape goes in as ``nav_mask``; it is a record, a reload does not apply it."""
+    prov = dst.create_group("CropProvenance")
+    prov.attrs["format_version"] = FORMAT_VERSION
+    prov.attrs["source_file"] = str(source)
+    prov.attrs["row0"] = int(window.row0)
+    prov.attrs["col0"] = int(window.col0)
+    prov.attrs["rows"] = int(window.rows)
+    prov.attrs["cols"] = int(window.cols)
+    prov.attrs["original_shape"] = [int(v) for v in window.original_shape]
+    prov.attrs["shape_kind"] = str(window.shape_kind)
+    prov.attrs["n_selected"] = int(window.n_selected)
+    prov.attrs["patterns"] = "processed" if processed else "as-in-source"
+    if variant is not None:
+        prov.attrs["pattern_source"] = variant.pattern_source
+        if variant.measurement is not None:
+            prov.attrs["measurement"] = str(variant.measurement)
+    if window.nav_mask is not None:
+        prov.create_dataset("nav_mask", data=np.asarray(window.nav_mask, dtype=bool))
 
 
 # --- helpers ------------------------------------------------------------------
 
 
-def _check_window_fits(src_path: Path, window: CropWindow) -> None:
+def _check_window_fits(src_path: Path, window: CropWindow, measurement: Optional[str] = None) -> None:
     """Refuse a window that was cut from a different grid than this file has.
 
     Every rule below keys on the scan's point count, so a mismatched window
     would cut nothing, rewrite nothing, and hand back a verbatim copy of the
     source under the name of a crop -- the silent kind of wrong. The file may
     legitimately state no cell counts at all, and then there is nothing to
-    check against.
+    check against. The header checked is the one of ``measurement`` (the crop's variant), not of
+    the first measurement in the file.
     """
     with h5py.File(src_path, "r") as src:
         for area in ("EBSD", "EDS"):
-            group = _header_group(src, area)
+            group = _header_group(src, area, measurement)
             if group is None:
                 continue
             cells = _declared_cells(group)
@@ -495,9 +666,11 @@ def _steps_of(group: h5py.Group) -> Optional[Tuple[float, float]]:
     return (x, y)
 
 
-def _header_group(h5file: h5py.File, area: str) -> Optional[h5py.Group]:
-    """The ``Header`` group of one acquisition area, under any root key."""
-    for root in h5file:
+def _header_group(h5file: h5py.File, area: str, measurement: Optional[str] = None) -> Optional[h5py.Group]:
+    """The ``Header`` group of one acquisition area: under the root key of ``measurement`` when one
+    is named, else under the first root that has one."""
+    variant = None if measurement is None else LoadVariant(measurement, "processed")
+    for root in measurement_groups(h5file, variant):
         if not isinstance(h5file[root], h5py.Group):
             continue
         path = f"{root}/{area}/Header"
@@ -506,7 +679,8 @@ def _header_group(h5file: h5py.File, area: str) -> Optional[h5py.Group]:
     return None
 
 
-def _area_geom(h5file: h5py.File, areas: Tuple[str, ...]) -> Optional[dict]:
+def _area_geom(h5file: h5py.File, areas: Tuple[str, ...],
+               measurement: Optional[str] = None) -> Optional[dict]:
     """Geometry of the first of ``areas`` that states one.
 
     Shaped like one entry of ``H5OINADataExtractor.get_pixel_sizes()`` because
@@ -519,7 +693,7 @@ def _area_geom(h5file: h5py.File, areas: Tuple[str, ...]) -> Optional[dict]:
     and its geometry lives in the EDS header.
     """
     for area in areas:
-        group = _header_group(h5file, area)
+        group = _header_group(h5file, area, measurement)
         if group is None:
             continue
         steps = _steps_of(group)
@@ -543,19 +717,20 @@ def _raw_offset(group: h5py.Group, key: str = "Relative Offset"):
         return None
 
 
-def _electron_grid(h5file: h5py.File) -> Optional[Tuple[int, int]]:
+def _electron_grid(h5file: h5py.File, measurement: Optional[str] = None) -> Optional[Tuple[int, int]]:
     """``(rows, cols)`` of the electron-image area.
 
     The header is authoritative -- a real file stores the image flat, so the
     array shape says nothing. Where there is no header (the older exports and
     the fixtures that mimic them) a 2-D image describes its own grid.
     """
-    group = _header_group(h5file, "Electron Image")
+    group = _header_group(h5file, "Electron Image", measurement)
     if group is not None:
         cells = _declared_cells(group)
         if cells is not None:
             return cells
-    for root in h5file:
+    variant = None if measurement is None else LoadVariant(measurement, "processed")
+    for root in measurement_groups(h5file, variant):
         if not isinstance(h5file[root], h5py.Group):
             continue
         path = f"{root}{_ELECTRON_DATA}".rstrip("/")

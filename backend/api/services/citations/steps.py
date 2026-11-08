@@ -31,18 +31,22 @@ does: the ``.sht`` master patterns both consume are simulated by EMsoft's
 matching method.
 
 Which keys are WIRED (i.e. some code path calls ``record_step`` with them):
-``indexing.hough``, ``indexing.hough_reflectors`` (only for a phase indexed with its
-own reflector selection), ``indexing.dictionary``, ``indexing.spherical``,
+``indexing.hough``, ``indexing.hough_reflectors`` (only for a phase whose reflector
+list is not the full default one: a selection by hand, another rule, or fewer rows), ``indexing.dictionary``, ``indexing.spherical``,
 ``indexing.spherical_emsphinx``, ``eds.chemistry_prior``,
 ``eds.particle_rescue``, ``pseudosym.resolver``, ``indexing.hough_anchor``,
-``calibration.pc_refinement``, ``refinement.orientation`` and
-``refinement.joint_r_pc``.
+``calibration.pc_refinement``, ``refinement.orientation``,
+``refinement.joint_r_pc`` and ``indexing.pattern_source``.
 
 ``refinement.joint_r_pc`` is recorded on the REFINED result of a joint R+PC
 refinement (the parent's trail plus this one step; the parent's own trail is
 not changed), once per refinement of that parent. It is a different step from
 ``refinement.orientation``, the orientation-only refinement of a dictionary
 result.
+
+``indexing.pattern_source`` is recorded at the start of a run, and only when the patterns indexed
+were the file's unprocessed (raw) ones: the default is the processed patterns, which the scan file
+holds as its ordinary patterns, so a run on them has nothing to add.
 
 ``calibration.pc_refinement`` is recorded on a result only when the pattern
 centre the run was indexed at really came out of PC refinement (global refine
@@ -212,6 +216,16 @@ _STEPS = (
         sentence=(
             "Orientations were refined against simulated patterns "
             "({n_refined} pixels)."
+        ),
+    ),
+    StepCitation(
+        key="indexing.pattern_source",
+        label="Pattern source",
+        citation_ids=("orienta",),
+        sentence=(
+            "Indexing used the {pattern_source} patterns stored in the scan file "
+            "(the raw detector patterns, not the processed ones the acquisition "
+            "software saves)."
         ),
     ),
     StepCitation(

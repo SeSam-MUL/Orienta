@@ -46,6 +46,51 @@ export function problemProse(err) {
 }
 
 /**
+ * Where a sentence that is the same on every page is kept, after the page's own namespace: `common`
+ * (a hexagonal scan met code that assumes a square one; a measurement or pattern source a step
+ * cannot read), then `ebsdviewer`, which holds the APEX refusals (a pairing that conflicts with the
+ * pattern file, a metadata file that is gone). Any route that loads a file can answer with one of
+ * those, whichever page asked: the header switcher, the Indexing dropdown, the Phase Map gallery.
+ */
+const SHARED_NAMESPACES = ['common', 'ebsdviewer'];
+
+/**
+ * The words for a code in the reader's language, or null when this build has none.
+ * Looks in the page's namespace first, then in the shared ones (`SHARED_NAMESPACES`).
+ * @param {string}   code
+ * @param {Function} t    i18next's t, bound to any namespace
+ * @param {string}   ns   the namespace holding the page's own `errors.<code>`
+ */
+export function codedText(code, t, ns = 'common') {
+  if (!code || typeof t !== 'function') return null;
+  // An empty defaultValue is not a value when returnEmptyString is false,
+  // so i18next would hand back the key. A sentinel no translation can
+  // equal is the only reliable "missing".
+  const MISS = '\u0000miss';
+  const out = t(`${ns}:errors.${code}`, { defaultValue: MISS });
+  if (out !== MISS) return out;
+  for (const shared of SHARED_NAMESPACES) {
+    if (shared === ns) continue;
+    const text = t(`${shared}:errors.${code}`, { defaultValue: MISS });
+    if (text !== MISS) return text;
+  }
+  return null;
+}
+
+/**
+ * The translated text of the code an error carries, or null when it has no code or this build has
+ * no text for it. For a reader that keeps its own fallback sentence (what it showed before codes
+ * existed) and only wants to put the coded text in front of it.
+ */
+export function codedProblemText(err, t, ns = 'common') {
+  try {
+    return codedText(problemCode(err), t, ns);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * @param {Error}    err  an axios error
  * @param {Function} t    i18next's t, bound to any namespace
  * @param {string}   ns   the namespace holding `errors.<code>`
@@ -56,17 +101,76 @@ export function problemText(err, t, ns = 'common') {
   // a blank failure instead of an English one. So the body is guarded, and
   // the docstring's promise that each path "ends in something true" holds.
   try {
-    const code = problemCode(err);
-    if (code && typeof t === 'function') {
-      // An empty defaultValue is not a value when returnEmptyString is false,
-      // so i18next would hand back the key. A sentinel no translation can
-      // equal is the only reliable "missing".
-      const MISS = '\u0000miss';
-      const out = t(`${ns}:errors.${code}`, { defaultValue: MISS });
-      if (out !== MISS) return out;
+    const coded = codedText(problemCode(err), t, ns);
+    if (coded !== null) return coded;
+    return problemProse(err);
+  } catch {
+    return err?.message || '';
+  }
+}
+
+/** The text of a Blob, or '' (jsdom's Blob has no `.text()`, a browser's has). */
+async function blobText(blob) {
+  if (typeof blob.text === 'function') return blob.text();
+  return new Promise((resolve) => {
+    try {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => resolve('');
+      reader.readAsText(blob);
+    } catch {
+      resolve('');
+    }
+  });
+}
+
+/**
+ * `problemText` for a request whose response type is `blob` (a file download).
+ *
+ * On such a response axios hands the error body over as a Blob, so `response.data.detail` is
+ * undefined and the user is left with "Request failed with status code 400". The header with the
+ * code is readable all the same, so a coded refusal is worded exactly as `problemText` words it.
+ * Without a code, a body that is JSON with a string `detail` (or a `detail.message`) is read and
+ * shown; anything else ends in the error's own message.
+ */
+export async function blobProblemText(err, t, ns = 'common') {
+  try {
+    const coded = codedText(problemCode(err), t, ns);
+    if (coded !== null) return coded;
+    const data = err?.response?.data;
+    if (data && typeof data === 'object' && typeof data.size === 'number'
+        && typeof data.slice === 'function') {
+      try {
+        const body = JSON.parse(await blobText(data));
+        const detail = body?.detail;
+        if (typeof detail === 'string' && detail) return detail;
+        if (detail && typeof detail === 'object' && typeof detail.message === 'string'
+            && detail.message) {
+          return detail.message;
+        }
+      } catch {
+        // not JSON (or unreadable): the error's own message below
+      }
+      return err?.message || '';
     }
     return problemProse(err);
   } catch {
     return err?.message || '';
   }
+}
+
+/**
+ * The reason a batch file/job failed, in the reader's language: the translation of its
+ * `error_code` (under `errors.<code>` of `ns`, then of the shared namespaces: a file that fails to
+ * load can carry any APEX refusal code), else the backend's own sentence.
+ * @param {{error_code?: string|null, error?: string|null, error_msg?: string|null}} entry
+ */
+export function failureText(entry, t, ns = 'common') {
+  try {
+    const coded = codedText(entry?.error_code, t, ns);
+    if (coded !== null) return coded;
+  } catch {
+    // fall through to the prose
+  }
+  return entry?.error || entry?.error_msg || '';
 }

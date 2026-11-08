@@ -176,6 +176,29 @@ export default function ReflectorFamilies({
     }
   };
 
+  // The one-click answer to "does not fit": the backend stores the largest default
+  // list the memory allows as an ordinary rule of the phase.
+  const onFit = async () => {
+    if (!apiRef.current.fit) return;
+    setBusy(true);
+    setError(null);
+    setNote(null);
+    try {
+      const res = await apiRef.current.fit(extendedRef.current);
+      showTable(res.data);
+      onChanged?.(res.data);
+      loadCost();
+      const fit = res.data.fit || {};
+      setNote(t('reflectorFamilies.fitDone', {
+        rows: fit.rows, size: formatSize(fit.predicted_bytes) ?? t('reflectorFamilies.costTiny'),
+      }));
+    } catch (err) {
+      setError(reflectorError(t, err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const onApplyRule = () => {
     const rule = { min_d: Number(minD), f_threshold: Number(fThr) };
     if (!Number.isFinite(rule.min_d) || !Number.isFinite(rule.f_threshold)) return;
@@ -394,7 +417,7 @@ export default function ReflectorFamilies({
               </div>
 
               <div style={{ ...small, marginTop: 6 }} title={t('reflectorFamilies.tipCost')}>
-                <CostLine t={t} cost={cost} />
+                <CostLine t={t} cost={cost} onFit={onFit} busy={busy} />
               </div>
               <div style={{ ...small, marginTop: 3 }}>{t('reflectorFamilies.rowLimitNote')}</div>
               {note && <div role="status" style={{ ...small, marginTop: 3, color: C.green ?? C.text }}>{note}</div>}
@@ -426,7 +449,7 @@ function labelFor(f) {
   return idx.every((x) => Math.abs(x) < 10) ? `{${idx.join('')}}` : `{${idx.join(' ')}}`;
 }
 
-function CostLine({ t, cost }) {
+function CostLine({ t, cost, onFit, busy }) {
   if (cost == null) return null;
   if (cost === 'loading') return <span>{t('reflectorFamilies.costMeasuring')}</span>;
   if (cost === 'error' || cost.bytes == null) return <span>{t('reflectorFamilies.costUnavailable')}</span>;
@@ -436,6 +459,25 @@ function CostLine({ t, cost }) {
       {t('reflectorFamilies.cost', { size })}
       {' - '}
       {cost.fits === false ? t('reflectorFamilies.costTooBig') : t('reflectorFamilies.costFits')}
+      {cost.fits === false && cost.fit && cost.fit.rows != null && (
+        <>
+          {' '}
+          <button
+            type="button" data-testid="reflector-fit" disabled={busy} onClick={onFit}
+            title={t('reflectorFamilies.fitTip', { rows: cost.fit.rows })}
+            style={btnStyle(busy)}
+          >
+            {t('reflectorFamilies.fitButton', { rows: cost.fit.rows })}
+          </button>
+        </>
+      )}
+      {cost.fits === false && cost.fit && cost.fit.rows == null && (
+        <div data-testid="reflector-fit-none" style={{ marginTop: 2 }}>
+          {cost.fit.reason === 'low_symmetry'
+            ? t('reflectorFamilies.fitNoneLowSym')
+            : t('reflectorFamilies.fitNone')}
+        </div>
+      )}
     </span>
   );
 }

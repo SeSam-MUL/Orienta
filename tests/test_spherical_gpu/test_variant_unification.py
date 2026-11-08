@@ -570,6 +570,67 @@ def test_score_fn_persistent_oom_returns_neg_inf(monkeypatch):
     assert fake.n_render == 2              # original + single retry, no loop
 
 
+@pytest.mark.parametrize("reload_error", ["raw", "wrapped"])
+def test_score_fn_reload_oom_during_recovery_scores_neg_inf(monkeypatch, reload_error):
+    """The first render OOMs; the recovery then reloads the phase and THAT
+    OOMs too -- raw from torch, or wrapped by load_or_get_phase into
+    SHTOutOfMemoryError (its text no longer contains "out of memory"). Either
+    way the pixel scores -inf and the run goes on; before the predicate was
+    shared, the wrapped form aborted the whole run."""
+    import backend.api.services.sht_pattern_renderer as svc
+    from backend.spherical_gpu.pipeline.variant_unification import (
+        build_render_score_fn,
+    )
+    releases: list[int] = []
+    fake = _FakeRenderer(oom_calls=1)
+    _patch_render_seams(monkeypatch, fake, releases)
+    loads = {"n": 0}
+
+    def _load(sht_path, max_bandwidth=None):
+        loads["n"] += 1
+        if loads["n"] == 1:
+            return object()                       # the initial load succeeds
+        if reload_error == "raw":
+            raise RuntimeError("CUDA out of memory. Tried to allocate 3.00 GiB")
+        raise svc.SHTOutOfMemoryError(
+            "Not enough memory to load this phase at bandwidth 256.")
+
+    monkeypatch.setattr(svc, "load_or_get_phase", _load)
+
+    H, W = _OOM_DET["pat_height"], _OOM_DET["pat_width"]
+    exp = np.random.default_rng(2).random((H, W)).astype(np.float32)
+    score = build_render_score_fn("dummy.sht", _OOM_DET, lambda f: exp)
+
+    out = score([0], _q_axis_angle([0, 0, 1], 5.0)[None, :])
+    assert out[0] == float("-inf")
+    assert loads["n"] == 2                        # the reload was attempted
+    assert len(releases) == 1
+
+
+def test_score_fn_survives_a_plain_memory_error(monkeypatch):
+    """A render that dies with Python's MemoryError (not a RuntimeError) is an
+    OOM too: it goes through the same one-time recovery and, if it persists,
+    the pixel scores -inf instead of aborting the run."""
+    from backend.spherical_gpu.pipeline.variant_unification import (
+        build_render_score_fn,
+    )
+
+    class _MemRenderer(_FakeRenderer):
+        def render(self, *a, **k):
+            self.n_render += 1
+            raise MemoryError()
+
+    releases: list[int] = []
+    fake = _MemRenderer(0)
+    _patch_render_seams(monkeypatch, fake, releases)
+    H, W = _OOM_DET["pat_height"], _OOM_DET["pat_width"]
+    exp = np.random.default_rng(3).random((H, W)).astype(np.float32)
+    score = build_render_score_fn("dummy.sht", _OOM_DET, lambda f: exp)
+    out = score([0], _q_axis_angle([0, 0, 1], 5.0)[None, :])
+    assert out[0] == float("-inf")
+    assert len(releases) == 1 and fake.n_render == 2
+
+
 def test_score_fn_non_oom_runtimeerror_propagates(monkeypatch):
     """A RuntimeError that is NOT an OOM must NOT be swallowed by the retry
     path — it propagates so real bugs stay loud."""
@@ -675,7 +736,7 @@ def test_snap_to_class_is_representative_independent_for_icosahedral_classes():
 
 
 def test_unify_map_five_fold_grain_with_mixed_representatives_comes_out_uniform():
-    """The ICAA20 crop1 defect (61 speckle px): a grain sitting in a five-fold
+    """The defect of a cropped alloy scan (61 speckle px): a grain sitting in a five-fold
     basin whose stored quaternions are random members of their m-3 orbits.
     After unification every pixel must sit on the truth — no speckle."""
     nr, nc = 6, 8

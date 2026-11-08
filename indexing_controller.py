@@ -27,6 +27,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from backend.api.log_broadcast import timed_step
+from backend.api.services.load_choices import LoadChoiceError, LoadVariant, reread_dataset_path
 
 logger = logging.getLogger(__name__)
 
@@ -795,6 +796,20 @@ def hough_index_patterns(
     _progress(f"Hough: preparing reflectors for {len(list(phase_list)) if phase_list else 0} phase(s)...", 0.22)
     with timed_step("Hough: prepare reflectors"):
         reflectors = prepare_reflectors(phase_list)
+    # A phase in a trigonal or hexagonal space group where Hough can return a wrong
+    # orientation says so in the log now and in the result below (a warning for the
+    # trigonal settings PyEBSDIndex gets wrong, a plain note for the hexagonal
+    # variants). A note, not a refusal: the run goes on.
+    try:
+        from hough_caveats import hough_caveats, log_and_progress
+        _caveats = hough_caveats(phase_list)
+        for _cav in _caveats:
+            _is_warning, _line = log_and_progress(_cav)
+            (logger.warning if _is_warning else logger.info)("Hough: %s", _cav["text"])
+            _progress(_line)
+    except Exception:  # noqa: BLE001 - a note must never fail the run
+        logger.warning("could not check the space groups of the phases for Hough notes", exc_info=True)
+        _caveats = []
     _check_cancel()
 
     # --- Step 2: Create indexer (30% -> 35%) ---
@@ -813,12 +828,15 @@ def hough_index_patterns(
         import hough_reflectors
         # from what THE INDEXER was built with, not the registry as it is now
         _selections = hough_reflectors.selection_provenance(
-            phase_list, hough_reflectors.last_build_snapshot())
+            phase_list, hough_reflectors.last_build_snapshot(),
+            hough_reflectors.last_build_rows())
         for _sel in _selections:
-            _progress(
-                f"Hough: {_sel['phase']} uses its own reflector selection "
-                f"({_sel['mode']}): " + " ".join(_sel["families_used"]),
-                0.31)
+            if _sel["differs"]:
+                _progress(
+                    f"Hough: {_sel['phase']} uses its own reflector selection "
+                    f"({_sel['mode']}): {_sel['n_rows']} rows, families "
+                    + " ".join(_sel["families_used"]),
+                    0.31)
     except Exception:  # noqa: BLE001 - a log line must never fail the run
         logger.debug("could not describe the reflector selection", exc_info=True)
         _selections = []
@@ -867,6 +885,19 @@ def hough_index_patterns(
             # already-contiguous memmap file-backed, and the mmap file handle
             # is not valid inside spawned Ray worker processes.
             patterns = np.ascontiguousarray(np.array(patterns))
+
+    # Unprocessed AZtec patterns are int16. PyEBSDIndex reads them, but finds other bands
+    # than in their 8-bit rescale; hand it the rescale of the selected patterns. The full grid is
+    # the scan, so it is rescaled by its own range; a selection by the range of the whole scan
+    # (the same numbers as the map run of the whole scan and a click on a pixel), read once.
+    if np.dtype(patterns.dtype).kind == "i":
+        from backend.api.services.load_choices import RANGE_UNKNOWN, for_pyebsdindex
+        _scan_range = (_scan_range_of_selection(patterns, signal, _check_cancel, lambda m: _progress(m, 0.39))
+                       if is_partial else RANGE_UNKNOWN)
+        _progress(f"Hough: rescaling {n_selected} signed-integer patterns to 8 bit...", 0.39)
+        with timed_step(f"Hough: rescale {n_selected} patterns to 8 bit"):
+            patterns = for_pyebsdindex(
+                patterns, value_range=None if _scan_range is RANGE_UNKNOWN else _scan_range)
 
     # --- Step 4: Run Hough transform (40% -> 85%) ---
     _progress(f"Hough: indexing {n_selected} patterns...", 0.40)
@@ -969,25 +1000,36 @@ def hough_index_patterns(
         confidence_scores=confidence,
         metadata={'band_data': band_data},
     )
+    if _caveats:
+        result.metadata["caveats"] = _caveats
     from backend.api.services.citations.provenance import record_step
     from backend.api.services.app_version import get_version_info
     record_step(result, "indexing.hough", {
         "orienta_version": get_version_info().get("version"),
     })
-    # Runs on the default list record nothing more. A phase with its own selection
-    # says which families PyEBSDIndex used, where a reader of the result looks: the
-    # metadata, and a sentence of the methods paragraph.
+    # Every phase records which reflector families PyEBSDIndex used and how many rows
+    # the list had, default included: the result says what it was indexed with. Only
+    # a list that is not the full default one (a selection by hand, another rule,
+    # fewer rows) adds a sentence to the methods paragraph.
     for _sel in _selections:
-        record_step(result, "indexing.hough_reflectors", {
-            "phase": _sel["phase"],
-            "families": _sel["families_used"],
-            "source": _sel["source"],
-        })
-        result.metadata.setdefault("hough_reflectors", {})[_sel["phase"]] = {
-            "mode": _sel["mode"], "source": _sel["source"],
-            "families_used": _sel["families_used"],
-            "families_ticked": _sel["families_ticked"], "spec": _sel["spec"],
+        if _sel["differs"]:
+            record_step(result, "indexing.hough_reflectors", {
+                "phase": _sel["phase"],
+                "families": _sel["families_used"],
+                "source": _sel["source"],
+                "n_rows": _sel["n_rows"],
+            })
+        _meta = {
+            "mode": _sel["mode"], "rule": _sel["rule"], "source": _sel["source"],
+            "families_used": _sel["families_used"], "n_rows": _sel["n_rows"],
+            "predicted_library_bytes": _sel["predicted_library_bytes"],
+            "budget_bytes": _sel["budget_bytes"], "spec": _sel["spec"],
         }
+        if _sel["families_ticked"] is not None:
+            _meta["families_ticked"] = _sel["families_ticked"]
+        if _sel["full_library_bytes"] is not None:
+            _meta["full_library_bytes"] = _sel["full_library_bytes"]
+        result.metadata.setdefault("hough_reflectors", {})[_sel["phase"]] = _meta
     return result
 
 
@@ -1019,7 +1061,8 @@ def _dictionary_signal_from_master(master, detector, angular_step_deg, *,
             )
         m = kp.load(path, projection="lambert", hemisphere="both")
 
-    rotations = sample_orientations(m.phase.point_group, angular_step_deg)
+    from crystal_symmetry import phase_point_group
+    rotations = sample_orientations(phase_point_group(m.phase), angular_step_deg)
     if progress:
         progress(f"Dictionary: projecting {rotations.size} simulated patterns "
                  f"from master at {angular_step_deg}° (CPU)...")
@@ -1711,15 +1754,21 @@ def _get_emsoft_data_path() -> Path:
     return Path.home() / "EMsoftData"
 
 
-def _get_pattern_dataset_path(h5_path: str) -> str:
+def _get_pattern_dataset_path(h5_path: str, variant: Optional[LoadVariant] = None) -> str:
     """Determine HDF5 dataset path to EBSD patterns.
 
     Supports Oxford H5OINA (``1/EBSD/Data/Processed Patterns``) and
     EDAX/TSL HDF5 (``ScanName/EBSD/Data/Pattern``).
 
+    ``variant`` is the measurement and pattern source the file was loaded as; the path is that
+    variant's dataset, or a refusal (``variantNotSupported``) when the file's layout cannot name it.
+    ``None`` is the first measurement's processed patterns, as before.
+
     Returns the full HDF5 internal path string for IndexEBSD's ``patdset``
     parameter.
     """
+    if variant is not None:
+        return reread_dataset_path(h5_path, variant, "_get_pattern_dataset_path")
     try:
         import h5py
         with h5py.File(h5_path, 'r') as f:
@@ -1818,6 +1867,16 @@ def _export_patterns_for_indexebsd(
             _progress(f"  Reading {n_patterns} patterns ({ds.shape})...")
             patterns = ds[:]
 
+        if np.dtype(patterns.dtype).kind == "i":
+            from backend.api.services.load_choices import RANGE_UNKNOWN, to_uint8_chunked
+            # A cropped region is a selection of the scan: rescaled by the scan's range (read once),
+            # like the other methods and a click on a pixel. The whole dataset is the scan.
+            _scan_range = (_scan_range_of_selection(patterns, ds, None, _progress)
+                           if crop_region is not None and n_cols_full > 0 else RANGE_UNKNOWN)
+            _progress("  Rescaling signed-integer patterns to 8 bit...")
+            patterns = to_uint8_chunked(
+                patterns, value_range=None if _scan_range is RANGE_UNKNOWN else _scan_range)
+
         # Read vendor name — IndexEBSD requires Manufacturer to exist.
         # EMSphInx applies `vendorFlip` based on this attribute per
         # include/modality/ebsd/pattern.hpp:463-470 of the upstream source:
@@ -1860,6 +1919,7 @@ def generate_emsphinx_nml(
     output_dir: Path,
     progress_callback=None,
     crop_region=None,
+    variant: Optional[LoadVariant] = None,
 ) -> Path:
     """Generate an EMSphInx NML file for IndexEBSD.
 
@@ -1884,6 +1944,9 @@ def generate_emsphinx_nml(
     crop_region : tuple, optional
         (row_start, row_end, col_start, col_end) for rectangular crop.
         When given, only cropped patterns are exported and scandims adjusted.
+    variant : LoadVariant, optional
+        The measurement and pattern source the file was loaded as: the compat file and ``patdset``
+        carry that variant's dataset. ``None`` is the first measurement's processed patterns.
 
     Returns
     -------
@@ -1917,7 +1980,7 @@ def generate_emsphinx_nml(
         n_cols_full = detector_params.get('n_cols', 0)
         # Always re-export: old compat files may have wrong pattern count
         if True:
-            patdset_src = _get_pattern_dataset_path(h5_path)
+            patdset_src = _get_pattern_dataset_path(h5_path, variant)
             _export_patterns_for_indexebsd(
                 h5_abs, h5_compat, patdset_src,
                 progress_callback=progress_callback,
@@ -1928,7 +1991,7 @@ def generate_emsphinx_nml(
         h5_abs = h5_compat
 
     # Auto-detect HDF5 dataset path for patterns
-    patdset = _get_pattern_dataset_path(h5_path)
+    patdset = _get_pattern_dataset_path(h5_path, variant)
 
     # Output filenames (absolute)
     base_name = Path(h5_path).stem
@@ -2092,10 +2155,81 @@ def _parse_emsphinx_output(output_dir: Path, base_name: str) -> Optional[object]
     return None
 
 
+#: "No stamp was passed: ask the dataset that is active now." Not ``None``: a run's stamp may say
+#: ``None`` for an unknown geometry, and unknown is not hexagonal; it must not trigger a live read.
+_LIVE = object()
+
+
+def _active_scan_is_hex() -> bool:
+    """Is the active dataset a hexagonal scan? Unknown (nothing registered) is not hexagonal."""
+    try:
+        from backend.api.routes import ebsd_viewer
+        from backend.api.services import scan_geometry
+        geometry = scan_geometry.geometry_for(ebsd_viewer._active_dataset)
+        return geometry is not None and bool(geometry.is_hex)
+    except Exception:
+        # Falling back to "not hexagonal" is the right answer for the run, but a hexagonal scan that
+        # silently lost its note must leave a trace (the sibling `_scan_geometry_fields_of` warns too).
+        logger.warning("could not read the scan geometry of the active dataset; treating the scan "
+                       "as not hexagonal", exc_info=True)
+        return False
+
+
+def _scan_is_hex(scan_geometry=_LIVE) -> bool:
+    """Hexagonal by the run's stamp, or by the active dataset when no stamp was passed."""
+    if scan_geometry is _LIVE:
+        return _active_scan_is_hex()
+    from backend.api.services.hex_guard import is_hex
+    return is_hex(scan_geometry)
+
+
+def _unification_topology(scan_geometry):
+    """What a neighbour is for the variant unification of this run: the six-neighbour topology of the run's own
+    hexagonal scan stamp (``_LIVE``: the geometry of the active dataset), or ``None`` for a square or unknown
+    scan, which keeps the four neighbours of the index grid."""
+    from backend.api.services.scan_neighbours import hex_topology, topology_of_stamp
+    if scan_geometry is _LIVE:
+        try:
+            from backend.api.routes import ebsd_viewer
+            from backend.api.services import scan_geometry as _geometry_service
+            return hex_topology(_geometry_service.geometry_for(ebsd_viewer._active_dataset))
+        except Exception:
+            logger.warning("could not read the scan geometry of the active dataset; the variant unification "
+                           "uses the four neighbours of the index grid", exc_info=True)
+            return None
+    return topology_of_stamp(scan_geometry)       # a stamp that cannot be read is a ValueError
+
+
+def _is_non_hdf5_file(path) -> bool:
+    """True for a source file that exists and is not HDF5 (an EDAX ``.up1``/``.up2``, a NORDIF
+    ``.dat``, an Oxford ``.ebsp``): h5py cannot open it, so the active signal is the only copy of
+    its patterns. A path that does not exist is not "non-HDF5": the code that opens it reports
+    what is wrong."""
+    try:
+        import h5py
+        p = Path(str(path))
+        return p.is_file() and not h5py.is_hdf5(str(p))
+    except Exception:
+        return False
+
+
 def _get_processed_patterns_if_dirty(
-    selection_mask: Optional[np.ndarray], roi_mode: bool,
+    selection_mask: Optional[np.ndarray], roi_mode: bool, force: bool = False,
+    why_not: Optional[list] = None,
+    signal=_LIVE,
 ) -> Optional[np.ndarray]:
-    """Return the active in-memory EBSD patterns IF the viewer modified them.
+    """Return the in-memory EBSD patterns of a run's signal IF the viewer modified them.
+
+    ``signal`` is the signal the run indexes. Left out (``_LIVE``), it is the viewer's active
+    signal. A caller that loaded its own signal (batch v2 loads each file into a signal of its
+    own and never activates it) passes it: a source that is not HDF5 takes its data from THAT
+    signal, and "the viewer edited it" can only apply to a signal that IS the viewer's active
+    one; a signal fresh from disk has no viewer edits, whatever else the viewer holds.
+
+    ``force=True`` returns them whether or not the signal is dirty: the Spherical path asks that
+    way when its source file is not HDF5 (``_is_non_hdf5_file``) and the signal is all there is.
+    When it still returns ``None`` and ``why_not`` is a list, the reason (a clause that completes
+    "... and <reason>") is appended to it, so the caller can refuse with the real cause.
 
     Frame averaging / background removal / autocontrast change the in-memory
     signal but not the file on disk. Spherical indexing reads patterns from
@@ -2108,19 +2242,28 @@ def _get_processed_patterns_if_dirty(
     the ceiling check below. ``None`` would be the wrong answer there: it means
     "read the file", and for a cropped dataset the file is the whole scan.
     """
+    def _none(reason: str):
+        if why_not is not None:
+            why_not.append(reason)
+        return None
+
     try:
         from backend.api.routes.ebsd_viewer import (
             is_active_signal_dirty, _get_active_signal,
             _CROP_MATERIALIZE_MAX_BYTES,
         )
     except Exception:
+        return _none("the viewer holds no patterns of it in memory")
+    active = _get_active_signal()
+    if signal is _LIVE:
+        signal = active
+    # The viewer's edits belong to the viewer's signal: a run on any other signal (a batch file's
+    # own) streams its HDF5 source instead of picking up whatever the viewer has edited.
+    if not force and not (signal is active and is_active_signal_dirty()):
         return None
-    if not is_active_signal_dirty():
-        return None
-    signal = _get_active_signal()
     data = getattr(signal, "data", None)
     if data is None:
-        return None
+        return _none("the viewer holds no patterns of it in memory")
     # `np.asarray` on a still-lazy signal ALLOCATES the whole stack. A crop
     # above the ceiling was deliberately left lazy by POST /api/ebsd/crop, and
     # POST /api/ebsd/crop/export refuses rather than make that allocation — so
@@ -2143,15 +2286,45 @@ def _get_processed_patterns_if_dirty(
             )
     data = np.asarray(data)
     if data.ndim != 4:
-        return None
+        return _none(f"the viewer's pattern stack has shape {tuple(int(n) for n in data.shape)}, "
+                     f"not (rows, columns, height, width)")
     sig_h, sig_w = int(data.shape[2]), int(data.shape[3])
     flat = data.reshape(-1, sig_h, sig_w)
     if roi_mode and selection_mask is not None:
         mask_flat = np.asarray(selection_mask).ravel()
         if mask_flat.size != flat.shape[0]:
-            return None  # shape mismatch — fall back to reading the file
+            # shape mismatch — fall back to reading the file
+            return _none(f"the selection has {mask_flat.size} positions but the viewer holds "
+                         f"{flat.shape[0]} patterns")
         return flat[mask_flat]
     return flat
+
+
+def _scan_range_of_selection(patterns, scan, check, progress):
+    """The (min, max) a stack of SELECTED patterns is rescaled by when it holds signed integers:
+    the range of the whole scan ``scan`` (an open h5py dataset, or the signal the stack was taken
+    from), which is what the map run of the whole scan and a click on a pixel (``signal_pattern``)
+    rescale by. Rescaled by its own range, a selection that lacks the scan's extremes would read
+    other values than the same pixels do anywhere else.
+
+    ``RANGE_UNKNOWN`` for every other dtype (nothing is rescaled, so there is no pass) and when
+    there is no scan to name. The pass reads the whole scan once and remembers it
+    (``dataset_pattern_range`` per file, ``scan_value_range`` per signal); ``check()`` is polled
+    before every block and raises when the user cancelled, ``progress(message)`` is called after
+    every block."""
+    from backend.api.services.load_choices import RANGE_UNKNOWN, dataset_pattern_range, scan_value_range
+    if scan is None or np.dtype(patterns.dtype).kind != "i":
+        return RANGE_UNKNOWN
+
+    def _report(done, total):
+        progress(f"Reading the value range of the signed-integer patterns ({done}/{total})")
+
+    import h5py
+    if isinstance(scan, h5py.Dataset):
+        rng = dataset_pattern_range(scan, check=check, progress=_report)
+    else:
+        rng = scan_value_range(scan, check=check, progress=_report)
+    return RANGE_UNKNOWN if rng is None else rng
 
 
 def _resolve_cif_for_sht(sht_path: str) -> str:
@@ -2198,8 +2371,12 @@ def _read_h5_pattern_stack(
     h5_path: str,
     indices: Optional[np.ndarray] = None,
     max_bytes: Optional[int] = None,
+    variant: Optional[LoadVariant] = None,
 ) -> np.ndarray:
     """Read the EBSD pattern dataset from an H5OINA / EDAX .h5 into a NumPy array.
+
+    ``variant`` is the measurement and pattern source the file was loaded as; its dataset is read
+    (``variantNotSupported`` when the file's layout cannot name it). ``None`` searches as before.
 
     ``indices=None`` reads the full ``(N, H, W)`` stack in file order; otherwise
     reads only those flat pattern indices (must be ascending for efficient
@@ -2213,13 +2390,15 @@ def _read_h5_pattern_stack(
     resolver so a huge lazy-loaded file can't OOM the run.
     """
     import h5py
+    named = (reread_dataset_path(h5_path, variant, "_read_h5_pattern_stack")
+             if variant is not None else None)
     with h5py.File(h5_path, "r") as f:
-        candidates = [
+        candidates = [named] if named else [
             "1/EBSD/Data/Processed Patterns",
             "1/EBSD/Data/Patterns",
             "1/EBSD/Data/Raw Patterns",
         ]
-        for top_name in list(f.keys()):
+        for top_name in ([] if named else list(f.keys())):
             top = f[top_name]
             if not isinstance(top, h5py.Group):
                 continue
@@ -2248,6 +2427,7 @@ def _read_h5_pattern_stack(
 
 def _materialize_patterns_for_resolution(
     h5_path: str, masters_meta, phase_id, progress=None,
+    variant: Optional[LoadVariant] = None,
 ) -> Optional[np.ndarray]:
     """Provide in-memory patterns for pseudo-symmetry resolution on the streaming
     (``index_h5``) full-map path, which otherwise has none.
@@ -2277,7 +2457,11 @@ def _materialize_patterns_for_resolution(
     if not need or not h5_path:
         return None
     try:
-        pats = _read_h5_pattern_stack(h5_path, max_bytes=_resolve_read_budget_bytes())
+        pats = _read_h5_pattern_stack(h5_path, max_bytes=_resolve_read_budget_bytes(), variant=variant)
+    except LoadChoiceError:
+        # Not a read error to keep the raw orientations for: the file cannot give this variant's
+        # patterns, and the resolver must not be fed another source's.
+        raise
     except _PatternStackTooLarge as e:
         if progress:
             progress(
@@ -2307,8 +2491,26 @@ def spherical_gpu_index_patterns(
     sht_paths: Optional[List[str]] = None,
     cancel_check=None,
     phase_weights: Optional[np.ndarray] = None,
+    scan_geometry=_LIVE,
+    signal=_LIVE,
+    variant: Optional[LoadVariant] = None,
 ) -> IndexingResult:
     """Run Spherical Indexing via the in-process PyTorch GPU pipeline.
+
+    ``variant`` is the measurement and pattern source of the dataset the run indexes (the loaded
+    one: callers pass ``variant_registry.variant_for`` of their dataset). Every read of the source
+    file (the ROI read, the streamed full map, the stack for the pseudo-symmetry resolver) takes
+    that variant's dataset; ``None`` is the first measurement's processed patterns, as before.
+
+    ``scan_geometry`` is the run's own scan stamp (a ``ScanGeometry.to_dict()``, or ``None`` for
+    "unknown"), taken when the run started: a crop or a file switch during a long run changes the
+    active dataset, and the note about a hexagonal scan must describe the one that was indexed.
+    Left out, the active dataset decides (the callers that hold no stamp).
+
+    ``signal`` is the signal whose patterns the run indexes when they come from memory (a source
+    file that is not HDF5, or the viewer's edited patterns): the caller's own. Left out, the
+    viewer's active signal, which is right for a run on the dataset the viewer holds. Batch v2
+    loads each file into a signal of its own and must pass it, or it would index the viewer's.
 
     Drop-in alternative to ``spherical_index_patterns`` that uses
     ``backend.spherical_gpu.SphericalGPUBackend``. ~11x faster than WSL
@@ -2330,7 +2532,7 @@ def spherical_gpu_index_patterns(
         BackendConfig, PhaseConfig, SphericalGPUBackend,
     )
     from orix.crystal_map import CrystalMap, PhaseList
-    from crystal_symmetry import FramePhase as Phase
+    from crystal_symmetry import FramePhase as Phase, phase_symmetry_arguments
     from orix.quaternion import Rotation
     import time as _time
 
@@ -2408,12 +2610,38 @@ def spherical_gpu_index_patterns(
     #     path because it skips the fancy-indexing copy.
     roi_mode = selection_mask is not None and not bool(selection_mask.all())
 
+    # A selection of an int16 scan is rescaled by the range of the WHOLE scan (set in the ROI block
+    # below), like the map run of the whole scan and a click on a pixel. RANGE_UNKNOWN: the stack
+    # is not signed integers (or this is no ROI run), nothing is read and the backend runs as before.
+    from backend.api.services.load_choices import RANGE_UNKNOWN
+    _roi_range = RANGE_UNKNOWN
+
+    def _check_range_pass():
+        if cancel_check is not None and cancel_check():
+            raise CancelledIndexingError("Spherical-GPU indexing cancelled while reading the value range")
+
     # When the viewer modified the patterns in-memory (frame averaging /
     # background removal / autocontrast), index THOSE patterns — otherwise
     # the edits are silently ignored because we read straight from the file.
-    processed = _get_processed_patterns_if_dirty(selection_mask, roi_mode)
+    # A source h5py cannot open (an EDAX .up1/.up2, NORDIF, Oxford .ebsp) cannot be streamed by
+    # index_h5, which died with a bare h5py error and could never have seen a hexagonal scan's own
+    # reshape. The active signal is then the only copy of the patterns: it is indexed like the
+    # processed ones, under the same in-memory ceiling.
+    _source_not_hdf5 = _is_non_hdf5_file(h5_path)
+    _why_not: list = []
+    processed = _get_processed_patterns_if_dirty(
+        selection_mask, roi_mode, force=_source_not_hdf5, why_not=_why_not, signal=signal)
+    if _source_not_hdf5 and processed is None:
+        raise ValueError(
+            f"{Path(h5_path).name} is not an HDF5 file and "
+            f"{_why_not[0] if _why_not else 'the viewer holds no patterns of it in memory'}, "
+            f"so there is nothing to index. Load the file in the EBSD viewer first."
+        )
     if processed is not None:
         _progress(
+            "Spherical-GPU: patterns source = the loaded in-memory signal "
+            "(the source file is not HDF5)."
+            if _source_not_hdf5 else
             "Spherical-GPU: patterns source = PROCESSED in-memory signal "
             "(viewer pre-processing applied, not the raw file)."
         )
@@ -2444,6 +2672,13 @@ def spherical_gpu_index_patterns(
                 f"in-memory patterns (viewer pre-processing applied)...",
                 0.08,
             )
+            if signal is _LIVE:
+                from backend.api.routes.ebsd_viewer import _get_active_signal
+                _scan_signal = _get_active_signal()
+            else:
+                _scan_signal = signal
+            _roi_range = _scan_range_of_selection(
+                patterns_roi, _scan_signal, _check_range_pass, lambda m: _progress(m, 0.08))
         else:
             _progress(
                 f"Spherical-GPU: ROI mode — loading {n_selected} of "
@@ -2458,13 +2693,16 @@ def spherical_gpu_index_patterns(
             # H5OINA both work. h5py supports integer fancy-indexing along
             # axis 0, so we only read the n_selected patterns we actually need.
             import h5py
+            # The variant's own dataset, or the refusal that says this layout cannot name it.
+            _named = (reread_dataset_path(h5_path, variant, "spherical_gpu_index_patterns")
+                      if variant is not None else None)
             with h5py.File(h5_path, "r") as f:
-                candidates = [
+                candidates = [_named] if _named else [
                     "1/EBSD/Data/Processed Patterns",
                     "1/EBSD/Data/Patterns",
                     "1/EBSD/Data/Raw Patterns",
                 ]
-                for top_name in list(f.keys()):
+                for top_name in ([] if _named else list(f.keys())):
                     top = f[top_name]
                     if not isinstance(top, h5py.Group):
                         continue
@@ -2494,6 +2732,8 @@ def spherical_gpu_index_patterns(
                 # for chunked datasets (one seek per chunk, no fancy mask copy).
                 indices = np.where(mask_flat)[0]
                 patterns_roi = np.asarray(dset[indices])  # (n_selected, ph, pw)
+                _roi_range = _scan_range_of_selection(
+                    patterns_roi, dset, _check_range_pass, lambda m: _progress(m, 0.08))
         _progress(
             f"Spherical-GPU: indexing {patterns_roi.shape[0]} patterns "
             f"across {n_phases} phase{'s' if n_phases > 1 else ''}...",
@@ -2569,12 +2809,22 @@ def spherical_gpu_index_patterns(
     except Exception:
         logger.debug("Could not fetch signal mask for spherical-GPU", exc_info=True)
 
-    def _apply_mask(patterns):
+    def _apply_mask(patterns, value_range=RANGE_UNKNOWN):
         if _sp_include is None:
             return patterns
         # patterns: (N, H, W). Multiply by 2D mask broadcast across N.
         if patterns.shape[-2:] != _sp_include.shape:
             return patterns  # mask shape mismatch — skip silently rather than crash
+        if np.dtype(patterns.dtype).kind == "i":
+            # A signed-integer stack is rescaled to 0..255 by the min/max of the scan (inside the
+            # backend, and for a single pattern by ``signal_pattern``). Zeroing the corners first
+            # would drag that minimum to 0 and move every value the indexer sees, so the map run
+            # would disagree with the click on the same pixel: rescale by the range of the
+            # unmasked scan first (the same numbers), then mask. ``value_range`` is the scan's when
+            # ``patterns`` are a selection of it; left out, the stack is the whole scan.
+            from backend.api.services.load_choices import to_uint8_chunked
+            patterns = to_uint8_chunked(
+                patterns, value_range=None if value_range is RANGE_UNKNOWN else value_range)
         return patterns * _sp_include.astype(patterns.dtype)
 
     masters_meta = []
@@ -2587,12 +2837,18 @@ def spherical_gpu_index_patterns(
         if roi_mode:
             # patterns_roi is the processed in-memory subset when the signal
             # was dirty, otherwise the H5-read subset (see the ROI block).
-            _sp_patterns_for_resolve = _apply_mask(patterns_roi)
+            _sp_patterns_for_resolve = _apply_mask(patterns_roi, _roi_range)
+            # Handed on only while the stack still holds signed integers: a masked stack is
+            # already the 0..255 rescale of the scan, and a second one would rescale it again.
+            _roi_kw = ({"value_range": _roi_range}
+                       if _roi_range is not RANGE_UNKNOWN
+                       and np.dtype(_sp_patterns_for_resolve.dtype).kind == "i" else {})
             result = backend.index_array(
                 patterns=_sp_patterns_for_resolve,
                 detector_params=detector_params,
                 progress_callback=_bcb,
                 phase_weights=phase_weights,
+                **_roi_kw,
             )
         elif processed is not None:
             # Full grid, viewer pre-processing applied.
@@ -2604,11 +2860,16 @@ def spherical_gpu_index_patterns(
                 phase_weights=phase_weights,
             )
         else:
+            _stream_kw = {}
+            if variant is not None:
+                _stream_kw["dataset_path"] = reread_dataset_path(
+                    h5_path, variant, "spherical_gpu_index_patterns")
             result = backend.index_h5(
                 h5_path=h5_path,
                 detector_params=detector_params,
                 progress_callback=_bcb,
                 phase_weights=phase_weights,
+                **_stream_kw,
             )
         # Snapshot only the small metadata fields we need to build the
         # CrystalMap's PhaseList. CRITICAL: do NOT keep references to the
@@ -2622,6 +2883,7 @@ def spherical_gpu_index_patterns(
             {
                 "formula": getattr(ix.master, "formula", None),
                 "point_group": getattr(ix.master, "point_group", None),
+                "space_group": getattr(ix.master, "space_group", None),
                 # z_rot is the authoritative "spherical-unreliable" determinant
                 # (== 2 → flat cc); snapshot it so we never re-touch the GPU
                 # master after invalidate().
@@ -2680,7 +2942,8 @@ def spherical_gpu_index_patterns(
     # correction runs on a plain full-map index too — no ROI / viewer edit needed.
     if _sp_patterns_for_resolve is None:
         _streamed = _materialize_patterns_for_resolution(
-            h5_path, masters_meta, result.phase_id.numpy(), progress=_progress)
+            h5_path, masters_meta, result.phase_id.numpy(), progress=_progress,
+            variant=variant)
         if _streamed is not None:
             _sp_patterns_for_resolve = _apply_mask(_streamed)
 
@@ -2754,11 +3017,20 @@ def spherical_gpu_index_patterns(
     # must not be cited as one (see the "single variant class" skip inside
     # unify_map/unify_after_hough_resolve).
     _pseudosym_variants_unified = False
+    # Unification joins grains through the neighbours of a pixel. On a hexagonal scan those are six, and
+    # which two of the adjacent rows' points they are depends on the parity of the row and on which way
+    # the odd rows are offset; ``scan_neighbours.Topology`` knows, the run's own stamp decides.
+    # The topology is read inside the ``try``: a stamp that cannot be read, or one of another grid, skips this
+    # one step, with a note in the result, instead of throwing away the run after the GPU work.
+    _vu_topology = None
+    _hex_scan = False
     if _resolved_phase_ids and _sp_patterns_for_resolve is not None:
         try:
             from backend.spherical_gpu.pipeline.variant_unification import (
                 unify_after_hough_resolve,
             )
+            _vu_topology = _unification_topology(scan_geometry)
+            _hex_scan = _vu_topology is not None
             _progress("Pseudo-symmetry: unifying variant speckle per grain "
                       "(render-NCC verified)...", 0.93)
             _eul_u, _vu_reports = unify_after_hough_resolve(
@@ -2766,7 +3038,8 @@ def spherical_gpu_index_patterns(
                 _sp_patterns_for_resolve, files, masters_meta,
                 detector_params, selection_mask, roi_mode,
                 _resolved_phase_ids, progress=lambda m: _progress(m, 0.95),
-                raw_eulers=result.euler_xyz.numpy().astype(np.float64))
+                raw_eulers=result.euler_xyz.numpy().astype(np.float64),
+                topology=_vu_topology)
             if _eul_u is not None:
                 eulers = _eul_u
                 _pseudosym_variants_unified = True
@@ -2780,10 +3053,17 @@ def spherical_gpu_index_patterns(
                     f"Pseudo-symmetry: variant unification done — "
                     f"{_tot_flip} unit(s) unified/flipped, {_tot_amb} ambiguous, "
                     f"{_tot_resc} px rescued", 0.96)
+                if _hex_scan:
+                    _progress("Pseudo-symmetry: hexagonal scan, grains were joined through all six "
+                              "neighbours of each pixel.", 0.96)
                 _orientation_source_reason += (
                     " Variant speckle was unified per grain (supergroup "
                     "segmentation + aggregated render-NCC; coherent twin "
                     "domains only flipped on a clear margin).")
+                if _hex_scan:
+                    _orientation_source_reason += (
+                        " The scan is hexagonal: grains were joined through all six neighbours "
+                        "of each pixel.")
                 _arb = (_vu_reports or {}).get("arbitration") or {}
                 _n_cmp = sum(int(a.get("n_compared", 0) or 0)
                              for a in _arb.values() if isinstance(a, dict))
@@ -2795,9 +3075,17 @@ def spherical_gpu_index_patterns(
                         f"({_n_cmp} px) both were rendered against the measured "
                         f"pattern; the spherical orientation was kept on "
                         f"{_n_rest} px where it fit better.")
-        except Exception:
+        except Exception as _vu_exc:
             logger.warning("Variant unification failed; keeping resolver "
                            "orientations", exc_info=True)
+            # The run keeps its result, but the user reads the reason in the result, not in the log.
+            # Only when nothing was unified: an error after the orientations were replaced (in the
+            # progress report or the summary) leaves a unified map, and "skipped" would be false.
+            if not _pseudosym_variants_unified:
+                _orientation_source_reason += (
+                    " The pseudo-symmetry variant unification was skipped"
+                    + (f" ({_vu_exc})" if isinstance(_vu_exc, ValueError) else " (see the log)")
+                    + "; the orientations are those of the Hough resolver.")
 
     # --- Provenance: count what the map KEPT, don't announce what was tried --
     # Labelling the map "hough" the moment the resolver substituted was true
@@ -2805,7 +3093,7 @@ def spherical_gpu_index_patterns(
     # only touches z_rot==2 phases, resolve_map hands Hough-failure pixels back
     # to the sphere, and since the render arbitration (5bbc2df5 / e605d0f8) plus
     # the decode fix (a4b7710c) the arbiter returns disputed pixels to the raw
-    # spherical answer wherever it renders better -- on the ICAA20 crop that was
+    # spherical answer wherever it renders better -- on a cropped alloy scan that was
     # all 676 of them. The badge then claimed Hough over a map that is the
     # sphere's. Fail-safe: any problem here leaves the label as it was.
     if _orientation_source != "spherical":
@@ -2869,6 +3157,7 @@ def spherical_gpu_index_patterns(
             masters_meta.append({
                 "formula": getattr(m, "formula", None),
                 "point_group": getattr(m, "point_group", None),
+                "space_group": getattr(m, "space_group", None),
                 "z_rot": getattr(m, "z_rot", None),
             })
             del m
@@ -2892,7 +3181,8 @@ def spherical_gpu_index_patterns(
                 "symmetry. Regenerate the SHT with a CIF that carries a valid "
                 "space group, or fix the SHT loader to propagate point_group."
             )
-        phase_objs.append(Phase(name=m.get("formula") or "Phase", point_group=pg))
+        phase_objs.append(Phase(name=m.get("formula") or "Phase",
+                                **phase_symmetry_arguments(pg, m.get("space_group"))))
         # The SHT-spherical SO(3) correlation can't index z_rot==2 masters
         # (cubic m-3/23/-43m + orthorhombic mmm/222/mm2) — it lands in a wrong
         # basin. The in-memory path AUTO-CORRECTS these above PER PHASE (Hough
@@ -3044,7 +3334,9 @@ def _sweep_stale_preproc_temps(temp_dir: Path) -> None:
         pass
 
 
-def _make_processed_temp_h5(h5_path: str, progress_callback=None) -> Optional[str]:
+def _make_processed_temp_h5(h5_path: str, progress_callback=None,
+                            use_viewer_patterns: bool = True,
+                            variant: Optional[LoadVariant] = None) -> Optional[str]:
     """Write a temp H5 with the viewer-processed patterns, if the signal is dirty.
 
     The external EMSphInx binary can only read files, so when the active EBSD
@@ -3053,16 +3345,34 @@ def _make_processed_temp_h5(h5_path: str, progress_callback=None) -> Optional[st
     in-place with the processed patterns. Returns the temp path, or ``None``
     when the signal is unmodified (callers then use the original file).
     The caller MUST delete the returned file.
+
+    Only for the viewer's own file: a batch run over another file with the same
+    pattern count got the viewer's processed patterns written into its copy and
+    reported them as its own. A batch passes ``use_viewer_patterns=False``: it
+    indexes its file as it is, also when that file is the one the viewer shows.
+
+    ``variant`` is the measurement and pattern source of the viewer's dataset: the patterns are
+    written into THAT variant's dataset of the copy (keeping its dtype), and nothing else of the
+    copy is touched, so the NML built from the temp file names the dataset that holds them. A file
+    whose layout cannot name the variant is refused (``variantNotSupported``), not indexed raw.
     """
+    if not use_viewer_patterns:
+        return None
     try:
+        from backend.api.routes import ebsd_viewer as _viewer
         from backend.api.routes.ebsd_viewer import (
-            is_active_signal_dirty, _get_active_signal,
+            is_active_signal_dirty, _get_active_signal, _canonical_path,
         )
     except Exception:
         return None
     if not is_active_signal_dirty():
         return None
     if not h5_path or not Path(h5_path).exists():
+        return None
+    viewer_file = getattr(_viewer, "_ebsd_file_path", None)
+    if not viewer_file or _canonical_path(str(viewer_file)) != _canonical_path(str(h5_path)):
+        logger.info("EMSphInx: %s is not the viewer's file; indexing its own patterns",
+                    Path(str(h5_path)).name)
         return None
     signal = _get_active_signal()
     data = getattr(signal, "data", None)
@@ -3073,6 +3383,10 @@ def _make_processed_temp_h5(h5_path: str, progress_callback=None) -> Optional[st
         return None
     sig_h, sig_w = int(data.shape[2]), int(data.shape[3])
     flat = data.reshape(-1, sig_h, sig_w)
+
+    # Asked of the source before anything is copied: the copy has the source's layout.
+    variant_ds = (reread_dataset_path(str(h5_path), variant, "_make_processed_temp_h5")
+                  if variant is not None else None)
 
     import os as _os
     import shutil as _shutil
@@ -3097,7 +3411,7 @@ def _make_processed_temp_h5(h5_path: str, progress_callback=None) -> Optional[st
         _p("Spherical: viewer pre-processing detected — writing processed "
            "patterns to a temporary file for EMSphInx...")
         _shutil.copy2(h5_path, temp_h5)
-        ds_path = _get_pattern_dataset_path(str(temp_h5))
+        ds_path = variant_ds or _get_pattern_dataset_path(str(temp_h5))
         with _h5py.File(temp_h5, "r+") as f:
             dset = f[ds_path]
             if int(np.prod(dset.shape[:-2]) if dset.ndim >= 3 else dset.shape[0]) \
@@ -3211,14 +3525,67 @@ def _emsphinx_crop_refusal(h5_path: str, detector_params: Dict) -> Optional[str]
     )
 
 
+class EmsphinxSourceRefused(ValueError):
+    """EMSphInx cannot index the patterns of this source file (see ``_emsphinx_source_refusal``).
+
+    ``code`` is what a batch stores on the job and the interface translates; the message is the text of the
+    refusal. Other refusals of the same call (a cropped dataset) stay plain ``ValueError``."""
+
+    code = "emsphinxSourceRefused"
+
+
+def _emsphinx_source_refusal(h5_path: str, scan_geometry=_LIVE) -> Optional[str]:
+    """Why EMSphInx cannot index the patterns of this source file, or None.
+
+    EMSphInx reads the patterns from the FILE (directly, or from a temporary H5
+    that ``_make_processed_temp_h5`` builds next to the source's own layout).
+    Two kinds of source give it nothing it can read correctly:
+
+    * a file that is not HDF5 (an EDAX ``.up1``/``.up2``, a NORDIF ``.dat``, an
+      Oxford ``.ebsp``): there is no H5 pattern dataset to export, and the run
+      died in the NML/export step with a bare h5py message;
+    * a hexagonal scan: EMSphInx takes the file's patterns as the points of a
+      square grid (the ``scandims`` we hand over), and the file's pattern order
+      does not match that grid - the map would come out with the wrong layout.
+
+    The other indexers take the patterns the app holds in memory, so they are
+    named as the way forward.
+
+    ``scan_geometry`` is the run's own stamp. Left out (``_LIVE``), the active
+    dataset decides; a batch run indexes a file the viewer does not show and
+    must pass its own, or a square file is refused while the viewer shows a
+    hexagonal one.
+    """
+    if _is_non_hdf5_file(h5_path):
+        why = (f"its patterns are in {Path(str(h5_path)).suffix or 'a'} file, which is not HDF5, "
+               "so there is no pattern dataset EMSphInx can read")
+    elif _scan_is_hex(scan_geometry):
+        why = ("this is a hexagonal scan: EMSphInx would read its patterns as the points of a square "
+               "grid, and the file's pattern order does not match that grid")
+    else:
+        return None
+    return (
+        f"The EMSphInx (CPU) spherical backend cannot index this dataset: {why}. "
+        "EMSphInx runs as an external program that reads the patterns from the file "
+        "on disk. The spherical GPU backend, Hough and Dictionary all index the "
+        "patterns that are already loaded in the app - use one of those."
+    )
+
+
 def spherical_index_patterns(
     h5_path: str,
     config: IndexingConfig,
     detector_params: Dict,
     selection_mask: Optional[np.ndarray] = None,
     progress_callback=None,
+    scan_geometry=_LIVE,
+    use_viewer_patterns: bool = True,
+    variant: Optional[LoadVariant] = None,
 ) -> IndexingResult:
     """Run Spherical Indexing via EMSphInx IndexEBSD.
+
+    ``variant`` is the measurement and pattern source of the dataset the run indexes: the temporary
+    H5 and the NML take that variant's dataset (``None``: first measurement, processed patterns).
 
     Thin wrapper over :func:`_spherical_index_patterns_impl`. When the active
     EBSD signal was modified in the viewer (frame averaging / background
@@ -3229,11 +3596,16 @@ def spherical_index_patterns(
     A CROPPED dataset is refused outright before any of that — see
     :func:`_emsphinx_crop_refusal`.
     """
-    refusal = _emsphinx_crop_refusal(h5_path, detector_params)
-    if refusal:
-        raise ValueError(refusal)
+    source_refusal = _emsphinx_source_refusal(h5_path, scan_geometry)
+    if source_refusal:
+        raise EmsphinxSourceRefused(source_refusal)
+    crop_refusal = _emsphinx_crop_refusal(h5_path, detector_params)
+    if crop_refusal:
+        raise ValueError(crop_refusal)
 
-    temp_h5 = _make_processed_temp_h5(h5_path, progress_callback)
+    temp_h5 = _make_processed_temp_h5(h5_path, progress_callback,
+                                      use_viewer_patterns=use_viewer_patterns,
+                                      variant=variant)
     try:
         return _spherical_index_patterns_impl(
             h5_path=temp_h5 or h5_path,
@@ -3241,6 +3613,7 @@ def spherical_index_patterns(
             detector_params=detector_params,
             selection_mask=selection_mask,
             progress_callback=progress_callback,
+            variant=variant,
         )
     finally:
         if temp_h5:
@@ -3256,6 +3629,7 @@ def _spherical_index_patterns_impl(
     detector_params: Dict,
     selection_mask: Optional[np.ndarray] = None,
     progress_callback=None,
+    variant: Optional[LoadVariant] = None,
 ) -> IndexingResult:
     """Run Spherical Indexing via EMSphinx IndexEBSD.
 
@@ -3263,6 +3637,8 @@ def _spherical_index_patterns_impl(
     ----------
     h5_path : str
         Path to the Oxford H5OINA experimental pattern file.
+    variant : LoadVariant, optional
+        The measurement and pattern source the file was loaded as (see ``generate_emsphinx_nml``).
     config : IndexingConfig
         Must have sht_file set.
     detector_params : dict
@@ -3351,7 +3727,10 @@ def _spherical_index_patterns_impl(
                 config, h5_path, detector_params, output_dir,
                 progress_callback=progress_callback,
                 crop_region=crop_region,
+                variant=variant,
             )
+    except LoadChoiceError:
+        raise                       # a coded refusal keeps its code; wrapping it would lose it
     except Exception as e:
         import traceback
         raise RuntimeError(
@@ -3833,8 +4212,10 @@ def quick_test_single_pattern(
     """
     from ebsd_utils import prepare_reflectors, create_indexer
 
-    # Extract pattern
-    pattern = np.asarray(signal.data[row, col], dtype=np.float32)
+    # Extract pattern: as the map run sees this pixel (an int16 scan rescaled by the range
+    # of the whole scan)
+    from backend.api.services.load_choices import signal_pattern
+    pattern = np.asarray(signal_pattern(signal, row, col), dtype=np.float32)
 
     # Build indexer
     reflectors = prepare_reflectors(phase_list)
@@ -3989,20 +4370,29 @@ def _simulate_pattern_for_orientation(detector, phase_list, rotation, phase_id):
         phase = phase_list[phase_id]
         from diffsims.crystallography import ReciprocalLatticeVector
         from ebsd_utils import _normalize_element_labels
+        from hough_reflectors import DEFAULT_RULE
+        from phase_cell import calculate_structure_factors, sanitise_reflectors
         # Same robustness as ebsd_utils._reflectors_for_phase: resolve messy CIF
         # element labels (oxidation states / mixed-occupancy sites) so structure
         # factors aren't silently zero, and tolerate diffsims' unimplemented
-        # ``.allowed`` for primitive-hexagonal space groups (absent reflections
-        # carry F≈0 and render invisibly).
+        # ``.allowed`` for primitive-hexagonal space groups (the structure-factor
+        # cut below removes the absent reflections instead).
         _normalize_element_labels(phase)
+        from crystal_symmetry import trigonal_frame_phase
+        phase = trigonal_frame_phase(phase)     # the true group of the trigonal space groups
         ref = ReciprocalLatticeVector.from_min_dspacing(phase, 1.0)
         try:
             ref = ref[ref.allowed]
         except NotImplementedError:
             pass
         ref = ref.unique(use_symmetry=True).symmetrise()
-        ref.sanitise_phase()
-        ref.calculate_structure_factor()
+        sanitise_reflectors(ref)
+        calculate_structure_factors(ref)
+        # kikuchipy draws a line for every reflector it is given, whatever its
+        # structure factor, so the forbidden and the weak rows have to be cut here,
+        # by the rule of the default Hough list (|F| above a tenth of the strongest).
+        strength = np.abs(np.asarray(ref.structure_factor)).ravel()
+        ref = ref[strength > DEFAULT_RULE["f_threshold"] * strength.max()]
 
         sim = KikuchiPatternSimulator(ref)
         from backend.api.services.detector_convention import for_kikuchipy_projection
@@ -4013,20 +4403,22 @@ def _simulate_pattern_for_orientation(detector, phase_list, rotation, phase_id):
         img = np.zeros((pat_h, pat_w), dtype=np.float32)
         lines = geo.as_collections(zone_axes=False)
         if lines:
-            import matplotlib.pyplot as plt
+            # An Agg canvas of our own: a bare Figure has a canvas that cannot draw,
+            # and FigureCanvasAgg.tostring_rgb is gone from matplotlib 3.10 (this
+            # function returned None there, so the quick-test image never rendered).
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
             from matplotlib.figure import Figure
             fig = Figure(figsize=(pat_w / 100, pat_h / 100), dpi=100)
+            canvas = FigureCanvasAgg(fig)
             ax = fig.add_axes([0, 0, 1, 1])
             ax.set_xlim(0, pat_w)
             ax.set_ylim(pat_h, 0)
             ax.set_facecolor('black')
             for lc in lines:
                 ax.add_collection(lc)
-            fig.canvas.draw()
-            buf = np.frombuffer(fig.canvas.tostring_rgb(), dtype=np.uint8)
-            buf = buf.reshape(pat_h, pat_w, 3)
+            canvas.draw()
+            buf = np.asarray(canvas.buffer_rgba())[..., :3]
             img = buf.mean(axis=2).astype(np.float32)
-            plt.close(fig)
         return img
     except Exception as e:
         logger.debug(f"Geometrical simulation failed: {e}")
@@ -4174,18 +4566,24 @@ def run_single_phase_method(
     selection_mask: np.ndarray,
     h5_path: str = "",
     detector_params: Optional[Dict] = None,
+    variant: Optional[LoadVariant] = None,
     progress_callback=None,
     cancel_check=None,
+    scan_geometry=_LIVE,
 ) -> PhaseMethodResult:
     """Run indexing for one (phase, method) combination.
 
-    Dispatches to the correct indexing function and wraps the result.
+    Dispatches to the correct indexing function and wraps the result. ``variant`` is the
+    measurement and pattern source of the dataset (``h5_path`` is its file); the Spherical
+    branches read that variant's dataset.
 
     ``detector`` is the calibrated (store-resolved) detector; the Dictionary
     path uses it for the projection, exactly as the single-phase route does.
     ``config.compute_mode`` reaches the Dictionary indexer the same way.
     ``progress_callback`` / ``cancel_check`` are forwarded to the indexers that
-    take them (EMSphInx CPU takes no cancel check).
+    take them (EMSphInx CPU takes no cancel check). ``scan_geometry`` is the run's
+    stamp; the Spherical branches take it, and the GPU one also ``signal``, as the
+    route's own calls of those indexers do.
     """
     n_rows, n_cols = signal.data.shape[:2]
     original_shape = (n_rows, n_cols)
@@ -4254,13 +4652,18 @@ def run_single_phase_method(
         # the in-process PyTorch backend.
         backend_choice = resolve_spherical_backend(idx_config)
         if backend_choice == "spherical_gpu":
+            # Phase-map routing comes here, one SHT file per phase. Pinned by
+            # tests/test_batch_v2_own_patterns.py::test_a_routed_spherical_gpu_run_indexes_its_own_signal.
             result = spherical_gpu_index_patterns(
                 h5_path=h5_path,
                 config=idx_config,
                 detector_params=detector_params or {},
                 selection_mask=selection_mask,
+                variant=variant,
                 progress_callback=progress_callback,
                 cancel_check=cancel_check,
+                scan_geometry=scan_geometry,
+                signal=signal,
             )
         else:
             result = spherical_index_patterns(
@@ -4268,7 +4671,9 @@ def run_single_phase_method(
                 config=idx_config,
                 detector_params=detector_params or {},
                 selection_mask=selection_mask,
+                variant=variant,
                 progress_callback=progress_callback,
+                scan_geometry=scan_geometry,
             )
 
     else:
@@ -4648,7 +5053,8 @@ def _index_selected_hough(signal, selected_indices, phase_list, indexer, detecto
 
     for row, col in selected_indices:
         try:
-            pat = signal.data[row, col]
+            from backend.api.services.load_choices import signal_pattern
+            pat = signal_pattern(signal, row, col)
             sig2d = Signal2D(pat)
             ebsd = EBSD(sig2d, detector=detector)
             xmap_single, _, _ = ebsd.hough_indexing(
@@ -4867,10 +5273,14 @@ def run_per_phase_indexing(
     h5_path: str = "",
     detector_params: Optional[Dict] = None,
     progress_cb: Optional[callable] = None,
+    variant: Optional[LoadVariant] = None,
     run_phase: Optional[callable] = None,
     cancel_check: Optional[callable] = None,
+    scan_geometry=_LIVE,
 ) -> IndexingResult:
     """Run indexing once per phase, each restricted to that phase's pixels.
+
+    ``variant`` is the measurement and pattern source of the dataset (see ``run_single_phase_method``).
 
     Unlike the comparison batch (where every phase competes for every pixel),
     this routine takes the assignment as ground truth — typically the
@@ -5001,8 +5411,10 @@ def run_per_phase_indexing(
                     selection_mask=mask,
                     h5_path=h5_path if method == IndexingMethod.SPHERICAL else "",
                     detector_params=detector_params if method == IndexingMethod.SPHERICAL else None,
+                    variant=variant,
                     progress_callback=_phase_progress if progress_cb else None,
                     cancel_check=cancel_check,
+                    scan_geometry=scan_geometry,
                 )
             per_phase_results.append(pmr)
         except IndexingCancelled:
@@ -5076,5 +5488,7 @@ def run_per_phase_indexing(
     )
     from backend.api.services.citations.provenance import merge_provenance
     merge_provenance(merged_result, (pmr.indexing_result for pmr in per_phase_results))
+    from hough_reflectors import merge_build_records
+    merge_build_records(merged_result, (pmr.indexing_result for pmr in per_phase_results))
     _carry_routed_fields(merged_result, per_phase_results, (n_rows, n_cols))
     return merged_result

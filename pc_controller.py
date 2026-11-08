@@ -84,6 +84,38 @@ def index_data_ci(index_data, n_phases):
     return float(index_data["cm"].mean())
 
 
+def pc_is_per_pixel(detector) -> bool:
+    """True when ``detector`` carries more than one projection centre.
+
+    A per-pixel detector (the result of a grid calibration, or a loaded map)
+    holds one PC per scan position. PyEBSDIndex takes one PC for one pattern, so
+    everything that handles a single pattern must first pick that pattern's PC
+    (:meth:`PCController.detector_at`).
+    """
+    try:
+        return int(np.asarray(detector.pc, dtype=float).reshape(-1, 3).shape[0]) > 1
+    except Exception:  # noqa: BLE001 - a detector without a readable PC is not per-pixel
+        return False
+
+
+def single_pc_detector(detector, pc):
+    """A copy of ``detector`` with the one projection centre ``pc`` (Bruker).
+
+    Every other geometry value (shape, pixel size, binning, tilts, azimuthal) is
+    carried over; ``detector`` itself is not touched.
+    """
+    from kikuchipy.detectors import EBSDDetector
+    return EBSDDetector(
+        shape=tuple(int(v) for v in detector.shape),
+        px_size=detector.px_size,
+        binning=detector.binning,
+        tilt=detector.tilt,
+        azimuthal=detector.azimuthal,
+        sample_tilt=detector.sample_tilt,
+        pc=[float(v) for v in np.asarray(pc, dtype=float).reshape(3)],
+    )
+
+
 class PCController:
     """
     Controller for EBSD workflows: load phases, manage patterns,
@@ -98,6 +130,8 @@ class PCController:
         self.indexer = None
         self.patterns = []            # list of (coords, pattern)
         self.cache = {}               # idx -> {'ci', 'xmap', 'band_data'}
+        # the sample tilt kikuchipy's plane fit estimated at the last grid fit (not applied)
+        self.last_fitted_sample_tilt = None
 
         # Indexing parameters with defaults
         self.min_d = 1.0
@@ -312,32 +346,87 @@ class PCController:
             self.indexer = None
             self.clear_cache()
 
-    def _indexer_pc_is_stale(self):
+    def pc_at(self, coords=None):
+        """The (3,) PC (Bruker) the detector has at scan position ``coords``.
+
+        One PC for a single-PC detector. For a per-pixel detector the PC of the
+        pixel ``(row, col)``; when the position is unknown (``coords`` None), is
+        outside the map, or the PC list cannot be placed on the scan, the MEAN of
+        the map, with a log line saying so (never a silent substitute).
+        """
+        arr = np.asarray(self.detector.pc, dtype=float)
+        flat = arr.reshape(-1, 3)
+        if flat.shape[0] == 1:
+            return flat[0].copy()
+        if coords is None:
+            logger.warning(
+                "pattern position unknown: using the mean of the %d-pixel PC map",
+                flat.shape[0])
+        elif arr.ndim == 3:
+            row, col = int(coords[0]), int(coords[1])
+            if 0 <= row < arr.shape[0] and 0 <= col < arr.shape[1]:
+                return arr[row, col].copy()
+            logger.warning(
+                "pattern position (%d, %d) is outside the %dx%d PC map: using the "
+                "map mean", row, col, arr.shape[0], arr.shape[1])
+        else:
+            logger.warning(
+                "the %d PCs of the detector have no scan layout: using their mean",
+                flat.shape[0])
+        return flat.mean(axis=0)
+
+    def detector_at(self, coords=None):
+        """The detector to use for ONE pattern at scan position ``coords``.
+
+        The detector itself when it has one PC; otherwise a single-PC copy at the
+        pattern's own pixel (see :meth:`pc_at`). The per-pixel detector stays as
+        it is.
+        """
+        if self.detector is None:
+            raise RuntimeError("No detector set.")
+        if not pc_is_per_pixel(self.detector):
+            return self.detector
+        return single_pc_detector(self.detector, self.pc_at(coords))
+
+    def _indexer_pc_is_stale(self, detector=None):
         """True when the cached indexer was built for another PC than the detector's.
 
         A PyEBSDIndex indexer copies the PC when it is created; assigning
         ``detector.pc`` afterwards (a refine, a typed value) does not reach it, so
-        whatever it indexes is indexed at the OLD PC.
+        whatever it indexes is indexed at the OLD PC. ``detector`` is the one the
+        indexer is wanted for (a single pattern's, see :meth:`detector_at`); the
+        controller's own when omitted.
         """
         try:
+            det = self.detector if detector is None else detector
             built = np.asarray(self.indexer.PC, dtype=float).ravel()
-            now = np.asarray(self.detector.pc_flattened, dtype=float).ravel()
+            now = np.asarray(det.pc_flattened, dtype=float).ravel()
             return built.shape != now.shape or not np.allclose(built, now, rtol=0, atol=1e-12)
         except Exception:  # noqa: BLE001 - cannot tell: rebuilding is always safe
             return True
 
-    def _ensure_indexer(self):
-        """Create indexer if not already cached. Validates prerequisites."""
+    def _ensure_indexer(self, coords=None, detector=None):
+        """Create indexer if not already cached. Validates prerequisites.
+
+        ``coords`` is the scan position of the pattern the indexer is for: with a
+        per-pixel detector the indexer is built at that pixel's PC (PyEBSDIndex
+        takes one PC for one pattern). An indexer built for another pixel is
+        rebuilt - its gnomonic correction depends on the PC, so swapping ``PC``
+        in place would index at the wrong geometry. A caller that already has the
+        pattern's detector (:meth:`detector_at`) passes it, so the position is
+        looked up, and logged if it cannot be placed, once.
+        """
         if self.detector is None:
             raise RuntimeError("No detector set.")
         if self.phase_list is None:
             raise RuntimeError("No phase loaded.")
         self.reflector_specs_changed()
-        if self.indexer is not None and self._indexer_pc_is_stale():
+        det = detector if detector is not None else self.detector_at(coords)
+        if self.indexer is not None and self._indexer_pc_is_stale(det):
             self.indexer = None
         if self.indexer is None:
             self.indexer = create_indexer(
-                self.detector, self.phase_list, self.reflectors,
+                det, self.phase_list, self.reflectors,
                 nBands=self.nBands
             )
         return self.indexer
@@ -354,11 +443,14 @@ class PCController:
         """Index a single pattern and cache the result."""
         if idx < 0 or idx >= len(self.patterns):
             raise ValueError(f"Pattern index {idx} out of range [0, {len(self.patterns)})")
-        self._ensure_indexer()
         coords, pat = self.patterns[idx]
+        # With a per-pixel detector the pattern is indexed at the PC of its own pixel.
+        det = self.detector_at(coords)
+        self._ensure_indexer(coords, det)
         # pat is 2D (H, W); hough_indexing requires at least one navigation axis.
         # Adding two singleton dims → (1, 1, H, W) avoids navigation_shape=() crash.
-        ebsd = EBSD(pat[np.newaxis, np.newaxis], detector=self.detector)
+        from backend.api.services.load_choices import for_pyebsdindex
+        ebsd = EBSD(for_pyebsdindex(pat)[np.newaxis, np.newaxis], detector=det)
         xmap, index_data, band_data = ebsd.hough_indexing(
             self.phase_list, self.indexer,
             return_index_data=True, return_band_data=True,
@@ -369,20 +461,27 @@ class PCController:
         self.cache[idx] = {'ci': ci, 'xmap': xmap, 'band_data': band_data}
         return ci, xmap, band_data
 
-    def phases_of_patterns(self, patterns):
+    def phases_of_patterns(self, patterns, coords=None):
         """Which phase indexes each pattern best, at the current detector.
 
         ``patterns`` are 2D arrays. Returns one dict per pattern with
         ``phase_name``, ``phase_index`` (position in the phase list) and ``ci``;
         a pattern that no phase fitted (or that failed to index) has ``None``
         for the first two. Does not touch the per-pattern result cache.
+
+        ``coords`` are the ``(row, col)`` scan positions of ``patterns``: with a
+        per-pixel detector each pattern is indexed at the PC of its own pixel
+        (without them, at the map mean).
         """
-        self._ensure_indexer()
         ids = [int(i) for i in self.phase_list.ids]
         out = []
-        for pat in patterns:
+        for k, pat in enumerate(patterns):
+            where = None if coords is None else coords[k]
+            det = self.detector_at(where)
+            self._ensure_indexer(where, det)  # a build failure is not a per-pattern failure
             try:
-                ebsd = EBSD(np.asarray(pat)[np.newaxis, np.newaxis], detector=self.detector)
+                from backend.api.services.load_choices import for_pyebsdindex
+                ebsd = EBSD(for_pyebsdindex(np.asarray(pat))[np.newaxis, np.newaxis], detector=det)
                 xmap, index_data = ebsd.hough_indexing(
                     self.phase_list, self.indexer,
                     return_index_data=True, verbose=0
@@ -492,13 +591,18 @@ class PCController:
         """
         if not self.patterns:
             raise RuntimeError("No patterns loaded.")
-        self._ensure_indexer()
+        # The optimiser sets its own trial PCs; the indexer only brings the band
+        # library and the geometry, so any pattern's pixel will do for it.
+        # (kept in a local: another request clearing the cache sets self.indexer to
+        # None, and the optimiser must not be handed that halfway through)
+        indexer = self._ensure_indexer(self.patterns[0][0])
         pcs = []
         n = len(self.patterns)
-        for i, (_, pat) in enumerate(self.patterns):
+        for i, (coords, pat) in enumerate(self.patterns):
             mean_pc, _ = optimize_pc(
-                detector=self.detector,
-                indexer=self.indexer,
+                # a per-pixel detector: start at the PC of this pattern's pixel
+                detector=self.detector_at(coords),
+                indexer=indexer,
                 pattern=pat,
                 method=method,
                 search_limit=search_limit,
@@ -513,10 +617,55 @@ class PCController:
         if len(pcs_arr) == 0:
             raise RuntimeError("All PC optimizations failed (invalid results)")
         global_pc = np.mean(pcs_arr, axis=0)
-        self.detector.pc = tuple(global_pc)
+        self.set_global_pc(global_pc)
+        return tuple(global_pc)
+
+    def set_global_pc(self, pc):
+        """Make ``pc`` the one PC of the whole detector.
+
+        A per-pixel detector (grid calibration) is REPLACED by a single-PC one:
+        asking for a global PC is asking for one value, so the map is dropped
+        explicitly rather than half-kept. The caches are cleared. Returns
+        ``"replaced"`` when a map was dropped, else ``"single"``.
+        """
+        if pc_is_per_pixel(self.detector):
+            logger.info("global PC %s replaces the per-pixel PC map of the detector",
+                        [round(float(v), 4) for v in pc])
+            self.detector = single_pc_detector(self.detector, pc)
+            action = "replaced"
+        else:
+            self.detector.pc = tuple(float(v) for v in pc)
+            action = "single"
         self.indexer = None
         self.clear_cache()
-        return tuple(global_pc)
+        return action
+
+    def shift_pc_map(self, pc):
+        """Make ``pc`` the PC of the detector, keeping a PC map's structure.
+
+        A single-PC detector just gets the value (``"single"``). A per-pixel
+        detector (grid calibration) is moved rigidly so the MEAN of its map is
+        ``pc``: every pixel keeps its offset from the mean, so a PC typed into the
+        page changes the level of the map, not its shape (``"shifted"``). Nothing
+        is collapsed silently. The caches are cleared.
+        """
+        pc = np.asarray(pc, dtype=float).reshape(3)
+        if not pc_is_per_pixel(self.detector):
+            self.detector.pc = tuple(float(v) for v in pc)
+            action = "single"
+        else:
+            from kikuchipy.detectors import EBSDDetector
+            det = self.detector
+            arr = np.asarray(det.pc, dtype=float)
+            moved = arr + (pc - arr.reshape(-1, 3).mean(axis=0))
+            self.detector = EBSDDetector(
+                shape=tuple(int(v) for v in det.shape), px_size=det.px_size,
+                binning=det.binning, tilt=det.tilt, azimuthal=det.azimuthal,
+                sample_tilt=det.sample_tilt, pc=moved)
+            action = "shifted"
+        self.indexer = None
+        self.clear_cache()
+        return action
 
     # === Pixel-wise PC Correction (FEAT-11) ===
 
@@ -604,7 +753,10 @@ class PCController:
             Invalid values (NaN, out-of-range) are logged but kept in place
             so the caller can map results back to calibration_points.
         """
-        self._ensure_indexer()
+        # (the optimiser sets its own trial PCs; see refine_global_pc). A grid run
+        # takes minutes: the indexer is kept in a local, so a request that clears
+        # the controller's cache meanwhile cannot hand the optimiser None.
+        indexer = self._ensure_indexer(calibration_points[0] if calibration_points else None)
 
         # Validate calibration points are within signal bounds
         nav_shape = signal.data.shape[:2]
@@ -618,10 +770,13 @@ class PCController:
         n = len(calibration_points)
         refined_pcs = []
         for i, (row, col) in enumerate(calibration_points):
-            pat = signal.data[row, col]
+            # as the map run sees this pixel (an int16 scan rescaled by the range of the whole scan)
+            from backend.api.services.load_choices import signal_pattern
+            pat = signal_pattern(signal, row, col)
             mean_pc, _ = optimize_pc(
-                detector=self.detector,
-                indexer=self.indexer,
+                # a per-pixel detector (an earlier grid run): start at this point's PC
+                detector=self.detector_at((row, col)),
+                indexer=indexer,
                 pattern=pat,
                 method=method,
                 search_limit=search_limit,
@@ -743,6 +898,15 @@ class PCController:
             is_outlier=is_outlier if is_outlier.any() else None,
             plot=False,
         )
+        # kikuchipy re-estimates the SAMPLE TILT from the plane it fits and puts it
+        # on the detector it returns. That detector becomes this controller's, so the
+        # estimate would silently replace the tilt the user set (and the calibration
+        # store would keep the old one). The tilts stay; the estimate is kept for the
+        # report, where it can be compared with the set value.
+        self.last_fitted_sample_tilt = float(new_det.sample_tilt)
+        new_det.sample_tilt = self.detector.sample_tilt
+        new_det.tilt = self.detector.tilt
+        new_det.azimuthal = self.detector.azimuthal
 
         # Fail loud if the fit produced an implausible field. The projective
         # homography can blow up (divide-by-near-zero) on noisy PCs and emit

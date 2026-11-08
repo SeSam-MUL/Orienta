@@ -1,4 +1,5 @@
 {
+  "hexAvgLocked": "Bei einem hexagonalen Scan nicht verfügbar: Die Nachbarn eines Punktes lassen sich noch nicht aus dem Indexraster ablesen, daher wird jedes Muster einzeln ausgewertet.",
   "page": {
     "title": "Crystal Hint",
     "subtitle": "Symmetrie + Gitterparameter aus EBSD-Beugungsmustern erkennen und Kandidatenphasen vorschlagen (auch wenn die tatsächliche Phase nicht in Ihrer SHT-Bibliothek ist).",

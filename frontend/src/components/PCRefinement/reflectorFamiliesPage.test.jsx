@@ -17,6 +17,7 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 
 const backend = vi.hoisted(() => ({
   phases: [], reflectorCalls: [], paramCalls: [], indexCalls: [],
+  refuse: false, fitCalls: [], optimizeRefuse: false, optimizeCalls: 0, gridCalls: 0,
 }));
 
 vi.mock('../../services/api', async (importOriginal) => {
@@ -71,7 +72,42 @@ vi.mock('../../services/api', async (importOriginal) => {
     updateParams: (p) => { backend.paramCalls.push(p); return ok({ success: true }); },
     indexPattern: (row, col) => {
       backend.indexCalls.push([row, col]);
+      if (backend.refuse) {
+        // the coded problem the backend sends for a refused library (HoughLibraryTooBig)
+        return Promise.reject({ response: { status: 400, data: { detail: {
+          code: 'hough_library_too_big', message: 'English text of the backend',
+          params: {
+            phases: [{ name: backend.phases[0], rows: 70, predicted_bytes: 2 * 1024 ** 3,
+              fit_rows: backend.refuse === 'low_symmetry' ? null : 50,
+              fit_families: backend.refuse === 'low_symmetry' ? null : 6,
+              fit_reason: backend.refuse === 'low_symmetry' ? 'low_symmetry' : null,
+              own_selection: false }],
+            budget_bytes: 1024 ** 3, free_bytes: 2 * 1024 ** 3, min_rows: 40, min_families: 4,
+          } } } } });
+      }
       return ok({ ci: 0.5, phase_name: backend.phases[0], segments: [], n_bands: 7 });
+    },
+    runGridCalibration: () => { backend.gridCalls += 1; return ok({ task_id: 'grid-1', status: 'running' }); },
+    optimize: () => { backend.optimizeCalls += 1; return ok({ task_id: 'task-1', status: 'running' }); },
+    getOptimizeStatus: () => {
+      if (!backend.optimizeRefuse) return ok({ status: 'running', progress: 0.1 });
+      // a background task refused for memory: the coded problem next to the English text
+      return ok({
+        status: 'failed', error: 'English text of the backend', message: 'Hough library too big',
+        problem: {
+          code: 'hough_library_too_big', message: 'English text of the backend',
+          params: {
+            phases: [{ name: backend.phases[0], rows: 70, predicted_bytes: 2 * 1024 ** 3,
+              fit_rows: 50, fit_families: 6, fit_reason: null, own_selection: false }],
+            budget_bytes: 1024 ** 3, free_bytes: 2 * 1024 ** 3, min_rows: 40, min_families: 4,
+          },
+        },
+      });
+    },
+    fitPhaseReflectors: (name) => {
+      backend.fitCalls.push(name);
+      backend.refuse = false;
+      return ok({ ...table(name), mode: 'auto', fit: { rows: 50, families: 6, predicted_bytes: null } });
     },
   }, { get: (t, k) => (k in t ? t[k] : () => ok({})) });
 
@@ -106,6 +142,11 @@ beforeEach(() => {
   backend.reflectorCalls = [];
   backend.paramCalls = [];
   backend.indexCalls = [];
+  backend.refuse = false;
+  backend.fitCalls = [];
+  backend.optimizeRefuse = false;
+  backend.optimizeCalls = 0;
+  backend.gridCalls = 0;
   globalThis.fetch = vi.fn(() => Promise.resolve({ json: () => Promise.resolve({ files: [] }) }));
 });
 afterEach(() => cleanup());
@@ -225,4 +266,115 @@ describe('a change of the families', () => {
     fireEvent.click(within(row).getByRole('checkbox'));
     await waitFor(() => expect(backend.indexCalls).toEqual([[3, 4]]));
   });
+});
+
+
+describe('a refused Hough library', () => {
+  it('is worded on the page with its one-click answer, and the click runs it again', async () => {
+    render(<PCRefinement />);
+    await addPhases('Al');
+    fireEvent.click(await screen.findByText(/pat 3,4/));
+    await waitFor(() => expect(backend.indexCalls).toEqual([]));
+    backend.refuse = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Index Pattern' }));
+    const notice = await screen.findByTestId('hough-refusal');
+    // translated by the page, not the English text of the backend
+    expect(notice.textContent).toMatch(/Hough indexing did not start/);
+    expect(notice.textContent).toMatch(/Al: 70 reflector rows would need a band-triplet library of 2.00 GiB/);
+    expect(notice.textContent).not.toMatch(/English text of the backend/);
+    const button = within(notice).getByTestId('hough-refusal-fit-Al');
+    expect(button.textContent).toBe('Use the largest list that fits (50 rows)');
+    fireEvent.click(button);
+    await waitFor(() => expect(backend.fitCalls).toEqual(['Al']));
+    // the shown pattern is indexed again with the new list, and the notice is gone
+    await waitFor(() => expect(backend.indexCalls.length).toBe(2));
+    await waitFor(() => expect(screen.queryByTestId('hough-refusal')).toBeNull());
+  });
+
+  it('a monoclinic or triclinic phase gets the reasons and no button, and the list stays editable', async () => {
+    render(<PCRefinement />);
+    await addPhases('Al');
+    fireEvent.click(await screen.findByText(/pat 3,4/));
+    await waitFor(() => expect(backend.indexCalls).toEqual([]));
+    backend.refuse = 'low_symmetry';
+    fireEvent.click(screen.getByRole('button', { name: 'Index Pattern' }));
+    const notice = await screen.findByTestId('hough-refusal');
+    expect(within(notice).queryByTestId('hough-refusal-fit-Al')).toBeNull();
+    expect(notice.textContent).toMatch(/monoclinic or triclinic/);
+    expect(notice.textContent).toMatch(/lose orientations/);
+    expect(notice.textContent).toMatch(/shorten the list by hand in the Reflector families card/);
+    // the hand path is the card on the same page: a family unticked there indexes again
+    const card = await screen.findByTestId('reflector-families');
+    fireEvent.click(within(card).getByRole('button', { name: /Reflector families/ }));
+    const row = await within(card).findByTestId('family-{220}');
+    backend.refuse = false;
+    fireEvent.click(within(row).getByRole('checkbox'));
+    await waitFor(() => expect(backend.reflectorCalls.some((c) => c[0] === 'put')).toBe(true));
+    expect(backend.fitCalls).toEqual([]);
+  });
+});
+
+describe('a Hough library refused during the global PC refinement', () => {
+  it('is worded on the page with its one-click answer, not as the English text of the task', async () => {
+    render(<PCRefinement />);
+    await addPhases('Al');
+    backend.optimizeRefuse = true;
+    fireEvent.click(await screen.findByRole('button', { name: 'Global PC Refine' }));
+    const notice = await screen.findByTestId('hough-refusal', {}, { timeout: 5000 });
+    expect(backend.optimizeCalls).toBe(1);
+    expect(notice.textContent).toMatch(/Hough indexing did not start/);
+    expect(notice.textContent).toMatch(/Al: 70 reflector rows would need a band-triplet library of 2.00 GiB/);
+    expect(document.body.textContent).not.toMatch(/English text of the backend/);
+    const button = within(notice).getByTestId('hough-refusal-fit-Al');
+    fireEvent.click(button);
+    await waitFor(() => expect(backend.fitCalls).toEqual(['Al']));
+    await waitFor(() => expect(screen.queryByTestId('hough-refusal')).toBeNull());
+  }, 15000);
+
+  it('a new run takes the notice away', async () => {
+    render(<PCRefinement />);
+    await addPhases('Al');
+    backend.optimizeRefuse = true;
+    fireEvent.click(await screen.findByRole('button', { name: 'Global PC Refine' }));
+    await screen.findByTestId('hough-refusal', {}, { timeout: 5000 });
+    backend.optimizeRefuse = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Global PC Refine' }));
+    await waitFor(() => expect(screen.queryByTestId('hough-refusal')).toBeNull());
+    expect(backend.optimizeCalls).toBe(2);
+  }, 15000);
+});
+
+describe('a Hough library refused during the pixel-wise calibration', () => {
+  const runGrid = async () => {
+    fireEvent.change(screen.getByTitle(/PC correction mode/), {
+      target: { value: 'Grid Calibration (fit_pc)' } });
+    fireEvent.click(await screen.findByRole('button', { name: 'Run Grid Calibration' }));
+  };
+
+  it('is worded on the page with its one-click answer, not as the English text of the task', async () => {
+    render(<PCRefinement />);
+    await addPhases('Al');
+    backend.optimizeRefuse = true;
+    await runGrid();
+    const notice = await screen.findByTestId('hough-refusal', {}, { timeout: 5000 });
+    expect(backend.gridCalls).toBe(1);
+    expect(notice.textContent).toMatch(/Hough indexing did not start/);
+    expect(notice.textContent).toMatch(/Al: 70 reflector rows would need a band-triplet library of 2.00 GiB/);
+    expect(document.body.textContent).not.toMatch(/English text of the backend/);
+    fireEvent.click(within(notice).getByTestId('hough-refusal-fit-Al'));
+    await waitFor(() => expect(backend.fitCalls).toEqual(['Al']));
+    await waitFor(() => expect(screen.queryByTestId('hough-refusal')).toBeNull());
+  }, 15000);
+
+  it('a new run takes the notice away', async () => {
+    render(<PCRefinement />);
+    await addPhases('Al');
+    backend.optimizeRefuse = true;
+    await runGrid();
+    await screen.findByTestId('hough-refusal', {}, { timeout: 5000 });
+    backend.optimizeRefuse = false;
+    fireEvent.click(screen.getByRole('button', { name: /Calibrating|Run Grid Calibration/ }));
+    await waitFor(() => expect(screen.queryByTestId('hough-refusal')).toBeNull());
+    expect(backend.gridCalls).toBe(2);
+  }, 15000);
 });

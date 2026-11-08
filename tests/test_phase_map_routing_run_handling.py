@@ -4,7 +4,7 @@ competitive one offers.
 
 Built on the helpers of ``test_phase_map_routing_methods.py`` (the real route and
 the real ``run_per_phase_indexing`` with the single-phase indexer stubbed).
-Expectations are written by hand from what the user asked for.
+Expectations are written by hand from the behaviour the feature is meant to have.
 """
 from __future__ import annotations
 
@@ -155,7 +155,7 @@ def test_progress_does_not_go_backwards_in_a_routed_run(monkeypatch, tmp_path):
     rec = Recorder(SPH)
 
     def on_call(k):                 # the bar as each phase starts
-        seen.extend(t["progress"] for t in route._indexing_tasks.values())
+        seen.append(next(reversed(route._indexing_tasks.values()))["progress"])
     rec.on_call = on_call
     task = _start_routed(monkeypatch, tmp_path, method="spherical", grid=_grid([3, 3]),
                          req_kwargs=_sht_request(tmp_path, ["PhaseA", "PhaseB"]),
@@ -530,7 +530,7 @@ def test_the_crops_lasso_mask_is_anded_into_every_routed_mask(monkeypatch, tmp_p
 
     keep = np.array([[True, False, True], [True, True, False]])
     monkeypatch.setattr(route, "_active_crop_window",
-                        lambda: SimpleNamespace(nav_mask=keep))
+                        lambda: SimpleNamespace(nav_mask=keep, row0=0, col0=0, original_shape=keep.shape))
     rec = Recorder(SPH)
     task = _start_routed(monkeypatch, tmp_path, method="spherical", grid=_grid([3, 3]),
                          req_kwargs=_sht_request(tmp_path, ["PhaseA", "PhaseB"]),

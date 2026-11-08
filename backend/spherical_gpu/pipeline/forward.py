@@ -2,8 +2,6 @@
 
 Skip the Master-H5 step entirely: load `.sht` -> inverse SHT -> DH grid ->
 sample at rotated detector pixel directions -> 2D simulated pattern.
-
-See `docs/superpowers/specs/2026-05-10-sht-forward-pattern-simulation-design.md`.
 """
 from __future__ import annotations
 
@@ -42,8 +40,8 @@ class LambertGrid:
 class PatternRenderer:
     """Phase-cached forward pattern renderer.
 
-    Phase A implements the single-pattern path; ``render_batch`` is a
-    NotImplementedError stub for Phase B.
+    Only the single-pattern path is implemented; ``render_batch`` is a
+    NotImplementedError stub.
     """
 
     def __init__(self, device: Optional[torch.device] = None):
@@ -65,7 +63,7 @@ class PatternRenderer:
             Override the default bandwidth truncation. ``None`` uses the
             default from ``sht_inverse.DEFAULT_MAX_BANDWIDTH`` (128).
             Higher values give sharper / less blurry patterns at the cost
-            of GPU memory: bw=256 needs ~1.7 GB, bw=384 needs ~5.7 GB.
+            of GPU memory: bw=256 needs ~1.8 GB, bw=384 needs ~5.9 GB.
 
         Caching is the responsibility of the caller (service layer).
         Raises ``SHTReadError`` if the file is invalid.

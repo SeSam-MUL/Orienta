@@ -237,6 +237,15 @@ All of these live in the collapsed **Advanced tools** group in the sidebar:
 
 ## Tips & notes
 
+- **Hexagonal scans.** The map of a hexagonal result is drawn as the hexagons lie
+  on the sample (see *EDAX APEX measurements and hexagonal scans* in the
+  [EBSD Viewer](EBSDViewer.md) guide). The tools of this page that compare a
+  point with its neighbours use the six neighbours of the hexagonal lattice; the
+  guide lists them. The rule inside the pseudo-symmetry unification that tells
+  salt-and-pepper variants from twin domains still counts four neighbours, and
+  its thresholds have not been tested on a hexagonal scan, so check the result of
+  a unification. KAM and GOS, which come from the Analysis page, are not
+  available; the guide lists what else is refused.
 - **Layers follow a crop.** If the active dataset is a cut-out from the EBSD
   Viewer (see `EBSDViewer.md`), the EDS element maps, Band Contrast and the phase
   and IPF layers all show the same region. An electron image that cannot be

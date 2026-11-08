@@ -30,9 +30,14 @@
     "scanning": "Scanne...",
     "filesLoaded": "{{count}} Datei(en) geladen",
     "hint": "Auf „Ordner hinzufügen“ klicken, um nach EBSD-Dateien zu suchen",
+    "patternSource": "Der Batch indiziert von jeder Datei die Standardmuster: die erste Messung, bearbeitet, wo die Datei das hat, unabhängig davon, welche Messung oder welche Muster Sie im Ladedialog gewählt haben.",
     "enterFolderPrompt": "Ordnerpfad eingeben:",
     "noFilesFound": "Keine EBSD-Dateien gefunden",
-    "scanFailed": "Scan fehlgeschlagen"
+    "scanFailed": "Scan fehlgeschlagen",
+    "gridHex": "hexagonal, {{rows}} x {{cols}}",
+    "gridSquare": "quadratisch, {{rows}} x {{cols}}",
+    "pairingPaired": "Metadaten: {{file}}, Messung {{name}}",
+    "pairingNone": "Keine Metadaten gefunden"
   },
   "step2": {
     "title": "Musterzentrum (PC)",
@@ -80,6 +85,9 @@
     "ctf": ".ctf",
     "ctfDesc": "Oxford/MTEX-Format",
     "ctfTooltip": "Ergebnisse im Oxford/MTEX-.ctf-Format exportieren.",
+    "angSquare": ".ang (quadratisches Raster)",
+    "angSquareDesc": "nur hexagonale Scans, umgerechnet",
+    "angSquareTooltip": "Die Ergebnisse eines hexagonalen Scans auf ein Quadratraster übertragen und als quadratisches .ang exportieren (jeder Punkt übernimmt den nächsten gemessenen).",
     "richH5": "Reiche .h5",
     "richH5Desc": "kopiert die Quelldatei — Größe = Quellgröße pro Ergebnis!",
     "richH5Tooltip": "Vollständige HDF5 mit Kopie der Quelldatei exportieren — Größe = Quelle pro Ergebnis.",
@@ -112,7 +120,8 @@
     "phaseChipTooltip": "Diese Phase für die Indizierung aus- oder abwählen.",
     "selected": "{{count}} ausgewählt",
     "applyToAll": "Auf alle Dateien anwenden",
-    "applyToAllTooltip": "Die ausgewählten Phasen jeder Datei im Stapel zuweisen."
+    "applyToAllTooltip": "Die ausgewählten Phasen jeder Datei im Stapel zuweisen.",
+    "methodChangedClearedPhases": "Methode geändert: Bitte wählen Sie die Phasen erneut aus — die Phasendateien unterscheiden sich je Methode."
   },
   "step5": {
     "sphericalTitle": "Spherical",
@@ -175,14 +184,19 @@
     "manualPcTitle": "Manuelles Musterzentrum",
     "manualPcFile": "Datei: {{name}}",
     "manualPcFractional": "Werte sind detektor-fraktional (0–1).",
+    "pcConvention": "Konvention:",
     "pcx": "PCx:",
     "pcy": "PCy:",
     "pcz": "PCz:",
+    "manualPcApplying": "Wird angewendet…",
+    "msgPcConventionNeedsSize": "Die Musterauflösung dieser Datei ist noch nicht bekannt, daher können Zahlen in dieser Konvention nicht umgerechnet werden. Bruker wählen oder die Datei erst per Quick-Load laden.",
+    "msgPcConversionFailed": "Diese Zahlen konnten nicht in Brukers Konvention umgerechnet werden.",
     "msgPcCopied": "PC auf {{count}} Datei(en) kopiert",
     "msgPcCopyPartial": "{{failed}}/{{total}} Ziel(e) fehlgeschlagen: {{error}}",
     "msgCopyPcFailed": "PC kopieren fehlgeschlagen: {{detail}}",
     "msgApplyAllLackedPc": "Alles anwenden: {{failed}}/{{total}} Ziel(en) fehlte PC",
     "msgAppliedTo": "Auf {{count}} Datei(en) angewendet",
+    "msgSkippedSource": "{{count}} übersprungen (Quelle = Ziel)",
     "msgApplyAllFailed": "Alles anwenden fehlgeschlagen: {{detail}}",
     "msgInvalidPc": "Ungültige PC-Werte — müssen drei Zahlen sein",
     "msgManualPcSet": "Manuelles PC gesetzt",
@@ -283,6 +297,7 @@
     "startBatch": "Stapel starten ({{files}} × {{phases}})"
   },
   "hoverTips": {
+    "pcConventionSelect": "Die Art der unten eingetippten Zahlen — Bruker (Orientas eigene), EDAX/TSL oder Oxford.",
     "pcXInput": "Musterzentrum PCx (detektor-fraktional, 0–1) für die aktive Datei.",
     "pcYInput": "Musterzentrum PCy (detektor-fraktional, 0–1) für die aktive Datei.",
     "pcZInput": "Musterzentrum PCz / Detektorabstand (detektor-fraktional, 0–1) für die aktive Datei.",
@@ -295,5 +310,48 @@
     "openRefinement": "Diese Datei in der Verfeinerung öffnen (liest den _multiphase.h5-Checkpoint neben der Quelle).",
     "openAnalysis": "Diese Datei in der Analyse öffnen (lädt den .ang/.ctf/leichte-.h5-Export).",
     "openPhaseMap": "Diese Datei in der Phasenkarte öffnen (lädt den .ang/.ctf/leichte-.h5-Export)."
+  },
+  "formats": {
+    "hexResampled": ".ctf und quadratisches .ang hexagonaler Scans werden auf ein Quadratraster umgerechnet."
+  },
+  "exports": {
+    "title": "Geschriebene Dateien",
+    "gridHex": "Raster: hexagonal",
+    "gridSquare": "Raster: quadratisch",
+    "missing": "Nicht geschrieben, {{format}}: {{reason}}",
+    "formats": {
+      "h5_light": "leichte .h5",
+      "h5_rich": "vollständige .h5",
+      "ang": ".ang",
+      "ctf": ".ctf",
+      "ang_square": "auf ein quadratisches Raster umgerechnete .ang",
+      "ang_ctf": ".ang / .ctf",
+      "export": "alle Dateien dieses Scans"
+    },
+    "notes": {
+      "resampledFromHex": "Aus einem hexagonalen Scan nach dem nächsten Nachbarn auf ein quadratisches Raster mit der Schrittweite {{step}} µm umgerechnet (Quellpunkte {{sourcePoints}}, geschriebene Punkte {{written}}, ungenutzte Quellpunkte {{unused}}); es wurde nichts interpoliert.",
+      "rowOffsetAssumedRight": "Die Richtung des Zeilenversatzes ist eine Annahme (keine Datei gibt sie an): Die ungeraden Zeilen liegen um einen halben Schritt rechts von den geraden Zeilen.",
+      "rowOffsetAssumedLeft": "Die Richtung des Zeilenversatzes ist eine Annahme (keine Datei gibt sie an): Die ungeraden Zeilen liegen um einen halben Schritt links von den geraden Zeilen.",
+      "noSquareAngForSquareScan": "Es wurde keine auf ein quadratisches Raster umgerechnete .ang geschrieben: Dieser Scan liegt schon auf einem quadratischen Raster.",
+      "edsNotCopied": "Die leichte .h5 enthält keine EDS-Daten: Die Muster dieses Scans liegen in einem anderen Dateiformat, und das enthält keine.",
+      "cleanupFailed": "Die Bereinigung der Phasenkarte ist fehlgeschlagen, deshalb enthalten die Dateien die Karte, wie sie vor der Bereinigung war. Technische Angabe: {{detail}}",
+      "autoAssignmentFailed": "Die beste Phase je Punkt konnte nicht zugewiesen werden, deshalb enthalten die Dateien dieses Scans möglicherweise nicht die erwartete Zuordnung. Technische Angabe: {{detail}}"
+    },
+    "errors": {
+      "fileNotWritten": "Die Datei wurde nicht geschrieben; das Protokoll des Programms nennt den Grund.",
+      "writerFailed": "Die Datei konnte nicht geschrieben werden. Technische Angabe: {{detail}}",
+      "exportFailed": "Der Export brach mit einem Fehler ab. Technische Angabe: {{detail}}",
+      "richNeedsHdf5Source": "Eine vollständige .h5 braucht eine HDF5-Quelle; die Muster dieses Scans liegen in einem anderen Dateiformat. Verwenden Sie die leichte .h5."
+    }
+  },
+  "errors": {
+    "edaxHexUpUnsupported": "Hexagonaler Scan ohne Metadaten: Legen Sie die APEX-.h5 in denselben Ordner.",
+    "apexNeedsMeasurement": "Das ist eine Metadatendatei; fügen Sie ihre .up1/.up2-Dateien hinzu.",
+    "emsphinxSourceRefused": "EMSphInx (CPU) kann diese Datei nicht indizieren; nutzen Sie GPU, Hough oder Dictionary.",
+    "checkpointPairingChanged": "Checkpoint von anderen Metadaten oder Raster; löschen Sie ihn.",
+    "hexFrameAverageRefused": "Die Frame-Mittelung lief auf diesem hexagonalen Scan nicht: Nutzen Sie ein ungerades Fenster unter dem Limit.",
+    "checkpointUnreadable": "Der Checkpoint dieser Datei lässt sich nicht lesen; löschen Sie ihn.",
+    "pc_missing": "Diese Datei enthält kein Pattern Center (PC); der Platzhalter von kikuchipy würde falsche Orientierungen liefern. Kalibrieren Sie das PC in der PC-Verfeinerung oder legen Sie die .osc-/Metadaten-Datei mit dem PC neben den Scan und starten Sie erneut.",
+    "detector_shape_mismatch": "Die für diese Datei gehaltene Kalibrierung gehört zu einem anderen Detektor als ihre Muster (andere Mustergröße): Sie gehört zu einer anderen Datei. Laden Sie die Datei erneut oder setzen Sie ihr PC, und starten Sie dann erneut."
   }
 }

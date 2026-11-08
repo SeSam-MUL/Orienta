@@ -24,16 +24,20 @@ class H5OINADataExtractor:
     Key feature: Lazy loading - patterns are loaded one at a time, not all at once.
     """
 
-    def __init__(self, h5file, format_type):
+    def __init__(self, h5file, format_type, measurement=None):
         """
         Initialize the data extractor.
 
         Args:
             h5file: Open h5py.File object
             format_type: 'Oxford' or 'EDAX'
+            measurement: the scan group to read (a loaded variant's measurement). ``None`` keeps
+                the first slot that holds EBSD data, as before; a name reads that group alone
+                and a file without it is refused (``variantNotSupported``).
         """
         self.h5file = h5file
         self.format = format_type
+        self.measurement = measurement
         self.root_key = self._find_root_key()
         # Caches
         self._grid_cache = None
@@ -55,7 +59,13 @@ class H5OINADataExtractor:
         Aztec "Elementverteilungsdaten" acquisitions have no ``EBSD`` group at
         all, and returning None there made the extractor report no elements and
         no images, so the EDS viewer had nothing to show.
+
+        An extractor made for a measurement reads that group and no other (the one rule is
+        ``load_choices.measurement_groups``).
         """
+        if self.measurement is not None:
+            from backend.api.services.load_choices import LoadVariant, measurement_groups
+            return measurement_groups(self.h5file, LoadVariant(self.measurement, "processed"))[0]
         for key in self.h5file.keys():
             if isinstance(self.h5file[key], h5py.Group):
                 if f'{key}/EBSD' in self.h5file:

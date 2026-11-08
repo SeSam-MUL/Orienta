@@ -16,9 +16,9 @@
       "fast": "高速 (bw=128)",
       "fastDesc": "約225 MB、やや不鮮明",
       "standard": "標準 (bw=256)",
-      "standardDesc": "より鮮明なシミュレーション像（VRAM 約1.7 GB）。レンダリングのみ — Compare phases の再指数付けは常に 128 で行われます（Legendre 表が数値的に有効な唯一の帯域幅）。",
+      "standardDesc": "より鮮明なシミュレーション像（VRAM 約1.8 GB）。レンダリングのみ — Compare phases の再指数付けは常に 128 で行われます（Legendre 表が数値的に有効な唯一の帯域幅）。",
       "high": "高 (bw=384)",
-      "highDesc": "最も鮮明なシミュレーション像（VRAM 約5.7 GB。GPU に空きがなければ拒否）。レンダリングのみ — Compare phases の再指数付けは常に 128 です。"
+      "highDesc": "最も鮮明なシミュレーション像（VRAM 約5.9 GB。GPU に空きがなければ拒否）。レンダリングのみ — Compare phases の再指数付けは常に 128 です。"
     },
     "aperture": "アパーチャ:",
     "apertureTooltip": "R/NCC スコア用の円形検出器アパーチャ。「Circular」はコーナーマスクを強制します — 自動検出が見落とす灰色のコーナーを持つ EDAX 蛍光体パターンに使用します。",
@@ -149,8 +149,8 @@
     "forwardNccBody": "指数付けされた各画素について SHT 順方向シミュレートパターンをレンダリングし、実験パターンに対する正規化相互相関を計算します。（Spherical CI とは別の）「グラウンドトゥルース」品質マップを提供します。",
     "bandwidth": "バンド幅:",
     "bandwidthFast": "高速 (bw=128, 約225 MB)",
-    "bandwidthStandard": "標準 (bw=256, 約1.7 GB)",
-    "bandwidthHigh": "高 (bw=384, 約5.7 GB)",
+    "bandwidthStandard": "標準 (bw=256, 約1.8 GB)",
+    "bandwidthHigh": "高 (bw=384, 約5.9 GB)",
     "computing": "計算中...",
     "computeForwardNcc": "Forward NCC マップを計算",
     "forwardNccHint": "マップサイズと GPU に応じて約 10〜60 秒かかります。結果は再指数付けするまでキャッシュされます。",
@@ -168,6 +168,8 @@
     "saveCancelled": "保存をキャンセルしました。",
     "loadCancelled": "読み込みをキャンセルしました。",
     "saved": "保存しました「{{label}}」 → {{path}}",
+    "savedResampled": "保存しました「{{label}}」 → {{path}}。{{rows}} × {{cols}} 点の正方格子に再サンプリングしました。各点は最も近い測定点の値を取ります。",
+    "savedResampledPlain": "保存しました「{{label}}」 → {{path}}。正方格子に再サンプリングしました。各点は最も近い測定点の値を取ります。",
     "saveFailed": "保存に失敗しました: {{msg}}",
     "loaded": "読み込みました {{name}}: {{features}}。",
     "noRecognisedData": "認識できるデータがありません",
@@ -211,6 +213,10 @@
     "ang": "MTEX .ang",
     "angLine1": "標準的な方位ファイル。MTEX、Aztec、OIM でネイティブに読み込めます。",
     "angLine2": "HDF5 なし — MATLAB 互換性の問題なし。",
+    "angSquare": ".ang（正方格子、再サンプリング）",
+    "angSquareLine1": "六方格子のスキャンを正方格子に再サンプリングします。各セルは最も近い測定点の値を取り、ファイルにもその旨が記録されます。",
+    "ctf": ".ctf（正方格子、再サンプリング）",
+    "ctfLine1": "Oxford/MTEX 形式。正方格子が必要なため、六方格子のスキャンを再サンプリングします。各セルは最も近い測定点の値を取り、ファイルにもその旨が記録されます。",
     "h5Light": "Light .h5",
     "recommended": "推奨",
     "h5LightLine1": "ソースサイズに関わらず約 5〜50 MB。生パターンはコピーされません。",
@@ -222,6 +228,8 @@
     "h5RichLine2": "ソースの Superblock を継承 — 古い MATLAB バージョンでは開けない場合があります。",
     "h5RichLine3": "すべてを 1 つのファイルにまとめたいアーカイブ用途に使用します。",
     "filterAng": "MTEX .ang（方位ファイル）",
+    "filterAngSquare": "MTEX .ang（正方格子、再サンプリング）",
+    "filterCtf": "Oxford .ctf（正方格子、再サンプリング）",
     "filterH5Light": "Light .h5（コンパクト、MATLAB 互換）",
     "filterH5Rich": "Rich .h5（フルソースコピー + 結果）",
     "promptTitle": "結果を {{format}} として保存…",
@@ -269,11 +277,13 @@
   "renamePrompt": "新しい名前:",
   "errors": {
     "couldntLoadResult": "この結果を読み込めませんでした: {{detail}}。ファイルを切り替えるとディスクから再読み込みされ、アクティブな結果がリセットされます — なくなった場合はこのデータセットの指数付け/解析を再実行してください。",
-    "noResultOrDataset": "指数付け結果も解析データセットも読み込まれていません。先にデータを読み込んでください。"
+    "noResultOrDataset": "指数付け結果も解析データセットも読み込まれていません。先にデータを読み込んでください。",
+    "pc_missing": "このファイルにはパターンセンター (PC) がありません。kikuchipy の仮の値では誤った方位になります。PC リファインメントで PC を較正するか、PC を含む .osc／メタデータファイルをスキャンの隣に置いてから、もう一度開始してください。"
   },
   "pc": {
     "label": "PC",
-    "value": "（アクティブな検出器）: ({{x}}, {{y}}, {{z}})"
+    "value": "（アクティブな検出器）: ({{x}}, {{y}}, {{z}})",
+    "mapMean": "（PCマップの平均）"
   },
   "linescan": {
     "title": "ラインスキャンプロファイル"
@@ -339,7 +349,8 @@
     "stepX": "ステップ X:",
     "stepY": "ステップ Y:",
     "micron": "µm",
-    "stepHint": "利用可能な場合、読み込んだ EBSD ファイルから自動入力されます。スケールバーの長さを決定します。"
+    "stepHint": "利用可能な場合、読み込んだ EBSD ファイルから自動入力されます。スケールバーの長さを決定します。",
+    "stepHintHex": "六方格子のスキャンでは、ステップはマップのスキャン形状から決まり、ここでは変更できません。スケールバーはこれに従います。"
   },
   "poleFigure": {
     "openButton": "極点図を開く ⧉"
@@ -421,14 +432,17 @@
     "showUnavailableN": "利用できないものも表示 ({{n}})",
     "title": "レイヤー",
     "toggleVisibilityAria": "{{label}} の表示を切り替え",
-    "unavailable": "まだ利用できません"
+    "unavailable": "まだ利用できません",
+    "gateHexGrid": "六方格子のスキャンにはまだ対応していません",
+    "notOnHexRaster": "このレイヤーは六方格子の表示ラスターに描かれていないため、このスキャンでは表示できません。",
+    "hexRasterNotExpected": "このレイヤーはこのスキャンと一致しない六方格子の表示ラスターに描かれているため、このスキャンでは表示できません。"
   },
   "diagnostics": {
     "title": "Forward 診断",
     "bandwidth": "バンド幅:",
     "bwFast": "高速 (128, より不鮮明)",
-    "bwStandard": "標準 (256, 約1.7 GB VRAM)",
-    "bwSharp": "鮮明 (384, 約5.7 GB VRAM)",
+    "bwStandard": "標準 (256, 約1.8 GB VRAM)",
+    "bwSharp": "鮮明 (384, 約5.9 GB VRAM)",
     "compute": "診断を計算",
     "recompute": "再計算",
     "noActiveResult": "アクティブな指数付け結果がありません",

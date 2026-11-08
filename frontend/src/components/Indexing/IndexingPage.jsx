@@ -20,7 +20,8 @@
 import { formatTime } from '../../i18n/formatDateTime';
 import { useState, useEffect, useCallback, useRef, useReducer, useMemo, Fragment } from 'react';
 import { useTranslation } from 'react-i18next';
-import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phaseMapApi, collectionsApi } from '../../services/api';
+import { problemText, blobProblemText, codedText } from '../../services/problemText';
+import { indexApi, ebsdApi, pcApi, edsApi, dictionaryGpuApi, getGpuStatus, phaseMapApi, collectionsApi, isSupersededLoad } from '../../services/api';
 import useCollectionStore from '../../stores/useCollectionStore';
 import {
   activeKeySet, activeKeySignature, activeMissing,
@@ -33,6 +34,11 @@ import {
 } from './phasePath';
 import { estimateCpuSphericalSeconds, estimateGpuSphericalSeconds, formatRoughDuration, hasNoCudaDevice, isSphericalCpuFallback } from './cpuEstimate';
 import NavigationCanvas from './NavigationCanvas';
+import { makeHexMap } from '../../services/hexMap';
+import { isHexScan, parseScanGeometry } from '../../services/scanGeometry';
+import { readResampled, EXPORT_FILE_NAMES } from '../../services/resampledExport';
+import { overviewMismatch } from '../EBSDViewer/hexOverview';
+import { navRasterKey, navGridKey, navMeasurementKey } from './hexNavMap';
 import EdsOverlayPanel from './EdsOverlayPanel';
 import BatchIndexingDialog from './BatchIndexingDialog';
 import { buildPhaseRecords } from './phaseRecords';
@@ -53,6 +59,7 @@ import { useZoomViews, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
 import ScaleLegend from '../PhaseMap/ScaleLegend';
 import { isZoomed, viewToTransform } from '../EDS/zoomView';
 import { zoomRectPct } from '../EBSDViewer/zoomOverlay';
+import { datasetGeometry, ebsdInfoWithGrid } from '../EBSDViewer/datasetGeometry';
 import { useWheelZoom } from '../common/useWheelZoom';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
@@ -61,11 +68,17 @@ import { orientationSourceBadge } from '../common/orientationSource';
 import NeighbourhoodZoom from '../common/NeighbourhoodZoom';
 import { detectPhaseDegeneracy } from './phaseDegeneracy';
 import FloatingPhasePanel from './FloatingPhasePanel';
+import HoughRefusal, { refusalFrom } from './HoughRefusal';
+import ResultCaveats from './ResultCaveats';
+import useActiveResultCaveats from './useActiveResultCaveats';
+import { specKey } from './reflectorSpec';
 import useResultStore from '../../stores/useResultStore';
 import useDataStore from '../../stores/useDataStore';
 import useLoadedFilesStore from '../../stores/useLoadedFilesStore';
 import { colors as C, spacing } from '../../theme/tokens';
 import { toast } from '../../stores/useToastStore';
+import { loadedFileLabel } from '../../services/loadedFileLabel';
+import { announcePairingDropped } from '../EBSDViewer/apexLoad';
 import {
   Button,
   GroupBox,
@@ -296,7 +309,7 @@ function RefineDialog({ open, onClose, onLog }) {
       }, 1000);
     } catch (err) {
       setRunning(false);
-      onLog(t('refineDialog.error', { error: err.response?.data?.detail || err.message }));
+      onLog(t('refineDialog.error', { error: problemText(err, t, 'indexing') || err.message }));
     }
   };
 
@@ -431,7 +444,8 @@ function PatternMatchesDialog({ open, onClose }) {
   useEffect(() => {
     if (!open) { setZoomLayer(null); return undefined; }
     let cancelled = false;
-    phaseMapApi.layer(zoomKind)
+    // 'index': the zoom magnifies data pixels, so it keeps the index grid of a hexagonal scan
+    phaseMapApi.layer(zoomKind, { display: 'index' })
       .then(r => { if (!cancelled) setZoomLayer(r.data); })
       .catch(() => { if (!cancelled) setZoomLayer(null); });
     return () => { cancelled = true; };
@@ -998,6 +1012,8 @@ function btnSmall(bg, color, disabled = false) {
 
 function NavigationMapPanel({
   navImage,        // base64 image string or null
+  hexMap,          // makeHexMap() of a hexagonal scan (the picture is its display raster), else null
+  navNotice,       // why there is no picture: 'loading' | 'mismatch' | 'failed' | null (nothing loaded)
   nRows,
   nCols,
   selectionMode,   // 'full' | 'region' | 'mask'
@@ -1050,6 +1066,8 @@ function NavigationMapPanel({
         onRegionChange={onRegionChange}
         edsLayers={edsOverlayLayers}
         maskData={maskOverlayData}
+        hexMap={hexMap}
+        notice={navNotice}
       />
 
       {/* Pixel Selection group */}
@@ -1508,6 +1526,85 @@ export default function IndexingPage({ isActive }) {
 
   // --- Navigation map ---
   const [navImage, setNavImage]         = useState(null);
+  // What the backend says the navigation picture is (the display raster of a hexagonal scan), and the scan
+  // geometry of the dataset the page shows (the store's, already parsed). A hexagonal scan's picture is clicked
+  // through hexMap (null for a square scan).
+  const [navDisplay, setNavDisplay]     = useState(null);
+  const navGeometry = useDataStore((s) => s.scanGeometry);
+  const hexMap = useMemo(() => makeHexMap(navGeometry), [navGeometry]);
+  // The geometry (navRasterKey) the picture was fetched for, and whether a question is out. A hexagonal scan's
+  // picture is shown only while the page still holds that geometry; a square scan's picture is bound to nothing.
+  const [navKey, setNavKey]             = useState(null);
+  const [navLoading, setNavLoading]     = useState(false);
+  const [navFailed, setNavFailed]       = useState(false);   // the last question of a hexagonal scan got no picture
+  const navRequestRef = useRef(0);               // which question was asked last
+  const navAskedKeyRef = useRef(undefined);      // the geometry it was asked under (undefined: never asked)
+  const navShownKeyRef = useRef(null);           // the geometry of the picture in the state (null: none or a square scan's)
+  const geometryKey = navRasterKey(navGeometry);
+  const navStale = !!navImage && navKey !== geometryKey;
+  // A picture that is not the raster this page expects is not shown, so it can never be dragged on.
+  const navMismatched = !!navImage && !navStale && overviewMismatch(hexMap, navDisplay);
+  // Until the answer for the geometry the page holds arrives, the map is loading, not empty.
+  const navPending = navStale || (navLoading && geometryKey !== null);
+  const navNotice = navPending ? 'loading' : navMismatched ? 'mismatch' : navFailed ? 'failed' : null;
+  const navInFlightRef = useRef(null);           // file and geometry of the question that is out (null: none, or a square scan's)
+  // `renew` asks again although a question for the same file and geometry is out: the data behind it changed (a
+  // dataset of the same file), so that answer may be of the old one.
+  const loadNavImage = useCallback((renew = false) => {
+    // The data store has the geometry the moment a load, a switch or a crop has published it.
+    const heldKey = () => navRasterKey(useDataStore.getState().scanGeometry);
+    const askedKey = heldKey();
+    const held = useDataStore.getState();
+    const askedFor = askedKey === null ? null : `${held.filePath}|${navMeasurementKey(held.ebsdInfo)}|${askedKey}`;
+    // A file switch and a page that becomes visible reach this from several places in one go. On a hexagonal scan
+    // the server draws the raster each time, so a question for the file and geometry that is already out is not
+    // asked again: its answer is the one this call would get. A square scan asks every time, as it always did.
+    if (!renew && askedFor !== null && navInFlightRef.current === askedFor) {
+      navAskedKeyRef.current = askedKey;
+      return;
+    }
+    const request = ++navRequestRef.current;
+    navAskedKeyRef.current = askedKey;
+    navInFlightRef.current = askedFor;
+    // On a hexagonal scan an answer that is no longer to the last question, or was asked under another geometry
+    // than the page holds now, is dropped: its raster may be another one of the same shape. A square scan keeps
+    // taking every answer, as it always did.
+    const hex = () => askedKey !== null || heldKey() !== null;
+    const outdated = () => hex() && (request !== navRequestRef.current || askedKey !== heldKey());
+    // an answer without a picture, like a failed question, leaves no earlier picture standing on a hexagonal scan,
+    // and none of a hexagonal scan's either once the page has moved to a square one (that picture never matches
+    // again, so it would keep the map waiting for an answer that is not coming)
+    const none = () => {
+      if (outdated()) return;
+      if (!hex() && navShownKeyRef.current === null) return;
+      navShownKeyRef.current = null;
+      setNavImage(null);
+      setNavDisplay(null);
+      setNavKey(null);
+      setNavFailed(true);
+    };
+    setNavLoading(true);
+    setNavFailed(false);
+    ebsdApi.overview('bc', { display: 'raster' }).then((r) => {
+      if (outdated()) return;
+      if (r.data?.image) {
+        setNavImage(r.data.image);
+        setNavDisplay(r.data.display || null);
+        setNavKey(askedKey);
+        navShownKeyRef.current = askedKey;
+      } else none();
+    }).catch(none).finally(() => {
+      if (request === navRequestRef.current) {
+        navInFlightRef.current = null;
+        setNavLoading(false);
+      }
+    });
+  }, []);
+  // The page moved to another hexagonal geometry (or off one) with no question asked for it: ask.
+  useEffect(() => {
+    if (!isActive || navAskedKeyRef.current === undefined || navAskedKeyRef.current === geometryKey) return;
+    loadNavImage();
+  }, [isActive, geometryKey, loadNavImage]);
   const [nRows, setNRows]               = useState(0);
   const [nCols, setNCols]               = useState(0);
 
@@ -1515,6 +1612,18 @@ export default function IndexingPage({ isActive }) {
   const [selMode, setSelMode]           = useState('full');   // 'full' | 'region' | 'mask'
   const [region, setRegion]             = useState({ rowStart: 0, rowEnd: 0, colStart: 0, colEnd: 0 });
   const [savedRegions, setSavedRegions] = useState([]);
+  // A region is index cells of one geometry. When the page moves to another hexagonal geometry (or off one) the
+  // typed region goes; the saved ones are cells of the grid and go only when the grid itself changes. A square
+  // scan's geometry key is always null, so for it nothing moves.
+  const gridKey = navGridKey(navGeometry);
+  const navShapeRef = useRef({ geometryKey, gridKey });
+  useEffect(() => {
+    const prev = navShapeRef.current;
+    navShapeRef.current = { geometryKey, gridKey };
+    if (prev.geometryKey === geometryKey) return;
+    setRegion({ rowStart: 0, rowEnd: 0, colStart: 0, colEnd: 0 });
+    if (prev.gridKey !== gridKey) setSavedRegions([]);
+  }, [geometryKey, gridKey]);
   const [maskInfo, setMaskInfo]         = useState('');
   const [pixelCount, setPixelCount]     = useState('');
 
@@ -1720,12 +1829,19 @@ export default function IndexingPage({ isActive }) {
   // --- Task / progress ---
   const [taskId, setTaskId]             = useState(null);
   const [running, setRunning]           = useState(false);
+  // The coded refusal of an oversized Hough library (shown with its one-click answer
+  // where the run failed; the reflector card is collapsed by default).
+  const [houghRefusal, setHoughRefusal] = useState(null);
   const [startTime, setStartTime]      = useState(null);
   const [elapsed, setElapsed]          = useState('');
   const [progress, setProgress]         = useState(0);
   const [progressVisible, setProgressVisible] = useState(false);
   const [quality, setQuality]           = useState('');
   const [qualityVisible, setQualityVisible]   = useState(false);
+  // The notes of the ACTIVE result: follows a run, a gallery switch on the Phase Map
+  // page, an import and a refinement (see the hook); paused while a run is going.
+  const { caveats: resultCaveats, apply: applyResultCaveats, clear: clearResultCaveats } =
+    useActiveResultCaveats({ enabled: !!isActive && !running });
   const [showResultModal, setShowResultModal] = useState(false);
   const [perPhaseStats, setPerPhaseStats]     = useState([]);
   const [logLines, setLogLines]         = useState([]);
@@ -1743,6 +1859,26 @@ export default function IndexingPage({ isActive }) {
 
   // --- Post-run actions ---
   const [canExport, setCanExport]       = useState(false);
+  // The geometry stamped on the RESULT the backend holds, not the one of the dataset the viewer shows: the
+  // .ctf and the square .ang are offered for a result of a hexagonal scan. A result imported on another page
+  // never passes through fetchResult, so the page asks again whenever it becomes active.
+  const [resultGeometry, setResultGeometry] = useState(null);
+  // The same answer decides whether the export list can be used: a result the backend holds can be exported
+  // whichever page produced it. While a run of this page is going, the list stays as the run left it (off).
+  const runningRef = useRef(false);
+  runningRef.current = running;
+  useEffect(() => {
+    if (!isActive) return undefined;
+    let cancelled = false;
+    indexApi.getLastResult()
+      .then((r) => {
+        if (cancelled) return;
+        setResultGeometry(parseScanGeometry(r.data?.scan_geometry));
+        if (!runningRef.current) setCanExport(r.data?.available !== false && !!r.data?.result_id);
+      })
+      .catch(() => { if (!cancelled) setResultGeometry(null); });
+    return () => { cancelled = true; };
+  }, [isActive]);
   const [canViewMatches, setCanViewMatches] = useState(false);
   const [canRefine, setCanRefine]       = useState(false);
   const [canSendAnalysis, setCanSendAnalysis] = useState(false);
@@ -1827,9 +1963,7 @@ export default function IndexingPage({ isActive }) {
     // the Indexing nav map matches the Viewer overview instead of showing a
     // visually different mean-intensity map of the same dataset. Falls back to
     // a live BC-style compute when no stored quality map exists.
-    ebsdApi.overview('bc').then(r => {
-      if (r.data?.image) setNavImage(r.data.image);
-    }).catch(() => {});
+    loadNavImage();
 
     // Camera geometry — always taken from the EBSD viewer detector, which
     // reports the vendor's sample_tilt / camera_tilt / azimuthal verbatim.
@@ -1848,7 +1982,9 @@ export default function IndexingPage({ isActive }) {
     const pPc = pcApi.detectorInfo().then(r => {
       const d = r.data;
       if (d?.has_detector && d?.pc) {
-        setPcValues(t('pcPhase.pcLine', { x: d.pc[0]?.toFixed(3), y: d.pc[1]?.toFixed(3), z: d.pc[2]?.toFixed(3) }));
+        // With a per-pixel PC map the three numbers are its mean: say so.
+        setPcValues(t('pcPhase.pcLine', { x: d.pc[0]?.toFixed(3), y: d.pc[1]?.toFixed(3), z: d.pc[2]?.toFixed(3) })
+          + (d.pc_basis === 'mean' ? t('pcPhase.mapMean') : ''));
         return undefined;
       }
       // Fall back to EBSD viewer detector
@@ -1892,24 +2028,39 @@ export default function IndexingPage({ isActive }) {
       const fname = payload.split(/[\\/]/).pop();
       log(t('dataset.switching', { name: fname }));
       try {
-        await ebsdApi.switchFile(payload);
+        const switched = await ebsdApi.switchFile(payload);
+        // Another load or switch (the header switcher, the viewer) started after this one and
+        // succeeded: its answer describes the file the backend ends on, this one is the older and
+        // must not overwrite it. (Waits for a later one that is still pending.)
+        const superseded = await isSupersededLoad(switched);
+        // A measurement of an APEX file whose metadata file cannot be used any more is reloaded
+        // without it: the pattern centre and the grid may now differ, so say so.
+        announcePairingDropped(switched?.data, (k, o) => t(`ebsdviewer:${k}`, o),
+          { log, warn: (m) => toast.warning(m, 15000) });
         // Update the GLOBAL store first so EVERY page (EBSD viewer, Crystal
         // Hint, status bar, EDS) reconciles to the new active file. Without
         // this, switching files from the Indexing dropdown left the rest of
         // the app pointing at the previous file — wrong-file images and a wall
         // of "Dataset not found" / "out of bounds" errors when those pages
         // fired calls with the old file's dataset names and grid.
-        await useDataStore.getState().syncFromBackend();
+        // The viewer's copy of the load answer (`ebsdInfo`: its grid and scan geometry) is the
+        // previous file's until a load or switch rewrites it, so the switch answer replaces it, but
+        // only where a copy exists: setEBSDLoaded also marks the viewer as loaded, which only its
+        // own first visit may do (the header file switcher follows the same rule).
+        const store = useDataStore.getState();
+        if (!superseded && store.ebsdInfo && switched?.data && typeof switched.data === 'object') {
+          store.setEBSDLoaded(switched.data);
+        }
+        await store.syncFromBackend();
         // Refresh the per-file dataset list and file switcher. The previous
         // file's processed datasets are now stashed (not destroyed) backend-
         // side, so switching back restores them.
         fetchDataState();
-        ebsdApi.overview('bc').then(r => {
-          if (r.data?.image) setNavImage(r.data.image);
-        }).catch(() => {});
+        loadNavImage();
         log(t('dataset.switchedFile', { name: fname }));
       } catch (err) {
-        log(t('dataset.switchFileError', { error: err.response?.data?.detail || err.message }));
+        // The switch reloads the file, so it can be refused with a code: worded in the interface's language.
+        log(t('dataset.switchFileError', { error: problemText(err, t, 'indexing') || err.message }));
       } finally {
         setDatasetSwitching(false);
       }
@@ -1929,15 +2080,29 @@ export default function IndexingPage({ isActive }) {
         setNCols(cols);
         setDataStatus(t('dataset.summary', { name: payload, rows, cols, count: info.n_patterns }));
         setEdsOverlayAvailable(!!info.has_eds);
+        // The grid the whole application works on moves with the dataset: the store's grid and
+        // scan geometry (status bar; PC refinement computes `row * gridShape[1] + col` from it)
+        // and, when the viewer has one, its copy of the load answer. The same two writes as the
+        // viewer's own dataset switches (EBSDViewer applyGrid), from the same reader.
+        const geom = datasetGeometry(info);
+        if (geom) {
+          const store = useDataStore.getState();
+          if (store.ebsdInfo) store.setEBSDLoaded(ebsdInfoWithGrid(store.ebsdInfo, geom));
+          store.setNavigationGrid({
+            gridShape: geom.gridShape,
+            patternShape: geom.patternShape,
+            patternCount: geom.patternCount,
+            scanGeometry: geom.scanGeometry,
+            hexResampled: geom.hexResampled,
+          });
+        }
       }
-      ebsdApi.overview('bc').then(r => {
-        if (r.data?.image) setNavImage(r.data.image);
-      }).catch(() => {});
+      loadNavImage(true);
       log(t('dataset.switchedDataset', { name: payload }));
     } catch (err) {
       log(t('dataset.switchDatasetError', { error: err.response?.data?.detail || err.message }));
     }
-  }, [log, datasetSwitching, fetchDataState, t]);
+  }, [log, datasetSwitching, fetchDataState, loadNavImage, t]);
 
   // GPU status probe — runs once on mount. Used by the dictionary Compute
   // radio group to disable the GPU option and show a status line. We never
@@ -2607,6 +2772,7 @@ export default function IndexingPage({ isActive }) {
 
   async function runIndexing() {
     if (running) return;
+    setHoughRefusal(null);
 
     const params = buildParams();
     log(t('messages.startingIndexing', { time: formatTime(), method }));
@@ -2615,6 +2781,7 @@ export default function IndexingPage({ isActive }) {
     setProgress(0);
     setProgressVisible(true);
     setQualityVisible(false);
+    clearResultCaveats();
     setCanExport(false);
     setCanViewMatches(false);
     setCanRefine(false);
@@ -2629,7 +2796,8 @@ export default function IndexingPage({ isActive }) {
       }
       if (id) startPolling(id);
     } catch (err) {
-      log(t('messages.errorPrefix', { error: err?.response?.data?.detail || err.message }));
+      // A coded refusal (no PC in the file) is shown in the reader's language.
+      log(t('messages.errorPrefix', { error: problemText(err, t, 'indexing') || err.message }));
       setRunning(false);
       setProgressVisible(false);
     }
@@ -2741,7 +2909,17 @@ export default function IndexingPage({ isActive }) {
           if (d.status !== 'error' && d.status !== 'failed') {
             fetchResult();
           } else {
-            log(t('messages.indexingFailed', { error: d.error || t('refineDialog.unknownError') }));
+            const refusal = refusalFrom(d);
+            if (refusal) {
+              // not the English text of the backend: the banner words it, with the answer
+              setHoughRefusal(refusal);
+              log(t('houghRefusal.log'));
+            } else {
+              // a coded refusal of a re-reader (error_code) reads in the language of the page
+              log(t('messages.indexingFailed', {
+                error: codedText(d.error_code, t, 'indexing') || d.error || t('refineDialog.unknownError'),
+              }));
+            }
             setProgressVisible(false);
           }
         }
@@ -2763,10 +2941,14 @@ export default function IndexingPage({ isActive }) {
       const d = r.data;
       if (d?.available === false) return;
       setIndexingResult(d, method);
+      setResultGeometry(parseScanGeometry(d?.scan_geometry));
       const ci = d?.mean_ci ?? d?.ci;
       const nPx = d?.n_indexed ?? d?.n_pixels;
       const pps = d?.per_phase_stats || [];
       setPerPhaseStats(pps);
+      // notes the result carries about itself (e.g. Hough on a trigonal space group
+      // PyEBSDIndex gets wrong); shown below the quality line, they do not block
+      applyResultCaveats(d);
       if (ci !== undefined) {
         const elapsedStr = startTime ? ` — ${((Date.now() - startTime) / 1000).toFixed(1)}s` : '';
         const ts = formatTime();
@@ -2984,7 +3166,9 @@ export default function IndexingPage({ isActive }) {
 
   const leftPanel = (
     <NavigationMapPanel
-      navImage={navImage}
+      navImage={navStale || navMismatched ? null : navImage}
+      hexMap={hexMap}
+      navNotice={navNotice}
       nRows={nRows}
       nCols={nCols}
       selectionMode={selMode}
@@ -3067,7 +3251,7 @@ export default function IndexingPage({ isActive }) {
           )}
           {loadedFiles.map((f) => {
             const isActiveFile = !!f.active;
-            const fileLabel = `${isActiveFile ? '● ' : '○ '}${f.name}`;
+            const fileLabel = `${isActiveFile ? '● ' : '○ '}${loadedFileLabel(f, (k, o) => t(`ebsdviewer:${k}`, o))}`;
             // For the active file, list its within-file datasets as
             // indented children. For non-active files, list only the file
             // itself (its in-memory datasets aren't loaded).
@@ -3521,6 +3705,17 @@ export default function IndexingPage({ isActive }) {
         </Row>
       )}
 
+      {houghRefusal && (
+        <HoughRefusal
+          problem={houghRefusal}
+          fit={(name) => {
+            const path = effectivePhasePaths.find((p) => specKey(p) === specKey(name));
+            if (!path) return Promise.reject(new Error(name));
+            return indexApi.fitHoughReflectors(path);
+          }}
+        />
+      )}
+
       {/* Action row 1 */}
       <Row gap={8} style={{ flexWrap: 'wrap' }}>
         <button
@@ -3630,6 +3825,7 @@ export default function IndexingPage({ isActive }) {
                 log(t('messages.gpuReleased', { freed: freedStr, after: d.free_after_gb })
                   + (d.backends_evicted ? t('messages.gpuReleasedEvicted', { count: d.backends_evicted }) : '')
                   + (d.render_phases_cleared ? t('messages.gpuReleasedPhases', { count: d.render_phases_cleared }) : '')
+                  + (d.workers_released ? t('messages.gpuReleasedWorker') : '')
                   + residual);
               } else {
                 // Not "nothing to do": the endpoint evicted caches before it
@@ -3639,7 +3835,7 @@ export default function IndexingPage({ isActive }) {
                   backends: d.backends_evicted ?? 0,
                   phases: d.render_phases_cleared ?? 0,
                   tables: d.tables_cleared ?? 0,
-                }));
+                }) + (d.workers_released ? t('messages.gpuReleasedWorker') : ''));
               }
             } catch (err) {
               log(t('messages.gpuReleaseFailed', { error: err?.message || err }));
@@ -3675,18 +3871,26 @@ export default function IndexingPage({ isActive }) {
             const fmt = e.target.value;
             if (!fmt) return;
             e.target.value = '';
-            log(t('messages.exporting', { fmt }));
+            const fileName = EXPORT_FILE_NAMES[fmt] || `indexing_result.${fmt}`;
+            log(t('messages.exporting', { fmt: fileName.split('.').pop() }));
             try {
               const res = await indexApi.exportResult(fmt, true, true);
               const url = window.URL.createObjectURL(res.data);
               const a = document.createElement('a');
               a.href = url;
-              a.download = `indexing_result.${fmt}`;
+              a.download = fileName;
               a.click();
               window.URL.revokeObjectURL(url);
-              log(t('messages.exportComplete', { fmt }));
+              // A resampled file says so, with the grid it was written on (header X-Orienta-Resampled).
+              const resampled = readResampled(res);
+              if (resampled) log(t('messages.exportResampled', { name: fileName, rows: resampled.rows, cols: resampled.cols }));
+              else if (fmt === 'ctf' || fmt === 'ang_square') log(t('messages.exportResampledPlain', { name: fileName }));
+              else log(t('messages.exportComplete', { fmt }));
             } catch (err) {
-              log(t('messages.exportFailed', { error: err.response?.data?.detail || err.message }));
+              // The request asks for a blob, so a refusal's body is a Blob and `detail` is not
+              // readable; blobProblemText words a coded refusal from its header and otherwise
+              // reads the JSON in the blob.
+              log(t('messages.exportFailed', { error: await blobProblemText(err, t, 'indexing') }));
             }
           }}
           disabled={!canExport}
@@ -3696,6 +3900,8 @@ export default function IndexingPage({ isActive }) {
           <option value="">{t('actions.export')}</option>
           <option value="h5">{t('actions.exportH5')}</option>
           <option value="ang">{t('actions.exportAng')}</option>
+          {isHexScan(resultGeometry) && <option value="ang_square">{t('actions.exportAngSquare')}</option>}
+          {isHexScan(resultGeometry) && <option value="ctf">{t('actions.exportCtf')}</option>}
         </select>
       </Row>
 
@@ -3803,6 +4009,9 @@ export default function IndexingPage({ isActive }) {
           )}
         </div>
       )}
+
+      {/* Notes the finished result carries about itself (not blocking) */}
+      <ResultCaveats caveats={resultCaveats} />
 
       {/* Log output */}
       <LogOutput lines={logLines} onClear={() => setLogLines([])} />

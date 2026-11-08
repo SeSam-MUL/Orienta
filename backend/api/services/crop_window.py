@@ -112,7 +112,7 @@ class CropWindow:
         """JSON-safe summary for API responses (the mask itself is not sent —
         it can be thousands of entries; the UI draws its own outline)."""
         return {
-            "source_file": str(self.source_file),
+            "source_file": str(self.source_file or ""),
             "row0": int(self.row0),
             "col0": int(self.col0),
             "rows": int(self.rows),

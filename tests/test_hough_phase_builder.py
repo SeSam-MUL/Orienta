@@ -363,13 +363,17 @@ def test_no_function_that_sets_up_hough_builds_its_phase_around_the_builder():
 
 
 def test_the_builder_is_built_on_frame_phase_and_not_on_orix_phase():
+    """The phase is built in ``_build_hough_phase``; ``hough_phase_from_cif`` is the
+    public name, which calls it (and adds the path the phase was read from)."""
     tree = ast.parse((ROOT / "ebsd_utils.py").read_text(encoding="utf-8"))
-    (builder,) = [f for f in _functions(tree) if f.name == "hough_phase_from_cif"]
+    (builder,) = [f for f in _functions(tree) if f.name == "_build_hough_phase"]
     imported = {(n.module, a.name)
                 for n in ast.walk(builder) if isinstance(n, ast.ImportFrom) for a in n.names}
     assert ("crystal_symmetry", "FramePhase") in imported
     assert ("orix.crystal_map", "Phase") not in imported
     assert "from_cif" in _called_names(builder)
+    (wrapper,) = [f for f in _functions(tree) if f.name == "hough_phase_from_cif"]
+    assert "_build_hough_phase" in _called_names(wrapper)
 
 
 def test_hough_reflectors_has_no_second_way_to_build_the_phase():

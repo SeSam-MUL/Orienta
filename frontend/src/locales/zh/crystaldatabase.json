@@ -35,7 +35,7 @@
     "converted": "已转换：{{name}}（SG #{{spaceGroup}}，{{atoms}} 个原子）",
     "conversionFailed": "转换失败：{{error}}",
     "skippingUnfit": "正在跳过 {{count}} 个不合适的文件...",
-    "noneFit": "没有适合转换的文件（已跳过 {{count}} 个 — 缺少 DOI、原子或空间群）",
+    "noneFit": "没有适合转换的文件（已跳过 {{count}} 个 — 缺少原子或空间群）",
     "convertingProgress": "转换中... {{done}}/{{total}}{{skipped}}",
     "convertingSkippedSuffix": "（已跳过 {{count}} 个）",
     "convertedCount": "已转换 {{count}} 个",
@@ -69,7 +69,16 @@
     "failed": "失败：{{error}}",
     "savedChanges": "已保存 {{count}} 项更改",
     "saveFailed": "保存失败：{{error}}",
-    "unknown": "未知"
+    "unknown": "未知",
+    "convertedDeclared": "已转换: {{name}} (空间群 #{{spaceGroup}}, {{atoms}} 个原子) — 参考文献已声明为未发表",
+    "p1Hidden": "{{count}} 个以 P 1 保存且隐含对称性（选中文件查看详情）",
+    "symmetrised": "已保存 {{name}} ({{symbol}}, #{{number}})；晶胞和轴与原文件相同，原文件未改动",
+    "symmetriseFailed": "无法保存对称化副本: {{error}}",
+    "skippedNoReference": "已跳过 {{count}} 个（无参考文献）",
+    "declaredUnpublishedCount": "{{count}} 个已声明为未发表",
+    "symmetrisedConverted": "已保存 {{name}} ({{symbol}}, #{{number}})；晶胞已转换为常规标准设置（每个晶胞的原子数 {{before}} → {{after}}{{axes}}）；原文件未改动",
+    "axesSuffix": "，轴 {{axes}}（原文件 → 副本）",
+    "toleranceChosen": "；您选择了 {{symprec}} Å 容差"
   },
   "counts": {
     "cifXtal": "{{cif}} CIF · {{xtal}} XTAL"
@@ -154,15 +163,30 @@
       "reference": "参考文献",
       "file": "文件",
       "size": "大小",
-      "kb": "{{value}} KB"
-    }
+      "kb": "{{value}} KB",
+      "referenceStatus": "参考文献状态",
+      "referenceStatuses": {
+        "found": "引用取自 CIF",
+        "declared_unpublished": "用户声明为未发表",
+        "missing": "无记录"
+      }
+    },
+    "saveSymmetrised": "保存对称化副本",
+    "saveSymmetrisedTooltip": "以检测到的空间群 ({{symbol}}, #{{number}}) 写入新的 CIF。原文件不会被修改。",
+    "symmetrising": "正在保存副本...",
+    "invalidDoi": "这不是 DOI（应为 10.xxxx/...）。未保存任何内容。引用请填写在参考文献字段。",
+    "copyExists": "已存在对称化副本: {{name}}",
+    "citationTooLong": "文本太长（最多 {{max}} 个字符）。未保存任何内容。",
+    "chooseTolerance": "空间群取决于容差。保存副本为:",
+    "saveSymmetrisedAt": "{{symbol}} (#{{number}}, {{symprec}} Å)",
+    "saveSymmetrisedAtTooltip": "以在 {{symprec}} Å 容差下找到的 {{symbol}} (#{{number}}) 写入新的 CIF。原文件不会被修改。"
   },
   "exportBar": {
     "convert": "转换为 .xtal",
     "converting": "转换中...",
     "convertTooltip": "将 {{name}} 转换为 .xtal",
     "convertSelectFirst": "请先选择一个 CIF 文件",
-    "convertNotFit": "不适合 .xtal — 请先修复警告（缺少 DOI、原子或空间群）",
+    "convertNotFit": "不适合 .xtal — 请先修复警告（缺少原子或空间群）",
     "batchConvert": "转换所选 ({{count}})",
     "batchConverting": "正在转换 {{count}} 个...",
     "batchConvertTooltip_one": "将所选的 {{count}} 个 CIF 文件转换为 .xtal",
@@ -308,5 +332,46 @@
     "syncBulkKeepBoth": "将每个冲突设为“保留两者”（服务器副本重命名）。",
     "syncBulkSkip": "将每个冲突设为“跳过”（不更改任何文件）。",
     "syncResolveAll": "将所选操作应用于每个冲突并完成同步。"
+  },
+  "fitWarnings": {
+    "no_reference": "未找到 DOI 或参考文献。转换为 .xtal 时会询问您补充，或将数据声明为未发表。",
+    "no_atoms": "没有原子位点。",
+    "no_space_group": "没有空间群。",
+    "disordered": "无序结构（部分占位）。",
+    "p1_hidden_symmetry": "以空间群 P 1 保存，但原子位置在 0.01 到 0.1 Å 的每个容差下都具有 {{symbol}} (#{{number}}) 的对称性。P 1 文件的 Hough 标定可能耗尽内存；请保存对称化副本。",
+    "p1_ambiguous_symmetry": "以空间群 P 1 保存；原子位置的对称性取决于容差（{{ladder}}）。请选择一个容差以保存对称化副本。",
+    "contradictory_header": "文件头自相矛盾：给出的空间群编号为 {{headerNumber}}，但空间群符号为 {{headerSymbol}}。不提供对称化副本；请先更正文件头。",
+    "p1_check_failed": "以空间群 P 1 保存；隐藏对称性的检查未能完成（{{detail}}），因此不提供对称化副本。"
+  },
+  "referenceDialog": {
+    "title": "该晶体结构没有参考文献",
+    "messageOne": "{{name}} 没有 DOI 或文献引用。.xtal 文件会记录晶体数据的来源，请在此填写，或声明这些数据尚未发表。",
+    "messageMany": "所选的 {{count}} 个 CIF 文件没有 DOI 或文献引用。.xtal 文件会记录其晶体数据的来源。",
+    "andMore": "… 另有 {{count}} 个",
+    "inputLabel": "DOI 或引用",
+    "inputPlaceholder": "10.1234/example 或 作者 等, 期刊, 年份",
+    "inputHint": "DOI (10.…) 将保存为 DOI，其他文本保存为参考文献。",
+    "willSaveDoi": "将作为 DOI 写入 CIF。",
+    "willSaveCitation": "将作为参考文献文本写入 CIF。",
+    "unpublishedNote": "“未发表 / 自有数据”会把“unpublished (declared by user)”写为参考文献，并标记为您的声明，绝不会留作“未知”。",
+    "declareOne": "未发表 / 自有数据",
+    "declareMany": "将全部 {{count}} 个声明为未发表",
+    "declareTooltip": "以参考文献“unpublished (declared by user)”进行转换",
+    "skip": "跳过这 {{count}} 个",
+    "skipTooltip": "仅转换有参考文献的文件",
+    "saveAndConvert": "保存并转换",
+    "counter": "{{count}} / {{max}} 个字符"
+  },
+  "symmetriseReasons": {
+    "not_p1": "该文件不是以空间群 P 1 保存的。",
+    "disordered": "结构包含部分占位的位点，由位置推出的对称性只是对样品的猜测。",
+    "no_symmetry": "在 0.01 到 0.1 Å 的任何容差下都未发现高于 P 1 的对称性。",
+    "changed_structure": "对称化后的结构在容差范围内不再与文件一致，因此未写入任何内容。",
+    "unreadable": "无法将该文件作为晶体结构读取。",
+    "not_writable": "该 CIF 文件所在的文件夹不可写，因此未保存副本。",
+    "same_content_exists": "该文件夹中已有同一晶体（{{existing}}），未再写入第二个副本。",
+    "ambiguous_tolerance": "原子位置的空间群取决于容差；请选择一个。",
+    "invalid_tolerance": "容差必须是 0.01、0.02、0.05 或 0.1 Å。",
+    "contradictory_header": "文件头自相矛盾（空间群编号与空间群符号对是否为 P 1 的说法不一致），因此未写入副本。请先更正文件头。"
   }
 }

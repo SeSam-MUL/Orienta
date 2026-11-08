@@ -17,7 +17,8 @@
     "noTaskId": "Backend が task_id を返しませんでした。",
     "generateFailed": "生成に失敗しました: {{detail}}",
     "deleteFailed": "削除に失敗しました: {{detail}}",
-    "progressPollFailed": "進捗の取得に失敗しました: {{message}}"
+    "progressPollFailed": "進捗の取得に失敗しました: {{message}}",
+    "pc_missing": "このファイルにはパターンセンター (PC) がありません。kikuchipy の仮の値では誤った方位になります。PC リファインメントで PC を較正するか、PC を含む .osc／メタデータファイルをスキャンの隣に置いてから、もう一度開始してください。"
   },
   "master": {
     "groupTitle": "マスターパターン",

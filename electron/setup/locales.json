@@ -32,6 +32,7 @@
     "install": "Install",
     "cancel": "Cancel",
     "retry": "Try again",
+    "back": "Back (choose another folder)",
     "installCpuInstead": "Install the processor version instead",
     "openLog": "Open the log",
     "start": "Start Orienta",
@@ -66,12 +67,19 @@
       "package": "The downloaded program files could not be unpacked.",
       "pip": "Installing the Python packages failed.",
       "unsupported": "Orienta cannot be installed on this computer.",
-      "inUse": "Orienta is still running. Close it completely and try again.",
+      "inUse": "A file in Orienta's folder is in use. Usually Orienta is still running, or something it started has not ended yet: close Orienta completely, and if it is not running, end any leftover python process that belongs to Orienta (on Windows: Task Manager, Details tab, python.exe). Antivirus software scanning the folder can cause the same message — wait a minute and try again. If it persists, choose another data folder with \"change…\".",
+      "noAccess": "Orienta is not allowed to change a file in its folder. Check that the folder is not read-only and not on a locked drive, and that no protection blocks Orienta there (Windows: \"Controlled folder access\" in ransomware protection; macOS: Privacy & Security, Files and Folders / Full Disk Access; Linux: the folder's permissions). Allow Orienta, or choose another data folder with \"change…\", then try again.",
       "cudaUnavailable": "The graphics card version was installed, but the card does not answer.",
       "interrupted": "The installation was stopped.",
       "unexpected": "Something unexpected went wrong.",
       "homeUnusable": "Orienta cannot write to its data folder. This is usually a drive that is not connected, or a user folder kept on a network share.",
-      "homeNotEmpty": "The chosen data folder already contains other files. Orienta needs a folder of its own — choose an empty one, or leave it at the default."
+      "homeNotEmpty": "The data folder {{dir}} already contains files that are not Orienta's: {{entries}}. Orienta needs a folder of its own — move those files away or choose an empty folder (the \"change…\" button on the first screen).",
+      "homeNotEmptyDefault": "Orienta's default folder {{dir}} already contains files that are not Orienta's: {{entries}}. Look at what they are: if you do not need them, remove them and try again; otherwise choose another folder with \"change…\" on the first screen.",
+      "homeHoldsData": "The folder {{dir}} contains {{entries}}, which may be an earlier Orienta installation or your crystal library (Database). Do not delete it. Check what is inside and back up your crystal library (Database) first; then choose another folder with \"change…\" on the first screen.",
+      "homeUnreachable": "The data folder {{dir}} is on a drive that is not connected right now. Connect it and start Orienta again. To use another location instead, delete the file {{pointer}} and start Orienta again — nothing on the missing drive is touched.",
+      "homeRetireFailed": "The data folder {{dir}} no longer exists, but Orienta could not update its setting file {{pointer}} (another program may be using it). Close other programs, or delete that file yourself, and start Orienta again.",
+      "homePointerUnreadable": "Orienta cannot read its setting file {{pointer}} (another program, such as antivirus software, may be using it). Wait a minute and start Orienta again. While it cannot be read, Orienta does not switch to another folder.",
+      "homeCheckFailed": "Orienta could not check where its data folder is ({{why}}) and does not guess, so it created nothing. Start Orienta again; if this keeps happening, the shell log in the data folder has the details."
     },
     "warnings": {
       "cudaUnverified": "Orienta could not check the graphics card, because PyTorch took too long to start. The installation itself is finished — start Orienta and it will use the card if it works."
@@ -95,6 +103,13 @@
     "homeChanged": "The folder has been changed.",
     "homeRestart": "Saved. Close Orienta and start it again so the new folder is used for the installation.",
     "homeUnwritable": "Orienta cannot write to {{dir}} ({{detail}}). Please choose another folder.",
+    "homeKept": "Orienta keeps using the data folder {{dir}}.",
+    "homeAdopted": "Found your existing Orienta data in {{dir}} and will use it.",
+    "homeAdoptedRestart": "Found your existing Orienta data in {{dir}} and saved it as the data folder. Close Orienta and start it again so it is used.",
+    "homeNotices": {
+      "staleFallback": "The folder chosen earlier ({{dir}}) no longer exists. Orienta will be set up in its default folder instead; use \"change…\" to choose another. The old setting was kept as {{previous}}; to go back to it, close Orienta, delete home.txt next to it and rename the kept file to home.txt.",
+      "staleDefault": "The data folder recorded earlier ({{dir}}) no longer exists. Orienta will be set up there again, in its default folder. The old setting was kept as {{previous}}."
+    },
     "reasons": {
       "macosCpuOnly": "Orienta runs on this Mac's processor and needs about {{size}} GB. Graphics-card acceleration needs an NVIDIA card, which Apple computers do not have.",
       "tooLittleSpace": "Only {{free}} GB free — Orienta needs at least {{needed}} GB. Free some space and try again.",
@@ -123,6 +138,7 @@
     "install": "Installieren",
     "cancel": "Abbrechen",
     "retry": "Nochmal versuchen",
+    "back": "Zurück (anderen Ordner wählen)",
     "installCpuInstead": "Stattdessen die Prozessor-Fassung installieren",
     "openLog": "Protokoll öffnen",
     "start": "Orienta starten",
@@ -157,12 +173,19 @@
       "package": "Die heruntergeladenen Programmdateien liessen sich nicht entpacken.",
       "pip": "Das Installieren der Python-Pakete ist fehlgeschlagen.",
       "unsupported": "Orienta kann auf diesem Computer nicht installiert werden.",
-      "inUse": "Orienta läuft noch. Schliessen Sie es vollständig und versuchen Sie es erneut.",
+      "inUse": "Eine Datei im Orienta-Ordner ist in Benutzung. Meist läuft Orienta noch, oder etwas, das es gestartet hat, ist noch nicht beendet: Schließen Sie Orienta vollständig; läuft es nicht mehr, beenden Sie übrig gebliebene python-Prozesse von Orienta (unter Windows: Task-Manager, Registerkarte Details, python.exe). Auch ein Virenscanner, der den Ordner gerade prüft, löst diese Meldung aus — warten Sie eine Minute und versuchen Sie es noch einmal. Bleibt es dabei, wählen Sie mit „ändern…“ einen anderen Datenordner.",
+      "noAccess": "Orienta darf eine Datei in seinem Ordner nicht ändern. Prüfen Sie, dass der Ordner nicht schreibgeschützt und nicht auf einem gesperrten Laufwerk liegt und dass kein Schutz Orienta dort blockiert (Windows: „Überwachter Ordnerzugriff“ im Ransomware-Schutz; macOS: Datenschutz & Sicherheit, Dateien und Ordner / Vollständiger Festplattenzugriff; Linux: die Berechtigungen des Ordners). Erlauben Sie Orienta den Zugriff oder wählen Sie mit „ändern…“ einen anderen Datenordner und versuchen Sie es dann erneut.",
       "cudaUnavailable": "Die Grafikkarten-Fassung wurde installiert, aber die Karte antwortet nicht.",
       "interrupted": "Die Installation wurde abgebrochen.",
       "unexpected": "Etwas Unerwartetes ist schiefgegangen.",
       "homeUnusable": "Orienta kann nicht in seinen Datenordner schreiben. Meist liegt das an einem nicht verbundenen Laufwerk oder an einem Benutzerordner auf einem Netzlaufwerk.",
-      "homeNotEmpty": "Der gewählte Datenordner enthält bereits andere Dateien. Orienta braucht einen eigenen Ordner — wählen Sie einen leeren oder behalten Sie den vorgegebenen."
+      "homeNotEmpty": "Der Datenordner {{dir}} enthält bereits Dateien, die nicht zu Orienta gehören: {{entries}}. Orienta braucht einen eigenen Ordner — verschieben Sie diese Dateien oder wählen Sie einen leeren Ordner (Knopf „ändern…“ auf der ersten Seite).",
+      "homeNotEmptyDefault": "Der vorgegebene Ordner {{dir}} enthält bereits Dateien, die nicht zu Orienta gehören: {{entries}}. Sehen Sie nach, was es ist: Brauchen Sie die Dateien nicht, entfernen Sie sie und versuchen Sie es erneut; andernfalls wählen Sie auf der ersten Seite mit „ändern…“ einen anderen Ordner.",
+      "homeHoldsData": "Der Ordner {{dir}} enthält {{entries}}. Das kann eine frühere Orienta-Installation oder Ihre Kristallbibliothek (Database) sein. Löschen Sie ihn nicht. Prüfen Sie, was darin liegt, und sichern Sie zuerst Ihre Kristallbibliothek (Database); wählen Sie dann auf der ersten Seite mit „ändern…“ einen anderen Ordner.",
+      "homeUnreachable": "Der Datenordner {{dir}} liegt auf einem Laufwerk, das gerade nicht verbunden ist. Verbinden Sie es und starten Sie Orienta erneut. Wenn Sie stattdessen einen anderen Ort verwenden möchten, löschen Sie die Datei {{pointer}} und starten Sie Orienta erneut — auf dem fehlenden Laufwerk wird nichts angetastet.",
+      "homeRetireFailed": "Der Datenordner {{dir}} existiert nicht mehr, aber Orienta konnte seine Einstellungsdatei {{pointer}} nicht ändern (ein anderes Programm hat sie vielleicht geöffnet). Schließen Sie andere Programme oder löschen Sie die Datei selbst und starten Sie Orienta erneut.",
+      "homePointerUnreadable": "Orienta kann seine Einstellungsdatei {{pointer}} nicht lesen (ein anderes Programm, etwa ein Virenscanner, hat sie vielleicht geöffnet). Warten Sie eine Minute und starten Sie Orienta erneut. Solange sie nicht gelesen werden kann, wechselt Orienta nicht zu einem anderen Ordner.",
+      "homeCheckFailed": "Orienta konnte nicht prüfen, wo sein Datenordner liegt ({{why}}), und rät nicht — deshalb wurde nichts angelegt. Starten Sie Orienta erneut; wenn das wieder passiert, stehen die Einzelheiten im Shell-Log im Datenordner."
     },
     "warnings": {
       "cudaUnverified": "Orienta konnte die Grafikkarte nicht prüfen, weil PyTorch zu lange zum Starten gebraucht hat. Die Installation selbst ist fertig — starten Sie Orienta, und die Karte wird genutzt, sofern sie funktioniert."
@@ -186,6 +209,13 @@
     "homeChanged": "Der Ordner wurde geändert.",
     "homeRestart": "Gespeichert. Schließen Sie Orienta und starten Sie es neu, damit der neue Ordner für die Installation verwendet wird.",
     "homeUnwritable": "Orienta kann nicht nach {{dir}} schreiben ({{detail}}). Bitte wählen Sie einen anderen Ordner.",
+    "homeKept": "Orienta verwendet weiterhin den Datenordner {{dir}}.",
+    "homeAdopted": "Ihre vorhandenen Orienta-Daten wurden in {{dir}} gefunden und werden verwendet.",
+    "homeAdoptedRestart": "Ihre vorhandenen Orienta-Daten wurden in {{dir}} gefunden und als Datenordner gespeichert. Schließen Sie Orienta und starten Sie es neu, damit er verwendet wird.",
+    "homeNotices": {
+      "staleFallback": "Der zuvor gewählte Ordner ({{dir}}) existiert nicht mehr. Orienta wird stattdessen im vorgegebenen Ordner eingerichtet; mit „ändern…“ können Sie einen anderen wählen. Die alte Einstellung wurde als {{previous}} aufbewahrt; um sie wiederherzustellen, schließen Sie Orienta, löschen Sie daneben die Datei home.txt und benennen Sie die aufbewahrte Datei in home.txt um.",
+      "staleDefault": "Der zuvor eingetragene Datenordner ({{dir}}) existiert nicht mehr. Orienta wird dort, im vorgegebenen Ordner, neu eingerichtet. Die alte Einstellung wurde als {{previous}} aufbewahrt."
+    },
     "reasons": {
       "macosCpuOnly": "Orienta läuft auf dem Prozessor dieses Macs und braucht etwa {{size}} GB. Beschleunigung über die Grafikkarte setzt eine NVIDIA-Karte voraus, die es in Apple-Rechnern nicht gibt.",
       "tooLittleSpace": "Nur {{free}} GB frei — Orienta braucht mindestens {{needed}} GB. Bitte Platz schaffen und erneut versuchen.",
@@ -214,6 +244,7 @@
     "install": "インストール",
     "cancel": "中止",
     "retry": "再試行",
+    "back": "戻る（別のフォルダーを選ぶ）",
     "installCpuInstead": "代わりにプロセッサー版をインストールする",
     "openLog": "ログを開く",
     "start": "Orienta を起動",
@@ -248,12 +279,19 @@
       "package": "ダウンロードしたプログラムファイルを展開できませんでした。",
       "pip": "Python パッケージのインストールに失敗しました。",
       "unsupported": "このコンピューターには Orienta をインストールできません。",
-      "inUse": "Orienta がまだ実行中です。完全に終了してからもう一度お試しください。",
+      "inUse": "Orienta のフォルダー内のファイルが使用中です。多くの場合、Orienta がまだ実行中か、Orienta が起動したプロセスがまだ終了していません。Orienta を完全に終了し、実行中でなければ Orienta に属する python プロセスを終了してください（Windows ではタスク マネージャーの「詳細」タブの python.exe）。ウイルス対策ソフトがフォルダーをスキャンしているときも同じメッセージが出ます。1 分待ってからやり直してください。それでも解消しない場合は、「変更…」で別のデータフォルダーを選んでください。",
+      "noAccess": "Orienta はフォルダー内のファイルを変更する権限がありません。フォルダーが読み取り専用でないこと、ロックされたドライブ上にないこと、そして保護機能が Orienta をブロックしていないことを確認してください（Windows:「コントロールされたフォルダー アクセス」、macOS:「プライバシーとセキュリティ」の「ファイルとフォルダ」/「フルディスクアクセス」、Linux: フォルダーのアクセス権）。Orienta を許可するか、「変更…」で別のデータフォルダーを選んでから、もう一度お試しください。",
       "cudaUnavailable": "グラフィックスカード版をインストールしましたが、カードが応答しません。",
       "interrupted": "インストールが中止されました。",
       "unexpected": "予期しない問題が発生しました。",
       "homeUnusable": "Orienta はデータフォルダーに書き込めません。接続されていないドライブ、またはネットワーク共有上のユーザーフォルダーが原因であることがほとんどです。",
-      "homeNotEmpty": "選択したデータフォルダーには既に他のファイルがあります。Orienta には専用のフォルダーが必要です。空のフォルダーを選ぶか、既定のままにしてください。"
+      "homeNotEmpty": "データフォルダー {{dir}} には、Orienta のものではないファイルが既にあります: {{entries}}。Orienta には専用のフォルダーが必要です。これらのファイルを移動するか、空のフォルダーを選んでください（最初の画面の「変更…」）。",
+      "homeNotEmptyDefault": "既定のフォルダー {{dir}} には、Orienta のものではないファイルが既にあります: {{entries}}。内容を確認してください。不要であれば削除してからやり直し、そうでなければ最初の画面の「変更…」で別のフォルダーを選んでください。",
+      "homeHoldsData": "フォルダー {{dir}} には {{entries}} があり、以前の Orienta のインストールまたは結晶ライブラリ（Database）である可能性があります。削除しないでください。中身を確認し、先に結晶ライブラリ（Database）をバックアップしてから、最初の画面の「変更…」で別のフォルダーを選んでください。",
+      "homeUnreachable": "データフォルダー {{dir}} は、現在接続されていないドライブにあります。ドライブを接続してから Orienta を起動し直してください。別の場所を使う場合は、ファイル {{pointer}} を削除してから Orienta を起動し直してください。見つからないドライブ上のデータには触れません。",
+      "homeRetireFailed": "データフォルダー {{dir}} は存在しませんが、Orienta は設定ファイル {{pointer}} を更新できませんでした（他のプログラムが使用している可能性があります）。他のプログラムを閉じるか、そのファイルを自分で削除してから、Orienta を起動し直してください。",
+      "homePointerUnreadable": "Orienta は設定ファイル {{pointer}} を読み取れません（ウイルス対策ソフトなど、他のプログラムが使用している可能性があります）。1 分待ってから Orienta を起動し直してください。読み取れない間、Orienta は別のフォルダーに切り替えません。",
+      "homeCheckFailed": "Orienta はデータフォルダーの場所を確認できず（{{why}}）、推測もしないため、何も作成しませんでした。Orienta を起動し直してください。繰り返し起きる場合は、データフォルダー内のシェルログに詳細があります。"
     },
     "warnings": {
       "cudaUnverified": "PyTorch の起動に時間がかかったため、Orienta はグラフィックスカードを確認できませんでした。インストール自体は完了しています。Orienta を起動すれば、カードが動作していれば使用されます。"
@@ -277,6 +315,13 @@
     "homeChanged": "保存先を変更しました。",
     "homeRestart": "保存しました。新しい保存先を使うには、Orienta を一度終了してから起動し直してください。",
     "homeUnwritable": "{{dir}} に書き込めません ({{detail}})。別のフォルダーを選んでください。",
+    "homeKept": "Orienta は引き続きデータフォルダー {{dir}} を使用します。",
+    "homeAdopted": "既存の Orienta のデータが {{dir}} に見つかったため、それを使用します。",
+    "homeAdoptedRestart": "既存の Orienta のデータが {{dir}} に見つかり、データフォルダーとして保存しました。使用するには、Orienta を一度終了してから起動し直してください。",
+    "homeNotices": {
+      "staleFallback": "以前に選んだフォルダー（{{dir}}）はもう存在しません。代わりに既定のフォルダーに Orienta をセットアップします。別の場所にする場合は「変更…」を使ってください。以前の設定は {{previous}} として保存してあります。元に戻すには、Orienta を終了し、同じ場所の home.txt を削除してから、保存したファイルの名前を home.txt に変更してください。",
+      "staleDefault": "以前に記録されたデータフォルダー（{{dir}}）はもう存在しません。既定のフォルダーである同じ場所に、Orienta をあらためてセットアップします。以前の設定は {{previous}} として保存してあります。"
+    },
     "reasons": {
       "macosCpuOnly": "Orienta はこの Mac のプロセッサで動作し、約 {{size}} GB を必要とします。グラフィックスカードによる高速化には NVIDIA のカードが必要ですが、Apple のコンピュータには搭載されていません。",
       "tooLittleSpace": "空き容量は {{free}} GB しかありません。Orienta には少なくとも {{needed}} GB が必要です。空き容量を確保してからもう一度お試しください。",
@@ -305,6 +350,7 @@
     "install": "安装",
     "cancel": "取消",
     "retry": "重试",
+    "back": "返回（选择其他文件夹）",
     "installCpuInstead": "改为安装处理器版本",
     "openLog": "打开日志",
     "start": "启动 Orienta",
@@ -339,12 +385,19 @@
       "package": "无法解压下载的程序文件。",
       "pip": "安装 Python 软件包失败。",
       "unsupported": "无法在此计算机上安装 Orienta。",
-      "inUse": "Orienta 仍在运行。请完全关闭后重试。",
+      "inUse": "Orienta 文件夹中的某个文件正在被使用。通常是 Orienta 仍在运行，或它启动的进程尚未结束：请完全关闭 Orienta；如果它没有在运行，请结束属于 Orienta 的残留 python 进程（Windows：任务管理器“详细信息”选项卡中的 python.exe）。杀毒软件正在扫描该文件夹时也会出现此提示 — 请等待一分钟后重试。如果仍然如此，请用“更改…”选择其他数据文件夹。",
+      "noAccess": "Orienta 无权修改其文件夹中的某个文件。请检查该文件夹是否为只读、是否位于已锁定的驱动器上，以及是否有保护功能阻止了 Orienta（Windows：勒索软件防护中的“受控文件夹访问”；macOS：“隐私与安全性”中的“文件和文件夹”/“完全磁盘访问权限”；Linux：文件夹的权限）。请允许 Orienta，或用“更改…”选择其他数据文件夹，然后重试。",
       "cudaUnavailable": "已安装显卡版本，但显卡没有响应。",
       "interrupted": "安装已停止。",
       "unexpected": "发生了意外问题。",
       "homeUnusable": "Orienta 无法写入其数据文件夹。这通常是由于驱动器未连接，或用户文件夹位于网络共享上。",
-      "homeNotEmpty": "所选数据文件夹中已有其他文件。Orienta 需要一个专用文件夹 — 请选择一个空文件夹，或保留默认位置。"
+      "homeNotEmpty": "数据文件夹 {{dir}} 中已有不属于 Orienta 的文件：{{entries}}。Orienta 需要一个专用文件夹 — 请移走这些文件，或选择一个空文件夹（第一页上的“更改…”按钮）。",
+      "homeNotEmptyDefault": "默认文件夹 {{dir}} 中已有不属于 Orienta 的文件：{{entries}}。请先查看它们是什么：如果不需要，请删除后重试；否则请在第一页用“更改…”选择其他文件夹。",
+      "homeHoldsData": "文件夹 {{dir}} 中有 {{entries}}，这可能是早先的 Orienta 安装或您的晶体库（Database）。请不要删除它。请先查看其中的内容并备份晶体库（Database），然后在第一页用“更改…”选择其他文件夹。",
+      "homeUnreachable": "数据文件夹 {{dir}} 位于当前未连接的驱动器上。请连接该驱动器后重新启动 Orienta。如果想改用其他位置，请删除文件 {{pointer}} 后重新启动 Orienta — 不会改动缺失驱动器上的任何内容。",
+      "homeRetireFailed": "数据文件夹 {{dir}} 已不存在，但 Orienta 无法更新其设置文件 {{pointer}}（可能有其他程序正在使用它）。请关闭其他程序，或自行删除该文件，然后重新启动 Orienta。",
+      "homePointerUnreadable": "Orienta 无法读取其设置文件 {{pointer}}（可能有其他程序，例如杀毒软件，正在使用它）。请等待一分钟后重新启动 Orienta。在无法读取期间，Orienta 不会切换到其他文件夹。",
+      "homeCheckFailed": "Orienta 无法确认其数据文件夹的位置（{{why}}），也不会猜测，因此没有创建任何内容。请重新启动 Orienta；如果反复出现，数据文件夹中的 shell 日志有详细信息。"
     },
     "warnings": {
       "cudaUnverified": "由于 PyTorch 启动过慢，Orienta 无法检查显卡。安装本身已经完成 — 启动 Orienta，若显卡正常即会使用。"
@@ -368,6 +421,13 @@
     "homeChanged": "存放位置已更改。",
     "homeRestart": "已保存。请关闭并重新启动 Orienta，新位置才会用于本次安装。",
     "homeUnwritable": "无法写入 {{dir}}（{{detail}}）。请选择其他文件夹。",
+    "homeKept": "Orienta 继续使用数据文件夹 {{dir}}。",
+    "homeAdopted": "在 {{dir}} 中找到了您现有的 Orienta 数据，将使用该文件夹。",
+    "homeAdoptedRestart": "在 {{dir}} 中找到了您现有的 Orienta 数据，并已保存为数据文件夹。请关闭并重新启动 Orienta 以使用它。",
+    "homeNotices": {
+      "staleFallback": "先前选择的文件夹（{{dir}}）已不存在。Orienta 将改为在默认文件夹中进行设置；如需其他位置，请使用“更改…”。旧的设置已保存为 {{previous}}；如需恢复，请关闭 Orienta，删除同一位置的 home.txt，并将保存的文件重命名为 home.txt。",
+      "staleDefault": "先前记录的数据文件夹（{{dir}}）已不存在。Orienta 将在同一位置（默认文件夹）重新进行设置。旧的设置已保存为 {{previous}}。"
+    },
     "reasons": {
       "macosCpuOnly": "Orienta 在这台 Mac 的处理器上运行，约需 {{size}} GB。显卡加速需要 NVIDIA 显卡，而 Apple 计算机没有配备。",
       "tooLittleSpace": "仅剩 {{free}} GB 可用空间 — Orienta 至少需要 {{needed}} GB。请释放一些空间后重试。",

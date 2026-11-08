@@ -203,10 +203,272 @@ def _kikuchipy_oxford_camera_binning_workaround():
         Reader.scan2dict = original
 
 
+def _calibration_group_is_complete(group) -> bool:
+    """True when an EDAX ``Pattern Center Calibration`` group holds a finite ``x-star``, ``y-star``
+    and ``z-star``."""
+    import numpy as np
+    for key in ("x-star", "y-star", "z-star"):
+        if key not in group:
+            return False
+        try:
+            value = float(np.asarray(group[key][()]).reshape(-1)[0])
+        except (TypeError, ValueError, IndexError):
+            return False
+        if not np.isfinite(value):
+            return False
+    return True
+
+
+def _header_has_pc(h5file) -> bool:
+    """True when a manufacturer's own header of this .h5 states a pattern centre.
+
+    EDAX: ``<scan>/EBSD/Header/Pattern Center Calibration`` with all three of ``x-star``,
+    ``y-star`` and ``z-star`` finite: kikuchipy's reader takes each component the header lacks
+    from its placeholder 0.5, so a group that holds two of the three is not a PC. Oxford H5OINA:
+    ``<scan>/EBSD/Data/Pattern Center X`` (a per-pixel PC).
+    """
+    import h5py
+    for key in h5file.keys():
+        group = h5file[key]
+        if not isinstance(group, h5py.Group):
+            continue
+        if "EBSD/Header/Pattern Center Calibration" in group:
+            if _calibration_group_is_complete(group["EBSD/Header/Pattern Center Calibration"]):
+                return True
+            continue
+        if "EBSD/Data/Pattern Center X" in group:
+            return True
+    return False
+
+
+def _is_edax_file(h5file) -> bool:
+    """True when the root says the file was written by EDAX software (or by an
+    Orienta export in the EDAX layout, which states ``Manufacturer = EDAX``)."""
+    try:
+        value = h5file["Manufacturer"][()] if "Manufacturer" in h5file else h5file.attrs.get("Manufacturer")
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", "ignore")
+        return value is not None and "EDAX" in str(value)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _restore_pc_from_orienta_export(sig, file_path: str, verbose: bool = True) -> None:
+    """Settle where the PC of a loaded .h5 comes from, when its header has none.
+
+    An Orienta .h5 states the PC its run used in ``/Detector/pc`` (Bruker). An
+    export of an EDAX .up1/.up2 made before the header carried the PC has the EDAX
+    layout without ``Pattern Center Calibration``; kikuchipy then loads it at its
+    placeholder, tilt 0, silently. The manufacturer's header always wins;
+    ``/Detector/pc`` is used only when the header has none, only when it is a
+    finite triple and only when ``/Detector/shape`` (if recorded) is this signal's
+    own pattern shape (another detector's PC is not this one's).
+
+    When no PC can be found - an export of a file that had none (``/Detector``
+    says ``pc_missing``), or an EDAX .h5 whose header never had one - the placeholder
+    stays, and the signal is tagged ``Signal.pc_source = "default"``, as an UP1
+    without its .osc is, so the file is registered as having no PC instead of
+    passing a made-up one off as a header value.
+    """
+    import h5py
+    import numpy as np
+    name = os.path.basename(file_path)
+    try:
+        applied = False
+        edax = False
+        with h5py.File(file_path, "r") as f:
+            if _header_has_pc(f):
+                # The header wins. If the export states another PC in /Detector/pc
+                # (a PC typed or refined after the file was written), say so: it is
+                # not applied, and the user would otherwise not know.
+                if "Detector" in f and "pc" in f["Detector"] and not bool(
+                        f["Detector"].attrs.get("pc_missing", False)):
+                    exported = np.asarray(f["Detector/pc"][()], dtype=float).ravel()
+                    now = np.asarray(sig.detector.pc, dtype=float).reshape(-1, 3).mean(axis=0)
+                    if (exported.size == 3 and np.all(np.isfinite(exported))
+                            and not np.allclose(exported, now, rtol=0, atol=1e-6)):
+                        sig.metadata.set_item("Signal.export_pc_ignored",
+                                              [float(v) for v in exported])
+                        logger.warning(
+                            "%s: /Detector/pc %s of this Orienta export differs from the PC in "
+                            "the file's header %s; the header wins and /Detector/pc is not "
+                            "applied.", name, tuple(round(float(v), 4) for v in exported),
+                            tuple(round(float(v), 4) for v in now))
+                return
+            edax = _is_edax_file(f)
+            exported_missing = "Detector" in f and bool(f["Detector"].attrs.get("pc_missing", False))
+            pc = shape = None
+            if "Detector" in f and "pc" in f["Detector"] and not exported_missing:
+                pc = np.asarray(f["Detector/pc"][()], dtype=float).ravel()
+                shape = f["Detector"].attrs.get("shape")
+        if pc is not None and pc.size == 3 and np.all(np.isfinite(pc)):
+            det = sig.detector
+            if shape is not None and tuple(int(v) for v in np.asarray(shape).ravel()) != tuple(
+                    int(v) for v in det.shape):
+                logger.info("%s: /Detector/pc is for a %s detector, not %s: not applied",
+                            name, tuple(np.asarray(shape).ravel()), tuple(det.shape))
+            else:
+                from kikuchipy.detectors import EBSDDetector
+                sig.detector = EBSDDetector(
+                    shape=tuple(int(v) for v in det.shape), px_size=det.px_size, binning=det.binning,
+                    tilt=det.tilt, azimuthal=det.azimuthal, sample_tilt=det.sample_tilt,
+                    pc=[float(v) for v in pc])
+                sig.metadata.set_item("Signal.pc_source", "orienta_export")
+                applied = True
+                if verbose:
+                    logger.info("%s: the header has no pattern centre; using /Detector/pc %s "
+                                "from the Orienta export", name,
+                                tuple(round(float(v), 4) for v in pc))
+        if not applied and (edax or exported_missing):
+            sig.metadata.set_item("Signal.pc_source", "default")
+            logger.warning(
+                "%s carries no pattern centre; kikuchipy's placeholder is in use. "
+                "Calibrate the PC (PC refinement) before indexing.", name)
+    except Exception:
+        logger.debug("could not settle the PC of %s", file_path, exc_info=True)
+
+
+def _is_oxford_layout(file_path: str) -> bool:
+    """True when an HDF5 file has the Oxford layout (``Manufacturer`` Oxford, a
+    ``/<scan>/EBSD/Data`` group) whatever its extension is called."""
+    try:
+        import h5py
+        from unified_loader import detect_format
+        with h5py.File(file_path, "r") as f:
+            return detect_format(f) == "Oxford"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _load_oxford_by_layout(file_path: str, use_lazy: bool, verbose: bool, load_kwargs: Optional[dict] = None):
+    """Read an Oxford-layout file with kikuchipy's Oxford reader, whatever its extension.
+    ``load_kwargs`` (``scan_group_names``, ``processed``) is the chosen variant, see ``_resolve_variant``.
+
+    ``kikuchipy.load`` picks its reader by the file EXTENSION: ``.h5oina`` goes to the
+    Oxford reader, a ``.h5`` is offered to the EDAX / Bruker / kikuchipy / EMsoft h5ebsd
+    readers only, none of which takes an Oxford file ("Could not read ..."). An Orienta
+    rich export of an Oxford scan is such a file (a copy of the .h5oina with our groups
+    added, saved under the name the user gave it, ``.h5`` by default). It then fell back to
+    the eager unified loader, which keeps neither the camera tilt (4.3 deg became 0) nor
+    the per-pixel PC map. The Oxford reader is called directly, as ``kikuchipy.load`` does
+    for an ``.h5oina``.
+    """
+    from kikuchipy.io._io import _dict2signal
+    from kikuchipy.io.plugins.oxford_h5ebsd import file_reader
+    with _kikuchipy_oxford_camera_binning_workaround():
+        dicts = file_reader(file_path, lazy=use_lazy, **(load_kwargs or {}))
+    signals = [_dict2signal(d, lazy=use_lazy) for d in dicts]
+    sig = signals[0] if len(signals) == 1 else signals
+    if verbose:
+        logger.info("  Success with kikuchipy's Oxford reader (file not named .h5oina)")
+    return sig
+
+
+#: Formats whose readers have no pattern centre to read: kikuchipy attaches its placeholder
+#: (0.5, 0.5, 0.5) and nothing in the file says otherwise. NORDIF ``Pattern.dat`` and ``Setting.txt``
+#: (calibration patterns), Oxford ``.ebsp`` and loose pattern images.
+_PC_LESS_SUFFIXES = (".dat", ".txt", ".ebsp", ".tif", ".tiff", ".bmp", ".png")
+
+
+def _tag_pc_less_formats(sig, file_path: str) -> None:
+    """Mark a signal whose format carries no pattern centre as ``Signal.pc_source = "default"``.
+
+    ``CalibrationStore.register`` turns that tag into ``pc_source == "missing"``, which every guard
+    that refuses to work from a PC nobody supplied tests for. Before this, only an UP file without
+    metadata and an EDAX .h5 without a header PC were tagged: a NORDIF or Oxford ``.ebsp`` scan was
+    registered as having a measured PC and indexed at (0.5, 0.5, 0.5). A tag a loader set already
+    (``osc``, ``apex``) is a statement about this very file and stays."""
+    if Path(file_path).suffix.lower() not in _PC_LESS_SUFFIXES:
+        return
+    try:
+        if sig.metadata.get_item("Signal.pc_source", None) is not None:
+            return
+        sig.metadata.set_item("Signal.pc_source", "default")
+    except Exception as exc:
+        # A PC-less file that cannot be tagged would register as having a measured PC: say so.
+        logger.warning(
+            "could not mark %s as having no pattern centre (%s: %s); it may be treated as having "
+            "a measured PC. Check the pattern centre before indexing.",
+            Path(file_path).name, type(exc).__name__, exc, exc_info=True)
+        return
+    logger.warning(
+        "%s carries no pattern centre; kikuchipy's placeholder (0.5, 0.5, 0.5) is in use. "
+        "Calibrate the PC (PC refinement) before indexing.", Path(file_path).name)
+
+
+def _resolve_variant(file_path: str, variant):
+    """Check a chosen variant against the file and say how to load it.
+
+    Returns ``(resolved, load_kwargs)``: the variant with its measurement filled in, and the
+    keyword arguments that make kikuchipy read exactly that scan group and pattern source.
+    The group is always named (kikuchipy's own "first group" follows HDF5 key order: 1, 10, 2).
+    ``processed`` is passed for Oxford files only, the one format with two pattern datasets.
+    Raises ``LoadChoiceError`` when the file does not hold the variant."""
+    from backend.api.services.load_choices import LoadVariant, pattern_dataset_path
+    scan, _, dataset = pattern_dataset_path(file_path, variant).partition("/EBSD/Data/")
+    load_kwargs = {"scan_group_names": [scan]}
+    if dataset in ("Processed Patterns", "Unprocessed Patterns"):
+        load_kwargs["processed"] = dataset == "Processed Patterns"
+    return LoadVariant(scan, variant.pattern_source), load_kwargs
+
+
+def _with_variant(sig, file_path: str, resolved):
+    """Attach what belongs to the loaded variant to ``sig``: the static background of its own
+    pattern source (kikuchipy reads the processed one whatever was loaded; a source without one has
+    none, never the other's), and ``Orienta.load_variant``, which the route registers and drops
+    (``variant_registry.register_from_signal``). Without a variant ``sig`` is returned unchanged."""
+    if resolved is None:
+        return sig
+    from backend.api.services.load_choices import PROCESSED, UNPROCESSED
+    if resolved.pattern_source in (PROCESSED, UNPROCESSED):
+        import h5py
+        import numpy as np
+        kind = "Processed" if resolved.pattern_source == PROCESSED else "Unprocessed"
+        path = f"{resolved.measurement}/EBSD/Header/{kind} Static Background"
+        with h5py.File(file_path, "r") as f:
+            background = np.asarray(f[path][()]) if path in f else None
+        if background is None:
+            sig._static_background = None     # the property setter takes an array only
+        else:
+            sig.static_background = background
+    sig.metadata.set_item("Orienta.load_variant", resolved.to_dict())
+    return sig
+
+
+def _check_fallback_variant(loader, ebsd_data, resolved, file_name: str) -> None:
+    """Refuse an eager-fallback load that did not read the chosen variant. ``unified_loader``
+    takes the first scan group of the file and, for Oxford, the unprocessed patterns only when
+    asked ('raw'); it cannot be told another group."""
+    from backend.api.services.load_choices import LoadChoiceError
+    wanted = {"processed": "processed", "unprocessed": "raw"}.get(resolved.pattern_source)
+    if loader.root_key != resolved.measurement or (wanted and ebsd_data.pattern_type != wanted):
+        raise LoadChoiceError(
+            "loadVariantNeedsNativeReader",
+            f"{file_name}: measurement {resolved.measurement!r} ({resolved.pattern_source} patterns) "
+            "can only be read by kikuchipy's reader, which failed on this file")
+
+
 def load_ebsd_safe(
     file_path: str,
     pattern_type: str = 'processed',
-    verbose: bool = True
+    verbose: bool = True,
+    apex: Optional[dict] = None,
+    variant=None,
+):
+    """Load an EBSD file (see ``_load_ebsd_safe_impl``) and say whether it carries a pattern centre."""
+    sig = _load_ebsd_safe_impl(file_path, pattern_type, verbose, apex, variant)
+    _tag_pc_less_formats(sig, str(file_path))
+    from backend.api.services.load_choices import note_file_source
+    note_file_source(sig, str(file_path), variant)
+    return sig
+
+
+def _load_ebsd_safe_impl(
+    file_path: str,
+    pattern_type: str = 'processed',
+    verbose: bool = True,
+    apex: Optional[dict] = None,
+    variant=None,
 ):
     """
     Safely load EBSD data with automatic fallback mechanism.
@@ -223,6 +485,16 @@ def load_ebsd_safe(
         file_path: Path to HDF5 file (.h5, .hdf5, .h5oina)
         pattern_type: 'processed' or 'raw' (for Oxford files with unified_loader)
         verbose: Print loading information to console
+        apex: ``{"h5_path": ..., "measurement_id": ...}``, the metadata file and measurement the
+            user chose for an EDAX ``.up1``/``.up2``. Without it a UP file looks for an APEX
+            ``.h5`` in its own folder that names it by GUID (``edax_apex``).
+        variant: a ``load_choices.LoadVariant``, the scan group and pattern source to read from an
+            HDF5 file. Without it the first group's processed patterns are read, as before. With
+            it the group and source are named to kikuchipy, the static background is that of the
+            source, and the signal carries ``Orienta.load_variant``. A variant the file does not
+            hold raises ``load_choices.LoadChoiceError``; the eager fallback, which can read the
+            first group only, raises it too rather than load another one. Formats read before this
+            point (NORDIF, UP1/UP2, EDAX hex) have one variant and ignore it.
 
     Returns:
         kikuchipy.signals.EBSD signal object. When the kikuchipy native
@@ -241,6 +513,17 @@ def load_ebsd_safe(
     """
     file_path = str(file_path)
     file_name = Path(file_path).name
+
+    # An EDAX APEX metadata file lists measurements and holds no patterns. Neither of the loaders
+    # below can read it ("Could not read ..." / a 1 x 1 grid); the load dialog is how it is opened.
+    if Path(file_path).suffix.lower() in (".h5", ".hdf5"):
+        from edax_apex import ApexError, is_apex_file
+        if is_apex_file(file_path):
+            raise ApexError(
+                "apexNeedsMeasurement",
+                f"{file_name} is an EDAX APEX metadata file: it lists measurements but holds no "
+                "patterns. Choose a measurement in the load dialog; its pattern file (.up1/.up2) "
+                "is then loaded with this file's settings.")
 
     # Decide lazy vs eager based on file size. The lazy chain is a massive
     # win on multi-GB files (27 GB H5OINA: 10 min → 7.7 s) because we don't
@@ -267,6 +550,11 @@ def load_ebsd_safe(
         lazy_threshold = 2 * 1024**3
     use_lazy = size_bytes is None or size_bytes >= lazy_threshold
 
+    # A NORDIF ``Setting.txt`` stands for the calibration patterns beside it. kikuchipy returns
+    # them as one-dimensional navigation; the PC page needs them as a scan of one row.
+    if Path(file_path).suffix.lower() == ".txt":
+        return _load_nordif_calibration(file_path, verbose)
+
     # EDAX UP1/UP2 raw-pattern files take a dedicated path: kikuchipy reads the
     # patterns natively, but a version-1 header carries no map grid (so the
     # signal would come back as a flat 1-D navigation) and neither v1 nor v3
@@ -276,7 +564,7 @@ def load_ebsd_safe(
     # with a clear message rather than falling through to a confusing HDF5 error.
     from edax_up1 import is_edax_up_file
     if is_edax_up_file(file_path):
-        return _load_edax_up(file_path, use_lazy, verbose)
+        return _load_edax_up(file_path, use_lazy, verbose, apex)
 
     # EDAX scans acquired on a hexagonal grid cannot be handed to either
     # loader as they are: kikuchipy refuses HexGrid outright, and the
@@ -284,9 +572,23 @@ def load_ebsd_safe(
     # arrays rectangular ("46648 patterns but grid is 397x118"). We resample
     # them onto a square grid first — nearest neighbour, exactly the way OIM
     # Analysis does it, verified against a square file OIM itself produced.
+    # An Orienta .h5 that holds a hexagonal scan natively (index order, no padding, its own
+    # geometry in the header) is not an OIM file: it loads as the index rectangle with its
+    # geometry attached, before the OIM test below, which is also True for it. Its one variant
+    # is the default; a variant the file does not hold is refused as for any other .h5.
+    from backend.api.services.orienta_hex_h5 import is_native_hex_file, load_native_hex
+    if is_native_hex_file(file_path):
+        native_variant = _resolve_variant(file_path, variant)[0] if variant is not None else None
+        sig = load_native_hex(file_path, lazy=use_lazy, verbose=verbose)
+        _restore_pc_from_orienta_export(sig, file_path, verbose)
+        return _with_variant(sig, file_path, native_variant)
+
     from edax_hex import is_edax_hex_file, load_edax_hex
     if is_edax_hex_file(file_path):
         return load_edax_hex(file_path, lazy=use_lazy, verbose=verbose)
+
+    from backend.api.services.load_choices import LoadChoiceError
+    resolved, variant_kwargs = _resolve_variant(file_path, variant) if variant is not None else (None, {})
 
     # Strategy 1: Try kikuchipy's native loader (fast path).
     # Wrapped in a context manager that monkey-patches kikuchipy's broken
@@ -300,10 +602,10 @@ def load_ebsd_safe(
                 file_name, "lazy" if use_lazy else "eager", size_mb,
             )
         with _kikuchipy_oxford_camera_binning_workaround():
-            sig = _kp().load(file_path, lazy=use_lazy)
+            sig = _kp().load(file_path, lazy=use_lazy, **variant_kwargs)
         if verbose:
             logger.info("  Success with kikuchipy")
-        return sig
+        _restore_pc_from_orienta_export(sig, file_path, verbose)
 
     except Exception as e_kp:
         # Kikuchipy failed - log and try fallback
@@ -331,13 +633,14 @@ def load_ebsd_safe(
         # sorting before /Scan1) -> KeyError on EBSD/Header. Detect the real
         # EBSD scan group(s) (those with EBSD/Data + EBSD/Header) and name them
         # explicitly. Fixes re-loading any file we've already exported.
+        # A chosen variant named its group in the first call already: the retry would repeat it.
         try:
             import h5py
             with h5py.File(file_path, "r") as _f:
                 scans = [k for k in _f.keys()
                          if isinstance(_f[k], h5py.Group)
                          and "EBSD/Data" in _f[k] and "EBSD/Header" in _f[k]]
-            if scans:
+            if scans and resolved is None:
                 if verbose:
                     logger.info("  Retrying kikuchipy with explicit scan group(s) %s", scans)
                 with _kikuchipy_oxford_camera_binning_workaround():
@@ -345,9 +648,23 @@ def load_ebsd_safe(
                                      scan_group_names=scans[0] if len(scans) == 1 else scans)
                 if verbose:
                     logger.info("  Success with kikuchipy (explicit scan group)")
+                _restore_pc_from_orienta_export(sig, file_path, verbose)
                 return sig
         except Exception:
             logger.debug("explicit-scan-group retry failed for %s", file_name, exc_info=True)
+
+        # Strategy 1c: an Oxford-layout file under another extension (see
+        # ``_load_oxford_by_layout``): kikuchipy's Oxford reader, called directly.
+        if not file_name.lower().endswith(".h5oina") and _is_oxford_layout(file_path):
+            try:
+                sig = _load_oxford_by_layout(file_path, use_lazy, verbose, variant_kwargs)
+                _restore_pc_from_orienta_export(sig, file_path, verbose)
+            except Exception:
+                logger.debug("Oxford reader on %s failed", file_name, exc_info=True)
+            else:
+                # outside the try: an error of the variant step is the load's error, not a reason to
+                # try the next reader (which would read something else, or the whole file eagerly)
+                return _with_variant(sig, file_path, resolved)
 
         # Strategy 2: Try unified_loader with adapter (robust fallback)
         try:
@@ -366,10 +683,17 @@ def load_ebsd_safe(
             from unified_loader import EBSDDataLoader
             from ebsd_adapter import ebsd_data_to_kikuchipy_signal
             loader = EBSDDataLoader(file_path)
+            if resolved is not None and resolved.pattern_source == "unprocessed":
+                pattern_type = "raw"
             ebsd_data = loader.load(pattern_type=pattern_type)
+            if resolved is not None:
+                _check_fallback_variant(loader, ebsd_data, resolved, file_name)
 
             # Convert to kikuchipy signal
             sig = ebsd_data_to_kikuchipy_signal(ebsd_data)
+            # An Orienta export that reached this branch has its own /Detector/pc: the
+            # header-wins rule and its hint apply here too, not only on the kikuchipy paths.
+            _restore_pc_from_orienta_export(sig, file_path, verbose)
 
             if verbose:
                 logger.info("  Success with unified_loader")
@@ -377,8 +701,8 @@ def load_ebsd_safe(
                 logger.info("    Patterns: %s", ebsd_data.patterns.shape)
                 logger.info("    Grid: %dx%d", ebsd_data.navigation.n_rows, ebsd_data.navigation.n_cols)
 
-            return sig
-
+        except LoadChoiceError:
+            raise
         except Exception as e_unified:
             # Both loaders failed - raise comprehensive error
             error_msg = (
@@ -393,20 +717,100 @@ def load_ebsd_safe(
                 f"File may be corrupted or in an unsupported format."
             )
             raise RuntimeError(error_msg) from e_unified
+        else:
+            return _with_variant(sig, file_path, resolved)
+
+    else:
+        # Strategy 1 succeeded. Outside its try: an error of the variant step surfaces as it is
+        # instead of sending the load to the eager fallback.
+        return _with_variant(sig, file_path, resolved)
 
 
-def _load_edax_up(file_path: str, use_lazy: bool, verbose: bool):
-    """Load an EDAX UP1/UP2 file, using its .osc sidecar for grid + step.
+def _calibration_scan_to_grid(scan: dict) -> dict:
+    """Give the one-dimensional navigation of NORDIF calibration patterns a grid of one row.
 
-    See ``load_ebsd_safe`` for why this is a separate path. Returns a
+    kikuchipy returns the patterns of ``Setting.txt`` as ``(N, sy, sx)`` with a single navigation
+    axis. Everything in the application that reads a pattern does ``signal.data[row, col]``, so
+    "row 0" of that array was a line of ONE pattern and the PC page could neither show nor refine
+    a calibration pattern. As a ``(1, N, sy, sx)`` array they are an ordinary scan of one row.
+    The navigation steps stay undefined: the patterns are not neighbours."""
+    import numpy as np
+    data = np.asarray(scan["data"])
+    if data.ndim != 3:
+        raise ValueError(f"calibration patterns should be (N, rows, cols), got {data.shape}")
+    n, sy, sx = data.shape
+    out = dict(scan)
+    out["data"] = data.reshape(1, n, sy, sx)
+    out["axes"] = [
+        {"size": 1, "index_in_array": 0, "name": "y", "scale": 1.0, "offset": 0.0},
+        {"size": n, "index_in_array": 1, "name": "x", "scale": 1.0, "offset": 0.0},
+        {"size": sy, "index_in_array": 2, "name": "dy", "scale": 1.0, "offset": 0.0, "units": "um"},
+        {"size": sx, "index_in_array": 3, "name": "dx", "scale": 1.0, "offset": 0.0, "units": "um"},
+    ]
+    return out
+
+
+class NordifSettingError(ValueError):
+    """A NORDIF ``Setting.txt`` that cannot be opened, worded for the user. ``code`` is what the
+    interface translates on; the text names files, never the folders above them."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
+def _load_nordif_calibration(file_path: str, verbose: bool):
+    """Open the calibration patterns of a NORDIF ``Setting.txt`` as a scan of one row.
+
+    Any ``.txt`` is routed here, so a file that is not a NORDIF settings file (or one whose
+    calibration images are missing) is refused by name instead of with kikuchipy's bare
+    ``IndexError`` / ``FileNotFoundError``."""
+    from kikuchipy.io._io import _dict2signal
+    from kikuchipy.io.plugins.nordif_calibration_patterns._api import file_reader
+    if not Path(file_path).is_file():
+        raise NordifSettingError("nordifSettingMissing",
+                                 f"{Path(file_path).name}: the file does not exist")
+    try:
+        raw = file_reader(file_path)[0]
+    except Exception as exc:
+        # kikuchipy's own text names the missing bitmap by its full path
+        from edax_apex import without_paths
+        raise NordifSettingError(
+            "nordifCalibrationUnreadable",
+            f"{Path(file_path).name} is not a NORDIF Setting.txt, or the calibration patterns "
+            f"it lists cannot be read ({type(exc).__name__}: {without_paths(exc, file_path)})"
+        ) from exc
+    scan = _calibration_scan_to_grid(raw)
+    sig = _dict2signal(scan, lazy=False)
+    if verbose:
+        logger.info("Loaded %d NORDIF calibration patterns from %s",
+                    scan["data"].shape[1], Path(file_path).name)
+    return sig
+
+
+def _load_edax_up(file_path: str, use_lazy: bool, verbose: bool, apex: Optional[dict] = None):
+    """Load an EDAX UP1/UP2 file with the metadata of its APEX measurement, else its .osc sidecar.
+
+    See ``load_ebsd_safe`` for why this is a separate path. An APEX measurement (named by the
+    user, or found in the folder by the GUID in the file's header) gives the grid, the steps,
+    the pattern centre and the camera angles, hexagonal or square. Otherwise: returns a
     kikuchipy EBSD signal with a correct 2-D navigation (v1 files reshaped from
     the .osc grid) and, where the .osc provides it, the real µm step size on
-    the navigation axes so the map scale bar is correct.
+    the navigation axes so the map scale bar is correct. A hexagonal file without APEX
+    metadata is refused (``EdaxHexUpError``).
     """
-    from edax_up1 import resolve_up1_geometry
+    from edax_apex import load_edax_up_with_apex, measurement_for_pattern_file, read_up_header
+    from edax_up1 import read_up1_header, resolve_up1_geometry
 
-    geom = resolve_up1_geometry(file_path)
     file_name = Path(file_path).name
+    measurement, how = measurement_for_pattern_file(file_path, apex)
+    if measurement is not None:
+        return load_edax_up_with_apex(
+            file_path, read_up1_header(file_path), measurement, how, use_lazy, verbose)
+
+    # Without metadata too, a header that cannot be read is refused with its code, by file name.
+    read_up_header(file_path)
+    geom = resolve_up1_geometry(file_path)
 
     if geom.version == 1 and geom.nav_shape is None:
         raise RuntimeError(
@@ -435,17 +839,21 @@ def _load_edax_up(file_path: str, use_lazy: bool, verbose: bool):
     # indexing stands or falls on). The .osc has the real PC; a joint
     # orientation+PC refinement confirmed these values (~2.5x the match NCC vs
     # the default). When the .osc has no usable PC we KEEP the default but tag
-    # the signal so the UI can warn the user loudly. See tasks/up1-osc-format-facts.md.
+    # the signal so the UI can warn the user loudly.
     pc_source = "default"
     if geom.pc_edax is not None:
         try:
-            from kikuchipy.detectors import EBSDDetector
+            from edax_up1 import tsl_detector
             old = sig.detector
-            sig.detector = EBSDDetector(
-                shape=old.shape,
-                pc=geom.pc_edax,
+            # The detector was rebuilt from the shape and the sample tilt alone, so a camera
+            # tilt, pixel size or binning the reader had set was dropped on the way.
+            sig.detector = tsl_detector(
+                old.shape, geom.pc_edax,
                 sample_tilt=getattr(old, "sample_tilt", 70.0),
-                convention="tsl",
+                tilt=getattr(old, "tilt", 0.0),
+                azimuthal=getattr(old, "azimuthal", 0.0),
+                px_size=getattr(old, "px_size", 1.0),
+                binning=getattr(old, "binning", 1),
             )
             pc_source = "osc"
             if verbose:
@@ -570,7 +978,7 @@ def probe_ebsd_content(file_path) -> dict:
                 ebsd_data = grp.get("EBSD/Data")
                 if isinstance(ebsd_data, h5py.Group):
                     for key in ("Processed Patterns", "Unprocessed Patterns",
-                                "Pattern", "patterns"):
+                                "RawPatterns", "Pattern", "patterns"):
                         ds = ebsd_data.get(key)
                         # A zero-length patterns dataset is not usable data.
                         if isinstance(ds, h5py.Dataset) and ds.shape and ds.shape[0] > 0:

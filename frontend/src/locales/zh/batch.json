@@ -30,9 +30,14 @@
     "scanning": "扫描中...",
     "filesLoaded": "已加载 {{count}} 个文件",
     "hint": "点击“添加文件夹”以扫描 EBSD 文件",
+    "patternSource": "无论您在加载对话框中选择了哪次测量或哪种花样，批处理都对每个文件的默认花样进行标定：第一次测量，文件含已处理花样时使用已处理花样。",
     "enterFolderPrompt": "输入文件夹路径：",
     "noFilesFound": "未找到 EBSD 文件",
-    "scanFailed": "扫描失败"
+    "scanFailed": "扫描失败",
+    "gridHex": "六方网格，{{rows}} x {{cols}}",
+    "gridSquare": "方形网格，{{rows}} x {{cols}}",
+    "pairingPaired": "元数据：{{file}}，测量 {{name}}",
+    "pairingNone": "未找到元数据"
   },
   "step2": {
     "title": "花样中心 (PC)",
@@ -80,6 +85,9 @@
     "ctf": ".ctf",
     "ctfDesc": "Oxford/MTEX 格式",
     "ctfTooltip": "以 Oxford/MTEX 的 .ctf 格式导出结果。",
+    "angSquare": ".ang（方形网格）",
+    "angSquareDesc": "仅六方扫描，已重采样",
+    "angSquareTooltip": "将六方扫描的结果重采样到方形网格，并导出为方形 .ang（每个单元取最近的实测点）。",
     "richH5": "完整 .h5",
     "richH5Desc": "复制源文件 — 每个结果的大小等于源文件大小！",
     "richH5Tooltip": "导出复制源文件的完整 HDF5 — 每个结果的大小等于源文件。",
@@ -112,7 +120,8 @@
     "phaseChipTooltip": "选择或取消选择此相进行标定。",
     "selected": "已选 {{count}} 个",
     "applyToAll": "应用到所有文件",
-    "applyToAllTooltip": "将所选相分配给批处理中的每个文件。"
+    "applyToAllTooltip": "将所选相分配给批处理中的每个文件。",
+    "methodChangedClearedPhases": "方法已更改：请重新选择相——不同方法使用不同的相文件。"
   },
   "step5": {
     "sphericalTitle": "Spherical",
@@ -175,14 +184,19 @@
     "manualPcTitle": "手动花样中心",
     "manualPcFile": "文件：{{name}}",
     "manualPcFractional": "值为相对探测器的分数 (0–1)。",
+    "pcConvention": "惯例：",
     "pcx": "PCx：",
     "pcy": "PCy：",
     "pcz": "PCz：",
+    "manualPcApplying": "应用中…",
+    "msgPcConventionNeedsSize": "此文件的花样尺寸尚未知晓，因此无法换算该惯例下的数值。请选择 Bruker，或先快速加载此文件。",
+    "msgPcConversionFailed": "无法将这些数值换算为 Bruker 惯例。",
     "msgPcCopied": "已将 PC 复制到 {{count}} 个文件",
     "msgPcCopyPartial": "{{failed}}/{{total}} 个目标失败：{{error}}",
     "msgCopyPcFailed": "复制 PC 失败：{{detail}}",
     "msgApplyAllLackedPc": "全部应用：{{failed}}/{{total}} 个目标缺少 PC",
     "msgAppliedTo": "已应用到 {{count}} 个文件",
+    "msgSkippedSource": "跳过 {{count}} 个（源 = 目标）",
     "msgApplyAllFailed": "全部应用失败：{{detail}}",
     "msgInvalidPc": "无效的 PC 值 — 必须是三个数字",
     "msgManualPcSet": "已设置手动 PC",
@@ -283,6 +297,7 @@
     "startBatch": "开始批处理（{{files}} × {{phases}}）"
   },
   "hoverTips": {
+    "pcConventionSelect": "下方输入数值所用的惯例——Bruker（Orienta 自身）、EDAX/TSL 或 Oxford。",
     "pcXInput": "活动文件的花样中心 PCx（相对探测器的分数，0–1）。",
     "pcYInput": "活动文件的花样中心 PCy（相对探测器的分数，0–1）。",
     "pcZInput": "活动文件的花样中心 PCz／探测器距离（相对探测器的分数，0–1）。",
@@ -295,5 +310,48 @@
     "openRefinement": "在精修中打开此文件（读取源文件旁边的 _multiphase.h5 检查点）。",
     "openAnalysis": "在分析中打开此文件（加载 .ang/.ctf/轻量 .h5 导出）。",
     "openPhaseMap": "在相分布图中打开此文件（加载 .ang/.ctf/轻量 .h5 导出）。"
+  },
+  "formats": {
+    "hexResampled": "六方扫描的 .ctf 和方形 .ang 会被重采样到方形网格。"
+  },
+  "exports": {
+    "title": "已写出的文件",
+    "gridHex": "网格：六方网格",
+    "gridSquare": "网格：方形网格",
+    "missing": "未写出（{{format}}）：{{reason}}",
+    "formats": {
+      "h5_light": "轻量 .h5",
+      "h5_rich": "完整 .h5",
+      "ang": ".ang",
+      "ctf": ".ctf",
+      "ang_square": "重采样到方形网格的 .ang",
+      "ang_ctf": ".ang / .ctf",
+      "export": "此扫描的所有文件"
+    },
+    "notes": {
+      "resampledFromHex": "已从六方扫描按最近邻法重采样到方形网格，步长 {{step}} µm（源点 {{sourcePoints}}，写出点 {{written}}，未使用的源点 {{unused}}）；未做任何插值。",
+      "rowOffsetAssumedRight": "行偏移的方向是一个假设（没有文件说明）：奇数行放在偶数行右侧半个步长处。",
+      "rowOffsetAssumedLeft": "行偏移的方向是一个假设（没有文件说明）：奇数行放在偶数行左侧半个步长处。",
+      "noSquareAngForSquareScan": "未写出重采样到方形网格的 .ang：此扫描本来就是方形网格。",
+      "edsNotCopied": "轻量 .h5 不含 EDS 数据：此扫描的花样保存在其他文件格式中，而该格式不含 EDS 数据。",
+      "cleanupFailed": "相图清理失败，因此文件中保存的是清理之前的相图。技术细节：{{detail}}",
+      "autoAssignmentFailed": "无法为每个点分配最佳相，因此此扫描的文件可能不含您预期的相分配。技术细节：{{detail}}"
+    },
+    "errors": {
+      "fileNotWritten": "文件未写出；原因见程序日志。",
+      "writerFailed": "无法写出该文件。技术细节：{{detail}}",
+      "exportFailed": "导出因错误而中止。技术细节：{{detail}}",
+      "richNeedsHdf5Source": "完整 .h5 需要 HDF5 格式的源文件；此扫描的花样保存在其他文件格式中。请使用轻量 .h5。"
+    }
+  },
+  "errors": {
+    "edaxHexUpUnsupported": "没有元数据的六方网格扫描：请将其 APEX .h5 放在同一文件夹中。",
+    "apexNeedsMeasurement": "这是元数据文件；请添加它对应的 .up1/.up2 文件。",
+    "emsphinxSourceRefused": "EMSphInx (CPU) 无法标定此文件；请使用 GPU、Hough 或 Dictionary。",
+    "checkpointPairingChanged": "检查点来自其他元数据或其他网格；请删除它。",
+    "hexFrameAverageRefused": "无法对此六方网格扫描进行帧平均：请使用小于上限的奇数窗口。",
+    "checkpointUnreadable": "无法读取此文件的检查点；请将其删除。",
+    "pc_missing": "此文件不含花样中心 (PC)；kikuchipy 的占位值会得出错误的取向。请在 PC 精修页面校准 PC，或将含 PC 的 .osc／元数据文件放在扫描文件旁，然后重新开始。",
+    "detector_shape_mismatch": "为此文件保存的校准对应的探测器与其花样不同（花样尺寸不同）：它属于另一个文件。请重新加载该文件或设置其 PC，然后重新开始。"
   }
 }

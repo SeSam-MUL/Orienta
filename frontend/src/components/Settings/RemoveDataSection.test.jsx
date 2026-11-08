@@ -117,10 +117,10 @@ describe('the way SettingsPage actually renders it', () => {
       delete globalThis.process;
       window.electronAPI.platform = 'darwin';
       render(<RemoveDataSection />);
-      await screen.findByText('settings:removeData.title');
     } finally {
-      globalThis.process = saved;
+      globalThis.process = saved;     // before the first await: Vitest's own ticks need it
     }
+    await screen.findByText('settings:removeData.title');
   });
 
   it('still renders nothing on Windows when asked the same way', async () => {

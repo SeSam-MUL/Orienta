@@ -29,6 +29,7 @@ const {
   logShellLine,
 } = require('./project_root');
 const { releasesPageUrl, setOrientaHome, homePointerFile } = require('./update_endpoints');
+const homeChoice = require('./home_choice');
 const startLanguage = require('./start_language');
 const { t, shellLanguage, preferredLocale } = require('./strings');
 const { createWaitingPage } = require('./waiting_page');
@@ -87,8 +88,34 @@ const projectRoot = path.resolve(__dirname, '..');
  * is wrong.
  */
 let homeStorageError = '';
+
+/**
+ * A recorded data folder that is gone, settled BEFORE anything reads the home.
+ *
+ * usableCacheDir() below creates `<home>/electron` recursively, so a pointer to
+ * a deleted folder silently re-created the whole chain on the next start -- the
+ * reason "deleting the directory and reinstalling does not help" for a user
+ * whose folder had nested (…/Orienta/Orienta/Orienta). Deleted while its drive
+ * is present: back to the default folder, pointer file renamed to
+ * home.txt.previous, the wizard says so. Drive absent: the pointer stays, because it is the only record of
+ * where the library is, and the wizard explains instead.
+ */
+// Kept for the shell log: this runs at module load, before any log file is open,
+// and a packaged app has no console -- a throwing check was invisible.
+let homeCheckError = null;
+const homeNotice = homeChoice.settleHomeAtStartup({
+  isPackaged: app.isPackaged,
+  onError: (err) => { homeCheckError = err; console.error('Could not check the data folder pointer:', err.message); },
+});
+
 function usableCacheDir() {
   if (!app.isPackaged) return path.join(projectRoot, '.cache', 'electron');
+  if (homeChoice.mustNotCreateHome(homeNotice)) {
+    // Not proven gone: nothing is created at the recorded folder. mkdir -p would
+    // rebuild a deleted chain, or write into an unmounted mount point.
+    homeStorageError = 'the recorded data folder could not be checked or kept';
+    return null;
+  }
   try {
     const dir = path.join(orientaHome(), 'electron');
     fs.mkdirSync(dir, { recursive: true });
@@ -1244,7 +1271,10 @@ ipcMain.handle('app:captureScreen', async () => {
  *
  * Windows asks these two questions while uninstalling; macOS and Linux have
  * nowhere to ask them, so the application does. The rules live in
- * electron/remove_data.js and are the NSIS uninstaller's, deliberately.
+ * electron/remove_data.js. They match the NSIS uninstaller's for ONE recognised
+ * data folder (recognition and the name list are shared through
+ * electron/leftovers.js); the chain, default-folder and pointer clean-up the
+ * uninstaller does on top is not done here -- see the header of that file.
  *
  * `plan` and `remove` are separate calls so the dialog can state what will
  * happen -- and so a refusal ("this folder is not recognisably Orienta's")
@@ -1433,6 +1463,7 @@ handleSetup('setup:context', () => ({
   message: setupContext.message,
   locale: shellLanguage(shellLocale()),
   home: orientaHome(),
+  homeNotice,
   releasesUrl: releasesPageUrl(),
   version: app.getVersion(),
 }));
@@ -1463,10 +1494,10 @@ handleSetup('setup:probe', async () => {
     return {
       gpu: { present: false }, recommendation: 'cpu', blocked: true,
       freeBytes: 0, freeKnown: false,
-      reason: `Orienta cannot write to ${home} (${homeStorageError}). `
-        + 'This is usually a drive that is not connected, or a user folder kept '
-        + 'on a network share. Set ORIENTA_HOME to a folder on this computer '
-        + 'and start Orienta again.',
+      // The recorded folder's drive is not there: said in its own sentence
+      // (what to connect, which file to delete), not as a disk measurement.
+      homeUnreachable: homeChoice.unreachableForProbe(homeNotice),
+      reason: homeChoice.unusableHomeReason({ home, error: homeStorageError, notice: homeNotice }),
       gpuBytesNeeded: GPU_BYTES_NEEDED, cpuBytesNeeded: CPU_BYTES_NEEDED,
     };
   }
@@ -1583,14 +1614,29 @@ handleSetup('setup:pickPackage', async () => {
 handleSetup('setup:pickHome', async () => {
   const answer = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'createDirectory'],
-    defaultPath: orientaHome(),
+    // The folder that CONTAINS the current home. The dialog selects the folder
+    // it opens in, so opening inside …\Orienta made the natural click -- OK --
+    // pick the current home, to which another "Orienta" was then appended:
+    // …\Orienta\Orienta\Orienta after three clicks.
+    defaultPath: homeChoice.pickerStart(orientaHome()),
   });
   if (answer.canceled || !answer.filePaths.length) return null;
-  // Orienta's own subfolder, never the bare folder the user picked: someone
-  // who chooses D:\ must not have python/, runtime/ and logs/ scattered
-  // across the root of their drive — and an uninstall has to know what is
-  // ours to remove.
-  const chosen = path.join(answer.filePaths[0], 'Orienta');
+  // Decided BEFORE anything is written. Orienta's own subfolder is added to
+  // the pick only where it is not already Orienta's; an installation found
+  // below the pick is used as it is; and a folder that cannot be used (other
+  // files in it) is refused while the pointer still names the working one --
+  // writing the pointer first orphaned a real installation behind the message.
+  const decision = homeChoice.decidePick(answer.filePaths[0], { current: orientaHome() });
+  const chosen = decision.home;
+  if (decision.refusal) {
+    logShellLine(`Not using ${chosen}: ${decision.refusal.error}`);
+    return { dir: chosen, code: decision.refusal.code, values: decision.refusal.values,
+      error: decision.refusal.error };
+  }
+  if (decision.unchanged) {
+    logShellLine(`Data folder kept at ${chosen}`);
+    return { dir: chosen, kept: true, restartNeeded: false };
+  }
   try {
     // The application's install directory is removed wholesale by its own
     // uninstaller, so data inside it would go with it.
@@ -1601,7 +1647,7 @@ handleSetup('setup:pickHome', async () => {
     // Chromium's own storage was pointed at the OLD home at startup and
     // cannot be moved under a running process, so the choice takes effect on
     // the next launch. Saying so is better than pretending otherwise.
-    return { dir: chosen, restartNeeded: Boolean(cacheDir) };
+    return { dir: chosen, adopted: decision.adopted, restartNeeded: Boolean(cacheDir) };
   } catch (err) {
     logShellLine(`Could not use ${chosen}: ${err.message}`);
     return { dir: chosen, error: String(err.message || err) };
@@ -1798,6 +1844,9 @@ app.whenReady().then(async () => {
     console.error('Could not open the shell log:', err.message);
   }
   logShellLine('Starting Orienta...');
+  for (const line of homeChoice.startupLogLines({
+    notice: homeNotice, checkError: homeCheckError, home: orientaHome(),
+  })) logShellLine(line);
 
   // A second launch must not race the first. Without this, double-clicking the
   // icon while Orienta is already running starts a second instance whose

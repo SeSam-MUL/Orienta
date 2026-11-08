@@ -28,7 +28,8 @@
     "notLoaded": "— 未読み込み —",
     "openPcRefinement": "PC 精密化を開く",
     "openPcRefinementTip": "パターン中心の精密化ウィンドウを開きます",
-    "pcLine": "PC: ({{x}}, {{y}}, {{z}})"
+    "pcLine": "PC: ({{x}}, {{y}}, {{z}})",
+    "mapMean": "（PCマップの平均）"
   },
   "method": {
     "label": "手法:",
@@ -273,6 +274,8 @@
     "exportTip": "指数付け結果をエクスポート（.ang/.ctf = 結晶方位のみ、.h5 = EDS + 検出器を含む全データ）",
     "exportH5": ".h5（全データ + EDS + 検出器）",
     "exportAng": ".ang（EDAX TSL）",
+    "exportAngSquare": ".ang（正方格子、再サンプリング）",
+    "exportCtf": ".ctf（正方格子、再サンプリング）",
     "patternMatches": "パターン一致",
     "patternMatchesTip": "Dictionary 指数付け結果の NCC スコアヒートマップとパターン比較を表示",
     "refine": "精密化",
@@ -396,6 +399,8 @@
     "fileBrowseRequiresElectron": "ファイル参照には Electron デスクトップモードが必要です。",
     "exporting": ".{{fmt}} としてエクスポート中...",
     "exportComplete": "エクスポート完了: indexing_result.{{fmt}}",
+    "exportResampled": "エクスポート完了: {{name}}。{{rows}} × {{cols}} 点の正方格子に再サンプリングしました。各点は最も近い測定点の値を取ります。",
+    "exportResampledPlain": "エクスポート完了: {{name}}。正方格子に再サンプリングしました。各点は最も近い測定点の値を取ります。",
     "exportFailed": "エクスポート失敗: {{error}}",
     "sentToAnalysis": "解析へ送信: {{phases}} 相、形状 {{shape}}",
     "analysisLoadFailed": "解析への読み込み失敗: {{detail}}",
@@ -404,6 +409,7 @@
     "gpuReleasedResidual": " · バックエンドの GPU メモリは解放済み（Torch は現在 {{torch}} GB）。残り {{used}} GB は共有 GPU 上の他プログラム（Windows デスクトップ/dwm、ブラウザ、Aztec …）＋ 約 1-2 GB の CUDA コンテキストが使用中で、このボタンでは解放できません",
     "gpuReleasedEvicted": " — キャッシュ済み相テストバックエンド {{count}} 件を削除",
     "gpuReleasedPhases": " — キャッシュ済みレンダー相 {{count}} 件をクリア",
+    "gpuReleasedWorker": " — 待機中の計算プロセスを終了",
     "gpuReleaseNoCuda": "GPU 解放: CUDA デバイスなし — 何もしません",
     "cachesReleased": "キャッシュを解放しました: 相テスト用バックエンド {{backends}} 件、レンダリング相 {{phases}} 件、テーブル {{tables}} 件",
     "gpuReleaseFailed": "GPU 解放に失敗: {{error}}",
@@ -572,6 +578,8 @@
     "batchComplete": "バッチ完了",
     "succeeded": "{{count}} 件成功",
     "failed": "{{count}} 件失敗",
+    "exportNotWritten": "指数付けは完了しましたが、エクスポートファイルは書き込まれませんでした: {{reason}}",
+    "exportsMissing": "{{count}} 件はエクスポートファイルなし",
     "stopBatch": "バッチを停止",
     "startBatch": "バッチを開始（{{count}} ファイル）",
     "close": "閉じる",
@@ -790,6 +798,15 @@
     "unavailable": "このファイルの反射面コストを取得できません。",
     "measuring": "反射面コストを測定中..."
   },
+  "houghRefusal": {
+    "title": "Hough インデキシングは開始されませんでした。反射面リストが、このコンピューターで使えるメモリより多くを必要とします。メモリ不足になったのではなく、確保する前に構築が拒否されました。",
+    "phase": "{{name}}: 反射面 {{rows}} 行には {{size}} のバンドトリプレットライブラリが必要で、予算は {{budget}} です。",
+    "own": "この相には独自のファミリー選択があります。{{card}} カードでそこからファミリーを外すか、既定に戻してください。",
+    "other": "それ以外は、メモリを空ける、{{card}} カードでファミリーを手動で編集する、またはこの相を Dictionary か Spherical インデキシングで処理してください。",
+    "lowSymmetry": "この相(単斜晶または三斜晶)には、より短い標準リストは提示されません。そのような相では、リストを短くすると方位が測定上明らかに失われます。一度に指数付けする相を減らす、メモリを空ける、Spherical または Dictionary 指数付けを使う、あるいは方位が失われる可能性があることを承知の上で、{{card}} カードで手動でリストを短くしてください。",
+    "runAgain": "もう一度実行してください。",
+    "log": "Hough インデキシングは開始されませんでした。反射面リストが、このコンピューターで使えるメモリより多くを必要とします (上の通知を参照)。"
+  },
   "reflectorFamilies": {
     "title": "反射面ファミリー",
     "summaryDefault": "{{used}} 件使用 - 既定のリスト",
@@ -834,6 +851,11 @@
     "cost": "ライブラリのメモリ: {{size}}",
     "costFits": "収まります",
     "costTooBig": "現在空いているメモリに収まりません",
+    "fitButton": "収まる最大のリストを使う ({{rows}} 行)",
+    "fitTip": "この相の既定リストを、このコンピューターのメモリで構築できる最大の {{rows}} 行 (強い順) に制限します。リストはどのコンピューターでも同じで、行数だけが異なります。この相に保存され、結果にも記録されます。",
+    "fitDone": "既定リストの強い順 {{rows}} 行を使用します (ライブラリ {{size}})。",
+    "fitNone": "現在空いているメモリに収まる、40 行以上かつ 4 ファミリー以上のリストはありません。ファミリーを手動で編集するか、この相を Dictionary または Spherical インデキシングで処理してください。",
+    "fitNoneLowSym": "単斜晶または三斜晶の相には、より短いリストは提示されません。そのような相では、リストを短くすると方位が測定上明らかに失われます。一度に指数付けする相を減らす、メモリを空ける、Spherical または Dictionary 指数付けを使う、あるいは方位が失われる可能性があることを承知の上で、下で手動でリストを短くしてください。",
     "costMeasuring": "メモリを測定中...",
     "costUnavailable": "メモリ量を取得できません。",
     "costTiny": "ごくわずか",
@@ -844,6 +866,10 @@
     "addedParallel": "{{label}} を追加しました。{{other}} と同じ極のため、PyEBSDIndex は 2 つのうち先のものだけを使います。",
     "errors": {
       "generic": "反射面ファミリーを変更できませんでした。",
+      "no_fit": "現在空いているメモリに収まる、40 行以上かつ 4 ファミリー以上のリストはありません。ファミリーを手動で編集するか、この相を Dictionary または Spherical インデキシングで処理してください。",
+      "low_symmetry": "単斜晶または三斜晶の相には、より短いリストは提示されません。そのような相では、リストを短くすると方位が測定上明らかに失われます。一度に指数付けする相を減らす、メモリを空ける、Spherical または Dictionary 指数付けを使う、あるいは方位が失われる可能性があることを承知の上で、手動でリストを短くしてください。",
+      "already_fits": "既定リストはすでにメモリに収まります。",
+      "own_selection": "この相には独自の選択があります。まずそこからファミリーを外すか、既定に戻してください。",
       "bad_hkl": "整数 3 つ (hkl) を入力してください。六方晶では 4 つ (hkil) も使えます。",
       "zero_vector": "(000) は反射ではありません。",
       "forbidden": "{{hkl}} はこの結晶の反射ではありません (格子の心によって禁制、または構造因子がゼロ)。",
@@ -868,5 +894,17 @@
     "showWeaker": "弱いファミリーも表示",
     "hideWeaker": "弱いファミリーを隠す",
     "tipWeaker": "既定のしきい値より弱いファミリーや 1 Å より細かいファミリーも、面間隔 0.7 Å まで一覧に加えます。これは別の計算で、大きな単位格子では時間がかかります。"
+  },
+  "caveats": {
+    "title": "この結果についての注意",
+    "houghTrigonalSetting_one": "相 {{phases}}：該当する空間群では、PyEBSDIndex はもう一方の三方晶設定の 2 回軸を使用しており、Hough では c 軸まわりに 60° 異なる方位を区別できないことがよくあります。Spherical 指数付けまたは Dictionary 指数付けが役立つ場合があります。",
+    "houghTrigonalSetting_other": "相 {{phases}}：該当する空間群では、PyEBSDIndex はもう一方の三方晶設定の 2 回軸を使用しており、Hough では c 軸まわりに 60° 異なる方位を区別できないことがよくあります。Spherical 指数付けまたは Dictionary 指数付けが役立つ場合があります。",
+    "houghHexagonalLaue_one": "相 {{phases}}：Hough は、真の方位に対して、六方晶の単位格子の対称操作ではあっても結晶そのものの対称操作ではない回転（結晶類によって、底面内の軸まわりの 180°、または c 軸まわりの 60°）で関係づけられる方位を返すことがよくあります。Spherical 指数付けまたは Dictionary 指数付けが役立つ場合があります。",
+    "houghHexagonalLaue_other": "相 {{phases}}：Hough は、真の方位に対して、六方晶の単位格子の対称操作ではあっても結晶そのものの対称操作ではない回転（結晶類によって、底面内の軸まわりの 180°、または c 軸まわりの 60°）で関係づけられる方位を返すことがよくあります。Spherical 指数付けまたは Dictionary 指数付けが役立つ場合があります。",
+    "houghHexagonalVariants_one": "相 {{phases}}：Hough では、六方晶の単位格子の対称操作ではあっても結晶そのものの対称操作ではない回転（c 軸まわりの 60°）で互いに移り合う方位を、常に区別できるとは限りません。重要な結果には、Spherical 指数付けまたは Dictionary 指数付けが役立つ場合があります。",
+    "houghHexagonalVariants_other": "相 {{phases}}：Hough では、六方晶の単位格子の対称操作ではあっても結晶そのものの対称操作ではない回転（c 軸まわりの 60°）で互いに移り合う方位を、常に区別できるとは限りません。重要な結果には、Spherical 指数付けまたは Dictionary 指数付けが役立つ場合があります。"
+  },
+  "errors": {
+    "pc_missing": "このファイルにはパターンセンター (PC) がありません。kikuchipy の仮の値では誤った方位になります。PC リファインメントで PC を較正するか、PC を含む .osc／メタデータファイルをスキャンの隣に置いてから、もう一度開始してください。"
   }
 }

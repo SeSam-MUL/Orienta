@@ -1019,7 +1019,8 @@ async function assertSha256(dest, expected, filename) {
 
 module.exports.redirectVerdict = redirectVerdict;
 module.exports.compareTagsDesc = compareTagsDesc;
-module.exports.foreignEntries = foreignEntries;
+module.exports.homeRefusal = homeRefusal;
+module.exports.holdsOrientaData = holdsOrientaData;
 module.exports.localPackage = localPackage;
 module.exports.localPackageSearch = localPackageSearch;
 module.exports.resolveRelease = resolveRelease;
@@ -1157,13 +1158,32 @@ const CODES = {
   // what the wizard's vocabulary is checked against, and a code with no
   // sentence is a user reading a raw identifier.
   homeUnusable: 'homeUnusable',
+  // Also raised by the shell, from `setup:probe`: the folder the user chose
+  // earlier is on a drive that is not connected, so its pointer is kept and the
+  // wizard says which folder and which file.
+  homeUnreachable: 'homeUnreachable',
+  // ... the same, when the pointer's old folder is gone but the pointer could not
+  // be updated (retire), or the pointer file itself could not be read.
+  homeRetireFailed: 'homeRetireFailed',
+  homePointerUnreadable: 'homePointerUnreadable',
+  // ... and when the check itself failed (an exception): nothing is guessed.
+  homeCheckFailed: 'homeCheckFailed',
   homeNotEmpty: 'homeNotEmpty',
+  // The same refusal for the DEFAULT folder, which the user never chose: the
+  // sentence must not say "the chosen data folder" about a folder nobody chose.
+  homeNotEmptyDefault: 'homeNotEmptyDefault',
+  // ... and when what is in the way may be an earlier Orienta or a crystal
+  // library: the sentence must never suggest deleting it.
+  homeHoldsData: 'homeHoldsData',
   network: 'network',
   notFound: 'notFound',
   rateLimited: 'rateLimited',
   checksum: 'checksum',
   timeout: 'timeout',
   inUse: 'inUse',
+  // Not allowed rather than in use: a read-only folder, a permission, or an
+  // operating-system protection (Controlled Folder Access, macOS privacy).
+  noAccess: 'noAccess',
   package: 'package',
   pip: 'pip',
   cuda: 'cudaUnavailable',
@@ -1176,6 +1196,11 @@ const CODES = {
 
 /** Classify a thrown error into one of the codes above. */
 function classify(err, step) {
+  return classifyOn(err, step, process.platform);
+}
+
+/** `classify` for a named platform: EPERM means different things on each. */
+function classifyOn(err, step, platformName) {
   if (err && err.code === 'checksum') return CODES.checksum;
   if (err && err.code === 'stalled') return CODES.timeout;
   if (err && err.code === 'captive') return CODES.network;
@@ -1191,6 +1216,14 @@ function classify(err, step) {
   // unambiguous, 403 is not.
   if (status === 429) return CODES.rateLimited;
   if (status === 403) return CODES.network;
+  // A locked file: Orienta itself, an orphaned backend python.exe that outlived
+  // a closed window, or an antivirus scan. All three are answered by the same
+  // instruction, and none of them is "something unexpected".
+  // EBUSY is a file in use. EPERM is that on Windows (a locked file, an
+  // antivirus scan) but a refusal everywhere else; EACCES is a refusal.
+  if (err && err.code === 'EBUSY') return CODES.inUse;
+  if (err && err.code === 'EPERM') return platformName === 'win32' ? CODES.inUse : CODES.noAccess;
+  if (err && err.code === 'EACCES') return CODES.noAccess;
   const message = String((err && err.message) || '');
   // Disk-full has its own message, and it is the one failure a user can act on
   // immediately. Landing it on "unexpected" wastes the only actionable error
@@ -1230,38 +1263,91 @@ function logSetupLine(home, line) {
 /**
  * Entries in `home` that Orienta did not put there.
  *
- * Everything on this list is something the app or the setup creates — note
- * `electron` and `logs`, which the shell writes at startup, BEFORE setup ever
- * runs, so a fresh home is never quite empty. Anything else means the folder
- * is somebody's, and setting up in it would hand that somebody's files to the
- * uninstaller.
+ * Decided by SHAPE, not by name (electron/leftovers.js): `logs`, `pending`,
+ * `python` and `runtime` are everyday folder names, and a user's own
+ * `D:\Work\Orienta` with a `logs\` of measurements in it must not be taken for
+ * Orienta's data folder -- the uninstaller would later delete `logs\` by name.
+ * In a folder that is recognisably Orienta's (the marker) every name Orienta
+ * creates is accepted, so a repair or resume run is not refused.
  */
-const OURS = new Set([
-  'electron', 'logs', 'setup-tmp', 'python', 'runtime', 'pending', 'pending.json',
-  '.orienta-home', '.python_path', '.install_mode', '.install_incomplete',
-  // What the packages were last brought to, the marker of an update in flight,
-  // and the last failure to bring them there (package_sync.js). Missing here, a
-  // repair after an interrupted update would refuse with "this folder contains
-  // files that are not Orienta's", naming files the app wrote itself.
-  '.packages_lock.json', '.packages_sync.json', '.packages_sync_failed.json',
-  // macOS writes these two itself, in step 2 and step 3. Without them the
-  // SECOND run of the setup — a retry after any failure, the "install the
-  // processor version instead" button, or repair mode — refuses with "this
-  // folder already contains files that are not Orienta's (envs, micromamba)",
-  // blaming the user for files the installer wrote a minute earlier, with no
-  // way out. Taken from platform.js so the list cannot drift from the paths.
-  platform.CONDA_ROOT_DIR, platform.CONDA_ENVS_DIR,
-]);
-function foreignEntries(home, entries = null) {
-  let names = entries;
-  if (!names) {
-    try {
-      names = fs.readdirSync(home);
-    } catch {
-      return [];   // unreadable: the steps below will say so in their own words
+const { foreignEntries, isEmptyDirTree, sameFolder: samePath } = require('../leftovers.js');
+
+/**
+ * Could anything among `names` (entries of `home`) be what must never be
+ * advised away: a crystal library (a directory called Database), a runtime,
+ * Orienta's own marker -- an earlier installation, such as the one a 0.4.6
+ * user has inside a chain Orienta/Orienta?
+ *
+ * The answer is "yes" whenever the look cannot rule it out: past the depth
+ * limits, a non-empty folder is assumed to hold data; a link (of any name) is
+ * never followed, and what is behind it is assumed to be somebody's; and a
+ * tree too big to judge counts as data. The sentence for a "no" tells the user
+ * to remove the files, so a wrong "no" destroys a library and a wrong "yes"
+ * costs one extra look.
+ */
+function holdsOrientaData(home, names) {
+  const budget = { left: 400 };
+  // Ordinary folders are looked into four levels; a chain of folders named
+  // Orienta -- what repeated "change..." clicks build, one level per click --
+  // as far as the folder chooser follows it (16), because the installation
+  // sits at its END and any fixed depth is one click too short.
+  const looks = (dir, depth, chain) => {
+    let list;
+    try { list = fs.readdirSync(dir); } catch { return false; }
+    for (const name of list) {
+      if (--budget.left < 0) return true;
+      const lower = name.toLowerCase();
+      if (lower === 'database' || lower === 'runtime' || lower === '.orienta-home') return true;
+      let st = null;
+      try { st = fs.lstatSync(path.join(dir, name)); } catch { continue; }   // gone meanwhile
+      if (st.isSymbolicLink()) return true;
+      if (!st.isDirectory()) continue;
+      const child = path.join(dir, name);
+      const isChain = lower === 'orienta';
+      if (isChain ? chain >= 16 : depth >= 4) {
+        // At the limit: not looked into, so not ruled out.
+        let inside = [];
+        try { inside = fs.readdirSync(child); } catch { return true; }
+        if (inside.length) return true;
+        continue;
+      }
+      if (looks(child, isChain ? depth : depth + 1, isChain ? chain + 1 : chain)) return true;
     }
-  }
-  return names.filter((n) => !OURS.has(n) && !/^python\.old-/.test(n));
+    return false;
+  };
+  return names.some((name) => {
+    const lower = name.toLowerCase();
+    if (lower === 'database') return true;
+    const full = path.join(home, name);
+    let st = null;
+    try { st = fs.lstatSync(full); } catch { return false; }
+    if (st.isSymbolicLink()) return true;
+    return looks(full, 1, lower === 'orienta' ? 1 : 0);
+  });
+}
+
+/**
+ * Why `home` cannot be set up in, or null if it can.
+ *
+ * ONE definition for both callers: the setup refuses with it, and the wizard's
+ * "change..." button asks BEFORE it writes the pointer -- a refusal after the
+ * pointer had been rewritten left a working installation orphaned.
+ */
+function homeRefusal(home) {
+  const foreign = foreignEntries(home);
+  if (!foreign.length) return null;
+  // Which folder, and which entries, in the sentence the user reads -- not in
+  // the small print under it. The default folder is named as such: the user
+  // never chose it, and "the chosen data folder" read as an accusation.
+  const isDefault = samePath(home, platform.defaultDataFolder());
+  const shown = foreign.slice(0, 5).join(', ') + (foreign.length > 5 ? ', …' : '');
+  let code = isDefault ? CODES.homeNotEmptyDefault : CODES.homeNotEmpty;
+  if (holdsOrientaData(home, foreign)) code = CODES.homeHoldsData;
+  return {
+    code,
+    values: { dir: home, entries: shown },
+    error: `${home} already contains files that are not Orienta's (${shown}).`,
+  };
 }
 
 /** Record what the run was doing, for a launch that happens after it dies.
@@ -1442,15 +1528,8 @@ async function runSetupInner(options, onProgress) {
     // Orienta's", and it would then remove `python\`, `logs\`, `runtime\*`
     // from — say — an ORIENTA_HOME=D:\Work that happened to have a folder of
     // those names.
-    const foreign = foreignEntries(home);
-    if (foreign.length) {
-      return {
-        ok: false,
-        code: CODES.homeNotEmpty,
-        error: `${home} already contains files that are not Orienta's `
-          + `(${foreign.slice(0, 5).join(', ')}${foreign.length > 5 ? ', …' : ''}).`,
-      };
-    }
+    const refusal = homeRefusal(home);
+    if (refusal) return { ok: false, ...refusal };
     // The one thing the UNINSTALLER trusts to say "this folder is Orienta's
     // data folder". Before it, recognition rested on files a developer
     // checkout can also have (.python_path), so an ORIENTA_HOME pointing at a
@@ -2052,3 +2131,6 @@ module.exports.recordPackagesLock = recordPackagesLock;
 module.exports.runSetup = runSetup;
 module.exports.CODES = CODES;
 module.exports.classify = classify;
+module.exports.classifyOn = classifyOn;
+module.exports.foreignEntries = foreignEntries;
+module.exports.isEmptyDirTree = isEmptyDirTree;

@@ -48,6 +48,8 @@ _PATTERN_CACHE_SIZE = 500  # Cache up to 500 patterns
 _current_file = None
 _current_extractor = None
 _current_path: Optional[str] = None
+# measurement -> (the h5py.File it was made on, its extractor); see get_variant_extractor
+_variant_extractors: dict = {}
 
 
 def get_format_type(h5file) -> str:
@@ -92,17 +94,107 @@ def open_file(path: str):
     logger.info("Opened HDF5 file: %s (format: %s)", path, fmt)
 
     # Restore any phase-map classification the user produced for this
-    # file in a previous session. Best-effort — a corrupted sidecar
+    # file (and the measurement the viewer holds) in a previous session.
+    # Best-effort — a corrupted sidecar
     # just leaves the store empty (the user can re-run auto-classify),
     # it must NEVER fail the file open.
     try:
+        global _phase_map_ctx
         from backend.api.services.phase_map_store import get_phase_map_store
-        if get_phase_map_store().load_from_disk(path):
+        measurement = active_measurement()
+        _phase_map_ctx = (_context_path(path), measurement)
+        if get_phase_map_store().load_from_disk(path, measurement):
             logger.info("Phase-map sidecar restored for %s", path)
     except Exception:
         logger.debug("phase_map_store.load_from_disk() failed during open_file", exc_info=True)
 
     return extractor, fmt
+
+
+def active_measurement() -> Optional[str]:
+    """The measurement of the open file the EBSD viewer's active dataset reads (None: the file's
+    default measurement, the slot the session itself reads, or nothing is open).
+
+    What derived per-measurement state is keyed on: a phase map made of one measurement's EDS
+    chemistry is not the phase map of another."""
+    with _lock:
+        extractor, path = _current_extractor, _current_path
+    if extractor is None or not path:
+        return None
+    try:
+        from backend.api.routes.ebsd_viewer import active_variant
+    except ImportError:
+        return None
+    variant = active_variant(path)
+    measurement = None if variant is None else variant.measurement
+    if measurement is None or measurement == extractor.root_key:
+        return None
+    return str(measurement)
+
+
+#: (file, measurement) the phase-map store was last matched to, by ``open_file`` or by
+#: :func:`sync_phase_map_store`. It tells "the store is empty because the user cleared it" from "the store
+#: is empty because it was never matched to what is loaded"; only the second reads a sidecar.
+_phase_map_ctx: Optional[tuple] = None
+
+
+def _phase_map_ctx_reset() -> None:
+    global _phase_map_ctx
+    _phase_map_ctx = None
+
+
+def _context_path(path) -> str:
+    import os
+    try:
+        return os.path.normcase(os.path.realpath(str(path)))
+    except (OSError, ValueError):
+        return str(path)
+
+
+def sync_phase_map_store() -> bool:
+    """Make the phase-map store hold the map of the file and the measurement the active dataset reads.
+
+    The store keeps one map. Loading another measurement of the SAME file does not reopen the session
+    (the path is unchanged), so the map of the measurement that was just left stayed on screen, was
+    paired with the new measurement's at-% maps by the export, and a first open of the new measurement
+    restored the sidecar the old one had left. Called after every load; a no-op when the store already
+    holds the map for what is loaded. The map left behind is not lost: every edit is saved to the
+    sidecar of its own measurement, which is read again when the user comes back to it.
+
+    Returns True when the store was changed."""
+    path = get_current_path()
+    if not path:
+        return False
+    try:
+        from backend.api.routes import ebsd_viewer
+        from backend.api.services.phase_map_store import get_phase_map_store
+        from backend.api.services.variant_registry import same_file
+        viewer_path = ebsd_viewer._ebsd_file_path
+        if not viewer_path or not same_file(viewer_path, path):
+            return False            # the session was opened for something else than the viewer's file
+        global _phase_map_ctx
+        store = get_phase_map_store()
+        wanted = active_measurement()
+        held = store.file_path()
+        context = (_context_path(path), wanted)
+        if store.is_set():
+            if not held:
+                return False        # a map made without a file (nothing to compare): not ours to drop
+            if same_file(held, path) and store.measurement() == wanted:
+                _phase_map_ctx = context
+                return False
+        elif _phase_map_ctx == context:
+            # Nothing held, and the store was already matched to this very file and measurement: the
+            # user cleared the map on purpose ("start from scratch"); the sidecar is not read back.
+            return False
+        store.clear()
+        _phase_map_ctx = context
+        if store.load_from_disk(path, wanted):
+            logger.info("Phase-map sidecar restored for %s (measurement %s)", path, wanted or "default")
+        return True
+    except Exception:
+        logger.debug("phase-map store sync failed (ignored)", exc_info=True)
+        return False
 
 
 def get_extractor():
@@ -113,19 +205,56 @@ def get_extractor():
         return _current_extractor
 
 
+def get_variant_extractor():
+    """The session's extractor read as the MEASUREMENT the EBSD viewer's active dataset holds.
+
+    The session opens a file by path and its extractor reads the first slot that holds EBSD data.
+    A file can offer several measurements (groups ``/1``, ``/2``, ...) and the viewer holds one of
+    them: its EDS maps, electron images, Euler/Phase, headers and static backgrounds are that
+    measurement's, not the first one's. When the viewer's file is the open file and its dataset
+    names a measurement other than the session's slot, this returns an extractor on the SAME open
+    handle for that measurement (cached; the shared session itself is not touched, so the HDF5
+    viewer page, which opens files on its own, keeps what it opened). Otherwise it is
+    ``get_extractor()`` itself, the same object: a dataset loaded without a choice, or on the
+    default measurement, reads as it always did.
+    """
+    extractor = get_extractor()
+    try:
+        from backend.api.routes.ebsd_viewer import active_variant
+    except ImportError:
+        logger.debug("ebsd_viewer not importable — no loaded variant", exc_info=True)
+        return extractor
+    with _lock:
+        path, h5file = _current_path, _current_file
+    variant = active_variant(path) if path else None
+    measurement = None if variant is None else variant.measurement
+    if measurement is None or measurement == extractor.root_key:
+        return extractor
+    with _lock:
+        cached = _variant_extractors.get(measurement)
+        if cached is not None and cached[0] is h5file:
+            return cached[1]
+    from tools.h5_viewer_backend import H5OINADataExtractor
+    made = H5OINADataExtractor(h5file, extractor.format, measurement=measurement)
+    with _lock:
+        _variant_extractors[measurement] = (h5file, made)
+    return made
+
+
 def get_active_extractor():
     """The extractor as the ACTIVE DATASET sees it.
 
     If the active dataset is a crop, this is a ``CroppedExtractor`` view whose
     every grid-shaped read is cut to the crop window. Otherwise it is the very
     same object ``get_extractor()`` returns — the non-crop path is unchanged,
-    not merely equivalent.
+    not merely equivalent. (For a dataset loaded as another measurement of the
+    file it is that measurement's extractor, ``get_variant_extractor``.)
 
     Use this from anything that works on "the dataset the user is looking at".
     Use ``get_extractor()`` from anything that must show the FILE as it is —
     the h5 viewer, format probing, preflight checks.
     """
-    extractor = get_extractor()
+    extractor = get_variant_extractor()
 
     # Lazy import: ebsd_viewer imports services, so a module-level import here
     # would close a cycle. Same pattern as close_file's phase_map_store import.
@@ -239,6 +368,8 @@ def close_file():
             _current_extractor = None
             _current_path = None
         _pattern_cache.clear()
+        _variant_extractors.clear()
+        _phase_map_ctx_reset()
 
     # Drop any per-file derived state so it cannot leak into the next
     # file's session. Lazy-imported to keep the dependency one-way
@@ -266,3 +397,22 @@ def get_cached_pattern(index: int, pattern_type: str = "processed"):
         while len(_pattern_cache) > _PATTERN_CACHE_SIZE:
             _pattern_cache.popitem(last=False)
     return pattern
+
+
+def get_loaded_pattern(index: int, pattern_type: str = "processed"):
+    """The pattern at flat ``index`` of the file as the EBSD viewer's dataset holds it.
+
+    For a dataset loaded as a variant (measurement x pattern source) that is the variant's
+    measurement and its pattern source; ``pattern_type`` is then not a choice, the loaded source
+    decides (it is what the viewer shows and what an analysis has to look at). A dataset loaded
+    without a choice reads exactly as :func:`get_cached_pattern` does with ``pattern_type``."""
+    try:
+        from backend.api.routes.ebsd_viewer import active_variant
+    except ImportError:
+        logger.debug("ebsd_viewer not importable — no loaded variant", exc_info=True)
+        return get_cached_pattern(index, pattern_type)
+    variant = active_variant(get_current_path())
+    if variant is None:
+        return get_cached_pattern(index, pattern_type)
+    ext = get_variant_extractor()
+    return ext.get_pattern_at_index(index, "raw" if variant.pattern_source == "unprocessed" else "processed")

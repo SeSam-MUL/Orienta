@@ -90,17 +90,18 @@ describe('a source is shown or nothing is', () => {
 
   it('a phase with only a DOI shows the DOI', () => {
     const doiOnly = ALL.find((p) => p.doi && !p.reference);
-    expect(doiOnly, 'six phases are in this state').toBeTruthy();
+    expect(doiOnly, 'three phases are in this state').toBeTruthy();
     expect(kinds(identityParts(doiOnly))).toContain('doi');
   });
 
   it('a phase with BOTH shows both, not one instead of the other', () => {
     // This was `else if`, so the DOI was shown only where there was no
     // citation -- suppressing the link to the paper exactly where a paper
-    // exists. Four of the 36 phases in this library carry both, and for
-    // all four a reader wanting the source concluded the file had none.
+    // exists. Four of the 36 phases in this library carried both then, and
+    // for all four a reader wanting the source concluded the file had none.
+    // Seven now: three more cite their journal fields.
     const both = ALL.filter((p) => p.reference && p.doi);
-    expect(both.length, 'four phases are in this state').toBe(4);
+    expect(both.length, 'seven phases are in this state').toBe(7);
     for (const p of both) {
       const k = kinds(identityParts(p));
       expect(k).toContain('reference');

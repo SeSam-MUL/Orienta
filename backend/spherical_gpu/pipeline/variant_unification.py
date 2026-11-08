@@ -24,8 +24,7 @@ action), so intra-grain distortion survives (same math as grain-flip v2).
 
 Scoring is injected (``score_fn``) so the core stays pure and unit-testable;
 the wiring layers provide render-NCC scorers (pipeline: in-memory patterns;
-endpoint: lazy per-pixel fetch). See
-docs/superpowers/specs/2026-07-08-map-variant-unification-design.md.
+endpoint: lazy per-pixel fetch).
 """
 from __future__ import annotations
 
@@ -136,6 +135,10 @@ def class_reps_for_phase(point_group: str, lattice=None) -> np.ndarray:
 # Vectorised pairwise disorientation + supergroup grain segmentation
 # ---------------------------------------------------------------------------
 
+# Orientation pairs reduced per call in :func:`segment_supergroup_grains` (bounds the peak memory).
+_PAIR_BLOCK = 50_000
+
+
 def pair_orientation_angle_deg(qa: np.ndarray, qb: np.ndarray,
                                sym: np.ndarray) -> np.ndarray:
     """Element-wise smallest rotation angle (deg) between orientation pairs
@@ -145,6 +148,22 @@ def pair_orientation_angle_deg(qa: np.ndarray, qb: np.ndarray,
     m = _qmul(np.atleast_2d(qa), _qconj(np.atleast_2d(qb)))       # (N,4)
     w = np.abs(_qmul(sym[None, :, :], m[:, None, :])[..., 0]).max(axis=1)
     return np.degrees(2.0 * np.arccos(np.clip(w, 0.0, 1.0)))
+
+
+def _neighbour_fn(n_cols: int, topology=None):
+    """``flat -> iterable of flat indices`` that may be neighbours of ``flat``.
+
+    With a ``Topology`` (``scan_neighbours``) exactly its neighbours; without one the four of the index grid, as
+    this module always had them, including the out-of-range candidates (-1 or beyond the map) that every caller
+    already filters."""
+    if topology is not None:
+        return topology.neighbours
+
+    def four(f):
+        c = f % n_cols
+        return (f - n_cols, f + n_cols, f - 1 if c > 0 else -1, f + 1 if c < n_cols - 1 else -1)
+
+    return four
 
 
 class _UnionFind:
@@ -166,11 +185,15 @@ class _UnionFind:
 
 def segment_supergroup_grains(full_q, phase_full, n_rows: int, n_cols: int,
                               phase_id, point_group: str,
-                              threshold_deg: float = 5.0) -> np.ndarray:
+                              threshold_deg: float = 5.0, topology=None) -> np.ndarray:
     """Grain labels (n_rows*n_cols,) for one phase, segmented modulo the
     SUPERGROUP holohedry — variant-split grains come out as ONE grain, while a
     generically-rotated neighbour grain stays separate. -1 = not this phase /
     unindexed. Vectorised neighbour disorientations + union-find.
+
+    ``topology`` (``scan_neighbours.Topology``) says which points are neighbours;
+    ``None`` is the four neighbours of the index grid, as before. A hexagonal
+    scan passes its six-neighbour topology.
     """
     holo = pseudosym_holohedry(point_group) or point_group
     sym = _sym_quats(holo)
@@ -180,16 +203,28 @@ def segment_supergroup_grains(full_q, phase_full, n_rows: int, n_cols: int,
 
     uf = _UnionFind(n)
     idx = np.arange(n).reshape(n_rows, n_cols)
-    for axis_pairs in (
-        (idx[:, :-1].ravel(), idx[:, 1:].ravel()),   # horizontal neighbours
-        (idx[:-1, :].ravel(), idx[1:, :].ravel()),   # vertical neighbours
-    ):
-        a, b = axis_pairs
+    if topology is not None:
+        if (topology.n_rows, topology.n_cols) != (n_rows, n_cols):
+            raise ValueError(
+                f"the topology is for a {topology.n_rows} x {topology.n_cols} grid, "
+                f"but the map is {n_rows} x {n_cols}")
+        pair_sets = (topology.pairs(),)
+    else:
+        pair_sets = (
+            (idx[:, :-1].ravel(), idx[:, 1:].ravel()),   # horizontal neighbours
+            (idx[:-1, :].ravel(), idx[1:, :].ravel()),   # vertical neighbours
+        )
+    for a, b in pair_sets:
         ok = valid[a] & valid[b]
         a, b = a[ok], b[ok]
         if a.size == 0:
             continue
-        d = pair_orientation_angle_deg(q[a], q[b], sym)
+        # In blocks: the reduction holds (pairs x symmetry operations x 4) numbers at once, which for the
+        # six-neighbour pairs of a large scan is gigabytes.
+        d = np.empty(a.size, dtype=np.float64)
+        for start in range(0, a.size, _PAIR_BLOCK):
+            end = start + _PAIR_BLOCK
+            d[start:end] = pair_orientation_angle_deg(q[a[start:end]], q[b[start:end]], sym)
         for i, j in zip(a[d < threshold_deg], b[d < threshold_deg]):
             uf.union(int(i), int(j))
 
@@ -222,7 +257,11 @@ def class_label_pixels(q_pixels: np.ndarray, q_ref: np.ndarray,
 
 def _components(pix_flat: np.ndarray, cls: np.ndarray, n_cols: int):
     """4-connected components of same-class pixels. Returns a list of
-    (class_k, [flat indices]) sorted largest-first."""
+    (class_k, [flat indices]) sorted largest-first.
+
+    The four neighbours of the index grid on purpose, also on a hexagonal scan (they are true
+    neighbours there): the cluster-size threshold of :func:`plan_grain_units` was set on a square
+    lattice, and six neighbours would make a random 50/50 mix percolate (see :func:`unify_map`)."""
     cls_of = {int(f): int(c) for f, c in zip(pix_flat, cls)}
     seen: set[int] = set()
     comps = []
@@ -317,7 +356,7 @@ def nearest_representative(q_pixels: np.ndarray, q_target: np.ndarray,
     group — true for the holohedry coset (T is normal in O), FALSE for the
     icosahedral class reps of the cubic approximants (T = A4 is
     self-normalising in I = A5): ``C·S·q`` and ``C·q`` then differ by
-    ``C S C⁻¹ ∉ T`` — another five-fold variant. Measured on the ICAA20 crop:
+    ``C S C⁻¹ ∉ T`` — another five-fold variant. Measured on a cropped aluminium-alloy scan:
     53 of the 61 speckle pixels left inside the corrected grain were exactly
     that. So every operator is applied to the representative nearest to the
     reference the decision was made against.
@@ -378,17 +417,27 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
               rescue_max_px: int = 2,
               min_grain_px: int = 3,
               # No size cap on the render-verified adoption any more (was 128 px):
-              # on the ICAA20 crop Hough's second basin (71.7 deg) covered a
+              # on a cropped aluminium-alloy scan (not included in the repository) Hough's second basin (about 72 deg) covered a
               # 688-px blob inside a 2 935-px grain, and the cap left it wrong.
               # The guards that matter stay: a donor grain at least 3x bigger,
               # and adoption only on a CLEAR render-NCC margin (2026-09-09).
               adopt_max_px: int = 10_000_000,
-              progress=None):
+              progress=None, topology=None):
     """Unify pseudo-variant speckle for ONE phase across the whole map.
 
     ``score_fn(flat_indices (n,), quats (n,4)) -> (n,) float`` returns the
     render-NCC of each pixel's experimental pattern vs the SHT forward render
     at the given orientation (injected — see module docstring).
+
+    ``topology`` (``scan_neighbours.Topology``) says which pixels are neighbours in the
+    grain segmentation, in the contact census of the small-grain adoption and in the
+    orphan rescue; ``None`` is the four neighbours of the index grid, as before. The
+    speckle-or-twin policy (:func:`plan_grain_units`) keeps the four neighbours of the
+    index grid on purpose: they are true neighbours on a hexagonal scan too, and its
+    cluster-size threshold was set on a square lattice (counted over six neighbours a
+    random 50/50 mix of two classes percolates and would pass for coherent twin
+    domains). Its thresholds have not been measured against a real hexagonal Spherical
+    run.
 
     Returns ``(new_full_q, report)``; ``new_full_q`` is a modified COPY of
     `full_q` (or None when the phase has only one variant class → no-op).
@@ -404,10 +453,12 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
                       "grains": []}
 
     n = n_rows * n_cols
+    nbrs = _neighbour_fn(n_cols, topology)
     q = np.asarray(full_q, dtype=np.float64).reshape(n, 4)
     new_q = q.copy()
     labels = segment_supergroup_grains(q, phase_full, n_rows, n_cols,
-                                       phase_id, point_group, threshold_deg)
+                                       phase_id, point_group, threshold_deg,
+                                       topology=topology)
     grain_ids = [g for g in np.unique(labels) if g >= 0]
     report = {"n_grains": len(grain_ids), "n_flipped_units": 0,
               "n_ambiguous": 0, "n_rescued": 0, "grains": []}
@@ -536,9 +587,7 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
         # boundary-adjacency census → the dominant, much-bigger neighbour grain
         contact: dict[int, int] = {}
         for f in pix:
-            r, c = divmod(int(f), n_cols)
-            for nb in (f - n_cols, f + n_cols,
-                       f - 1 if c > 0 else -1, f + 1 if c < n_cols - 1 else -1):
+            for nb in nbrs(int(f)):
                 nb = int(nb)
                 if 0 <= nb < n and labels[nb] >= 0 and labels[nb] != g:
                     contact[int(labels[nb])] = contact.get(int(labels[nb]), 0) + 1
@@ -593,9 +642,7 @@ def unify_map(full_q, phase_full, n_rows: int, n_cols: int, phase_id,
         votes: dict[int, int] = {}
         donor: dict[int, int] = {}
         for f in pix:
-            r, c = divmod(int(f), n_cols)
-            for nb in (f - n_cols, f + n_cols,
-                       f - 1 if c > 0 else -1, f + 1 if c < n_cols - 1 else -1):
+            for nb in nbrs(int(f)):
                 nb = int(nb)
                 if 0 <= nb < n and labels[nb] >= 0 and labels[nb] != labels[int(f)]:
                     g = int(labels[nb])
@@ -763,7 +810,10 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
         return float(np.dot(av, bv) / den)
 
     def _is_oom(exc):
-        return isinstance(exc, RuntimeError) and "out of memory" in str(exc).lower()
+        # ``load_or_get_phase`` wraps a reload OOM in SHTOutOfMemoryError, whose
+        # text no longer says "out of memory"; the shared predicate knows both
+        # that type, the raw torch messages and a plain MemoryError.
+        return _sht_service.is_out_of_memory(exc)
 
     def _reacquire_renderer():
         """Free GPU caches and rebuild the renderer + phase grid in-place after
@@ -806,7 +856,7 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
                                   dtype=torch.float64)
                 try:
                     rendered = _render(qt)
-                except RuntimeError as e:
+                except (RuntimeError, MemoryError) as e:
                     if not _is_oom(e):
                         raise
                     # First OOM for this pixel: free the interactive VRAM,
@@ -815,7 +865,7 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
                     try:
                         _reacquire_renderer()
                         rendered = _render(qt)
-                    except RuntimeError as e2:
+                    except (RuntimeError, MemoryError) as e2:
                         if _is_oom(e2):
                             log.warning(
                                 "variant-unify render OOM persisted after cache "
@@ -832,7 +882,7 @@ def build_render_score_fn(sht_path: str, det_params: dict, get_pattern,
 #: Stage 0 of :func:`unify_after_hough_resolve` (added 2026-09-09). The resolver
 #: substitutes the Hough band-geometry orientation for every pixel where Hough
 #: reports a fit — without rendering it. Rendering both candidates is the check
-#: the resolver was missing. Measured on the 131 x 51 crop of the ICAA20 talk
+#: the resolver was missing. Measured on a cropped 131 x 51 aluminium-alloy scan
 #: (alpha, 3 668 px where the two disagree): Hough renders at 0.79, the raw
 #: spherical answer at 0.16 — so for cubic approximants the check confirms
 #: Hough; it is here for the phases and maps where it will not. The raw
@@ -852,7 +902,7 @@ def arbitrate_resolver_by_render(full_q, raw_full_q, phase_full, n_rows: int,
                                  threshold_deg: float = 5.0,
                                  score_pixels_max: int = 8,
                                  min_grain_px: int = 3,
-                                 progress=None):
+                                 progress=None, topology=None):
     """Per GRAIN of ONE phase: keep the resolver's (Hough) orientation unless the
     raw spherical candidate renders better by ``margin``.
 
@@ -893,7 +943,7 @@ def arbitrate_resolver_by_render(full_q, raw_full_q, phase_full, n_rows: int,
                 pass
 
     labels = segment_supergroup_grains(q, ph, n_rows, n_cols, phase_id,
-                                       point_group, threshold_deg)
+                                       point_group, threshold_deg, topology=topology)
     grain_ids = [int(g) for g in np.unique(labels) if g >= 0]
     report["n_grains"] = len(grain_ids)
     if not grain_ids:
@@ -964,7 +1014,7 @@ def arbitrate_resolver_by_render(full_q, raw_full_q, phase_full, n_rows: int,
 def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
                               masters_meta, det_params, selection_mask,
                               roi_mode: bool, resolved_phase_ids,
-                              progress=None, raw_eulers=None):
+                              progress=None, raw_eulers=None, topology=None):
     """Pipeline entry: run map-wide variant unification for every phase whose
     orientations were just substituted from (variant-blind) Hough.
 
@@ -978,6 +1028,10 @@ def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
     candidates on every pixel where they disagree and keeps the spherical one
     where it fits the measured pattern better; the unification then runs on the
     arbitrated map. Its report sits under ``reports["arbitration"][phase_id]``.
+
+    ``topology`` (``scan_neighbours.Topology``, for a hexagonal scan) is handed to both
+    stages; it must describe the same ``n_rows x n_cols`` grid (``ValueError`` otherwise).
+    ``None`` keeps the four neighbours of the index grid.
     """
     from orix.quaternion import Rotation
 
@@ -998,6 +1052,13 @@ def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
         if n_rows * n_cols != N:
             return None, {"skipped": "no 2D grid (streamed/1D result)"}
         flat_of_row = np.arange(N)
+
+    # The rows and columns, not only their product: a 4 x 6 topology is not a 6 x 4 map (the segmentation
+    # checks it too, but inside the per-phase try below, where it would only be logged).
+    if topology is not None and (topology.n_rows, topology.n_cols) != (n_rows, n_cols):
+        raise ValueError(
+            f"the topology is for a {topology.n_rows} x {topology.n_cols} grid, "
+            f"but the map is {n_rows} x {n_cols}")
 
     row_of_flat = np.full(n_rows * n_cols, -1, dtype=np.int64)
     row_of_flat[flat_of_row] = np.arange(N)
@@ -1035,13 +1096,13 @@ def unify_after_hough_resolve(eulers, phase_id, patterns, sht_paths,
                 # Stage 0: Hough anchor vs raw spherical, decided by rendering.
                 arb_q, arb_rep = arbitrate_resolver_by_render(
                     full_q, raw_full_q, phase_full, n_rows, n_cols, pid, pg,
-                    score_fn, progress=progress)
+                    score_fn, progress=progress, topology=topology)
                 reports.setdefault("arbitration", {})[pid] = arb_rep
                 if arb_q is not None:
                     full_q = arb_q
                     changed = True
             new_full, rep = unify_map(full_q, phase_full, n_rows, n_cols,
-                                      pid, pg, score_fn, progress=progress)
+                                      pid, pg, score_fn, progress=progress, topology=topology)
         except Exception:
             import logging
             logging.getLogger(__name__).warning(
@@ -1075,7 +1136,7 @@ def classify_orientation_source(final_eulers, raw_eulers):
     resolver only touches ``z_rot == 2`` phases, ``resolution.resolve_map``
     hands pixels back to the sphere where Hough failed, and
     :func:`arbitrate_resolver_by_render` renders the two answers against the
-    measured pattern and keeps the better one -- on the ICAA20 crop it returned
+    measured pattern and keeps the better one -- on that crop it returned
     every one of the 676 disputed pixels to the sphere.  A map whose
     orientations are the sphere's must not be labelled Hough's.
 

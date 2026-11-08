@@ -208,7 +208,8 @@ describe('LoadProgressModal', () => {
       render(<LoadProgressModal isOpen progressState={err({ code: 'edaxHexUpUnsupported' })} onClose={() => {}} />);
       const text = screen.getByTestId('progress-error').textContent;
       expect(text).toMatch(/hexagonal grid/);
-      expect(text).toMatch(/export the scan as H5 from OIM/);
+      expect(text).toMatch(/APEX metadata file/);
+      expect(text).not.toMatch(/export the scan as H5 from OIM/);
       expect(text).not.toMatch(/server prose/);
     });
     it('falls back to the server prose for a code this build has no text for', () => {

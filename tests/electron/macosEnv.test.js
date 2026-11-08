@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 
 const requireCjs = createRequire(import.meta.url);
 const mac = requireCjs('../../electron/setup/macos_env.js');
@@ -312,7 +313,7 @@ describe('building the environment, in order', () => {
 
   it('does not send the user to install developer tools codesign never needed', async () => {
     // The first version of this message said `xcode-select --install`. The
-    // research (spec appendix A.1) showed codesign is a base-system binary
+    // research showed codesign is a base-system binary
     // and ad-hoc signing has needed no Xcode tools since macOS 12 — so that
     // advice cost an afternoon and several gigabytes and fixed nothing.
     const h = harness({ options: { codesign: async () => { throw new Error('boom'); } } });
@@ -417,9 +418,20 @@ describe('the two allowlists know what a macOS install creates', () => {
     expect(topLevel.sort()).toEqual([P.CONDA_ENVS_DIR, P.CONDA_ROOT_DIR].sort());
   });
 
-  it.each(topLevel)('the setup does not call %s a stranger\'s file', (name) => {
-    const foreign = installer.foreignEntries(home, [name]);
-    expect(foreign).toEqual([]);
+  it.each(topLevel)('the setup does not call %s a stranger\'s file on a retry in its own folder', (name) => {
+    // A retry, "install the processor version instead" and repair all run in a
+    // folder the first run marked. In an UNMARKED folder `envs` is just a folder
+    // name (conda users have one), which the rule by shape deliberately refuses.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orienta-mac-'));
+    try {
+      fs.mkdirSync(path.join(dir, name, 'x'), { recursive: true });
+      fs.writeFileSync(path.join(dir, name, 'x', 'file'), 'x');
+      expect(installer.foreignEntries(dir)).toEqual([name]);          // unmarked: foreign
+      fs.writeFileSync(path.join(dir, '.orienta-home'), 'x');
+      expect(installer.foreignEntries(dir)).toEqual([]);              // marked: ours
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it.each(topLevel)('the uninstaller removes %s instead of keeping it', (name) => {

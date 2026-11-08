@@ -206,3 +206,17 @@ def test_normal_file_grid_is_unchanged():
         assert feats["grid_shape"] == expected
     finally:
         close_file()
+
+
+def test_bruker_patterns_count_as_patterns(tmp_path):
+    """A pattern dataset the probe does not name, next to EDS data, loaded as EDS-only and dropped the
+    patterns: a click on a result of such a file left the viewer without a signal."""
+    import h5py
+    import numpy as np
+
+    p = tmp_path / "bruker.h5"
+    with h5py.File(p, "w") as f:
+        f.create_dataset("Scan 1/EBSD/Data/RawPatterns", data=np.zeros((6, 4, 5), np.uint8))
+        f.create_group("Scan 1/EDS/Data/Window Integral").create_dataset("Al Ka1", data=np.zeros(6))
+    info = probe_ebsd_content(p)
+    assert info["has_patterns"] is True and info["n_patterns"] == 6

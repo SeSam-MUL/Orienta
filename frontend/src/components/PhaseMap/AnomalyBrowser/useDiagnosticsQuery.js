@@ -63,18 +63,37 @@ export function useDiagnosticsSummary(resultId, refreshKey = 0) {
   return { summary, error, loading };
 }
 
-export function useDiagnosticsBrowser(resultId, opts) {
+/**
+ * @param {number} refreshKey  bumped by the drawer every time it opens. A request that failed is
+ *   asked again then (a refusal can pass: the diagnostics get computed, a result is loaded), while
+ *   a request that worked is not repeated just because the drawer was reopened. (It is not a
+ *   dependency of the request effect itself: its cleanup would cancel a request still in flight
+ *   when the drawer mounts and opens in the same breath.)
+ */
+export function useDiagnosticsBrowser(resultId, opts, refreshKey = 0) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const k = `browser:${resultId}:${opts?.sort || ''}:${opts?.n || ''}:${opts?.range_min ?? ''}:${opts?.range_max ?? ''}`;
   const lastKeyRef = useRef(null);
+  const failedRef = useRef(false);
+  const [retry, setRetry] = useState(0);
+
+  // Reopening the drawer after a failure asks again.
+  useEffect(() => {
+    if (!failedRef.current) return;
+    failedRef.current = false;
+    lastKeyRef.current = null;
+    setRetry((n) => n + 1);
+  }, [refreshKey]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!resultId) { setData(null); return; }
+    if (!resultId) { setData(null); setError(null); return; }
     if (lastKeyRef.current === k) return;
     lastKeyRef.current = k;
+    failedRef.current = false;
+    setError(null);
     if (_cache.has(k)) { setData(_cache.get(k).value); return; }
     setLoading(true);
     forwardDiagApi.browser(resultId, opts).then((d) => {
@@ -84,9 +103,19 @@ export function useDiagnosticsBrowser(resultId, opts) {
       if (d) _put(k, d);
       setData(d);
       setLoading(false);
-    }).catch((e) => { if (!cancelled) { setError(e.message || String(e)); setLoading(false); } });
+    }).catch((e) => {
+      if (cancelled) return;
+      // The error itself, not its message: a coded refusal carries `code` (see _fwdDiagError),
+      // which the drawer words in the language of the page. The rows of the previous request
+      // belong to another sort or tab and must not stay on screen next to the reason.
+      setError(e || new Error('request failed'));
+      setData(null);
+      setLoading(false);
+      // A failure is not an answer to remember (see the refreshKey effect above).
+      failedRef.current = true;
+    });
     return () => { cancelled = true; };
-  }, [k, resultId]);
+  }, [k, resultId, retry]);
 
   return { data, error, loading };
 }

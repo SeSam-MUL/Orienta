@@ -477,7 +477,7 @@ def test_progress_endpoint_reports_all_stages(monkeypatch, tmp_path):
     # set and before detecting_features. Slow it to make building_signal
     # observable.
     from backend.api.services.calibration_store import calibration_store
-    def slow_register(dataset_name, signal):
+    def slow_register(dataset_name, signal, file_key=None):
         time.sleep(0.2)
         # The signal is a MagicMock so we can't pass it to the real register
         # without side effects — just no-op here, our test doesn't read it.

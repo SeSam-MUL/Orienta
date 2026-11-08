@@ -35,7 +35,7 @@
     "converted": "Konvertiert: {{name}} (RG #{{spaceGroup}}, {{atoms}} Atome)",
     "conversionFailed": "Konvertierung fehlgeschlagen: {{error}}",
     "skippingUnfit": "Überspringe {{count}} ungeeignete Datei(en)...",
-    "noneFit": "Keine Dateien zur Konvertierung geeignet ({{count}} übersprungen — DOI, Atome oder Raumgruppe fehlen)",
+    "noneFit": "Keine Dateien zur Konvertierung geeignet ({{count}} übersprungen — Atome oder Raumgruppe fehlen)",
     "convertingProgress": "Konvertiere... {{done}}/{{total}}{{skipped}}",
     "convertingSkippedSuffix": " ({{count}} übersprungen)",
     "convertedCount": "{{count}} konvertiert",
@@ -69,7 +69,16 @@
     "failed": "Fehlgeschlagen: {{error}}",
     "savedChanges": "{{count}} Änderung(en) gespeichert",
     "saveFailed": "Speichern fehlgeschlagen: {{error}}",
-    "unknown": "unbekannt"
+    "unknown": "unbekannt",
+    "convertedDeclared": "Konvertiert: {{name}} (RG #{{spaceGroup}}, {{atoms}} Atome) — Referenz als unveröffentlicht erklärt",
+    "p1Hidden": "{{count}} als P 1 gespeichert, mit verborgener Symmetrie (Datei auswählen für Details)",
+    "symmetrised": "{{name}} gespeichert ({{symbol}}, #{{number}}); Zelle und Achsen wie im Original, das unverändert bleibt",
+    "symmetriseFailed": "Symmetrisierte Kopie konnte nicht gespeichert werden: {{error}}",
+    "skippedNoReference": "{{count}} übersprungen (keine Referenz)",
+    "declaredUnpublishedCount": "{{count}} als unveröffentlicht erklärt",
+    "symmetrisedConverted": "{{name}} gespeichert ({{symbol}}, #{{number}}); Zelle in die konventionelle Standardaufstellung umgerechnet (Atome pro Zelle {{before}} → {{after}}{{axes}}); das Original bleibt unverändert",
+    "axesSuffix": ", Achsen {{axes}} (Original → Kopie)",
+    "toleranceChosen": "; Toleranz {{symprec}} Å von Ihnen gewählt"
   },
   "counts": {
     "cifXtal": "{{cif}} CIF · {{xtal}} XTAL"
@@ -154,15 +163,30 @@
       "reference": "Referenz",
       "file": "Datei",
       "size": "Größe",
-      "kb": "{{value}} KB"
-    }
+      "kb": "{{value}} KB",
+      "referenceStatus": "Referenzstatus",
+      "referenceStatuses": {
+        "found": "Zitat aus der CIF-Datei übernommen",
+        "declared_unpublished": "Vom Nutzer als unveröffentlicht erklärt",
+        "missing": "Nichts hinterlegt"
+      }
+    },
+    "saveSymmetrised": "Symmetrisierte Kopie speichern",
+    "saveSymmetrisedTooltip": "Schreibt eine neue CIF-Datei mit der erkannten Raumgruppe ({{symbol}}, #{{number}}). Die Originaldatei bleibt unverändert.",
+    "symmetrising": "Kopie wird gespeichert...",
+    "invalidDoi": "Das ist kein DOI (erwartet: 10.xxxx/...). Es wurde nichts gespeichert. Für ein Zitat nutzen Sie das Referenzfeld.",
+    "copyExists": "Eine symmetrisierte Kopie existiert: {{name}}",
+    "citationTooLong": "Der Text ist zu lang (höchstens {{max}} Zeichen). Es wurde nichts gespeichert.",
+    "chooseTolerance": "Die Gruppe hängt von der Toleranz ab. Kopie speichern als:",
+    "saveSymmetrisedAt": "{{symbol}} (#{{number}}, {{symprec}} Å)",
+    "saveSymmetrisedAtTooltip": "Schreibt eine neue CIF-Datei als {{symbol}} (#{{number}}), gefunden bei einer Toleranz von {{symprec}} Å. Die Originaldatei bleibt unverändert."
   },
   "exportBar": {
     "convert": "Zu .xtal konvertieren",
     "converting": "Konvertiere...",
     "convertTooltip": "{{name}} zu .xtal konvertieren",
     "convertSelectFirst": "Zuerst eine CIF-Datei auswählen",
-    "convertNotFit": "Nicht für .xtal geeignet — erst Warnungen beheben (DOI, Atome oder Raumgruppe fehlen)",
+    "convertNotFit": "Nicht für .xtal geeignet — erst Warnungen beheben (Atome oder Raumgruppe fehlen)",
     "batchConvert": "Auswahl konvertieren ({{count}})",
     "batchConverting": "Konvertiere {{count}}...",
     "batchConvertTooltip_one": "{{count}} ausgewählte CIF-Datei zu .xtal konvertieren",
@@ -308,5 +332,46 @@
     "syncBulkKeepBoth": "Alle Konflikte auf „Beide behalten“ setzen (Server-Kopien umbenannt).",
     "syncBulkSkip": "Alle Konflikte auf „Überspringen“ setzen (keine Datei geändert).",
     "syncResolveAll": "Die gewählte Aktion auf jeden Konflikt anwenden und Abgleich abschließen."
+  },
+  "fitWarnings": {
+    "no_reference": "Kein DOI und keine Referenz gefunden. Beim Konvertieren nach .xtal werden Sie gefragt, ob Sie eine angeben oder die Daten als unveröffentlicht kennzeichnen.",
+    "no_atoms": "Keine Atompositionen.",
+    "no_space_group": "Keine Raumgruppe.",
+    "disordered": "Fehlgeordnete Struktur (Teilbesetzungen).",
+    "p1_hidden_symmetry": "Als Raumgruppe P 1 gespeichert, die Atompositionen haben aber bei jeder Toleranz von 0,01 bis 0,1 Å die Symmetrie {{symbol}} (#{{number}}). Hough-Indizierung einer P-1-Datei kann den Speicher sprengen; speichern Sie eine symmetrisierte Kopie.",
+    "p1_ambiguous_symmetry": "Als Raumgruppe P 1 gespeichert; die Symmetrie der Atompositionen hängt von der Toleranz ab ({{ladder}}). Wählen Sie eine Toleranz, um eine symmetrisierte Kopie zu speichern.",
+    "contradictory_header": "Der Kopf der Datei widerspricht sich: Er nennt die Raumgruppennummer {{headerNumber}}, aber das Raumgruppensymbol {{headerSymbol}}. Es wird keine symmetrisierte Kopie angeboten; korrigieren Sie zuerst den Kopf.",
+    "p1_check_failed": "Als Raumgruppe P 1 gespeichert; die Prüfung auf verborgene Symmetrie konnte nicht abgeschlossen werden ({{detail}}), deshalb wird keine symmetrisierte Kopie angeboten."
+  },
+  "referenceDialog": {
+    "title": "Keine Referenz für diese Kristallstruktur",
+    "messageOne": "{{name}} hat weder DOI noch Literaturreferenz. Die .xtal-Datei hält fest, woher die Kristalldaten stammen: Geben Sie hier eine an oder erklären Sie die Daten für unveröffentlicht.",
+    "messageMany": "{{count}} ausgewählte CIF-Dateien haben weder DOI noch Literaturreferenz. Die .xtal-Dateien halten fest, woher ihre Kristalldaten stammen.",
+    "andMore": "… und {{count}} weitere",
+    "inputLabel": "DOI oder Zitat",
+    "inputPlaceholder": "10.1234/beispiel oder Autor et al., Zeitschrift, Jahr",
+    "inputHint": "Ein DOI (10.…) wird als DOI gespeichert, jeder andere Text als Referenz.",
+    "willSaveDoi": "Wird als DOI in die CIF-Datei geschrieben.",
+    "willSaveCitation": "Wird als Referenztext in die CIF-Datei geschrieben.",
+    "unpublishedNote": "„Unveröffentlicht / eigene Daten“ schreibt „unpublished (declared by user)“ als Referenz und markiert es als Ihre Erklärung. Es bleibt nie bei „unbekannt“.",
+    "declareOne": "Unveröffentlicht / eigene Daten",
+    "declareMany": "Alle {{count}} als unveröffentlicht erklären",
+    "declareTooltip": "Mit der Referenz „unpublished (declared by user)“ konvertieren",
+    "skip": "Diese {{count}} überspringen",
+    "skipTooltip": "Nur Dateien mit Referenz konvertieren",
+    "saveAndConvert": "Speichern und konvertieren",
+    "counter": "{{count}} / {{max}} Zeichen"
+  },
+  "symmetriseReasons": {
+    "not_p1": "Die Datei ist nicht als Raumgruppe P 1 gespeichert.",
+    "disordered": "Die Struktur hat teilbesetzte Positionen; eine aus den Positionen gefundene Symmetrie wäre eine Vermutung über die Probe.",
+    "no_symmetry": "Bei keiner Toleranz von 0,01 bis 0,1 Å wurde eine Symmetrie oberhalb von P 1 gefunden.",
+    "changed_structure": "Die symmetrisierte Struktur stimmt nicht mehr innerhalb der Toleranz mit der Datei überein; es wurde nichts geschrieben.",
+    "unreadable": "Die Datei konnte nicht als Kristallstruktur gelesen werden.",
+    "not_writable": "Der Ordner dieser CIF-Datei ist nicht beschreibbar; es wurde keine Kopie gespeichert.",
+    "same_content_exists": "Derselbe Kristall liegt bereits in diesem Ordner als {{existing}}; es wurde keine zweite Kopie geschrieben.",
+    "ambiguous_tolerance": "Die Gruppe der Atompositionen hängt von der Toleranz ab; wählen Sie eine.",
+    "invalid_tolerance": "Die Toleranz muss 0,01, 0,02, 0,05 oder 0,1 Å sein.",
+    "contradictory_header": "Der Kopf der Datei widerspricht sich (Raumgruppennummer und Raumgruppensymbol sind sich über P 1 uneins); es wurde keine Kopie geschrieben. Korrigieren Sie zuerst den Kopf."
   }
 }

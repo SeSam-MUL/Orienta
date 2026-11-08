@@ -118,7 +118,7 @@
     "presetHigh": "高",
     "presetMax": "最大",
     "downloadFirst": "球面を表示するには、まずこのファイルをダウンロードしてください。",
-    "reconstructing": "マスター球面を再構成中…",
+    "reconstructingElapsed": "マスター球面を再構成中…（{{s}} 秒）",
     "loadError": "球面を読み込めませんでした: {{error}}",
     "loadErrorFallback": "球面の読み込みに失敗しました",
     "selectLocal": "球面を表示するローカルの .sht を選択してください。",
@@ -126,7 +126,19 @@
     "spaceGroupShort": "空間群 {{sg}}",
     "bandwidthSuffix": "bw {{bw}}",
     "hint": "ドラッグで回転 · スクロールでズーム",
-    "captureNotReady": "球体はまだ準備できていません。描画されるまでお待ちください。"
+    "captureNotReady": "球体はまだ準備できていません。描画されるまでお待ちください。",
+    "useStandard": "標準を使用",
+    "retry": "再試行",
+    "timeout": "サーバーはまだ他の球面を処理中です。しばらくしてからもう一度お試しください。",
+    "cancel": "キャンセル",
+    "cancelled": "キャンセルしました。",
+    "workerSlowStart": "計算プロセスの起動に時間がかかっています（初回起動、またはウイルス対策ソフトによる確認）。処理は続いています。"
+  },
+  "errors": {
+    "sphereOutOfMemory": "この解像度で球面を作成するメモリが足りません。標準を選択してください。",
+    "workerCrashed": "計算プロセスが予期せず終了しました。Orienta とデータには影響ありません。もう一度試すか、低い解像度を選択してください。",
+    "workerStartFailed": "計算プロセスを起動できませんでした。ウイルス対策ソフトが Orienta の Python をブロックしていないか確認し、もう一度試してください。",
+    "workerStopped": "Orienta を終了しようとしているため、球面は計算されませんでした。Orienta を起動し直して、もう一度試してください。"
   },
   "splitterTooltip": "ドラッグして、ファイルテーブルとプレビューパネルの幅を調整します。",
   "status": {

@@ -34,6 +34,9 @@ import h5py
 import numpy as np
 import torch
 
+from backend.api.services.load_choices import (
+    RANGE_UNKNOWN, dataset_pattern_range, patterns_to_float32, signed_pattern_range,
+)
 from .pipeline.detector import DetectorGeometry
 from .pipeline.indexer import IndexResult, Tier1Indexer
 from .pipeline._shared_tables import SharedSphericalTables
@@ -181,6 +184,7 @@ class SphericalGPUBackend:
         detector_params: dict,
         progress_callback: Optional[Callable[[str, float], None]] = None,
         phase_weights: Optional[np.ndarray] = None,
+        dataset_path: Optional[str] = None,
     ) -> IndexResult:
         """Index every pattern in an H5OINA / EDAX H5 file.
 
@@ -189,7 +193,11 @@ class SphericalGPUBackend:
         h5_path
             Path to an Oxford ``.h5oina`` or EDAX ``.h5`` containing patterns.
             Pattern dataset is auto-discovered (see
-            ``Tier1Indexer._open_pattern_dataset`` for the search list).
+            ``Tier1Indexer._open_pattern_dataset`` for the search list), unless
+            ``dataset_path`` names it.
+        dataset_path
+            The HDF5 path of the pattern dataset to stream (the measurement and pattern source the
+            file was loaded as). Opened as named or the run fails; never replaced by the search.
         detector_params
             Dict with keys: ``n_rows, n_cols, pat_width, pat_height,
             pixel_size, tilt, binning, step_x, step_y, pc_x, pc_y, pc_z,
@@ -209,7 +217,7 @@ class SphericalGPUBackend:
         self._ensure_built(detector_params)
         return self._index_with_phases(
             kind="h5",
-            payload=str(h5_path),
+            payload=str(h5_path) if dataset_path is None else (str(h5_path), str(dataset_path)),
             progress_callback=progress_callback,
             phase_weights=phase_weights,
         )
@@ -220,6 +228,7 @@ class SphericalGPUBackend:
         detector_params: dict,
         progress_callback: Optional[Callable[[str, float], None]] = None,
         phase_weights: Optional[np.ndarray] = None,
+        value_range=RANGE_UNKNOWN,
     ) -> IndexResult:
         """Index a stack of patterns already loaded in memory.
 
@@ -227,6 +236,11 @@ class SphericalGPUBackend:
         is when patterns came from a non-H5 source or have been ROI-cropped
         in upstream code. Detector params are still required so we can
         build the right SHT geometry.
+
+        ``value_range`` is the (min, max) a signed-integer stack is rescaled by. Left out, it is the
+        range of ``patterns`` itself, which is right for a whole scan; a stack that is a selection
+        out of a larger scan is handed the range of the scan, so that its pixels read as they do in
+        the map run of the whole scan and in a click on them.
 
         ``phase_weights`` is an optional ``(P, N)`` float32 EDS chemistry
         prior applied to the per-phase scores before the winner argmax; see
@@ -243,6 +257,7 @@ class SphericalGPUBackend:
             payload=patterns,
             progress_callback=progress_callback,
             phase_weights=phase_weights,
+            value_range=value_range,
         )
 
     def index_signal(
@@ -391,30 +406,85 @@ class SphericalGPUBackend:
                 shared = SharedSphericalTables.from_indexer(ix)
         self._detector_params_cached = dict(detector_params)
 
+    def _range_of(self, source, progress_callback):
+        """Value range of an open pattern source (array or h5py dataset) for a signed-integer scan,
+        ``None`` for every other dtype. A pass over a 27 GB scan takes minutes, so it polls the
+        cancel check before every block (``CancelledIndexingError`` ends the run the normal way) and
+        reports its progress through the run's callback (message only: the bar belongs to indexing)."""
+        if np.dtype(source.dtype).kind != "i":
+            return None
+
+        def progress(done, total):
+            if progress_callback:
+                progress_callback(
+                    f"Reading the value range of the signed-integer patterns ({done}/{total})", 0.0)
+
+        announced = []
+
+        def check():
+            # The pass polls this before every block, so the first call is the start of a pass that
+            # really runs; a file whose range is remembered never calls it and announces nothing.
+            if progress_callback and not announced:
+                announced.append(True)
+                progress_callback("Reading the value range of the signed-integer patterns...", 0.0)
+            self._raise_if_cancelled()
+
+        if isinstance(source, h5py.Dataset):
+            return dataset_pattern_range(source, check=check, progress=progress)
+        return signed_pattern_range(source, check=check, progress=progress)
+
+    def _pattern_range(self, kind: str, payload, progress_callback):
+        """``_range_of`` for the pattern source of a run (``kind`` and ``payload`` as in
+        ``_index_with_phases``): opened for the pass and closed again, so that the run itself
+        starts from the same state as before."""
+        if kind == "array":
+            return self._range_of(payload, progress_callback)
+        if kind == "h5":
+            # The range is the one of the dataset that is streamed: the variant's, not the first
+            # dataset the search of ``_open_pattern_dataset`` would find.
+            h5_path, named = payload if isinstance(payload, tuple) else (str(payload), None)
+            _, dset, _, handle = self._indexers[0]._open_pattern_dataset(h5_path, named)
+        elif kind == "h5_dataset":
+            h5_path, dataset_path = payload
+            handle = h5py.File(h5_path, "r")
+            dset = handle[dataset_path]
+        else:
+            raise ValueError(f"Unknown indexing kind: {kind!r}")
+        try:
+            return self._range_of(dset, progress_callback)
+        finally:
+            handle.close()
+
     def _index_single_phase(
         self,
         indexer: Tier1Indexer,
         kind: str,
         payload,
         progress_callback,
+        value_range=RANGE_UNKNOWN,
     ) -> IndexResult:
         batch_size = self.config.batch_size or self._auto_batch_size(indexer)
+        if value_range is RANGE_UNKNOWN:
+            value_range = self._pattern_range(kind, payload, progress_callback)
 
         def run(b: int) -> IndexResult:
             if kind == "h5":
+                h5_path, named = payload if isinstance(payload, tuple) else (payload, None)
                 return indexer.index_h5oina(
-                    payload, batch_size=b,
+                    h5_path, batch_size=b,
                     progress_callback=progress_callback,
                     cancel_check=self._cancel_check,
+                    dataset_path=named,
+                    value_range=value_range,
                 )
             if kind == "array":
                 return self._index_array_via_indexer(
-                    indexer, payload, b, progress_callback,
+                    indexer, payload, b, progress_callback, value_range,
                 )
             if kind == "h5_dataset":
                 h5_path, dataset_path = payload
                 return self._index_h5_dataset_via_indexer(
-                    indexer, h5_path, dataset_path, b, progress_callback,
+                    indexer, h5_path, dataset_path, b, progress_callback, value_range,
                 )
             raise ValueError(f"Unknown indexing kind: {kind!r}")
 
@@ -431,18 +501,21 @@ class SphericalGPUBackend:
         dataset_path: str,
         batch_size: int,
         progress_callback,
+        value_range=RANGE_UNKNOWN,
     ) -> IndexResult:
         """Streaming HDF5 dataset indexer — reads one batch at a time."""
         t0 = time.perf_counter()
         with h5py.File(h5_path, "r") as f:
             dset = f[dataset_path]
             n_total = int(dset.shape[0])
+            if value_range is RANGE_UNKNOWN:
+                value_range = self._range_of(dset, progress_callback)
             all_eulers = torch.empty(n_total, 3, dtype=torch.float32)
             all_scores = torch.empty(n_total, dtype=torch.float32)
             for start in range(0, n_total, batch_size):
                 self._raise_if_cancelled()
                 end = min(start + batch_size, n_total)
-                chunk = np.asarray(dset[start:end], dtype=np.float32)
+                chunk = patterns_to_float32(dset[start:end], value_range)
                 pat = torch.from_numpy(chunk).to(self._device)
                 eulers, scores = indexer._index_batch(pat)
                 all_eulers[start:end] = eulers.cpu()
@@ -465,6 +538,7 @@ class SphericalGPUBackend:
         payload,
         progress_callback,
         phase_weights: Optional[np.ndarray] = None,
+        value_range=RANGE_UNKNOWN,
     ) -> IndexResult:
         """Run all phases, select the per-pixel winner by score.
 
@@ -488,10 +562,17 @@ class SphericalGPUBackend:
         The phases must share the same preprocessing flags (circmask,
         gausbckg, nregions) for the SHT-input prep to be reusable across
         them. If they differ, we fall back to the per-phase loop.
+
+        A signed-integer scan is rescaled by the range of the whole scan. That range is
+        read HERE, once per run, and handed to every path below (single phase, interleaved,
+        per-phase fallback, OOM retries), so no path pays the pass again. A caller that holds a
+        range already (a selection out of a scan it read the range of) hands it in and no pass runs.
         """
+        if value_range is RANGE_UNKNOWN:
+            value_range = self._pattern_range(kind, payload, progress_callback)
         if len(self._indexers) == 1:
             res = self._index_single_phase(
-                self._indexers[0], kind, payload, progress_callback,
+                self._indexers[0], kind, payload, progress_callback, value_range,
             )
             return res
 
@@ -512,6 +593,7 @@ class SphericalGPUBackend:
         if all_same_preproc:
             return self._index_with_phases_interleaved(
                 kind, payload, progress_callback, phase_weights=phase_weights,
+                value_range=value_range,
             )
 
         # Fallback: per-phase loop (heterogeneous preprocessing).
@@ -526,7 +608,7 @@ class SphericalGPUBackend:
                 ))
                 if progress_callback else None
             )
-            res = self._index_single_phase(ix, kind, payload, wrapped_cb)
+            res = self._index_single_phase(ix, kind, payload, wrapped_cb, value_range)
             per_phase.append(res)
         scores = torch.stack([r.score for r in per_phase], dim=0)   # (P, N) CPU RAW
         eulers = torch.stack([r.euler_xyz for r in per_phase], dim=0)
@@ -566,6 +648,7 @@ class SphericalGPUBackend:
         payload,
         progress_callback,
         phase_weights: Optional[np.ndarray] = None,
+        value_range=RANGE_UNKNOWN,
     ) -> IndexResult:
         """Batch-level multi-phase: read each batch once, run all phases,
         pick winner. Cuts H5 I/O + preprocessing + (full) SHT cost from
@@ -598,7 +681,8 @@ class SphericalGPUBackend:
             # that one. The previous code opened a SECOND h5py.File (closed
             # later) while `dset` referenced the helper's handle — leaking one
             # open HDF5 file per whole-file index.
-            n_total, dset, _, h5_handle = first._open_pattern_dataset(str(payload))
+            h5_path_str, named = payload if isinstance(payload, tuple) else (str(payload), None)
+            n_total, dset, _, h5_handle = first._open_pattern_dataset(h5_path_str, named)
             close_handle = True
         elif kind == "array":
             patterns_np = np.asarray(payload)
@@ -640,8 +724,11 @@ class SphericalGPUBackend:
         # essentially free overlap.
         from concurrent.futures import ThreadPoolExecutor
 
+        if value_range is RANGE_UNKNOWN:
+            value_range = self._range_of(dset, progress_callback)
+
         def _read_chunk(s, e):
-            return np.asarray(dset[s:e], dtype=np.float32)
+            return patterns_to_float32(dset[s:e], value_range)
 
         ex = ThreadPoolExecutor(max_workers=1)
         starts = list(range(0, n_total, batch_size))
@@ -731,16 +818,19 @@ class SphericalGPUBackend:
         patterns: np.ndarray,
         batch_size: int,
         progress_callback,
+        value_range=RANGE_UNKNOWN,
     ) -> IndexResult:
         """Mini-loop equivalent to ``Tier1Indexer.index_h5oina`` for ndarray input."""
         n_total = patterns.shape[0]
+        if value_range is RANGE_UNKNOWN:
+            value_range = self._range_of(patterns, progress_callback)
         all_eulers = torch.empty(n_total, 3, dtype=torch.float32)
         all_scores = torch.empty(n_total, dtype=torch.float32)
         t0 = time.perf_counter()
         for start in range(0, n_total, batch_size):
             self._raise_if_cancelled()
             end = min(start + batch_size, n_total)
-            chunk = np.asarray(patterns[start:end], dtype=np.float32)
+            chunk = patterns_to_float32(patterns[start:end], value_range)
             pat = torch.from_numpy(chunk).to(self._device)
             eulers, scores = indexer._index_batch(pat)
             all_eulers[start:end] = eulers.cpu()

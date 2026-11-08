@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, alpha, GroupBox, LoadingOverlay, Button, Input } from '../../theme/components';
 import { dbApi } from '../../services/api';
+import { translateFitWarnings, errorText, errorCode, errorField, ladderChoices, MAX_CITATION_CHARS, MAX_DOI_CHARS } from './cifWarnings';
 
 // ---------------------------------------------------------------------------
 // Shared sub-components
@@ -150,9 +151,34 @@ function DocTabs({ tabs, activeTab, onTabChange }) {
 // CIF tab content
 // ---------------------------------------------------------------------------
 
-function FitBadge({ fit, warnings }) {
+function FitBadge({ fit, crystalInfo, selectedFileName, savedCopy, onSymmetrised }) {
   const { t } = useTranslation('crystaldatabase');
+  const [saving, setSaving] = useState(false);
   if (fit == null) return null;
+  const warnings = translateFitWarnings(t, crystalInfo);
+  const detected = crystalInfo?.detected_space_group;
+
+  // The group depends on the tolerance: no single copy is offered; one choice per
+  // distinct group on the ladder, each saying which tolerance it stands for.
+  const ambiguous = !!crystalInfo?.p1_ambiguous;
+  const choices = ambiguous ? ladderChoices(crystalInfo?.symmetry_ladder) : [];
+
+  const saveSymmetrised = async (symprec = null) => {
+    if (!selectedFileName || saving) return;
+    setSaving(true);
+    try {
+      const res = await dbApi.symmetriseCif(selectedFileName, symprec);
+      onSymmetrised?.({ ok: true, file: selectedFileName, data: res.data });
+    } catch (err) {
+      onSymmetrised?.({
+        ok: false, file: selectedFileName, error: errorText(err), code: errorCode(err),
+        existing: errorField(err, 'existing'),
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const color = fit ? colors.green : colors.red;
   const label = fit ? t('parameters.fitForXtal') : t('parameters.notFitForXtal');
   return (
@@ -173,11 +199,49 @@ function FitBadge({ fit, warnings }) {
           {warnings.map((w, i) => <div key={i}>{w}</div>)}
         </div>
       )}
+      {ambiguous && savedCopy && (
+        <div role="status" style={{ marginTop: 6, fontSize: 11, color: colors.green }}>
+          {t('parameters.copyExists', { name: savedCopy })}
+        </div>
+      )}
+      {ambiguous && !savedCopy && choices.length > 0 && (
+        <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: colors.textSecondary }}>{t('parameters.chooseTolerance')}</span>
+          {choices.map(r => (
+            <Button
+              key={r.number}
+              small
+              disabled={saving}
+              onClick={() => saveSymmetrised(r.symprec)}
+              title={t('parameters.saveSymmetrisedAtTooltip', { symbol: r.symbol, number: r.number, symprec: r.symprec })}
+            >
+              {t('parameters.saveSymmetrisedAt', { symbol: r.symbol, number: r.number, symprec: r.symprec })}
+            </Button>
+          ))}
+        </div>
+      )}
+      {detected && savedCopy && (
+        <div role="status" style={{ marginTop: 6, fontSize: 11, color: colors.green }}>
+          {t('parameters.copyExists', { name: savedCopy })}
+        </div>
+      )}
+      {detected && !savedCopy && (
+        <div style={{ marginTop: 6 }}>
+          <Button
+            small
+            onClick={() => saveSymmetrised()}
+            disabled={saving}
+            title={t('parameters.saveSymmetrisedTooltip', { symbol: detected.symbol, number: detected.number })}
+          >
+            {saving ? t('parameters.symmetrising') : t('parameters.saveSymmetrised')}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
 
-function EditableRow({ label, value, placeholder, onSave }) {
+function EditableRow({ label, value, placeholder, onSave, maxLength }) {
   const { t } = useTranslation(['crystaldatabase', 'common']);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value || '');
@@ -188,7 +252,7 @@ function EditableRow({ label, value, placeholder, onSave }) {
       <div style={{ padding: '3px 4px', borderBottom: `1px solid ${alpha(colors.border, 13)}` }}>
         <div style={{ fontSize: 10, color: colors.textSecondary, marginBottom: 2 }}>{label}</div>
         <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-          <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={placeholder}
+          <Input value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={placeholder} maxLength={maxLength}
             style={{ flex: 1, fontSize: 11, height: 24, padding: '2px 6px' }} autoFocus
             title={t('hoverTips.editFieldInput')}
             onKeyDown={(e) => {
@@ -224,14 +288,16 @@ function EditableRow({ label, value, placeholder, onSave }) {
   );
 }
 
-function CifTabContent({ crystalInfo, selectedFileName, onInfoUpdated }) {
+function CifTabContent({ crystalInfo, selectedFileName, savedCopy, onInfoUpdated, onSymmetrised }) {
   const { t } = useTranslation('crystaldatabase');
   const [saving, setSaving] = useState(false);
+  const [metaError, setMetaError] = useState('');
   const atoms = crystalInfo.atoms || crystalInfo.asymmetric_unit || [];
 
   const handleSaveMeta = async (field, value) => {
     if (!selectedFileName) return;
     setSaving(true);
+    setMetaError('');
     try {
       // Only send the field the user just edited — don't pass an empty
       // string for the other one. The backend already skips empty-string
@@ -242,12 +308,21 @@ function CifTabContent({ crystalInfo, selectedFileName, onInfoUpdated }) {
       if (onInfoUpdated) onInfoUpdated();
     } catch (err) {
       console.error('Failed to save CIF metadata:', err);
+      // A "DOI" that is none is refused by the backend, and the user is told.
+      if (errorCode(err) === 'invalid_doi') setMetaError(t('parameters.invalidDoi'));
+      if (errorCode(err) === 'too_long') setMetaError(t('parameters.citationTooLong', { max: field === 'doi' ? MAX_DOI_CHARS : MAX_CITATION_CHARS }));
     } finally { setSaving(false); }
   };
 
   return (
     <>
-      <FitBadge fit={crystalInfo.fit_for_xtal} warnings={crystalInfo.fit_warnings} />
+      <FitBadge
+        fit={crystalInfo.fit_for_xtal}
+        crystalInfo={crystalInfo}
+        selectedFileName={selectedFileName}
+        savedCopy={savedCopy}
+        onSymmetrised={onSymmetrised}
+      />
 
       {crystalInfo.parse_warning && (
         <div style={{
@@ -267,12 +342,13 @@ function CifTabContent({ crystalInfo, selectedFileName, onInfoUpdated }) {
         <InfoRow label={t('parameters.cifFile')} value={selectedFileName} />
         <InfoRow label={t('parameters.asymmetricUnitSites')} value={atoms.length > 0 ? String(atoms.length) : null} valueColor={colors.green} />
         <EditableRow label={t('parameters.doi')} value={crystalInfo.doi} placeholder={t('parameters.doiPlaceholder')}
-          onSave={(v) => handleSaveMeta('doi', v)} />
+          onSave={(v) => handleSaveMeta('doi', v)} maxLength={MAX_DOI_CHARS} />
         <EditableRow label={t('parameters.reference')} value={crystalInfo.reference} placeholder={t('parameters.referencePlaceholder')}
-          onSave={(v) => handleSaveMeta('reference', v)} />
+          onSave={(v) => handleSaveMeta('reference', v)} maxLength={MAX_CITATION_CHARS} />
       </div>
 
       {saving && <div style={{ fontSize: 10, color: colors.cyan, marginBottom: 6 }}>{t('parameters.saving')}</div>}
+      {metaError && <div role="alert" style={{ fontSize: 11, color: colors.red, marginBottom: 6 }}>{metaError}</div>}
 
       <AtomTable atoms={atoms} dwfPrecision={4} />
     </>
@@ -344,6 +420,13 @@ function XtalTabContent({ xtalInfo, loading }) {
           xtalInfo.CreationDate ? `${xtalInfo.CreationDate} ${xtalInfo.CreationTime || ''}` : null
         } />
         <InfoRow label={t('parameters.xtal.reference')} value={xtalInfo.useReference} />
+        {xtalInfo.reference_status && (
+          <InfoRow
+            label={t('parameters.xtal.referenceStatus')}
+            value={t(`parameters.xtal.referenceStatuses.${xtalInfo.reference_status}`, { defaultValue: xtalInfo.reference_status })}
+            valueColor={xtalInfo.reference_status === 'found' ? undefined : colors.yellow}
+          />
+        )}
         <InfoRow label={t('parameters.xtal.file')} value={xtalInfo.filename} />
         <InfoRow label={t('parameters.xtal.size')} value={xtalInfo.size ? t('parameters.xtal.kb', { value: (xtalInfo.size / 1024).toFixed(1) }) : null} />
       </div>
@@ -358,7 +441,7 @@ function XtalTabContent({ xtalInfo, loading }) {
 // Main component
 // ---------------------------------------------------------------------------
 
-export default function CrystalParametersPanel({ crystalInfo, loading, selectedFileName, hasXtal, onInfoUpdated }) {
+export default function CrystalParametersPanel({ crystalInfo, loading, selectedFileName, hasXtal, savedCopy, onInfoUpdated, onSymmetrised }) {
   const { t } = useTranslation('crystaldatabase');
   const [tab, setTab] = useState('cif');
   const [xtalInfo, setXtalInfo] = useState(null);
@@ -425,7 +508,7 @@ export default function CrystalParametersPanel({ crystalInfo, loading, selectedF
 
       {/* Tab content */}
       {tab === 'cif' && (
-        <CifTabContent crystalInfo={crystalInfo} selectedFileName={selectedFileName} onInfoUpdated={onInfoUpdated} />
+        <CifTabContent crystalInfo={crystalInfo} selectedFileName={selectedFileName} savedCopy={savedCopy} onInfoUpdated={onInfoUpdated} onSymmetrised={onSymmetrised} />
       )}
       {tab === 'xtal' && (
         <XtalTabContent xtalInfo={xtalInfo} loading={xtalLoading} />

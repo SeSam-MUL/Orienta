@@ -22,6 +22,7 @@ import h5py
 import numpy as np
 
 from backend.api.services.atomic_result import begin_atomic, finish_atomic
+from backend.api.services.load_choices import LoadChoiceError, measurement_groups
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def place_rows_on_grid(rows, original_shape, selection_mask=None,
     Full-coverage results are a plain reshape. ROI/masked results (fewer rows
     than grid pixels) are PLACED via the selection mask — the old blind
     ``.reshape(original_shape)`` raised ``cannot reshape array of size N``
-    on every ROI export (user-hit 2026-07-15). Pixels outside the ROI get
+    on every ROI export. Pixels outside the ROI get
     ``fill``.
     """
     import numpy as np
@@ -173,40 +174,66 @@ def _read_step_size_from_checkpoint(checkpoint_path: str) -> float:
             )
         return step_f
 
+
+def _hex_geometry_of_checkpoint(checkpoint_path: str, step_size: float, who: str):
+    """The hexagonal geometry a checkpoint states, or ``None`` for a square or legacy one.
+
+    Read from the stamp and nowhere else; a stamp that cannot be read raises ``ValueError`` and
+    stops the export (a hexagonal file with square positions is worse than none). ``step_size`` is
+    the step the caller writes, and for a hexagonal scan it must be the stamp's ``step_x``:
+    ``ValueError`` otherwise, as for the ``.ang`` export."""
+    from backend.api.services.checkpoint_writer import read_checkpoint_geometry
+    geometry = read_checkpoint_geometry(checkpoint_path)
+    if geometry is None or not geometry.is_hex:
+        return None
+    if abs(float(step_size) - geometry.step_x) > 1e-4 * geometry.step_x:
+        raise ValueError(
+            f"{who} was given step_size={step_size!r}, the hexagonal checkpoint states "
+            f"step_x={geometry.step_x!r}; refusing to write positions of two grids.")
+    return geometry
+
+
 # Quality / per-pixel measurement fields copied from the source h5oina into
-# /Indexing/Assignment/ of the light h5. Mapping: h5oina path → (key in
-# light file, dtype). Loader pulls these by key on read.
+# /Indexing/Assignment/ of the light h5. Mapping: path inside the measurement
+# group (``<group>/<path>``; the group is the measurement the result was indexed
+# on, "1" for the default) → (key in light file, dtype). Loader pulls these by
+# key on read.
 #
 # MAD intentionally absent: we re-index from scratch instead of trusting
 # the source's MAD, so carrying it forward only invites confusion (which
 # MAD is shown — Aztec's or ours? we have no "ours"). BC is the band
 # contrast acquisition signal and survives across re-indexing — keep it.
 H5OINA_QUALITY_FIELDS: List[Tuple[str, str, type]] = [
-    ("/1/EBSD/Data/Band Contrast",          "band_contrast", np.uint8),
-    ("/1/EBSD/Data/Pattern Center X",       "pc_x",          np.float32),
-    ("/1/EBSD/Data/Pattern Center Y",       "pc_y",          np.float32),
-    ("/1/EBSD/Data/Detector Distance",      "dd",            np.float32),
-    ("/1/EBSD/Data/Bands",                  "bands",         np.uint8),
+    ("EBSD/Data/Band Contrast",          "band_contrast", np.uint8),
+    ("EBSD/Data/Pattern Center X",       "pc_x",          np.float32),
+    ("EBSD/Data/Pattern Center Y",       "pc_y",          np.float32),
+    ("EBSD/Data/Detector Distance",      "dd",            np.float32),
+    ("EBSD/Data/Bands",                  "bands",         np.uint8),
 ]
 
 
 def _copy_quality_fields(
-    source_h5_path: str, dst_asg_grp: "h5py.Group", grid_shape: Tuple[int, int]
+    source_h5_path: str, dst_asg_grp: "h5py.Group", grid_shape: Tuple[int, int],
+    variant=None,
 ) -> List[str]:
     """Copy per-pixel quality fields (BC, MAD, PC, Bands) from h5oina.
 
     Each field is reshaped to grid_shape and stored under
     /Indexing/Assignment/<key>. Returns list of keys that were copied so
     the caller can attach a manifest attr.
+
+    ``variant`` (a ``LoadVariant``; None = measurement "1", as before) names the measurement the
+    result was indexed on: the fields are that measurement's, never the first one's.
     """
     copied: List[str] = []
     n_pixels = int(np.prod(grid_shape))
     try:
         with h5py.File(source_h5_path, "r") as src:
+            group = measurement_groups(src, variant, default="1")[0]
             for h5_path, key, dtype in H5OINA_QUALITY_FIELDS:
                 if key in dst_asg_grp:
                     continue  # idempotent — don't overwrite if already present
-                ds = src.get(h5_path)
+                ds = src.get(f"/{group}/{h5_path}")
                 if ds is None:
                     continue
                 arr = np.asarray(ds)
@@ -223,6 +250,8 @@ def _copy_quality_fields(
                     compression="gzip",
                 )
                 copied.append(key)
+    except LoadChoiceError:
+        raise
     except Exception as e:
         logger.warning("Quality-field copy failed: %s", e)
     return copied
@@ -277,6 +306,39 @@ Auto-Assignment (/Indexing/Assignment/):
 Software: Orienta — https://github.com/SeSam-MUL/Orienta
 Libraries: kikuchipy, orix, diffsims, EMSphInx
 """
+
+# The paragraph of README_TEXT that says where X and Y come from, and what it says for a hexagonal
+# scan. ``readme_text`` swaps one for the other; a square file keeps README_TEXT as it is.
+_README_XY_SQUARE = """  - /Indexing/X, /Indexing/Y        per-pixel sample coordinates in µm,
+                                    shape (rows, cols). X = column·step,
+                                    Y = row·step (same convention as .ang).
+                                    Use these to place orientations on a
+                                    grid in MTEX without the source h5oina.
+"""
+_README_XY_HEX = """  - /Indexing/X, /Indexing/Y        per-pixel sample POSITIONS in µm (float64),
+                                    shape (rows, cols). This is a HEXAGONAL
+                                    scan: the odd rows are offset by half a
+                                    step_x (the direction is
+                                    /Indexing.attrs[odd_row_shift], in steps,
+                                    +0.5 = to the right) and the rows are
+                                    step_y = step_x·√3/2 apart. X = column·
+                                    step_x, plus odd_row_shift·step_x on the
+                                    odd rows; Y = row·step_y. A position can
+                                    be negative. Use these to place
+                                    orientations in MTEX without the source.
+  - /Indexing.attrs[grid_type, odd_row_shift, shift_confirmed, step_x, step_y]
+                                    the same stamp a batch checkpoint has.
+"""
+
+
+def readme_text(geometry=None) -> str:
+    """The README of a result file: ``README_TEXT`` for a square scan (or none), the same text with
+    the hexagonal description of X and Y for a hexagonal ``ScanGeometry``."""
+    if geometry is None or not geometry.is_hex:
+        return README_TEXT
+    if _README_XY_SQUARE not in README_TEXT:
+        raise RuntimeError("README_TEXT no longer holds the X/Y paragraph the hexagonal variant replaces")
+    return README_TEXT.replace(_README_XY_SQUARE, _README_XY_HEX)
 
 
 def _write_scan_provenance(group, scan_provenance: Optional[Dict]) -> None:
@@ -374,21 +436,53 @@ def write_assignment_provenance(idx_group, provenance: Dict) -> None:
     idx_group.attrs["phase_assignment"] = str(provenance["text"])
 
 
-def _stated_in_batch_export(f, idx, source_path) -> None:
+def _stated_in_batch_export(f, idx, source_path, variant=None) -> None:
     """What every export states, for the checkpoint-based writers.
 
     A batch gives each pixel the phase with the highest confidence index and
-    never reads the EDS, hence ``eds_chemistry_prior = 0``.
+    never reads the EDS, hence ``eds_chemistry_prior = 0``. ``variant`` names the
+    measurement of ``source_path`` whose acquisition header is stated (None: the first).
     """
     from backend.api.services import ang_export
 
     write_assignment_provenance(idx, ang_export.assignment_provenance(None))
     write_crystal_frame(idx)
-    geometry = ang_export.read_source_geometry(str(source_path))
+    geometry = ang_export.read_source_geometry(str(source_path), variant)
     write_acquisition_group(f, geometry)
 
 
-def _write_citations(group, steps: Optional[List[dict]]) -> None:
+def _write_hough_reflectors(group, record: Optional[dict]) -> None:
+    """Stamp which reflector list each Hough phase was indexed with.
+
+    ``record`` is ``result.metadata["hough_reflectors"]``: one entry per phase
+    (mode, rule, families used, rows, predicted library, budget). A result that
+    went through "Save result" and a re-import keeps saying what it was indexed
+    with. Stored as one JSON attribute in ``/Indexing/Citations`` (the group of
+    the trail it belongs to); ``None`` and an empty record write nothing.
+    """
+    if not record:
+        return
+    import json as _json
+
+    grp = group.require_group("Citations")
+    grp.attrs["hough_reflectors"] = _json.dumps(record, ensure_ascii=False)
+
+
+def _write_caveats(group, caveats: Optional[list]) -> None:
+    """Stamp the notes the result carries about itself (``result.metadata["caveats"]``,
+    see ``hough_caveats``) as one JSON attribute next to ``hough_reflectors``.
+    ``None`` and an empty list write nothing."""
+    if not caveats:
+        return
+    import json as _json
+
+    grp = group.require_group("Citations")
+    grp.attrs["caveats"] = _json.dumps(caveats, ensure_ascii=False)
+
+
+def _write_citations(group, steps: Optional[List[dict]],
+                     hough_reflectors: Optional[dict] = None,
+                     caveats: Optional[list] = None) -> None:
     """Stamp what to cite for this result.
 
     Mirrors ``_write_scan_provenance`` deliberately: ``None`` — and an empty
@@ -408,6 +502,8 @@ def _write_citations(group, steps: Optional[List[dict]]) -> None:
     back — with it the importing side rebuilds the bibliography from ITS own
     library — so the trail survives and only the cached copy is missing.
     """
+    _write_hough_reflectors(group, hough_reflectors)
+    _write_caveats(group, caveats)
     if not steps:
         return
     import json as _json
@@ -425,7 +521,7 @@ def _write_citations(group, steps: Optional[List[dict]]) -> None:
             "trail is written and is what a re-import reads."
         )
 
-    grp = group.create_group("Citations")
+    grp = group.require_group("Citations")
     grp.attrs["schema"] = 1
     grp.attrs["steps"] = _json.dumps(steps, ensure_ascii=False)
     if library is None:
@@ -446,6 +542,24 @@ def _write_citations(group, steps: Optional[List[dict]]) -> None:
     )
 
 
+class RichNeedsHdf5Source(ValueError):
+    """The source of a rich ``.h5`` is not an HDF5 file. ``code`` is what the interface translates on
+    (``exports.errors.richNeedsHdf5Source`` of the batch page)."""
+
+    code = "richNeedsHdf5Source"
+    params: dict = {}
+
+
+def _reason_of(exc: Exception):
+    """The reason an export failed for the record: the text of the exception, as a ``Note`` that
+    carries the exception's ``code`` and ``params`` when it has a code, else the plain text."""
+    code = getattr(exc, "code", None)
+    if not isinstance(code, str):
+        return str(exc)
+    from backend.api.services.pc_sources import Note
+    return Note(str(exc), code, **dict(getattr(exc, "params", None) or {}))
+
+
 def export_result_h5(
     source_h5_path: str,
     checkpoint_path: str,
@@ -457,6 +571,9 @@ def export_result_h5(
     step_size: Optional[float] = None,
     scan_provenance: Optional[Dict] = None,
     citation_steps: Optional[List[Dict]] = None,
+    hough_reflectors: Optional[Dict] = None,
+    caveats: Optional[List[Dict]] = None,
+    name_suffix: str = "",
 ) -> str:
     """Create a rich H5 result file: original data + indexing results.
 
@@ -498,12 +615,34 @@ def export_result_h5(
     """
     source_path = Path(source_h5_path)
     out_dir = Path(output_dir)
+
+    # The rich file is a copy of its source with the result added. A pattern file that is not
+    # HDF5 (an EDAX .up1 / .up2, any other format) cannot be that copy, and opening the copy as
+    # HDF5 would fail after the copy was made: refused first, with a code, before anything is created.
+    if source_path.is_file() and not h5py.is_hdf5(str(source_path)):
+        raise RichNeedsHdf5Source(
+            "A rich .h5 needs an HDF5 source; this scan's patterns are in another file format. "
+            "Use the light .h5.")
+
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if step_size is None:
         step_size = _read_step_size_from_checkpoint(checkpoint_path)
 
-    result_name = f"result_{source_path.stem}.h5"
+    # The grid the checkpoint states. A hexagonal one is stamped on /Indexing below. The copy of
+    # the source keeps whatever grid its own header states, so a source that is a hexagonal Orienta
+    # file under a checkpoint that is not hexagonal would leave a file whose header and /Indexing
+    # disagree: refused, before any file is made.
+    from backend.api.services.orienta_hex_h5 import is_native_hex_file, write_index_block
+    hex_geometry = _hex_geometry_of_checkpoint(checkpoint_path, step_size, "export_result_h5")
+    if hex_geometry is not None:
+        step_size = hex_geometry.step_x
+    elif is_native_hex_file(source_path):
+        raise ValueError(
+            f"{source_path.name} is a hexagonal Orienta file, but the checkpoint states no "
+            "hexagonal scan; refusing to copy a hexagonal header under a square result.")
+
+    result_name = f"result_{source_path.stem}{name_suffix}.h5"
     result_path = out_dir / result_name
     # Built under a .part name and moved into place at the end: a process
     # killed mid-write would otherwise leave a file that opens cleanly and
@@ -597,7 +736,9 @@ def export_result_h5(
         idx.attrs["step_size_um"] = float(step_size)
         idx.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(idx, scan_provenance)
-        _write_citations(idx, citation_steps)
+        if hex_geometry is not None:
+            write_index_block(idx, hex_geometry)
+        _write_citations(idx, citation_steps, hough_reflectors, caveats)
         _stated_in_batch_export(f, idx, source_path)
 
         # --- Per-Phase Results ---
@@ -739,9 +880,9 @@ def export_result_h5(
         doc = f.create_group("Documentation")
         doc.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(doc, scan_provenance)
-        _write_citations(doc, citation_steps)
+        _write_citations(doc, citation_steps, hough_reflectors, caveats)
         doc.attrs["description"] = "EBSD indexing results + original experimental data"
-        doc.create_dataset("README", data=README_TEXT)
+        doc.create_dataset("README", data=readme_text(hex_geometry))
 
         # Phase table as readable string
         table_lines = ["ID  Name             CI_mean   Phase File"]
@@ -758,8 +899,9 @@ def export_result_h5(
     return finish_atomic(work_path, result_path)
 
 
-def _read_h5oina_acquisition(source_h5_path: Optional[str]) -> Dict[str, float]:
-    """Pull real KV / TiltAngle / Mag / WD from h5oina /1/EBSD/Header.
+def _read_h5oina_acquisition(source_h5_path: Optional[str], variant=None) -> Dict[str, float]:
+    """Pull real KV / TiltAngle / Mag / WD from the h5oina EBSD header (``variant``: a
+    ``LoadVariant`` naming the measurement; None = the first one with a header, as before).
 
     Returns whatever it could read; missing keys are absent (caller falls
     back to None and writes an empty CTF field rather than a fake value).
@@ -772,7 +914,7 @@ def _read_h5oina_acquisition(source_h5_path: Optional[str]) -> Dict[str, float]:
         return out
     try:
         with h5py.File(source_h5_path, "r") as f:
-            for entry in f.keys():
+            for entry in measurement_groups(f, variant):
                 hdr = f.get(f"{entry}/EBSD/Header")
                 if hdr is None:
                     continue
@@ -794,15 +936,20 @@ def _read_h5oina_acquisition(source_h5_path: Optional[str]) -> Dict[str, float]:
                 if mag is not None: out["mag"] = mag
                 if wd  is not None: out["wd"]  = wd
                 break
+    except LoadChoiceError:
+        raise
     except Exception as e:
         logger.warning("Could not read h5oina acquisition header: %s", e)
     return out
 
 
 def _read_h5oina_quality(
-    source_h5_path: Optional[str], n_pixels: int
+    source_h5_path: Optional[str], n_pixels: int, variant=None
 ) -> Dict[str, np.ndarray]:
     """Pull real BC and Bands per-pixel arrays from h5oina.
+
+    ``variant`` (a ``LoadVariant``; None = measurement "1", as before) names the measurement the
+    result was indexed on; a measurement without the channel gives no entry for it.
 
     Returns flattened arrays of size n_pixels. MAD is deliberately not
     pulled — we re-index from scratch so the source's MAD doesn't
@@ -814,9 +961,10 @@ def _read_h5oina_quality(
         return out
     try:
         with h5py.File(source_h5_path, "r") as f:
+            group = measurement_groups(f, variant, default="1")[0]
             for h5_key, out_key in (
-                ("/1/EBSD/Data/Band Contrast", "bc"),
-                ("/1/EBSD/Data/Bands", "bands"),
+                (f"/{group}/EBSD/Data/Band Contrast", "bc"),
+                (f"/{group}/EBSD/Data/Bands", "bands"),
             ):
                 ds = f.get(h5_key)
                 if ds is None:
@@ -829,6 +977,8 @@ def _read_h5oina_quality(
                     )
                     continue
                 out[out_key] = arr
+    except LoadChoiceError:
+        raise
     except Exception as e:
         logger.warning("Could not read h5oina quality fields: %s", e)
     return out
@@ -840,8 +990,22 @@ def _write_ctf(
     sample_tilt: Optional[float] = None,
     prj_note: Optional[str] = None,
     vendor: str = "",
+    variant=None,
+    resampled: bool = False,
+    resampled_quality: Optional[np.ndarray] = None,
+    resampled_quality_native: bool = False,
 ) -> None:
     """Write an MTEX-compatible Channel Text File (.ctf) from a CrystalMap.
+
+    ``resampled=True`` is for a map that holds a hexagonal scan resampled to a square grid. Its
+    cells are not the pixels of the source file, so the source's own quality channels are not
+    read: ``source_h5_path`` still gives the acquisition header, but Band Contrast comes from
+    ``resampled_quality`` (one value per cell, already resampled; ``None`` writes the honest zero
+    column) and Bands is the neutral 8. ``resampled_quality_native`` says that these values are
+    the source's own Band Contrast (written as they are), not a computed image quality (scaled to
+    0..255 as for a square scan). The phase table and the phase numbers of the rows, for every
+    map, both come from ``xmap.phases``: ``phase_names`` is not used, because a map holds no
+    phase that no cell takes and its remaining ids are not consecutive.
 
     The Euler angles are written in the frame of the source system
     (``vendor``), like the ``.h5`` exports: a .ctf is an Oxford format, MTEX
@@ -882,7 +1046,14 @@ def _write_ctf(
     # phase_id with PhaseList ids and lose every non-first phase's
     # symmetry — see the comment block in export_ang_ctf for context.
     raw_pid = np.asarray(xmap.phase_id).reshape(-1).astype(int)
-    phase_id = np.where(raw_pid < 0, 0, raw_pid + 1)
+    # one map decides both the table and the numbers: the table lists the phases the map holds,
+    # in id order, and a row carries the position of its phase in that list. A phase no cell
+    # takes is not in the map (orix drops it), so it is not in the table either.
+    table_ids = sorted(int(i) for i in xmap.phases.ids if int(i) >= 0)
+    phase_names = [xmap.phases[i].name for i in table_ids]
+    phase_id = np.zeros(raw_pid.shape, dtype=int)
+    for position, pid in enumerate(table_ids):
+        phase_id[raw_pid == pid] = position + 1
     # Euler angles — Bunge convention, CTF wants degrees
     from backend.api.services.orientation_frame import to_vendor_export_frame
     eulers = to_vendor_export_frame(xmap.rotations, vendor).to_euler(degrees=True)
@@ -893,7 +1064,19 @@ def _write_ctf(
     # confidence surrogate). MAD is always 0 — we re-index from scratch so
     # we have no MAD of our own and the source's MAD doesn't apply to our
     # orientations.
-    quality = _read_h5oina_quality(source_h5_path, n)
+    if resampled:
+        # the source's channels are in the order of its own points, not of these cells; they
+        # would even pass the size check when the grid has as many cells as the scan has points
+        quality: Dict[str, np.ndarray] = {}
+        if resampled_quality is not None:
+            given = np.asarray(resampled_quality).reshape(-1)
+            if given.size != n:
+                raise ValueError(
+                    f"resampled_quality has {given.size} values, the map {n} cells")
+            if resampled_quality_native:
+                quality["bc"] = given
+    else:
+        quality = _read_h5oina_quality(source_h5_path, n, variant)
     has_real_bc    = "bc" in quality
     has_real_bands = "bands" in quality
     bands = quality.get("bands", np.full(n, 8, dtype=int)).astype(int)
@@ -902,12 +1085,19 @@ def _write_ctf(
     if has_real_bc:
         bc = quality["bc"].astype(int)
         bc_is_computed = False
+    elif resampled:
+        # a computed image quality of the cells, scaled as for a square scan; none: honest zeros
+        iqf = (np.asarray(resampled_quality, dtype=float).ravel()
+               if resampled_quality is not None else np.zeros(n))
+        mx = float(iqf.max()) if iqf.size else 0.0
+        bc = np.clip(iqf / mx * 255.0, 0, 255).astype(int) if mx > 0 else np.zeros(n, dtype=int)
+        bc_is_computed = mx > 0
     else:
         # No native Band Contrast — try a computed FFT image quality from the
         # source patterns (heavy, opt-in). Falls back to honest zeros (never a
         # CI surrogate) when the helper can't produce a matching-size result.
         from backend.api.services.pattern_quality import image_quality_from_file
-        iq = image_quality_from_file(source_h5_path)
+        iq = image_quality_from_file(source_h5_path, variant=variant)
         if iq is not None and iq.size == n:
             iqf = np.asarray(iq, dtype=float).ravel()
             mx = float(iqf.max())
@@ -954,7 +1144,7 @@ def _write_ctf(
         "4/m":  4,  "4":    4,   "-4":  4,
         "4/mmm":5,  "422":  5,   "4mm": 5,  "-42m": 5,
         "-3":   6,  "3":    6,
-        "-3m":  7,  "32":   7,   "3m":  7,
+        "-3m":  7,  "32":   7,   "3m":  7,  "312": 7,
         "6/m":  8,  "6":    8,   "-6":  8,
         "6/mmm":9,  "622":  9,   "6mm": 9,  "-6m2": 9,
         "m-3":  10, "23":   10,
@@ -1017,7 +1207,7 @@ def _write_ctf(
     # sample_tilt (calibrated value from CalibrationStore) and only
     # falls back to the h5oina header's acquisition tilt when no
     # calibrated value is available.
-    acq = _read_h5oina_acquisition(source_h5_path)
+    acq = _read_h5oina_acquisition(source_h5_path, variant)
     kv_str  = f"{acq['kv']:.1f}"  if "kv"  in acq else "0"
     mag_str = f"{acq['mag']:.0f}" if "mag" in acq else "0"
     if sample_tilt is not None:
@@ -1177,19 +1367,66 @@ def _inject_ang_acquisition(
         logger.warning("ANG header inject: cannot write %s (%s)", ang_path, e)
 
 
+def _tsl_codes_of_map(xmap) -> Dict[int, str]:
+    """``{phase number in the .ang: TSL symmetry code}`` for the phases ``xmap`` holds.
+
+    orix numbers the phases of a ``.ang`` by their position in the map's phase list, from 1 and
+    without the "not indexed" phase, and a map that no cell of a phase is in has dropped that
+    phase: the numbers are those of THIS map, not of the list the run started with.
+    The group is read through ``crystal_symmetry.phase_point_group``, as everywhere else the exports
+    read a phase's symmetry: a plain orix ``Phase`` of the space groups 6-9 holds the point group
+    ``m``, which has no Laue group there, while the frame-aware group is 2/m.
+    ``SymmetryUnknown`` (a ``ValueError``) for a phase without a TSL code."""
+    from backend.api.services import ang_export
+    from crystal_symmetry import phase_point_group
+    codes: Dict[int, str] = {}
+    held = [(pid, phase) for pid, phase in xmap.phases if int(pid) >= 0]
+    for number, (_pid, phase) in enumerate(held, start=1):
+        try:
+            codes[number] = ang_export.tsl_symmetry_code(
+                phase_point_group(phase), ang_export.lattice_from_structure(phase))
+        except ValueError as exc:
+            raise ang_export.SymmetryUnknown(f"phase {phase.name!r}: {exc}") from exc
+    return codes
+
+
+class AngCtfFiles(tuple):
+    """What :func:`export_ang_ctf` returns: ``(ang_path, ctf_path)``, and ``ang_square`` for the
+    third file. It unpacks into two, as the result of this function always did."""
+
+    def __new__(cls, ang, ctf, ang_square=None):
+        self = super().__new__(cls, (ang, ctf))
+        self.ang_square = ang_square
+        return self
+
+
 def export_ang_ctf(
     checkpoint_path: str,
     output_dir: str,
     phase_names: Optional[List[str]] = None,
     step_size: Optional[float] = None,
     *, write_ang: bool = True, write_ctf: bool = True,
+    write_ang_square: bool = False,
     source_h5_path: Optional[str] = None,
     sample_tilt: Optional[float] = None,
     pc: Optional[List[float]] = None,
     detector_shape: Optional[Tuple[int, int]] = None,
     scan_provenance: Optional[Dict] = None,
-) -> Tuple[Optional[str], Optional[str]]:
+    name_suffix: str = "",
+    variant=None,
+) -> "AngCtfFiles":
     """Export indexing results as .ang and .ctf for MTEX compatibility.
+
+    ``variant`` (a ``LoadVariant``; None = the file's first measurement, as before) is the
+    measurement ``source_h5_path`` was indexed on: its Band Contrast, Bands, acquisition header
+    and image quality go into the files.
+
+    A checkpoint that states a hexagonal grid gives a ``.ang`` that is a ``HexGrid`` file. A
+    ``.ctf`` and the square ``.ang`` (``write_ang_square``, named ``result_<name>_square.ang``)
+    hold the scan resampled to a square grid by OIM's nearest-neighbour rule
+    (``hex_resample``), and say so in their headers. ``write_ang_square`` for a square
+    checkpoint, and a scan that cannot be resampled, raise ``ValueError`` before anything is
+    written.
 
     Uses the auto-assignment (best phase per pixel) to build a CrystalMap
     and exports via orix.
@@ -1223,7 +1460,8 @@ def export_ang_ctf(
 
     Returns
     -------
-    (ang_path, ctf_path) — paths to created files, or None if failed.
+    (ang_path, ctf_path) — paths to created files, or None if failed; the square ``.ang`` is
+    the ``ang_square`` attribute of the result (``None`` when not written or failed).
     """
     if step_size is None:
         step_size = _read_step_size_from_checkpoint(checkpoint_path)
@@ -1232,13 +1470,37 @@ def export_ang_ctf(
             f"export_ang_ctf called with step_size={step_size!r}; refusing "
             "to write coordinates that would be unusable downstream."
         )
+    # The grid the checkpoint states (None: a checkpoint from before hexagonal scans, square).
+    # Read here, outside the try below, whose `except Exception` turns errors into None paths: a
+    # stamp that cannot be read must stop the export, not produce a square file.
+    from backend.api.services.checkpoint_writer import read_checkpoint_geometry
+    hex_grid = read_checkpoint_geometry(checkpoint_path)
+    if hex_grid is not None and not hex_grid.is_hex:
+        hex_grid = None
+    row_step = step_size
+    if hex_grid is not None:
+        if abs(step_size - hex_grid.step_x) > 1e-4 * hex_grid.step_x:
+            raise ValueError(
+                f"export_ang_ctf was given step_size={step_size!r}, the hexagonal checkpoint "
+                f"states step_x={hex_grid.step_x!r}; refusing to write positions of two grids.")
+        step_size = hex_grid.step_x
+        row_step = hex_grid.step_y
+    # The square grid a .ctf and a square .ang hold. Worked out here, with the stamp and before
+    # the try below: a scan that cannot be resampled is a refusal the caller must see.
+    resampling = None
+    if write_ang_square and hex_grid is None:
+        raise ValueError(
+            "write_ang_square is for a hexagonal scan; this checkpoint states a square grid")
+    if hex_grid is not None and (write_ctf or write_ang_square):
+        from backend.api.services.hex_resample import square_resampling
+        resampling = square_resampling(hex_grid)
     from orix.crystal_map import CrystalMap, Phase, PhaseList
     from orix.quaternion import Rotation
 
     cp_path = Path(checkpoint_path)
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    base_name = cp_path.stem.replace("_multiphase", "")
+    base_name = cp_path.stem.replace("_multiphase", "") + name_suffix
 
     try:
         with h5py.File(str(cp_path), "r") as cp:
@@ -1251,7 +1513,7 @@ def export_ang_ctf(
 
             if not phase_names:
                 logger.warning("No phases in checkpoint for ang/ctf export")
-                return None, None
+                return AngCtfFiles(None, None)
 
             # Read auto-assignment or build from per-phase CI.
             # Prefer cleaned_phase_id (written by /apply-cleanup or batch
@@ -1313,7 +1575,7 @@ def export_ang_ctf(
         # Build coordinates
         y_coords, x_coords = np.mgrid[0:n_rows, 0:n_cols]
         x_flat = (x_coords.flatten() * step_size).astype(float)
-        y_flat = (y_coords.flatten() * step_size).astype(float)
+        y_flat = (y_coords.flatten() * row_step).astype(float)
 
         # Build phase list — CRUCIAL that each Phase carries its proper
         # point group / space group. Without it orix falls back to the
@@ -1389,23 +1651,29 @@ def export_ang_ctf(
         # 'iq', orix writes zeros and the .ang's IQ column is useless
         # in MTEX/EDAX OIM Analysis.
         prop: Dict[str, np.ndarray] = {"ci": ci_flat}
-        bc_quality = _read_h5oina_quality(source_h5_path, n_pixels)
+        bc_quality = _read_h5oina_quality(source_h5_path, n_pixels, variant)
         bc_arr = bc_quality.get("bc")
         ang_iq_note = None
+        # The quality of each point, in the order of the scan's points: what a resampled .ctf
+        # takes its Band Contrast from (after the gather), and whether it is the source's own.
+        ctf_quality = None
+        ctf_quality_native = False
         if bc_arr is not None:
             # Native Band Contrast → real IQ column, no provenance note.
             prop["iq"] = bc_arr.astype(np.float32)
+            ctf_quality, ctf_quality_native = bc_arr, True
         else:
             # No native Band Contrast — try a computed FFT image quality from
             # the source patterns (heavy, opt-in). Rescale to 0..255 to match
             # the ANG IQ column's usual range. Fall back to honest zeros + note.
             from backend.api.services.pattern_quality import image_quality_from_file
-            iq = image_quality_from_file(source_h5_path, n_rows, n_cols)
+            iq = image_quality_from_file(source_h5_path, n_rows, n_cols, variant)
             if iq is not None and iq.size == n_pixels:
                 iqf = np.asarray(iq, dtype=np.float64).ravel()
                 mx = float(iqf.max())
                 if mx > 0:
                     prop["iq"] = np.clip(iqf / mx * 255.0, 0, 255).astype(np.float32)
+                    ctf_quality = iqf
                     ang_iq_note = (
                         "# NOTE: IQ column = computed FFT image quality "
                         "(no native Band Contrast; not a confidence surrogate)"
@@ -1444,17 +1712,39 @@ def export_ang_ctf(
         # its scan, the source scan's own acquisition geometry, the Euler frame
         # and whether the EDS decided any phase (a batch never uses it: each
         # pixel gets the phase with the highest confidence index).
-        geometry = ang_export.read_source_geometry(source_h5_path)
+        geometry = ang_export.read_source_geometry(source_h5_path, variant)
         vendor = _read_vendor_from_h5(source_h5_path) if source_h5_path else ""
         provenance = ang_export.assignment_provenance(None)
         pc_tsl = ang_export.pc_tsl_from_bruker(pc, detector_shape)
+
+        # The scan on the square grid, once, for both files; the note and the grid come from the
+        # same stamp and the same resampling. Outside the per-file tries below, whose
+        # `except Exception` turns a failure into a missing path: a refusal here is the caller's.
+        square_xmap = None
+        square_codes = None
+        resampled_note = None
+        if resampling is not None:
+            from backend.api.services.hex_resample import resample_xmap
+            square_xmap = resample_xmap(xmap, resampling)
+            resampled_note = ang_export.resampling_note(resampling, hex_grid)
+            if write_ang_square:
+                square_codes = _tsl_codes_of_map(square_xmap)
+
+        # The TSL ``# Symmetry`` code of each phase of the file, numbered by the map that is
+        # written: orix leaves a phase out that no cell takes and renumbers the rest, and writes
+        # the name of the rotation group (312 for the point group 312, 112 for 2/m), which is no
+        # TSL code. Asked outside the try below: a phase without a code is the caller's refusal.
+        ang_codes = _tsl_codes_of_map(xmap) if write_ang else None
 
         ang_path = None
         if write_ang:
             ang_path = str(out_dir / f"result_{base_name}.ang")
             try:
-                from orix.io import save
-                save(ang_path, xmap, overwrite=True)
+                if hex_grid is None:
+                    from orix.io import save
+                    save(ang_path, xmap, overwrite=True)
+                else:
+                    ang_export.save_hex_ang(ang_path, xmap, hex_grid)
                 # Post-edit the ANG header to inject TILT from the calibration
                 # store. orix's ANG writer does not take detector geometry as
                 # input -- adding it as additional ``# KEY VALUE`` lines is the
@@ -1464,18 +1754,21 @@ def export_ang_ctf(
                 _inject_ang_acquisition(
                     ang_path, sample_tilt=sample_tilt, pc=None, note=ang_iq_note
                 )
+                header_replace = ang_export.header_replacements(
+                    geometry=geometry, pc_tsl=pc_tsl)
                 ang_export.edit_ang_header(
                     ang_path,
-                    replace=ang_export.header_replacements(
-                        geometry=geometry, pc_tsl=pc_tsl),
+                    replace=header_replace,
                     comments=ang_export.header_comments(
                         method=None, vendor=vendor, provenance=provenance,
                         scan=scan_provenance, step_um=step_size,
-                        geometry=geometry, pc_bruker=pc,
+                        geometry=geometry, pc_bruker=pc, grid=hex_grid,
                         notes=([] if pc_tsl is not None or pc is None else [
                             "x-star, y-star, z-star are zero: the TSL values "
                             "need the detector shape, which was not given."]),
+                        phases=ang_export.map_phases(xmap),
                     ),
+                    symmetry_codes=ang_codes or None,
                 )
                 logger.info("Exported .ang: %s", ang_path)
             except Exception as e:
@@ -1489,22 +1782,79 @@ def export_ang_ctf(
         if write_ctf:
             ctf_path = str(out_dir / f"result_{base_name}.ctf")
             try:
-                _write_ctf(
-                    ctf_path, xmap, phase_names, step_size,
-                    source_h5_path=source_h5_path,
-                    sample_tilt=sample_tilt,
-                    vendor=vendor,
-                    prj_note=ang_export.ctf_project_note(
-                        vendor=vendor, provenance=provenance,
-                        scan=scan_provenance, step_um=step_size,
-                        geometry=geometry),
-                )
+                if resampling is None:
+                    _write_ctf(
+                        ctf_path, xmap, phase_names, step_size,
+                        source_h5_path=source_h5_path,
+                        sample_tilt=sample_tilt,
+                        vendor=vendor,
+                        variant=variant,
+                        prj_note=ang_export.ctf_project_note(
+                            vendor=vendor, provenance=provenance,
+                            scan=scan_provenance, step_um=step_size,
+                            geometry=geometry, phases=ang_export.map_phases(xmap)),
+                    )
+                else:
+                    # a hexagonal scan: the cells of the square grid, every step stated is the
+                    # step of that grid, and the quality is that of the points the cells take
+                    _write_ctf(
+                        ctf_path, square_xmap, phase_names, resampling.step,
+                        source_h5_path=source_h5_path,
+                        sample_tilt=sample_tilt,
+                        vendor=vendor,
+                        variant=variant,
+                        resampled=True,
+                        resampled_quality=(None if ctf_quality is None
+                                           else resampling.gather(ctf_quality)),
+                        resampled_quality_native=ctf_quality_native,
+                        prj_note=ang_export.ctf_project_note(
+                            vendor=vendor, provenance=provenance,
+                            scan=scan_provenance, step_um=resampling.step,
+                            geometry=geometry, notes=(resampled_note,),
+                            resampled_from=hex_grid,
+                            phases=ang_export.map_phases(square_xmap)),
+                    )
                 logger.info("Exported .ctf: %s", ctf_path)
             except Exception as e:
                 logger.warning("Failed to export .ctf: %s", e)
                 ctf_path = None
 
-        return ang_path, ctf_path
+        # The square .ang of a hexagonal scan: orix's writer on the resampled map, then the
+        # same header work as for the .ang above, with the grid of the resampling.
+        square_path = None
+        if write_ang_square:
+            square_path = str(out_dir / f"result_{base_name}_square.ang")
+            try:
+                from orix.io import save
+                save(square_path, square_xmap, overwrite=True)
+                _inject_ang_acquisition(
+                    square_path, sample_tilt=sample_tilt, pc=None, note=ang_iq_note)
+                step_line = f"{resampling.step:.6f}"
+                header_replace = ang_export.header_replacements(
+                    geometry=geometry, pc_tsl=pc_tsl)
+                header_replace["# XSTEP:"] = f"# XSTEP: {step_line}"
+                header_replace["# YSTEP:"] = f"# YSTEP: {step_line}"
+                ang_export.edit_ang_header(
+                    square_path,
+                    replace=header_replace,
+                    comments=ang_export.header_comments(
+                        method=None, vendor=vendor, provenance=provenance,
+                        scan=scan_provenance, step_um=resampling.step,
+                        geometry=geometry, pc_bruker=pc, resampled_from=hex_grid,
+                        notes=([] if pc_tsl is not None or pc is None else [
+                            "x-star, y-star, z-star are zero: the TSL values "
+                            "need the detector shape, which was not given."]
+                            ) + [resampled_note],
+                        phases=ang_export.map_phases(square_xmap),
+                    ),
+                    symmetry_codes=square_codes or None,
+                )
+                logger.info("Exported square .ang: %s", square_path)
+            except Exception as e:
+                logger.warning("Failed to export square .ang: %s", e)
+                square_path = None
+
+        return AngCtfFiles(ang_path, ctf_path, square_path)
 
     except ValueError:
         # Bubble out — these are intentional refusals (missing step,
@@ -1512,10 +1862,10 @@ def export_ang_ctf(
         raise
     except Exception as e:
         logger.exception("Failed to export ang/ctf from checkpoint: %s", e)
-        return None, None
+        return AngCtfFiles(None, None)
 
 
-def _copy_eds_full(source_h5_path: str, dst_file: "h5py.File") -> bool:
+def _copy_eds_full(source_h5_path: str, dst_file: "h5py.File", variant=None) -> bool:
     """Copy the FULL EDS payload from a source h5oina into the light file.
 
     This includes the per-pixel raw Spectrum dataset — historically we
@@ -1529,13 +1879,20 @@ def _copy_eds_full(source_h5_path: str, dst_file: "h5py.File") -> bool:
     and chunk-friendly shapes. We compress everything (gzip default) so
     the file is still smaller than the raw input.
 
-    Returns True on success, False if the source has no EDS group.
-    Raises if the copy itself fails partway — we don't want a silent
-    half-EDS file (the user explicitly asked for full data).
+    ``variant`` (a ``LoadVariant``; None = measurement "1", as before) names the measurement
+    whose EDS payload is copied.
+
+    Returns True on success, False if the source has no EDS group or is not an HDF5 file at
+    all (an EDAX ``.up1`` / ``.up2`` pattern file holds no EDS). Raises if the copy itself
+    fails partway — we don't want a silent half-EDS file (the user explicitly asked for
+    full data).
     """
+    if not h5py.is_hdf5(str(source_h5_path)):
+        return False
     with h5py.File(source_h5_path, "r") as src:
-        # H5OINA stores EDS under "1/EDS" (first scan group).
-        src_eds = src.get("1/EDS")
+        # H5OINA stores EDS under "<scan group>/EDS": the measurement indexed, "1" by default.
+        eds_group = measurement_groups(src, variant, default="1")[0]
+        src_eds = src.get(f"{eds_group}/EDS")
         if src_eds is None:
             return False
         dst_eds = dst_file.create_group("EDS")
@@ -1592,8 +1949,12 @@ def _read_vendor_from_h5(path: str) -> str:
     """Map an EBSD file's Manufacturer to oxford/edax/bruker, or "" if unknown.
 
     Used to write exported Euler in the vendor's stored frame (see
-    orientation_frame.to_vendor_export_frame).
+    orientation_frame.to_vendor_export_frame). An EDAX APEX pattern file (``.up1`` /
+    ``.up2``) is not HDF5 and has no Manufacturer, but only EDAX writes it: ``"edax"``, the
+    frame of which is the native one.
     """
+    if str(path).lower().endswith((".up1", ".up2")) and not h5py.is_hdf5(str(path)):
+        return "edax"
     try:
         with h5py.File(path, "r") as f:
             if "Manufacturer" in f:
@@ -1637,8 +1998,16 @@ def export_result_h5_light(
     step_size: Optional[float] = None,
     scan_provenance: Optional[Dict] = None,
     citation_steps: Optional[List[Dict]] = None,
+    hough_reflectors: Optional[Dict] = None,
+    caveats: Optional[List[Dict]] = None,
+    name_suffix: str = "",
+    variant=None,
 ) -> str:
     """Create a lightweight H5 result file: indexing data only, no source copy.
+
+    ``variant`` (a ``LoadVariant``; None = measurement "1", as before) is the measurement of
+    ``source_h5_path`` the result was indexed on: the quality fields and the EDS payload copied
+    into the file are that measurement's.
 
     Unlike :func:`export_result_h5`, this does NOT copy the (potentially
     multi-GB) original h5oina patterns. It only writes:
@@ -1654,18 +2023,34 @@ def export_result_h5_light(
     on the results without replicating terabytes of raw pattern data.
     """
     source_path = Path(source_h5_path)
+
+    # A source that claims to be an EDAX UP1/UP2 but whose header does not parse (truncated,
+    # corrupt, or not actually a UP file) is refused here, before anything is written. Without
+    # this, the helpers below treat "not HDF5" as "an ordinary EDAX file, nothing to copy" and
+    # silently finish a light result that looks done but was never read from a real source.
+    from edax_up1 import is_edax_up_file, read_up1_header
+    if source_path.is_file() and is_edax_up_file(str(source_path)) and not h5py.is_hdf5(str(source_path)):
+        read_up1_header(str(source_path))
+
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if step_size is None:
         step_size = _read_step_size_from_checkpoint(checkpoint_path)
 
+    # The grid the checkpoint states: a hexagonal one is stamped on /Indexing and gives X and Y
+    # their positions; its step_x is the step of the file.
+    from backend.api.services.orienta_hex_h5 import write_index_block
+    hex_geometry = _hex_geometry_of_checkpoint(checkpoint_path, step_size, "export_result_h5_light")
+    if hex_geometry is not None:
+        step_size = hex_geometry.step_x
+
     # Vendor for export-frame conversion: our indexers emit the EMsoft/kikuchipy
     # common frame; Oxford/Bruker store Euler 90deg about ND from it. Writing in
     # the vendor frame makes a raw MTEX/h5read import match Aztec.
     export_vendor = _read_vendor_from_h5(source_h5_path)
 
-    result_name = f"result_{source_path.stem}_light.h5"
+    result_name = f"result_{source_path.stem}{name_suffix}_light.h5"
     result_path = out_dir / result_name
 
     work_path = begin_atomic(result_path)
@@ -1758,13 +2143,15 @@ def export_result_h5_light(
         idx.attrs["format"] = "light"
         idx.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(idx, scan_provenance)
-        _write_citations(idx, citation_steps)
-        _stated_in_batch_export(f, idx, source_path)
+        _write_citations(idx, citation_steps, hough_reflectors, caveats)
+        _stated_in_batch_export(f, idx, source_path, variant)
         # Store the µm step size on /Indexing AND /Detector below so any
         # reader path finds it without guessing. The reader in
         # analysis.py uses this to scale CrystalMap.x/y from pixel units
         # to µm, which is what the PC-Refinement axes manager needs.
         idx.attrs["step_size_um"] = float(step_size)
+        if hex_geometry is not None:
+            write_index_block(idx, hex_geometry)
         # Orientation export-frame tag (see _read_vendor_from_h5). Euler below
         # is written in the vendor frame; the reader inverts via source_vendor.
         from backend.api.services.orientation_frame import (
@@ -1781,22 +2168,32 @@ def export_result_h5_light(
 
         # Per-pixel X/Y µm coordinates so MTEX (and any generic HDF5 reader)
         # can place the orientations on a grid without the source h5oina.
-        # X = column · step, Y = row · step — same convention as the .ang
-        # writer (export_ang_ctf).
+        # Square: X = column · step, Y = row · step — same convention as the .ang
+        # writer (export_ang_ctf). Hexagonal: the positions of the points, float64,
+        # as the geometry states them (odd rows half a step aside).
         _n_rows, _n_cols = grid_shape
-        _cc, _rr = np.meshgrid(np.arange(_n_cols), np.arange(_n_rows))
-        _xds = idx.create_dataset(
-            "X", data=(_cc * float(step_size)).astype(np.float32),
-            compression="gzip",
-        )
+        if hex_geometry is not None:
+            _x_pos, _y_pos = hex_geometry.positions()
+            _xds = idx.create_dataset("X", data=_x_pos, compression="gzip")
+            _xds.attrs["description"] = (
+                "Sample X position in um (column * step_x, plus half a step_x on the "
+                "shifted rows of the hexagonal scan)")
+            _yds = idx.create_dataset("Y", data=_y_pos, compression="gzip")
+            _yds.attrs["description"] = "Sample Y position in um (row * step_y)"
+        else:
+            _cc, _rr = np.meshgrid(np.arange(_n_cols), np.arange(_n_rows))
+            _xds = idx.create_dataset(
+                "X", data=(_cc * float(step_size)).astype(np.float32),
+                compression="gzip",
+            )
+            _xds.attrs["description"] = "Sample X (column · step_size_um)"
+            _yds = idx.create_dataset(
+                "Y", data=(_rr * float(step_size)).astype(np.float32),
+                compression="gzip",
+            )
+            _yds.attrs["description"] = "Sample Y (row · step_size_um)"
         _xds.attrs["unit"] = "um"
-        _xds.attrs["description"] = "Sample X (column · step_size_um)"
-        _yds = idx.create_dataset(
-            "Y", data=(_rr * float(step_size)).astype(np.float32),
-            compression="gzip",
-        )
         _yds.attrs["unit"] = "um"
-        _yds.attrs["description"] = "Sample Y (row · step_size_um)"
 
         # Per-Phase
         per_phase = idx.create_group("PerPhase")
@@ -1872,7 +2269,7 @@ def export_result_h5_light(
             # quality maps, BC-GMM/RX analysis, per-pixel PC refinement,
             # and Aztec-vs-ours diagnostic comparisons — without keeping
             # the (multi-GB) source open.
-            copied = _copy_quality_fields(source_h5_path, aa_grp, grid_shape)
+            copied = _copy_quality_fields(source_h5_path, aa_grp, grid_shape, variant)
             if copied:
                 aa_grp.attrs["quality_fields"] = copied
                 logger.info("Copied quality fields from source: %s", copied)
@@ -1904,7 +2301,7 @@ def export_result_h5_light(
         doc = f.create_group("Documentation")
         doc.attrs["format_version"] = FORMAT_VERSION
         _write_scan_provenance(doc, scan_provenance)
-        _write_citations(doc, citation_steps)
+        _write_citations(doc, citation_steps, hough_reflectors, caveats)
         doc.attrs["format"] = "light"
         doc.attrs["description"] = (
             "Lightweight indexing result. Original pattern data is NOT included — "
@@ -1917,7 +2314,7 @@ def export_result_h5_light(
         # accessible. Default-on so the EDS-driven phase-preselection
         # workflow (FEAT-10) works without manual configuration.
         if include_eds:
-            if _copy_eds_full(source_h5_path, f):
+            if _copy_eds_full(source_h5_path, f, variant):
                 doc.attrs["eds_included"] = True
                 doc.attrs["eds_full"] = True
                 logger.info("Full EDS payload copied into light result file")
@@ -1932,6 +2329,10 @@ def export_result_h5_light(
     return finish_atomic(work_path, result_path)
 
 
+#: What :func:`export_all` writes when no format is asked for: the small-output set.
+DEFAULT_EXPORT_FORMATS = ("h5_light", "ang", "ctf")
+
+
 def export_all(
     source_h5_path: str,
     checkpoint_path: str,
@@ -1944,8 +2345,24 @@ def export_all(
     formats: Optional[List[str]] = None,
     include_eds: bool = True,
     scan_provenance: Optional[Dict] = None,
+    name_suffix: str = "",
+    citation_steps: Optional[List[Dict]] = None,
+    hough_reflectors: Optional[Dict] = None,
+    caveats: Optional[List[Dict]] = None,
 ) -> Dict[str, Optional[str]]:
-    """Export selected formats: rich .h5, light .h5, .ang, .ctf.
+    """Export selected formats: rich .h5, light .h5, .ang, .ctf and, for a hexagonal scan,
+    ``ang_square`` (the scan resampled to a square grid, ``result_<name>_square.ang``).
+
+    ``citation_steps`` and ``hough_reflectors`` are what the run recorded about itself
+    (the steps that ran, and which reflector list each Hough phase was indexed with);
+    they go to both .h5 writers, as on every other export path. ``None`` writes nothing.
+    ``caveats`` (the notes the run carries about its result, see ``hough_caveats``)
+    travels the same way.
+
+    ``name_suffix`` is put between the source stem and the extension of every output
+    (``result_scan__1a2b3c4d.ang``): two sources with the same stem exported into one
+    folder would otherwise overwrite each other. It is returned in the result under
+    ``"name_suffix"``.
 
     Parameters
     ----------
@@ -1961,19 +2378,19 @@ def export_all(
         writes nothing, and ``None`` is correct for every caller that exports
         files it did not just index — see the note in :func:`export_result_h5`.
     formats : list of str, optional
-        Subset of {"h5_rich", "h5_light", "ang", "ctf"}. Default:
+        Subset of {"h5_rich", "h5_light", "ang", "ctf", "ang_square"}. Default:
         ["h5_light", "ang", "ctf"] — the small-output set, safe for
         multi-GB sources. Include "h5_rich" explicitly when you need the
         source patterns replicated alongside the indexing data.
 
     Returns
     -------
-    dict with keys: 'h5_rich', 'h5_light', 'ang', 'ctf' — paths or None.
+    dict with keys: 'h5_rich', 'h5_light', 'ang', 'ctf', 'ang_square' — paths or None.
     """
     if output_dir is None:
         output_dir = str(Path(source_h5_path).parent)
     if formats is None:
-        formats = ["h5_light", "ang", "ctf"]
+        formats = list(DEFAULT_EXPORT_FORMATS)
 
     # Resolve step_size once so every output stamps the same scale.
     # Raises ValueError if the checkpoint never recorded a step — better
@@ -1991,7 +2408,7 @@ def export_all(
         )
 
     results: Dict[str, Optional[str]] = {
-        "h5_rich": None, "h5_light": None, "ang": None, "ctf": None
+        "h5_rich": None, "h5_light": None, "ang": None, "ctf": None, "ang_square": None
     }
     errors: Dict[str, str] = {}
 
@@ -2003,10 +2420,15 @@ def export_all(
                 sample_tilt=sample_tilt, detector_shape=detector_shape,
                 step_size=step_size,
                 scan_provenance=scan_provenance,
+                citation_steps=citation_steps,
+                hough_reflectors=hough_reflectors,
+                caveats=caveats,
+                name_suffix=name_suffix,
             )
         except Exception as e:
             logger.exception("Rich H5 export failed: %s", e)
-            errors["h5_rich"] = str(e)
+            errors["h5_rich"] = _reason_of(e)
+            _discard_part(output_dir, f"result_{Path(source_h5_path).stem}{name_suffix}.h5")
 
     if "h5_light" in formats:
         try:
@@ -2017,17 +2439,23 @@ def export_all(
                 include_eds=include_eds,
                 step_size=step_size,
                 scan_provenance=scan_provenance,
+                citation_steps=citation_steps,
+                hough_reflectors=hough_reflectors,
+                caveats=caveats,
+                name_suffix=name_suffix,
             )
         except Exception as e:
             logger.exception("Light H5 export failed: %s", e)
             errors["h5_light"] = str(e)
+            _discard_part(output_dir, f"result_{Path(source_h5_path).stem}{name_suffix}_light.h5")
 
-    if "ang" in formats or "ctf" in formats:
+    if "ang" in formats or "ctf" in formats or "ang_square" in formats:
         try:
-            ang, ctf = export_ang_ctf(
+            written = export_ang_ctf(
                 checkpoint_path, output_dir, step_size=step_size,
                 write_ang=("ang" in formats),
                 write_ctf=("ctf" in formats),
+                write_ang_square=("ang_square" in formats),
                 source_h5_path=source_h5_path,
                 # Calibrated values from CalibrationStore land here so
                 # the .ang TILT / x-star / y-star / z-star header lines
@@ -2037,9 +2465,10 @@ def export_all(
                 pc=pc,
                 detector_shape=detector_shape,
                 scan_provenance=scan_provenance,
+                name_suffix=name_suffix,
             )
-            results["ang"] = ang
-            results["ctf"] = ctf
+            results["ang"], results["ctf"] = written
+            results["ang_square"] = written.ang_square
         except Exception as e:
             logger.exception("ANG/CTF export failed: %s", e)
             errors["ang_ctf"] = str(e)
@@ -2050,4 +2479,21 @@ def export_all(
     # the backend log and the frontend just saw a missing file.
     if errors:
         results["_errors"] = errors  # type: ignore[assignment]
+    results["name_suffix"] = name_suffix or None
     return results
+
+
+def _discard_part(output_dir, result_name: str) -> None:
+    """Remove the ``.part`` a failed writer left under ``result_name``.
+
+    A crash mid-write leaves the fragment on purpose (nothing reads it, the next export
+    deletes it); a writer that FAILED with an exception, as one does for a source that is
+    not HDF5, is not a crash and leaves nothing behind.
+    """
+    from backend.api.services.atomic_result import PART_SUFFIX
+    part = Path(output_dir) / (result_name + PART_SUFFIX)
+    try:
+        if part.exists():
+            part.unlink()
+    except OSError:
+        logger.warning("Could not remove the partial export %s", part)

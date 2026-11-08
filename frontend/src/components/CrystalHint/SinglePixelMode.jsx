@@ -10,7 +10,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors } from '../../theme/tokens';
 import useDataStore from '../../stores/useDataStore';
+import useAvgRadius from './useAvgRadius';
+import { problemText } from '../../services/problemText';
 import { crystalHintApi, ebsdApi } from '../../services/api';
+import { makeHexMap } from '../../services/hexMap';
+import {
+  pickerAspect, pickAt, markerAt, rowColOf, shownPicture, pictureProblem, pictureEntry, pictureAfterFailure,
+  pickerRect, pickerInner, PICKER_BORDER,
+} from '../common/scanPickerGeometry';
 import SymmetryReportPanel from './SymmetryReportPanel';
 import LatticeReportPanel from './LatticeReportPanel';
 import CandidateList from './CandidateList';
@@ -98,6 +105,9 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
   const { t } = useTranslation('crystalhint');
   const currentIndex = useDataStore(s => s.currentIndex) || 0;
   const gridShape = useDataStore(s => s.gridShape);
+  // A hexagonal scan is clicked through its display raster (null for a square scan).
+  const scanGeometry = useDataStore(s => s.scanGeometry);
+  const hexMap = useMemo(() => makeHexMap(scanGeometry), [scanGeometry]);
   const setPosition = useDataStore(s => s.setPosition);
   // Either path (EBSD Viewer's `ebsd/load` or HDF5 Viewer's `h5/open`)
   // sets up a usable h5_session on the backend — both gate Crystal Hint.
@@ -107,7 +117,8 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
   // Neighborhood averaging: 0=single pixel, 1=3x3 average (9 patterns).
   // 3x3 averaging recovers ~2x NCC on noisy raw patterns by suppressing
   // per-pixel noise while preserving band structure.
-  const [avgRadius, setAvgRadius] = useState(1);
+  // (a hexagonal scan: 0 and locked, see useAvgRadius)
+  const { avgRadius, setAvgRadius, avgLocked } = useAvgRadius(1);
   // EDS chemistry weighting: 'off' (pattern-only) | 'soft' (damp by
   // chemistry match) | 'filter' (drop chemically inconsistent phases).
   // Default 'soft'; degrades to off server-side when the dataset has no EDS.
@@ -138,19 +149,28 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
   // the same crisp band-contrast map as the Indexing Navigation Map (native
   // Oxford BC, computed FFT image-quality fallback) rather than a washed-out
   // per-pixel mean-intensity map.
-  const [overviewB64, setOverviewB64] = useState(null);
+  // The answer, with the map it was fetched for: shownPicture() shows it only while the picker still holds that
+  // map and the answer carries that map's raster.
+  const [overview, setOverview] = useState(null);
+  const shownOverview = shownPicture(hexMap, overview);
+  const overviewProblem = pictureProblem(hexMap, overview);
 
   useEffect(() => {
     if (!fileLoaded || !isActive) return;
     let cancelled = false;
-    ebsdApi.overview('bc')
+    ebsdApi.overview('bc', { display: 'raster' })
       .then((r) => {
         if (cancelled) return;
-        setOverviewB64(r?.data?.image || null);
+        setOverview((prev) => pictureEntry(prev, hexMap, r?.data?.image, r?.data?.display));
       })
-      .catch(() => { /* silently fall back to empty SVG */ });
+      .catch(() => {
+        // a square scan silently falls back to the empty SVG, unless it held a hexagonal picture before; a
+        // hexagonal one says the picture failed
+        if (!cancelled) setOverview((prev) => pictureAfterFailure(prev, hexMap));
+      });
     return () => { cancelled = true; };
-  }, [fileLoaded, isActive]);
+    // another measurement, a crop or a dataset switch changes the map without changing the file
+  }, [fileLoaded, isActive, hexMap]);
 
   // Keep the input in sync with the global currentIndex when it changes (e.g.
   // user clicks a pixel in the EBSD viewer / phase map).
@@ -213,7 +233,7 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
         }
       } catch (err) {
         if (myReqId !== reqIdRef.current) return;
-        const msg = err?.response?.data?.detail || err?.message || 'unknown error';
+        const msg = problemText(err, t, 'crystalhint') || 'unknown error';
         setError(msg);
         setAnalysisResult(null);
         setLoading(false);
@@ -316,7 +336,7 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
       // analysis result was already saved above; we just warn here.
       console.warn('External DB search setup failed:', err);
     }
-  }, [pixelIndex, elements, presetKey, strictChemistry, avgRadius, edsWeighting]);
+  }, [pixelIndex, elements, presetKey, strictChemistry, avgRadius, edsWeighting, t]);
 
   const symmetry = analysisResult?.symmetry;
   const lattice = analysisResult?.lattice;
@@ -357,11 +377,14 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
               </div>
               <ScanPicker
                 gridShape={gridShape}
+                hexMap={hexMap}
                 pixelIndex={pixelIndex}
-                overviewB64={overviewB64}
+                overviewB64={shownOverview}
                 scanPickerTitle={t('single.scanPickerTooltip')}
                 overviewAlt={t('single.overviewAlt')}
-                loadingOverviewText={t('single.loadingOverview')}
+                loadingOverviewText={overviewProblem
+                  ? t(`ebsdviewer:overview.${overviewProblem}`) : t('single.loadingOverview')}
+                overviewIsProblem={!!overviewProblem}
                 onPick={(r, c) => {
                   const idx = r * gridShape[1] + c;
                   setPixelIndex(idx);
@@ -397,7 +420,8 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
               style={S.input}
               value={avgRadius}
               onChange={e => setAvgRadius(parseInt(e.target.value, 10))}
-              title={t('single.avgNeighborhoodTooltip')}
+              disabled={avgLocked}
+              title={avgLocked ? t('hexAvgLocked') : t('single.avgNeighborhoodTooltip')}
             >
               <option value={0}>{t('single.avgSingle')}</option>
               <option value={1}>{t('single.avg3x3')}</option>
@@ -407,6 +431,9 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
           <div style={S.hint}>
             {t('single.avgHint')}
           </div>
+          {avgLocked && (
+            <div style={S.hint} data-testid="hex-avg-locked">{t('hexAvgLocked')}</div>
+          )}
           <div style={{ ...S.controlRow, marginTop: 10 }}>
             <span style={S.label}>{t('single.edsWeighting')}</span>
             <select
@@ -482,26 +509,32 @@ export default function SinglePixelMode({ elements, presetKey, presetEntry, isAc
  * Falls back to an empty box if the overview isn't loaded yet — the
  * crosshair + click logic still works in that case.
  */
-function ScanPicker({ gridShape, pixelIndex, overviewB64, onPick, scanPickerTitle, overviewAlt, loadingOverviewText }) {
+export function ScanPicker({
+  gridShape, hexMap = null, pixelIndex, overviewB64, onPick, scanPickerTitle, overviewAlt, loadingOverviewText,
+  overviewIsProblem = false,
+}) {
   const [nRows, nCols] = gridShape;
   // Bigger than before — easier to pick a small region on a 174x145 scan.
   const maxW = 320;
   const maxH = 280;
-  const aspect = nCols / Math.max(nRows, 1);
+  const aspect = pickerAspect(hexMap, nRows, nCols);
   const w = aspect >= maxW / maxH ? maxW : Math.round(maxH * aspect);
   const h = aspect >= maxW / maxH ? Math.round(maxW / aspect) : maxH;
-  const cy = Math.floor(pixelIndex / nCols);
-  const cx = pixelIndex % nCols;
+  const { row: cy, col: cx } = rowColOf(nCols, pixelIndex);
   const handleClick = (ev) => {
-    const rect = ev.currentTarget.getBoundingClientRect();
+    // on a hexagonal scan: the area inside the frame, where the picture lies
+    const rect = pickerRect(ev.currentTarget, hexMap);
     const x = ev.clientX - rect.left;
     const y = ev.clientY - rect.top;
-    const c = Math.max(0, Math.min(nCols - 1, Math.floor((x / rect.width) * nCols)));
-    const r = Math.max(0, Math.min(nRows - 1, Math.floor((y / rect.height) * nRows)));
-    onPick(r, c);
+    // none in a corner no hexagon covers
+    const hit = pickAt(hexMap, nRows, nCols, x / rect.width, y / rect.height);
+    if (hit) onPick(hit[0], hit[1]);
   };
-  const px = ((cx + 0.5) / nCols) * w;
-  const py = ((cy + 0.5) / nRows) * h;
+  const marker = markerAt(hexMap, nRows, nCols, pixelIndex);
+  // the crosshair is drawn over the same area the click is measured against
+  const { w: sw, h: sh } = pickerInner(hexMap, w, h);
+  const px = marker.fx * sw;
+  const py = marker.fy * sh;
   return (
     <div
       onClick={handleClick}
@@ -511,7 +544,8 @@ function ScanPicker({ gridShape, pixelIndex, overviewB64, onPick, scanPickerTitl
         width: w,
         height: h,
         background: colors.bg,
-        border: `1px solid ${colors.border}`,
+        boxSizing: hexMap ? 'border-box' : undefined,   // a square scan is drawn as before: content-box
+        border: `${PICKER_BORDER}px solid ${colors.border}`,
         borderRadius: 4,
         cursor: 'crosshair',
         marginBottom: 6,
@@ -534,19 +568,19 @@ function ScanPicker({ gridShape, pixelIndex, overviewB64, onPick, scanPickerTitl
         <div style={{
           position: 'absolute', inset: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: colors.textSecondary, fontSize: 10, opacity: 0.5,
+          color: colors.textSecondary, fontSize: 10, opacity: overviewIsProblem ? 1 : 0.5,
         }}>
           {loadingOverviewText}
         </div>
       )}
       <svg
-        width={w} height={h}
+        width={sw} height={sh}
         style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
       >
-        <line x1={px} y1={0} x2={px} y2={h} stroke={colors.accent} strokeWidth="1" opacity="0.7" />
-        <line x1={0} y1={py} x2={w} y2={py} stroke={colors.accent} strokeWidth="1" opacity="0.7" />
+        <line x1={px} y1={0} x2={px} y2={sh} stroke={colors.accent} strokeWidth="1" opacity="0.7" />
+        <line x1={0} y1={py} x2={sw} y2={py} stroke={colors.accent} strokeWidth="1" opacity="0.7" />
         <circle cx={px} cy={py} r={5} fill={colors.accent} stroke="#fff" strokeWidth="1.5" />
-        <text x={4} y={h - 6} fill="#fff" fontSize="10" style={{
+        <text x={4} y={sh - 6} fill="#fff" fontSize="10" style={{
           paintOrder: 'stroke', stroke: '#000', strokeWidth: 2,
         }}>
           ({cy}, {cx})

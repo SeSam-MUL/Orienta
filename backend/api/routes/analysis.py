@@ -10,6 +10,7 @@ Wraps the analysis/ module (MTEX-equivalent post-processing):
 - Batch processing & Excel export
 """
 
+import copy
 import functools
 import io
 import logging
@@ -23,7 +24,9 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from backend.api.problem import problem
 from backend.api.services.image_utils import array_to_base64_png, colormap_array_to_base64
+from backend.api.services.scan_geometry import ScanGeometry
 
 logger = logging.getLogger(__name__)
 
@@ -57,19 +60,29 @@ _dataset = None  # EBSDDataset instance
 _dataset_by_file: dict = {}
 
 
-def stash_dataset_for_file(file_path) -> None:
+def _stash_key(file_path, variant_key=None):
+    """A file under its default variant keeps the plain path as its key (as it always was); another
+    variant (measurement x pattern source) of the same file is its own entry."""
+    return file_path if variant_key is None else (file_path, tuple(variant_key))
+
+
+def stash_dataset_for_file(file_path, variant_key=None) -> None:
     """Save the current analysis ``_dataset`` under ``file_path`` so it can be
     restored when the user switches back. No-op when nothing is loaded or the
-    path is empty."""
+    path is empty.
+
+    ``variant_key`` is the viewer's key of the variant the file was loaded as (None: the default).
+    The dataset is built from the indexing result of ONE measurement: loading another measurement
+    of the same file must not bring it back."""
     if _dataset is not None and file_path:
-        _dataset_by_file[file_path] = _dataset
+        _dataset_by_file[_stash_key(file_path, variant_key)] = _dataset
 
 
-def restore_dataset_for_file(file_path) -> bool:
-    """Make the analysis dataset previously built for ``file_path`` active
+def restore_dataset_for_file(file_path, variant_key=None) -> bool:
+    """Make the analysis dataset previously built for ``file_path`` (as ``variant_key``) active
     again (or ``None`` if there is none). Returns True if one was restored."""
     global _dataset
-    _dataset = _dataset_by_file.get(file_path)
+    _dataset = _dataset_by_file.get(_stash_key(file_path, variant_key))
     return _dataset is not None
 
 # Cap analysis-task tracking at MAX_TRACKED_TASKS so a long backend session
@@ -331,6 +344,32 @@ def _load_kikuchipy_rich_h5(path: str):
     return xmap
 
 
+def read_index_stamp(path: str) -> Optional[ScanGeometry]:
+    """The scan geometry stamped on ``/Indexing`` of an Orienta ``.h5``, or None.
+
+    None for everything that states no geometry: a file that is not HDF5, one without ``/Indexing``
+    (the caller's own loaders report that), and an ``/Indexing`` without a stamp (a square or older
+    export). A stamp that cannot be read (a missing key, a shift that is not +-0.5, a grid that is
+    not the stored data) is a 400, so that a damaged hexagonal file is never read as a square one."""
+    import h5py
+    from pathlib import Path
+    from backend.api.services import orienta_hex_h5
+    try:
+        if not h5py.is_hdf5(path):
+            return None
+        with h5py.File(path, "r") as f:
+            if "Indexing" not in f:
+                return None
+    except OSError:
+        return None
+    try:
+        return orienta_hex_h5.read_index_geometry(path)
+    except (ValueError, KeyError, TypeError, OverflowError) as exc:
+        raise HTTPException(status_code=400, detail=(
+            f"The scan geometry stored in {Path(path).name} cannot be read ({exc}). "
+            "Nothing was stored."))
+
+
 class LoadXmapRequest(BaseModel):
     xmap_path: str  # Path to .h5 CrystalMap file
 
@@ -399,7 +438,11 @@ async def load_xmap(req: LoadXmapRequest):
                         src = meta.get("source_file")
                     if src:
                         n_rows, n_cols = xmap.shape
-                        native_bc = read_native_band_contrast(src, n_rows, n_cols)
+                        # The measurement the result was indexed on (None = the file's default).
+                        from backend.api.services import variant_registry
+                        native_bc = read_native_band_contrast(
+                            src, n_rows, n_cols,
+                            variant=variant_registry.variant_for_source(_last_result, src))
                         if native_bc is not None:
                             bc_flat = native_bc.ravel()
                             if bc_flat.size == xmap.size:
@@ -410,6 +453,10 @@ async def load_xmap(req: LoadXmapRequest):
             if not step_size or step_size == 1.0:
                 step_size = _fallback_step_size()
             _dataset = EBSDDataset(xmap, step_size=step_size, source="indexing_result")
+            # Which grid the grains and the KAM will be computed on: the one the result ran on.
+            # Its own copy: the dataset must not change what the result says about itself.
+            _dataset.scan_geometry = copy.deepcopy(
+                (getattr(_last_result, "metadata", None) or {}).get("scan_geometry"))
         else:
             # Load from file.
             # Try orix first (native .ang/.ctf/.h5 with orix structure). If the
@@ -418,8 +465,17 @@ async def load_xmap(req: LoadXmapRequest):
             # orix's rsciio chain fails with a cryptic "NoneType has no
             # attribute 'file_reader'". Fall back to parsing our schema.
             from orix.io import load as orix_load
+            from analysis.ang_hexgrid import AngGridRefused, load_ang_xmap
+            hex_grid = None     # the grid a hexagonal .ang states (analysis/ang_hexgrid.py)
             try:
-                xmap = orix_load(req.xmap_path)
+                if str(req.xmap_path).lower().endswith(".ang"):
+                    # a HexGrid file is kept as a hexagonal scan or refused by name; it is never
+                    # read as a square map
+                    xmap, hex_grid = load_ang_xmap(req.xmap_path)
+                else:
+                    xmap = orix_load(req.xmap_path)
+            except AngGridRefused as refused:
+                raise problem(400, refused.code, str(refused))
             except Exception as orix_err:
                 xmap = None
                 try:
@@ -438,10 +494,24 @@ async def load_xmap(req: LoadXmapRequest):
             # comes back as 1.0 from the unit-pixel coordinates we built;
             # _fallback_step_size pulls the real value off the active
             # signal in that case.
-            step_size = getattr(xmap, 'dx', None)
-            if not step_size or step_size == 1.0:
-                step_size = _fallback_step_size()
+            # An Orienta .h5 states its grid on /Indexing (a damaged stamp is a 400, before anything
+            # is stored); a file with no stamp states none.
+            file_stamp = None if hex_grid is not None else read_index_stamp(req.xmap_path)
+            if hex_grid is not None:
+                step_size = hex_grid["step_x"]
+            else:
+                step_size = getattr(xmap, 'dx', None)
+                if not step_size or step_size == 1.0:
+                    step_size = _fallback_step_size()
             _dataset = EBSDDataset(xmap, step_size=step_size, source=req.xmap_path)
+            # A hexagonal .ang states its grid, and so does an Orienta .h5 with a stamp; any other
+            # file does not state it (unknown, not square)
+            if hex_grid is not None:
+                _dataset.scan_geometry = ScanGeometry.hex(
+                    hex_grid["n_rows"], hex_grid["n_cols"], hex_grid["step_x"], hex_grid["step_y"],
+                    odd_row_shift=hex_grid["shift"], shift_confirmed=hex_grid["confirmed"]).to_dict()
+            else:
+                _dataset.scan_geometry = None if file_stamp is None else file_stamp.to_dict()
             # Forward per-phase CI maps extracted by our custom .h5 reader
             # onto the dataset so Phase Map's "CI — <phase>" and
             # "Uncertainty" modes work after a file load (orix .ang/.ctf
@@ -538,9 +608,15 @@ async def pc_drift_to_seed(req: PcSeedRequest):
     (rows, cols, 3) map and write it to the calibration store, where it
     becomes the starting point for the next indexing / PC refinement run.
 
-    Conventions: pc_x/pc_y/dd come straight from the source h5oina (Oxford
-    fractional 0..1). The downstream consumer (PC Refinement controller +
-    indexer) expects the same convention. No conversion is applied.
+    Conventions: pc_x/pc_y/dd come straight from the source h5oina, in the OXFORD
+    convention. The calibration store, the PC Refinement controller and the
+    indexers hold the BRUKER one (kikuchipy's), so the map is converted with
+    kikuchipy's own Oxford to Bruker conversion (PCy = 1 - PCy_Oxford * aspect,
+    PCz = PCz_Oxford * aspect, aspect = columns / rows of the pattern) before it
+    is stored. Stored unconverted, the Oxford reference scan's PCy 0.552 and PCz 0.694 stood in for
+    the real 0.327 and 0.846. The map is the FILE's own PC map, not a refinement,
+    so it is stored as a file ("header") map: a later refine moves it as it does
+    the map of a loaded file.
 
     The target dataset name defaults to the EBSD viewer's currently active
     one, so the typical workflow "load h5oina in EBSD viewer → load light
@@ -591,8 +667,8 @@ async def pc_drift_to_seed(req: PcSeedRequest):
         )
 
     from backend.api.services.calibration_store import calibration_store
-    ok = calibration_store.update_pc_map(target, pc_map)
-    if not ok:
+    entry = calibration_store.get_entry(target)
+    if entry is None:
         raise HTTPException(
             status_code=404,
             detail=(
@@ -600,15 +676,52 @@ async def pc_drift_to_seed(req: PcSeedRequest):
                 "Open it in EBSD Viewer first to register it."
             ),
         )
+    # The pattern shape fixes the aspect ratio the conversion needs.
+    from kikuchipy.detectors import EBSDDetector
+    pc_map = np.asarray(
+        EBSDDetector(shape=tuple(int(v) for v in entry.detector_shape),
+                     pc=pc_map.astype(np.float64), convention="oxford").pc,
+        dtype=np.float32).reshape(pc_map.shape)
+    calibration_store.update_pc_map(target, pc_map, source="header")
 
-    mean_pc = pc_map.reshape(-1, 3).mean(axis=0)
+    # The PC Refinement page works on its own controller, which only reads the store
+    # the first time it is opened for a dataset. A page that is already open would
+    # keep refining from the old PC, so the seed is handed to it as well.
+    in_page = _seed_pc_page(target, pc_map)
+
+    # the value the store holds (the mean of the map as stored, in double precision),
+    # not a float32 mean of the array: the page and the store must say the same number
+    mean_pc = calibration_store.get_entry(target).pc_single
     return {
         "success": True,
         "target_dataset": target,
         "pc_map_shape": list(pc_map.shape),
         "mean_pc": [float(v) for v in mean_pc],
         "source": "aztec_per_pixel",
+        "pc_page_updated": in_page,
     }
+
+
+def _seed_pc_page(target: str, pc_map) -> bool:
+    """Give an already opened PC Refinement session of ``target`` the seed map.
+
+    The geometry (tilts, pixel size, binning) stays the page's own; only the PC
+    becomes the map. Returns whether a session was updated.
+    """
+    from backend.api.routes import pcrefinement as _pcr
+    sess = _pcr._sessions.get(target)
+    if sess is None or sess.ctrl.detector is None:
+        return False
+    from kikuchipy.detectors import EBSDDetector
+    det = sess.ctrl.detector
+    seeded = EBSDDetector(
+        shape=tuple(int(v) for v in det.shape), px_size=det.px_size,
+        binning=det.binning, tilt=det.tilt, azimuthal=det.azimuthal,
+        sample_tilt=det.sample_tilt, pc=np.asarray(pc_map, dtype=np.float64))
+    with _pcr._state_lock:
+        sess.ctrl.apply_pixelwise_pc(seeded)
+        sess.sim_cache.clear()
+    return True
 
 
 @router.get("/aztec-comparison")
@@ -671,13 +784,19 @@ def aztec_comparison():
     # Load Aztec phase + Euler
     grid = _dataset.shape
     n_total = int(np.prod(grid))
+    # Which measurement of the source the light h5 was indexed on: its own /Indexing attributes
+    # say (none = the default, "1" as before). Aztec's Phase/Euler must be that measurement's.
+    from backend.api.routes.indexing import _read_variant_provenance
+    from backend.api.services.load_choices import measurement_groups, variant_from_stamp
+    _source_variant = variant_from_stamp(_read_variant_provenance(src_path))
     try:
         with h5py.File(src_h5oina, "r") as f:
-            aztec_phase = np.asarray(f["/1/EBSD/Data/Phase"]).reshape(grid)
-            aztec_euler = np.asarray(f["/1/EBSD/Data/Euler"]).reshape(*grid, 3)
+            _grp = measurement_groups(f, _source_variant, default="1")[0]
+            aztec_phase = np.asarray(f[f"/{_grp}/EBSD/Data/Phase"]).reshape(grid)
+            aztec_euler = np.asarray(f[f"/{_grp}/EBSD/Data/Euler"]).reshape(*grid, 3)
             # Build name→id map for Aztec
             aztec_phase_names: dict = {}
-            phases_grp = f.get("/1/EBSD/Header/Phases")
+            phases_grp = f.get(f"/{_grp}/EBSD/Header/Phases")
             if phases_grp is not None:
                 for key in phases_grp:
                     nm = phases_grp[key].get("Phase Name")

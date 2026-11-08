@@ -29,7 +29,7 @@ def default_hkl_families(point_group) -> list[tuple[int, int, int]]:
         return [(1, 0, 0), (1, 1, 0), (1, 1, 1)]
     # Hexagonal / trigonal → basal + prism + pyramidal (3-index hkl here).
     hexag = {"6/mmm", "6mm", "-6m2", "622", "6/m", "-6", "6",
-             "-3m", "3m", "32", "-3", "3"}
+             "-3m", "3m", "32", "312", "-3", "3"}
     if name in hexag:
         return [(0, 0, 1), (1, 0, 0), (1, 0, 1)]
     # Fallback (tetragonal/orthorhombic/etc.)

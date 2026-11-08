@@ -13,6 +13,8 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors } from '../../theme/tokens';
 import useDataStore from '../../stores/useDataStore';
+import useAvgRadius from './useAvgRadius';
+import { problemText } from '../../services/problemText';
 import useResultStore from '../../stores/useResultStore';
 import { crystalHintApi } from '../../services/api';
 
@@ -87,7 +89,7 @@ export default function QualityCheckMode({ isActive }) {
   const fileLoaded = useDataStore(s => s.ebsdLoaded || s.isFileOpen);
   const indexingResult = useResultStore(s => s.indexingResult);
   const [maxPixels, setMaxPixels] = useState(256);
-  const [avgRadius, setAvgRadius] = useState(1);
+  const { avgRadius, setAvgRadius, avgLocked } = useAvgRadius(1);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -102,12 +104,12 @@ export default function QualityCheckMode({ isActive }) {
       });
       setResult(res.data);
     } catch (err) {
-      const msg = err?.response?.data?.detail || err?.message || 'unknown error';
+      const msg = problemText(err, t, 'crystalhint') || 'unknown error';
       setError(msg);
     } finally {
       setLoading(false);
     }
-  }, [maxPixels, avgRadius]);
+  }, [maxPixels, avgRadius, t]);
 
   const phaseRows = result
     ? Object.entries(result.mismatch_by_phase || {})
@@ -147,7 +149,8 @@ export default function QualityCheckMode({ isActive }) {
               style={S.input}
               value={avgRadius}
               onChange={e => setAvgRadius(parseInt(e.target.value, 10))}
-              title={t('quality.avgRadiusTooltip')}
+              disabled={avgLocked}
+              title={avgLocked ? t('hexAvgLocked') : t('quality.avgRadiusTooltip')}
             >
               <option value={0}>{t('quality.avg0')}</option>
               <option value={1}>{t('quality.avg1')}</option>
@@ -157,6 +160,9 @@ export default function QualityCheckMode({ isActive }) {
           <div style={S.hint}>
             {t('quality.avgRadiusHint')}
           </div>
+          {avgLocked && (
+            <div style={S.hint} data-testid="hex-avg-locked">{t('hexAvgLocked')}</div>
+          )}
         </div>
 
         <button

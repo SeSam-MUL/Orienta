@@ -1,0 +1,10 @@
+{
+  "codes": [
+    "loadCameUpAsOther",
+    "loadInspectFailed",
+    "loadNoPatterns",
+    "loadVariantNeedsNativeReader",
+    "loadVariantUnknown",
+    "variantNotSupported"
+  ]
+}

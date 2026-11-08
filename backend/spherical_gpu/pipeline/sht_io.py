@@ -78,6 +78,12 @@ def _build_sg_to_pg_table() -> dict[int, str]:
     for sg in range(149, 156): table[sg] = "32"
     for sg in range(156, 162): table[sg] = "3m"
     for sg in range(162, 168): table[sg] = "-3m"   # includes R-3m (166), R-3c (167)
+    # Seven trigonal groups have their two-fold axes / mirror normals along Y,
+    # not along X as orix' "32", "3m", "-3m" do. They carry the text that tells
+    # the setting apart ("312", "31m", "-31m"); crystal_symmetry decides which.
+    from crystal_symmetry import TRIGONAL_Y_SETTING_SPACE_GROUPS, point_group_key
+    for sg in sorted(TRIGONAL_Y_SETTING_SPACE_GROUPS):
+        table[sg] = point_group_key(frame_symmetry(space_group=sg))
     # Hexagonal
     for sg in range(168, 174): table[sg] = "6"
     table[174] = "-6"

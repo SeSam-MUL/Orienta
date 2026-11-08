@@ -163,6 +163,7 @@ import numpy as np
 from scipy import ndimage
 
 from backend.api.services import eds_particles
+from backend.api.services.load_choices import LoadChoiceError, measurement_groups
 from backend.api.services.eds_particles import (
     CONNECTIVITY,
     ParticleGeometry,
@@ -321,6 +322,10 @@ class ExportGeometry:
     #: which is what every current caller relies on — see
     #: ``ExportOptions.read_acquisition_header``.
     acquisition: Optional[dict] = None
+    #: The ``LoadVariant`` of ``source_path`` the raster was loaded as (None = the file's
+    #: default measurement). :func:`read_acquisition_header` reads THAT measurement's header,
+    #: so the export never states the first measurement's voltage for another one.
+    source_variant: Any = None
 
     @property
     def n_px(self) -> int:
@@ -1257,8 +1262,12 @@ def _h5_scalar(value: Any) -> Any:
     return out
 
 
-def read_acquisition_header(source_path: Optional[str]) -> Optional[dict]:
+def read_acquisition_header(source_path: Optional[str], variant: Any = None) -> Optional[dict]:
     """``/<root>/EDS/Header`` as a plain dict, or ``None``.
+
+    ``variant``: the measurement (a ``LoadVariant``) whose header is wanted; None = the first
+    one that has an EDS header, as before. A file without the named measurement refuses with the
+    coded ``LoadChoiceError``.
 
     Read GENERICALLY: every dataset in the group, plus one level of
     subgroups -- ``Stage Position`` is a group and not a dataset, so a flat
@@ -1280,7 +1289,7 @@ def read_acquisition_header(source_path: Optional[str]) -> Optional[dict]:
     try:
         with h5py.File(source_path, "r") as fh:
             group = None
-            for root in fh.keys():
+            for root in measurement_groups(fh, variant):
                 candidate = f"{root}/EDS/Header"
                 if candidate in fh:
                     group = fh[candidate]
@@ -1300,6 +1309,8 @@ def read_acquisition_header(source_path: Optional[str]) -> Optional[dict]:
                     logger.debug("eds_export: header key %s unreadable", key,
                                  exc_info=True)
             return out
+    except LoadChoiceError:
+        raise
     except Exception:
         logger.debug("eds_export: cannot read the EDS header from %s",
                      source_path, exc_info=True)
@@ -1315,7 +1326,7 @@ def _acquisition_block(
     source = "caller"
     if raw is None:
         if opts.read_acquisition_header:
-            raw = read_acquisition_header(geometry.source_path)
+            raw = read_acquisition_header(geometry.source_path, geometry.source_variant)
             source = "source file"
         else:
             source = "not requested"

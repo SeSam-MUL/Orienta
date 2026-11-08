@@ -6,12 +6,13 @@
  * gallery chip — the click IS the intent — but the visit-sync adopts on a
  * mere page visit. "Nothing active" can also mean "the user just loaded a
  * DIFFERENT file" (loading resets the active result), and adopting then
- * silently replaced that file with the old result's source
- * (user-hit 2026-08-17).
+ * silently replaced that file with the old result's source.
  *
  * Rule: auto-adoption is allowed only when it cannot switch the file —
- * either no file is loaded (nothing to lose) or the result belongs to the
- * file that is already loaded.
+ * either no file is open (nothing to lose) or the result belongs to the
+ * file that is already loaded, as the variant that is loaded. Two variants of
+ * one file have the same path, so the backend says that part
+ * (`activation_loads` of /api/indexing/results).
  */
 
 /** Normalise a filesystem path for comparison (Windows-tolerant). */
@@ -22,12 +23,13 @@ function normPath(p) {
 /**
  * @param {string|null|undefined} resultSourceFile  The result's source_file.
  * @param {string|null|undefined} currentFile       The backend's loaded file.
+ * @param {boolean} [activationLoads]  The backend's `activation_loads` of the result.
  * @returns {boolean} true when activating the result would replace the
- *   currently loaded file with a different one.
+ *   currently loaded file with a different one, or with another variant of it.
  */
-export function wouldSwitchFile(resultSourceFile, currentFile) {
+export function wouldSwitchFile(resultSourceFile, currentFile, activationLoads = false) {
   if (!resultSourceFile || !currentFile) return false;
-  return normPath(resultSourceFile) !== normPath(currentFile);
+  return !!activationLoads || normPath(resultSourceFile) !== normPath(currentFile);
 }
 
 export default wouldSwitchFile;

@@ -229,6 +229,7 @@ def compute_ipf_colors_grain_consistent(
     n_cols: Optional[int] = None,
     mask=None,
     fallback_deg: float = 10.0,
+    topology=None,
 ) -> np.ndarray:
     """Grain-consistent IPF colouring (v2) — de-jitters low-symmetry IPF maps
     WITHOUT flattening intra-grain gradients.
@@ -263,7 +264,10 @@ def compute_ipf_colors_grain_consistent(
 
     Parameters mirror :func:`compute_ipf_colors`; ``n_rows``/``n_cols``/``mask``
     describe the full display grid (ROI results carry a boolean ``mask`` whose
-    ``sum()`` equals ``xmap.size``).
+    ``sum()`` equals ``xmap.size``). ``topology`` (``scan_neighbours.Topology``)
+    says which points are neighbours when the grains are segmented; ``None`` is
+    the four neighbours of the index grid. A hexagonal scan passes its
+    six-neighbour topology.
     """
     from orix.vector import Vector3d
     from orix.quaternion import Rotation
@@ -292,6 +296,12 @@ def compute_ipf_colors_grain_consistent(
         else:
             n_rows, n_cols = xmap.size, 1
     n = int(n_rows) * int(n_cols)
+    if topology is not None and (topology.n_rows, topology.n_cols) != (int(n_rows), int(n_cols)):
+        # Said here, not left to the segmentation: its failure is caught below as "keep the baseline", which
+        # would colour a hexagonal map without grains and call it a result.
+        raise ValueError(
+            f"the topology is for a {topology.n_rows} x {topology.n_cols} grid, "
+            f"but the map is {int(n_rows)} x {int(n_cols)}")
 
     # Baseline = STANDARD per-pixel colouring. It handles r_user, the grey
     # default for unindexed pixels, and the missing-symmetry ValueError exactly
@@ -338,20 +348,28 @@ def compute_ipf_colors_grain_consistent(
         if phase_id == -1:
             continue
         try:
-            from crystal_symmetry import phase_point_group
+            from crystal_symmetry import phase_point_group, point_group_key
             pg = phase_point_group(xmap.phases[int(phase_id)])
-            pg_name = pg.name
+            pg_name = point_group_key(pg)       # the key: "-3m" is two groups
             laue = pg.laue
             sector = laue.fundamental_sector
         except Exception:
+            logger.warning("grain-stabilised IPF: no point group for phase %s, keeping the "
+                           "standard colours for it", phase_id, exc_info=True)
             continue  # baseline already coloured / errored for this phase
         try:
             S_sym = _sym_quats(pg_name)
             labels = segment_supergroup_grains(
                 full_q, phase_full, int(n_rows), int(n_cols),
-                int(phase_id), pg_name, 5.0,
+                int(phase_id), pg_name, 5.0, topology=topology,
             )
+        except MemoryError:
+            # Not a property of one phase: the map was asked for stabilised and would come back in the
+            # baseline colours with nothing said. Let the caller answer with the error.
+            raise
         except Exception:
+            logger.warning("grain-stabilised IPF: segmentation failed for phase %s, keeping the "
+                           "standard colours for it", phase_id, exc_info=True)
             continue  # display helper: fail soft, keep baseline
 
         for g in np.unique(labels[labels >= 0]):

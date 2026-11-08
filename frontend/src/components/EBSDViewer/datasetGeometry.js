@@ -12,8 +12,11 @@
  * grid.
  */
 
+import { parseScanGeometry } from '../../services/scanGeometry';
+
 /**
- * @param {{navigation_shape?: number[], signal_shape?: number[], dtype?: string}|null} entry
+ * @param {{navigation_shape?: number[], signal_shape?: number[], dtype?: string,
+ *          scan_geometry?: object}|null} entry
  * @returns {{gridShape:[number,number], patternShape:[number,number]|null,
  *            patternCount:number, navigationShape:[number,number],
  *            dtype:string|null}|null}
@@ -39,5 +42,32 @@ export function datasetGeometry(entry) {
     patternCount: rows * cols,
     navigationShape: [cols, rows],
     dtype: entry.dtype || null,
+    // The same dataset's scan geometry: parsed for the store, raw for `ebsdInfo` (which keeps the
+    // backend's own object). null when the backend did not report one.
+    scanGeometry: parseScanGeometry(entry.scan_geometry),
+    scanGeometryRaw: entry.scan_geometry ?? null,
+    // True when this square map was resampled from a hexagonal scan (the geometry above is then
+    // honestly square); null when the backend did not say.
+    hexResampled: entry.hex_resampled ?? null,
+  };
+}
+
+/**
+ * `ebsdInfo` (the viewer's own copy of the load answer) with a new grid. The load answer carries
+ * `scan_geometry`, and a spread of it that replaces `grid_shape` but not the geometry would leave
+ * the parent's geometry standing next to a crop's grid; so the geometry is replaced here, in the
+ * same place as the grid, with null when the new dataset has none.
+ */
+export function ebsdInfoWithGrid(info, geom) {
+  return {
+    ...(info || {}),
+    grid_shape: geom.gridShape,
+    navigation_shape: geom.navigationShape,
+    pattern_shape: geom.patternShape || info?.pattern_shape,
+    n_patterns: geom.patternCount,
+    pattern_count: geom.patternCount,
+    dtype: geom.dtype || info?.dtype,
+    scan_geometry: geom.scanGeometryRaw ?? null,
+    hex_resampled: geom.hexResampled ?? null,
   };
 }

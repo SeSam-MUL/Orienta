@@ -17,7 +17,8 @@
     "noTaskId": "Backend hat keine task_id zurückgegeben.",
     "generateFailed": "Erzeugung fehlgeschlagen: {{detail}}",
     "deleteFailed": "Löschen fehlgeschlagen: {{detail}}",
-    "progressPollFailed": "Fortschritts-Abfrage fehlgeschlagen: {{message}}"
+    "progressPollFailed": "Fortschritts-Abfrage fehlgeschlagen: {{message}}",
+    "pc_missing": "Diese Datei enthält kein Pattern Center (PC); der Platzhalter von kikuchipy würde falsche Orientierungen liefern. Kalibrieren Sie das PC in der PC-Verfeinerung oder legen Sie die .osc-/Metadaten-Datei mit dem PC neben den Scan und starten Sie erneut."
   },
   "master": {
     "groupTitle": "Master-Pattern",

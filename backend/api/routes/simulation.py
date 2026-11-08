@@ -723,8 +723,11 @@ async def scan_missing_materials(output_type: str = "both", ekev: float = 20.0):
                 m["engine_reason"] = f"routing failed: {e}"
         # `unreadable`: phases whose only master kikuchipy cannot load (code
         # masterUnreadableByKikuchipy, file, writing program). Distinct from
-        # "missing": the file exists, and re-running the GPU master program
-        # would write the same unusable file, so they are reported, not queued.
+        # "missing": the file exists, so they are reported, not queued. A run
+        # started for them anyway would use the CPU master program (EMEBSDmaster),
+        # but it would not replace the file: the automation copies a master into
+        # the cache only if none of that name is there (emsphinx_automation.py,
+        # `if not perm_master_dest.exists()`). The user has to delete the file first.
         return {"missing": missing, "count": len(missing), "unreadable": unreadable}
     except Exception as e:
         logger.error("scan_missing_materials failed: %s", e)

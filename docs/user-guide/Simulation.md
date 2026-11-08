@@ -66,9 +66,10 @@ is detected.
    - **Advanced** Monte-Carlo and master-pattern options are available for fine
      control.
 4. **Compute mode (EMsoft only).** When EMsoft is selected, an
-   Auto / GPU-only / CPU-only switch chooses the OpenCL vs OpenMP path for the
-   EMsoft binaries. This card is hidden under the Orienta Engine because that
-   pipeline picks GPU-vs-CPU itself.
+   Auto / GPU-only / CPU-only switch chooses whether the Monte-Carlo step runs
+   on the GPU (OpenCL) or on the CPU (OpenMP). The master pattern is always
+   computed on the CPU, also on a machine with a GPU. This card is hidden under
+   the Orienta Engine because that pipeline picks GPU-vs-CPU itself.
 5. **Start.** Click **Start Simulation** to queue a single job. The view
    switches to the Queue tab.
 

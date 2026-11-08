@@ -69,6 +69,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from backend.api.services.load_choices import (
+    RANGE_UNKNOWN, dataset_pattern_range, patterns_to_float32,
+)
 from .._math import (
     RSHT,
 )
@@ -311,9 +314,8 @@ class Tier1Indexer:
         # when the route already had the experimental sample_tilt in
         # det_params silently used the MC tilt (70°) instead of the
         # calibration's tilt (75.7° on LoGainNi), producing a fixed
-        # ~5.7° rotation offset on every recovered orientation. See
-        # tasks/_kikuchipy_oracle_roundtrip.py and the matching regression
-        # in tests/test_spherical_gpu/.
+        # ~5.7° rotation offset on every recovered orientation. See the
+        # matching regression in tests/test_spherical_gpu/.
         if sample_tilt_deg is not None:
             sigma_deg = float(sample_tilt_deg)
         elif getattr(geom, "sample_tilt_deg", None) is not None:
@@ -329,8 +331,8 @@ class Tier1Indexer:
         # which is why the Hough and spherical routes share a convention instead
         # of differing by the camera elevation. That the elevation reaches
         # PyEBSDIndex at all is pinned by `tests/test_hough_camera_tilt.py`; the
-        # recorded agreement figures between the two routes are in
-        # `tasks/retire-hough/RESULTS.md` (0.33 deg on 7050, 0.357 deg on crop1).
+        # recorded agreement figures between the two routes are
+        # 0.33 deg on an aluminium-alloy scan and 0.357 deg on a cropped scan (scans not included in the repository).
         # A `sigma - tilt` version stood here first, was overwritten two lines
         # later by this one, and the dead assignment plus its "Wait —" note
         # survived until 2026-09-26.
@@ -543,17 +545,34 @@ class Tier1Indexer:
         batch_size: int = 32,
         progress_callback: Optional[callable] = None,
         cancel_check: Optional[callable] = None,
+        dataset_path: Optional[str] = None,
+        value_range=RANGE_UNKNOWN,
     ) -> IndexResult:
         """Index every pattern in the H5OINA dataset.
 
         ``cancel_check``: optional zero-arg callable returning True when the
         caller (typically the Spherical-GPU backend wrapper) wants the run
-        cancelled. Polled at the start of each batch; raising
+        cancelled. Polled at the start of each batch AND before every block of
+        the value-range pass over a signed-integer scan; raising
         ``CancelledIndexingError`` exits cleanly from the loop.
+
+        ``dataset_path``: the pattern dataset to stream (see ``_open_pattern_dataset``).
+
+        ``value_range``: the (min, max) of a signed-integer scan, when the caller already
+        read it (the backend reads it once per run); left out, it is read here, on the
+        dataset that is streamed (``dataset_path``).
         """
         t0 = time.perf_counter()
-        n_total, dset, dset_path, h5_handle = self._open_pattern_dataset(h5oina_path)
+        n_total, dset, dset_path, h5_handle = self._open_pattern_dataset(h5oina_path, dataset_path)
         try:
+            if value_range is RANGE_UNKNOWN:
+                def _check():
+                    if cancel_check is not None and cancel_check():
+                        from indexing_controller import CancelledIndexingError
+                        raise CancelledIndexingError(
+                            "Spherical-GPU indexing cancelled by user"
+                        )
+                value_range = dataset_pattern_range(dset, check=_check)
             all_eulers = torch.empty(n_total, 3, dtype=torch.float32)
             all_scores = torch.empty(n_total, dtype=torch.float32)
 
@@ -564,7 +583,7 @@ class Tier1Indexer:
                         "Spherical-GPU indexing cancelled by user"
                     )
                 end = min(start + batch_size, n_total)
-                pat_np = np.asarray(dset[start:end], dtype=np.float32)
+                pat_np = patterns_to_float32(dset[start:end], value_range)
                 pat = torch.from_numpy(pat_np).to(self.device)
                 eulers, scores = self._index_batch(pat)
                 all_eulers[start:end] = eulers.cpu()
@@ -615,6 +634,7 @@ class Tier1Indexer:
             step_x=step_x, step_y=step_y,
             point_group=self.master.point_group,
             phase_name=self.master.formula,
+            space_group=self.master.space_group,
         )
 
     # --- Internals -----------------------------------------------------------
@@ -2743,10 +2763,21 @@ class Tier1Indexer:
         return l_active.to(device), d_mk_pre, d_kn_pre
 
     def _open_pattern_dataset(
-        self, h5oina_path: str,
+        self, h5oina_path: str, dataset_path: Optional[str] = None,
     ) -> Tuple[int, h5py.Dataset, str, h5py.File]:
-        """Open H5OINA / EDAX H5, locate the patterns dataset."""
+        """Open H5OINA / EDAX H5, locate the patterns dataset.
+
+        ``dataset_path`` names the dataset (the variant the file was loaded as: another measurement,
+        or the unprocessed patterns); it is opened as it is or the call fails, never replaced by
+        the first dataset the search below would find. Without it, the search."""
         f = h5py.File(h5oina_path, "r")
+        if dataset_path:
+            dset = f[dataset_path] if dataset_path in f else None
+            if isinstance(dset, h5py.Dataset) and dset.ndim == 3:
+                return int(dset.shape[0]), dset, dataset_path, f
+            f.close()
+            raise KeyError(
+                f"{dataset_path!r} is not a 3-D pattern dataset in {h5oina_path}")
         # H5OINA (Oxford) candidates first
         candidates = [
             "1/EBSD/Data/Processed Patterns",

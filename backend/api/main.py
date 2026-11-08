@@ -23,7 +23,7 @@ if "NUMBA_CACHE_DIR" not in os.environ:
 mimetypes.add_type("application/javascript", ".js")
 mimetypes.add_type("application/javascript", ".mjs")
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -281,7 +281,15 @@ async def _reap_orphaned_emsoft():
     legitimately running yet, so anything found is an orphan. Runs in a
     thread (subprocess calls block, and a cold WSL may take seconds) and is
     fire-and-forget so it never delays server readiness. Non-fatal on error.
+
+    ``ORIENTA_NO_STARTUP_REAPER=1`` switches it off. The test suite sets it:
+    "nothing is legitimately running" is false on a development machine, and a
+    test that entered the app lifespan ended an EMsoft simulation that another
+    session was running in WSL.
     """
+    if os.environ.get("ORIENTA_NO_STARTUP_REAPER", "").strip() == "1":
+        logger.info("Startup reaper skipped (ORIENTA_NO_STARTUP_REAPER=1)")
+        return
     try:
         from simulation.simulation_controller import reap_orphaned_emsoft_processes
         reaped = await asyncio.to_thread(reap_orphaned_emsoft_processes)
@@ -390,10 +398,9 @@ async def _parent_watchdog():
         return
 
     try:
-        import psutil
-        parent = psutil.Process(parent_pid)
+        from backend.process_watch import gone_reason, started_at
         # Pin the identity: a PID alone is not enough, the OS reuses them.
-        parent_started_at = parent.create_time()
+        parent_started_at = started_at(parent_pid)
     except Exception:
         logger.warning("Parent watchdog: parent PID %d not found at startup — "
                        "exiting rather than outliving it", parent_pid)
@@ -404,15 +411,9 @@ async def _parent_watchdog():
                 "(checked every %.0fs)", parent_pid, interval)
     while True:
         await asyncio.sleep(interval)
-        try:
-            if not psutil.pid_exists(parent_pid):
-                gone = "process no longer exists"
-            elif psutil.Process(parent_pid).create_time() != parent_started_at:
-                gone = "PID was reused by a different process"
-            else:
-                continue
-        except Exception:
-            gone = "parent process is no longer inspectable"
+        gone = gone_reason(parent_pid, parent_started_at)
+        if gone is None:
+            continue
         logger.info("Parent (PID %d) gone (%s) — shutting the backend down.",
                     parent_pid, gone)
         os._exit(0)
@@ -462,6 +463,10 @@ async def lifespan(app: FastAPI):
         # Safe here: uvicorn shuts every connection down, including the dev
         # panel's WebSocket, before it awaits lifespan.shutdown.
         uninstall_ws_log_handler()
+        # A running compute worker must not outlive an orderly shutdown either
+        # (the hard ways out are covered by the worker's own guards).
+        from backend.worker import manager as _worker_manager
+        _worker_manager.shutdown_manager()
 
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -474,6 +479,9 @@ class HTTPTimingMiddleware(BaseHTTPMiddleware):
 
     _EXCLUDED_PREFIXES = ("/api/health", "/ws", "/assets/", "/.vite/")
     _EXCLUDED_EXTENSIONS = (".js", ".css", ".png", ".svg", ".ico", ".woff", ".woff2", ".map")
+    # Polls that would be the whole log. Exact method + path, not a prefix:
+    # POST /api/jobs (submit), /api/jobs/<id>/wait and /cancel are real events.
+    _EXCLUDED_CALLS = (("GET", "/api/jobs"),)
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -489,6 +497,8 @@ class HTTPTimingMiddleware(BaseHTTPMiddleware):
         if any(path.startswith(p) for p in self._EXCLUDED_PREFIXES):
             return await call_next(request)
         if any(path.endswith(ext) for ext in self._EXCLUDED_EXTENSIONS):
+            return await call_next(request)
+        if (request.method, path) in self._EXCLUDED_CALLS:
             return await call_next(request)
 
         start = _time.perf_counter()
@@ -535,7 +545,9 @@ app.add_middleware(
     # same-origin (vite proxies /api to 8000), so this matters for a frontend
     # pointed straight at the backend with VITE_API_URL — where, without it,
     # errors would be translated in the packaged app and English in dev.
-    expose_headers=["X-Orienta-Code"],
+    # X-Orienta-Resampled: the facts of a hexagonal scan resampled to a square grid (.ctf and square
+    # .ang exports answer with a file, so they travel in a header).
+    expose_headers=["X-Orienta-Code", "X-Orienta-Resampled"],
 )
 app.add_middleware(HTTPTimingMiddleware)
 
@@ -576,6 +588,18 @@ async def _log_http_exception(request: Request, exc: _StarletteHTTPException):
 
 from fastapi.exceptions import RequestValidationError as _RequestValidationError
 from fastapi.responses import JSONResponse as _JSONResponse
+
+from backend.api.services.load_choices import LoadChoiceError as _LoadChoiceError
+
+
+@app.exception_handler(_LoadChoiceError)
+async def _coded_load_choice_error(request: Request, exc: _LoadChoiceError):
+    """A reader that cannot follow the variant the viewer holds (the measurement is not in the file,
+    the layout cannot name it) refuses with a coded 400, wherever in a route it was raised: the
+    interface words the code (``errors.<code>``), the prose stays English. The routes that catch
+    it themselves answer the same way."""
+    from backend.api.problem import problem
+    return await _log_http_exception(request, problem(400, exc.code, str(exc)))
 
 
 @app.exception_handler(_RequestValidationError)
@@ -725,9 +749,11 @@ async def websocket_endpoint(websocket: WebSocket):
 from backend.api.routes import h5_viewer, ebsd_viewer, pcrefinement, simulation
 from backend.api.routes import indexing, phase_map, analysis, ml_hub, database, eds
 from backend.api.routes import eds_export
+from backend.api.routes import ebsd_apex
 from backend.api.routes import calibration, settings, batch_v2, refinement
 from backend.api.routes import install, virtual_images, system
 from backend.api.routes import dictionary_gpu
+from backend.api.routes import jobs as jobs_routes
 from backend.api.routes import forward_diagnostics as forward_diagnostics_routes
 from backend.api.routes import crystal_hint
 from backend.api.routes import reference_frame as reference_frame_routes
@@ -735,34 +761,46 @@ from backend.api.routes import pole_figure as pole_figure_routes
 from backend.api.routes import citations
 from backend.api.routes import addons
 from backend.api.routes import phase_collections
+from backend.api.routes import pc_calibrations as pc_calibrations_routes
 from backend.api.routes import phase_library
 from backend.api.routes import hough_reflectors as hough_reflector_routes
 from backend.api.routes import nlpar as nlpar_routes
+from backend.api.routes import scan_geometry_info
+
+# Refuses, by name, what a hexagonal scan cannot honestly do yet (see services/hex_guard.py). It
+# sits on the routers that hold those endpoints; the table in hex_guard.GUARDED says which ones.
+from backend.api.services.hex_guard import hex_gate  # noqa: E402
+_HEX_GATE = [Depends(hex_gate)]
 
 app.include_router(h5_viewer.router, prefix="/api/h5", tags=["HDF5 Viewer"])
-app.include_router(ebsd_viewer.router, prefix="/api/ebsd", tags=["EBSD Viewer"])
+app.include_router(ebsd_viewer.router, prefix="/api/ebsd", tags=["EBSD Viewer"], dependencies=_HEX_GATE)
+# The load dialog's questions about an EDAX APEX metadata file (/inspect, /apex/...).
+app.include_router(ebsd_apex.router, prefix="/api/ebsd", tags=["EBSD APEX"])
 # Virtual BSE + Band Contrast share the /api/ebsd prefix because they
 # are EBSD-derived (sum-of-detector-intensity, pattern-quality) — not
 # EDS, even though the EDS Analysis page is what surfaces them.
 app.include_router(virtual_images.router, prefix="/api/ebsd", tags=["Virtual Images"])
-app.include_router(pcrefinement.router, prefix="/api/pc", tags=["PC Refinement"])
+app.include_router(pcrefinement.router, prefix="/api/pc", tags=["PC Refinement"], dependencies=_HEX_GATE)
 app.include_router(simulation.router, prefix="/api/simulation", tags=["Simulation"])
-app.include_router(indexing.router, prefix="/api/indexing", tags=["Indexing"])
-app.include_router(phase_map.router, prefix="/api/phasemap", tags=["Phase Map"])
-app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"])
+app.include_router(indexing.router, prefix="/api/indexing", tags=["Indexing"], dependencies=_HEX_GATE)
+app.include_router(phase_map.router, prefix="/api/phasemap", tags=["Phase Map"], dependencies=_HEX_GATE)
+app.include_router(analysis.router, prefix="/api/analysis", tags=["Analysis"], dependencies=_HEX_GATE)
 app.include_router(ml_hub.router, prefix="/api/ml", tags=["ML Hub"])
 app.include_router(database.router, prefix="/api/database", tags=["Database"])
 app.include_router(eds.router, prefix="/api/eds", tags=["EDS"])
 app.include_router(eds_export.router, prefix="/api/eds", tags=["EDS Export"])
 app.include_router(calibration.router, prefix="/api/calibration", tags=["Calibration"])
+app.include_router(pc_calibrations_routes.router, prefix="/api/pc-calibrations", tags=["PC calibrations"])
 app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(batch_v2.router, prefix="/api/batch-v2", tags=["Batch v2"])
-app.include_router(refinement.router, prefix="/api/refinement", tags=["Phase Refinement"])
+app.include_router(refinement.router, prefix="/api/refinement", tags=["Phase Refinement"], dependencies=_HEX_GATE)
 app.include_router(install.router, prefix="/api/install", tags=["Install Wizard"])
 app.include_router(dictionary_gpu.router, prefix="/api/dictionary-gpu", tags=["Dictionary GPU"])
-app.include_router(forward_diagnostics_routes.router, prefix="/api/forward-diagnostics", tags=["forward-diagnostics"])
+app.include_router(jobs_routes.router, prefix="/api/jobs", tags=["Jobs"])
+app.include_router(forward_diagnostics_routes.router, prefix="/api/forward-diagnostics", tags=["forward-diagnostics"], dependencies=_HEX_GATE)
 app.include_router(system.router, prefix="/api/system", tags=["System"])
-app.include_router(crystal_hint.router, prefix="/api/crystal-hint", tags=["Crystal Hint"])
+# The neighbourhood average (avg_radius > 0) is refused for a hexagonal scan (hex_guard.GUARDED).
+app.include_router(crystal_hint.router, prefix="/api/crystal-hint", tags=["Crystal Hint"], dependencies=_HEX_GATE)
 # reference_frame.router self-prefixes "/api" (frame + state-version live at /api/*).
 app.include_router(reference_frame_routes.router)
 # pole_figure.router self-prefixes "/api" (route lives at /api/pole-figure).
@@ -774,7 +812,11 @@ app.include_router(addons.router, prefix="/api/addons", tags=["Add-ons"])
 app.include_router(phase_collections.router, prefix="/api/phase-collections", tags=["Phase Collections"])
 app.include_router(phase_library.router, prefix="/api/phase-library", tags=["Phase Library"])
 app.include_router(hough_reflector_routes.router, prefix="/api/indexing/hough", tags=["Hough reflectors"])
-app.include_router(nlpar_routes.router, prefix="/api/ebsd", tags=["NLPAR"])
+# NLPAR averages over the neighbours on the index grid: refused for a hexagonal scan of any source
+# (hex_guard.GUARDED); its own check of an OIM hexagonal file stays as well.
+app.include_router(nlpar_routes.router, prefix="/api/ebsd", tags=["NLPAR"], dependencies=_HEX_GATE)
+# What a hexagonal scan cannot do yet, as one list (built from hex_guard's table).
+app.include_router(scan_geometry_info.router, prefix="/api/scan-geometry", tags=["Scan geometry"])
 
 FRONTEND_DIST = Path(PROJECT_ROOT) / "frontend" / "dist"
 

@@ -40,6 +40,13 @@ describe('syncFromBackend', () => {
     expect(useDataStore.getState().isFileOpen).toBe(false);
   });
 
+  it('keeps the store of an open file without a signal: an EDS-only file is open', async () => {
+    info.mockResolvedValue({ data: { loaded: false, open_file: '/data/a.h5oina' } });
+    await useDataStore.getState().syncFromBackend();
+    expect(useDataStore.getState().isFileOpen).toBe(true);
+    expect(useDataStore.getState().filePath).toBe('/data/a.h5oina');
+  });
+
   it('does nothing while a file load or switch is in flight', async () => {
     inFlight = true;
     info.mockResolvedValue({ data: { loaded: false } });
@@ -47,5 +54,29 @@ describe('syncFromBackend', () => {
     expect(result).toBe(false);
     expect(info).not.toHaveBeenCalled();
     expect(useDataStore.getState().isFileOpen).toBe(true);
+  });
+});
+
+describe('syncFromBackend and the raw patterns', () => {
+  const answer = (extra) => ({
+    data: { loaded: true, file_path: '/data/b.h5oina', data_shape: [2, 3, 4, 5], ...extra },
+  });
+
+  it('takes whether the measurement holds unprocessed patterns from the answer', async () => {
+    info.mockResolvedValue(answer({ has_raw_patterns: false }));
+    await useDataStore.getState().syncFromBackend();
+    expect(useDataStore.getState().filePath).toBe('/data/b.h5oina');
+    expect(useDataStore.getState().hasRawPatterns).toBe(false);
+
+    useDataStore.setState({ ...OPEN });
+    info.mockResolvedValue(answer({ has_raw_patterns: true }));
+    await useDataStore.getState().syncFromBackend();
+    expect(useDataStore.getState().hasRawPatterns).toBe(true);
+  });
+
+  it('does not claim raw patterns when the answer says nothing about them', async () => {
+    info.mockResolvedValue(answer({}));
+    await useDataStore.getState().syncFromBackend();
+    expect(useDataStore.getState().hasRawPatterns).toBe(false);
   });
 });

@@ -51,6 +51,9 @@ def _normalize_to_u8(arr: np.ndarray) -> np.ndarray:
     """
     if arr.dtype == np.uint8:
         return arr
+    if arr.dtype.kind == "i":
+        # int16 minus its own minimum overflows once the range exceeds 32767
+        arr = arr.astype(np.float64)
     arr_min, arr_max = np.nanmin(arr), np.nanmax(arr)
     if arr_max > arr_min:
         return ((arr - arr_min) / (arr_max - arr_min) * 255).astype(np.uint8)

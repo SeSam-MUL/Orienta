@@ -173,6 +173,418 @@
 !macroend
 
 ; ---------------------------------------------------------------------------
+; What counts as Orienta's own LEFTOVER -- by SHAPE, never by name.
+;
+; Names such as logs, pending, electron, python and runtime are everyday folder
+; names. A level holding "only names from a list" would take a user's own
+; D:\Work\Orienta with logs\mydata.csv for Orienta's, and the data would go with it.
+; So an entry is a leftover only if it has
+; the shape of what Orienta itself writes:
+;
+;   electron\    only userData, sessionData, temp, .writable
+;   logs\        only FILES named orienta*.log / backend-console*.log (+ .log.N)
+;   pending\     only orienta-runtime-* files;  pending.json only beside pending\
+;   setup-tmp\   only cpython-*, orienta-*, python-unpacked*, micromamba*,
+;                extract-result*, apply-result*, package-sync*, *.tmp
+;   state files  .python_path .install_mode .install_incomplete
+;                .packages_lock.json .packages_sync.json .packages_sync_failed.json
+;
+; python\ and runtime\ are NEVER leftovers by name: a folder holding them has an
+; installation in it (it is recognised through its marker, not through this).
+; Operating-system litter FILES (Thumbs.db, desktop.ini, .DS_Store) count as
+; nothing, like in electron/leftovers.js -- which carries the same rules for the
+; setup, and tests/leftover_shapes.json is ONE table of cases run against both.
+;
+; A "level" is a folder in a chain Orienta\Orienta\... (0.4.6 added one level per
+; click of "change..."); every level may hold leftovers and the next Orienta.
+; Each macro answers only in the cautious direction and removes nothing but
+; what it has just recognised, by fixed name, or an EMPTY directory (RMDir
+; without /r).
+; ---------------------------------------------------------------------------
+
+; $oOk = "yes" if the string STR starts with PREFIX (case-insensitive).
+!macro orientaStarts STR PREFIX
+  StrLen $oLen "${PREFIX}"
+  StrCpy $oCmp "${STR}" $oLen
+  ${If} $oCmp == "${PREFIX}"
+    StrCpy $oOk "yes"
+  ${Else}
+    StrCpy $oOk "no"
+  ${EndIf}
+!macroend
+
+; $oOk = "yes" if the string STR ends with SUFFIX (case-insensitive).
+!macro orientaEnds STR SUFFIX
+  StrLen $oLen "${SUFFIX}"
+  IntOp $oLen 0 - $oLen
+  StrCpy $oCmp "${STR}" "" $oLen
+  ${If} $oCmp == "${SUFFIX}"
+    StrCpy $oOk "yes"
+  ${Else}
+    StrCpy $oOk "no"
+  ${EndIf}
+!macroend
+
+; $oOk = "yes" if every child of DIR has the shape KIND (electron|logs|pending|
+; setup-tmp) allows. An empty folder passes.
+!macro orientaChildrenOk DIR KIND
+  Push $R4
+  ; The running verdict has its OWN variable: the helper macros below answer in
+  ; $oOk, and one child's answer must not overwrite another's refusal.
+  StrCpy $oAll "yes"
+  FindFirst $oFind4 $oName4 "${DIR}\*"
+  ${DoWhile} $oName4 != ""
+    ${If} $oName4 != "."
+    ${AndIf} $oName4 != ".."
+      StrCpy $R4 "no"
+      ${If} "${KIND}" == "electron"
+        ${If} $oName4 == "userData"
+        ${OrIf} $oName4 == "sessionData"
+        ${OrIf} $oName4 == "temp"
+        ${OrIf} $oName4 == ".writable"
+          StrCpy $R4 "yes"
+        ${EndIf}
+      ${ElseIf} "${KIND}" == "pending"
+        !insertmacro orientaStarts "$oName4" "orienta-runtime-"
+        StrCpy $R4 $oOk
+      ${ElseIf} "${KIND}" == "setup-tmp"
+        !insertmacro orientaEnds "$oName4" ".tmp"
+        StrCpy $R4 $oOk
+        ${If} $R4 == "no"
+          !insertmacro orientaStarts "$oName4" "cpython-"
+          StrCpy $R4 $oOk
+        ${EndIf}
+        ${If} $R4 == "no"
+          !insertmacro orientaStarts "$oName4" "orienta-"
+          StrCpy $R4 $oOk
+        ${EndIf}
+        ${If} $R4 == "no"
+          !insertmacro orientaStarts "$oName4" "python-unpacked"
+          StrCpy $R4 $oOk
+        ${EndIf}
+        ${If} $R4 == "no"
+          !insertmacro orientaStarts "$oName4" "micromamba"
+          StrCpy $R4 $oOk
+        ${EndIf}
+        ${If} $R4 == "no"
+          !insertmacro orientaStarts "$oName4" "extract-result"
+          StrCpy $R4 $oOk
+        ${EndIf}
+        ${If} $R4 == "no"
+          !insertmacro orientaStarts "$oName4" "apply-result"
+          StrCpy $R4 $oOk
+        ${EndIf}
+        ${If} $R4 == "no"
+          !insertmacro orientaStarts "$oName4" "package-sync"
+          StrCpy $R4 $oOk
+        ${EndIf}
+      ${ElseIf} "${KIND}" == "logs"
+        ; Orienta's own log FILES: orienta*.log, backend-console*.log, and the
+        ; rotations (.log.1 ...). A folder, or any other name, is not ours.
+        !insertmacro orientaKindOf "${DIR}\$oName4"
+        ${If} $oKind == "file"
+          !insertmacro orientaStarts "$oName4" "orienta"
+          StrCpy $R4 $oOk
+          ${If} $R4 == "no"
+            !insertmacro orientaStarts "$oName4" "backend-console"
+            StrCpy $R4 $oOk
+          ${EndIf}
+          ${If} $R4 == "yes"
+            !insertmacro orientaEnds "$oName4" ".log"
+            StrCpy $R4 $oOk
+            ${If} $R4 == "no"
+              StrLen $oLen "$oName4"
+              ${If} $oLen > 5
+                StrCpy $oCmp "$oName4" 5 -6
+                ${If} $oCmp == ".log."
+                  ; ... and ONE digit after it: .log.1 ... .log.9, as file_log.py and
+                  ; the shell log rotate -- not ".log.~" or ".log.12".
+                  StrCpy $oCmp "$oName4" 1 -1
+                  ${If} $oCmp == "0"
+                  ${OrIf} $oCmp == "1"
+                  ${OrIf} $oCmp == "2"
+                  ${OrIf} $oCmp == "3"
+                  ${OrIf} $oCmp == "4"
+                  ${OrIf} $oCmp == "5"
+                  ${OrIf} $oCmp == "6"
+                  ${OrIf} $oCmp == "7"
+                  ${OrIf} $oCmp == "8"
+                  ${OrIf} $oCmp == "9"
+                    StrCpy $R4 "yes"
+                  ${EndIf}
+                ${EndIf}
+              ${EndIf}
+            ${EndIf}
+          ${EndIf}
+        ${EndIf}
+      ${EndIf}
+      ${If} $R4 == "no"
+        StrCpy $oAll "no"
+      ${EndIf}
+    ${EndIf}
+    FindNext $oFind4 $oName4
+  ${Loop}
+  FindClose $oFind4
+  StrCpy $oOk $oAll
+  Pop $R4
+!macroend
+
+; $oOk = "yes" if the entry NAME of LEVEL has the shape of something Orienta
+; wrote there (see the table above); never python, runtime or the conda folders.
+!macro orientaEntryLeftover LEVEL NAME
+  StrCpy $oOk "no"
+  ${If} "${NAME}" == ".orienta-home"
+  ${AndIf} $oMarkerOk == "yes"
+    ; Only while the caller is judging the chain BELOW a recognised data folder,
+    ; whose own marker is still there (it is removed last).
+    StrCpy $oOk "yes"
+  ${ElseIf} "${NAME}" == ".python_path"
+  ${OrIf} "${NAME}" == ".install_mode"
+  ${OrIf} "${NAME}" == ".install_incomplete"
+  ${OrIf} "${NAME}" == ".packages_lock.json"
+  ${OrIf} "${NAME}" == ".packages_sync.json"
+  ${OrIf} "${NAME}" == ".packages_sync_failed.json"
+    StrCpy $oOk "yes"
+  ${ElseIf} "${NAME}" == "pending.json"
+    !insertmacro orientaKindOf "${LEVEL}\pending"
+    ${If} $oKind == "dir"
+      StrCpy $oOk "yes"
+    ${EndIf}
+  ${ElseIf} "${NAME}" == "electron"
+  ${OrIf} "${NAME}" == "logs"
+  ${OrIf} "${NAME}" == "pending"
+  ${OrIf} "${NAME}" == "setup-tmp"
+    !insertmacro orientaKindOf "${LEVEL}\${NAME}"
+    ${If} $oKind == "dir"
+      !insertmacro orientaChildrenOk "${LEVEL}\${NAME}" "${NAME}"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; Is PATH -- and the chain Orienta\Orienta\... below it, to 16 levels -- made of
+; nothing but leftovers (shapes above), operating-system litter files and the
+; next Orienta? Sets $oLight, and $oEntries = the top-level entries that are
+; not litter. A link named Orienta, an unknown entry, or a chain deeper than 16
+; answers no.
+!macro orientaLevelsLight PATH
+  Push $R5
+  Push $R6
+  Push $R7
+  Push $R8
+  StrCpy $oLight "yes"
+  StrCpy $oEntries 0
+  StrCpy $R6 "${PATH}"
+  StrCpy $R8 ""
+  ${For} $R7 1 17
+    !insertmacro orientaKindOf "$R6"
+    ${If} $oKind != "dir"
+      StrCpy $oLight "no"
+      StrCpy $R8 ""
+      ${ExitFor}
+    ${EndIf}
+    StrCpy $R8 ""
+    FindFirst $oFind2 $oName2 "$R6\*"
+    ${DoWhile} $oName2 != ""
+      ${If} $oName2 != "."
+      ${AndIf} $oName2 != ".."
+        StrCpy $R5 "no"
+        ${If} $oName2 == "Thumbs.db"
+        ${OrIf} $oName2 == "desktop.ini"
+        ${OrIf} $oName2 == ".DS_Store"
+          !insertmacro orientaKindOf "$R6\$oName2"
+          ${If} $oKind == "file"
+            StrCpy $R5 "litter"
+          ${EndIf}
+        ${EndIf}
+        ${If} $R5 == "no"
+        ${AndIf} $oName2 == "Orienta"
+          !insertmacro orientaKindOf "$R6\$oName2"
+          ${If} $oKind == "dir"
+            StrCpy $R5 "chain"
+          ${EndIf}
+        ${EndIf}
+        ${If} $R5 == "no"
+          !insertmacro orientaEntryLeftover "$R6" "$oName2"
+          ${If} $oOk == "yes"
+            StrCpy $R5 "leftover"
+          ${EndIf}
+        ${EndIf}
+        ${If} $R5 == "no"
+          StrCpy $oLight "no"
+        ${ElseIf} $R5 == "chain"
+          ; Two folders that NSIS's case-insensitive == both takes for "Orienta"
+          ; (Orienta and orienta on a case-sensitive directory): only one of them
+          ; would be followed and checked, and the cleaning below follows the
+          ; literal name -- which may be the other one. Never guess which.
+          ${If} $R8 != ""
+            StrCpy $oLight "no"
+          ${Else}
+            StrCpy $R8 "$R6\$oName2"
+          ${EndIf}
+        ${EndIf}
+        ${If} $R7 = 1
+        ${AndIf} $R5 != "litter"
+          IntOp $oEntries $oEntries + 1
+        ${EndIf}
+      ${EndIf}
+      FindNext $oFind2 $oName2
+    ${Loop}
+    FindClose $oFind2
+    ${If} $oLight == "no"
+      ${ExitFor}
+    ${EndIf}
+    ${If} $R8 == ""
+      ${ExitFor}
+    ${EndIf}
+    StrCpy $R6 "$R8"
+  ${Next}
+  ; Still a next level after 16: too deep to judge.
+  ${If} $R8 != ""
+    StrCpy $oLight "no"
+  ${EndIf}
+  Pop $R8
+  Pop $R7
+  Pop $R6
+  Pop $R5
+!macroend
+
+; Kept under its old name for the callers that only want the verdict.
+!macro orientaOnlyLight PATH
+  !insertmacro orientaLevelsLight "${PATH}"
+!macroend
+
+!macro orientaPruneChain PATH
+  Push $R6
+  Push $R7
+  Push $R8
+  StrCpy $R6 "${PATH}"
+  StrCpy $R7 0
+  ${For} $R8 1 16
+    !insertmacro orientaKindOf "$R6\Orienta"
+    ${If} $oKind == "dir"
+      StrCpy $R6 "$R6\Orienta"
+      IntOp $R7 $R7 + 1
+    ${Else}
+      ${ExitFor}
+    ${EndIf}
+  ${Next}
+  ${While} $R7 > 0
+    Delete "$R6\Thumbs.db"
+    Delete "$R6\desktop.ini"
+    Delete "$R6\.DS_Store"
+    RMDir "$R6"
+    StrCpy $R6 $R6 -8
+    IntOp $R7 $R7 - 1
+  ${EndWhile}
+  Pop $R8
+  Pop $R7
+  Pop $R6
+!macroend
+
+; ---------------------------------------------------------------------------
+; Split PATH at its last backslash: $oParent, and $oBase (what follows). Both
+; empty for a path with no backslash.
+; ---------------------------------------------------------------------------
+!macro orientaSplit PATH
+  Push $R6
+  Push $R7
+  Push $R8
+  StrCpy $R6 "${PATH}"
+  StrLen $R7 $R6
+  StrCpy $oParent ""
+  StrCpy $oBase ""
+  ${Do}
+    IntOp $R7 $R7 - 1
+    ${If} $R7 < 0
+      ${ExitDo}
+    ${EndIf}
+    StrCpy $R8 $R6 1 $R7
+    ${If} $R8 == "\"
+      StrCpy $oParent $R6 $R7
+      IntOp $R7 $R7 + 1
+      StrCpy $oBase $R6 "" $R7
+      ${ExitDo}
+    ${EndIf}
+  ${Loop}
+  Pop $R8
+  Pop $R7
+  Pop $R6
+!macroend
+
+; ---------------------------------------------------------------------------
+; Remove the leftovers of ONE level, by fixed name. Called only for a level that
+; orientaLevelsLight has just found to hold nothing else, so every name here has
+; been checked for its shape; the marker and python\ and runtime\ are not on it.
+; ---------------------------------------------------------------------------
+!macro orientaWipeLevel LEVEL
+  ; Copied to a GLOBAL first: orientaRemovePath re-expands its argument after it
+  ; has reused R6..R9, so a register-based path would point somewhere else.
+  StrCpy $oWipe "${LEVEL}"
+  !insertmacro orientaRemovePath "$oWipe\electron"
+  !insertmacro orientaRemovePath "$oWipe\logs"
+  !insertmacro orientaRemovePath "$oWipe\setup-tmp"
+  !insertmacro orientaRemovePath "$oWipe\pending"
+  !insertmacro orientaRemovePath "$oWipe\pending.json"
+  !insertmacro orientaRemovePath "$oWipe\.python_path"
+  !insertmacro orientaRemovePath "$oWipe\.install_mode"
+  !insertmacro orientaRemovePath "$oWipe\.install_incomplete"
+  !insertmacro orientaRemovePath "$oWipe\.packages_lock.json"
+  !insertmacro orientaRemovePath "$oWipe\.packages_sync.json"
+  !insertmacro orientaRemovePath "$oWipe\.packages_sync_failed.json"
+  ; Litter FILES only: Delete does not touch a folder of that name.
+  Delete "$oWipe\Thumbs.db"
+  Delete "$oWipe\desktop.ini"
+  Delete "$oWipe\.DS_Store"
+!macroend
+
+; ---------------------------------------------------------------------------
+; The chain levels BELOW PATH, wiped and removed from the deepest up. Only after
+; orientaLevelsLight has just answered "yes" for PATH: every level was checked.
+; PATH itself is not touched here.
+; ---------------------------------------------------------------------------
+!macro orientaCleanBelow PATH
+  Push $R6
+  Push $R7
+  Push $R8
+  StrCpy $R6 "${PATH}"
+  StrCpy $R7 0
+  ${For} $R8 1 16
+    !insertmacro orientaKindOf "$R6\Orienta"
+    ${If} $oKind == "dir"
+      StrCpy $R6 "$R6\Orienta"
+      IntOp $R7 $R7 + 1
+    ${Else}
+      ${ExitFor}
+    ${EndIf}
+  ${Next}
+  ${While} $R7 > 0
+    !insertmacro orientaWipeLevel "$R6"
+    RMDir "$R6"
+    StrCpy $R6 $R6 -8
+    IntOp $R7 $R7 - 1
+  ${EndWhile}
+  Pop $R8
+  Pop $R7
+  Pop $R6
+!macroend
+
+; ---------------------------------------------------------------------------
+; A folder that holds only leftovers (see orientaLevelsLight) is cleaned, level
+; by level from the deepest chain level up, and removed if that leaves it empty.
+; Anything else in it -- in ANY level -- and nothing is touched. Used for the
+; default folder and for the levels above a nested data folder.
+; ---------------------------------------------------------------------------
+!macro orientaCleanLight PATH
+  !insertmacro orientaLevelsLight "${PATH}"
+  ${If} $oLight == "yes"
+    !insertmacro orientaCleanBelow "${PATH}"
+    !insertmacro orientaWipeLevel "${PATH}"
+    RMDir "${PATH}"
+    DetailPrint "Orienta: cleaned the leftover folder ${PATH}"
+  ${EndIf}
+!macroend
+
+; ---------------------------------------------------------------------------
 ; The whole decision.
 ; ---------------------------------------------------------------------------
 !macro orientaRemoveData
@@ -198,6 +610,21 @@
   Var /GLOBAL oMsgUnsure
   Var /GLOBAL oMsgLeft
   Var /GLOBAL oMsgMissing
+  Var /GLOBAL oOk
+  Var /GLOBAL oAll
+  Var /GLOBAL oMarkerOk
+  Var /GLOBAL oWipe
+  Var /GLOBAL oCmp
+  Var /GLOBAL oLen
+  Var /GLOBAL oLight
+  Var /GLOBAL oEntries
+  Var /GLOBAL oFind2
+  Var /GLOBAL oName2
+  Var /GLOBAL oFind4
+  Var /GLOBAL oName4
+  Var /GLOBAL oParent
+  Var /GLOBAL oBase
+  Var /GLOBAL oDefault
 
   Push $R0
   Push $R1
@@ -384,6 +811,19 @@
         StrCpy $R1 "yes"
       ${EndIf}
     ${EndIf}
+    ; The DEFAULT folder that only ever held what the application writes before
+    ; any setup (electron\, logs\) and, after repeated "change..." clicks of
+    ; 0.4.6, an empty Orienta\Orienta chain: no marker, nothing of anyone
+    ; else's, and nothing to lose. Only for the default location -- a folder the
+    ; user or ORIENTA_HOME named is judged by its markers alone.
+    ${If} $R1 != "yes"
+    ${AndIf} $oSource == "default"
+      !insertmacro orientaOnlyLight "$oHome"
+      ${If} $oLight == "yes"
+      ${AndIf} $oEntries > 0
+        StrCpy $R1 "yes"
+      ${EndIf}
+    ${EndIf}
     ; A repository is never a data folder, however many markers it carries.
     ${If} ${FileExists} "$oHome\.git"
       StrCpy $R1 "no"
@@ -520,6 +960,26 @@
       RMDir "$oHome\runtime"
     ${EndIf}
 
+    ; An empty Orienta\Orienta chain inside the folder (0.4.6's repeated
+    ; "change..." clicks) would keep the folder from being removed below.
+    ; Empty directories only: RMDir refuses anything with a file in it.
+    ; Levels of the chain that hold only Orienta's leftovers (0.4.6 told the user
+    ; to restart after every "change...", so each level holds electron\ and
+    ; logs\): checked level by level, and only then wiped.
+    ; The home's own marker is still here (it goes last), and would make the
+    ; level "not only leftovers" for ever: it is allowed for this one call.
+    StrCpy $oMarkerOk "yes"
+    !insertmacro orientaLevelsLight "$oHome"
+    StrCpy $oMarkerOk "no"
+    ${If} $oLight == "yes"
+      !insertmacro orientaCleanBelow "$oHome"
+    ${EndIf}
+    ; Operating-system litter FILES at the top do not keep the folder alive.
+    Delete "$oHome\Thumbs.db"
+    Delete "$oHome\desktop.ini"
+    Delete "$oHome\.DS_Store"
+    !insertmacro orientaPruneChain "$oHome"
+
     ; The marker goes last, and only once nothing is left to identify.
     ${IfNot} ${FileExists} "$oHome\runtime\*.*"
       !insertmacro orientaRemovePath "$oHome\.orienta-home"
@@ -542,7 +1002,53 @@
     ${AndIf} $oSource == "pointer"
       ; Removed by this run, and the recorded choice was what pointed here.
       Delete "$oPointer"
+      ; The record of the volume the folder was on (electron/volume_id.js) goes with
+      ; it, or it would keep the settings folder alive.
+      Delete "$oAppData\Orienta\home.volume"
       RMDir "$oAppData\Orienta"
+
+      ; The levels ABOVE a data folder that sat inside a chain of Orienta
+      ; folders. Each goes only if it is named Orienta, is a plain directory
+      ; (never a link) and is empty -- RMDir refuses otherwise, and the walk
+      ; stops at the first level that refuses.
+      StrCpy $R0 "$oHome"
+      ${For} $R1 1 16
+        !insertmacro orientaSplit "$R0"
+        ${If} $oParent == ""
+          ${ExitFor}
+        ${EndIf}
+        StrCpy $R0 "$oParent"
+        !insertmacro orientaSplit "$R0"
+        ${If} $oBase != "Orienta"
+          ${ExitFor}
+        ${EndIf}
+        !insertmacro orientaKindOf "$R0"
+        ${If} $oKind != "dir"
+          ${ExitFor}
+        ${EndIf}
+        ; Leftovers the application wrote into that level before the next click
+        ; (electron\, logs\) go first -- the same rule as for the default folder,
+        ; and again only if that is ALL the level holds.
+        !insertmacro orientaCleanLight "$R0"
+        ClearErrors
+        RMDir "$R0"
+        ${If} ${Errors}
+          ${ExitFor}
+        ${EndIf}
+        DetailPrint "Orienta: removed empty folder $R0"
+      ${Next}
+    ${EndIf}
+
+    ; The DEFAULT folder, when the data was recorded somewhere else. Before the
+    ; user's choice the application had already written electron\ and logs\
+    ; there, and the repeated clicks left an empty chain beside them: all of it
+    ; Orienta's, none of it worth keeping -- but only if that is ALL there is.
+    ; One file of anybody's, or a python\ or runtime\ (a real installation),
+    ; and the whole folder is left exactly as it is.
+    StrCpy $oDefault "$oLocalAppData\Orienta"
+    ${If} $oSource == "pointer"
+    ${AndIf} $oDefault != $oHome
+      !insertmacro orientaCleanLight "$oDefault"
     ${EndIf}
 
     ${If} $oLibWasLink == "yes"

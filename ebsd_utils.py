@@ -12,6 +12,9 @@ import numpy as np
 from diffsims.crystallography import ReciprocalLatticeVector
 from kikuchipy.signals import EBSD
 
+from crystal_symmetry import trigonal_frame_phase, trigonal_frame_phase_list
+from phase_cell import calculate_structure_factors, sanitise_reflectors
+
 logger = logging.getLogger(__name__)
 
 # A CIF ``_atom_site_type_symbol`` should be a bare element symbol, but
@@ -79,12 +82,13 @@ def _filtered_reflectors(phase, min_d, f_threshold):
             _FILTERED_CACHE_ORDER.append(key)
             return _FILTERED_CACHE[key]
     _normalize_element_labels(phase)
-    # `sanitise_phase()` below expands the structure IN PLACE, and expanding an
-    # already expanded structure is not idempotent: the same pi-Al8FeMg3Si6 phase
-    # object went 26 -> 128 -> 104 -> 86 atoms over three calls and gave a
-    # different reflector list each time. Work on a copy, so the list depends on
-    # the crystal and not on how often the phase object was used before.
-    work = phase.deepcopy()
+    # diffsims' `sanitise_phase()` expanded the structure IN PLACE, and expanding
+    # an already expanded structure was not idempotent: the same pi-Al8FeMg3Si6
+    # phase object went 26 -> 128 -> 104 -> 86 atoms over three calls and gave a
+    # different reflector list each time. `sanitise_reflectors` below is
+    # idempotent and works on a copy; the copy here only keeps the phase the
+    # caller passed in untouched while the reflectors are built.
+    work = trigonal_frame_phase(phase).deepcopy()
     ref = ReciprocalLatticeVector.from_min_dspacing(work, min_d)
     # ``allowed`` (systematic-absence filter) raises NotImplementedError for
     # primitive-hexagonal space groups in diffsims. Those absent reflections
@@ -97,8 +101,10 @@ def _filtered_reflectors(phase, min_d, f_threshold):
                      "relying on the structure-factor filter",
                      getattr(work, 'name', '?'))
     ref = ref.unique(use_symmetry=True).symmetrise()
-    ref.sanitise_phase()
-    ref.calculate_structure_factor()
+    # the complete cell, in the CIF's frame: diffsims' own `sanitise_phase()`
+    # expands the atoms in orix' rotated frame (see phase_cell)
+    sanitise_reflectors(ref)
+    calculate_structure_factors(ref)
     F = np.abs(ref.structure_factor)
     filt = ref[F > f_threshold * F.max()]
     with _FILTERED_CACHE_LOCK:
@@ -111,18 +117,74 @@ def _filtered_reflectors(phase, min_d, f_threshold):
     return filt
 
 
+def _library_rows_for(phase, rows, probe_rows=None):
+    """Rows the band-triplet library of this reflector list needs; 0 when it is
+    smaller than the probe cap (``probe_rows``, default ``_PREDICT_PROBE_ROWS``:
+    negligible). Raises whatever PyEBSDIndex raises for a list it cannot build.
+
+    Builds the BandIndexer of the phase only - the same call kikuchipy's
+    ``get_indexer`` makes first - and not a whole EBSDIndexer, which on a machine
+    with OpenCL also opens a GPU context for its Radon plan: one per call, and
+    this is called on every click. No detector is involved: the library is sized
+    from the poles and the lattice alone.
+    """
+    from kikuchipy.indexing._hough_indexing import _get_pyebsdindex_phaselist
+    from orix.crystal_map import PhaseList
+
+    fixed = _standard_setting_phase_list(PhaseList(phase.deepcopy()))
+    try:
+        with _capped_triplet_library(probe_rows or _PREDICT_PROBE_ROWS):
+            _get_pyebsdindex_phaselist(fixed, [rows])
+    except MemoryError as exc:
+        m = re.search(r"need ([0-9,]+) rows", str(exc))
+        if m:
+            return int(m.group(1).replace(",", ""))
+        raise
+    return 0
+
+
+def _default_selection(phase, min_d, f_threshold, max_reflectors):
+    """Indices into ``_filtered_reflectors(...)`` of the rows of the default list.
+
+    The default list is a function of the phase, the rule (``min_d``,
+    ``f_threshold``, ``max_reflectors``) and the Orienta version, and of nothing
+    else: never of the memory that happens to be free. How much memory a run may
+    use decides whether it runs or is refused (``create_indexer``), not which
+    reflectors it uses; a shorter list is a choice the user makes, on purpose and
+    on record (``hough_reflectors.largest_list_that_fits``).
+
+    The list is the strongest ``max_reflectors`` rows. diffsims' ``unique`` and
+    ``symmetrise`` can hand back a row more than once, from float noise in the
+    lattice constants of hexagonal and trigonal cells (alpha-Ti with a = 2.95,
+    c = 4.68: 172 rows, 106 distinct; with 2.951 and 4.684 none). Repeats
+    used up the 70-row budget on rows PyEBSDIndex ignores, so a family above a
+    third of the strongest reflection could be missing. They are removed before
+    the cut, keeping the first occurrence of each row in the original order. A
+    phase without repeats takes exactly the path it always took, row for row.
+    """
+    filt = _filtered_reflectors(phase, min_d, f_threshold)
+    hkl = np.asarray(filt.hkl, dtype=float)
+    n_all = hkl.shape[0]
+    sf = np.abs(np.asarray(filt.structure_factor)).ravel()
+
+    def cut(idx):
+        if len(idx) > max_reflectors:
+            return idx[np.argsort(-sf[idx])[:max_reflectors]]
+        return idx
+
+    _, first = np.unique(np.rint(hkl).astype(int), axis=0, return_index=True)
+    if len(first) == n_all:
+        return cut(np.arange(n_all))
+    return cut(np.sort(first))
+
+
 def _reflectors_for_phase(phase, min_d=1.0, f_threshold=0.1, max_reflectors=70):
     """Compute filtered reflectors for a single phase."""
     filt = _filtered_reflectors(phase, min_d, f_threshold)
-
-    # Limit to strongest max_reflectors. Either way a NEW object is returned: the
-    # filtered list behind it is cached and shared.
-    n_ref = filt.hkl.shape[0]
-    if n_ref > max_reflectors:
-        sf = np.abs(filt.structure_factor)
-        strongest = np.argsort(-sf)[:max_reflectors]
-        return filt[strongest.tolist()]
-    return filt[list(range(n_ref))]
+    idx = _default_selection(phase, min_d, f_threshold, max_reflectors)
+    # Either way a NEW object is returned: the filtered list behind it is cached
+    # and shared.
+    return filt[idx.tolist()]
 
 
 def prepare_reflectors(phase_list, min_d=1.0, f_threshold=0.1, max_reflectors=70):
@@ -160,7 +222,12 @@ def _standard_setting_phase_list(phase_list):
     phase exactly as the CIF defines it, so the real centring and systematic
     absences are untouched. Returns the input unchanged when nothing needs
     fixing (the common case).
+
+    A phase of the seven trigonal space groups that is a plain orix ``Phase``
+    comes out as a ``FramePhase``: kikuchipy folds the rows to pole families
+    with ``phase.point_group``, and orix' group for these is the other setting.
     """
+    phase_list = trigonal_frame_phase_list(phase_list)
     off_standard = {}
     for pid, phase in phase_list:
         number = getattr(phase.space_group, "number", None)
@@ -195,7 +262,9 @@ def _standard_setting_phase_list(phase_list):
 _TRIPLET_ROW_BYTES = 48
 
 #: Reflector counts whose predicted library size is REPORTED when the full set
-#: does not fit, so the caller (and the user) can choose one knowingly.
+#: does not fit, so the caller (and the user) can choose one knowingly: the
+#: refusal offers the largest of them that fits (``hough_reflectors.
+#: largest_list_that_fits``), which the user accepts with one click.
 #:
 #: These are NOT applied automatically, and that is a measured decision rather
 #: than caution. Trimming families silently changes the answer: on Ni (m-3m, 58
@@ -221,7 +290,32 @@ _TRIPLET_ROW_BYTES = 48
 #: The same phase at `mmm` needs 0.59 GiB for all 70, and cubic `m-3m` never
 #: gets near the budget — so this ladder is only ever walked by the low-symmetry
 #: phases that would otherwise take the machine down with them.
-_REFLECTOR_LADDER = (50, 40, 32, 24, 20, 16, 12)
+#:
+#: The steps are fine near the top and stop at 40 rows (at 32 until the floor was
+#: raised, see below). Measured on the library
+#: (band-triplet library, GiB): Al13Fe4 64 -> 0.75, 60 -> 0.54, 56 -> 0.31;
+#: beta-AlFeSi 64 -> 2.64, 60 -> 1.73, 56 -> 1.09, 50 -> 0.49; a coarse 50/40/32
+#: ladder gave up most of the list to gain what a step of 4 rows already gives.
+#: The floor is the same measured edge as the Ni evidence above, read the other
+#: way: PyEBSDIndex's own defaults are 4 families for cubic (FCC/BCC) and 8 for
+#: hexagonal (HCP) phases, so a list that keeps fewer than ``MIN_FIT_FAMILIES``
+#: effective families, or fewer than ``MIN_FIT_ROWS`` rows, is not offered as the
+#: one-click answer. Below that only the hand editor, or Dictionary/Spherical
+#: indexing, are left, and the refusal says so.
+#:
+#: The floor was 32 rows and is 40: on the one real
+#: low-symmetry phase measured (S phase, mmm, an aluminium-alloy scan not included in the repository) 32 rows give 0.3 % of the
+#: reference pixels within 5 degrees (2.8 % indexed), 40 rows give 38.0 %. Where the
+#: floor still acts: ``largest_list_that_fits`` (the one-click answer, nothing below
+#: it is offered), the ladder itself (``predict_triplet_library``: the counts the
+#: refusal's advice lists and the "How many reflector rows" select of the Indexing
+#: page offers), and the refusal message. It does not cut the hand editor: a
+#: selection of families, or any row limit the user types, is not bound by it.
+#: Monoclinic and triclinic phases get no one-click at all, see
+#: ``hough_reflectors.LOW_SYMMETRY_SYSTEMS``.
+_REFLECTOR_LADDER = (64, 60, 56, 50, 44, 40)
+MIN_FIT_ROWS = 40
+MIN_FIT_FAMILIES = 4
 
 #: Probe ceiling for `predict_triplet_library`, in library rows (48 MiB).
 _PREDICT_PROBE_ROWS = 1_000_000
@@ -551,6 +645,36 @@ def _trim_reflectors(ref_hkl, keep):
     return [r[:keep] for r in ref_hkl] if multi else ref_hkl[:keep]
 
 
+def _by_strength(reflectors, ref_hkl, keep, multi):
+    """Order the rows of every phase that a limit will cut, strongest |F| first.
+
+    The default list of a phase with up to 70 rows is in diffsims' order, not in
+    order of strength (only a list longer than the cap is sorted, by the cut). A
+    limit "N rows" takes the first N, so on such a phase it dropped {111} of Al
+    and kept {200} and {220}. The strongest N rows are what the limit means (and
+    what the methods sentence says), so they are put first here, only for the
+    phases that are cut: a list nothing cuts keeps its order, row for row.
+
+    A phase whose rows a selection replaced (``apply_specs``) has no limit and is
+    left alone; so is one whose structure factors are not at hand.
+    """
+    rlvs = reflectors if multi else [reflectors]
+    per = list(ref_hkl) if multi else [ref_hkl]
+    limits = list(keep) if isinstance(keep, (list, tuple)) else [keep] * len(per)
+    out = []
+    for i, rows in enumerate(per):
+        k = limits[i] if i < len(limits) else None
+        rlv = rlvs[i] if i < len(rlvs) else None
+        if k and k < len(rows) and rlv is not None and len(rlv.hkl) == len(rows):
+            try:
+                strength = np.abs(np.asarray(rlv.structure_factor)).ravel()
+                rows = [rows[j] for j in np.argsort(-strength, kind="stable")]
+            except Exception:  # noqa: BLE001 - no structure factors: keep the order
+                pass
+        out.append(rows)
+    return out if multi else out[0]
+
+
 def _normalise_max_reflectors(max_reflectors, ref_hkl, n_full):
     """User's choice -> what `_trim_reflectors` wants, clamped to what exists.
 
@@ -609,10 +733,11 @@ def predict_triplet_library(detector, phase_list, reflectors, counts=None, nBand
             # is 48 MiB — above every one of those and far below any library
             # worth warning about.
             with _capped_triplet_library(_PREDICT_PROBE_ROWS):
+                kk = _hough_reflectors().keep_without_spec_phases(
+                    keep, ref_hkl, spec_phases, multi)
                 detector.get_indexer(
                     fixed,
-                    _trim_reflectors(ref_hkl, _hough_reflectors().keep_without_spec_phases(
-                        keep, ref_hkl, spec_phases, multi)),
+                    _trim_reflectors(_by_strength(reflectors, ref_hkl, kk, multi), kk),
                     nBands=nBands)
             rows = 0                      # built under the probe: negligible
         except MemoryError as e:
@@ -623,6 +748,43 @@ def predict_triplet_library(detector, phase_list, reflectors, counts=None, nBand
             continue
         if rows is not None:
             out.append((int(keep), rows, rows * _TRIPLET_ROW_BYTES))
+    return out
+
+
+def _refusal_phases(phase_list, built, multi, budget):
+    """Per phase of a refused build: what it asked for and what could be offered.
+
+    ``fit_rows`` is the count of the one-click answer (``largest_list_that_fits``),
+    only for a phase on the default list or an auto rule: a selection of families
+    made by hand is never replaced, so it carries ``own_selection`` and no count.
+    Never raises: the refusal must reach the user even if this cannot be computed.
+    """
+    hr = _hough_reflectors()
+    per_phase = list(built) if multi else [built]
+    out = []
+    for i, (_pid, phase) in enumerate(phase_list):
+        entry = {"name": str(phase.name), "rows": None, "predicted_bytes": None,
+                 "fit_rows": None, "fit_families": None, "fit_reason": None,
+                 "own_selection": False}
+        try:
+            rows = per_phase[i] if i < len(per_phase) else None
+            if rows is not None:
+                entry["rows"] = int(len(rows))
+                probe = max(1, min(_PREDICT_PROBE_ROWS, budget // _TRIPLET_ROW_BYTES))
+                entry["predicted_bytes"] = int(_library_rows_for(phase, rows, probe_rows=probe)
+                                               * _TRIPLET_ROW_BYTES) or None
+            spec = hr.get_spec(phase.name)
+            if spec is not None and spec["mode"] == "custom":
+                entry["own_selection"] = True
+            else:
+                found = hr.largest_list_that_fits(phase, budget)
+                if not found["fits"]:
+                    entry["fit_rows"] = found["rows"]
+                    entry["fit_families"] = found["families"]
+                    entry["fit_reason"] = found["reason"]
+        except Exception:  # noqa: BLE001
+            logger.debug("refusal details for %s unavailable", phase.name, exc_info=True)
+        out.append(entry)
     return out
 
 
@@ -682,10 +844,13 @@ def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma
     # context and leak it (see pyebsdindex_mode).
     share_opencl_context()
 
+    built = _trim_reflectors(_by_strength(reflectors, ref_hkl, keep, multi), keep)
+    # what the indexer is built with, for the result's record of its reflectors
+    _hough_reflectors().record_build_rows(built if multi else [built])
     try:
         with _capped_triplet_library(max(1, budget // _TRIPLET_ROW_BYTES)):
             return detector.get_indexer(
-                fixed_phases, _trim_reflectors(ref_hkl, keep),
+                fixed_phases, built,
                 nBands=nBands, tSigma=tSigma, rSigma=rSigma
             )
     except (IndexError, ValueError) as e:
@@ -725,14 +890,60 @@ def create_indexer(detector, phase_list, reflectors, nBands=12, tSigma=2, rSigma
         if any(spec_phases):
             advice += ("  A phase here uses a reflector selection of its own; remove "
                        "families from it or reset it to the default.")
-        raise MemoryError(
+        phases = _refusal_phases(phase_list, built, multi, budget)
+        offer = ""
+        if any(p["fit_reason"] == "low_symmetry" for p in phases):
+            offer = (" No shorter default list is offered for a monoclinic or triclinic "
+                     "phase: shorter lists measurably lose orientations there. Index fewer "
+                     "phases at a time, free memory, use Spherical or Dictionary indexing, "
+                     "or shorten the list by hand in the 'Reflector families' card, knowing "
+                     "that it may lose orientations.")
+        elif any(p["fit_rows"] for p in phases):
+            offer = (f" The 'Reflector families' card of this phase offers 'Use the largest "
+                     f"list that fits' (a default list of at most that many rows, kept for "
+                     f"the phase and recorded with the result); a list of fewer than "
+                     f"{MIN_FIT_ROWS} rows or {MIN_FIT_FAMILIES} families is not offered.")
+        raise _hough_reflectors().HoughLibraryTooBig(
             f"Hough indexing needs more memory than this machine can spare for "
             f"{names}: {e}. About {_available_memory_bytes() / 2**30:.1f} GiB is free "
-            f"right now.{advice} Lower the reflector count for this phase, free memory, "
+            f"right now.{advice}{offer} Otherwise "
+            f"edit the families by hand, free memory, "
             f"or index it with Dictionary or Spherical indexing instead. "
-            f"(A CIF stored without symmetry — space group P 1 — is the usual cause: "
-            f"every reflector family is then a single pole.)"
+            f"{_p1_memory_hint(phase_list)}",
+            {"phases": phases, "budget_bytes": int(budget),
+             "free_bytes": int(_available_memory_bytes()),
+             "min_rows": MIN_FIT_ROWS, "min_families": MIN_FIT_FAMILIES},
         ) from e
+
+
+def _p1_memory_hint(phase_list) -> str:
+    """The sentence about P 1 at the end of the Hough memory error.
+
+    A CIF stored without symmetry (space group P 1) is the usual cause: every
+    reflector family is then a single pole. Where the atoms of such a phase
+    actually have more symmetry, name it and the action that fixes it. One
+    analyser call per P 1 phase, and only on this error path.
+    """
+    generic = (
+        "(A CIF stored without symmetry — space group P 1 — is the usual cause: "
+        "every reflector family is then a single pole.)"
+    )
+    try:
+        from backend.api.services.cif_symmetry import analyse_p1, hough_hint
+
+        found = []
+        for _, p in phase_list:
+            source = getattr(p, "cif_source_path", None)
+            sentence = hough_hint(analyse_p1(source), p.name) if source else ""
+            if sentence:
+                found.append(sentence)
+        if found:
+            # One sentence per P 1 phase: the group where it is the same at every
+            # tolerance, the ladder where it changes along it.
+            return " ".join(found)
+    except Exception:  # noqa: BLE001 - the hint is a bonus, not the error
+        pass
+    return generic
 
 
 def log_index_data(xmap, index_data, band_data):
@@ -784,7 +995,8 @@ def optimize_pc(detector, indexer, pattern, method="PSO", search_limit=0.05, bat
     """
     # pattern is 2D (H, W); hough_indexing_optimize_pc requires at least one
     # navigation axis — shape (1, 1, H, W) satisfies this requirement.
-    ebsd = EBSD(pattern[np.newaxis, np.newaxis], detector=detector)
+    from backend.api.services.load_choices import for_pyebsdindex
+    ebsd = EBSD(for_pyebsdindex(pattern)[np.newaxis, np.newaxis], detector=detector)
 
     # search_limit is only supported by PSO (not Nelder-Mead)
     extra_kwargs = {}
@@ -819,7 +1031,8 @@ def compute_ci(detector, phase_list, indexer, pattern):
         indexer = create_indexer(detector, phase_list, reflectors)
     
     # pattern is 2D (H, W); hough_indexing requires at least one navigation axis.
-    ebsd = EBSD(pattern[np.newaxis, np.newaxis], detector=detector)
+    from backend.api.services.load_choices import for_pyebsdindex
+    ebsd = EBSD(for_pyebsdindex(pattern)[np.newaxis, np.newaxis], detector=detector)
     # Run indexing with the configured indexer
     xmap, index_data, band_data = ebsd.hough_indexing(
         phase_list, indexer,
@@ -1053,8 +1266,8 @@ def _expand_in_origin_choice_1(parser, space_group):
 
     The same steps as ``P_cif._expandAsymmetricUnit``, with one difference: each
     coordinate goes through ``origin_choice.to_choice_1`` before the operators
-    of ``space_group`` (diffpy's, i.e. choice 1, the ones diffsims re-expands
-    with in ``sanitise_phase``) are applied. Labels, occupancies and U tensors
+    of ``space_group`` (diffpy's, i.e. choice 1, the ones ``phase_cell`` expands
+    the structure factors' cell with) are applied. Labels, occupancies and U tensors
     are carried exactly as diffpy carries them.
     """
     from diffpy.structure import Atom
@@ -1086,6 +1299,19 @@ def _expand_in_origin_choice_1(parser, space_group):
 
 
 def hough_phase_from_cif(path):
+    """``_build_hough_phase(path)`` plus the file it was read from.
+
+    The phase's atoms are not a safe way back to the crystal (orix re-expresses
+    them in its own frame; a hexagonal cell comes back as another group), so the
+    path is kept on the phase for the one caller that has to re-read the file:
+    the Hough memory error, which names the hidden symmetry of a P 1 CIF.
+    """
+    phase = _build_hough_phase(path)
+    phase.cif_source_path = str(path)
+    return phase
+
+
+def _build_hough_phase(path):
     """``Phase.from_cif(sanitize_cif(path))``, with the CIF's origin choice honoured.
 
     Every Hough phase (the run, the per-phase split, batch, the cached indexer

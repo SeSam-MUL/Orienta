@@ -30,25 +30,83 @@ const api = axios.create({
 // pending. A store resync that runs in the middle of one reads half-changed
 // state, so it asks isFileLoadInFlight() first. Counted here because every
 // request passes these interceptors, whichever page issued it.
+//
+// Exactly these three endpoints change it. The match is on the PATH, query string and host
+// ignored, and it is exact: `/api/ebsd/loaded-files/remove` (and clear, clear-all) merely
+// start with `/api/ebsd/load`, they edit the switcher's list and load nothing.
+const FILE_SETTING_PATHS = ['/api/ebsd/load', '/api/ebsd/switch-file', '/api/h5/open'];
+
+const pathOf = (url) => {
+  try {
+    return new URL(String(url || ''), 'http://localhost').pathname;
+  } catch {
+    return String(url || '').split(/[?#]/)[0];
+  }
+};
+/** True for a URL that is exactly one of the endpoints that set the loaded file. */
+const isFileSettingUrl = (url) => FILE_SETTING_PATHS.includes(pathOf(url));
+
 let fileLoadsInFlight = 0;
 const changesLoadedFile = (config) =>
-  String(config?.method || '').toLowerCase() === 'post'
-  && FILE_SETTING_PATHS.some((p) => String(config?.url || '').includes(p));
-const fileLoadSettled = (config) => {
+  String(config?.method || '').toLowerCase() === 'post' && isFileSettingUrl(config?.url);
+
+// Outcome of every load / switch-file / open request, by start order: `ok` is null while the
+// request is pending, then true (answered) or false (failed); `done` resolves when it settles.
+const fileLoads = new Map();
+const MAX_REMEMBERED_LOADS = 64;
+
+const fileLoadSettled = (config, ok) => {
   if (config?.metadata?.fileLoad) {
     config.metadata.fileLoad = false;
     fileLoadsInFlight = Math.max(0, fileLoadsInFlight - 1);
+    const entry = fileLoads.get(config.metadata.fileLoadStart);
+    if (entry) {
+      entry.ok = ok;
+      entry.resolve();
+    }
   }
 };
 
 /** True while a load / switch-file / open request is pending. */
 export const isFileLoadInFlight = () => fileLoadsInFlight > 0;
 
+// Every such request is stamped with its start order. Whoever wrote the answer of a load or switch
+// into shared state asks whether a later one has been started since: then the later answer
+// describes the file the backend ends on, and this one is the older.
+let fileLoadStarts = 0;
+
+/**
+ * Resolves true when a load / switch-file / open that was started after the one that produced
+ * `response` has SUCCEEDED: its answer describes the file the backend ends on, so this older one
+ * must not be written. A later one that failed changes nothing, and does not supersede.
+ *
+ * A later one that is still pending decides nothing yet, so the verdict waits until every later
+ * one has settled: writing the older answer now would show a file the backend is about to leave,
+ * and dropping it would leave nothing if the later one then fails.
+ */
+export const isSupersededLoad = async (response) => {
+  const stamp = response?.config?.metadata?.fileLoadStart;
+  if (typeof stamp !== 'number') return false;
+  const later = () => [...fileLoads.entries()].filter(([s]) => s > stamp).map(([, e]) => e);
+  for (let pending = later().filter((e) => e.ok === null); pending.length;
+    pending = later().filter((e) => e.ok === null)) {
+    await Promise.all(pending.map((e) => e.done));
+  }
+  return later().some((e) => e.ok === true);
+};
+
 api.interceptors.request.use((config) => {
   config.metadata = { start: Date.now() };
   if (changesLoadedFile(config)) {
     config.metadata.fileLoad = true;
     fileLoadsInFlight += 1;
+    fileLoadStarts += 1;
+    config.metadata.fileLoadStart = fileLoadStarts;
+    const entry = { ok: null };
+    entry.done = new Promise((resolve) => { entry.resolve = resolve; });
+    fileLoads.set(fileLoadStarts, entry);
+    const old = fileLoads.get(fileLoadStarts - MAX_REMEMBERED_LOADS);
+    if (old && old.ok !== null) fileLoads.delete(fileLoadStarts - MAX_REMEMBERED_LOADS);
   }
   return config;
 });
@@ -59,12 +117,9 @@ api.interceptors.request.use((config) => {
  * request body of the endpoints that change the loaded file — one place
  * instead of every call site.
  */
-const FILE_SETTING_PATHS = ['/api/ebsd/load', '/api/ebsd/switch-file', '/api/h5/open'];
-
 function noteLoadedFile(config) {
   try {
-    const url = config?.url || '';
-    if (!FILE_SETTING_PATHS.some((p) => url.includes(p))) return;
+    if (!changesLoadedFile(config)) return;
     const body = typeof config.data === 'string' ? JSON.parse(config.data) : config.data;
     const path = body?.path;
     if (!path) return;
@@ -77,7 +132,7 @@ function noteLoadedFile(config) {
 
 api.interceptors.response.use(
   (response) => {
-    fileLoadSettled(response.config);
+    fileLoadSettled(response.config, true);
     addHttpBreadcrumb({
       method: response.config?.method,
       url: response.config?.url,
@@ -88,7 +143,7 @@ api.interceptors.response.use(
     return response;
   },
   (error) => {
-    fileLoadSettled(error?.config);
+    fileLoadSettled(error?.config, false);
     try {
       if (!axios.isCancel?.(error)) {
         const cfg = error.config || {};
@@ -261,6 +316,12 @@ export const h5Api = {
   getLayers: () => api.get('/api/h5/layers'),
 };
 
+// --- Scan geometry ---
+export const scanGeometryApi = {
+  // What a hexagonal scan cannot do yet, built by the backend from the table that enforces it.
+  hexLimits: () => api.get('/api/scan-geometry/hex-limits'),
+};
+
 // --- EBSD Viewer ---
 export const ebsdApi = {
   load: (path, useKikuchipy = true) =>
@@ -276,11 +337,14 @@ export const ebsdApi = {
    *   plus stage='error' on the error path)
    * @param {number} [options.pollIntervalMs=250] - polling cadence in ms
    * @param {boolean} [options.useKikuchipy=true] - passes through to safe_loader
+   * @param {{h5_path: string, measurement_id: string}|null} [options.apex] - for an EDAX
+   *   .up1/.up2: the APEX metadata file and measurement the user chose. Without it the
+   *   backend looks for a metadata file in the pattern file's own folder.
    * @returns {Promise} resolves with the POST /api/ebsd/load axios response on success
    */
   loadWithProgress: (
     path,
-    { onProgress, pollIntervalMs = 250, useKikuchipy = true } = {},
+    { onProgress, pollIntervalMs = 250, useKikuchipy = true, apex = null, variant = null } = {},
   ) => {
     // crypto.randomUUID() is available in all modern browsers + Node 14.17+.
     // It returns an RFC4122 v4 UUID. Fallback for paranoia / very old envs.
@@ -390,6 +454,10 @@ export const ebsdApi = {
         path,
         use_kikuchipy: useKikuchipy,
         request_id: requestId,
+        // Only when the user chose a measurement: an ordinary load sends exactly what it always did.
+        ...(apex ? { apex } : {}),
+        // Likewise: the measurement and pattern source the user chose, `{measurement, pattern_source}`.
+        ...(variant ? { variant } : {}),
       },
       {
         // NO client-side deadline for the load itself. The axios instance
@@ -446,6 +514,27 @@ export const ebsdApi = {
   select: (indices) => api.post('/api/ebsd/select', { indices }),
   getDetector: () => api.get('/api/ebsd/detector'),
   getMetadata: () => api.get('/api/ebsd/metadata'),
+
+  // EDAX APEX metadata files (an .h5 that lists measurements and holds no patterns): what the
+  // load dialog asks before anything is loaded. `inspect` answers {kind: 'plain'} for any other
+  // file, {kind: 'unreadable', problem} for an .h5 that cannot be opened as HDF5.
+  inspect: (path) => api.get('/api/ebsd/inspect', { params: { path } }),
+  // A PNG (blob) of the middle pattern of one pattern source ('processed' | 'unprocessed' | 'single')
+  // of one measurement of an HDF5 file; only that pattern is read. A coded 400 when the file lacks it.
+  // `signal` (optional AbortSignal) cancels the request, for a dialog that closes before the answer.
+  inspectPreview: (path, measurement, source, signal) =>
+    api.get('/api/ebsd/inspect/preview', { params: { path, measurement, source }, responseType: 'blob', signal }),
+  // The same listing of pattern files for another folder, for all measurements at once.
+  apexPatternFiles: (h5Path, folder) => api.get('/api/ebsd/apex/pattern-files',
+    { params: { h5_path: h5Path, folder } }),
+  // A small PNG of one measurement: its overview image ('sem') or its image-quality map ('iq').
+  apexPreview: (path, measurement, kind = 'sem') =>
+    api.get('/api/ebsd/apex/preview', { params: { path, measurement, kind }, responseType: 'blob' }),
+  // A refused file is a coded 400 here: proof that a pattern file belongs to a measurement.
+  apexCheckPairing: (body) => api.post('/api/ebsd/apex/check-pairing', body),
+  // The same check as data (200 with the file's `problem`, `count` and numbers), which is what the
+  // dialog shows for a file the user chose: "holds 1,856 patterns, the measurement has 2,000".
+  apexDescribePatternFile: (body) => api.post('/api/ebsd/apex/describe-pattern-file', body),
 
   // Multi-dataset management
   datasets: () => api.get('/api/ebsd/datasets'),
@@ -507,12 +596,14 @@ export const ebsdApi = {
     api.post('/api/ebsd/signal-mask', { enabled, radius_fraction: radiusFraction }),
 
   // Navigation overview
-  overview: (mode = 'mean') =>
-    api.get('/api/ebsd/overview', { params: { mode } }),
+  // options.display = 'raster': a hexagonal scan's picture on the display raster (ignored for square scans)
+  overview: (mode = 'mean', options = {}) =>
+    api.get('/api/ebsd/overview', { params: { mode, ...options } }),
 
   // Virtual EBSD-derived images (used by EDS Analysis)
-  virtualBSE: (cmap = 'gray', color = '', roi = '') =>
-    api.get('/api/ebsd/virtual-bse', { params: { cmap, color, roi } }),
+  // options.display = 'raster': a hexagonal scan's image on the display raster (ignored for square scans)
+  virtualBSE: (cmap = 'gray', color = '', roi = '', options = {}) =>
+    api.get('/api/ebsd/virtual-bse', { params: { cmap, color, roi, ...options } }),
   bandContrast: (cmap = 'gray', color = '') =>
     api.get('/api/ebsd/band-contrast', { params: { cmap, color } }),
 };
@@ -605,15 +696,30 @@ export const pcApi = {
     api.put('/api/pc/phase/reflectors', { phase_name: phaseName, spec, extended }),
   validatePhaseReflector: (phaseName, hkl, spec = null) =>
     api.post('/api/pc/phase/reflectors/validate', { phase_name: phaseName, hkl, spec }),
+  // The one-click answer to a refusal: the largest default list that fits.
+  fitPhaseReflectors: (phaseName, extended = false) =>
+    api.post('/api/pc/phase/reflectors/fit', { phase_name: phaseName, extended }),
   phaseReflectorCost: (phaseName, nBands = 12) =>
     api.get('/api/pc/phase/reflectors/cost', {
       params: { phase_name: phaseName, n_bands: nBands },
     }),
   status: () => api.get('/api/pc/status'),
-  optimize: (patterns, method = 'PSO', searchLimit = 0.05) =>
-    api.post('/api/pc/optimize', { patterns, method, search_limit: searchLimit }),
+  // mode 'refine' = Global PC Refine (starts at the PC the page holds); 'find' = Find PC (no start).
+  optimize: (patterns, method = 'PSO', searchLimit = 0.05, mode = 'refine') =>
+    api.post('/api/pc/optimize', { patterns, method, search_limit: searchLimit, mode }),
+  // Picks calibration patterns from the whole scan (one per ninth) and puts them on the list.
+  // `exclude` = [[row, col], ...]: positions that must not be chosen ("other patterns"); the best of each
+  // block that is not in it is taken instead.
+  autoPick: (replace = true, exclude = []) =>
+    api.post('/api/pc/pattern/auto-pick', exclude.length ? { replace, exclude } : { replace }),
+  // A PC in another vendor's convention ('bruker' | 'tsl' | 'oxford'); `shape` is [rows, columns].
+  convert: (pc, source, target, shape) => api.post('/api/pc/convert', { pc, source, target, shape }),
+  // One step back: what the PC of `dataset` (default: the open one) was before the last PC write.
+  previous: (dataset = null) =>
+    api.get('/api/pc/previous', { params: dataset ? { dataset } : {} }),
+  putBack: (dataset = null) => api.post('/api/pc/put-back', dataset ? { dataset } : {}),
   getOptimizeStatus: (taskId) => api.get(`/api/pc/optimize/${taskId}`),
-  analyzeDrift: (indices) => api.post('/api/pc/drift', { indices }),
+  cancelOptimize: (taskId) => api.post(`/api/pc/optimize/${taskId}/cancel`),
   runGridCalibration: (gridStep, mode = 'plane', method = 'PSO', searchLimit = 0.05) =>
     api.post('/api/pc/calibrate/grid', {
       grid_step: gridStep, mode, method, search_limit: searchLimit,
@@ -625,6 +731,35 @@ export const calibrationApi = {
   getEntry: (dataset) => api.get(`/api/calibration/${encodeURIComponent(dataset)}`),
   propagateToParent: (dataset) =>
     api.post(`/api/calibration/${encodeURIComponent(dataset)}/propagate-to-parent`),
+};
+
+// --- Named PC calibrations (saved, versioned, applied only on request) ---
+export const pcCalibrationsApi = {
+  list: () => api.get('/api/pc-calibrations'),
+  create: (name, dataset, author = '') => api.post('/api/pc-calibrations', { name, dataset, author }),
+  get: (id) => api.get(`/api/pc-calibrations/${encodeURIComponent(id)}`),
+  rename: (id, name) => api.put(`/api/pc-calibrations/${encodeURIComponent(id)}`, { name }),
+  remove: (id) => api.delete(`/api/pc-calibrations/${encodeURIComponent(id)}`),
+  // The calibrations that fit `dataset`'s file; with `all` every calibration with its comparison, fitting or not.
+  suggest: (dataset, all = false) =>
+    api.get('/api/pc-calibrations/suggest', { params: all ? { dataset, all: true } : { dataset } }),
+  forDataset: (dataset) => api.get(`/api/pc-calibrations/for-dataset/${encodeURIComponent(dataset)}`),
+  candidates: (id) => api.get(`/api/pc-calibrations/${encodeURIComponent(id)}/candidates`),
+  // Gives the calibration's PC to the datasets named. A dataset whose settings differ is refused unless it is
+  // named again in `acceptMismatch`. `version` null: the latest.
+  apply: (id, datasets, acceptMismatch = [], version = null) =>
+    api.post(`/api/pc-calibrations/${encodeURIComponent(id)}/apply`, {
+      datasets, accept_mismatch: acceptMismatch, version,
+    }),
+  // `fromVersion`: the version the files in `applyTo` were on when the page asked about them; a file that is not
+  // on it any more is left as it is (its answer reads status "left").
+  newVersion: (id, dataset, applyTo = [], acceptMismatch = [], fromVersion = null) =>
+    api.post(`/api/pc-calibrations/${encodeURIComponent(id)}/versions`, {
+      dataset, apply_to: applyTo, accept_mismatch: acceptMismatch, from_version: fromVersion,
+    }),
+  results: (id) => api.get(`/api/pc-calibrations/${encodeURIComponent(id)}/results`),
+  // The PC another file holds, proposed for `dataset` (writes nothing).
+  fromFile: (path, dataset) => api.post('/api/pc-calibrations/from-file', { path, dataset }),
 };
 
 // --- Simulation ---
@@ -701,6 +836,8 @@ export const indexApi = {
     api.put('/api/indexing/hough/reflectors', { cif_path: cifPath, spec, extended }),
   validateHoughReflector: (cifPath, hkl, spec = null) =>
     api.post('/api/indexing/hough/reflectors/validate', { cif_path: cifPath, hkl, spec }),
+  fitHoughReflectors: (cifPath, extended = false) =>
+    api.post('/api/indexing/hough/reflectors/fit', { cif_path: cifPath, extended }),
   houghReflectorsCost: (cifPath, nBands = 12) =>
     api.get('/api/indexing/hough/reflectors/cost', {
       params: { cif_path: cifPath, n_bands: nBands },
@@ -980,10 +1117,20 @@ export const batchV2Api = {
     api.post('/api/batch-v2/scan-folder', { folder, recursive }),
   quickLoad: (filePath) =>
     api.post('/api/batch-v2/quick-load', { file_path: filePath }),
-  copyPC: (sourceDataset, targetDatasets) =>
-    api.post('/api/batch-v2/copy-pc', { source_dataset: sourceDataset, target_datasets: targetDatasets }),
+  // The files' paths go with the names: two files can share a stem, and the PC has to
+  // reach the entry of the file that was meant.
+  copyPC: (sourceDataset, targetDatasets, sourceFilePath = null, targetFilePaths = null) =>
+    api.post('/api/batch-v2/copy-pc', {
+      source_dataset: sourceDataset, target_datasets: targetDatasets,
+      source_file_path: sourceFilePath, target_file_paths: targetFilePaths,
+    }),
   pcStatus: (fileNames = '') =>
     api.get('/api/batch-v2/pc-status', { params: { files: fileNames } }),
+  // Addressed by file path like copyPC: two files can share a stem. `pc` is already in
+  // Bruker convention — the caller converts it the same way the PC-Refinement page does
+  // (pcApi.convert), never a second formula here.
+  setPC: (filePath, pc) =>
+    api.post('/api/batch-v2/set-pc', { file_path: filePath, pc }),
   unload: (datasetName = '') =>
     api.post('/api/batch-v2/unload', null, { params: { dataset_name: datasetName } }),
   create: (files, phases, config = {}) =>
@@ -998,6 +1145,8 @@ export const batchV2Api = {
   deleteBatch: (batchId) => api.delete(`/api/batch-v2/${batchId}`),
   list: () => api.get('/api/batch-v2/list'),
   report: (batchId) => api.get(`/api/batch-v2/${batchId}/report`),
+  // what each file's export wrote, left out and why, which grid and which APEX measurement it ran on
+  exports: (batchId) => api.get(`/api/batch-v2/${batchId}/exports`),
 };
 
 // --- Phase Refinement (file-stem based per-pixel phase override) ---
@@ -1016,6 +1165,16 @@ export const phaseRefinementApi = {
     api.post(`/api/refinement/${encodeURIComponent(fileStem)}/override-region`, region, { params: { search_dir: searchDir } }),
 };
 
+// Compute-worker jobs (/api/jobs): watched, waited for and cancelled.
+export const jobsApi = {
+  list: (params = {}) => api.get('/api/jobs', { params }),
+  get: (id) => api.get(`/api/jobs/${encodeURIComponent(id)}`),
+  wait: (id, timeoutS = 30) => api.get(`/api/jobs/${encodeURIComponent(id)}/wait`,
+    { params: { timeout: timeoutS }, timeout: (timeoutS + 10) * 1000 }),
+  cancel: (id) => api.post(`/api/jobs/${encodeURIComponent(id)}/cancel`),
+  submit: (job, args = {}) => api.post('/api/jobs', { job, args }),
+};
+
 // --- Database ---
 export const dbApi = {
   browse: (category = 'all', material = '') =>
@@ -1030,8 +1189,24 @@ export const dbApi = {
   xtalInfo: (stem) => api.get(`/api/database/xtal/${encodeURIComponent(stem)}/info`),
   addXtal: (filePath, materialName = '') =>
     api.post('/api/database/add-xtal', { file_path: filePath, material_name: materialName }),
-  convertCifToXtal: (cifPath, outputDir = '') =>
-    api.post('/api/database/convert-cif-to-xtal', { cif_path: cifPath, output_dir: outputDir }),
+  // `referenceDeclaration` is '' or 'unpublished'. A CIF without DOI or reference
+  // is refused (422, code 'reference_missing') unless the caller declares the
+  // data unpublished; the converter never writes a silent "unknown".
+  convertCifToXtal: (cifPath, outputDir = '', referenceDeclaration = '') =>
+    api.post('/api/database/convert-cif-to-xtal', {
+      cif_path: cifPath,
+      output_dir: outputDir,
+      reference_declaration: referenceDeclaration,
+    }),
+  // Save a symmetrised COPY of a CIF stored as P 1 (never overwrites the original).
+  // `symprec` (0.01, 0.02, 0.05 or 0.1 A) is the tolerance the user chose when the
+  // group of the atom positions depends on it; omitted, the backend decides only
+  // where the group is the same at every tolerance.
+  symmetriseCif: (filename, symprec = null) =>
+    api.post(
+      `/api/database/cif/${encodeURIComponent(filename)}/symmetrise`,
+      symprec == null ? undefined : { symprec },
+    ),
 
   // Build database (parse all CIFs into crystal_database.xlsx)
   build: (skipOnline = true) =>
@@ -1050,8 +1225,10 @@ export const dbApi = {
 
   // Master pattern of a .sht reconstructed onto a sphere grid (3D viewer).
   // Returns { filename, grid, phi[], theta[], bandwidth, file_bandwidth, meta }.
-  sphere: (filename, params = {}) =>
-    api.get(`/api/database/sphere/${encodeURIComponent(filename)}`, { params }),
+  // `config` carries the AbortSignal: the server drops a queued reconstruction
+  // whose client has gone, so aborting here is what stops it costing memory.
+  sphere: (filename, params = {}, config = {}) =>
+    api.get(`/api/database/sphere/${encodeURIComponent(filename)}`, { ...config, params }),
 
   // Full-unit-cell crystal structure of a local .cif/.xtal (3D ball-and-stick viewer).
   // Returns { source, lattice, cell_vectors, space_group, atoms[], bonds[], meta }.
@@ -1482,8 +1659,12 @@ async function _fwdDiagError(response) {
   // HTTP status if neither is present.
   let body = null;
   try { body = await response.json(); } catch (_) { /* non-JSON body */ }
-  const msg = body?.detail?.error || body?.error || `HTTP ${response.status}`;
-  return new Error(msg);
+  const detail = typeof body?.detail === 'string' ? body.detail : body?.detail?.error;
+  const msg = detail || body?.error || `HTTP ${response.status}`;
+  const err = new Error(msg);
+  // the stable code of a coded refusal (X-Orienta-Code), for the caller to translate
+  err.code = response.headers?.get?.('X-Orienta-Code') || null;
+  return err;
 }
 
 export const forwardDiagApi = {

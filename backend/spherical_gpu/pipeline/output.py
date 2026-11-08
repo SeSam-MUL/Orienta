@@ -16,14 +16,20 @@ def to_crystal_map(
     step_y: float,
     point_group: str,
     phase_name: str = "Aluminum",
+    space_group: Optional[int] = None,
 ):
     """Build an orix CrystalMap from an IndexResult.
 
     Layout matches the Classic-WSL output structure: rotations stored as
     Bunge ZYZ Euler angles, score in ``prop['ci']``, 1-indexed phase ids.
+
+    ``space_group`` is the master's space group. For the trigonal groups whose
+    two-fold axes lie along Y it goes into the phase, because the point-group
+    name orix saves does not tell the two settings apart; for every other phase
+    it is not used.
     """
     from orix.crystal_map import CrystalMap, PhaseList
-    from crystal_symmetry import FramePhase as Phase
+    from crystal_symmetry import FramePhase as Phase, phase_symmetry_arguments
     from orix.quaternion import Rotation
 
     if result.euler_xyz.shape[0] != n_rows * n_cols:
@@ -32,7 +38,8 @@ def to_crystal_map(
             f"= {n_rows*n_cols}"
         )
 
-    phase = Phase(name=phase_name, point_group=point_group)
+    phase = Phase(name=phase_name,
+                  **phase_symmetry_arguments(point_group, space_group))
     phases = PhaseList(phases=[phase], ids=[1])
 
     eulers = result.euler_xyz.cpu().numpy()

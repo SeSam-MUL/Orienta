@@ -9,42 +9,46 @@
  *
  * It is written as plan-then-execute, and the planning half is pure, because
  * the failure mode here is not "it did not work" -- it is "it deleted the
- * wrong thing", and that cannot be tested after the fact. Every rule below is
- * the NSIS uninstaller's, kept deliberately in step with it:
+ * wrong thing", and that cannot be tested after the fact. Removing ONE
+ * recognised data folder follows the NSIS uninstaller's rules, and the parts that
+ * can be shared ARE shared (electron/leftovers.js): the recognition of a data
+ * folder and the list of names Orienta creates are one definition, and a test
+ * pins the uninstaller's copy of the lists against it.
  *
- *   * only a folder that is recognisably ours (the marker the setup writes, or
- *     an older install's runtime/VERSION plus a second sign of our own);
+ *   * only a folder that is recognisably ours (leftovers.isOrientaHome: the
+ *     marker, or runtime/VERSION plus a second sign of our own);
  *   * never a repository, never a home directory, never a filesystem root;
  *   * never through a symlink: a link is unlinked, never followed;
  *   * only the entries we created -- anything the user put there stays;
  *   * the crystal library only on a separate, explicit yes;
- *   * the pointer file last, so an interrupted removal can be resumed.
+ *   * the marker last, so an interrupted removal can be resumed.
+ *
+ * NOT done here, but done by the uninstaller (this module handles only
+ * the folder it is given, and only by name inside a recognised data folder):
+ *   * cleaning a chain Orienta/Orienta/... of leftover levels, inside the folder
+ *     or above it, and the DEFAULT folder's leftovers (electron/, logs/) when the
+ *     data was recorded elsewhere -- by SHAPE, level by level;
+ *   * removing the data-folder pointer (home.txt) once the folder is gone.
+ * A POSIX user who nested the folder by repeated "change..." clicks (0.4.6) may
+ * therefore be left with leftover folders and a pointer; the stale-pointer check
+ * at the next start handles the pointer, and the leftovers are harmless.
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
-const platform = require('./platform.js');
+const leftovers = require('./leftovers.js');
 
 /**
  * Top-level entries the installer creates. Nothing else is touched.
  *
- * The macOS names come from `platform.js` rather than being written out here.
+ * ONE list, shared with the setup and (pinned by a test) the uninstaller:
+ * electron/leftovers.js. The macOS names come from `platform.js` through it.
  * They were written out here once, from the SPEC, and the implementation then
  * chose different ones: this list carried `mamba-root`, which nothing ever
- * creates, and lacked `envs`, which holds the conda environment. So "remove
- * all Orienta data" on a Mac left the largest thing on disk — a 2-5 GB
- * environment — and reported it as the user's own files it had kindly kept.
+ * creates, and lacked `envs`, which holds the conda environment.
  */
-const OURS = [
-  'electron', 'logs', 'setup-tmp', 'python', 'runtime', 'pending', 'pending.json',
-  '.orienta-home', '.python_path', '.install_mode', '.install_incomplete',
-  // package_sync.js: what the packages were brought to, an update in flight, and
-  // the last failure of one. Left behind, "remove all data" would keep files
-  // that name a lock for packages that are no longer there.
-  '.packages_lock.json', '.packages_sync.json', '.packages_sync_failed.json',
-  platform.CONDA_ROOT_DIR, platform.CONDA_ENVS_DIR,
-];
+const OURS = leftovers.ALL_NAMES;
 
 /** Inside runtime/, this one is the user's own data. */
 const LIBRARY = path.join('runtime', 'Database');
@@ -112,13 +116,11 @@ function planRemoval(home, io = fs, homedir = os.homedir()) {
   // A checkout is never a data folder, however many markers it carries.
   if (exists(path.join(resolved, '.git'), io)) { plan.reason = REASONS.isRepo; return plan; }
 
-  // Recognisably ours: the marker the setup writes, or an older install's
-  // runtime/VERSION together with a second sign of our own.
-  let ours = exists(path.join(resolved, '.orienta-home'), io);
-  if (!ours && exists(path.join(resolved, 'runtime', 'VERSION'), io)) {
-    ours = exists(path.join(resolved, '.python_path'), io)
-      || exists(path.join(resolved, 'python'), io);
-  }
+  // Recognisably ours: ONE rule, shared with the uninstaller, the folder chooser
+  // and the setup (leftovers.isOrientaHome) -- it used to be written out three
+  // times, and this copy accepted any `python` folder where the others wanted
+  // an interpreter.
+  const ours = leftovers.isOrientaHome(resolved, { exists: (p) => exists(p, io) });
   if (!ours) { plan.reason = REASONS.notOurs; return plan; }
 
   let names = [];

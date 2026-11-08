@@ -15,7 +15,9 @@
 import { formatTime } from '../../i18n/formatDateTime';
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ebsdApi, edsApi, pcApi } from '../../services/api';
+import { ebsdApi, edsApi, pcApi, scanGeometryApi } from '../../services/api';
+import { usePcPatternCount } from './usePcPatternCount';
+import { isPcJobRunning, pcJobRunningText } from '../PCRefinement/jobRunning';
 import { problemText } from '../../services/problemText';
 import useDataStore from '../../stores/useDataStore';
 import useEdsColorStore from '../../stores/useEdsColorStore';
@@ -25,13 +27,26 @@ import FileSwitcher from '../common/FileSwitcher';
 import InfoTooltip from '../common/InfoTooltip';
 import { qualityProvenanceKey } from '../common/qualityProvenance';
 import LoadProgressModal from './LoadProgressModal';
+import ApexLoadDialog from './ApexLoadDialog';
+import {
+  announcePairingDropped, exportStem as exportStemOf, loadedAs, reopenPath, runLoads,
+  sidebarLabels, singleFlight, statusFileName,
+} from './apexLoad';
+import { routeLoad, readRememberedVariant, rememberVariant, canonicalPath } from './loadChoices';
+import LoadDialog from './LoadDialog';
 import CropPanel from './CropPanel';
 import { NlparControls, NlparOverlayExtras } from './NlparControls';
 import { useNlpar, nlparStepFor } from './useNlpar';
 import {
   boundsOf, bytesPerSample, maskForTool, selectionPointsFor,
 } from './navSelection';
-import { datasetGeometry } from './datasetGeometry';
+import { datasetGeometry, ebsdInfoWithGrid } from './datasetGeometry';
+import { parseScanGeometry } from '../../services/scanGeometry';
+import { makeHexMap } from '../../services/hexMap';
+import { HEX_MAX_WINDOW, hexWindowOk } from './frameAverageWindow';
+import {
+  overviewPointer, crosshairPercent, selectionCrop, roiLabelBox, overviewMismatch, rasterKey, overviewScale,
+} from './hexOverview';
 import { useSettledPath } from './useSettledPath';
 // Same zoom mechanics as the EDS analysis maps — imported rather than copied so
 // the two pages cannot drift apart. See ../EDS/zoomView.js for the derivation.
@@ -48,6 +63,7 @@ import {
   FormRow, Separator, ScrollPanel, useConfirm, ConfirmDialog,
   usePrompt, PromptDialog,
 } from '../../theme/components';
+import { pcLoadNote } from './pcLoadNote';
 
 // A drag shorter than this (in CSS px) still counts as a click, so panning a
 // zoomed overview never navigates to a pattern by accident. Same slop as the
@@ -212,6 +228,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const [filePath, setFilePath] = useState('');
   const [loadLoading, setLoadLoading] = useState(false);
   const [loadError, setLoadError] = useState(null);
+  // An EDAX APEX metadata file waiting for the user to choose measurements: {h5Path, inspection}.
+  const [apexDialog, setApexDialog] = useState(null);
+  const [loadDialog, setLoadDialog] = useState(null);   // {path, inspection, remembered} of a `choices` file
   // Progress modal: opens immediately on Load click, advances through 4
   // backend-driven stages (reading_metadata → building_signal →
   // detecting_features → finalising), stays open on error until dismissed.
@@ -245,6 +264,18 @@ export default function EBSDViewer({ onNavigate, isActive }) {
 
   // --- Overview ---
   const [overviewImage, setOverviewImage] = useState(null);
+  // What the backend says it drew (the display raster of a hexagonal scan), kept with the picture.
+  const [overviewDisplay, setOverviewDisplay] = useState(null);
+  // The geometry (rasterKey) the picture was fetched for. On a hexagonal scan the picture is shown only while the
+  // page still holds that geometry.
+  const [overviewKey, setOverviewKey] = useState(null);
+  // Which overview question was asked last, for fetchOverview to tell an answer that is no longer wanted from the
+  // one it waits for.
+  const overviewRequestRef = useRef(0);
+  // The geometry the viewer itself has just published (applyGrid) and is about to fetch the overview for, and the
+  // geometry the viewer fetched for on its own because another page changed it. See the effect below geometryKey.
+  const publishedKeyRef = useRef(undefined);
+  const refetchedKeyRef = useRef(undefined);
   // Band Contrast is sourced from Aztec's precomputed per-pixel array (read
   // in ~ms regardless of file size). Mean Intensity, by contrast, has to read
   // every pattern off a lazy multi-GB signal, so it must not be the default —
@@ -291,7 +322,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
 
   // --- Detector ---
   const [detector, setDetector] = useState(null);
-  const [pcPatternCount, setPcPatternCount] = useState(0);
+  const [pcPatternCount, setPcPatternCount] = usePcPatternCount('ebsdviewer', activeDataset);
 
   // --- EDS ---
   const [edsMode, setEdsMode] = useState('At.%');
@@ -313,6 +344,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // that pans does not also fire the overview's click-to-navigate.
   const ovPanRef = useRef(null);
   const ovSuppressClickRef = useRef(false);
+  // Hexagonal scans only: whether the pointer, since the last press, was over a measurement point. A press and
+  // release in a corner no hexagon covers has nothing to load.
+  const ovOnCellRef = useRef(false);
   const patDragRef = useRef(null);
 
   // --- Right-click export ---
@@ -384,6 +418,27 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const maxRow = gridShape ? gridShape[0] - 1 : 0;
   const maxCol = gridShape ? gridShape[1] - 1 : 0;
 
+  // A hexagonal scan's overview is the backend's display raster, not the index grid: every pixel of it is mapped
+  // to a measurement point by this object (null for a square scan, and that null keeps the square code in charge).
+  const hexMap = useMemo(
+    () => makeHexMap(parseScanGeometry(ebsdInfo?.scan_geometry)),
+    [ebsdInfo?.scan_geometry],
+  );
+  // The shape the overview picture and everything drawn over it are measured in.
+  const frameShape = hexMap ? hexMap.shape : gridShape;
+  // A box drawn between two raster pixels covers both of them; between two grid cells it is drawn as before.
+  const boxPad = hexMap ? 1 : 0;
+  // A picture belongs to the geometry it was fetched for. When the page has moved to another one (a switch to a
+  // crop, a deleted dataset) and the answer for it has not come yet, the old picture is neither shown nor blamed:
+  // the page waits as it does for any overview.
+  const geometryKey = rasterKey(ebsdInfo?.scan_geometry);
+  const overviewStale = !!overviewImage && overviewKey !== geometryKey;
+  // A picture that is not the raster this page clicks through must not be clicked at all. This is for an answer
+  // that was fetched for the geometry the page holds and still disagrees with it.
+  const overviewMismatched = !!overviewImage && !overviewStale && overviewMismatch(hexMap, overviewDisplay);
+  const shownOverview = overviewStale || overviewMismatched ? null : overviewImage;
+  const shownOverviewError = overviewMismatched ? t('overview.rasterMismatch') : overviewError;
+
   const log = useCallback((msg) => {
     setLogLines((prev) => [
       ...prev.slice(-200),
@@ -410,7 +465,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       if (preload) {
         sessionStorage.removeItem('ebsd_preload_path');
         setFilePath(preload);
-        setTimeout(() => doLoadFile(preload), 100);
+        setTimeout(() => requestLoad(preload), 100);
       }
     } catch { /* sessionStorage unavailable */ }
   }, [isActive]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -432,6 +487,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         const gridShape = geom?.gridShape || [0, 0];
         setEBSDLoaded({
           grid_shape: gridShape,
+          scan_geometry: active.scan_geometry ?? null,
+          hex_resampled: active.hex_resampled ?? null,
           signal_shape: active.signal_shape || [0, 0],
           n_patterns: active.n_patterns || 0,
         });
@@ -440,6 +497,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           file_path: active.name || '',
           format_type: 'h5oina',
           grid_shape: gridShape,
+          scan_geometry: active.scan_geometry ?? null,
+          hex_resampled: active.hex_resampled ?? null,
           pattern_count: active.n_patterns || 0,
           pattern_shape: geom?.patternShape || [0, 0],
           has_patterns: true,
@@ -454,8 +513,10 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         // Persist file path for Recent Files on Dashboard
         const backendPath = res.data?.file_path;
         if (backendPath) {
-          setFilePath(backendPath);
-          addRecentFile(backendPath);
+          // the metadata file for a measurement of an APEX file (see doLoadFile)
+          const shown = reopenPath(backendPath, useLoadedFilesStore.getState().files);
+          setFilePath(shown);
+          addRecentFile(shown);
         }
         log(t('logMessages.syncedBackend', {
           name: active.name || 'dataset', rows: gridShape[0], cols: gridShape[1],
@@ -596,6 +657,20 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   }, [atlasInfo]);
 
   const fetchOverview = useCallback(async (mode) => {
+    const request = ++overviewRequestRef.current;
+    // The geometry the page holds as it asks. The data store has it the moment a load, a switch or a crop has
+    // published it, which this callback (it has no dependencies) could not read from the render.
+    const heldKey = () => rasterKey(useDataStore.getState().ebsdInfo?.scan_geometry);
+    const askedKey = heldKey();
+    publishedKeyRef.current = undefined;   // this is the fetch the viewer was waiting to make
+    // On a hexagonal scan an answer that is no longer the answer to the last question must not replace the
+    // picture. Whether the picture then fits the page is for the geometry key and the raster check to say. A
+    // square scan keeps taking every answer, as it always did.
+    const outdated = () => {
+      if (askedKey === null && heldKey() === null) return false;
+      return request !== overviewRequestRef.current;
+    };
+    let dropped = false;
     setOverviewLoading(true);
     setOverviewError(null);
     try {
@@ -604,16 +679,21 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         'Band Contrast': 'bc', 'Sharpness (Laplacian)': 'sharpness',
         'SNR (MAD)': 'snr', 'Neighbor Correlation': 'ncc', 'Entropy': 'entropy',
       };
-      const res = await ebsdApi.overview(modeMap[mode] || 'mean');
+      const res = await ebsdApi.overview(modeMap[mode] || 'mean', { display: 'raster' });
+      if (outdated()) { dropped = true; return; }
       setOverviewImage(res.data?.image || null);
+      setOverviewDisplay(res.data?.display || null);
+      setOverviewKey(askedKey);
       setOverviewSampled(!!res.data?.sampled);
       setOverviewSource(res.data?.source || null);
     } catch (e) {
+      if (outdated()) { dropped = true; return; }
       // Surface the failure instead of silently leaving the empty placeholder —
       // a swallowed error here looked identical to "loaded but no image".
       setOverviewError(e?.response?.data?.detail || e?.message || 'Overview failed');
     } finally {
-      setOverviewLoading(false);
+      // The newer question has set the spinner and clears it itself.
+      if (!dropped || request === overviewRequestRef.current) setOverviewLoading(false);
     }
   }, []);
 
@@ -631,6 +711,22 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } catch { /* endpoint may not exist */ }
     return null;
   }, []);
+
+  // Another page (the file switcher in the header, the Indexing page's file and dataset switch) can replace the
+  // geometry in the store without this viewer asking for a new overview. The picture then belongs to the old
+  // geometry (overviewStale) and would wait for an answer that never comes. The viewer fetches it, and the
+  // dataset list with it, as soon as the page is visible: the pages stay mounted when hidden, and an overview of a
+  // large scan takes minutes. Once per geometry: a failed fetch leaves its error box and is not repeated until the
+  // geometry changes again. A square scan on both sides has no key, so it is never stale and nothing happens.
+  useEffect(() => {
+    if (!overviewStale) { refetchedKeyRef.current = undefined; return; }   // the picture fits again
+    if (!isActive || overviewLoading) return;
+    if (publishedKeyRef.current === geometryKey) return;   // applyGrid ran; its caller fetches
+    if (refetchedKeyRef.current === geometryKey) return;
+    refetchedKeyRef.current = geometryKey;
+    fetchDatasets();
+    fetchOverview(overviewMode);
+  }, [isActive, overviewStale, overviewLoading, geometryKey, overviewMode, fetchDatasets, fetchOverview]);
 
 
   const fetchEds = useCallback(async (r, c) => {
@@ -654,8 +750,10 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     fetchEds(nr, nc);
   }, [maxRow, maxCol, loadPattern, fetchEds]);
 
-  const doLoadFile = useCallback(async (path) => {
-    if (!path?.trim()) { setLoadError(t('load.enterPath')); return; }
+  // `extra.apex` is the metadata file and measurement the user chose for an EDAX .up1/.up2. Returns
+  // true when the file loaded, so a caller that loads several in a row can stop at the first failure.
+  const doLoadFile = useCallback(async (path, extra = {}) => {
+    if (!path?.trim()) { setLoadError(t('load.enterPath')); return false; }
     setLoadLoading(true);
     setLoadError(null);
     setPattern(null);
@@ -676,23 +774,31 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       const res = await ebsdApi.loadWithProgress(path.trim(), {
         onProgress: (state) => setLoadProgressState(state),
         pollIntervalMs: 250,
+        apex: extra?.apex || null,
+        variant: extra?.variant || null,
       });
+      // The load worked: this is the variant the file opens preselected next time.
+      if (extra?.variant) rememberVariant(path.trim(), extra.variant);
       const info = res.data || {};
       setEBSDLoaded(info);
       setFileData({ ...info, file_path: path });
       setRow(0);
       setCol(0);
-      setFilePath(path);
+      // What Recent, the path box and the Dashboard remember: for a measurement of an APEX file the
+      // metadata file, so that opening it again goes through the measurement dialog (the pattern
+      // file alone would load without its metadata).
+      const recorded = loadedAs(path, extra);
+      setFilePath(recorded);
       // EDAX UP1/UP2 carry no pattern centre. If we couldn't recover it from
       // the .osc sidecar, indexing runs on kikuchipy's placeholder PC
       // (0.5,0.5,0.5) — almost certainly wrong. Warn loudly + persistently so
       // the user calibrates the PC before trusting any indexing result.
-      if (info.pc_defaulted) {
-        const warnMsg = t('logMessages.pcDefaultWarning');
-        toast.warning(warnMsg, 15000);
-        log(warnMsg);
-      } else if (info.pc_source === 'osc') {
-        log(t('logMessages.pcFromOsc'));
+      const pcNote = pcLoadNote(info);
+      if (pcNote) {
+        const noteMsg = t(`logMessages.${pcNote.key}`, pcNote.params);
+        if (pcNote.level === 'warning') toast.warning(noteMsg, 15000);
+        else if (pcNote.level === 'info') toast.info(noteMsg, 15000);
+        log(noteMsg);
       }
       // Vendor-dependent: EDAX-style files store patterns with a circular
       // detector aperture (corners are 0 in raw data) → mask helps.
@@ -703,10 +809,10 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       // session) can't leak onto the next file. The mask state is fully
       // re-derived per file (see the comment block at the maskEnabled state).
       setMaskRadius(100);
-      addRecentFile(path);
+      addRecentFile(recorded);
       setRecentFiles((prev) => {
-        const filtered = prev.filter((f) => f !== path);
-        return [path, ...filtered].slice(0, 10);
+        const filtered = prev.filter((f) => f !== recorded);
+        return [recorded, ...filtered].slice(0, 10);
       });
       // Await only the ESSENTIAL fetches — the ones the user needs before
       // they can navigate patterns. fetchOverview is moved to the
@@ -746,7 +852,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           // themselves that they have to navigate.
           setLoadProgressOpen(false);
           onNavigate?.('eds');
-          return;
+          return true;
       } else {
         log(t('logMessages.loadedFile', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
         toast.success(t('logMessages.loadedToast', { name: fname, rows: info.grid_shape?.[0], cols: info.grid_shape?.[1] }));
@@ -755,6 +861,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       // by here the viewer is interactive for navigation; overview and
       // atlas fill in async without blocking the user.
       setLoadProgressOpen(false);
+      return true;
     } catch (err) {
       // Modal stays open in error state — user clicks Close to dismiss.
       // loadProgressState was set to {stage:'error', message: detail} by
@@ -765,10 +872,130 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       setLoadError(msg);
       log(t('logMessages.errorPrefix', { error: msg }));
       toast.error(t('logMessages.loadFailedToast', { error: msg }));
+      return false;
     } finally {
       setLoadLoading(false);
     }
   }, [log, t, onNavigate, setEBSDLoaded, setFileData, setMetadata, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+
+  // Every way of opening a file (typed path, Browse, recent list, drop, the HDF5 viewer's hand-off)
+  // comes through here. An EDAX APEX metadata file lists measurements and holds no patterns, so it
+  // asks which to load; anything else loads as before. A file the backend cannot inspect loads the
+  // ordinary way, which reports its own error. Every HDF5 EBSD name is asked about (loadChoices.js).
+  // One question at a time: a second Enter or click on the same .h5 must not open a second dialog.
+  const askRoute = useRef(singleFlight(routeLoad, { action: 'busy' }));
+  const requestLoad = useCallback(async (path) => {
+    // A pattern file that was loaded with an APEX pairing (Recent from an older session cannot know,
+    // but this session's list of loaded files does) is asked about through its metadata file.
+    const p = reopenPath((path || '').trim(), useLoadedFilesStore.getState().files);
+    if (!p) { setLoadError(t('load.enterPath')); return false; }
+    const route = await askRoute.current(p, ebsdApi.inspect);
+    if (route.action === 'busy') return false;
+    // There is one dialog at a time, and it is the one for the file asked for last: a dialog left open
+    // behind a newer request would otherwise stack on it, or load its older file over the newer one.
+    if (route.action === 'dialog' && route.kind === 'apex') {
+      setLoadDialog(null);
+      setApexDialog(route.dialog);
+      return false;
+    }
+    // A file with several measurements or pattern sources asks which one, preselecting the one chosen
+    // for this file last time. A file with one variant never gets here: it loads below as ever.
+    if (route.action === 'dialog' && route.kind === 'choices') {
+      setApexDialog(null);
+      // The same file again keeps the dialog as it is (the pick already made in it stays).
+      setLoadDialog((open) => (open && canonicalPath(open.path) === canonicalPath(route.dialog.path)
+        ? open : { ...route.dialog, remembered: readRememberedVariant(route.dialog.path) }));
+      return false;
+    }
+    setApexDialog(null);
+    setLoadDialog(null);
+    if (route.action === 'unreadable') {
+      // An .h5 that cannot be opened as HDF5 (held by the program that writes it, or not HDF5):
+      // say why, do not offer the measurement dialog, and let the user insist.
+      askConfirm({
+        title: t('apexDialog.unreadableTitle', { file: p.split(/[\\/]/).pop() }),
+        message: t('apexDialog.unreadableMessage', {
+          reason: t(`errors.${route.problem}`, { defaultValue: route.detail || route.problem }),
+        }),
+        confirmLabel: t('apexDialog.unreadableOpenAnyway'),
+        variant: 'warning',
+        onConfirm: () => doLoadFile(p),
+      });
+      return false;
+    }
+    return doLoadFile(p);
+  }, [doLoadFile, askConfirm, t]);
+
+  // The dialog's "Open": one load after another, so each lands in the list of loaded files and the
+  // last one is the active dataset. A failure stops the run: its error window is open, and loading
+  // on would stack another one on top of it. Say which measurements stayed closed.
+  const handleDialogLoad = useCallback(async (jobs) => {
+    setApexDialog(null);
+    setLoadDialog(null);
+    const { stopped } = await runLoads(
+      jobs,
+      (job) => doLoadFile(job.path, { apex: job.apex, variant: job.variant }),
+      (i, job) => log(t('apexDialog.loadingNth', { n: i + 1, total: jobs.length, name: job.label })),
+    );
+    if (stopped) {
+      log(t('apexDialog.runStopped', { failed: stopped.failed }));
+      if (stopped.notOpened.length) {
+        const msg = t('apexDialog.runNotOpened', { names: stopped.notOpened.join(', ') });
+        log(msg);
+        toast.warning(msg, 15000);
+      }
+    }
+  }, [doLoadFile, log, t]);
+
+  // "Choose file..." in the APEX dialog: a pattern file for one measurement.
+  const choosePatternFile = useCallback(() => {
+    if (window.electronAPI?.openFile) {
+      return window.electronAPI.openFile({
+        filters: [
+          { name: t('apexDialog.chooseFilterName'), extensions: ['up1', 'up2'] },
+          { name: 'All Files', extensions: ['*'] },
+        ],
+      });
+    }
+    return new Promise((resolve) => {
+      askPrompt({
+        title: t('apexDialog.choosePromptTitle'),
+        message: t('apexDialog.choosePromptMessage'),
+        placeholder: t('apexDialog.choosePromptPlaceholder'),
+        submitLabel: t('apexDialog.choosePromptSubmit'),
+        onSubmit: (p) => resolve(p && p.trim() ? p.trim() : null),
+      });
+    });
+  }, [askPrompt, t]);
+
+  // "Search another folder..." in the APEX dialog.
+  const chooseApexFolder = useCallback(() => {
+    if (window.electronAPI?.openFolder) return window.electronAPI.openFolder();
+    return new Promise((resolve) => {
+      askPrompt({
+        title: t('apexDialog.folderPromptTitle'),
+        message: t('apexDialog.folderPromptMessage'),
+        placeholder: t('apexDialog.folderPromptPlaceholder'),
+        submitLabel: t('apexDialog.folderPromptSubmit'),
+        onSubmit: (p) => resolve(p && p.trim() ? p.trim() : null),
+      });
+    });
+  }, [askPrompt, t]);
+
+  // Stable identities: the dialog's previews reload whenever these change.
+  const apexH5 = apexDialog?.h5Path;
+  const apexDescribe = useCallback(async (m, patternPath) => (await ebsdApi.apexDescribePatternFile({
+    h5_path: apexH5, measurement_id: m.id, pattern_path: patternPath })).data, [apexH5]);
+  const apexSearchFolder = useCallback(
+    async (folder) => (await ebsdApi.apexPatternFiles(apexH5, folder)).data, [apexH5]);
+  const apexLoadPreview = useCallback(
+    async (measurementId, kind) => (await ebsdApi.apexPreview(apexH5, measurementId, kind)).data, [apexH5]);
+  // The load dialog's small pattern per source (a failure is the dialog's "no preview", never an error).
+  const choicesPath = loadDialog?.path;
+  const choicePreview = useCallback(
+    async (measurement, source, signal) => (await ebsdApi.inspectPreview(choicesPath, measurement, source, signal)).data,
+    [choicesPath]);
+  const apexHexLimits = useCallback(async () => (await scanGeometryApi.hexLimits()).data, []);
 
   // ---------------------------------------------------------------------------
   // Switch active file from the left-panel Loaded Files list. Calls
@@ -777,7 +1004,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // ---------------------------------------------------------------------------
   const handleSwitchFile = useCallback(async (path) => {
     if (!path || fileSwitching) return;
-    if (path === filePath) return; // already active
+    const entry = useLoadedFilesStore.getState().files.find((f) => f.path === path);
+    if (path === filePath || entry?.active) return; // already active
     setFileSwitching(true);
     setPattern(null);
     setDetector(null);
@@ -791,7 +1019,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       setFileData({ ...info, file_path: path });
       setRow(0);
       setCol(0);
-      setFilePath(path);
+      setFilePath(reopenPath(path, useLoadedFilesStore.getState().files));
       // Re-detect vendor on switch — mask only applies to EDAX-style files.
       setMaskEnabled(info.format_type === 'EDAX');
       setMaskRadius(100);  // reset radius so a stale value can't leak across files
@@ -810,11 +1038,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       fetchAtlas();
       log(t('logMessages.switchedFile', { name: fname }));
       toast.success(t('logMessages.switchedToast', { name: fname }));
+      // A measurement of an APEX file whose metadata file cannot be used any more is reloaded
+      // without it: say so, the pattern centre and the grid now come from somewhere else.
+      announcePairingDropped(info, t, { log, warn: (m) => toast.warning(m, 15000) });
         // Same reasoning as the load path: an EDS-only acquisition
         // leaves this viewer with nothing to show, so follow the data.
         if (info?.content_mode === 'eds_only') onNavigate?.('eds');
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || t('logMessages.switchFailedDefault');
+      // Switching reloads the file, so it can be refused with a code (an APEX pairing that
+      // conflicts, a pattern source the file does not hold): worded in the page's language.
+      const msg = problemText(err, t, 'ebsdviewer') || t('logMessages.switchFailedDefault');
       log(t('logMessages.switchError', { error: msg }));
       toast.error(t('logMessages.switchFailedToast', { error: msg }));
     } finally {
@@ -837,7 +1070,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     setOverviewImage(null);
     setRow(0);
     setCol(0);
-    setFilePath(path);
+    setFilePath(reopenPath(path, useLoadedFilesStore.getState().files));
     // Mask only applies to EDAX-style files; the store was just synced.
     setMaskEnabled(useDataStore.getState().formatType === 'EDAX');
     setMaskRadius(100);  // reset radius so a stale value can't leak across files
@@ -852,6 +1085,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     fetchEds(0, 0);
     fetchAtlas();
   }, [setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+
+  // A result activated on another page brought up its file or variant: the same re-read. Compared
+  // with the count at mount, because a viewer that opens later reads the backend by itself.
+  const fileChangedElsewhere = useDataStore((s) => s.fileChangedElsewhere);
+  const fileChangesSeen = useRef(fileChangedElsewhere);
+  useEffect(() => {
+    if (fileChangesSeen.current === fileChangedElsewhere) return;
+    fileChangesSeen.current = fileChangedElsewhere;
+    handleHeaderSwitcherSwitched(useDataStore.getState().filePath);
+  }, [fileChangedElsewhere, handleHeaderSwitcherSwitched]);
 
   // Remove a single file from the loaded-files registry (the backend refuses
   // to remove the active file). The store action refreshes every consumer.
@@ -930,6 +1173,12 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     // Before the auto-copy: an op that would be refused must not leave a copy behind.
     const nlparStep = nlparStepFor(op, nlpar);
     if (nlparStep === 'refuse') return;
+    // The backend answers a window a hexagonal scan cannot take with a 400 that only the log would show;
+    // the field says so beside itself, and nothing is sent (also not by Alt+A) and no copy is made.
+    if (op === 'avg' && hexMap && !hexWindowOk(windowSize)) {
+      log(t('processing.windowSizeHexInvalid'));
+      return;
+    }
     setProcessingBusy(true);
     setProcessingLabel(label);
     log(`${label}...`);
@@ -1002,7 +1251,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } finally {
       setProcessingBusy(false);
     }
-  }, [log, t, nlpar, windowSize, claheKernel, row, col, deepcopy, activeDataset, overviewMode, fetchDatasets, loadPattern, fetchOverview, fetchAtlas]);
+  }, [log, t, nlpar, windowSize, hexMap, claheKernel, row, col, deepcopy, activeDataset, overviewMode, fetchDatasets, loadPattern, fetchOverview, fetchAtlas]);
 
   // --- Keyboard shortcuts matching PyQt5 ---
   useEffect(() => {
@@ -1121,8 +1370,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     if (!img) return null;
     const rect = img.getBoundingClientRect();
     // Account for object-fit: contain — the actual image may be smaller than the element
-    const natW = img.naturalWidth || gridShape[1];
-    const natH = img.naturalHeight || gridShape[0];
+    const natW = img.naturalWidth || frameShape[1];
+    const natH = img.naturalHeight || frameShape[0];
     const scale = Math.min(rect.width / natW, rect.height / natH);
     const imgW = natW * scale;
     const imgH = natH * scale;
@@ -1131,16 +1380,19 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     const rx = (e.clientX - rect.left - offsetX) / imgW;
     const ry = (e.clientY - rect.top - offsetY) / imgH;
     if (rx < 0 || rx > 1 || ry < 0 || ry > 1) return null;
-    return {
-      r: Math.max(0, Math.min(Math.round(ry * gridShape[0]), maxRow)),
-      c: Math.max(0, Math.min(Math.round(rx * gridShape[1]), maxCol)),
-      rx, ry,
-    };
+    // `r`/`c` are the measurement point under the pointer (null in a corner of a hexagonal picture that no
+    // hexagon covers); `sr`/`sc` are what a selection is drawn in: the same cell on a square scan, a raster pixel
+    // on a hexagonal one.
+    if (hexMap) return overviewPointer(hexMap, rx, ry);
+    const r = Math.max(0, Math.min(Math.round(ry * gridShape[0]), maxRow));
+    const c = Math.max(0, Math.min(Math.round(rx * gridShape[1]), maxCol));
+    return { r, c, rx, ry, sr: r, sc: c };
   };
 
   const handleOverviewPointer = (e, isDrag = false) => {
     const pos = calcOverviewPos(e);
-    if (!pos) return;
+    if (!pos || pos.r === null) return;               // outside, or a corner no hexagon covers: nothing to show
+    if (hexMap) ovOnCellRef.current = true;
     if (pos.r !== row || pos.c !== col) {
       setRow(pos.r);
       setCol(pos.c);
@@ -1209,16 +1461,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         // identical points.
         setLassoPoints((pts) => {
           const last = pts[pts.length - 1];
-          if (last && last.r === pos.r && last.c === pos.c) return pts;
-          return [...pts, { r: pos.r, c: pos.c }];
+          if (last && last.r === pos.sr && last.c === pos.sc) return pts;
+          return [...pts, { r: pos.sr, c: pos.sc }];
         });
         return;
       }
       setRoi({
-        startRow: Math.min(roiStartRef.current.row, pos.r),
-        startCol: Math.min(roiStartRef.current.col, pos.c),
-        endRow: Math.max(roiStartRef.current.row, pos.r),
-        endCol: Math.max(roiStartRef.current.col, pos.c),
+        startRow: Math.min(roiStartRef.current.row, pos.sr),
+        startCol: Math.min(roiStartRef.current.col, pos.sc),
+        endRow: Math.max(roiStartRef.current.row, pos.sr),
+        endCol: Math.max(roiStartRef.current.col, pos.sc),
       });
     } else if (e.buttons === 1 && !e.shiftKey && !cropTool) {
       handleOverviewPointer(e, true);
@@ -1226,7 +1478,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   };
 
   const crosshair = gridShape
-    ? { x: ((col + 0.5) / gridShape[1]) * 100, y: ((row + 0.5) / gridShape[0]) * 100 }
+    ? (hexMap
+      ? crosshairPercent(hexMap, row, col)
+      : { x: ((col + 0.5) / gridShape[1]) * 100, y: ((row + 0.5) / gridShape[0]) * 100 })
     : null;
 
   // The drawn selection as a crop window. Every drag coordinate is INCLUSIVE
@@ -1241,8 +1495,6 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     () => selectionPointsFor(cropTool, lassoPoints, roi),
     [cropTool, lassoPoints, roi],
   );
-
-  const cropBbox = useMemo(() => boundsOf(selectionPoints), [selectionPoints]);
 
   // The lasso path as it stands once the hand has let go. Rebuilding a mask
   // costs O(rows·cols·points) — 392 ms for a 361×461 selection with 1200
@@ -1260,9 +1512,22 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     [cropTool, lassoMaskPath, roi],
   );
 
+  // On a hexagonal scan the drawn points are raster pixels: the crop window is the cells whose centres the shape
+  // contains (a bounding box in the index grid plus a mask), so the box and the mask come from one call. For a
+  // lasso it follows the settled path, i.e. it appears when the hand lets go.
+  const hexCrop = useMemo(
+    () => (hexMap ? selectionCrop(hexMap, cropTool, maskPoints) : null),
+    [hexMap, cropTool, maskPoints],
+  );
+
+  const cropBbox = useMemo(
+    () => (hexMap ? (hexCrop ? hexCrop.bbox : null) : boundsOf(selectionPoints)),
+    [hexMap, hexCrop, selectionPoints],
+  );
+
   const cropMask = useMemo(
-    () => maskForTool(cropTool, maskPoints, cropBbox),
-    [cropTool, maskPoints, cropBbox],
+    () => (hexMap ? (hexCrop ? hexCrop.mask : null) : maskForTool(cropTool, maskPoints, cropBbox)),
+    [hexMap, hexCrop, cropTool, maskPoints, cropBbox],
   );
 
   // A lasso drag ends wherever the button is released — over the sidebar, over
@@ -1297,6 +1562,17 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     setRoi(null);
     setLassoPoints([]);
   }, []);
+
+  // A selection on a hexagonal scan is drawn in pixels of its raster, which a load or a file switch can replace
+  // by another raster (or by a square grid) without going through adoptGrid: the same numbers would then name
+  // other cells without a word. When the geometry changes the selection goes. Between two square scans the key
+  // stays null and nothing happens here.
+  const geometryKeyRef = useRef(geometryKey);
+  useEffect(() => {
+    const before = geometryKeyRef.current;
+    geometryKeyRef.current = geometryKey;
+    if (before !== geometryKey) clearSelection();
+  }, [geometryKey, clearSelection]);
 
   // Switching tools. A path and a box cannot be read as each other, so moving
   // in or out of the lasso drops both — which also keeps the image export from
@@ -1337,10 +1613,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
 
   // --- Export ---------------------------------------------------------------
   // Short, human-recognisable stem for the suggested filename.
-  const exportStem = useMemo(() => {
-    const raw = filePath || activeDataset || 'ebsd';
-    return raw.split(/[\\/]/).pop().replace(/\.[^.]+$/, '') || 'ebsd';
-  }, [filePath, activeDataset]);
+  // (a measurement of an APEX file adds its own name: its metadata file is shared by all of them)
+  const exportStem = useMemo(
+    () => exportStemOf(filePath, activeDataset, loadedFiles), [filePath, activeDataset, loadedFiles]);
 
   const openExport = useCallback(async (target) => {
     // During a drag over the overview the pattern pane shows a ~1/4-resolution
@@ -1358,16 +1633,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     if (exportFor === 'overview') {
       const modeName = t(`overview.modeNames.${overviewMode}`, { defaultValue: overviewMode });
       return {
-        src: overviewImage ? `data:image/png;base64,${overviewImage}` : null,
+        src: shownOverview ? `data:image/png;base64,${shownOverview}` : null,
         title: t('overview.captionTitle'),
         defaultBaseName: `${exportStem}_${modeName}${gridShape ? `_${gridShape[0]}x${gridShape[1]}` : ''}`,
         // The overview carries no CSS correction — what is in the PNG is what
         // is on screen, so "as displayed" and "raw" are the same thing here.
         displayFilter: null,
-        unitsPerPixel: stepSize?.x ?? null,
-        unitLabel: units,
+        // On a hexagonal scan one picture pixel is a fraction of the scan step, not a step, and the scale is in um.
+        ...overviewScale(hexMap, stepSize),
         annotations: {
-          crosshair: gridShape ? { row, col } : null,
+          crosshair: gridShape ? (hexMap ? (({ i, j }) => ({ row: i, col: j }))(hexMap.pixelOf(row, col)) : { row, col }) : null,
           roi: roi || null,
           label: `${exportStem} · ${modeName}${gridShape ? ` · ${gridShape[0]}×${gridShape[1]}` : ''}`,
         },
@@ -1389,8 +1664,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         label: `${exportStem} · [${row}, ${col}]`,
       },
     };
-  }, [exportFor, exportStem, overviewImage, overviewMode, gridShape, roi, row, col,
-      pattern, gamma, stepSize, t]);
+  }, [exportFor, exportStem, shownOverview, overviewMode, gridShape, roi, row, col,
+      pattern, gamma, stepSize, hexMap, t]);
 
   // The active dataset's origin. Re-read on every dataset change because
   // switching moves between a crop and its parent.
@@ -1417,19 +1692,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // against the wrong pixels.
   const applyGrid = useCallback((geom) => {
     if (!geom) return false;
-    setEBSDLoaded({
-      ...(ebsdInfo || {}),
-      grid_shape: geom.gridShape,
-      navigation_shape: geom.navigationShape,
-      pattern_shape: geom.patternShape || ebsdInfo?.pattern_shape,
-      n_patterns: geom.patternCount,
-      pattern_count: geom.patternCount,
-      dtype: geom.dtype || ebsdInfo?.dtype,
-    });
+    // The caller asks for the overview of this geometry itself, a little later: the effect that follows up on
+    // other pages' changes must not ask as well.
+    publishedKeyRef.current = rasterKey(geom.scanGeometryRaw ?? null);
+    setEBSDLoaded(ebsdInfoWithGrid(ebsdInfo, geom));
     setNavigationGrid({
       gridShape: geom.gridShape,
       patternShape: geom.patternShape,
       patternCount: geom.patternCount,
+      scanGeometry: geom.scanGeometry,
+      hexResampled: geom.hexResampled,
     });
     return true;
   }, [ebsdInfo, setEBSDLoaded, setNavigationGrid]);
@@ -1497,6 +1769,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           patternShape: null,
           patternCount: nPx ?? cropWin.rows * cropWin.cols,
           dtype: null,
+          scanGeometry: parseScanGeometry(res.data?.scan_geometry),
+          scanGeometryRaw: res.data?.scan_geometry ?? null,
+          hexResampled: res.data?.hex_resampled ?? null,
         });
       }
       await fetchMetadata();
@@ -1505,7 +1780,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       fetchAtlas();
       loadPattern(0, 0);
     } catch (e) {
-      log(t('crop.failed', { message: e?.response?.data?.detail || e?.message || String(e) }));
+      // problemText: a coded refusal (a dataset without a recorded scan geometry) reads in the
+      // language of the page; anything else is the server's prose or the axios message, as before.
+      log(t('crop.failed', { message: problemText(e, t, 'ebsdviewer') || String(e) }));
     } finally {
       setCropBusy(false);
     }
@@ -1523,6 +1800,25 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       log(t('crop.saveCropDone', {
         points: (d.n_points ?? 0).toLocaleString(), path: d.path || path,
       }));
+      if (d.hex) {
+        // A hexagonal crop is a new Orienta file written from the crop itself: say what it holds on
+        // the hexagonal grid and what of the source did not come along (the answer's `note_items`
+        // carry the codes, the words are this page's).
+        const shift = Number(d.odd_row_shift);
+        const [gridRows, gridCols] = d.grid_shape || [];
+        log(t('crop.saveCropHexDetail', {
+          rows: gridRows ?? '?', cols: gridCols ?? '?', shift: `${shift > 0 ? '+' : ''}${shift}`,
+        }));
+        log(t('crop.saveCropHexNotCarried'));
+        const codes = new Set((d.note_items || []).map((n) => n.code));
+        if (d.pc_map_dropped) log(t('crop.saveCropHexPcMapDropped'));
+        if (codes.has('cropNoPatternCentre')) log(t('crop.saveCropHexNoPc'));
+        if (d.patterns_converted) log(t('crop.saveCropHexConverted'));
+        if (codes.has('cropMaskRecorded')) {
+          log(t('crop.saveCropHexMaskNote', { points: (d.n_points ?? 0).toLocaleString() }));
+        }
+        return;
+      }
       // Say what actually went into the file. "Saved" alone leaves the user
       // to open it to find out whether the EDS maps and the electron image
       // came along.
@@ -1546,8 +1842,10 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         log(t('crop.saveCropElectronFull', { count: d.electron_images_full }));
       }
     } catch (e) {
+      // problemText: a coded refusal (the file's layout does not name the pattern source the
+      // viewer holds) reads in the language of the page; anything else is the server's prose.
       log(t('crop.saveCropFailed', {
-        message: e?.response?.data?.detail || e?.message || String(e),
+        message: problemText(e, t, 'ebsdviewer') || String(e),
       }));
     } finally {
       setCropSaving(false);
@@ -1557,12 +1855,16 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   const handleExportCrop = useCallback(async () => {
     // Suggest a name, but never invent a directory: the Electron dialog and
     // the prompt fallback both let the user say where it goes.
-    const suggested = `${String(activeDataset || 'crop').replace(/[^\w.-]+/g, '_')}.h5oina`;
+    // A hexagonal crop is written as an Orienta .h5 (an .h5oina name would be opened as an Oxford file).
+    const hexCrop = ebsdInfo?.scan_geometry?.kind === 'hex';
+    const suggested = `${String(activeDataset || 'crop').replace(/[^\w.-]+/g, '_')}.${hexCrop ? 'h5' : 'h5oina'}`;
     if (window.electronAPI?.saveFile) {
       const selected = await window.electronAPI.saveFile({
         defaultPath: suggested,
         filters: [
-          { name: 'Oxford H5OINA', extensions: ['h5oina'] },
+          hexCrop
+            ? { name: 'Orienta H5', extensions: ['h5'] }
+            : { name: 'Oxford H5OINA', extensions: ['h5oina'] },
           { name: 'All Files', extensions: ['*'] },
         ],
       });
@@ -1574,13 +1876,13 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     // filesystem either way, so a typed path is as valid as a picked one.
     askPrompt({
       title: t('crop.savePromptTitle'),
-      message: t('crop.savePromptMessage'),
+      message: t(hexCrop ? 'crop.savePromptMessageHex' : 'crop.savePromptMessage'),
       defaultValue: suggested,
-      placeholder: t('crop.savePromptPlaceholder'),
+      placeholder: t(hexCrop ? 'crop.savePromptPlaceholderHex' : 'crop.savePromptPlaceholder'),
       submitLabel: t('crop.savePromptSubmit'),
       onSubmit: (p) => { if (p && p.trim()) doExportCrop(p.trim()); },
     });
-  }, [activeDataset, askPrompt, doExportCrop, t]);
+  }, [activeDataset, askPrompt, doExportCrop, ebsdInfo?.scan_geometry?.kind, t]);
 
   const switchDataset = async (name) => {
     try {
@@ -1604,19 +1906,20 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     if (window.electronAPI?.openFile) {
       const selected = await window.electronAPI.openFile({
         filters: [
-          { name: 'EBSD Files', extensions: ['h5oina', 'h5', 'hdf5', 'up1', 'up2'] },
+          { name: 'EBSD Files', extensions: ['h5oina', 'h5', 'hdf5', 'up1', 'up2', 'dat', 'ebsp', 'txt'] },
           { name: 'EDAX Patterns', extensions: ['up1', 'up2'] },
+          { name: 'NORDIF / Oxford Patterns', extensions: ['dat', 'txt', 'ebsp'] },
           { name: 'All Files', extensions: ['*'] },
         ],
       });
-      if (selected) doLoadFile(selected);
+      if (selected) requestLoad(selected);
     } else {
       askPrompt({
         title: t('load.promptTitle'),
         message: t('load.promptMessage'),
         placeholder: t('load.promptPlaceholder'),
         submitLabel: t('load.promptSubmit'),
-        onSubmit: (path) => { if (path.trim()) doLoadFile(path.trim()); },
+        onSubmit: (path) => { if (path.trim()) requestLoad(path.trim()); },
       });
     }
   };
@@ -1644,16 +1947,25 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       window.dispatchEvent(new CustomEvent('pc-patterns-updated'));
       if (n === 1) onNavigate?.('pcrefinement');
     } catch (err) {
-      log(t('logMessages.addPatternError', { error: err.response?.data?.detail || err.message }));
+      // A coded refusal (a PC refine is running) is an object: say it in words,
+      // not "[object Object]", and where it is seen, not only in the log.
+      const detail = err.response?.data?.detail;
+      const text = isPcJobRunning(err) ? pcJobRunningText(t)
+        : (typeof detail === 'string' ? detail : detail?.message || err.message);
+      if (isPcJobRunning(err)) toast.warning(text);
+      log(t('logMessages.addPatternError', { error: text }));
     }
   };
 
   // Short, distinguishable labels for the loaded-files switcher (common
   // prefix/suffix stripped — see disambiguateNames).
+  // A measurement of an EDAX APEX file is named by its measurement ("Area 1 / OIM Map 1 (a.up1)"),
+  // which already tells it apart; only the other files go through the name shortening.
   const loadedFileLabels = useMemo(
-    () => disambiguateNames(loadedFiles.map((f) => f.name || '')),
-    [loadedFiles]
-  );
+    () => sidebarLabels(loadedFiles, disambiguateNames, (k, o) => t(k, o)), [loadedFiles, t]);
+
+  // The status bar names the open file; for a measurement of an APEX file, that measurement.
+  const shownFile = useMemo(() => statusFileName(filePath, loadedFiles), [filePath, loadedFiles]);
 
   const quickModes = [
     { label: 'σ',   mode: 'Std Dev (Quality)',     tip: t('quickModes.stdDevTooltip') },
@@ -1862,7 +2174,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           type="text"
           value={filePath}
           onChange={(e) => setFilePath(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') doLoadFile(filePath); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') requestLoad(filePath); }}
           placeholder={t('load.pathPlaceholder')}
           title={t('hoverTips.filePathInput')}
           style={{
@@ -1876,7 +2188,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         <div style={{ display: 'flex', gap: spacing.innerSpacing, marginBottom: spacing.innerSpacing }}>
           <Button
             variant="primary"
-            onClick={() => doLoadFile(filePath)}
+            onClick={() => requestLoad(filePath)}
             disabled={loadLoading || !filePath.trim()}
             title={t('load.loadDataTooltip')}
             style={{ flex: 1 }}
@@ -1907,7 +2219,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             {recentFiles.map((f, i) => (
               <div
                 key={i}
-                onClick={() => { setShowRecent(false); doLoadFile(f); }}
+                onClick={() => { setShowRecent(false); requestLoad(f); }}
                 title={f}
                 style={{
                   padding: '4px 8px', fontSize: '9pt', cursor: 'pointer', color: colors.text,
@@ -2003,13 +2315,15 @@ export default function EBSDViewer({ onNavigate, isActive }) {
               value={windowSize}
               onChange={(e) => setWindowSize(Number(e.target.value))}
               min={1}
-              max={50}
-              title={t('processing.windowSizeTooltip')}
+              max={hexMap ? HEX_MAX_WINDOW : 50}
+              step={hexMap ? 2 : 1}
+              title={hexMap ? t('processing.windowSizeHexHint') : t('processing.windowSizeTooltip')}
+              aria-invalid={hexMap && !hexWindowOk(windowSize) ? true : undefined}
               style={{ width: 60 }}
             />
             <Button
               onClick={() => doProcessing('avg', t('logMessages.labelFrameAverage'))}
-              disabled={!ebsdLoaded || processingBusy}
+              disabled={!ebsdLoaded || processingBusy || (!!hexMap && !hexWindowOk(windowSize))}
               title={t('processing.frameAverageTooltip')}
               small
               style={{ flex: 1 }}
@@ -2018,6 +2332,18 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             </Button>
           </div>
         </FormRow>
+        {hexMap && (
+          <div
+            data-testid="window-size-hex-note"
+            role={hexWindowOk(windowSize) ? undefined : 'alert'}
+            style={{
+              fontSize: '8.5pt', marginBottom: spacing.innerSpacing,
+              color: hexWindowOk(windowSize) ? colors.textSecondary : colors.red,
+            }}
+          >
+            {hexWindowOk(windowSize) ? t('processing.windowSizeHexHint') : t('processing.windowSizeHexInvalid')}
+          </div>
+        )}
 
         <NlparControls
           nlpar={nlpar}
@@ -2484,6 +2810,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
             if (!e.shiftKey && !cropTool) handleOverviewPointer(e);
           }}
           onMouseDown={(e) => {
+            if (hexMap) ovOnCellRef.current = false;
             // Ctrl is the escape hatch: with a tool armed the plain drag is
             // taken, so panning a zoomed overview needs its own modifier.
             if (ovZoomed && e.ctrlKey && e.button === 0) {
@@ -2495,9 +2822,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                 // A new drag replaces the old selection rather than adding to
                 // it — for the lasso that means starting a fresh path, not
                 // continuing the previous one.
-                roiStartRef.current = { row: pos.r, col: pos.c };
+                roiStartRef.current = { row: pos.sr, col: pos.sc };
                 if (cropTool === 'lasso') {
-                  setLassoPoints([{ r: pos.r, c: pos.c }]);
+                  setLassoPoints([{ r: pos.sr, c: pos.sc }]);
                   setLassoDrawing(true);
                 }
               }
@@ -2513,6 +2840,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           onMouseUp={() => {
             ovPanRef.current = null;
             roiStartRef.current = null;
+            // On a hexagonal scan a press that never touched a measurement point (a corner, or a selection
+            // drawn without navigating) has nothing to load.
+            if (hexMap && !ovOnCellRef.current) return;
             loadPattern(row, col);
             fetchEds(row, col);
           }}
@@ -2534,7 +2864,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
               background: '#000',
             }}
           >
-          {overviewImage ? (
+          {shownOverview ? (
             <div style={{ position: 'relative', width: '100%', height: '100%' }}>
               {/* Zoom layer — a CSS transform only, so the overview PNG is
                   never re-fetched or re-rendered by a zoom. */}
@@ -2546,7 +2876,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
               }}>
                 <img
                   className="image-reveal"
-                  src={`data:image/png;base64,${overviewImage}`}
+                  src={`data:image/png;base64,${shownOverview}`}
                   alt={t('overview.imageAlt')}
                   draggable={false}
                   onDragStart={(e) => e.preventDefault()}
@@ -2571,20 +2901,24 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                   {roi && gridShape && cropTool !== 'lasso' && (
                     <div data-roi-box style={{
                       position: 'absolute',
-                      left: `${(roi.startCol / gridShape[1]) * 100}%`,
-                      top: `${(roi.startRow / gridShape[0]) * 100}%`,
-                      width: `${((roi.endCol - roi.startCol) / gridShape[1]) * 100}%`,
-                      height: `${((roi.endRow - roi.startRow) / gridShape[0]) * 100}%`,
+                      left: `${(roi.startCol / frameShape[1]) * 100}%`,
+                      top: `${(roi.startRow / frameShape[0]) * 100}%`,
+                      width: `${((roi.endCol - roi.startCol + boxPad) / frameShape[1]) * 100}%`,
+                      height: `${((roi.endRow - roi.startRow + boxPad) / frameShape[0]) * 100}%`,
                       border: `2px solid ${colors.yellow}`,
                       background: alpha(colors.yellow, 8),
                       borderRadius: cropTool === 'ellipse' ? '50%' : 0,
                     }}>
-                      <span style={{
-                        position: 'absolute', top: -14, left: 0,
-                        fontSize: '7pt', color: colors.yellow, whiteSpace: 'nowrap',
-                      }}>
-                        {t('overview.roiLabel', { startRow: roi.startRow, startCol: roi.startCol, endRow: roi.endRow, endCol: roi.endCol })}
-                      </span>
+                      {/* On a hexagonal scan the caption names the cells of the crop window; a frame that
+                          holds no cell has none to name, so it gets no caption (raster pixels are not cells). */}
+                      {(!hexMap || hexCrop) && (
+                        <span style={{
+                          position: 'absolute', top: -14, left: 0,
+                          fontSize: '7pt', color: colors.yellow, whiteSpace: 'nowrap',
+                        }}>
+                          {t('overview.roiLabel', roiLabelBox(hexCrop, roi))}
+                        </span>
+                      )}
                     </div>
                   )}
                   {/* The traced lasso path. An <svg> in this same untransformed
@@ -2595,7 +2929,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                       is outlined is what would be cropped on mouse-up.
                       non-scaling-stroke keeps the line one constant width
                       despite preserveAspectRatio="none" stretching the box. */}
-                  {cropTool === 'lasso' && gridShape && lassoPoints.length > 0 && (
+                  {cropTool === 'lasso' && frameShape && lassoPoints.length > 0 && (
                     <svg
                       data-lasso-path
                       viewBox="0 0 100 100"
@@ -2607,7 +2941,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                     >
                       <polygon
                         points={lassoPoints.map((p) => (
-                          `${((p.c + 0.5) / gridShape[1]) * 100},${((p.r + 0.5) / gridShape[0]) * 100}`
+                          `${((p.c + 0.5) / frameShape[1]) * 100},${((p.r + 0.5) / frameShape[0]) * 100}`
                         )).join(' ')}
                         fill={alpha(colors.yellow, 8)}
                         stroke={colors.yellow}
@@ -2639,13 +2973,13 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                 </div>
               )}
             </div>
-          ) : overviewError ? (
+          ) : shownOverviewError ? (
             <div style={{ textAlign: 'center', color: colors.red, padding: 12 }}>
               <div style={{ fontSize: 28, opacity: 0.5 }}>&#9888;</div>
               <div style={{ fontSize: '9pt' }}>{t('overview.failed')}</div>
-              <div style={{ fontSize: '8pt', opacity: 0.8, marginTop: 4, maxWidth: 220 }}>{overviewError}</div>
+              <div style={{ fontSize: '8pt', opacity: 0.8, marginTop: 4, maxWidth: 220 }}>{shownOverviewError}</div>
             </div>
-          ) : overviewLoading ? (
+          ) : (overviewLoading || overviewStale) ? (
             <div style={{ textAlign: 'center', color: colors.textSecondary }}>
               <div className="spinner" style={{
                 width: 22, height: 22, margin: '0 auto 8px',
@@ -2675,12 +3009,13 @@ export default function EBSDViewer({ onNavigate, isActive }) {
                detector [h, w], and estimateBytes only multiplies them. */
             patternShape={ebsdInfo?.pattern_shape || ebsdInfo?.signal_shape || null}
             bytesPerPixel={bytesPerSample(activeDtype)}
-            shape={cropTool}
+            shape={cropTool ?? 'rect'}
             busy={cropBusy}
             origin={cropWindow}
             onCrop={handleCrop}
             onExport={handleExportCrop}
             saving={cropSaving}
+            hex={ebsdInfo?.scan_geometry?.kind === 'hex'}
           />
         )}
         </div>
@@ -3099,8 +3434,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         if (!file) return;
         // Electron exposes .path on dropped files
         const path = file.path || file.name;
-        if (path && /\.(h5oina|h5|hdf5|up1|up2)$/i.test(path)) {
-          doLoadFile(path);
+        if (path && /\.(h5oina|h5|hdf5|up1|up2|dat|ebsp|txt)$/i.test(path)) {
+          requestLoad(path);
         }
       }}
       style={{
@@ -3111,6 +3446,34 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         outline: dragOver ? `2px dashed ${colors.accent}` : 'none',
       }}
     >
+
+      {/* Which measurements of an EDAX APEX metadata file to open. */}
+      <ApexLoadDialog
+        isOpen={!!apexDialog}
+        h5Path={apexDialog?.h5Path}
+        inspection={apexDialog?.inspection}
+        onClose={() => setApexDialog(null)}
+        onLoad={handleDialogLoad}
+        choosePatternFile={choosePatternFile}
+        chooseFolder={chooseApexFolder}
+        describePatternFile={apexDescribe}
+        searchFolder={apexSearchFolder}
+        loadPreview={apexLoadPreview}
+        loadHexLimits={apexHexLimits}
+        escapeBlocked={promptProps.open || confirmProps.open}
+      />
+
+      {/* Which measurement and pattern source of any other HDF5 file that offers more than one to open. */}
+      <LoadDialog
+        isOpen={!!loadDialog}
+        path={loadDialog?.path}
+        inspection={loadDialog?.inspection}
+        remembered={loadDialog?.remembered}
+        onClose={() => setLoadDialog(null)}
+        onLoad={handleDialogLoad}
+        loadPreview={choicePreview}
+        escapeBlocked={promptProps.open || confirmProps.open}
+      />
 
       {/* Load progress modal — fixed-position overlay, position:fixed inset:0
           so it always sits above all viewer chrome regardless of layout. */}
@@ -3129,7 +3492,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           items={[{
             id: 'export',
             label: t('imageexport:menuExport'),
-            disabled: contextMenu.target === 'overview' ? !overviewImage : !pattern,
+            disabled: contextMenu.target === 'overview' ? !shownOverview : !pattern,
             onSelect: () => openExport(contextMenu.target),
           }]}
         />
@@ -3297,7 +3660,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       }}>
         {ebsdInfo ? (
           <>
-            <span style={{ fontWeight: 500, color: colors.text }} title={filePath}>{filePath.split(/[\\/]/).pop()}</span>
+            <span style={{ fontWeight: 500, color: colors.text }} title={shownFile.title}>{shownFile.text}</span>
             {gridShape && <span title={t('infoBar.gridTooltip', { rows: gridShape[0], cols: gridShape[1], pixels: (gridShape[0] * gridShape[1]).toLocaleString() })}>{t('infoBar.grid', { rows: gridShape[0], cols: gridShape[1] })}</span>}
             {ebsdInfo.pattern_shape && (
               <span>{t('infoBar.pattern', { rows: ebsdInfo.pattern_shape[0], cols: ebsdInfo.pattern_shape[1] })}</span>

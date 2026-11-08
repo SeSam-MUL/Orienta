@@ -17,7 +17,8 @@
     "noTaskId": "Backend 未返回 task_id。",
     "generateFailed": "生成失败: {{detail}}",
     "deleteFailed": "删除失败: {{detail}}",
-    "progressPollFailed": "进度轮询失败: {{message}}"
+    "progressPollFailed": "进度轮询失败: {{message}}",
+    "pc_missing": "此文件不含花样中心 (PC)；kikuchipy 的占位值会得出错误的取向。请在 PC 精修页面校准 PC，或将含 PC 的 .osc／元数据文件放在扫描文件旁，然后重新开始。"
   },
   "master": {
     "groupTitle": "主花样",

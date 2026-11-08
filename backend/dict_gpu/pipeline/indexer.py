@@ -187,6 +187,23 @@ def _rotations_from_ebsd_signal(sig):
     )
 
 
+def _result_phase(src_phase):
+    """The phase of the result map: the dictionary's phase as a ``FramePhase``.
+
+    The space group and the point group travel together (see
+    :func:`crystal_symmetry.copy_phase_arguments`): for space groups 149, 151
+    and 153 a plain phase from a loaded dictionary names its group "32", and
+    handing that next to the space group would drop the space group.
+    """
+    from crystal_symmetry import FramePhase, copy_phase_arguments
+
+    return FramePhase(
+        name=getattr(src_phase, "name", None) or "Phase",
+        **copy_phase_arguments(src_phase),
+        structure=getattr(src_phase, "structure", None),
+    )
+
+
 def _run_dictionary_index(
     experimental_signal,
     master_pattern_or_path,
@@ -874,7 +891,6 @@ def _run_dictionary_index(
     # them to CPU numpy internally) so it must run BEFORE the VRAM
     # cleanup block below. Earlier versions del'd these first → crash.
     from orix.crystal_map import PhaseList
-    from crystal_symmetry import FramePhase as Phase
     src_phase = payload.phase
     if src_phase is None or getattr(src_phase, "point_group", None) is None:
         raise GpuDictError(
@@ -884,12 +900,7 @@ def _run_dictionary_index(
             "carries a valid space/point group, or pick a different "
             "dictionary file."
         )
-    phase = Phase(
-        name=getattr(src_phase, "name", None) or "Phase",
-        point_group=src_phase.point_group,
-        space_group=getattr(src_phase, "space_group", None),
-        structure=getattr(src_phase, "structure", None),
-    )
+    phase = _result_phase(src_phase)
     phase_list = PhaseList(phases=[phase], ids=[1])
     xmap = build_crystal_map(
         top_indices=best_indices,

@@ -40,7 +40,77 @@ This is normally the **first** module you open in a session. Use it to:
    afterwards in the background.
 3. The header **File switcher** and the **Loaded Files** list (left panel, shown
    when more than one file is loaded) let you switch between several files loaded
-   this session. Switching re-loads the chosen file from disk.
+   this session. Switching re-loads the chosen file from disk. Removing a file from
+   the list (**x**, **Clear list**, **Clear all**) does not delete it on disk, but it
+   discards that file's crops and derived datasets (background removal, CLAHE,
+   frame average): they are held in memory only and cannot be recovered, so the
+   file starts from its raw patterns when you load it again. A PC you typed,
+   refined or calibrated for the file is kept and is restored on the next load
+   (see [PC Refinement](PCRefinement.md)). The active file is not affected.
+
+### EDAX APEX measurements and hexagonal scans
+
+An EDAX APEX measurement is stored in two files: an `.h5` metadata file, which
+holds the grid, the step sizes, the pattern centre and the camera angles but no
+patterns, and a `.up1`/`.up2` pattern file. Open the `.h5` file and choose the
+measurement in the dialog, or open the pattern file with its `.h5` file in the
+same folder. A pattern file is matched to its measurement by the ID in its
+header, not by its name. A file whose header has no ID can only be assigned by
+hand in the load dialog, and only if its pattern count equals the grid. A
+pattern file whose header or `.osc` file shows a hexagonal grid is refused when
+its `.h5` file is missing, because the pattern file alone does not say where its
+points lie.
+
+Hexagonal-grid `.h5` files written by OIM Analysis (not APEX) are a different
+case: they are resampled to a square grid when they are loaded (nearest point, as
+OIM does it), and the interface marks the scan as resampled.
+
+An APEX measurement on a hexagonal grid is kept in its own grid, with its own
+step sizes, and shown as the hexagons lie on the sample: the overview, the maps
+on the Phase Map page and the navigation map on the Indexing page are drawn with
+four pixels per step along a row (two or one for scans of more than about a
+million points), with every second row half a step further along, so the picture
+has the true proportions and the scale bar is right. The files do not state which
+way the rows are offset; Orienta uses the EDAX convention (the 2nd, 4th, ... rows
+half a step to the right). Points outside the scan stay transparent. This is a
+picture only: nothing is resampled, every measurement point still has exactly one
+value, and a click, a rectangle, an ellipse or a lasso acts on the measurement
+points under it.
+
+- **Crop** cuts out the rectangle around your shape; an ellipse or lasso
+  additionally restricts indexing to the points you drew. A crop that starts on
+  an odd row is drawn with the rows offset the other way, as they are measured.
+- **Neighbour evaluations.** The evaluations that compare a point with its
+  neighbours use the six neighbours of the lattice: the phase-map cleanup
+  (minimum cluster size, modal filter, fill unindexed), the phase adjacency table,
+  the grain-stabilised IPF colours, the grain-boundary layer, the unification of
+  pseudo-symmetry variants, the local-anomaly layer with its sorts in the anomaly
+  browser, and the grain tools of Pattern Match and Phase Verification (candidate
+  orientations from adjacent grains, apply to grain, assign phase to grain,
+  island check, phase check and phase reassignment). Within the unification, the
+  rule that tells salt-and-pepper variants from coherent twin domains still counts
+  four neighbours of the index grid; its thresholds have not been tested on a
+  hexagonal scan.
+- **Saving.** `.ang` and Orienta `.h5` files keep the hexagonal grid as
+  measured. A `.ctf` file and the square `.ang` option exist only on a square
+  grid: each point takes the nearest measured point, as OIM Analysis does it, and
+  the file says so. While the direction of the row offset is assumed (your file
+  has no field for it), every saved file says that too. Indexing, orientations
+  and patterns are not affected.
+- **Frame Average** averages each pattern with the points within the same number
+  of steps on the sample (the point and its six neighbours for a window of 3, 19
+  points for a window of 5), clipped at the border. Only odd windows up to 49 are
+  accepted. The averaged patterns are held in memory next to the originals while
+  it runs, so a scan with more than 2 GiB of patterns is refused with the advice
+  to crop first.
+- **Not available**, each refused with a message that says so: NLPAR denoising,
+  averaging neighbouring patterns in Crystal Hint (a radius of 0 works), the
+  pixel-wise pattern-centre calibration, the joint orientation/pattern-centre
+  refinement, the automatic grain-based phase assignment from EDS chemistry, and
+  the Analysis page (grain reconstruction, grain size, deformation analysis and
+  its maps). The Analysis page draws its maps on the index grid, which would put
+  every second row half a step off; using the hexagonal lattice there is open
+  work.
 
 ### Navigate and inspect
 
@@ -150,14 +220,14 @@ A larger radius averages more and takes longer.
 - **When it helps.** When indexing the raw patterns fails because the scan is
   very noisy (short exposure, high detector gain). On a scan that already indexes
   well it brings nothing and can spoil grain-boundary pixels: on a clean nickel
-  scan, dictionary indexing lost 1 percentage point of pixels within 2° of the
+  scan (not included in the repository), dictionary indexing lost 1 percentage point of pixels within 2° of the
   reference, all of them at grain boundaries. **Frame Average** is the cheaper
   alternative.
-- **Radius.** 3 (the default) was the best on the very noisy scans below. If the
+- **Radius.** 3 (the default) was the best or tied for best on the very noisy scans below. If the
   grains or particles of your sample are only a few pixels across, the 7 × 7
   window reaches across their boundaries; use 1 or 2 there (on an aluminium alloy
   with fine grains, Hough indexing lost 0.7 points at radius 1 and 1.9 at radius
-  3).
+  3; scan not included in the repository).
 - **Advice.** Under the radius field the panel says whether NLPAR is likely to
   help on the active scan. It estimates, from about 1000 patterns (about a second
   at most), how much of the difference between neighbouring patterns is noise:
@@ -167,12 +237,13 @@ A larger radius averages more and takes longer.
   such as grain boundaries. The numbers are shown (strength, noise level in
   counts). It is an estimate, not a prediction: the limit (a strength of 1.7) was
   set on a few measured test scans (the nickel series below, a clean nickel scan
-  that lost 1.0 points and an aluminium alloy with fine grains that lost 1.9 to
-  6.6 points, both "not recommended"), using raw patterns. The estimate is made on
+  that lost 1.0 points with dictionary indexing and an aluminium alloy with fine
+  grains that lost 1.9 to 6.6 points depending on method and radius, both "not recommended"; these two scans are not included in the repository), using raw patterns. The estimate is made on
   the dataset as it is now, so after background removal or CLAHE it can differ.
   You can still run NLPAR, on a copy. A dataset that NLPAR has already been applied to
   says so and its button is disabled, as it is for a scan NLPAR cannot run on
-  (too small, hexagonal, uniform); choose the original dataset to run it again.
+  (too small, hexagonal, uniform; an APEX measurement on a hexagonal grid counts
+  as hexagonal); choose the original dataset to run it again.
   The Recommended Pipeline's "denoise first" is skipped (with a log line) in
   those cases.
 - **Order.** Run it first, on the raw patterns, before any background removal:
@@ -187,8 +258,8 @@ A larger radius averages more and takes longer.
   denoised is refused, so the same noise is not averaged away twice.
 - **Size limit.** The denoised patterns are a second copy in memory, so a scan
   that is too large for that is refused with a message; crop it first (see
-  *Crop to a selection*). EDAX hexagonal-grid scans are not supported. It runs
-  on the CPU.
+  *Crop to a selection*). Hexagonal scans (EDAX hexagonal-grid files and APEX
+  measurements on a hexagonal grid) are not supported. It runs on the CPU.
 - **Measured.** Public nickel gain series (Anes et al., Zenodo 7497682; 29 800
   patterns of 60 × 60 px per scan), dictionary indexing on the GPU against the
   orientations of the 0 dB scan of the same area, share of pixels within 2°:
@@ -198,7 +269,7 @@ A larger radius averages more and takes longer.
   | 17 dB | 0.68 | 0.85 | 0.85 | 0.83 |
   | 24 dB | 0.09 | 0.80 | 0.77 | 0.64 |
 
-  The whole map takes about 2 s on a 24-thread CPU (60 × 60 patterns, radius 3);
+  The whole map takes about 2 s on a 24-thread CPU (29 800 patterns of 60 × 60 px, radius 3);
   expect longer on a laptop.
 - **Cancel.** The **Cancel** button in the progress overlay stops the run at the
   next block of rows and leaves the dataset exactly as it was. The first run in a

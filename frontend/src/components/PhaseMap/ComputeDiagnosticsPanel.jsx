@@ -94,7 +94,9 @@ export default function ComputeDiagnosticsPanel({ resultId, onOpenBrowser, heldB
         current_phase: '',
       });
     } catch (e) {
-      setError(e.message || String(e));
+      // a coded refusal (X-Orienta-Code) is shown in the language of the page
+      const coded = e.code ? t(`errors.${e.code}`, { defaultValue: '' }) : '';
+      setError(coded || e.message || String(e));
     }
   };
 

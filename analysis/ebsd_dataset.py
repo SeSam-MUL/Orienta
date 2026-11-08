@@ -14,6 +14,7 @@ Key features:
 Reference: the MTEX-equivalence design notes §1.2
 """
 
+import copy
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Tuple
 import logging
@@ -192,6 +193,9 @@ class EBSDDataset:
         self.step_size = step_size
         self.source = source
         self.grains: Optional[GrainSet] = None
+        # The grid this map sits on (a ScanGeometry dict). None = unknown, never "square": set by
+        # whoever knows it (the result a dataset was made from), copied by every derived dataset.
+        self.scan_geometry: Optional[dict] = None
 
     # ─── Shape & Dimensions ──────────────────────────────────────────────────
 
@@ -396,7 +400,9 @@ class EBSDDataset:
         Useful for removing non-indexed regions before analysis.
         """
         xmap_indexed = self.xmap[self.indexed_mask]
-        return EBSDDataset(xmap_indexed, self.step_size, self.source)
+        cropped = EBSDDataset(xmap_indexed, self.step_size, self.source)
+        cropped.scan_geometry = copy.deepcopy(self.scan_geometry)      # same grid, its own copy
+        return cropped
 
     # ─── Quality Filter ──────────────────────────────────────────────────────
 

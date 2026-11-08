@@ -424,4 +424,40 @@ describe('SimulationPage two-way engine toggle', () => {
     fireEvent.click(getGpuButton());
     expect(screen.queryByText('Compute')).toBeNull();
   });
+
+  // -------------------------------------------------------------------------
+  // "Monte Carlo runs on the GPU" is true only when the backend recommends the
+  // GPU path. OpenCL without a GPU (a CPU platform) makes it run EMMC on the CPU.
+  // -------------------------------------------------------------------------
+  const MC_ON_GPU_NOTE = 'Monte Carlo runs on the GPU; the master pattern is computed on the CPU.';
+
+  it('auto mode, OpenCL but no GPU (recommended_mode cpu): no GPU note, CPU card shown', async () => {
+    const { simApi } = await import('../../services/api');
+    simApi.systemStatus.mockResolvedValue({
+      data: { emsoft_available: true, opencl_available: true, has_gpu: false,
+              recommended_mode: 'cpu', cpu_count: 24 },
+    });
+    renderPage();
+    await waitEmsoftEnabled();
+    fireEvent.click(getEngineButton('EMsoft'));
+    await waitFor(() => expect(screen.getByText('Compute')).toBeInTheDocument());
+    expect(screen.queryByText(MC_ON_GPU_NOTE)).toBeNull();
+    // The CPU card is shown instead of the GPU card.
+    expect(screen.getByText('CPU Mode (OpenMP)')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('24 cores available')).toBeInTheDocument());
+    expect(screen.queryByText(MC_ON_GPU_NOTE)).toBeNull();
+  });
+
+  it('auto mode, GPU present (recommended_mode gpu): GPU card with the note', async () => {
+    const { simApi } = await import('../../services/api');
+    simApi.systemStatus.mockResolvedValue({
+      data: { emsoft_available: true, opencl_available: true, has_gpu: true,
+              gpu_name: 'RTX 4070', gpu_memory_gb: 12, recommended_mode: 'gpu', cpu_count: 24 },
+    });
+    renderPage();
+    await waitEmsoftEnabled();
+    fireEvent.click(getEngineButton('EMsoft'));
+    await waitFor(() => expect(screen.getByText(MC_ON_GPU_NOTE)).toBeInTheDocument());
+    expect(screen.queryByText('CPU Mode (OpenMP)')).toBeNull();
+  });
 });

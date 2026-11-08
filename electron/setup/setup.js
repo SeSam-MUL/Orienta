@@ -201,10 +201,21 @@ function renderChoice(probe) {
 let releases = null;        // null = not fetched yet
 let chosenTag = null;       // null = newest
 
+/** True once the user chose a folder here; the note is then about that choice. */
+let homePicked = false;
+
 function renderHome() {
   setText('homeLabel', 'homeLabel');
   $('homeValue').textContent = ctx.home || '';
   setText('pickHomeBtn', 'pickHome');
+  // One clear line when the folder chosen on an earlier run was deleted and
+  // the default is used instead. Without it the folder shown above simply
+  // differs from the one the user remembers.
+  const notice = ctx.homeNotice;
+  if (notice && (notice.code === 'staleFallback' || notice.code === 'staleDefault') && !homePicked) {
+    $('homeNote').hidden = false;
+    $('homeNote').textContent = t(`homeNotices.${notice.code}`, { dir: notice.dir, previous: notice.previousFile });
+  }
 }
 
 function renderVersion() {
@@ -266,8 +277,23 @@ function sizeOf(which, probe) {
 function renderBlocked(probe) {
   // Its own code. `space` says "free some room", which is wrong and
   // unactionable for a drive that is not connected at all.
-  const code = probe.freeKnown === false ? 'homeUnusable' : 'space';
-  renderFailure({ code, error: probe.reason, blockedBeforeStart: true }, null);
+  let code = probe.freeKnown === false ? 'homeUnusable' : 'space';
+  let values;
+  // The recorded folder lives on a drive that is not connected: say which
+  // folder, and how to give it up, instead of a generic "cannot write".
+  if (probe.homeUnreachable) {
+    // Three different causes, each with its own sentence: the drive is not
+    // there, the old setting could not be updated, the setting file cannot be read.
+    const kind = probe.homeUnreachable.kind;
+    code = kind === 'retire' ? 'homeRetireFailed'
+      : (kind === 'unreadable' ? 'homePointerUnreadable'
+        : (kind === 'check' ? 'homeCheckFailed' : 'homeUnreachable'));
+    values = {
+      dir: probe.homeUnreachable.dir, pointer: probe.homeUnreachable.pointerFile,
+      why: probe.homeUnreachable.why,
+    };
+  }
+  renderFailure({ code, error: probe.reason, values, blockedBeforeStart: true }, null);
   show('failed');
 }
 
@@ -351,6 +377,11 @@ function onProgress(event, mode) {
 // screen 3: it did not work
 // --------------------------------------------------------------------------
 
+/** Failures that are about the data folder the user can change on the first screen. */
+const HOME_REFUSALS = ['homeNotEmpty', 'homeNotEmptyDefault', 'homeHoldsData'];
+/** ... and the failures whose sentence ends "or choose another data folder": Back is offered too, but Retry stays the main action. */
+const BACK_CODES = [...HOME_REFUSALS, 'inUse', 'noAccess'];
+
 function renderFailure(result, mode) {
   renderSteps(null, result.step || null);
   setText('failedTitle', 'failedTitle');
@@ -358,7 +389,7 @@ function renderFailure(result, mode) {
   // The translated sentence for the code, and the installer's own English
   // detail underneath it -- the first is what the user acts on, the second is
   // what they paste into a message to us.
-  const translated = t(`errors.${result.code}`);
+  const translated = t(`errors.${result.code}`, result.values);
   const known = translated !== `errors.${result.code}`;
   // Two elements, not one string with \n\n in it: #failedMessage is a <p>,
   // and a newline in a <p> collapses to a space -- so the sentence the user
@@ -393,6 +424,14 @@ function renderFailure(result, mode) {
   $('failedLogHint').hidden = !result.logFile;
 
   setText('retryBtn', 'retry');
+  // The refusals that the text answers with "choose another folder": the folder
+  // lives on the FIRST screen, which Retry cannot reach (it runs the same
+  // refusal again). Back goes there.
+  const folderRefusal = HOME_REFUSALS.includes(result.code);
+  $('backBtn').hidden = !BACK_CODES.includes(result.code);
+  $('backBtn').classList.toggle('primary', folderRefusal);
+  $('retryBtn').classList.toggle('primary', !folderRefusal);
+  setText('backBtn', 'back');
   setText('openLogBtn', 'openLog');
   setText('closeBtn', 'close');
   setText('releasesLabel', 'releasesLabel');
@@ -408,7 +447,7 @@ function renderFailure(result, mode) {
   // fallback, and Retry -- which re-downloads 8 GB to reach the identical
   // failure -- was the primary button sitting to its left.
   $('fallbackBtn').classList.toggle('primary', canFallBack);
-  $('retryBtn').classList.toggle('primary', !canFallBack);
+  $('retryBtn').classList.toggle('primary', !canFallBack && !folderRefusal);
   $('fallbackBtn').hidden = !canFallBack;
   if (canFallBack) setText('fallbackBtn', 'installCpuInstead');
 }
@@ -544,6 +583,12 @@ async function main() {
     if (!picked) return;
     const note = $('homeNote');
     note.hidden = false;
+    homePicked = true;
+    if (picked.code) {
+      // Refused before anything was recorded: the folder in use is unchanged.
+      note.textContent = t(`errors.${picked.code}`, picked.values);
+      return;
+    }
     if (picked.error) {
       note.textContent = t('homeUnwritable', { dir: picked.dir, detail: picked.error });
       return;
@@ -554,7 +599,15 @@ async function main() {
     // existed, so the move takes effect on the next launch. Saying that is
     // better than letting someone install 8 GB and wonder why it went to the
     // folder they just changed away from.
-    note.textContent = picked.restartNeeded ? t('homeRestart') : t('homeChanged');
+    // Both facts when both are true: that existing data was found, AND that the
+    // move needs a restart. "adopted" used to be lost whenever a restart was due,
+    // which in the packaged app is nearly always.
+    let key = 'homeChanged';
+    if (picked.adopted && picked.restartNeeded) key = 'homeAdoptedRestart';
+    else if (picked.restartNeeded) key = 'homeRestart';
+    else if (picked.adopted) key = 'homeAdopted';
+    else if (picked.kept) key = 'homeKept';
+    note.textContent = t(key, { dir: picked.dir });
   });
 
   $('pickVersionBtn').addEventListener('click', async () => {
@@ -585,6 +638,10 @@ async function main() {
     resume: Boolean(lastResult && lastResult.resumable),
   }));
   $('closeBtn').addEventListener('click', () => window.setupAPI.quit());
+  $('backBtn').addEventListener('click', () => {
+    show('choose');
+    focusSection('choose');
+  });
   $('pickPackageBtn').addEventListener('click', async () => {
     const picked = await window.setupAPI.pickPackage();
     if (!picked) return;

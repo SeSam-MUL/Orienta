@@ -84,7 +84,10 @@ def test_exits_when_parent_pid_is_reused(monkeypatch):
     import psutil
     from backend.api import main as backend_main
 
+    from backend import process_watch
+
     monkeypatch.setenv("KIKUCHIPY_PARENT_PID", str(os.getpid()))
+    monkeypatch.setattr(process_watch, "_uses_proc", lambda: False)    # psutil's route, on every platform
 
     real_process = psutil.Process
     _patch_exit(monkeypatch, backend_main)

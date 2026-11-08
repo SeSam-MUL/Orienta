@@ -43,6 +43,7 @@
 import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, alpha } from '../../theme/components';
+import { codedText } from '../../services/problemText';
 
 const STAGE_DEFS = [
   { id: 'reading_metadata',   labelKey: 'loadModal.stageReadingMetadata' },
@@ -65,11 +66,10 @@ export default function LoadProgressModal({ isOpen, progressState, onClose }) {
   const isTerminal = isError || isComplete;
   // A refusal with a stable code is worded in the language of the page; a code
   // this build has no text for, or none at all, shows the server's own prose.
-  const MISSING = '\u0000missing';
-  const codedText = progressState?.code
-    ? t(`errors.${progressState.code}`, { defaultValue: MISSING })
-    : MISSING;
-  const errorMsg = codedText !== MISSING ? codedText : (progressState?.error || message);
+  // `codedText` looks in this page's `errors.*` and then in `common`, where the sentences that
+  // every page shares are kept once (a measurement or pattern source the file does not hold).
+  const coded = codedText(progressState?.code, t, 'ebsdviewer');
+  const errorMsg = coded !== null ? coded : (progressState?.error || message);
   const stageIdx = STAGE_DEFS.findIndex((s) => s.id === stage);
 
   // A11y-1: focus the Close button on entering a terminal state. Pulls

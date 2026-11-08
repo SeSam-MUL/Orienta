@@ -62,7 +62,12 @@ MAX_VARIANTS = 8
 _NEIGHBOUR_OFFSETS = ((-1, 0), (1, 0), (0, -1), (0, 1))
 
 
-def _neighbours(flat: int, n_rows: int, n_cols: int):
+def _neighbours(flat: int, n_rows: int, n_cols: int, topology=None):
+    """Flat indices of the neighbours of ``flat``: the four of the index grid, or, given a
+    ``scan_neighbours.Topology``, exactly its neighbours (six on a hexagonal scan)."""
+    if topology is not None:
+        yield from topology.neighbours(flat)
+        return
     r, c = divmod(int(flat), n_cols)
     for dr, dc in _NEIGHBOUR_OFFSETS:
         rr, cc = r + dr, c + dc
@@ -71,7 +76,7 @@ def _neighbours(flat: int, n_rows: int, n_cols: int):
 
 
 def find_enclosed_islands(phase_full, n_rows: int, n_cols: int, *,
-                          max_island_px: int = MAX_ISLAND_PX):
+                          max_island_px: int = MAX_ISLAND_PX, topology=None):
     """Small same-phase islands that are completely surrounded by ONE other phase.
 
     Returns a list of
@@ -83,14 +88,23 @@ def find_enclosed_islands(phase_full, n_rows: int, n_cols: int, *,
     — a hole in the map should not protect a wrong pixel — but an island with no
     indexed neighbour at all is skipped, since there is then nothing to compare
     against.
+
+    ``topology`` (``scan_neighbours.Topology``, for a hexagonal scan) says which pixels are neighbours; ``None``
+    is the four of the index grid, as before. A pixel with no neighbour of its own borrows from the nearest ring
+    pixel, nearest on the sample when there is a topology.
     """
     pf = np.asarray(phase_full).reshape(-1)
     n = n_rows * n_cols
     if pf.size != n:
         raise ValueError(f"phase_full has {pf.size} entries, expected {n}")
+    if topology is not None and (topology.n_rows, topology.n_cols) != (n_rows, n_cols):
+        raise ValueError(
+            f"the topology is for a {topology.n_rows} x {topology.n_cols} grid, "
+            f"but the map is {n_rows} x {n_cols}")
 
     seen = np.zeros(n, dtype=bool)
     islands = []
+    sample_xy = None
     for start in range(n):
         pid = int(pf[start])
         if pid < 0 or seen[start]:
@@ -104,7 +118,7 @@ def find_enclosed_islands(phase_full, n_rows: int, n_cols: int, *,
         too_big = False
         while stack:
             cur = stack.pop()
-            for nb in _neighbours(cur, n_rows, n_cols):
+            for nb in _neighbours(cur, n_rows, n_cols, topology):
                 if seen[nb] or int(pf[nb]) != pid:
                     continue
                 seen[nb] = True
@@ -120,7 +134,7 @@ def find_enclosed_islands(phase_full, n_rows: int, n_cols: int, *,
             # another of its pixels.
             while stack:
                 cur = stack.pop()
-                for nb in _neighbours(cur, n_rows, n_cols):
+                for nb in _neighbours(cur, n_rows, n_cols, topology):
                     if not seen[nb] and int(pf[nb]) == pid:
                         seen[nb] = True
                         stack.append(nb)
@@ -131,7 +145,7 @@ def find_enclosed_islands(phase_full, n_rows: int, n_cols: int, *,
         neighbour_of: dict[int, int] = {}
         enclosed = True
         for px in comp:
-            for nb in _neighbours(px, n_rows, n_cols):
+            for nb in _neighbours(px, n_rows, n_cols, topology):
                 if nb in inside:
                     continue
                 nb_pid = int(pf[nb])
@@ -156,11 +170,22 @@ def find_enclosed_islands(phase_full, n_rows: int, n_cols: int, *,
         missing = [int(p) for p in comp if int(p) not in neighbour_of]
         if missing:
             ring = sorted(set(neighbour_of.values()))
-            ring_rc = np.array([[r // n_cols, r % n_cols] for r in ring])
-            for px in missing:
-                pr, pc = divmod(px, n_cols)
-                d = np.abs(ring_rc[:, 0] - pr) + np.abs(ring_rc[:, 1] - pc)
-                neighbour_of[px] = int(ring[int(np.argmin(d))])
+            if topology is None:
+                ring_rc = np.array([[r // n_cols, r % n_cols] for r in ring])
+                for px in missing:
+                    pr, pc = divmod(px, n_cols)
+                    d = np.abs(ring_rc[:, 0] - pr) + np.abs(ring_rc[:, 1] - pc)
+                    neighbour_of[px] = int(ring[int(np.argmin(d))])
+            else:
+                # Nearest on the sample: the distance in index space is not one on a hexagonal scan.
+                if sample_xy is None:                    # once per call, not once per island
+                    sample_xy = tuple(a.ravel() for a in topology.xy())
+                x, y = sample_xy
+                for px in missing:
+                    d = np.hypot(x[ring] - x[px], y[ring] - y[px])
+                    # A tie goes to the lowest index (ring is sorted), as on the index grid; rounding noise of
+                    # the float distance (two equal distances differ in the last bit) must not decide it.
+                    neighbour_of[px] = int(ring[int(np.flatnonzero(d <= d.min() + 1e-9)[0])])
 
         islands.append({
             "pixels": np.asarray(sorted(comp), dtype=np.int64),
@@ -186,7 +211,7 @@ def check_islands(full_q, phase_full, n_rows: int, n_cols: int,
                   max_island_px: int = MAX_ISLAND_PX,
                   margin_clear: float = MARGIN_CLEAR,
                   max_variants: int = MAX_VARIANTS,
-                  progress=None):
+                  progress=None, topology=None):
     """Score every enclosed island against its neighbours and its own variants.
 
     `score_fns` is ``{pid: fn(flat_idx (n,), quats (n,4)) -> (n,)}`` — the same
@@ -233,10 +258,13 @@ def check_islands(full_q, phase_full, n_rows: int, n_cols: int,
     Returns ``{"islands": [...], "n_islands", "n_phase_swap", "n_variant_flip",
     "n_unresolved", "n_undecided", "n_suspect", "n_rescued"}``. Nothing is
     modified.
+
+    ``topology`` (``scan_neighbours.Topology``, for a hexagonal scan) is handed to
+    :func:`find_enclosed_islands`; ``None`` is the four neighbours of the index grid.
     """
     q = np.asarray(full_q, dtype=np.float64).reshape(-1, 4)
     islands = find_enclosed_islands(phase_full, n_rows, n_cols,
-                                    max_island_px=max_island_px)
+                                    max_island_px=max_island_px, topology=topology)
 
     out = []
     pending = []          # stage-1 losers awaiting the fairness step

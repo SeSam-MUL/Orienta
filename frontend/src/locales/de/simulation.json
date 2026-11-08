@@ -32,7 +32,7 @@
   "pipeline": {
     "label": "Pipeline:",
     "mcTooltip": "Monte-Carlo (EMMCOpenCL) — läuft immer",
-    "masterTooltip": "Master-Pattern (EMEBSDmaster/OpenCL)",
+    "masterTooltip": "Master-Pattern (EMEBSDmaster, CPU)",
     "shtTooltip": "Kugelflächenfunktionen (EMEBSDmasterSHT)",
     "gpuDetecting": "Erkennung läuft...",
     "gpuCpuOnly": "Nur CPU"
@@ -116,15 +116,12 @@
     "gpuDetected": "GPU erkannt",
     "vram": "{{gb}} GB VRAM",
     "platform": "Plattform: OpenCL über PoCL-CUDA",
-    "blockSize": "Blockgröße: {{size}}",
-    "lowVramWarning": "GPU hat {{gb}} GB — reduzierte Blockgröße für das Master-Pattern wird genutzt",
+    "masterOnCpuNote": "Monte Carlo läuft auf der GPU; das Master-Pattern wird auf der CPU berechnet.",
     "cpuModeTitle": "CPU-Modus (OpenMP)",
     "coresAvailable": "{{count}} Kerne verfügbar",
     "threadsLabel": "Threads:",
     "threadsTooltip": "Anzahl der CPU-Threads für die EMsoft-Programme",
-    "autoDetected": "automatisch erkannt",
-    "cpuHelperThreadsLabel": "CPU-Hilfsthreads:",
-    "helperThreadsNote": "(4N+3-Format, automatisch für die GPU-Pipeline optimiert)"
+    "autoDetected": "automatisch erkannt"
   },
   "advanced": {
     "groupTitle": "Erweiterte Optionen",
@@ -178,8 +175,8 @@
     "errorPrefix": "Fehler: {{message}}",
     "scanningMissing": "XTAL-Bibliothek wird nach fehlenden Materialien durchsucht...",
     "allHaveResults": "Alle Materialien haben bereits Simulationsergebnisse.",
-    "unreadableMasters_one": "Es fehlt nichts, aber {{count}} Phase hat einen Master, der nicht für die Dictionary-Indizierung verwendet werden kann (kikuchipy kann ihn nicht laden): {{names}}. Simulieren Sie sie erneut mit dem CPU-Masterprogramm.",
-    "unreadableMasters_other": "Es fehlt nichts, aber {{count}} Phasen haben einen Master, der nicht für die Dictionary-Indizierung verwendet werden kann (kikuchipy kann ihn nicht laden): {{names}}. Simulieren Sie sie erneut mit dem CPU-Masterprogramm.",
+    "unreadableMasters_one": "Es fehlt nichts, aber {{count}} Phase hat einen Master, der nicht für die Dictionary-Indizierung verwendet werden kann (kikuchipy kann ihn nicht laden): {{names}}. Löschen Sie die Datei und simulieren Sie die Phase neu; die Simulation nutzt jetzt das CPU-Masterprogramm.",
+    "unreadableMasters_other": "Es fehlt nichts, aber {{count}} Phasen haben einen Master, der nicht für die Dictionary-Indizierung verwendet werden kann (kikuchipy kann ihn nicht laden): {{names}}. Löschen Sie die Dateien und simulieren Sie die Phasen neu; die Simulation nutzt jetzt das CPU-Masterprogramm.",
     "errorScanningMissing": "Fehler beim Suchen fehlender Materialien.",
     "startingBatch": "Stapel wird gestartet...",
     "batchStarted": "Stapel gestartet: {{count}} Job(s) in der Warteschlange.",
@@ -214,7 +211,7 @@
     "viewMasterTooltipNotReady": "Verfügbar, sobald eine Simulation gestartet wurde"
   },
   "jobWarnings": {
-    "masterUnreadableByKikuchipy": "{{file}} kann nicht für die Dictionary-Indizierung verwendet werden: kikuchipy kann die Datei nicht laden (sie wurde von {{program}} geschrieben), daher bietet die Phasenbibliothek sie nicht an. Simulieren Sie sie erneut mit dem CPU-Masterprogramm.",
+    "masterUnreadableByKikuchipy": "{{file}} kann nicht für die Dictionary-Indizierung verwendet werden: kikuchipy kann die Datei nicht laden (sie wurde von {{program}} geschrieben), daher bietet die Phasenbibliothek sie nicht an. Löschen Sie die Datei und simulieren Sie die Phase neu; die Simulation nutzt jetzt das CPU-Masterprogramm.",
     "unknownProgram": "einem unbekannten Programm",
     "unknown": "Warnung {{code}}: {{file}}"
   },
@@ -278,7 +275,7 @@
     "select": "Auswählen"
   },
   "missingDialog": {
-    "unreadableMaster": "{{stem}}: Master nicht lesbar (geschrieben von {{program}}) — {{file}} kann nicht für die Dictionary-Indizierung verwendet werden. Oben nicht aufgeführt, weil eine erneute Simulation mit demselben Programm dieselbe Datei schriebe; verwenden Sie das CPU-Masterprogramm.",
+    "unreadableMaster": "{{stem}}: Master nicht lesbar (geschrieben von {{program}}) — {{file}} kann nicht für die Dictionary-Indizierung verwendet werden. Oben nicht aufgeführt, weil die Datei bereits in der Bibliothek liegt und ein neuer Lauf eine vorhandene Datei nicht ersetzt. Löschen Sie sie und simulieren Sie die Phase danach erneut (es wird das CPU-Masterprogramm verwendet).",
     "titlePhases": "Alle fehlenden simulieren — {{count}} Phase(n)",
     "pipelineOurs": "✨ Orienta Engine",
     "pipelineEmsoft": "⚙ EMsoft-Pipeline",
@@ -319,8 +316,8 @@
     "testConnection": "Prüfen, ob der konfigurierte Database-Stamm erreichbar ist",
     "saveServerConfig": "Die Server-Modus-Einstellungen speichern",
     "crystalFileInput": "Pfad zur zu simulierenden .xtal-Kristallstrukturdatei",
-    "computeModeAuto": "GPU (OpenCL) nutzen, falls verfügbar, sonst auf CPU (OpenMP) zurückfallen",
-    "computeModeGpu": "Berechnung nur über GPU (OpenCL) erzwingen",
+    "computeModeAuto": "Monte Carlo auf der GPU (OpenCL) rechnen, falls verfügbar, sonst auf der CPU (OpenMP); das Master-Pattern läuft immer auf der CPU",
+    "computeModeGpu": "Monte Carlo über OpenCL auf der GPU erzwingen; das Master-Pattern läuft trotzdem auf der CPU",
     "computeModeCpu": "Berechnung nur über CPU (OpenMP) erzwingen",
     "checkSystem": "EMsoft-Installation, GPU und OpenCL-Geräte auf diesem Rechner prüfen",
     "stopJob": "Diesen laufenden oder wartenden Simulationsjob stoppen",

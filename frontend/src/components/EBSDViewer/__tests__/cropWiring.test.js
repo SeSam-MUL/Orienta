@@ -43,7 +43,9 @@ describe('CropPanel wiring in EBSDViewer', () => {
   });
 
   it('is handed the active tool, not a hardcoded shape', () => {
-    expect(el).toContain('shape={cropTool}');
+    // `?? 'rect'`: with no tool armed (a Shift+drag) cropTool is null, which the panel would pass on as
+    // `shape: null`; the endpoint wants a string and refuses null with a 422.
+    expect(el).toContain("shape={cropTool ?? 'rect'}");
     expect(el).not.toMatch(/shape="/);
   });
 

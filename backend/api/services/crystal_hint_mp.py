@@ -36,6 +36,42 @@ REQUEST_TIMEOUT_S = 10.0
 MAX_RESULTS_CAP = 50    # API rate-limit-friendly default
 
 
+#: First line of a CIF that had to be written as space group P 1. The downloader
+#: turns it into a visible warning; the file keeps it as a comment.
+P1_WARNING_COMMENT = (
+    "# Orienta warning: stored as space group P 1 (no symmetry found); "
+    "Hough indexing of this phase may need very large amounts of memory."
+)
+
+
+def _tolerance_that_reproduces(structure, mp_number: Optional[int]) -> Optional[float]:
+    """The first of 0.05 and 0.1 A at which the analyser finds exactly the group
+    Materials Project lists for this entry, else None. 0.1 A is MP's own
+    tolerance for its symmetry data."""
+    from backend.api.services.cif_symmetry import spacegroup_analyzer
+
+    if mp_number in (None, 1):
+        return None
+    for symprec in (0.05, 0.1):
+        try:
+            if int(spacegroup_analyzer(structure, symprec).get_space_group_number()) == mp_number:
+                return symprec
+        except Exception:
+            continue
+    return None
+
+
+class CifSymmetryError(RuntimeError):
+    """Symmetry detection failed for a downloaded structure.
+
+    Raised instead of writing the structure as space group P 1: a CIF without
+    symmetry makes every reflector family a single pole, and Hough indexing then
+    asks for a band-triplet library of tens of GiB (a noisy P 1 cell with about
+    70 reflector families needs about 1.0e9 triplet rows, 44.7 GiB; see
+    tests/synthetic_cif.py; the symmetrised copy needs under 48 MiB).
+    """
+
+
 @dataclass
 class MpResult:
     """One match returned from Materials Project."""
@@ -542,7 +578,9 @@ def fetch_cif_text(mp_id: str) -> Optional[str]:
 
     Returns the CIF text on success, None on any failure (no API key,
     network error, unknown mp_id, pymatgen missing, etc.). Caller is
-    responsible for downstream parsing + saving.
+    responsible for downstream parsing + saving. Raises
+    :class:`CifSymmetryError` when the structure was fetched but its symmetry
+    could not be detected: that is never written out as P 1.
     """
     api_key = uc.get_api_key("materials_project")
     if not api_key:
@@ -554,7 +592,7 @@ def fetch_cif_text(mp_id: str) -> Optional[str]:
         return None
     url = "https://api.materialsproject.org/materials/summary/"
     params = {
-        "_fields": "material_id,structure",
+        "_fields": "material_id,structure,symmetry",
         "material_ids": mp_id,
     }
     try:
@@ -585,10 +623,16 @@ def fetch_cif_text(mp_id: str) -> Optional[str]:
     try:
         from pymatgen.core import Structure
         from pymatgen.io.cif import CifWriter
-        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+        from backend.api.services.cif_symmetry import ANGLE_TOLERANCE, spacegroup_analyzer
     except ImportError:
         logger.warning("MP cif fetch: pymatgen not available")
         return None
+
+    symmetry = data[0].get("symmetry") or {}
+    try:
+        mp_number = int(symmetry.get("number")) if symmetry.get("number") is not None else None
+    except (TypeError, ValueError):
+        mp_number = None
 
     try:
         s = Structure.from_dict(structure_dict)
@@ -599,17 +643,49 @@ def fetch_cif_text(mp_id: str) -> Optional[str]:
         # symmetry-equivalent positions into the CIF — which is what
         # EMsoft's mkxtal needs to build the master pattern correctly.
         try:
-            sga = SpacegroupAnalyzer(s, symprec=0.01)
+            symprec = 0.01
+            sga = spacegroup_analyzer(s, symprec)
+            if len(s) > 1 and int(sga.get_space_group_number()) == 1:
+                # The analyser finds nothing at 0.01 A, which is what a relaxed
+                # structure with 0.02 A of noise looks like (an hcp metal as a 2x2x1
+                # cell). Materials Project states the group of every entry; ask
+                # whether a looser tolerance reproduces THAT group, and only then
+                # use it. A group the database does not name is never guessed.
+                symprec = _tolerance_that_reproduces(s, mp_number)
+                if symprec is not None:
+                    sga = spacegroup_analyzer(s, symprec)
+                elif mp_number not in (None, 1):
+                    raise CifSymmetryError(
+                        f"Materials Project lists {mp_id} as space group {mp_number}, but its atom "
+                        "positions show no symmetry even at 0.1 Angstrom. The structure was not "
+                        "saved: a CIF stored as space group P 1 cannot be indexed with Hough "
+                        "(the band-triplet library would need tens of GiB)."
+                    )
+            if symprec is None:
+                # A genuine P 1 entry (or one with no group stated): written as it
+                # is, with the fact stated in the file and returned to the caller.
+                return P1_WARNING_COMMENT + "\n" + str(CifWriter(s))
             s = sga.get_conventional_standard_structure()
-            cif_text = str(CifWriter(s, symprec=0.01))
+            cif_text = str(CifWriter(s, symprec=symprec, angle_tolerance=ANGLE_TOLERANCE))
+        except CifSymmetryError:
+            raise
         except Exception as exc:
-            # Fall back to primitive if symmetry detection fails; the
-            # SHT pipeline can still cope with P1 for triclinic structures.
-            logger.warning(
-                "MP cif fetch: conventionalisation failed for %s (%s) — "
-                "falling back to primitive cell", mp_id, exc,
+            # No silent P 1 fallback. A structure that is genuinely triclinic
+            # does not land here (the analyser answers P-1 or P1 without
+            # raising); this is spglib failing on the cell. Writing P 1 anyway
+            # would hand the user a file that later dies with a band-triplet
+            # request of tens of GiB, so say so now instead.
+            logger.error(
+                "MP cif fetch: symmetry detection failed for %s (%s); "
+                "refusing to write it as space group P 1", mp_id, exc,
             )
-            cif_text = str(CifWriter(s))
+            raise CifSymmetryError(
+                f"Symmetry detection failed for {mp_id} ({type(exc).__name__}: {exc}). "
+                "The structure was not saved: a CIF stored as space group P 1 cannot be "
+                "indexed with Hough (the band-triplet library would need tens of GiB)."
+            ) from exc
+    except CifSymmetryError:
+        raise
     except Exception as exc:
         logger.warning("MP cif fetch: pymatgen failed to build CIF for %s: %s", mp_id, exc)
         return None

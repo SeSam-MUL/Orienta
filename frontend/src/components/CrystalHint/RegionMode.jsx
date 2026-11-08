@@ -11,6 +11,8 @@ import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors } from '../../theme/tokens';
 import useDataStore from '../../stores/useDataStore';
+import useAvgRadius from './useAvgRadius';
+import { problemText } from '../../services/problemText';
 import { crystalHintApi } from '../../services/api';
 import HistogramBars from './HistogramBars';
 import MissingPhaseClusters from './MissingPhaseClusters';
@@ -71,7 +73,8 @@ export default function RegionMode({ elements, presetKey, presetEntry, isActive 
   const [roiType, setRoiType] = useState('whole');
   const [rect, setRect] = useState({ rMin: 0, rMax: 50, cMin: 0, cMax: 50 });
   const [maxPixels, setMaxPixels] = useState(256);
-  const [avgRadius, setAvgRadius] = useState(1);  // 3x3 by default — same as Mode 1
+  // 3x3 by default, same as Mode 1; 0 and locked on a hexagonal scan
+  const { avgRadius, setAvgRadius, avgLocked } = useAvgRadius(1);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -95,12 +98,12 @@ export default function RegionMode({ elements, presetKey, presetEntry, isActive 
       const res = await crystalHintApi.analyzeRegion(payload);
       setResult(res.data);
     } catch (err) {
-      const msg = err?.response?.data?.detail || err?.message || 'unknown error';
+      const msg = problemText(err, t, 'crystalhint') || 'unknown error';
       setError(msg);
     } finally {
       setLoading(false);
     }
-  }, [elements, presetKey, roiType, rect, maxPixels, avgRadius]);
+  }, [elements, presetKey, roiType, rect, maxPixels, avgRadius, t]);
 
   return (
     <div style={S.layout}>
@@ -172,7 +175,8 @@ export default function RegionMode({ elements, presetKey, presetEntry, isActive 
               style={S.input}
               value={avgRadius}
               onChange={e => setAvgRadius(parseInt(e.target.value, 10))}
-              title={t('region.avgRadiusTooltip')}
+              disabled={avgLocked}
+              title={avgLocked ? t('hexAvgLocked') : t('region.avgRadiusTooltip')}
             >
               <option value={0}>{t('region.avg0')}</option>
               <option value={1}>{t('region.avg1')}</option>
@@ -182,6 +186,9 @@ export default function RegionMode({ elements, presetKey, presetEntry, isActive 
           <div style={S.hint}>
             {t('region.avgRadiusHint')}
           </div>
+          {avgLocked && (
+            <div style={S.hint} data-testid="hex-avg-locked">{t('hexAvgLocked')}</div>
+          )}
         </div>
 
         <button

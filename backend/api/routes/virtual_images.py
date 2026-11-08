@@ -28,7 +28,9 @@ from typing import Optional
 import numpy as np
 from fastapi import APIRouter, HTTPException
 
+from backend.api.services import hex_raster
 from backend.api.services.h5_session import get_extractor, is_open
+from backend.api.services.load_choices import LoadChoiceError, measurement_groups
 from backend.api.services.image_utils import (
     colormap_array_to_base64,
     element_color_overlay_to_base64,
@@ -71,11 +73,22 @@ def _render_2d_image(arr_2d: np.ndarray, cmap: str, color: str) -> str:
     return colormap_array_to_base64(arr_2d.astype(np.float64), cmap)
 
 
+def _display_geometry(display):
+    """The active dataset's geometry when the caller asks for the raster and the scan is hexagonal, else None."""
+    if display != "raster":
+        return None
+    from backend.api.routes import ebsd_viewer
+    from backend.api.services import scan_geometry
+    geometry = scan_geometry.geometry_for(ebsd_viewer._active_dataset)
+    return geometry if geometry is not None and geometry.kind == "hex" else None
+
+
 @router.get("/virtual-bse")
 async def virtual_bse(
     cmap: str = "gray",
     color: str = "",
     roi: Optional[str] = None,
+    display: Optional[str] = None,
 ):
     """Return the virtual BSE image (per-pixel detector ROI sum).
 
@@ -89,8 +102,12 @@ async def virtual_bse(
         roi: optional ``"row_min,row_max,col_min,col_max"`` rectangle in
             detector pixel coordinates (inclusive low / exclusive high,
             same as numpy slicing). Defaults to the full detector.
+        display: ``"raster"`` draws the image of a hexagonal scan on the display raster (RGBA,
+            transparent outside the hexagons) and adds a ``display`` field describing it; ``shape``
+            stays the index grid. A square or unknown scan ignores it.
     """
     sig, data = _signal_data()
+    geometry = _display_geometry(display)
     n_rows, n_cols, det_h, det_w = data.shape
 
     if roi:
@@ -123,7 +140,7 @@ async def virtual_bse(
     bse = await asyncio.to_thread(_compute_bse)
 
     image_b64 = _render_2d_image(bse, cmap, color)
-    return {
+    answer = {
         "image": image_b64,
         "shape": [int(n_rows), int(n_cols)],
         "roi": [int(r0), int(r1), int(c0), int(c1)],
@@ -132,14 +149,21 @@ async def virtual_bse(
         "max_val": float(np.nanmax(bse)),
         "source": "computed",
     }
+    if geometry is not None:
+        answer["image"] = await asyncio.to_thread(hex_raster.png_to_display, answer["image"], geometry)
+        answer["display"] = hex_raster.display_info(geometry)
+    return answer
 
 
-def _read_native_band_contrast() -> Optional[np.ndarray]:
+def _read_native_band_contrast(variant=None) -> Optional[np.ndarray]:
     """Best-effort native Band Contrast read from the open H5OINA file.
 
     Returns a 2D ``(n_rows, n_cols)`` array, or ``None`` if the file
     has no Band Contrast dataset (EDAX, processed-only signals,
     or anywhere the user has stripped the metadata).
+
+    ``variant`` (a ``LoadVariant``; None = the first measurement that has the channel, as before)
+    names the measurement the map belongs to: only that measurement's is read.
     """
     if not is_open():
         return None
@@ -149,8 +173,8 @@ def _read_native_band_contrast() -> Optional[np.ndarray]:
     except Exception:
         return None
 
-    # Walk top-level scan groups (Oxford uses '1', '2', ... per scan).
-    for scan_key in list(h5.keys()):
+    # Walk top-level scan groups (Oxford uses '1', '2', ... per scan); a variant names one.
+    for scan_key in measurement_groups(h5, variant):
         try:
             grp = h5[scan_key]
         except Exception:
@@ -178,7 +202,7 @@ def _read_native_band_contrast() -> Optional[np.ndarray]:
     return None
 
 
-def _read_native_band_contrast_from(path) -> Optional[np.ndarray]:
+def _read_native_band_contrast_from(path, variant=None) -> Optional[np.ndarray]:
     """Read native Band Contrast directly from a SPECIFIC H5OINA file path.
 
     Unlike ``_read_native_band_contrast`` (which reads the shared EDS
@@ -188,6 +212,7 @@ def _read_native_band_contrast_from(path) -> Optional[np.ndarray]:
     (the exact cross-page coupling that has bitten this app before). Returns a
     2D ``(n_rows, n_cols)`` array, or None if the file has no Band Contrast
     dataset (EDAX, processed-only, stripped metadata) or can't be opened.
+    ``variant`` names the measurement, as for :func:`_read_native_band_contrast`.
     """
     if not path:
         return None
@@ -197,7 +222,7 @@ def _read_native_band_contrast_from(path) -> Optional[np.ndarray]:
         return None
     try:
         with h5py.File(path, "r") as h5:
-            for scan_key in list(h5.keys()):
+            for scan_key in measurement_groups(h5, variant):
                 try:
                     grp = h5[scan_key]
                     bc = np.asarray(grp["EBSD/Data/Band Contrast"][...])
@@ -215,6 +240,8 @@ def _read_native_band_contrast_from(path) -> Optional[np.ndarray]:
                     except Exception:
                         continue
                 return bc.astype(np.float64)
+    except LoadChoiceError:
+        raise
     except Exception:
         return None
     return None
@@ -256,7 +283,10 @@ def _native_band_contrast_for_active_dataset():
                        exc_info=True)
         return None
     if not isinstance(ext, CroppedExtractor):
-        return _read_native_band_contrast()
+        from backend.api.routes.ebsd_viewer import active_variant
+        from backend.api.services.h5_session import get_current_path
+        # The measurement the viewer holds, when the open file is the viewer's.
+        return _read_native_band_contrast(active_variant(get_current_path()))
     try:
         bc = ext.get_band_contrast_map()
     except Exception:

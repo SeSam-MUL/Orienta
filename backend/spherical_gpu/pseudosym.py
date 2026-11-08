@@ -7,9 +7,6 @@ module expands the spherical cc peaks by the pseudo-symmetry coset (supergroup \
 group) and selects the variant consistent with a rough Hough band-geometry
 orientation. The selected orientation has spherical (cc-peak) precision on the
 Hough-correct variant; selection is pure quaternion math (no rendering).
-
-See tasks/golive/spherical-vs-emsphinx-vs-hough-2026-06-27.md and
-tasks/golive/pseudosym-resolver-plan.md.
 """
 from __future__ import annotations
 
@@ -91,7 +88,7 @@ _ZROT2_PG: frozenset[str] = frozenset({"m-3", "23", "-43m", "mmm", "222", "mm2"}
 # That diagnosis was the decode error: the C2 lies in O and D4, so it was
 # invisible on m-3m / 4/mmm and a 90-deg basin on m-3 and mmm.
 #
-# Measured 2026-09-22 (tasks/retire-hough/), raw spherical, no resolver:
+# Measured with raw spherical indexing, no resolver:
 #   synthetic, 48 random orientations per master, angle to the truth
 #     m-3  (alpha sd_0302719)     median 0.17 deg, 100 % <= 2 deg
 #     mmm  (S-phase MgCuAl2)      median 0.26 deg, 100 % <= 2 deg
@@ -179,6 +176,7 @@ _SYSTEM_HOLOHEDRY: dict[str, str] = {
     "4": "4/mmm", "-4": "4/mmm", "4/m": "4/mmm", "422": "4/mmm",
     "4mm": "4/mmm", "-42m": "4/mmm", "-4m2": "4/mmm", "4/mmm": "4/mmm",
     "3": "6/mmm", "-3": "6/mmm", "32": "6/mmm", "3m": "6/mmm", "-3m": "6/mmm",
+    "312": "6/mmm", "31m": "6/mmm", "-31m": "6/mmm",     # two-folds along Y (see crystal_symmetry)
     "6": "6/mmm", "-6": "6/mmm", "6/m": "6/mmm", "622": "6/mmm",
     "6mm": "6/mmm", "-6m2": "6/mmm", "-62m": "6/mmm", "6/mmm": "6/mmm",
     "23": "m-3m", "m-3": "m-3m", "432": "m-3m", "-43m": "m-3m", "m-3m": "m-3m",
@@ -196,7 +194,7 @@ def pseudosym_holohedry(point_group: str):
 #: on top of the cubic holohedry: their Kikuchi bands nearly map onto themselves
 #: under the 72 deg / 144 deg rotations about the six pseudo-five-fold axes
 #: <0 1 tau> of the cubic cell. Band-geometry indexing (Hough) therefore has a
-#: second basin at 71.9 deg — measured on crop1 of the ICAA20 alloy: ONE left
+#: second basin at 71.9 deg — measured on a crop of an aluminium-alloy scan not included in the repository: ONE left
 #: operator, 144 deg about a (0, 1, tau) axis, maps the Hough answer onto the
 #: EMSphInx / dictionary answer within 0.46 deg on 99 % of a 688-px blob
 #: (2026-09-09). These point groups get the icosahedral coset classes as extra
@@ -338,10 +336,11 @@ def _snap_ops(point_group: str):
 def grain_snap_floodfill(full_q, phase_full, n_rows: int, n_cols: int,
                          start_rc, phase_id, point_group: str, q_target,
                          threshold_deg: float = 5.0,
-                         max_total_deg: float = 15.0):
+                         max_total_deg: float = 15.0, topology=None):
     """Grain flood fill with per-pixel pseudo-variant snapping (grain-flip v2).
 
-    4-connected BFS from ``start_rc`` over same-phase pixels. For every
+    BFS from ``start_rc`` over same-phase pixels, through the 4 neighbours of the index grid or, given a
+    ``scan_neighbours.Topology`` (a hexagonal scan), through its 6. For every
     candidate pixel the possible corrected orientations are ITS OWN
     pseudo-variants ``h·q`` (LEFT composition — see :func:`_snap_ops` for why
     the right-composed form is excluded here) plus the rigid fallback ``C·q``
@@ -367,6 +366,9 @@ def grain_snap_floodfill(full_q, phase_full, n_rows: int, n_cols: int,
     phase_full : (n_rows*n_cols,) int — phase id per pixel (or -1).
     start_rc : (row, col) clicked pixel.
     q_target : (4,) — user-chosen corrected orientation AT the clicked pixel.
+    topology : ``scan_neighbours.Topology`` of the scan, or None for the four
+        neighbours of the index grid (the code as it was). Its grid must be
+        ``(n_rows, n_cols)``.
 
     Returns
     -------
@@ -379,6 +381,10 @@ def grain_snap_floodfill(full_q, phase_full, n_rows: int, n_cols: int,
             ``max_residual_deg`` (largest disorientation to target kept).
     """
     from collections import deque
+    if topology is not None and (topology.n_rows, topology.n_cols) != (n_rows, n_cols):
+        raise ValueError(
+            f"the topology is for a {topology.n_rows} x {topology.n_cols} grid, "
+            f"but the map is {n_rows} x {n_cols}")
     pg = point_group or "1"
     q_target = np.asarray(q_target, dtype=np.float64).reshape(4)
     q_target = q_target / (np.linalg.norm(q_target) + 1e-12)
@@ -433,14 +439,20 @@ def grain_snap_floodfill(full_q, phase_full, n_rows: int, n_cols: int,
     seen = {tuple(start_rc)}
     grain = [tuple(start_rc)]
     dq = deque([tuple(start_rc)])
+    if topology is None:
+        def neighbours_rc(r, c):
+            return [(r + dr, c + dc) for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                    if 0 <= r + dr < n_rows and 0 <= c + dc < n_cols]
+    else:
+        def neighbours_rc(r, c):
+            return [divmod(f, n_cols) for f in topology.neighbours(r * n_cols + c)]
     while dq:
         r, c = dq.popleft()
         pflat = r * n_cols + c
         q_ref = new_q[pflat]
         parent_op = op_of[pflat]
-        for dr, dc in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            nr, nc_ = r + dr, c + dc
-            if not (0 <= nr < n_rows and 0 <= nc_ < n_cols) or (nr, nc_) in seen:
+        for nr, nc_ in neighbours_rc(r, c):
+            if (nr, nc_) in seen:
                 continue
             fi = nr * n_cols + nc_
             qn = np.asarray(full_q[fi], dtype=np.float64)

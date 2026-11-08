@@ -24,5 +24,20 @@
   "fullscreen": {
     "enter": "Vollbild",
     "exit": "Vollbild verlassen"
+  },
+  "errors": {
+    "crop_geometry_unknown": "Für diesen Datensatz ist keine Scan-Geometrie hinterlegt, deshalb lässt sich kein Teil davon sicher ausschneiden. Laden Sie die Datei erneut.",
+    "export_needs_hex_scan": "Eine .ctf-Datei und eine quadratische .ang-Datei enthalten einen hexagonalen Scan, der auf ein quadratisches Raster umgerechnet wurde. Dieses Ergebnis wurde bereits auf ein quadratisches Raster umgerechnet oder stammt nicht aus einem hexagonalen Scan, daher gibt es nichts umzurechnen. Es wurde nichts geschrieben.",
+    "export_other_dataset": "Der im Viewer geöffnete Scan ist nicht der Scan, auf dem dieses Ergebnis berechnet wurde. Die Datei enthielte die Muster eines Scans unter dem Ergebnis eines anderen. Wählen Sie den Datensatz aus, auf dem dieses Ergebnis berechnet wurde, und speichern Sie erneut. Es wurde nichts geschrieben.",
+    "hex_analysis_page_pending": "Die Karten der Analyse-Seite lassen sich für einen hexagonalen Scan noch nicht zeichnen: Die Seite zeichnet jede Karte auf dem Indexraster, das in jeder zweiten Zeile um einen halben Schritt danebenliegt.",
+    "hex_ang_unreadable": "Diese .ang-Datei hat ein hexagonales Raster, das Orienta nicht lesen kann: Die Zeilen sind unterschiedlich lang oder die Positionen unregelmäßig. Wandeln Sie den Scan in OIM Analysis in ein Quadratraster um, oder laden Sie stattdessen die .h5-Datei des Scans.",
+    "hex_neighbourhood_unsupported": "Diese Auswertung vergleicht jeden Punkt mit seinen vier Nachbarn auf dem Indexraster. Ein hexagonaler Scan hat sechs Nachbarn je Punkt, das Ergebnis wäre unbemerkt verzerrt. Für hexagonale Scans ist sie noch nicht verfügbar.",
+    "hex_pc_grid_pending": "Die punktweise Pattern-Center-Kalibrierung legt ihre Gitterpunkte auf das Indexraster, das bei einem hexagonalen Scan in jeder zweiten Zeile um einen halben Schritt danebenliegt. Nutzen Sie vorerst ein einzelnes globales Pattern Center.",
+    "loadCameUpAsOther": "Die Datei wurde geöffnet, aber als andere Messung oder Musterquelle als die, mit der dieses Ergebnis erzeugt wurde. Das Ergebnis wurde nicht aktiviert, und der Viewer zeigt jetzt die andere Variante.",
+    "loadInspectFailed": "Die Messungen dieser Datei konnten nicht gelesen werden: Eine Gruppe darin ist beschädigt oder unvollständig. Prüfen Sie, ob die Datei vollständig ist und nicht noch geschrieben wird, und öffnen Sie sie dann erneut.",
+    "loadNoPatterns": "Diese Datei oder Messung enthält keine Beugungsmuster, es gibt also nichts zu laden.",
+    "loadVariantNeedsNativeReader": "Die gewählte Messung oder Mustervariante kann nur vom Standardleser gelesen werden, und dieser konnte die Datei nicht lesen. Wählen Sie die erste Messung mit den prozessierten Mustern oder prüfen Sie, ob die Datei vollständig ist.",
+    "loadVariantUnknown": "Die Datei enthält die gewählte Messung oder Mustervariante nicht. Öffnen Sie die Datei erneut und wählen Sie aus der Liste.",
+    "variantNotSupported": "Die gewählte Messung oder Mustervariante kann hier nicht gelesen werden: Dieser Schritt öffnet die Datei selbst erneut, und der Aufbau dieser Datei benennt ihre Mustervarianten nicht, er müsste also eine andere verwenden. Wählen Sie die erste Messung mit den prozessierten Mustern."
   }
 }

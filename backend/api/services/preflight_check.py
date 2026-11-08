@@ -82,7 +82,7 @@ class PreFlightChecker:
                     # Only indexing data, no pattern copy: ~5 MB per phase
                     # plus per-file constant for metadata.
                     estimated_result_mb += (len(phases) * 5 + 5) * len(files)
-                elif fmt in ("ang", "ctf"):
+                elif fmt in ("ang", "ctf", "ang_square"):
                     # Plain-text orientation dumps are pixels * ~80 bytes.
                     # We don't have the grid shape here; estimate 20 MB/file
                     # as a safe upper bound for typical scans.

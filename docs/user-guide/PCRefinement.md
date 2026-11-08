@@ -130,6 +130,29 @@ optimiser (*search_limit* only to PSO).
    point across the scan and reports how many points were valid plus the
    per-component spread; **Show PC Map** displays the per-component min/max/mean/
    span. The default **Global (single PC)** mode performs no per-pixel fit.
+   **Extrapolate from Points** converts the fitted drift into a PC shift with the
+   detector's pixel size, so it needs a real one: set the detector width and the
+   binning under **Pixel Size & Binning** and press **Apply Pixel Size** first,
+   otherwise the run is refused. **Grid Calibration** does not need it.
+
+#### What a per-pixel PC map does when you change the PC
+
+While a map is active, the PC fields show its **mean**, and a line above the
+detector settings says so. Each pattern is indexed at the PC of its own pixel.
+
+- **Typing a PC** into the fields **shifts** the whole map so that its mean is
+  the PC you typed. Every pixel keeps its offset from the mean: you change the
+  level of the map, not its shape.
+- **Global PC Refine** (and **Apply** with a changed PC) **replace** the map by
+  that one PC for the whole scan. A global refine asks for one value; keeping
+  the old map would make the page show the refined PC while indexing kept
+  reading the map.
+- **Apply** with only tilt, binning or pixel size changed leaves the map as it
+  is.
+
+The page says which of the two happened. The same action is applied to the
+dataset's parent and to the copies that follow it, and each dataset reports what
+happened to its own map.
 
 ### Source drift
 
@@ -137,8 +160,8 @@ optimiser (*search_limit* only to PSO).
    (read from the analysis dataset). This shows the *raw* measured PC drift before
    any refinement — large drift means a single global PC throws away signal.
    **Use as seed** copies that per-pixel PC into the calibration store as a
-   starting point. **PC Drift Analysis** reports the spread across your
-   calibration patterns (needs at least two).
+   starting point; a PC Refinement page that is already open for the dataset
+   takes it over as well (its tilts, pixel size and binning stay).
 
 ## Inputs & outputs
 
@@ -177,6 +200,29 @@ the rest of the pipeline.
   grid and interpolates; a full independent PC at every pixel is not robust.
   Prefer a refined global PC plus a smooth field, and check the source-drift map
   to see whether per-pixel correction is even needed.
+- **A file without a pattern centre is not indexed on a guess.** A file that
+  carries no PC (for example a `.up1` without its `.osc`) starts with the
+  placeholder (0.5, 0.5, 0.5); Indexing and Batch refuse to run on it. Calibrate
+  the PC here first, or provide the file that holds the metadata. A file
+  exported and loaded again keeps this state: it does not turn into a file with
+  a header PC.
+- **An export states one PC, the mean of a per-pixel map.** The `.h5` and `.ang`
+  exports of a run indexed on a PC map write the mean PC of the map in their
+  header (the TSL convention in `.ang`), not the pixel-by-pixel values: the map
+  itself is not exported. A file loaded again from such an export therefore
+  starts with one PC, not the map.
+- **The file's header PC wins over the PC of an export.** An Orienta `.h5` states
+  the PC of its run in `/Detector/pc`. When the file also carries a manufacturer
+  header PC (an Oxford `.h5oina`, an EDAX `.h5` with its PC calibration), loading it
+  again uses the header's PC, not a PC you typed or refined afterwards. The viewer
+  says so when the two differ and shows both; set the PC on this page to use another.
+  `/Detector/pc` is used only for a file whose header has none.
+- **A PC you set survives a file switch, unless the file now says something else.**
+  If you typed or refined the PC of a file that carries none and then load it again,
+  your PC is restored, also after the file was removed from the Loaded Files list (the
+  crops and derived datasets of a removed file are discarded, the PC is not). If an
+  `.osc` (or another header PC) has appeared next to it, the file's own PC replaces
+  yours, and the viewer says which one is active.
 - **Bandwidth trades speed for sharpness** in the forward-sim preview: 128 is
   fast for sweeping, 384 is sharp for a final check.
 - **Backend restarts clear the calibration state** (detector, phase, patterns,

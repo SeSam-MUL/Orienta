@@ -34,8 +34,6 @@
       "notSetUp": "Not set up"
     },
     "warnings": {
-      "gpuBlocksizeReduced": "GPU has {{gb}} GB — using blocksize={{blocksize}} for the GPU master pattern (reduced from 32 to fit the memory).",
-      "gpuBlocksizeMinimal": "GPU has {{gb}} GB — using the smallest blocksize {{blocksize}} for the GPU master pattern. Complex crystals (more than 20 atoms) may still run out of memory.",
       "emsoftNotOffered": "EMsoft is not set up on this computer. It is optional — the Orienta Engine needs no EMsoft."
     }
   },

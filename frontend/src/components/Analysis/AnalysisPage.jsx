@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { analysisApi, indexApi, edsApi } from '../../services/api';
 import useResultStore from '../../stores/useResultStore';
 import { toast } from '../../stores/useToastStore';
+import { codedProblemText } from '../../services/problemText';
 import {
   colors, alpha,
   Button,
@@ -29,6 +30,10 @@ import {
   FormRow,
   ProgressBar,
 } from '../../theme/components';
+
+// A refusal with a stable code (a pattern source a step cannot read) in the reader's language;
+// null for anything else, so each caller keeps the sentence it showed before.
+const codedError = (err, t) => codedProblemText(err, t, 'analysis');
 
 // ---------------------------------------------------------------------------
 // Page-specific UI atoms not covered by shared components
@@ -239,7 +244,7 @@ function MapViewer({ defaultLayer = 'bc', analysisLoaded, style }) {
       // for grain boundary map"). Show it, and show it as a failure.
       setImage(null);
       setError(true);
-      setInfo(err.response?.data?.detail || t('analysis:map.failedToLoad'));
+      setInfo(codedError(err, t) || err.response?.data?.detail || t('analysis:map.failedToLoad'));
     } finally {
       setLoading(false);
     }
@@ -524,7 +529,7 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
       setIsError(false);
       onComplete('data');
     } catch (err) {
-      setMsg(err.response?.data?.detail || err.message || t('analysis:data.loadFailed'));
+      setMsg(codedError(err, t) || err.response?.data?.detail || err.message || t('analysis:data.loadFailed'));
       setIsError(true);
     } finally {
       setLoading(false);
@@ -595,7 +600,7 @@ function DataTab({ status, onLoad, onComplete, analysisLoaded }) {
       }));
       setQfMsgError(false);
     } catch (err) {
-      setQfMsg(err.response?.data?.detail || err.message || t('analysis:data.qualityFilterFailed'));
+      setQfMsg(codedError(err, t) || err.response?.data?.detail || err.message || t('analysis:data.qualityFilterFailed'));
       setQfMsgError(true);
     } finally {
       setQfApplying(false);
@@ -1189,7 +1194,7 @@ function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
       setIsError(false);
       onComplete('deformation');
     } catch (err) {
-      setMsg(err.response?.data?.detail || t('analysis:deformation.failed'));
+      setMsg(codedError(err, t) || err.response?.data?.detail || t('analysis:deformation.failed'));
       setIsError(true);
     } finally {
       setLoading(false);
@@ -1216,7 +1221,7 @@ function DeformationTab({ analysisLoaded, hasGrains, onComplete }) {
       }
       setIsError(false);
     } catch (err) {
-      setMsg(err.response?.data?.detail || t('analysis:deformation.gmmFailed'));
+      setMsg(codedError(err, t) || err.response?.data?.detail || t('analysis:deformation.gmmFailed'));
       setIsError(true);
     } finally {
       setGmmRunning(false);
@@ -1549,7 +1554,7 @@ function RXTab({ analysisLoaded, hasGrains, onComplete }) {
       setIsError(false);
       onComplete('rx');
     } catch (err) {
-      setMsg(err.response?.data?.detail || t('analysis:rx.failed'));
+      setMsg(codedError(err, t) || err.response?.data?.detail || t('analysis:rx.failed'));
       setIsError(true);
     } finally {
       setLoading(false);

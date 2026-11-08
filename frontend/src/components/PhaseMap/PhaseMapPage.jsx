@@ -10,12 +10,13 @@
  * the old separate Data Source box was redundant and removed.
  */
 
-import { problemText } from '../../services/problemText';
+import { problemText, blobProblemText, problemCode } from '../../services/problemText';
+import { experimentalMissingText } from './experimentalPanelText';
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import api, {
   phaseMapApi, analysisApi, ebsdApi, indexApi, h5Api, pcApi,
-  forwardDiagApi, refinementApi,
+  forwardDiagApi, refinementApi, isFileLoadInFlight,
 } from '../../services/api';
 import { wouldSwitchFile } from './autoAdoptGuard';
 import { reassignWork, reassignLabelKey } from './reassignLabel';
@@ -28,7 +29,9 @@ import {
 } from '../../theme/components';
 import useResultStore from '../../stores/useResultStore';
 import useDataStore from '../../stores/useDataStore';
+import useLoadedFilesStore from '../../stores/useLoadedFilesStore';
 import { toast } from '../../stores/useToastStore';
+import { announceImportedPc } from '../EBSDViewer/pcLoadNote';
 import usePhaseColorStore from '../../stores/usePhaseColorStore';
 import useAddonLayerRequests from '../../stores/useAddonLayerRequests';
 import { MAX_LAYERS } from './layerStackReducer';
@@ -53,6 +56,9 @@ import { useLayerStack, cleanupAffectsLayer } from './hooks/useLayerStack';
 import PhaseReflectorPanel from './PhaseReflectorPanel';
 import { useSourceLink } from './hooks/useSourceLink';
 import { buildAddLayerOptions, findLayerDef } from './layerSources';
+import { isHexScan, parseScanGeometry } from '../../services/scanGeometry';
+import { readResampled } from '../../services/resampledExport';
+import { makeHexMap } from '../../services/hexMap';
 
 // EDS-shared building blocks (reused for Tier-2 tools)
 import { CursorSyncProvider, useCursorSync, useCursorPublisher } from '../EDS/CursorSyncContext';
@@ -111,8 +117,8 @@ import { usePhaseMapLinescan } from './hooks/usePhaseMapLinescan';
 // Pattern Matches Dialog (inline — used by "View Pattern Matches" button)
 // ---------------------------------------------------------------------------
 // Quality preset for SHT-forward simulated patterns. Bandwidth controls
-// sharpness vs. VRAM: 128 (fast, ~225 MB), 256 (sharp, ~1.7 GB),
-// 384 (sharpest, ~5.7 GB). Only used for Spherical Indexing results.
+// sharpness vs. VRAM: 128 (fast, ~225 MB), 256 (sharp, ~1.8 GB),
+// 384 (sharpest, ~5.9 GB). Only used for Spherical Indexing results.
 const SHT_QUALITY_OPTIONS = [
   { value: 128, labelKey: 'matches.sht.fast',     descKey: 'matches.sht.fastDesc'     },
   { value: 256, labelKey: 'matches.sht.standard', descKey: 'matches.sht.standardDesc' },
@@ -206,7 +212,8 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
   useEffect(() => {
     if (!open) { setZoomLayer(null); return undefined; }
     let cancelled = false;
-    phaseMapApi.layer(zoomKind)
+    // 'index': the zoom magnifies data pixels, so it keeps the index grid of a hexagonal scan
+    phaseMapApi.layer(zoomKind, { display: 'index' })
       .then(r => { if (!cancelled) setZoomLayer(r.data); })
       .catch(() => { if (!cancelled) setZoomLayer(null); });
     return () => { cancelled = true; };
@@ -655,7 +662,7 @@ function PatternMatchesDialog({ open, onClose, initialPixel = null, onOrientatio
                   <div style={{ height: 38, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', marginBottom: 4 }}>
                     <div style={{ fontSize: '9pt', color: '#f8f8f2' }}>{t('phasemap:matches.experimental')}</div>
                   </div>
-                  {matchData.experimental ? <LinkedPatternImage src={`data:image/png;base64,${matchData.experimental}`} alt={t('phasemap:matches.expAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} view={patZoom.viewFor(PATTERN_VIEW_ID)} onZoomAt={(f, px, py) => patZoom.zoomAtPointer(PATTERN_VIEW_ID, f, px, py)} onPan={(dx, dy) => patZoom.pan(PATTERN_VIEW_ID, dx, dy)} onResetView={() => patZoom.resetOne(PATTERN_VIEW_ID)} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4' }}>{t('phasemap:matches.notAvailable')}</div>}
+                  {matchData.experimental ? <LinkedPatternImage src={`data:image/png;base64,${matchData.experimental}`} alt={t('phasemap:matches.expAlt')} markers={markerCtl.markers} hover={markerCtl.hover} onHover={markerCtl.setHover} onClick={markerCtl.handlePanelClick} view={patZoom.viewFor(PATTERN_VIEW_ID)} onZoomAt={(f, px, py) => patZoom.zoomAtPointer(PATTERN_VIEW_ID, f, px, py)} onPan={(dx, dy) => patZoom.pan(PATTERN_VIEW_ID, dx, dy)} onResetView={() => patZoom.resetOne(PATTERN_VIEW_ID)} style={{ ...patStyle, width: '100%' }} /> : <div style={{ height: 240, background: '#282a36', borderRadius: 3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6272a4', padding: 12, textAlign: 'center', fontSize: '9pt' }}>{experimentalMissingText(matchData, t)}</div>}
                 </div>
                 <div
                   style={{ flex: 1, textAlign: 'center' }}
@@ -1225,13 +1232,19 @@ function directionFromMode(modeId) {
 const CLICK_SLOP_PX = 3;
 // The stacked composite is one map, so one entry in the zoom store.
 const STACK_VIEW_ID = '__stack__';
+// Samples of a line profile (the default of usePhaseMapLinescan, and what a hexagonal line is sampled at).
+const LINE_SAMPLES = 128;
 
-function CanvasInteractionLayer({
+export function CanvasInteractionLayer({
   view, layers, bitmaps, errors, shape, tileMinWidth,
   bitmapVersion, scalebar, title, stepX, ipfKeyImage, showIpfKey, hoverPixel,
   onPixelClick, onRegionSelected, onLineComplete,
   linescanMode, magnifierEnabled,
   onContextMenu, zoom, onContentBbox, wheelHostRef, roiBbox,
+  // makeHexMap() of a hexagonal result, else null; pointer positions are then pixels of the display raster
+  hexMap = null,
+  // names the result and raster a selection started on; a rectangle or line that ends under another one is dropped
+  selectionKey = null,
 }) {
   const { t } = useTranslation('phasemap');
   const zoomResetHint = t('phasemap:hoverTips.zoomReset');
@@ -1326,14 +1339,46 @@ function CanvasInteractionLayer({
     setCrosshair({ x, y });
   });
 
+  // On a hexagonal scan a pointer lands on a pixel of the display raster, and the page works in (row, col) of
+  // the stored grid. A click on a corner no hexagon covers is not a click on a measurement.
+  // The pixels are read with the raster of hexMap only while the picture shown is that raster: a picture of
+  // another shape (the geometry has just changed and the new one has not arrived) is not read at all.
+  const rasterShown = !hexMap
+    || (!!shape && shape[0] === hexMap.shape[0] && shape[1] === hexMap.shape[1]);
+
+  // A rectangle or a line is a pair of raster pixels. If the result or the raster changes between its start
+  // and its end, the pixels mean other cells now, and the selection is dropped instead of read on the new map.
+  const gestureKeyRef = useRef(null);
+  const gestureOnThisMap = useCallback(
+    () => rasterShown && gestureKeyRef.current === selectionKey, [rasterShown, selectionKey]);
+  const regionOnThisMap = useCallback((region) => {
+    if (gestureOnThisMap()) onRegionSelected?.(region);
+  }, [gestureOnThisMap, onRegionSelected]);
+  const regionHandler = hexMap ? regionOnThisMap : onRegionSelected;
+  // A line on screen was drawn on the previous result or raster.
+  useEffect(() => {
+    lineStartRef.current = null;
+    setLinePts(null);
+  }, [selectionKey]);
+
   const drag = useRectangleDrag({
     shape,
-    onRegion: onRegionSelected,
+    onRegion: regionHandler,
     contentBbox: activeBbox,
     // Pixel maths follows the zoom; the dashed box itself stays drawn in host
     // coordinates so it keeps sitting under the cursor.
     mapRect: () => mapRectNow(),
   });
+
+  const pickCell = useMemo(() => {
+    if (!onPixelClick) return undefined;
+    if (!hexMap) return onPixelClick;
+    return (i, j) => {
+      if (!rasterShown) return;
+      const cell = hexMap.cellAt(i, j);
+      if (cell) onPixelClick(cell.row, cell.col);
+    };
+  }, [onPixelClick, hexMap, rasterShown]);
 
   const onMouseMove = (e) => {
     if (!shape || !hostRef.current) return;
@@ -1356,7 +1401,11 @@ function CanvasInteractionLayer({
     }
     const mrect = mapRectNow();
     const out = mrect && pointerToRowCol(e, mrect, shape, activeBbox);
-    if (out) publish({ row: out.row, col: out.col, hovering: true, screenX: e.clientX, screenY: e.clientY });
+    if (out) {
+      publish({
+        row: out.row, col: out.col, hovering: rasterShown, screenX: e.clientX, screenY: e.clientY,
+      });
+    }
     setLensPos({ x: e.clientX - rect.left, y: e.clientY - rect.top });
     if (linescanMode && lineStartRef.current) {
       if (e.buttons === 0) {
@@ -1374,6 +1423,7 @@ function CanvasInteractionLayer({
     setLensPos(null);
   };
   const onMouseDown = (e) => {
+    gestureKeyRef.current = selectionKey;
     // Plain drag pans once zoomed in. Shift stays the ROI tool, and the
     // linescan tool keeps priority over both.
     if (!linescanMode && !e.shiftKey && e.button === 0 && zoomed && zoom) {
@@ -1384,7 +1434,8 @@ function CanvasInteractionLayer({
       const rect = hostRef.current.getBoundingClientRect();
       const mrect = mapRectNow();
       const out = mrect && pointerToRowCol(e, mrect, shape, activeBbox);
-      if (out) {
+      // (on a hexagonal scan only while the picture shown is the raster the pixel is read on)
+      if (out && rasterShown) {
         lineStartRef.current = { row: out.row, col: out.col, x: e.clientX - rect.left, y: e.clientY - rect.top };
         setLinePts({
           x0: lineStartRef.current.x, y0: lineStartRef.current.y,
@@ -1393,14 +1444,14 @@ function CanvasInteractionLayer({
       }
       return;
     }
-    drag.onPointerDown(e);
+    if (rasterShown) drag.onPointerDown(e);
   };
   const onMouseUp = (e) => {
     panRef.current = null;
     if (linescanMode && lineStartRef.current && hostRef.current && shape) {
       const mrect = mapRectNow();
       const end = mrect && pointerToRowCol(e, mrect, shape, activeBbox);
-      if (end) onLineComplete?.({ start: { row: lineStartRef.current.row, col: lineStartRef.current.col }, end });
+      if (end && (!hexMap || gestureOnThisMap())) onLineComplete?.({ start: { row: lineStartRef.current.row, col: lineStartRef.current.col }, end });
       lineStartRef.current = null;
       return;
     }
@@ -1413,7 +1464,7 @@ function CanvasInteractionLayer({
     if (!shape || !hostRef.current || !onPixelClick) return;
     const mrect = mapRectNow();
     const out = mrect && pointerToRowCol(e, mrect, shape, activeBbox);
-    if (out) onPixelClick(out.row, out.col);
+    if (out) pickCell(out.row, out.col);
   };
 
   return (
@@ -1442,8 +1493,8 @@ function CanvasInteractionLayer({
           bitmaps={bitmaps}
           errors={errors}
           shape={shape}
-          onPixelClick={onPixelClick}
-          onRegionSelected={onRegionSelected}
+          onPixelClick={pickCell}
+          onRegionSelected={regionHandler}
           minTileWidth={tileMinWidth}
           zoom={zoom}
           onTileContextMenu={onContextMenu
@@ -1522,18 +1573,36 @@ function CanvasInteractionLayer({
 // the CursorSyncProvider subtree (mounted in the page-level return); the
 // tooltip's screen-fixed position state stays local so 60Hz cursor moves
 // don't thrash the rest of the page.
-function HoverProbeLayer({ probe, error, requestProbe, clearProbe }) {
+export function HoverProbeLayer({ probe, error, requestProbe, clearProbe, hexMap = null }) {
   const [pos, setPos] = useState(null);
   useCursorSync((p) => {
-    if (!p.hovering) {
+    // The shared cursor position is a pixel of whatever raster the map is drawn on; the probe asks for a
+    // measurement point. None under a corner that no hexagon covers.
+    const cell = !p.hovering ? null : (hexMap ? hexMap.cellAt(p.row, p.col) : { row: p.row, col: p.col });
+    if (!cell) {
       setPos(null);
       clearProbe();
       return;
     }
     setPos({ x: p.screenX ?? 0, y: p.screenY ?? 0 });
-    requestProbe(p.row, p.col);
+    requestProbe(cell.row, cell.col);
   });
   return <PhaseMapProbeOverlay probe={probe} error={error} visible={pos !== null} pos={pos} />;
+}
+
+// The formats that hold a hexagonal scan resampled onto a square grid.
+const RESAMPLED_FORMATS = ['ctf', 'ang_square'];
+
+/**
+ * The line after "Save as…". A resampled file says so, with the grid it was written on (the header
+ * X-Orienta-Resampled of the answer); when the header did not arrive the line still says it was resampled,
+ * without a grid it cannot name.
+ */
+function savedLine(t, label, path, fmt, response) {
+  const resampled = readResampled(response);
+  if (resampled) return t('phasemap:info.savedResampled', { label, path, rows: resampled.rows, cols: resampled.cols });
+  if (RESAMPLED_FORMATS.includes(fmt)) return t('phasemap:info.savedResampledPlain', { label, path });
+  return t('phasemap:info.saved', { label, path });
 }
 
 // ---------------------------------------------------------------------------
@@ -1542,7 +1611,7 @@ function HoverProbeLayer({ probe, error, requestProbe, clearProbe }) {
 // theme/components.jsx so it feels like part of the dialog family. Esc and
 // click-outside cancel.
 // ---------------------------------------------------------------------------
-function SaveFormatPicker({ entry, onPick, onCancel }) {
+function SaveFormatPicker({ entry, hex = false, onPick, onCancel }) {
   const { t } = useTranslation('phasemap');
   useEffect(() => {
     if (!entry) return;
@@ -1617,6 +1686,20 @@ function SaveFormatPicker({ entry, onPick, onCancel }) {
             t('phasemap:save.angLine2'),
           ]}
         />
+        {hex && (
+          <>
+            <OptionCard
+              onClick={() => onPick(entry, 'ang_square')}
+              title={t('phasemap:save.angSquare')}
+              lines={[t('phasemap:save.angSquareLine1')]}
+            />
+            <OptionCard
+              onClick={() => onPick(entry, 'ctf')}
+              title={t('phasemap:save.ctf')}
+              lines={[t('phasemap:save.ctfLine1')]}
+            />
+          </>
+        )}
         <OptionCard
           onClick={() => onPick(entry, 'h5_light')}
           title={t('phasemap:save.h5Light')}
@@ -1725,7 +1808,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     }
   }, []);
 
-  const { t } = useTranslation(['phasemap', 'common']);
+  const { t } = useTranslation(['phasemap', 'common', 'ebsdviewer']);
   // Gallery state — subscribe to Zustand store for reactivity
   const indexingResult = useResultStore((s) => s.indexingResult);
   const indexingMethod = useResultStore((s) => s.indexingMethod);
@@ -1854,6 +1937,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     // A refined result is a second card next to its original; say so.
     r.is_refined ? t('phasemap:gallery.refined') : null,
     r.method || 'Indexing',
+    // Results of two variants of one file sit side by side and read the same otherwise.
+    (r.variant_parts || [])
+      .map((part) => (part === 'unprocessed' ? t('ebsdviewer:loadDialog.unprocessedTag') : part))
+      .join(' · ') || null,
     r.phases?.length > 0 ? r.phases.map((p) => (typeof p === 'object' ? p.name : p)).join(', ') : null,
     r.mean_ci != null ? `CI: ${r.mean_ci.toFixed(3)}` : null,
     `${r.n_indexed} px`,
@@ -1874,6 +1961,14 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     setResultList(list.map((r) => ({
       id: r.id, is_refined: !!r.is_refined, refinement_of: r.refinement_of ?? null,
     })));
+    // A chip made right after a run has no word for the variant yet: the list has it.
+    const namedByList = (e) => list.find((r) => r.id === e.result_id && r.variant_parts?.length > 0);
+    if (galleryRef.current.some((e) => namedByList(e) && e.label !== labelForResult(namedByList(e)))) {
+      setGallery((prev) => prev.map((e) => {
+        const r = namedByList(e);
+        return r ? { ...e, label: labelForResult(r) } : e;
+      }));
+    }
     const listed = new Set(list.map((r) => r.id));
     const gone = (e) => !!e.data?.is_refined && !!e.result_id && !listed.has(e.result_id);
     const before = galleryRef.current;
@@ -1992,6 +2087,39 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [cleanupModalSize, setCleanupModalSize] = useState(0); // 0 / 3 / 5
   const [cleanupApplying, setCleanupApplying] = useState(false);
   const [cleanupMsg, setCleanupMsg] = useState(null);
+  // The scan geometry of the result on screen (from /results, stamped when it ran): decides which
+  // layers the picker offers and whether the neighbour-based cleanup below can be used.
+  // null = unknown, which is not hexagonal.
+  const [activeScanGeometry, setActiveScanGeometry] = useState(null);
+  // The analysis dataset's geometry, from available-maps; only used while the dataset is what the routes
+  // draw (no result with a crystal map is active). `datasetGeometryAsof` names the picture and gallery
+  // entry the answer was read for.
+  const [datasetScanGeometry, setDatasetScanGeometry] = useState(null);
+  const [datasetGeometryAsof, setDatasetGeometryAsof] = useState(null);
+  const drawnScanGeometry = activeScanGeometry ?? datasetScanGeometry;
+  const hexMap = useMemo(() => makeHexMap(drawnScanGeometry), [drawnScanGeometry]);
+  // Names the raster including its origin and pixel size, so the layer stack re-checks what it holds when
+  // the raster changes without its size changing (a crop from an odd row), and not on a new object of the same.
+  const rasterId = hexMap
+    ? [hexMap.shape[0], hexMap.shape[1], hexMap.spec.factor, hexMap.spec.stepUm, hexMap.spec.x0, hexMap.spec.y0].join('|')
+    : '';
+  // Showing the page again asks available-maps again (another page may have changed the dataset meanwhile).
+  // The flag is set in the render that shows the page, not in the effect after it, so that nothing is judged
+  // against the old geometry in between; it is cleared by the answer.
+  const [wasActive, setWasActive] = useState(isActive);
+  const [geometryRereading, setGeometryRereading] = useState(false);
+  if (wasActive !== isActive) {
+    setWasActive(isActive);
+    if (isActive) setGeometryRereading(true);
+  }
+  // The geometry of a shown result is known with the result; the dataset's comes from available-maps and
+  // is stale from the moment the picture or the selected entry changes, or the page is shown again, until
+  // that answer is in.
+  const datasetGeometryPending = activeScanGeometry == null && (
+    !datasetGeometryAsof
+    || geometryRereading
+    || datasetGeometryAsof.mapImage !== mapImage
+    || datasetGeometryAsof.galleryIdx !== selectedGalleryIdx);
   const cleanupActive = (
     cleanupCI > 0 || cleanupUnc > 0 || cleanupMinCluster > 0
     || cleanupFillUnindexed || cleanupModalSize > 0
@@ -2031,7 +2159,15 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const layerStack = useLayerStack({ cleanupParams, resetSignal, frameSig,
                                      colorOverrides: phaseColorOverrides,
                                      resultId: shownResultId ?? null,
-                                     seedResultId: selectedEntryResultId });
+                                     seedResultId: selectedEntryResultId,
+                                     // every layer must be on the display raster of a hexagonal result;
+                                     // while the dataset's geometry is being re-read, a picture that does
+                                     // not fit proves nothing and is fetched again, not refused
+                                     expectedShape: hexMap ? hexMap.shape : null,
+                                     shapePending: datasetGeometryPending,
+                                     // ... and the raster an answer says it drew must be this one
+                                     rasterMatches: hexMap ? hexMap.matches : null,
+                                     rasterId });
 
   // ----- add-on maps handed over from the Add-ons page -----
   // A queue, drained here and emptied. Not a mirror of the stack: state held
@@ -2102,6 +2238,20 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // The indexed region of the result on screen, as the backend reports it.
   // Null for a full-scan run — then nothing is cropped, exactly as before.
   const [activeRoiBbox, setActiveRoiBbox] = useState(null);
+  // The indexed region and the hover marker, in the pixels of the raster the map is drawn on.
+  const roiFrame = useMemo(() => (
+    hexMap && activeRoiBbox
+      ? hexMap.boxToPixels({ row0: activeRoiBbox.y, col0: activeRoiBbox.x, rows: activeRoiBbox.h, cols: activeRoiBbox.w })
+      : activeRoiBbox
+  ), [hexMap, activeRoiBbox]);
+  const hoverMarker = useMemo(() => {
+    if (!hoverPixel || !hexMap) return hoverPixel;
+    // The ring sits on the exact centre of the cell, as a fractional pixel position (the canvas adds the half
+    // pixel itself). The whole pixel that holds the centre (`hexMap.pixelOf`) can be half a pixel off, which at
+    // the coarse factors of a large scan is up to half a step: on the neighbouring hexagon.
+    const f = hexMap.fractionOf(hoverPixel.row, hoverPixel.col);
+    return { row: f.fy * hexMap.shape[0] - 0.5, col: f.fx * hexMap.shape[1] - 0.5 };
+  }, [hoverPixel, hexMap]);
   // (backendResultId — the backend's answer to "which result is on screen" —
   // is declared at the top of the component, beside the result store read.)
   // Wheel zoom for the map. One store serves both views: the stacked composite
@@ -2119,13 +2269,40 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     () => layerStack.layers.filter((l) => l.visible).map((l) => l.id),
     [layerStack.layers],
   );
-  const linescan = usePhaseMapLinescan({ layerIds: visibleLayerIds });
+  const linescan = usePhaseMapLinescan({ layerIds: visibleLayerIds, nSamples: LINE_SAMPLES });
+
+  // A rectangle or a line on a hexagonal map is kept as index-space results (statistics, a profile) that are
+  // only true for the result and raster they were asked on: when either changes they go, and so does an answer
+  // that is still on its way (clear() drops it).
+  const selectionKey = hexMap ? `${shownResultId ?? ''}|${rasterId}` : null;
+  const selectionKeyRef = useRef(selectionKey);
+  const clearRegionStats = regionStats.clear;
+  const clearLinescan = linescan.clear;
+  useEffect(() => {
+    if (selectionKeyRef.current === selectionKey) return;
+    selectionKeyRef.current = selectionKey;
+    clearRegionStats();
+    clearLinescan();
+  }, [selectionKey, clearRegionStats, clearLinescan]);
 
   const onSwipeChange = useCallback((next) => setSwipe((s) => ({ ...s, ...next })), []);
-  const onLineComplete = useCallback(({ start, end }) => linescan.fetchProfile(start, end), [linescan]);
+  const onLineComplete = useCallback(({ start, end }) => {
+    if (!hexMap) return linescan.fetchProfile(start, end);
+    // A straight line on the raster is a straight line on the sample: the scan points under it, not a line
+    // between two cells of the index grid (whose rows are not evenly spaced on a hexagonal scan).
+    return linescan.fetchPoints(
+      hexMap.line({ i: start.row, j: start.col }, { i: end.row, j: end.col }, LINE_SAMPLES));
+  }, [linescan, hexMap]);
   const onRegionSelected = useCallback(({ rowStart, rowEnd, colStart, colEnd }) => {
-    regionStats.fetchStats({ row: rowStart, col: colStart }, { row: rowEnd, col: colEnd });
-  }, [regionStats]);
+    if (!hexMap) {
+      regionStats.fetchStats({ row: rowStart, col: colStart }, { row: rowEnd, col: colEnd });
+      return;
+    }
+    // The dragged rectangle is a physical rectangle: the cells whose centres it contains, as a box and a mask.
+    const selection = hexMap.selection('rect', [{ i: rowStart, j: colStart }, { i: rowEnd, j: colEnd }]);
+    if (selection) regionStats.fetchMasked(selection);
+    else regionStats.clear();
+  }, [regionStats, hexMap]);
 
   // useLayerStack doesn't expose `shape`. Derive it from the first available
   // bitmap: ImageBitmap dimensions are the natural shape of the layer grid
@@ -2189,7 +2366,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       return (
         <div style={{ padding: '4px 2px', display: 'flex', flexDirection: 'column', gap: 5 }}>
           <label
-            style={{ fontSize: '8.5pt', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+            style={{ fontSize: '8.5pt', color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 6,
+                     cursor: 'pointer' }}
             title={t('phasemap:ipfStabilize.tip')}
           >
             <input
@@ -2366,6 +2544,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         const shown = pickShown(rs);
         noteResults(rs);
         setBackendResultId(shown?.id ?? null);
+        setActiveScanGeometry(parseScanGeometry(shown?.scan_geometry));
       })
       .catch(() => { if (!cancelled) setBackendResultId(null); });
     return () => { cancelled = true; };
@@ -2471,6 +2650,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         reason: (viewingRefined && refinementOnOriginal)
           ? t('phasemap:layers.gateRefinedView') : t('phasemap:layers.gateRefHint'),
       },
+      // the geometry that is drawn (the result's, else the Analysis dataset's): the backend refuses KAM and
+      // GOS by that one
+      squareGrid: { ok: !isHexScan(drawnScanGeometry), reason: t('phasemap:layers.gateHexGrid') },
       // No gate on the provenance layer. The "grain_" id prefix identifies the
       // results the per-grain assignment produced here, but a result exported
       // and re-imported keeps the provenance and loses the prefix — and hiding
@@ -2478,7 +2660,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     };
   }, [originalResultId, backendResultId,
       analysisLoaded, resultLayerDrew, ebsdLoaded, sourceLink.linked, sourceLink.reason,
-      diagnosticsGate, refinementGate, viewingRefined,
+      diagnosticsGate, refinementGate, drawnScanGeometry, viewingRefined,
       diagnosticsOnOriginal, refinementOnOriginal, t]);
 
   // Build the "Add Layer" dropdown options (static + dynamic, dedup'd)
@@ -2567,6 +2749,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // back to the Indexing page. Re-reads whenever the active result/file
   // changes; falls back to "not shown" on any error.
   const [pcValue, setPcValue] = useState(null);
+  const [pcIsMean, setPcIsMean] = useState(false);
   useEffect(() => {
     let cancelled = false;
     pcApi.detectorInfo()
@@ -2576,8 +2759,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         setPcValue(
           d?.has_detector && Array.isArray(d.pc) && d.pc.length === 3 ? d.pc : null,
         );
+        // With a per-pixel PC map the three numbers are the map's mean.
+        setPcIsMean(d?.pc_basis === 'mean');
       })
-      .catch(() => { if (!cancelled) setPcValue(null); });
+      .catch(() => { if (!cancelled) { setPcValue(null); setPcIsMean(false); } });
     return () => { cancelled = true; };
   }, [resetSignal]);
 
@@ -2609,8 +2794,20 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [stepX, setStepX] = useState(1.0);
   const [stepY, setStepY] = useState(1.0);
   const [stepConfirmed, setStepConfirmed] = useState(false);
-  /** The step to quote in micrometres, or null when there is nothing to quote. */
-  const knownStepX = stepConfirmed && stepX > 0 ? stepX : null;
+  /**
+   * The size of one map pixel in micrometres, or null when there is nothing to quote.
+   *
+   * On a hexagonal map that is the pixel of the display raster, taken from the scan geometry stamped on the
+   * map itself (the scan step over the raster factor, the `step_um` the backend reports for what it drew).
+   * It does not come from the step of the loaded file: two measurements of one session may have different
+   * steps, and the map shown is the one that counts. The scale bar, the annotation scale bar and the exports
+   * measure display pixels, so they all follow. When the file did not state the step, the geometry carries a
+   * placeholder: it is not quoted as a length (nothing is invented), the same as an unconfirmed step on a
+   * square scan.
+   */
+  const knownStepX = hexMap
+    ? (hexMap.geometry.stepsKnown ? hexMap.umPerPx : null)
+    : (stepConfirmed && stepX > 0 ? stepX : null);
 
   /**
    * Micrometres per pixel of ONE layer's own bitmap, or null.
@@ -2840,9 +3037,30 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // least the 5 base modes, and if the user switches to an entry without
   // per-phase data we WANT the dropdown to collapse back to 5 items, not
   // linger on the previous 8.
+  // The question last asked and the page state it was asked in. An answer for an earlier question must not
+  // replace the one for the current: it would give the map the geometry of a dataset that is no longer shown.
+  // (A counter rather than a flag per effect run, so that leaving the page, which does not ask again, does not
+  // throw away an answer that is still on its way.)
+  const mapsQuestionRef = useRef({ no: 0, mapImage, galleryIdx: selectedGalleryIdx, isActive });
+  useEffect(() => () => { mapsQuestionRef.current.no += 1; }, []);
   useEffect(() => {
+    // Showing the page again asks again (`isActive` is a dependency): another page may have changed the
+    // dataset while this one stayed mounted. Leaving it does not: nothing has changed that the page shown
+    // last would not already know.
+    const last = mapsQuestionRef.current;
+    const leaving = last.isActive && !isActive
+      && last.mapImage === mapImage && last.galleryIdx === selectedGalleryIdx;
+    mapsQuestionRef.current = { ...last, mapImage, galleryIdx: selectedGalleryIdx, isActive };
+    if (leaving) return undefined;
+    const asked = ++mapsQuestionRef.current.no;
+    const cancelledNow = () => mapsQuestionRef.current.no !== asked;
+    const asof = { mapImage, galleryIdx: selectedGalleryIdx };
     phaseMapApi.availableMaps()
       .then((res) => {
+        if (cancelledNow()) return;
+        setDatasetScanGeometry(parseScanGeometry(res.data?.dataset_scan_geometry));
+        setDatasetGeometryAsof(asof);
+        setGeometryRereading(false);
         const maps = res.data?.maps ?? [];
         const modes = maps.length > 0
           ? maps.map((m) => ({
@@ -2860,8 +3078,15 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           setDisplayMode('phase');
         }
       })
-      .catch(() => { setAvailableModes(BASE_DISPLAY_MODES); });
-  }, [mapImage, selectedGalleryIdx]); // eslint-disable-line react-hooks/exhaustive-deps
+      .catch(() => {
+        if (cancelledNow()) return;
+        setDatasetScanGeometry(null);
+        setDatasetGeometryAsof(asof);
+        setGeometryRereading(false);
+        setAvailableModes(BASE_DISPLAY_MODES);
+      });
+    return undefined;
+  }, [mapImage, selectedGalleryIdx, isActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------------------------------------------------------------------------
   // Handlers (defined before useEffects that reference them)
@@ -2897,7 +3122,16 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     }
   }, [forwardNccState.bandwidth]);
 
+  // Counts the preview requests. Several callers can fire one in quick succession (a result switch
+  // calls it from the handler that switches, and again once the new settings have rendered), and
+  // their answers do not arrive in the order they left: only the newest request may touch the image,
+  // the error or the loading flag, otherwise an answer to a request that was already replaced can put
+  // an error over the map that the newer request has drawn.
+  const previewRequestRef = useRef(0);
+
   const handleRefreshPreview = useCallback(async () => {
+    const requestNo = ++previewRequestRef.current;
+    const isLatest = () => previewRequestRef.current === requestNo;
     // Phase B: Forward-NCC has its own load path
     if (displayMode === 'forward_ncc') {
       setMapLoading(true);
@@ -2959,20 +3193,23 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           ? JSON.stringify(phaseColorOverrides)
           : undefined,
       });
+      if (!isLatest()) return;
       const img = res.data?.image || res.data?.image_base64 || null;
       if (img) {
         setMapImage(img);
+        setMapError(null);
         setInfoText('');
       } else {
         setMapError(t('phasemap:info.noImageReturned'));
         setInfoText(t('phasemap:info.noPhaseMapAvailable'));
       }
     } catch (err) {
+      if (!isLatest()) return;
       const msg = problemText(err, t, 'phasemap') || t('phasemap:info.renderFailed');
       setMapError(msg);
       setInfoText(msg);
     } finally {
-      setMapLoading(false);
+      if (isLatest()) setMapLoading(false);
     }
   }, [displayMode, showScalebar, sbPosition, sbLength, sbFontSize,
       sbBarColor, sbBoxColor, sbBoxAlpha, showLegend, showIpfKeys, mapTitle,
@@ -3046,22 +3283,44 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // result, and /render, /layer and /phase-stats all answer for that one. A
   // highlighted chip whose result was never activated shows the previous
   // result's map — which is what "I have to click it myself" looked like.
+  //
+  // An activation can load the result's file, or another variant of the open one. The stores, the
+  // header and the viewer then have to follow, as after a switch in the header; the path alone does
+  // not tell, the same file has the same path. `loaded` is the load answer, when there is one.
+  const followBackendFile = useCallback(async (loaded) => {
+    // A load in flight sets all of this itself, and the backend ends on that file.
+    if (isFileLoadInFlight()) return;
+    const store = useDataStore.getState();
+    await store.syncFromBackend({ force: true });
+    if (loaded) {
+      store.setFileData(loaded);
+      if (store.ebsdInfo) store.setEBSDLoaded(loaded);
+    }
+    await useLoadedFilesStore.getState().refresh();
+    store.noteFileChangedElsewhere();
+  }, []);
+
   const activateEntry = useCallback(async (entry) => {
     if (!entry) return;
     try {
       if (entry.result_id) {
         const resp = await indexApi.activateResult(entry.result_id);
-        if (resp?.data?.auto_switched_file) await syncFromBackend();
+        if (resp?.data?.reloaded) await followBackendFile(resp.data.reloaded);
       } else if (entry.data?.source_path) {
         await indexApi.deactivateResult().catch(() => {});
         await analysisApi.load(entry.data.source_path);
       }
     } catch (err) {
       console.warn('[PhaseMap] activating result failed:', err);
-      const detail = err?.response?.data?.detail || err?.message || 'unknown error';
+      const detail = problemText(err, t, 'phasemap') || 'unknown error';
       toast.error(t('phasemap:errors.couldntLoadResult', { detail }));
+      // The result's file opened as another variant: the viewer on the backend now shows that other
+      // one (and says so in the text above), so the stores and the header must show it too.
+      if (problemCode(err) === 'loadCameUpAsOther') {
+        try { await followBackendFile(); } catch (syncErr) { console.warn('[PhaseMap] sync after a changed variant failed:', syncErr); }
+      }
     }
-  }, [syncFromBackend, t]);
+  }, [followBackendFile, t]);
 
   // Activate, then repaint — in that order, so the canvas fetches against the
   // result that is now current instead of racing the activation.
@@ -3083,6 +3342,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       const results = res.data?.results || [];
       const shown = pickShown(results);
       setActiveRoiBbox(shown?.roi_bbox ?? null);
+      setActiveScanGeometry(parseScanGeometry(shown?.scan_geometry));
       noteResults(results);
       setBackendResultId(shown?.id ?? null);
       if (shown?.id) {
@@ -3095,6 +3355,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       }
     } catch {
       setActiveRoiBbox(null);
+      setActiveScanGeometry(null);
     }
     setBackendSyncTick((tick) => tick + 1);
     handleRefreshPreview();
@@ -3134,6 +3395,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         const shown = pickShown(results);
         noteResults(results);
         setBackendResultId(shown?.id ?? null);
+        setActiveScanGeometry(parseScanGeometry(shown?.scan_geometry));
         if (shown?.id === storeRefinedId) setBackendSyncTick((tick) => tick + 1);
       })
       .catch(() => {});
@@ -3152,7 +3414,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         if (cancelled) return;
         const results = res.data?.results || [];
         noteResults(results);
-        setBackendResultId(pickShown(results)?.id ?? null);
+        const shown = pickShown(results);
+        setBackendResultId(shown?.id ?? null);
+        setActiveScanGeometry(parseScanGeometry(shown?.scan_geometry));
         // The result on screen may have been replaced under a new id.
         setBackendSyncTick((tick) => tick + 1);
       })
@@ -3244,7 +3508,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       const newEntries = toAdd.map((r) => ({
         id: Date.now() + Math.random(),
         label: r.label,
-        data: { phases: r.phases, mean_ci: r.mean_ci, n_indexed: r.n_indexed, result_id: r.result_id },
+        data: { phases: r.phases, mean_ci: r.mean_ci, n_indexed: r.n_indexed, result_id: r.result_id,
+          scan_geometry: r.scan_geometry },
         result_id: r.result_id,
       }));
       return [...prev, ...newEntries];
@@ -3297,6 +3562,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           // Nothing stored any more (backend restart, results cleared) — say
           // so, or the picker keeps offering layers against a dead id.
           setBackendResultId(null);
+          setActiveScanGeometry(null);
           return;
         }
 
@@ -3327,6 +3593,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           // The region the run covered, straight from the backend. Everything
           // on the map is framed by it, so a region run reads like a full one.
           setActiveRoiBbox(shown.roi_bbox ?? null);
+          setActiveScanGeometry(parseScanGeometry(shown.scan_geometry));
           const idx = merged.findIndex((e) => e.result_id === shown.id);
           if (idx >= 0) setSelectedGalleryIdx((cur) => (cur === idx ? cur : idx));
           return merged[idx];
@@ -3347,6 +3614,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
 
         // Nothing active: no indexing result is shown.
         setBackendResultId(null);
+        setActiveScanGeometry(null);
         // A result that is merely stored needs activating.
         //
         // But activating a result AUTO-SWITCHES the loaded file to that
@@ -3363,7 +3631,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         ebsdApi.info()
           .then((info) => {
             if (cancelled) return;
-            if (wouldSwitchFile(candidate.source_file, info?.data?.file_path)) {
+            const openFile = info?.data?.file_path || info?.data?.open_file;
+            if (wouldSwitchFile(candidate.source_file, openFile, candidate.activation_loads)) {
               handleRefreshPreview();
             } else {
               adoptEntry(showChipOf(candidate));
@@ -3564,6 +3833,16 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // handleSaveWithFormat() with one of 'ang' / 'h5_light' / 'h5'. Split so
   // the existing keyboard-shortcut / programmatic callers don't have to
   // know about the picker.
+  // The geometry stamped on the result a chip stands for. The chip's own record has it when it came from
+  // the result list, from an import or from a run; a chip without one is the result on screen or unknown.
+  // Unknown is not hexagonal, so the resampled formats are not offered.
+  const entryScanGeometry = (entry) => {
+    if (!entry) return null;
+    if (entry.data?.scan_geometry !== undefined) return parseScanGeometry(entry.data.scan_geometry);
+    if (entry.result_id && entry.result_id === backendResultId) return activeScanGeometry;
+    return null;
+  };
+
   const handleGallerySave = async () => {
     if (gallery.length === 0) return;
     if (selectedGalleryIdx < 0) {
@@ -3583,6 +3862,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // accepts the dialog default.
   const SAVE_FORMAT_DEFAULTS = {
     ang:       { ext: 'ang', tail: '.ang',       filterName: t('phasemap:save.filterAng')     },
+    // a hexagonal scan resampled onto a square grid; the name tells it from the .ang as measured
+    ang_square: { ext: 'ang', tail: '_square.ang', filterName: t('phasemap:save.filterAngSquare') },
+    ctf:       { ext: 'ctf', tail: '.ctf',       filterName: t('phasemap:save.filterCtf')     },
     h5_light:  { ext: 'h5',  tail: '_light.h5',  filterName: t('phasemap:save.filterH5Light')  },
     h5:        { ext: 'h5',  tail: '.h5',        filterName: t('phasemap:save.filterH5Rich')   },
   };
@@ -3607,7 +3889,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       });
       if (!targetPath) { setInfoText(t('phasemap:info.saveCancelled')); return; }
     } else {
-      const fmtLabel = fmt === 'h5_light' ? t('phasemap:save.h5Light') : (fmt === 'h5' ? t('phasemap:save.h5Rich') : t('phasemap:save.ang'));
+      const fmtLabel = {
+        h5_light: t('phasemap:save.h5Light'), h5: t('phasemap:save.h5Rich'),
+        ang_square: t('phasemap:save.angSquare'), ctf: t('phasemap:save.ctf'),
+      }[fmt] || t('phasemap:save.ang');
       targetPath = await new Promise((resolve) => {
         askPrompt({
           title: t('phasemap:save.promptTitle', { format: fmtLabel }),
@@ -3634,14 +3919,22 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
       targetPath = targetPath + '.' + spec.ext;
     }
     try {
-      await indexApi.activateResult(entry.result_id);
-      await api.post('/api/indexing/export', {
+      const resp = await indexApi.activateResult(entry.result_id);
+      if (resp?.data?.reloaded) await followBackendFile(resp.data.reloaded);
+      const saved = await api.post('/api/indexing/export', {
         format: fmt, filename: targetPath, include_eds: true, include_detector: true,
       }, { responseType: 'blob' });
-      setInfoText(t('phasemap:info.saved', { label: entry.label, path: targetPath }));
+      const savedText = savedLine(t, entry.label, targetPath, fmt, saved);
+      setInfoText(savedText);
+      // The info line shows only while no map is drawn; what the file is must reach the reader anyway.
+      if (RESAMPLED_FORMATS.includes(fmt)) toast.info(savedText, 12000);
     } catch (err) {
-      const msg = problemText(err, t, 'phasemap') || 'export failed';
+      // A blob request: a refusal's body is a Blob, so read the code from the header or the JSON in it.
+      const msg = (await blobProblemText(err, t, 'phasemap')) || 'export failed';
       setInfoText(t('phasemap:info.saveFailed', { msg }));
+      // The info line shows only while no map is drawn; a refusal (a result that is not from a
+      // hexagonal scan, a one-row grid, a shift that cannot be used) must reach the reader anyway.
+      toast.error(t('phasemap:info.saveFailed', { msg }));
     }
   };
 
@@ -3705,6 +3998,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             shape: d.shape,
             capabilities: caps,
             ebsd_signal_loaded: !!d.ebsd_signal_loaded,
+            // the geometry the file states: the save picker offers the resampled formats from it
+            scan_geometry: d.scan_geometry ?? null,
           },
         };
         setGallery((prev) => {
@@ -3727,6 +4022,10 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         if (caps.eds) features.push('EDS');
         if (caps.electron_image) features.push('electron images');
         setInfoText(t('phasemap:info.loaded', { name: fileName, features: features.join(', ') || t('phasemap:info.noRecognisedData') }));
+        // What the PC is now for the loaded file (a typed PC restored, the file's own PC
+        // winning, an export whose /Detector/pc the header overruled, none at all): the same
+        // notice the viewer gives for a load.
+        announceImportedPc(d, t, toast);
       } else {
         // .ang / .ctf — go through the legacy analysis-only path. These
         // formats only carry orientations; no /1/EBSD or /1/EDS to wire.
@@ -3993,7 +4292,9 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           <CanvasInteractionLayer
             onContextMenu={(x, y, layer) => setMapMenu({ x, y, layer })}
             zoom={zoom}
-            roiBbox={activeRoiBbox}
+            roiBbox={roiFrame}
+            hexMap={hexMap}
+            selectionKey={selectionKey}
             onContentBbox={setMapContentBbox}
             wheelHostRef={mapContainerRef}
             view={view}
@@ -4014,7 +4315,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
             }}
             title={cleanView ? null : effectiveTitle}
             stepX={knownStepX}
-            hoverPixel={hoverPixel}
+            hoverPixel={hoverMarker}
             onPixelClick={(r, c) => {
               // Drive the existing Pattern Matches dialog flow when a user
               // clicks a pixel \u2014 surface the same affordance as anomaly-browser
@@ -4510,6 +4811,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         }}>
           <span style={{ color: colors.accent, fontWeight: 600 }}>{t('phasemap:pc.label')}</span>
           {t('phasemap:pc.value', { x: pcValue[0].toFixed(3), y: pcValue[1].toFixed(3), z: pcValue[2].toFixed(3) })}
+          {pcIsMean ? t('phasemap:pc.mapMean') : ''}
         </div>
       )}
 
@@ -4669,7 +4971,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         </div>
 
         <label style={{
-          display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', gap: 6,
+          cursor: 'pointer',
           marginTop: 6, fontSize: '10pt', color: colors.text,
         }} title={t('phasemap:cleanup.fillUnindexedTooltip')}>
           <input
@@ -4729,7 +5032,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
                 // mounted) — kept so both renderings stay in step.
                 handleRefreshPreview();
               } catch (err) {
-                const msg = err.response?.data?.detail || err.message || t('phasemap:cleanup.applyFailed');
+                const msg = problemText(err, t, 'phasemap') || t('phasemap:cleanup.applyFailed');
                 setCleanupMsg({ kind: 'err', text: msg });
               } finally {
                 setCleanupApplying(false);
@@ -4903,7 +5206,11 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         <FormRow label={t('phasemap:annotationCalibration.stepX')}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <NumberInput
-              value={stepX}
+              // On a hexagonal map the step is the map's own (see knownStepX): the field shows it and is
+              // locked, since a typed number would change nothing on screen. A step the file did not
+              // state is a placeholder in the geometry and is not shown.
+              value={hexMap ? (hexMap.geometry.stepsKnown ? hexMap.geometry.stepX : '') : stepX}
+              disabled={!!hexMap}
               // Typing a step is the user vouching for it — from here on it is
               // a real calibration and the scale bar may quote it.
               onChange={(e) => { setStepX(Number(e.target.value)); setStepConfirmed(true); }}
@@ -4911,7 +5218,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
               max={1000}
               step={0.1}
               style={{ width: 80 }}
-              title={t('phasemap:hoverTips.stepX')}
+              title={hexMap ? t('phasemap:annotationCalibration.stepHintHex') : t('phasemap:hoverTips.stepX')}
             />
             <Label small secondary>{t('phasemap:annotationCalibration.micron')}</Label>
           </div>
@@ -4919,19 +5226,20 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         <FormRow label={t('phasemap:annotationCalibration.stepY')}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <NumberInput
-              value={stepY}
+              value={hexMap ? (hexMap.geometry.stepsKnown ? hexMap.geometry.stepY : '') : stepY}
+              disabled={!!hexMap}
               onChange={(e) => { setStepY(Number(e.target.value)); setStepConfirmed(true); }}
               min={0.001}
               max={1000}
               step={0.1}
               style={{ width: 80 }}
-              title={t('phasemap:hoverTips.stepY')}
+              title={hexMap ? t('phasemap:annotationCalibration.stepHintHex') : t('phasemap:hoverTips.stepY')}
             />
             <Label small secondary>{t('phasemap:annotationCalibration.micron')}</Label>
           </div>
         </FormRow>
         <Label small secondary style={{ display: 'block' }}>
-          {t('phasemap:annotationCalibration.stepHint')}
+          {hexMap ? t('phasemap:annotationCalibration.stepHintHex') : t('phasemap:annotationCalibration.stepHint')}
         </Label>
       </CollapsibleGroup>
 
@@ -5066,6 +5374,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
         <PromptDialog {...promptProps} />
         <SaveFormatPicker
           entry={saveFormatPickerEntry}
+          hex={isHexScan(entryScanGeometry(saveFormatPickerEntry))}
           onPick={handleSaveWithFormat}
           onCancel={() => setSaveFormatPickerEntry(null)}
         />
@@ -5103,6 +5412,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
           error={probeError}
           requestProbe={requestProbe}
           clearProbe={clearProbe}
+          hexMap={hexMap}
         />
 
         {/* Right-click export for the map itself */}

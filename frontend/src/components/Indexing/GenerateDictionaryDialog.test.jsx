@@ -248,3 +248,17 @@ describe('the backend radio names the device it will actually use', () => {
     expect(gpuRadio()).not.toBeNull();
   });
 });
+
+describe('a file without a pattern centre', () => {
+  it('shows the translated sentence of the pc_missing code, not the English prose', async () => {
+    generate.mockRejectedValue({
+      response: { status: 400, headers: { 'x-orienta-code': 'pc_missing' },
+                  data: { detail: 'ENGLISH PROSE FROM THE BACKEND' } },
+      message: 'Request failed with status code 400',
+    });
+    renderDialog({ pc: [0.5, 0.5, 0.5] });
+    fireEvent.click(screen.getByText('Generate'));
+    expect(await screen.findByText(/carries no pattern centre/)).toBeTruthy();
+    expect(screen.queryByText(/ENGLISH PROSE/)).toBeNull();
+  });
+});

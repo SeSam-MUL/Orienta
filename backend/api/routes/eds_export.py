@@ -37,6 +37,8 @@ from backend.api.services.eds_export import (
     write_export,
 )
 from backend.api.services.eds_particles import CONNECTIVITY, find_particles
+from backend.api.problem import problem
+from backend.api.services.load_choices import LoadChoiceError
 from backend.api.services.phase_map_store import get_phase_map_store
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,11 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 def _state_or_400():
+    # The export pairs this map with the at-% maps of the loaded measurement: it must be that
+    # measurement's map and not the one left behind by a switch (the load normally does it; this is
+    # the last place before the two meet).
+    from backend.api.services.h5_session import sync_phase_map_store
+    sync_phase_map_store()
     state = get_phase_map_store().get_state()
     if state is None:
         raise HTTPException(
@@ -67,12 +74,21 @@ def _step_um():
     return _eds_step_um()
 
 
+def _active_variant(file_path: Optional[str]):
+    if not file_path:
+        return None
+    from backend.api.routes.ebsd_viewer import active_variant
+    return active_variant(file_path)
+
+
 def _geometry(state, file_path: Optional[str]) -> ExportGeometry:
     step_x, step_y = _step_um()
     return ExportGeometry(
         n_rows=int(state.n_rows), n_cols=int(state.n_cols),
         step_x_um=step_x, step_y_um=step_y,
         source_path=file_path,
+        # the measurement the viewer holds, when file_path is its file
+        source_variant=_active_variant(file_path),
     )
 
 
@@ -531,6 +547,9 @@ async def export(req: ExportRequest):
         result = write_export(tables, dest, options=opts, source_path=file_path)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except LoadChoiceError as exc:
+        # a ValueError too, so it must come first: the measurement the viewer holds is not in the file
+        raise problem(400, exc.code, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:                                   # pragma: no cover

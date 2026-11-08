@@ -127,8 +127,11 @@ def test_resolving_twice_changes_nothing():
 
 
 @pytest.mark.parametrize("n", [n for n in range(1, 231)
-                               if cs.monoclinic_class_of_space_group(n) is None])
+                               if cs.monoclinic_class_of_space_group(n) is None
+                               and n not in cs.TRIGONAL_Y_SETTING_SPACE_GROUPS])
 def test_every_other_space_group_is_returned_exactly_as_orix_does(n):
+    # Not the monoclinic ones (b-unique group) and not the seven trigonal ones
+    # (two-fold axes along Y); see tests/test_crystal_symmetry_trigonal.py.
     got = frame_symmetry(space_group=n)
     ref = get_point_group(n)
     assert got is ref

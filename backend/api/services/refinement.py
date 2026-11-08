@@ -1,9 +1,9 @@
 """Joint R+PC refinement service — Stage 1 (per-pixel LM), Stage 2 (smoothness
-solve), Stage 3 (R-only). See spec
-docs/superpowers/specs/2026-05-14-joint-r-pc-refinement-design.md
+solve), Stage 3 (R-only).
 """
 from __future__ import annotations
 
+import copy
 import logging
 import threading
 import uuid
@@ -38,7 +38,7 @@ from backend.api.services import state_version
 logger = logging.getLogger(__name__)
 
 
-# Stage 1 hyperparameters (spec section 4.3)
+# Stage 1 hyperparameters
 STAGE1_MAX_ITER = 20
 STAGE1_LM_INIT = 1e-2
 STAGE1_TOL_ABS = 1e-5
@@ -65,7 +65,7 @@ JOB_REGISTRY: "OrderedDict[str, RefinementJob]" = OrderedDict()
 class RefinementJob:
     """Tracks one in-flight or finished compute_full_refinement call.
 
-    Lives in module-level JOB_REGISTRY (LRU cap 8). Mirrors the Phase A
+    Lives in module-level JOB_REGISTRY (LRU cap 8). Mirrors the
     DiagnosticsJob pattern but with multi-stage progress.
     """
 
@@ -453,10 +453,10 @@ def refine_per_pixel(
         delta_r = (r.detach() - r_new).abs()
         step_norm = torch.linalg.vector_norm(step_clipped.detach(), dim=-1)
         converged_now = (delta_r < STAGE1_TOL_ABS) | (step_norm < STAGE1_TOL_STEP)
-        # Save last Jacobian PC column for newly-deactivating pixels. Phase B
-        # v1.5: this is the frozen finite-difference J_p (we replaced the
-        # broken autograd PC columns above), so the value handed off to
-        # Stage 2 is the genuine ∂r/∂PC at the LM start point.
+        # Save last Jacobian PC column for newly-deactivating pixels. This is
+        # the frozen finite-difference J_p (we replaced the broken autograd PC
+        # columns above), so the value handed off to Stage 2 is the genuine
+        # ∂r/∂PC at the LM start point.
         last_J_p[idx_active] = J.detach()[:, 3:]
 
         deactivate = converged_now & accept
@@ -588,7 +588,7 @@ def solve_smooth_pc(
 
 
 STAGE3_MAX_ITER = 30  # raised from 10 -- the per-pixel serial render path
-                      # (Bug 1 fix) introduces enough LM step-size churn that
+                      # introduces enough LM step-size churn that
                       # 10 iterations of the bounded LM rarely reaches the
                       # spec's step-norm tolerance on real HiGainNi data.
 
@@ -736,6 +736,10 @@ _RUN_METADATA_OF_THE_PARENT = (
     "multi_phase", "n_phases",
     "dictionary", "dict_path", "signal", "metric", "keep_n",
     "step_size_um", "recorded_lattices",
+    # The vendor of the file the run read its patterns from (``""`` included): the exports put the
+    # Euler angles into that vendor's frame. Without it the child of an Oxford result exports as
+    # "vendor unknown" whenever another file is open, a quarter turn away from its parent.
+    "source_vendor",
 )
 
 
@@ -1270,12 +1274,19 @@ def compute_full_refinement(
     # same measurement. Copied off the parent rather than left to
     # _store_result's setdefault, which reads the crop LIVE — clear or change
     # the crop between indexing and refining and parent and child would report
-    # different origins for the very same pixels.
+    # different origins for the very same pixels. The grid the pixels sit on follows the same
+    # rule (``scan_geometry``, ``hex_resampled``): copied from the parent, and None (unknown)
+    # when the parent carries none - never the geometry of whatever dataset is live now, which
+    # would stamp a hexagonal result as square or the reverse. The patterns it ran on follow the
+    # same rule (``load_variant``, ``indexed_variant``): the parent's, never the variant loaded now.
     parent_meta = getattr(result, "metadata", None)
     if not isinstance(parent_meta, dict):
         parent_meta = {}
     for _key, _default in ind_routes.NO_SCAN_OFFSET.items():
         refined_result.metadata[_key] = parent_meta.get(_key, _default)
+    for _key in ("scan_geometry", "hex_resampled", "load_variant", "indexed_variant"):
+        refined_result.metadata[_key] = copy.deepcopy(parent_meta.get(_key))
+    ind_routes._seed_variant_stamp(refined_result, ind_routes._stored_variant(refined_result))
     # Same file as its parent as well: _store_result would otherwise tag it
     # with whatever file is loaded at this moment, and the file-switch
     # re-activation and the gallery route by this tag.
@@ -1393,6 +1404,9 @@ def compute_full_refinement(
     from backend.api.services.citations.provenance import (
         merge_provenance, record_step,
     )
+    # Not carried: ``metadata["caveats"]`` (hough_caveats). Only a Hough run writes
+    # them, and a Hough result is refused at the top of this function, so a
+    # parent here has none.
     merge_provenance(refined_result, [result])
     record_step(refined_result, "refinement.joint_r_pc", {
         "orienta_version": get_version_info().get("version"),

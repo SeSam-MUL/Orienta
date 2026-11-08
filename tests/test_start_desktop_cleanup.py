@@ -30,9 +30,12 @@ def _free_port() -> int:
     launcher's identity check exists to prevent. A free port plus an owner that
     must belong to the spawned tree (`_wait_for_owner`) rule that out.
 
-    The band stays near 8137 on purpose: on a Windows 11 build (26300) psutil
-    listed a listener on 18100 and on a port the OS handed out with status NONE,
-    and on 8137 with LISTEN. The owner lookup asks for LISTEN."""
+    The band stays near 8137 on purpose: below the OS's ephemeral range, so
+    the port is not one the OS is about to hand to an outgoing connection
+    between the bind check and the child's bind. (It used to be blamed on the
+    owner lookup, which wanted LISTEN while most listeners on Windows 11 build
+    26300 read NONE; since commit 2d2d22fc the lookup no longer reads the
+    status at all.)"""
     import socket
     for port in range(8137, 8237):
         with socket.socket() as s:
@@ -264,3 +267,65 @@ def test_the_launcher_env_does_not_drop_the_rest_of_the_environment():
 
     env = start_app._backend_env(headless=False, base={"PATH": "/somewhere", "FOO": "bar"})
     assert env["PATH"] == "/somewhere" and env["FOO"] == "bar"
+
+
+_THIS_PROCESS = object()
+
+
+def _fake_conn(port, status, raddr=(), pid=_THIS_PROCESS):
+    """A psutil connection as `_port_owner` reads it. Default pid: this process,
+    so psutil.Process(pid).create_time() works. `pid=None` is a socket no
+    process owns (psutil reports that for sockets it cannot attribute)."""
+    from collections import namedtuple
+    Addr = namedtuple("Addr", "ip port")
+    Conn = namedtuple("Conn", "laddr raddr status pid")
+    return Conn(Addr("127.0.0.1", port), raddr, status,
+                os.getpid() if pid is _THIS_PROCESS else pid)
+
+
+@pytest.mark.parametrize("status", ["LISTEN", "NONE", "CLOSE", "FIN_WAIT1"])
+def test_a_socket_without_a_peer_is_the_listener_whatever_its_status_says(monkeypatch, status):
+    # Windows 11 build 26300, psutil 7.2.2: one listener of ours read LISTEN, NONE
+    # or FIN_WAIT1 depending on the moment and the port, so the status is not read.
+    port = 45678
+    monkeypatch.setattr(
+        psutil, "net_connections",
+        lambda kind="inet": [_fake_conn(port, status)])
+    assert start_desktop._port_owner(port) == (os.getpid(), psutil.Process(os.getpid()).create_time())
+
+
+@pytest.mark.parametrize("status", ["NONE", "LISTEN", "ESTABLISHED"])
+def test_a_socket_with_a_peer_is_not_the_listener(monkeypatch, status):
+    port = 45678
+    monkeypatch.setattr(
+        psutil, "net_connections",
+        lambda kind="inet": [_fake_conn(port, status, ("10.0.0.5", 50000))])
+    assert start_desktop._port_owner(port) is None
+
+
+def test_a_socket_whose_pid_is_gone_is_not_an_owner(monkeypatch):
+    dead = 4_000_000
+    while psutil.pid_exists(dead):
+        dead += 1
+    port = 45678
+    monkeypatch.setattr(
+        psutil, "net_connections",
+        lambda kind="inet": [_fake_conn(port, "NONE", pid=dead)])
+    assert start_desktop._port_owner(port) is None
+
+
+@pytest.mark.parametrize("pid", [None, 0])
+def test_a_socket_without_a_pid_is_not_an_owner(monkeypatch, pid):
+    """No peer, right port, but nobody owns it: there is no process to kill."""
+    port = 45678
+    monkeypatch.setattr(
+        psutil, "net_connections",
+        lambda kind="inet": [_fake_conn(port, "NONE", pid=pid)])
+    assert start_desktop._port_owner(port) is None
+
+
+def test_a_listener_on_another_port_is_not_the_owner(monkeypatch):
+    monkeypatch.setattr(
+        psutil, "net_connections",
+        lambda kind="inet": [_fake_conn(45679, "NONE")])
+    assert start_desktop._port_owner(45678) is None

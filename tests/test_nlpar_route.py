@@ -53,6 +53,8 @@ def _restore_viewer_state():
             live.update(v)
     route._running.clear()
     route._cancel_events.clear()
+    from backend.api.services import scan_geometry
+    scan_geometry.clear(NAME)
 
 
 def _install(signal, name=NAME):
@@ -70,6 +72,9 @@ def _install(signal, name=NAME):
     ev._active_dataset = name
     ev._ebsd_signal = signal
     ev._ebsd_file_path = None
+    # Every load registers a scan geometry; a crop of a dataset without one is refused by name.
+    from backend.api.services import scan_geometry
+    scan_geometry.set_geometry(name, scan_geometry.geometry_of_signal(signal))
     app = FastAPI()
     app.include_router(ev.router, prefix="/api/ebsd")
     app.include_router(route.router, prefix="/api/ebsd")

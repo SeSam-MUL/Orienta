@@ -234,3 +234,100 @@ describe('choosing a language', () => {
     expect(SETUP_JS).toMatch(/applyLanguage\(ctx\.locale\)/);
   });
 });
+
+describe('the data-folder messages', () => {
+  const needs = {
+    homeNotEmpty: ['{{dir}}', '{{entries}}'],
+    homeNotEmptyDefault: ['{{dir}}', '{{entries}}'],
+    homeUnreachable: ['{{dir}}', '{{pointer}}'],
+    homeRetireFailed: ['{{dir}}', '{{pointer}}'],
+    homePointerUnreadable: ['{{pointer}}'],
+    homeCheckFailed: ['{{why}}'],
+  };
+
+  it('name the folder and what is in the way, in the sentence itself', () => {
+    // They used to appear only in the small English detail under a sentence
+    // that said "the chosen data folder" about a folder nobody had chosen.
+    for (const lang of LANGS) {
+      for (const [code, placeholders] of Object.entries(needs)) {
+        for (const placeholder of placeholders) {
+          expect(LOCALES[lang].errors[code], `${lang}.errors.${code}`).toContain(placeholder);
+        }
+      }
+      expect(LOCALES[lang].homeNotices.staleFallback, lang).toContain('{{dir}}');
+      expect(LOCALES[lang].homeNotices.staleFallback, lang).toContain('{{previous}}');
+      for (const key of ['staleDefault']) {
+        expect(LOCALES[lang].homeNotices[key], `${lang}.${key}`).toContain('{{dir}}');
+        expect(LOCALES[lang].homeNotices[key], `${lang}.${key}`).toContain('{{previous}}');
+      }
+    }
+  });
+
+  it('are given their values by the wizard', () => {
+    // The sentence is rendered by renderFailure; without `result.values` the
+    // placeholders would reach the user literally.
+    expect(SETUP_JS).toMatch(/t\(`errors\.\$\{result\.code\}`, result\.values\)/);
+    expect(SETUP_JS).toMatch(/t\(`homeNotices\.\$\{notice\.code\}`/);
+    expect(SETUP_JS).toMatch(/notice\.code === 'staleDefault'/);
+    expect(SETUP_JS).toMatch(/: 'homeUnreachable'\)\);/);
+    expect(SETUP_JS).toMatch(/kind === 'check' \? 'homeCheckFailed'/);
+    expect(SETUP_JS).toMatch(/kind === 'retire' \? 'homeRetireFailed'/);
+    expect(SETUP_JS).toMatch(/'homePointerUnreadable'/);
+    expect(SETUP_JS).toMatch(/previous: notice\.previousFile/);
+    // a refused pick is shown from its code and values, and 'kept' has its line
+    expect(SETUP_JS).toMatch(/if \(picked\.code\)[\s\S]*?t\(`errors\.\$\{picked\.code\}`, picked\.values\)/);
+    // the four pick results each have their line (run for real in setupWizardDom)
+    for (const key of ['homeKept', 'homeAdopted', 'homeAdoptedRestart', 'homeRestart', 'homeChanged']) {
+      expect(SETUP_JS, key).toContain(`'${key}'`);
+      for (const lang of LANGS) expect(LOCALES[lang][key], `${lang}.${key}`).toBeTruthy();
+    }
+  });
+});
+
+describe('the sentence for a folder that may hold the crystal library', () => {
+  it('says to check and back up the library, in every language, and never to delete the folder', () => {
+    for (const lang of LANGS) {
+      const text = LOCALES[lang].errors.homeHoldsData;
+      expect(text, lang).toContain('Database');
+      expect(text, lang).toContain('{{dir}}');
+      expect(text, lang).toContain('{{entries}}');
+    }
+    expect(LOCALES.en.errors.homeHoldsData).toMatch(/Do not delete/);
+    expect(LOCALES.en.errors.homeHoldsData).toMatch(/back up/);
+    expect(LOCALES.de.errors.homeHoldsData).toMatch(/Löschen Sie ihn nicht/);
+  });
+
+  it('is not contradicted by the plainer refusals, which no longer say to delete the folder', () => {
+    for (const lang of LANGS) {
+      for (const code of ['homeNotEmpty', 'homeNotEmptyDefault']) {
+        expect(LOCALES[lang].errors[code], `${lang}.${code}`).not.toMatch(/whole folder|ganzen Ordner|フォルダー全体|整个文件夹/);
+      }
+    }
+  });
+});
+
+describe('the "in use" and "no access" sentences', () => {
+  it('in use: still running or leftover python, platform named where it is platform-specific', () => {
+    expect(LOCALES.en.errors.inUse).toMatch(/python/);
+    expect(LOCALES.en.errors.inUse).toMatch(/on Windows/);
+    expect(LOCALES.de.errors.inUse).toMatch(/unter Windows/);
+    expect(LOCALES.ja.errors.inUse).toMatch(/Windows/);
+    expect(LOCALES.zh.errors.inUse).toMatch(/Windows/);
+  });
+
+  it('no access: names the protections of all three platforms, in every language', () => {
+    // classify() answers EACCES, and EPERM off Windows, with this code. A
+    // sentence about Task Manager would send a Mac or Linux user nowhere.
+    for (const lang of LANGS) {
+      const text = LOCALES[lang].errors.noAccess;
+      expect(text, lang).toMatch(/macOS/);
+      expect(text, lang).toMatch(/Linux/);
+      expect(text, lang).toMatch(/Windows/);
+    }
+    expect(LOCALES.en.errors.noAccess).toMatch(/read-only/);
+    expect(LOCALES.en.errors.noAccess).toMatch(/Controlled folder access/);
+    expect(LOCALES.de.errors.noAccess).toMatch(/Überwachter Ordnerzugriff/);
+    expect(LOCALES.ja.errors.noAccess).toMatch(/コントロールされたフォルダー アクセス/);
+    expect(LOCALES.zh.errors.noAccess).toMatch(/受控文件夹访问/);
+  });
+});

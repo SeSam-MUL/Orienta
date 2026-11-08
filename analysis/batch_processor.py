@@ -28,6 +28,7 @@ try:
 except ImportError:
     ORIX_AVAILABLE = False
 
+from analysis.ang_hexgrid import AngGridRefused, HexNeighbourhoodUnsupported, load_ang_xmap
 from analysis.ebsd_dataset import EBSDDataset
 from analysis.grain_analysis import analyze_grain_size
 from analysis.bc_analysis import calculate_bc_histogram, fit_bc_gmm
@@ -95,6 +96,8 @@ class BatchProcessor:
         self.exporter: Optional[ExcelExporter] = None
         self.processed_count = 0
         self.failed_files: List[str] = []
+        #: file -> stable code, for the files refused by name (see analysis/ang_hexgrid.py)
+        self.failed_codes: Dict[str, str] = {}
 
     def find_files(self) -> List[Path]:
         """Find all EBSD files in folder matching file patterns.
@@ -137,7 +140,17 @@ class BatchProcessor:
             if progress_callback:
                 progress_callback(f"Loading {dataset_name}...", self.processed_count, -1)
 
-            crystal_map = load(str(file_path))
+            if file_path.suffix.lower() == ".ang":
+                # a HexGrid file is refused by name here (the grains and the KAM below use the four
+                # neighbours of a square map), never read as a square map
+                crystal_map, grid = load_ang_xmap(file_path)
+                if grid is not None:
+                    raise HexNeighbourhoodUnsupported(
+                        "This .ang file has a hexagonal grid. The grains and the KAM of a folder "
+                        "analysis use the four neighbours of a square map, so a hexagonal file "
+                        "is not analysed here.")
+            else:
+                crystal_map = load(str(file_path))
 
             # Extract step size from CrystalMap
             # CrystalMap has dx, dy properties
@@ -258,6 +271,8 @@ class BatchProcessor:
         except Exception as e:
             logger.error(f"Failed to process {file_path}: {e}")
             self.failed_files.append(str(file_path))
+            if isinstance(e, AngGridRefused):
+                self.failed_codes[str(file_path)] = e.code
             return None
 
     def process_all(

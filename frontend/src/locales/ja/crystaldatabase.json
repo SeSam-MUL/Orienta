@@ -35,7 +35,7 @@
     "converted": "変換しました: {{name}} (SG #{{spaceGroup}}、{{atoms}} 原子)",
     "conversionFailed": "変換に失敗しました: {{error}}",
     "skippingUnfit": "{{count}} 件の不適格なファイルをスキップ中...",
-    "noneFit": "変換に適したファイルがありません ({{count}} 件スキップ — DOI、原子、または空間群が欠落)",
+    "noneFit": "変換に適したファイルがありません ({{count}} 件スキップ — 原子または空間群が欠落)",
     "convertingProgress": "変換中... {{done}}/{{total}}{{skipped}}",
     "convertingSkippedSuffix": " ({{count}} 件スキップ)",
     "convertedCount": "{{count}} 件変換",
@@ -69,7 +69,16 @@
     "failed": "失敗: {{error}}",
     "savedChanges": "{{count}} 件の変更を保存しました",
     "saveFailed": "保存に失敗しました: {{error}}",
-    "unknown": "不明"
+    "unknown": "不明",
+    "convertedDeclared": "変換しました: {{name}} (空間群 #{{spaceGroup}}, 原子 {{atoms}} 個) — 文献情報は未発表と申告",
+    "p1Hidden": "{{count}} 件が P 1 で保存されており、対称性が隠れています（詳細はファイルを選択）",
+    "symmetrised": "{{name}} を保存しました ({{symbol}}, #{{number}})。格子と軸は元のファイルのままで、元のファイルは変更されていません",
+    "symmetriseFailed": "対称化したコピーを保存できませんでした: {{error}}",
+    "skippedNoReference": "{{count}} 件をスキップ（文献情報なし）",
+    "declaredUnpublishedCount": "{{count}} 件を未発表として申告",
+    "symmetrisedConverted": "{{name}} を保存しました ({{symbol}}, #{{number}})。セルを慣用標準設定に変換しました (セル当たりの原子数 {{before}} → {{after}}{{axes}})。元のファイルは変更されていません",
+    "axesSuffix": "、軸 {{axes}} (元 → コピー)",
+    "toleranceChosen": "、許容値 {{symprec}} Å を選択"
   },
   "counts": {
     "cifXtal": "{{cif}} CIF · {{xtal}} XTAL"
@@ -154,15 +163,30 @@
       "reference": "参考文献",
       "file": "ファイル",
       "size": "サイズ",
-      "kb": "{{value}} KB"
-    }
+      "kb": "{{value}} KB",
+      "referenceStatus": "文献情報の状態",
+      "referenceStatuses": {
+        "found": "CIF から取得した引用",
+        "declared_unpublished": "ユーザーが未発表と申告",
+        "missing": "記録なし"
+      }
+    },
+    "saveSymmetrised": "対称化したコピーを保存",
+    "saveSymmetrisedTooltip": "検出した空間群 ({{symbol}}, #{{number}}) で新しい CIF を書き出します。元のファイルは変更されません。",
+    "symmetrising": "コピーを保存中...",
+    "invalidDoi": "DOI の形式ではありません (10.xxxx/... を想定)。何も保存されていません。引用は「文献」欄に入力してください。",
+    "copyExists": "対称化したコピーがあります: {{name}}",
+    "citationTooLong": "テキストが長すぎます (最大 {{max}} 文字)。何も保存されていません。",
+    "chooseTolerance": "群は許容値に依存します。コピーの保存先:",
+    "saveSymmetrisedAt": "{{symbol}} (#{{number}}, {{symprec}} Å)",
+    "saveSymmetrisedAtTooltip": "{{symprec}} Å の許容値で見つかった {{symbol}} (#{{number}}) として新しい CIF を書き出します。元のファイルは変更されません。"
   },
   "exportBar": {
     "convert": ".xtal に変換",
     "converting": "変換中...",
     "convertTooltip": "{{name}} を .xtal に変換",
     "convertSelectFirst": "先に CIF ファイルを選択してください",
-    "convertNotFit": ".xtal に不適格 — 先に警告を修正してください (DOI、原子、または空間群が欠落)",
+    "convertNotFit": ".xtal に不適格 — 先に警告を修正してください (原子または空間群が欠落)",
     "batchConvert": "選択を変換 ({{count}})",
     "batchConverting": "{{count}} 件を変換中...",
     "batchConvertTooltip_one": "選択した {{count}} 件の CIF ファイルを .xtal に変換",
@@ -308,5 +332,46 @@
     "syncBulkKeepBoth": "すべての競合を「両方を保持」に設定します (サーバーのコピーをリネーム)。",
     "syncBulkSkip": "すべての競合を「スキップ」に設定します (ファイルは変更されません)。",
     "syncResolveAll": "選択したアクションをすべての競合に適用し、同期を完了します。"
+  },
+  "fitWarnings": {
+    "no_reference": "DOI も文献情報も見つかりません。.xtal への変換時に、追加するか未発表データとして申告するかを尋ねます。",
+    "no_atoms": "原子サイトがありません。",
+    "no_space_group": "空間群がありません。",
+    "disordered": "不規則構造（部分占有）。",
+    "p1_hidden_symmetry": "空間群 P 1 として保存されていますが、原子位置は 0.01〜0.1 Å のどの許容値でも {{symbol}} (#{{number}}) の対称性を持ちます。P 1 のファイルでは Hough 指数付けがメモリ不足になることがあります。対称化したコピーを保存してください。",
+    "p1_ambiguous_symmetry": "空間群 P 1 として保存されています。原子位置の対称性は許容値によって変わります ({{ladder}})。許容値を選んで対称化したコピーを保存してください。",
+    "contradictory_header": "ヘッダーが矛盾しています。空間群番号は {{headerNumber}} ですが、空間群記号は {{headerSymbol}} です。対称化コピーは提示されません。先にヘッダーを修正してください。",
+    "p1_check_failed": "空間群 P 1 として保存されています。隠れた対称性の確認を完了できませんでした ({{detail}})。そのため対称化コピーは提示されません。"
+  },
+  "referenceDialog": {
+    "title": "この結晶構造には文献情報がありません",
+    "messageOne": "{{name}} には DOI も文献情報もありません。.xtal ファイルには結晶データの出典が記録されるため、ここで入力するか、未発表データであると指定してください。",
+    "messageMany": "選択した {{count}} 件の CIF ファイルには DOI も文献情報もありません。.xtal ファイルには結晶データの出典が記録されます。",
+    "andMore": "… ほか {{count}} 件",
+    "inputLabel": "DOI または引用",
+    "inputPlaceholder": "10.1234/example または 著者 他, 雑誌, 年",
+    "inputHint": "DOI (10.…) は DOI として、それ以外のテキストは文献情報として保存されます。",
+    "willSaveDoi": "CIF に DOI として保存されます。",
+    "willSaveCitation": "CIF に文献情報として保存されます。",
+    "unpublishedNote": "「未発表 / 自分のデータ」を選ぶと、文献情報に「unpublished (declared by user)」と書き込み、ユーザーによる申告として記録します。「不明」のままにはなりません。",
+    "declareOne": "未発表 / 自分のデータ",
+    "declareMany": "{{count}} 件すべてを未発表として申告",
+    "declareTooltip": "文献情報「unpublished (declared by user)」で変換します",
+    "skip": "これら {{count}} 件をスキップ",
+    "skipTooltip": "文献情報のあるファイルだけを変換します",
+    "saveAndConvert": "保存して変換",
+    "counter": "{{count}} / {{max}} 文字"
+  },
+  "symmetriseReasons": {
+    "not_p1": "このファイルは空間群 P 1 として保存されていません。",
+    "disordered": "部分占有のサイトがあるため、位置から見つけた対称性は試料についての推測になります。",
+    "no_symmetry": "0.01〜0.1 Å のどの許容値でも P 1 より高い対称性は見つかりませんでした。",
+    "changed_structure": "対称化した構造が許容範囲内でファイルと一致しなくなったため、何も書き込みませんでした。",
+    "unreadable": "ファイルを結晶構造として読み込めませんでした。",
+    "not_writable": "この CIF ファイルのフォルダーに書き込めないため、コピーを保存できませんでした。",
+    "same_content_exists": "同じ結晶がすでにこのフォルダーに {{existing}} としてあるため、コピーは作成しませんでした。",
+    "ambiguous_tolerance": "原子位置の群は許容値に依存します。選んでください。",
+    "invalid_tolerance": "許容値は 0.01、0.02、0.05、または 0.1 Å です。",
+    "contradictory_header": "ヘッダーが矛盾しているため（空間群番号と空間群記号で P 1 かどうかが食い違っています）、コピーは作成されませんでした。先にヘッダーを修正してください。"
   }
 }

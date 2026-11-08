@@ -34,8 +34,6 @@
       "notSetUp": "未配置"
     },
     "warnings": {
-      "gpuBlocksizeReduced": "显卡显存为 {{gb}} GB — GPU 主图样使用块大小 {{blocksize}}（由 32 降低以适应显存）。",
-      "gpuBlocksizeMinimal": "显卡显存为 {{gb}} GB — GPU 主图样使用最小块大小 {{blocksize}}。原子数超过 20 的复杂晶体仍可能显存不足。",
       "emsoftNotOffered": "这台计算机未配置 EMsoft。它是可选的 — Orienta Engine 不需要 EMsoft。"
     }
   },

@@ -104,8 +104,18 @@ The browser does not create simulation files — it manages files produced by th
   at a glance what is only on the server (and downloadable) versus already local.
 - **The SHT sphere viewer loads a large plotting library on demand.** The 3-D
   Plotly view is lazy-loaded the first time you open a sphere, so there can be a
-  brief delay; the sphere reconstruction itself runs on a worker thread to keep
-  the UI responsive, and may take longer at higher bandwidth/resolution.
+  brief delay; the sphere reconstruction itself may take longer at higher
+  bandwidth/resolution.
+- **The sphere is computed in a second Python process.** While a sphere is being
+  computed you will see a second `python` process in the Task Manager; it ends
+  when the sphere is done (after a high-resolution sphere) or after a few minutes
+  of inactivity, and it gives its memory back to the system. The first sphere
+  after starting Orienta can take noticeably longer, especially with a virus
+  scanner, because the process has to load its libraries first; if that takes
+  longer than expected, the viewer says that the process is starting slowly.
+  Press **Cancel** next to the progress indicator to stop a sphere you no longer
+  need: the computation is stopped within about a second and the process is
+  closed. Choosing another file or resolution does the same.
 - **Corrupt-master warning.** A master-pattern thumbnail may be flagged as a
   stale, disc-masked artifact — if you see that badge, delete and regenerate the
   master in the Simulation tool.

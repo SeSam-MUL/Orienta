@@ -9,8 +9,6 @@ SHT generation run.
 Full SHT generation is NOT done here — that requires a working
 WSL+EMsoft toolchain and is a long-running async operation; the user
 should run it explicitly from the existing Simulation page.
-
-See docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md
 """
 from __future__ import annotations
 
@@ -205,10 +203,18 @@ def inject_cif_reference(cif_text: str, doi: str = "",
     MP-rendered CIFs (pure pymatgen structures) carry no bibliography, so
     this is how the source reference fetched from MP's provenance endpoint
     gets persisted into the saved file.
+
+    The writer refuses a person's input; a provider's value cannot be corrected by
+    anyone here. One that is no DOI is left out with a warning, so the reference
+    still arrives, and an overlong text is cut at the limit the reader applies.
     """
+    from backend.api.services.cif_citation import MAX_CITATION_CHARS, normalise_doi
     from backend.api.services.phase_library import set_cif_source
 
-    return set_cif_source(cif_text, doi=doi, reference=reference)
+    bare = normalise_doi(doi)
+    if doi.strip() and not bare:
+        logger.warning("Source DOI %r is not a DOI; left out of the CIF.", doi)
+    return set_cif_source(cif_text, doi=bare, reference=reference[:MAX_CITATION_CHARS])
 
 
 def download_cif_from_cod(
@@ -328,14 +334,19 @@ def download_cif_from_mp(
 
     # Lazy import: keeps the COD path free of pymatgen/MP dependencies.
     try:
-        from backend.api.services.crystal_hint_mp import fetch_cif_text
+        from backend.api.services.crystal_hint_mp import CifSymmetryError, fetch_cif_text
     except ImportError as exc:
         return CifDownloadResult(
             success=False, source="MP", structure_id=mp_id,
             error=f"MP module unavailable: {exc}",
         )
 
-    cif_text = fetch_cif_text(mp_id)
+    try:
+        cif_text = fetch_cif_text(mp_id)
+    except CifSymmetryError as exc:
+        return CifDownloadResult(
+            success=False, source="MP", structure_id=mp_id, error=str(exc),
+        )
     if not cif_text:
         return CifDownloadResult(
             success=False, source="MP", structure_id=mp_id,
@@ -369,6 +380,11 @@ def download_cif_from_mp(
 
     val_warnings = _validation_warnings(meta)
     all_warnings = list(parse_warnings) + list(val_warnings)
+    if cif_text.startswith("# Orienta warning: stored as space group P 1"):
+        all_warnings.append(
+            "Stored as space group P 1: no symmetry was found, and Materials Project does not "
+            "list a higher one. Hough indexing of this phase may need very large amounts of memory."
+        )
 
     local_path = None
     if save:

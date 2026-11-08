@@ -22,6 +22,14 @@ describe('wouldSwitchFile', () => {
     )).toBe(false);
   });
 
+  it('true for another variant of the loaded file: the path is the same, the backend says it', () => {
+    expect(wouldSwitchFile('C:\\data\\SampleB.h5oina', 'C:\\data\\SampleB.h5oina', true)).toBe(true);
+  });
+
+  it('false with no file loaded, whatever the backend says: nothing to lose', () => {
+    expect(wouldSwitchFile('C:\\data\\SampleB.h5oina', null, true)).toBe(false);
+  });
+
   it('tolerates slash direction and case differences (same file ≠ switch)', () => {
     expect(wouldSwitchFile(
       'C:/Data/SampleB.h5oina',

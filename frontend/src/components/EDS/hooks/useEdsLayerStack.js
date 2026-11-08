@@ -56,7 +56,8 @@ async function fetchLayer(layer, displayMode) {
     layer.kind === 'ci' ||
     (typeof layer.id === 'string' && layer.id.startsWith('ci_'))
   ) {
-    return phaseMapApi.layer(layer.id, {});
+    // 'index': these layers are composited with index-grid maps, so a hexagonal scan keeps its index grid
+    return phaseMapApi.layer(layer.id, { display: 'index' });
   }
   throw new Error(`Unsupported EDS layer kind: ${layer.kind || layer.id}`);
 }

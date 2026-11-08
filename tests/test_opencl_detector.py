@@ -11,7 +11,6 @@ Covered functions:
 - compute_emsoft_devid(devices)
 - recommend_device(status)
 - auto_detect_nthreads()
-- auto_detect_nthreads_4n3()
 - validate_globalworkgrpsz(requested, device)
 - detect_opencl(emsoft_bin_dir)
 - validate_icd_files()
@@ -26,7 +25,6 @@ from unittest.mock import Mock, MagicMock, patch, call
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import math
 import pytest
 
 IS_WINDOWS = sys.platform == "win32"
@@ -40,7 +38,6 @@ from simulation.opencl_detector import (
     compute_emsoft_devid,
     recommend_device,
     auto_detect_nthreads,
-    auto_detect_nthreads_4n3,
     validate_globalworkgrpsz,
     detect_opencl,
     validate_icd_files,
@@ -667,7 +664,7 @@ class TestComputeEmsoftDevid:
 # ---------------------------------------------------------------------------
 
 class TestAutoDetectNthreads:
-    """Test auto_detect_nthreads() and auto_detect_nthreads_4n3()."""
+    """Test auto_detect_nthreads()."""
 
     def test_nthreads_12_core_system(self):
         """12-core CPU: min(12-2, 12) = 10."""
@@ -712,32 +709,6 @@ class TestAutoDetectNthreads:
         for cores in (14, 32, 64, 128):
             with patch("os.cpu_count", return_value=cores):
                 assert auto_detect_nthreads() <= 12
-
-    def test_4n3_12_core_system(self):
-        """12-core CPU target=10, nearest 4N+3 <= 10 is 7."""
-        with patch("os.cpu_count", return_value=12):
-            result = auto_detect_nthreads_4n3()
-            assert result == 7
-
-    def test_4n3_is_valid_form(self):
-        """Result must satisfy (n - 3) % 4 == 0."""
-        for cores in (8, 12, 16, 24, 32):
-            with patch("os.cpu_count", return_value=cores):
-                result = auto_detect_nthreads_4n3()
-                assert (result - 3) % 4 == 0, f"Result {result} is not 4N+3"
-
-    def test_4n3_minimum_is_7(self):
-        """Result should never be less than 7."""
-        for cores in (1, 2, 4, 8):
-            with patch("os.cpu_count", return_value=cores):
-                assert auto_detect_nthreads_4n3() >= 7
-
-    def test_4n3_none_cpu_count_fallback(self):
-        """None cpu_count should fall back gracefully, returning >= 7."""
-        with patch("os.cpu_count", return_value=None):
-            result = auto_detect_nthreads_4n3()
-            assert result >= 7
-            assert (result - 3) % 4 == 0
 
 
 # ---------------------------------------------------------------------------
@@ -874,27 +845,43 @@ class TestRecommendDevice:
         rec = recommend_device(status)
         assert rec["mc_program"] == "EMMC"
 
-    def test_gpu_below_16gb_uses_cpu_master(self):
-        """GPU with < 16 GB RAM → master_program = EMEBSDmaster (CPU fallback)."""
-        status = self._make_status_with_gpu(gpu_memory_bytes=12_878_086_144)  # ~12 GB
-        rec = recommend_device(status)
-        assert rec["master_program"] == "EMEBSDmaster"
+    # The master is computed on the CPU whatever the GPU is (decision
+    # 2026-10-31): the OpenCL master differs from the CPU master for the same
+    # Monte Carlo and kikuchipy cannot load it. Monte Carlo stays on the GPU.
 
-    def test_gpu_above_16gb_uses_gpu_master(self):
-        """GPU with >= 16 GB RAM → master_program = EMEBSDmasterOpenCL."""
-        # 17 GiB
-        status = self._make_status_with_gpu(gpu_memory_bytes=18_253_611_008)
-        # But EMEBSDmasterOpenCL is empty in our helper, so override
+    def test_gpu_with_16gb_or_more_uses_gpu_mc_and_cpu_master(self):
+        """17 GiB GPU, OpenCL master binary installed: MC on the GPU, master on the CPU."""
+        status = self._make_status_with_gpu(gpu_memory_bytes=18_253_611_008)  # 17 GiB
         status.binaries["EMEBSDmasterOpenCL"] = "/bin/EMEBSDmasterOpenCL"
         rec = recommend_device(status)
-        assert rec["master_program"] == "EMEBSDmasterOpenCL"
+        assert rec["master_program"] == "EMEBSDmaster"
+        assert rec["mc_program"] == "EMMCOpenCL"
+        assert rec["mode"] == "gpu"
 
-    def test_gpu_below_16gb_adds_warning(self):
-        """GPU with < 16 GB RAM → warning about EMEBSDmasterOpenCL."""
-        status = self._make_status_with_gpu(gpu_memory_bytes=8_589_934_592)  # 8 GB
+    @pytest.mark.parametrize("gib", [24, 16, 12, 8, 4])
+    def test_the_master_is_the_cpu_program_at_every_gpu_size(self, gib):
+        """No memory size picks the OpenCL master, and none warns about it."""
+        status = self._make_status_with_gpu(gpu_memory_bytes=gib * 1024 ** 3)
+        status.binaries["EMEBSDmasterOpenCL"] = "/bin/EMEBSDmasterOpenCL"
         rec = recommend_device(status)
-        warning_text = " ".join(rec["warnings"])
-        assert "16 GB" in warning_text or "GB" in warning_text
+        assert rec["master_program"] == "EMEBSDmaster"
+        assert rec["mc_program"] == "EMMCOpenCL"
+        assert rec["warnings"] == []
+        assert rec["warning_items"] == []
+
+    def test_gpu_recommendation_has_no_opencl_master_settings(self):
+        """blocksize and the 4N+3 thread count belonged to the OpenCL master only."""
+        rec = recommend_device(self._make_status_with_gpu())
+        assert "blocksize" not in rec
+        assert "nthreads_master_opencl" not in rec
+
+    def test_a_missing_cpu_master_binary_is_reported_not_swapped_for_opencl(self):
+        """EMEBSDmaster missing: say so; never fall over to the OpenCL program."""
+        status = self._make_status_with_gpu(has_emebsdmaster=False)
+        status.binaries["EMEBSDmasterOpenCL"] = "/bin/EMEBSDmasterOpenCL"
+        rec = recommend_device(status)
+        assert rec["master_program"] == "EMEBSDmaster"
+        assert any("EMEBSDmaster not found" in w for w in rec["warnings"])
 
     def test_cpu_only_adds_no_gpu_warning(self):
         """CPU-only setup should warn that no GPU was found."""
@@ -945,8 +932,8 @@ class TestRecommendDevice:
         """recommend_device must always return all expected keys."""
         expected_keys = {
             "mode", "platid", "devid", "emsoft_devid", "globalworkgrpsz",
-            "nthreads", "nthreads_master_opencl", "mc_program",
-            "master_program", "sht_program", "warnings",
+            "nthreads", "mc_program",
+            "master_program", "sht_program", "warnings", "warning_items",
         }
         status = self._make_status_cpu_only()
         rec = recommend_device(status)
@@ -958,14 +945,6 @@ class TestRecommendDevice:
         rec = recommend_device(status)
         assert isinstance(rec["nthreads"], int)
         assert rec["nthreads"] >= 1
-
-    def test_nthreads_4n3_is_valid(self):
-        """nthreads_master_opencl must be 4N+3 form and >= 7."""
-        status = self._make_status_cpu_only()
-        rec = recommend_device(status)
-        n = rec["nthreads_master_opencl"]
-        assert n >= 7
-        assert (n - 3) % 4 == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1294,90 +1273,25 @@ if __name__ == "__main__":
 
 # ---------------------------------------------------------------------------
 
-class TestBlocksizeThresholdMatchesTheMessage:
-    """The printed memory and the branch it chose must agree.
-
-    Reported from the 0.4.5 laptop test: "GPU has 8.0 GB ... using blocksize=8".
-    `global_memory_gb` is bytes / 1024**3 and OpenCL reports usable memory, so a
-    card whose true value was just under 8 printed "8.0" through `.1f` while
-    `>= 8` was False. The message denied the decision it was explaining. (The
-    card's exact value was never measured; all that follows from the message is
-    7.95 <= v < 8.0.)
-
-    The fix FLOORS to one decimal, so no card changes branch -- see the comment
-    at the call site for why rounding would have been a tuning decision.
-    """
+class TestGpuWarningsAreGone:
+    """The GPU blocksize warnings belonged to the OpenCL master, which is no
+    longer chosen. The structured `warning_items` list stays (system_check
+    copies it), and a prose-only warning still arrives as prose."""
 
     def _rec_for(self, memory_bytes: int) -> dict:
         helper = TestRecommendDevice()
         status = helper._make_status_with_gpu(gpu_memory_bytes=memory_bytes)
         return recommend_device(status)
 
-    def test_a_card_just_under_8_says_what_it_did(self):
-        """The reported case: prints 8.0, takes the sub-8 branch -- now prints 7.9."""
+    def test_a_card_just_under_8_gets_no_memory_warning(self):
+        """The 0.4.5 case (7.96 GiB): it used to be told "using blocksize=8"."""
         rec = self._rec_for(int(7.96 * 1024 ** 3))
-        assert rec["blocksize"] == 8          # unchanged by this commit
-        text = " ".join(rec["warnings"])
-        assert "7.9 GB" in text, text         # and no longer claims 8.0
-        assert "8.0 GB" not in text
-        assert "blocksize=8" in text
-
-    def test_flooring_never_moves_a_card_into_another_branch(self):
-        """floor1(v) >= 8 exactly when v >= 8, so the boundary stays put."""
-        assert self._rec_for(int(8.0 * 1024 ** 3))["blocksize"] == 16
-        assert self._rec_for(8 * 1024 ** 3 - 1)["blocksize"] == 8
-        assert self._rec_for(int(16.0 * 1024 ** 3))["blocksize"] == 32
-        assert self._rec_for(16 * 1024 ** 3 - 1)["blocksize"] == 16
-
-    @pytest.mark.parametrize("gib, blocksize", [
-        (24.0, 32), (16.0, 32),
-        (15.94, 16), (12.0, 16), (8.0, 16),
-        (7.96, 8), (7.5, 8), (4.0, 8), (2.0, 8),
-    ])
-    def test_every_branch_reports_the_number_it_compared(self, gib, blocksize):
-        rec = self._rec_for(int(gib * 1024 ** 3))
-        assert rec["blocksize"] == blocksize
-        if blocksize == 32:
-            return   # the big branch says nothing, and has nothing to contradict
-        shown = math.floor(gib * 10) / 10
-        text = " ".join(rec["warnings"])
-        assert f"{shown:.1f} GB" in text, text
-        assert f"blocksize={blocksize}" in text, text
+        assert rec["warnings"] == []
+        assert rec["warning_items"] == []
 
     def test_a_big_card_warns_about_nothing(self):
         rec = self._rec_for(24 * 1024 ** 3)
-        assert rec["blocksize"] == 32
-        assert not [w for w in rec["warnings"] if "blocksize" in w]
-
-    def test_the_prose_is_unchanged_including_the_dash(self):
-        """Every other warning in this function uses an em dash; so must these."""
-        rec = self._rec_for(int(7.5 * 1024 ** 3))
-        assert "GB — using blocksize=8" in " ".join(rec["warnings"])
-
-    # --- the structured half, for the interface ---
-
-    def test_the_blocksize_warning_carries_a_code_and_values(self):
-        """Settings -> System Status showed this sentence in English because
-        prose was all the backend sent."""
-        rec = self._rec_for(int(7.5 * 1024 ** 3))
-        items = [i for i in rec["warning_items"] if i["code"] == "gpuBlocksizeMinimal"]
-        assert len(items) == 1
-        assert items[0]["values"] == {"gb": "7.5", "blocksize": 8}
-        assert items[0]["message"] in rec["warnings"]
-
-    def test_the_reduced_warning_too(self):
-        rec = self._rec_for(int(12.0 * 1024 ** 3))
-        items = [i for i in rec["warning_items"] if i["code"] == "gpuBlocksizeReduced"]
-        assert len(items) == 1
-        assert items[0]["values"] == {"gb": "12.0", "blocksize": 16}
-
-    def test_a_whole_number_keeps_its_decimal(self):
-        """A JSON 8.0 reaches i18next as `8` and would print a different number
-        than the English prose one line away."""
-        rec = self._rec_for(int(8.0 * 1024 ** 3))
-        item = [i for i in rec["warning_items"] if i["code"] == "gpuBlocksizeReduced"][0]
-        assert item["values"]["gb"] == "8.0"
-        assert "8.0 GB" in item["message"]
+        assert rec["warnings"] == []
 
     def test_prose_only_warnings_are_untouched(self):
         """Every other producer keeps working exactly as before."""

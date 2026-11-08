@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ebsdApi } from '../../services/api';
 import useDataStore from '../../stores/useDataStore';
 import useLoadedFilesStore from '../../stores/useLoadedFilesStore';
 import { colors } from '../../theme/components';
+import { loadedFileLabel } from '../../services/loadedFileLabel';
+import { problemText } from '../../services/problemText';
+import switchLoadedFile from './switchLoadedFile';
 
 /**
  * Dropdown to switch between loaded H5OINA files.
@@ -17,12 +19,11 @@ import { colors } from '../../theme/components';
  * one option is just noise.
  */
 export default function FileSwitcher({ onSwitched }) {
-  const { t } = useTranslation('shell');
+  const { t } = useTranslation(['shell', 'ebsdviewer']);
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState(null);
   const filePath = useDataStore((s) => s.filePath);
   const isFileOpen = useDataStore((s) => s.isFileOpen);
-  const syncFromBackend = useDataStore((s) => s.syncFromBackend);
   // Shared registry mirror — the sidebar "Loaded Files" panel and the
   // Indexing dataset dropdown read the same store, so pruning the list
   // anywhere updates this dropdown immediately (no more stale entries).
@@ -48,16 +49,18 @@ export default function FileSwitcher({ onSwitched }) {
     setSwitching(true);
     setError(null);
     try {
-      await ebsdApi.switchFile(path);
-      await syncFromBackend();   // refresh global store → all pages re-read
-      await refresh();           // shared registry → all switcher views re-read
-      onSwitched?.(path);
+      // The sequence (switch, pairing notice, store refresh, registry refresh) is shared with every other
+      // place that opens a loaded file: switchLoadedFile.js.
+      const { opened } = await switchLoadedFile(path, (k, o) => t(`ebsdviewer:${k}`, o));
+      if (opened) onSwitched?.(path);
     } catch (e) {
-      setError(e?.response?.data?.detail || e?.message || 'Switch failed');
+      // A switch reloads the file, so it can be refused with a code (a pattern source the file does
+      // not hold any more, an APEX pairing that conflicts): worded in the interface's language.
+      setError(problemText(e, t, 'ebsdviewer') || 'Switch failed');
     } finally {
       setSwitching(false);
     }
-  }, [activePath, switching, syncFromBackend, refresh, onSwitched]);
+  }, [activePath, switching, onSwitched, t]);
 
   // Fewer than 2 files → nothing to switch between.
   if (files.length < 2) return null;
@@ -79,7 +82,7 @@ export default function FileSwitcher({ onSwitched }) {
         }}
       >
         {files.map((f) => (
-          <option key={f.path} value={f.path}>{f.name}</option>
+          <option key={f.path} value={f.path}>{loadedFileLabel(f, (k, o) => t(`ebsdviewer:${k}`, o))}</option>
         ))}
       </select>
       {switching && <span style={{ fontSize: '8.5pt', color: colors.cyan }}>switching…</span>}

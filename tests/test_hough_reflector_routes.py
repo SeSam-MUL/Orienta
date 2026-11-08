@@ -187,12 +187,12 @@ def test_a_bad_choice_is_refused_and_the_old_one_stays(client, cifs):
 
 
 def test_a_selection_pyebsdindex_cannot_build_is_refused_when_it_is_made(client, cifs):
-    """Mg: {0002} with {2-1-11} ends in an IndexError inside PyEBSDIndex's
+    """Mg: {0002} with {10-11} ends in an IndexError inside PyEBSDIndex's
     library builder. The page hears that at the click, not when a run starts."""
     c, _ = client
     r = c.put("/api/indexing/hough/reflectors",
               json={"cif_path": cifs["Mg"],
-                    "spec": {"mode": "custom", "families": [[0, 0, 2], [2, -1, 1]]}})
+                    "spec": {"mode": "custom", "families": [[0, 0, 2], [1, 0, 1]]}})
     assert r.status_code == 400
     d = r.json()["detail"]
     assert d["code"] == "library_failed" and "IndexError" in d["params"]["reason"]
@@ -551,13 +551,8 @@ def test_the_optimiser_uses_an_indexer_built_from_the_current_choice(cifs, monke
     ctrl._ensure_indexer()                      # cached under the default list
     hr.set_spec("Al", {"mode": "custom", "families": [[1, 1, 1], [2, 0, 0]]})
 
-    seen = []
-
-    def fake_optimize_pc(detector, indexer, pattern, method, search_limit, batch):
-        seen.append(indexer)
-        return (0.5, 0.5, 0.5), None
-
-    monkeypatch.setattr(eu, "optimize_pc", fake_optimize_pc)
+    from tests.pc_engine_stub import stub_search
+    calls = stub_search(monkeypatch, [(0.5, 0.5, 0.5)])
     monkeypatch.setattr(pcr, "_get_controller", lambda: ctrl)
     monkeypatch.setattr(pcr, "_writeback_refined_pc", lambda *a, **k: None)
     monkeypatch.setattr(ebsd_viewer, "_active_dataset", "unit", raising=False)
@@ -566,7 +561,7 @@ def test_the_optimiser_uses_an_indexer_built_from_the_current_choice(cifs, monke
     pcr._run_optimization("t", [pat], "Nelder-Mead", 0.05)
     pcr._optimization_tasks.pop("t")
     poles = {tuple(int(x) for x in r)
-             for r in np.asarray(seen[0].phaselist[0].polefamilies).reshape(-1, 3)}
+             for r in np.asarray(calls[0]["indexer"].phaselist[0].polefamilies).reshape(-1, 3)}
     assert poles == {(1, 1, 1), (2, 0, 0)}
 
 

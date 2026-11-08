@@ -59,13 +59,46 @@ MIN_GRAIN_PX = 9
 SAMPLE_PX_MAX = 16
 
 
+_CORE_BLOCK = 1 << 18
+
+
+def _hex_core(pix: np.ndarray, topology) -> np.ndarray:
+    """The pixels of the sorted grain ``pix`` whose neighbours ALL exist and are ALL in the grain, from the
+    cached neighbour table of the topology, in blocks (the table rows of a large grain are never held at once)."""
+    table = topology.table()
+    in_grain = np.zeros(topology.n_points, dtype=bool)
+    in_grain[pix] = True
+    out = []
+    for start in range(0, pix.size, _CORE_BLOCK):
+        block = pix[start:start + _CORE_BLOCK]
+        nbs = table[block]                                   # (m, K), -1 outside the scan
+        out.append(block[(nbs >= 0).all(axis=1) & in_grain[nbs].all(axis=1)])
+    return np.concatenate(out) if out else np.empty(0, dtype=np.int64)
+
+
 def _grain_core_sample(pix: np.ndarray, n_rows: int, n_cols: int,
-                       k: int = SAMPLE_PX_MAX) -> np.ndarray:
+                       k: int = SAMPLE_PX_MAX, topology=None) -> np.ndarray:
     """Pick up to ``k`` flat indices from a grain, preferring CORE pixels
     (all 4-neighbours inside the grain) — boundary pixels carry mixed
     signal from the neighbouring grain/phase and must not decide a phase.
     Evenly spread over the (sorted) core so one corner can't dominate.
+
+    ``topology`` (``scan_neighbours.Topology``, for a hexagonal scan): a core pixel then has ALL its neighbours
+    inside the grain and all of them exist (six on a hexagonal scan); a point on the edge of the scan has fewer
+    and is never core, as on the index grid. ``None`` is the four neighbours of the index grid, as before.
     """
+    if topology is not None:
+        if (topology.n_rows, topology.n_cols) != (n_rows, n_cols):
+            raise ValueError(
+                f"the topology is for a {topology.n_rows} x {topology.n_cols} grid, "
+                f"but the map is {n_rows} x {n_cols}")
+        pix = np.sort(np.asarray(pix, dtype=np.int64).reshape(-1))
+        core = _hex_core(pix, topology)
+        base = core if core.size >= max(3, k // 2) else pix
+        if base.size <= k:
+            return base.astype(np.int64)
+        step = base.size / float(k)
+        return np.asarray([base[int(i * step)] for i in range(k)], dtype=np.int64)
     pix = np.asarray(sorted(int(p) for p in pix), dtype=np.int64)
     inset = set(pix.tolist())
     n = n_rows * n_cols
@@ -106,11 +139,13 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
               margin_clear: float = MARGIN_CLEAR,
               min_grain_px: int = MIN_GRAIN_PX,
               threshold_deg: float = 5.0,
-              progress=None):
+              progress=None, topology=None):
     """Stage A — render-verified phase check over the whole map.
 
     Parameters
     ----------
+    topology : ``scan_neighbours.Topology`` of a hexagonal scan, or None for the four neighbours of the index
+        grid. It is handed to the grain segmentation and to the core sample of each grain.
     full_q : (n_rows*n_cols, 4) quaternions, NaN rows = unindexed.
     phase_full : (n_rows*n_cols,) int phase ids, -1 = unindexed.
     phases : {pid: point_group_name} for every phase present.
@@ -150,7 +185,8 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
         if pg is None:
             continue
         labels = segment_supergroup_grains(
-            q, pf, n_rows, n_cols, pid, pg, threshold_deg=threshold_deg)
+            q, pf, n_rows, n_cols, pid, pg, threshold_deg=threshold_deg,
+            topology=topology)
         grain_ids = [g for g in np.unique(labels) if g >= 0]
         for g in grain_ids:
             pix = np.flatnonzero(labels == g)
@@ -169,7 +205,8 @@ def check_map(full_q, phase_full, n_rows: int, n_cols: int,
                 entries.append(entry)
                 continue
 
-            sample = _grain_core_sample(pix, n_rows, n_cols, k=sample_px_max)
+            sample = _grain_core_sample(pix, n_rows, n_cols, k=sample_px_max,
+                                        topology=topology)
             stored = _agg(score_fns[pid](sample, q[sample]))
             entry["stored_score"] = None if not np.isfinite(stored) else round(stored, 4)
             n_checked += 1
@@ -377,7 +414,7 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
                        report: dict, phases: dict, hough_quats_fn, *,
                        score_fns=None, score_floor: float = SCORE_FLOOR,
                        margin_clear: float = MARGIN_CLEAR,
-                       progress=None):
+                       progress=None, topology=None):
     """Stage B — apply the ``reassign`` decisions from :func:`check_map`.
 
     For every grain with ``decision == "reassign"``: set its pixels to the
@@ -414,6 +451,10 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
     mismatch skips the grain (``grain changed since check``) instead of
     flipping whatever now happens to carry that id.
 
+    ``topology`` (``scan_neighbours.Topology`` of a hexagonal scan, or None for the index grid) is handed to the
+    re-segmentation. It must be the one :func:`check_map` was given: grains are segmented differently on the two
+    lattices, and the identity guard above answers "grain changed since check" otherwise.
+
     Returns ``(new_phase_full, new_full_q, applied, skipped)`` where
     ``applied`` / ``skipped`` are lists of grain entries (with
     ``"n_hough_filled"`` on applied entries counting nearest-fill pixels).
@@ -438,7 +479,8 @@ def apply_reassignment(full_q, phase_full, n_rows: int, n_cols: int,
             # exactly once (appending to `skipped` here too would duplicate it).
             labels_by_phase[pid] = None if pg is None else segment_supergroup_grains(
                 q, pf, n_rows, n_cols, pid, pg,
-                threshold_deg=float(report.get("params", {}).get("threshold_deg", 5.0)))
+                threshold_deg=float(report.get("params", {}).get("threshold_deg", 5.0)),
+                topology=topology)
 
     for e in todo:
         pid = int(e["phase_id"])

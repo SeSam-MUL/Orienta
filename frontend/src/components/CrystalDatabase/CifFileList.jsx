@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, alpha, Button, Input, GroupBox } from '../../theme/components';
+import { translateFitWarnings } from './cifWarnings';
 
 // ---------------------------------------------------------------------------
 // Sub-components
@@ -233,7 +234,7 @@ function CifRow({ file, index, isSelected, onSelect, onToggleCheck, onDeleteXtal
         exists={!!file.hasXtal}
         hasWarning={!!file.parsedInfo?.parse_warning}
         fitForXtal={file.parsedInfo?.fit_for_xtal}
-        fitWarnings={file.parsedInfo?.fit_warnings}
+        fitWarnings={file.parsedInfo ? translateFitWarnings(t, file.parsedInfo) : undefined}
         onDeleteXtal={() => onDeleteXtal(index)}
       />
       <LocationDot location={file.location} />

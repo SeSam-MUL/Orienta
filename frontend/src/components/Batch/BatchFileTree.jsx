@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, spacing } from '../../theme/tokens';
 import useBatchConfigStore from '../../stores/useBatchConfigStore';
-import { batchV2Api } from '../../services/api';
+import { batchV2Api, pcApi } from '../../services/api';
+import { copyOutcomeText } from './copyPcOutcome';
+import { CONVENTIONS, parseNum, patternSizeOf } from '../PCRefinement/pcConvention';
 
 // -----------------------------------------------------------------------
 // PC status indicators
@@ -189,8 +191,17 @@ export default function BatchFileTree() {
   // Local checkbox state: Set of checked indices
   const [checkedSet, setCheckedSet] = useState(/** @type {Set<number>} */ (new Set()));
 
-  // Manual PC entry dialog state
-  const [pcDialog, setPcDialog] = useState({ open: false, x: '0.500', y: '0.500', z: '0.500' });
+  // Manual PC entry dialog state. `conv` is the convention the three fields are typed in
+  // (preselected to the file's own vendor, like the PC-Refinement page); `error`/`busy` cover
+  // the backend round trip, since applying a PC now actually calls the backend.
+  const [pcDialog, setPcDialog] = useState({
+    open: false, x: '0.500', y: '0.500', z: '0.500', conv: 'bruker', error: null, busy: false,
+  });
+  // Guards the two async round trips in the dialog (opening it, changing its convention)
+  // against an answer that is no longer the latest one asked for — a fast file switch or a
+  // fast double convention change must not let an earlier, slower pcApi.convert answer land
+  // after a later one, the same race class the method-change fix closed one step upstream.
+  const pcDialogSeq = useRef(0);
 
   // Inline error/success feedback for action buttons
   const [actionMsg, setActionMsg] = useState(null);  // { kind: 'ok'|'err', text: string }
@@ -239,6 +250,8 @@ export default function BatchFileTree() {
       const res = await batchV2Api.copyPC(
         activeFile.file_name,
         checkedFiles.map((f) => f.file_name),
+        activeFile.file_path,
+        checkedFiles.map((f) => f.file_path),
       );
       const results = res.data?.results || [];
       const failed = results.filter((r) => !r.success);
@@ -249,7 +262,7 @@ export default function BatchFileTree() {
         });
         console.warn('[BatchFileTree] copyPC partial failure:', failed);
       } else {
-        setActionMsg({ kind: 'ok', text: t('fileTree.msgPcCopied', { count: results.length }) });
+        setActionMsg({ kind: 'ok', text: copyOutcomeText(results, 'fileTree.msgPcCopied', t) });
       }
     } catch (err) {
       const detail = err.response?.data?.detail || err.message || t('fileTree.errUnknown');
@@ -274,13 +287,15 @@ export default function BatchFileTree() {
       const res = await batchV2Api.copyPC(
         activeFile.file_name,
         checkedFiles.map((f) => f.file_name),
+        activeFile.file_path,
+        checkedFiles.map((f) => f.file_path),
       );
       const results = res.data?.results || [];
       const failed = results.filter((r) => !r.success);
       if (failed.length > 0) {
         setActionMsg({ kind: 'err', text: t('fileTree.msgApplyAllLackedPc', { failed: failed.length, total: results.length }) });
       } else {
-        setActionMsg({ kind: 'ok', text: t('fileTree.msgAppliedTo', { count: results.length }) });
+        setActionMsg({ kind: 'ok', text: copyOutcomeText(results, 'fileTree.msgAppliedTo', t) });
       }
     } catch (err) {
       const detail = err.response?.data?.detail || err.message || t('fileTree.errUnknown');
@@ -291,35 +306,111 @@ export default function BatchFileTree() {
 
   // ---- action: open manual PC dialog ------------------------------------
 
-  const openPcDialog = () => {
+  const fmtPc = (pc) => pc.map((v) => String(v.toFixed(4)));
+
+  // The PC already in use (if any) is stored in Bruker numbers; preselecting the file's own
+  // convention must show it AS THAT CONVENTION's numbers, converted, not the raw Bruker ones
+  // under a different label — typing nothing and pressing Apply would otherwise silently
+  // reconvert real Bruker numbers as if they were TSL/Oxford and store the wrong PC.
+  const openPcDialog = async () => {
     if (activeFileIndex < 0) return;
-    const v = files[activeFileIndex].pc_value;
-    setPcDialog({
-      open: true,
-      x: v ? String(v[0].toFixed(4)) : '0.5000',
-      y: v ? String(v[1].toFixed(4)) : '0.5000',
-      z: v ? String(v[2].toFixed(4)) : '0.5000',
-    });
+    const seq = ++pcDialogSeq.current;
+    const f = files[activeFileIndex];
+    const v = f.pc_value;
+    const size = patternSizeOf(f.pattern_shape?.[0], f.pattern_shape?.[1]);
+    let conv = f.convention_known && size ? f.convention : 'bruker';
+    let shown = v;
+    if (v && conv !== 'bruker') {
+      try {
+        const res = await pcApi.convert(v, 'bruker', conv, size);
+        if (seq !== pcDialogSeq.current) return;        // a newer open/convention-change won
+        if (Array.isArray(res?.data?.pc) && res.data.pc.length === 3) {
+          shown = res.data.pc;
+        } else {
+          // No usable answer: never show the real Bruker numbers under a non-Bruker label.
+          conv = 'bruker';
+        }
+      } catch {
+        if (seq !== pcDialogSeq.current) return;
+        conv = 'bruker'; // same: Bruker numbers only ever appear under the Bruker label
+      }
+    }
+    if (seq !== pcDialogSeq.current) return;
+    const [x, y, z] = shown ? fmtPc(shown) : ['0.5000', '0.5000', '0.5000'];
+    setPcDialog({ open: true, x, y, z, conv, error: null, busy: false });
   };
 
-  const submitManualPC = () => {
-    const x = parseFloat(pcDialog.x);
-    const y = parseFloat(pcDialog.y);
-    const z = parseFloat(pcDialog.z);
-    if (![x, y, z].every((v) => Number.isFinite(v))) {
-      setActionMsg({ kind: 'err', text: t('fileTree.msgInvalidPc') });
+  // The select converts what the fields hold to the new convention's numbers (as the
+  // PC-Refinement page does) instead of just relabelling them.
+  const changeConvention = async (next) => {
+    if (next === pcDialog.conv) return;
+    const seq = ++pcDialogSeq.current;
+    const nums = [pcDialog.x, pcDialog.y, pcDialog.z].map(parseNum);
+    if (!nums.every((n) => Number.isFinite(n))) {
+      setPcDialog((d) => ({ ...d, conv: next, error: null }));
       return;
     }
+    const f = files[activeFileIndex];
+    const size = patternSizeOf(f.pattern_shape?.[0], f.pattern_shape?.[1]);
+    if (!size) {
+      setPcDialog((d) => ({ ...d, error: t('fileTree.msgPcConventionNeedsSize') }));
+      return;
+    }
+    try {
+      const res = await pcApi.convert(nums, pcDialog.conv, next, size);
+      if (seq !== pcDialogSeq.current) return;           // a newer open/convention-change won
+      const out = res?.data?.pc;
+      if (Array.isArray(out) && out.length === 3) {
+        const [x, y, z] = fmtPc(out);
+        setPcDialog((d) => ({ ...d, conv: next, x, y, z, error: null }));
+      } else {
+        setPcDialog((d) => ({ ...d, error: t('fileTree.msgPcConversionFailed') }));
+      }
+    } catch (err) {
+      if (seq !== pcDialogSeq.current) return;
+      setPcDialog((d) => ({ ...d, error: err.response?.data?.detail || err.message || t('fileTree.errUnknown') }));
+    }
+  };
+
+  const submitManualPC = async () => {
     if (activeFileIndex < 0) return;
-    useBatchConfigStore
-      .getState()
-      .updateFilePCStatus(activeFileIndex, {
-        pc_value: [x, y, z],
-        pc_status: 'manual',
-        pc_source_file: null,
-      });
-    setPcDialog({ ...pcDialog, open: false });
-    setActionMsg({ kind: 'ok', text: t('fileTree.msgManualPcSet') });
+    const nums = [pcDialog.x, pcDialog.y, pcDialog.z].map(parseNum);
+    if (!nums.every((n) => Number.isFinite(n))) {
+      setPcDialog((d) => ({ ...d, error: t('fileTree.msgInvalidPc') }));
+      return;
+    }
+    const f = files[activeFileIndex];
+    const size = patternSizeOf(f.pattern_shape?.[0], f.pattern_shape?.[1]);
+    if (pcDialog.conv !== 'bruker' && !size) {
+      setPcDialog((d) => ({ ...d, error: t('fileTree.msgPcConventionNeedsSize') }));
+      return;
+    }
+    setPcDialog((d) => ({ ...d, busy: true, error: null }));
+    try {
+      let bruker = nums;
+      if (pcDialog.conv !== 'bruker') {
+        const res = await pcApi.convert(nums, pcDialog.conv, 'bruker', size);
+        bruker = res?.data?.pc;
+        if (!Array.isArray(bruker) || bruker.length !== 3) {
+          setPcDialog((d) => ({ ...d, busy: false, error: t('fileTree.msgPcConversionFailed') }));
+          return;
+        }
+      }
+      await batchV2Api.setPC(f.file_path, bruker);
+      useBatchConfigStore
+        .getState()
+        .updateFilePCStatus(activeFileIndex, {
+          pc_value: bruker,
+          pc_status: 'manual',
+          pc_source_file: null,
+        });
+      setPcDialog((d) => ({ ...d, open: false, busy: false }));
+      setActionMsg({ kind: 'ok', text: t('fileTree.msgManualPcSet') });
+    } catch (err) {
+      const detail = err.response?.data?.detail || err.message || t('fileTree.errUnknown');
+      setPcDialog((d) => ({ ...d, busy: false, error: detail }));
+      console.error('[BatchFileTree] set-pc failed:', err);
+    }
   };
 
   // ---- action: open active file in EBSD Viewer --------------------------
@@ -514,6 +605,17 @@ export default function BatchFileTree() {
               {t('fileTree.manualPcFile', { name: activeFileIndex >= 0 ? files[activeFileIndex].file_name : '—' })}<br/>
               {t('fileTree.manualPcFractional')}
             </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: '6px 8px', fontSize: '11px', alignItems: 'center', marginBottom: 8 }}>
+              <span>{t('fileTree.pcConvention')}</span>
+              <select
+                value={pcDialog.conv}
+                title={t('hoverTips.pcConventionSelect')}
+                onChange={(e) => changeConvention(e.target.value)}
+                style={{ background: colors.bgSecondary, color: colors.text, border: `1px solid ${colors.border}`, borderRadius: 3, padding: '3px 6px', fontSize: '11px' }}
+              >
+                {CONVENTIONS.map((c) => <option key={c} value={c}>{t(`pcrefinement:convention.names.${c}`)}</option>)}
+              </select>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '40px 1fr', gap: '6px 8px', fontSize: '11px', alignItems: 'center' }}>
               <span>{t('fileTree.pcx')}</span>
               <input
@@ -537,6 +639,9 @@ export default function BatchFileTree() {
                 style={{ background: colors.bgSecondary, color: colors.text, border: `1px solid ${colors.border}`, borderRadius: 3, padding: '3px 6px', fontSize: '11px' }}
               />
             </div>
+            {pcDialog.error && (
+              <div style={{ fontSize: '10px', color: colors.red, marginTop: 8 }}>{pcDialog.error}</div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 12 }}>
               <button
                 onClick={() => setPcDialog({ ...pcDialog, open: false })}
@@ -547,10 +652,11 @@ export default function BatchFileTree() {
               </button>
               <button
                 onClick={submitManualPC}
+                disabled={pcDialog.busy}
                 title={t('hoverTips.pcDialogApply')}
-                style={{ ...btnBase, width: 'auto', padding: '4px 12px', borderColor: colors.accent, color: colors.accent }}
+                style={{ ...btnBase, width: 'auto', padding: '4px 12px', borderColor: colors.accent, color: colors.accent, opacity: pcDialog.busy ? 0.6 : 1 }}
               >
-                {t('common:apply')}
+                {pcDialog.busy ? t('fileTree.manualPcApplying') : t('common:apply')}
               </button>
             </div>
           </div>

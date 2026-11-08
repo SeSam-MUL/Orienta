@@ -30,7 +30,7 @@ function isUsableBbox(bbox) {
 
 export default function CropPanel({
   bbox, mask, patternShape, bytesPerPixel = 1, shape = 'rect',
-  busy = false, origin = null, onCrop, onExport, saving = false,
+  busy = false, origin = null, onCrop, onExport, saving = false, hex = false,
 }) {
   const { t } = useTranslation('ebsdviewer');
 
@@ -93,7 +93,7 @@ export default function CropPanel({
           data-testid="crop-export"
           disabled={saving}
           onClick={onExport}
-          title={t('crop.saveCropHint')}
+          title={t(hex ? 'crop.saveCropHintHex' : 'crop.saveCropHint')}
           style={{
             padding: '3px 10px', borderRadius: 4, fontSize: '8pt', fontWeight: 500,
             border: `1px solid ${colors.border}`,

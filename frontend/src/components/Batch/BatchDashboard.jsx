@@ -249,10 +249,11 @@ function ResultExplorer({ jobs, exportDir, exportFormats }) {
   const formats = Array.isArray(exportFormats) && exportFormats.length > 0
     ? exportFormats
     : ['h5_light', 'ang', 'ctf'];
-  const pickedFormat = ['ang', 'h5_light', 'ctf'].find((f) => formats.includes(f)) || 'ang';
+  const pickedFormat = ['ang', 'h5_light', 'ctf', 'ang_square'].find((f) => formats.includes(f)) || 'ang';
   const formatSuffix = {
     ang: (stem) => `result_${stem}.ang`,
     ctf: (stem) => `result_${stem}.ctf`,
+    ang_square: (stem) => `result_${stem}_square.ang`,
     h5_light: (stem) => `result_${stem}_light.h5`,
   }[pickedFormat];
   // Group jobs by file_path (one open-in row per source file)

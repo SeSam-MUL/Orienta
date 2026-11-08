@@ -90,6 +90,7 @@ from backend.api.services.addons.trust import (
     orienta_version_satisfies,
     running_orienta_version,
 )
+from backend.api.services import variant_registry
 from backend.api.services.pattern_quality import get_quality_map
 
 logger = logging.getLogger(__name__)
@@ -801,6 +802,8 @@ def _context_extras(result) -> Dict[str, Any]:
             signal=None,
             xmap=getattr(result, "xmap", None),
             allow_compute=False,
+            # the measurement this result was indexed on, so an add-on never gets another's map
+            variant=variant_registry.variant_for_source(result, metadata.get("source_file")),
         )
     except Exception:
         logger.debug("no quality map for this result", exc_info=True)

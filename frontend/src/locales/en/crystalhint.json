@@ -1,4 +1,5 @@
 {
+  "hexAvgLocked": "Not available for a hexagonal scan: the neighbours of a point cannot be read off the index grid yet, so each pattern is analysed on its own.",
   "page": {
     "title": "Crystal Hint",
     "subtitle": "Detect symmetry + lattice parameter from EBSD patterns, suggest candidate phases (even when the actual phase isn't in your SHT library).",

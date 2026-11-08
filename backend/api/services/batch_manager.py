@@ -5,6 +5,8 @@ No more assumption that a signal is pre-loaded.
 """
 import gc
 import logging
+import math
+import os
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -14,18 +16,136 @@ from display_names import display_stem
 import numpy as np
 
 from backend.api.services.batch_queue import BatchQueue
-from backend.api.services.checkpoint_writer import CheckpointWriter
+from backend.api.services.checkpoint_writer import (
+    CheckpointPairingChanged, CheckpointWriter, read_checkpoint_pairing,
+)
+from backend.api.services import scan_geometry as scan_geometry_service
 from backend.api.services.memory_guardian import MemoryGuardian, MemoryStatus
+from backend.api.services.pc_sources import Note
 from backend.api.services.preflight_check import PreFlightChecker, PreFlightReport
 
 logger = logging.getLogger(__name__)
 
 
+class HexFrameAverageRefused(ValueError):
+    """Frame averaging of a hexagonal scan was refused or failed. ``code`` is the one the interface translates.
+
+    A hexagonal scan must never be indexed unaveraged when the user asked for averaging, so unlike a square
+    file (where a failed averaging is noted as ``FAILED`` and the run goes on) this fails the file."""
+
+    code = "hexFrameAverageRefused"
+
+
 def _load_signal(file_path: str):
-    """Load an EBSD signal from file. Returns the kikuchipy EBSD signal."""
+    """Load an EBSD signal from file. Returns the kikuchipy EBSD signal.
+
+    The loader's copy of the scan geometry (``Signal.scan_geometry``) stays on the signal: the run reads it
+    once (``scan_geometry.geometry_of_signal``) and hands it on. A batch signal is never cropped or copied,
+    so the copy cannot go stale; taking it off here would make a hexagonal scan read as a square one from
+    its navigation axes."""
     from safe_loader import load_ebsd_safe
     logger.info("Loading signal: %s", display_stem(file_path))
     return load_ebsd_safe(file_path)
+
+
+#: The formats that are written by ``export_ang_ctf`` (one failure there is reported under ``ang_ctf``).
+_ANG_CTF_FORMATS = ("ang", "ctf", "ang_square")
+
+
+def _export_plan(formats, checkpoint_path: str):
+    """What to ask ``export_all`` for one file, and what to tell the user about it.
+
+    Returns ``(formats, grid_kind, notes)``. The grid is read from the checkpoint, as the writers do. The
+    resampled square ``.ang`` exists for a hexagonal scan only: for a square file it is left out (asking
+    for it would refuse the whole ``.ang``/``.ctf`` export of that file) and the notes say so; for a
+    hexagonal scan whose ``.ctf`` or square ``.ang`` is asked for, the notes carry the sentence those
+    files carry about the resampling.
+
+    A note is the English sentence (``str``) with a ``code`` and ``params`` (``pc_sources.Note``): the
+    sentence is what the files on disk carry, the code and the numbers are what the page words it with."""
+    from backend.api.services import ang_export
+    from backend.api.services.checkpoint_writer import read_checkpoint_geometry
+    from backend.api.services.result_exporter import DEFAULT_EXPORT_FORMATS
+    wanted = list(formats) if formats is not None else list(DEFAULT_EXPORT_FORMATS)
+    geometry = read_checkpoint_geometry(checkpoint_path)
+    notes: List[str] = []
+    if geometry is None or not geometry.is_hex:
+        if "ang_square" in wanted:
+            wanted.remove("ang_square")
+            notes.append(Note("No resampled square .ang was written: this scan is already on a square grid.",
+                              "noSquareAngForSquareScan"))
+        return wanted, "square", notes
+    if "ctf" in wanted or "ang_square" in wanted:
+        from backend.api.services.hex_resample import square_resampling
+        try:
+            resampling = square_resampling(geometry)
+            assumed = not geometry.shift_confirmed
+            notes.append(Note(
+                ang_export.resampling_note(resampling, geometry), "resampledFromHex",
+                step=float(f"{resampling.step:.10g}"), source_points=int(resampling.n_source),
+                written=int(resampling.n_out), unused=int(resampling.n_unused), direction_assumed=assumed,
+                # the side the odd rows were placed on, named only when the sentence says it is an assumption
+                side=("right" if float(geometry.odd_row_shift) > 0 else "left") if assumed else None))
+        except ValueError:
+            pass     # the exporter refuses the same scan with the same reason: it is in the record's errors
+    return wanted, "hex", notes
+
+
+def _eds_notes(file_path: str, formats, include_eds: bool) -> List[str]:
+    """The note for a light ``.h5`` that cannot hold the EDS data it was asked to hold.
+
+    ``include_eds`` is on by default. A pattern file that is not HDF5 (an EDAX ``.up1`` / ``.up2``, any
+    other format) carries no EDS: the light file is written without it, and the record says so (code
+    ``edsNotCopied``)."""
+    import h5py
+    if not (include_eds and "h5_light" in formats):
+        return []
+    path = Path(file_path)
+    if path.is_file() and not h5py.is_hdf5(str(path)):
+        return [Note("The light .h5 holds no EDS data: this scan's patterns are in another file format, "
+                     "which carries none.", "edsNotCopied")]
+    return []
+
+
+def _unwritten(formats, results: dict, errors: dict) -> Dict[str, str]:
+    """The formats asked for whose file does not exist and whose failure no error names.
+
+    ``export_ang_ctf`` turns a failed ``.ang``, ``.ctf`` or square ``.ang`` into a missing path and a log
+    line; without this the record would show an output that is simply absent. The reason is a
+    ``pc_sources.Note`` with the code ``fileNotWritten``."""
+    missing = {}
+    for fmt in formats:
+        if results.get(fmt) is not None or fmt in errors:
+            continue
+        if fmt in _ANG_CTF_FORMATS and "ang_ctf" in errors:
+            continue
+        missing[fmt] = Note("The file was not written; the backend log says why.", "fileNotWritten")
+    return missing
+
+
+def _items(values, default_code: str = "other") -> List[dict]:
+    """``{code, params, text}`` of each note: the code and numbers the page words it with, and the English
+    sentence it falls back to. A plain string has no code of its own and gets ``default_code``, with itself
+    as the ``detail``."""
+    out = []
+    for value in values:
+        code = getattr(value, "code", None)
+        if code is None:
+            out.append({"code": default_code, "params": {"detail": str(value)}, "text": str(value)})
+        else:
+            out.append({"code": code, "params": dict(value.params), "text": str(value)})
+    return out
+
+
+def _error_items(errors: Optional[dict]) -> Optional[Dict[str, dict]]:
+    """``_items`` of the reasons of a record, by format; ``None`` when nothing failed.
+
+    A reason without a code of its own is an exception's text (``str(e)``): the page puts a translated
+    lead-in before it and shows the text as technical detail. A failed export as a whole is ``export``."""
+    if not errors:
+        return None
+    return {fmt: _items([reason], "exportFailed" if fmt == "export" else "writerFailed")[0]
+            for fmt, reason in errors.items()}
 
 
 def _extract_step_size_um(signal, file_path: str) -> float:
@@ -74,8 +194,53 @@ def _extract_step_size_um(signal, file_path: str) -> float:
     return 0.0
 
 
-def _apply_preprocessing(signal, config: Dict):
+def _average_hex_neighbours(signal, window, geometry, topology) -> int:
+    """Average each pattern of a hexagonal scan with the points within ``(window - 1) / 2`` steps, in place.
+
+    The same rules as the viewer's ``/api/ebsd/frame-average`` on a hexagonal dataset: an odd window up to
+    ``frame_average.HEX_MAX_WINDOW``, patterns that fit twice into ``frame_average.HEX_MAX_BYTES``, a lazy signal
+    computed in place. Returns the number of rings averaged (0 for a window of one: nothing changed). Raises
+    :class:`HexFrameAverageRefused` for a refusal and for any failure."""
+    from backend.api.services import frame_average
+    try:
+        size = int(window)
+        if size < 1:
+            raise HexFrameAverageRefused(f"A window of {size} is not a window.")
+        if size > frame_average.HEX_MAX_WINDOW:
+            raise HexFrameAverageRefused(
+                f"A window of {size} is too large for a hexagonal scan: the largest is "
+                f"{frame_average.HEX_MAX_WINDOW}.")
+        if size > 1 and size % 2 == 0:
+            raise HexFrameAverageRefused(
+                f"A window of {size} is not available on a hexagonal scan: the neighbourhood grows by whole "
+                f"rings around a point. Use an odd size: 3 averages a point with its 6 neighbours, "
+                f"5 with the 18 points within two steps.")
+        rings = (size - 1) // 2
+        if rings < 1:
+            return 0                                               # a window of one averages nothing
+        nbytes = int(np.prod(signal.data.shape, dtype=np.int64)) * int(signal.data.dtype.itemsize)
+        if nbytes > frame_average.HEX_MAX_BYTES:
+            raise HexFrameAverageRefused(
+                f"Averaging a hexagonal scan holds its {nbytes / 1024 ** 3:.2f} GiB of patterns twice in "
+                f"memory, more than the {frame_average.HEX_MAX_BYTES / 1024 ** 3:.2f} GiB allowed.")
+        if getattr(signal, "_lazy", False):
+            signal.compute(show_progressbar=False)                 # materialise in place, as the viewer does
+        signal.data[...] = frame_average.average_neighbour_patterns(
+            signal.data, topology, rings, geometry.valid_mask)
+        return rings
+    except HexFrameAverageRefused:
+        raise
+    except Exception as exc:  # noqa: BLE001 - whatever broke, an unaveraged hexagonal file is not indexed
+        raise HexFrameAverageRefused(f"Frame averaging failed: {exc}") from exc
+
+
+def _apply_preprocessing(signal, config: Dict, geometry=None):
     """Apply preprocessing steps to the signal in-place.
+
+    ``geometry`` is the ``ScanGeometry`` of the file (the run reads it once, when it loads the file). A
+    hexagonal one makes frame averaging run on the neighbour table of the lattice, and a refusal or a failure
+    there raises :class:`HexFrameAverageRefused`; a square or unknown geometry (``None``) takes kikuchipy's
+    rectangular window, whose failure is noted as ``FAILED`` while the run goes on.
 
     Returns
     -------
@@ -102,20 +267,32 @@ def _apply_preprocessing(signal, config: Dict):
     # Frame averaging
     if config.get("frame_averaging", False):
         window = config.get("frame_averaging_window", 3)
-        try:
+        from backend.api.services import scan_neighbours
+        topology = scan_neighbours.hex_topology(geometry) if geometry is not None else None
+        if topology is not None:
+            rings = _average_hex_neighbours(signal, window, geometry, topology)
+            logger.info("Applied hexagonal frame averaging (window=%s, %d rings)", window, rings)
+            # What was averaged is rings of neighbours, not a rectangle of window x window points. The
+            # label says so, so that a checkpoint never reads as the rectangular window of a square scan.
+            if rings < 1:
+                applied["frame_averaging"] = "hex, 0 rings (nothing averaged)"
+            else:
+                applied["frame_averaging"] = f"hex, {rings} ring{'' if rings == 1 else 's'}"
+        else:
             try:
-                signal.average_neighbour_patterns(
-                    window="rectangular", window_shape=(window, window)
-                )
-            except AttributeError:
-                signal.average_neighbor_patterns(
-                    window="rectangular", window_shape=(window, window)
-                )
-            logger.info("Applied frame averaging (window=%d)", window)
-            applied["frame_averaging"] = f"{window}x{window}"
-        except Exception as e:
-            logger.warning("Frame averaging failed: %s", e)
-            applied["frame_averaging"] = f"FAILED: {e}"
+                try:
+                    signal.average_neighbour_patterns(
+                        window="rectangular", window_shape=(window, window)
+                    )
+                except AttributeError:
+                    signal.average_neighbor_patterns(
+                        window="rectangular", window_shape=(window, window)
+                    )
+                logger.info("Applied frame averaging (window=%d)", window)
+                applied["frame_averaging"] = f"{window}x{window}"
+            except Exception as e:
+                logger.warning("Frame averaging failed: %s", e)
+                applied["frame_averaging"] = f"FAILED: {e}"
 
     # Background removal
     if config.get("background_removal", False):
@@ -167,12 +344,154 @@ def _apply_preprocessing(signal, config: Dict):
     return signal, applied
 
 
+# --- one calibration entry per FILE, also when two files share a stem -------------------
+#
+# The calibration store is keyed by dataset name (the file stem). A batch over
+# ``A/scan.up1`` and ``B/scan.up1`` would use ONE entry for both: the second file was
+# indexed at the first one's PC (or the one without a PC at the other's), and both wrote
+# ``result_scan.*`` into the same folder. Within a batch, files whose stems collide get a
+# name that carries a short hash of their canonical path; the others keep their stem.
+_batch_names: Dict[str, Tuple[str, str]] = {}      # canonical path -> (dataset name, suffix)
+
+
+def _canonical_file(path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _path_suffix(canonical: str) -> str:
+    import hashlib
+    return "__" + hashlib.sha1(canonical.encode("utf-8")).hexdigest()[:8]
+
+
+def _holds_default_variant(name: str, file_path) -> bool:
+    """Whether the store entry ``name`` of ``file_path`` describes the file's default variant, the
+    patterns batch v2 reads. The viewer registers a file it loaded as another variant (another
+    measurement, the unprocessed patterns) under a name that carries it; the registry of loaded
+    variants knows those names. No variant on record, or the file's default one (also when it was
+    named explicitly), is the default."""
+    from backend.api.services import variant_registry
+    from backend.api.services.load_choices import inspect_file
+    variant = variant_registry.variant_for(name)
+    if variant is None:
+        return True
+    try:
+        choices = inspect_file(str(file_path))
+    except Exception:  # noqa: BLE001 - cannot be listed: it has no choices to differ by
+        return True
+    return choices is None or variant.is_default(choices)
+
+
+def holds_default_measurement(name: str, file_path) -> bool:
+    """Whether the store entry ``name`` of ``file_path`` holds the measurement batch v2 reads, in
+    whichever pattern source. Two sources of one measurement are one acquisition on one detector;
+    another measurement has a PC of its own. A file that cannot be listed answers False."""
+    from backend.api.services import variant_registry
+    from backend.api.services.load_choices import inspect_file
+    variant = variant_registry.variant_for(name)
+    if variant is None:
+        return True
+    try:
+        choices = inspect_file(str(file_path))
+    except Exception:  # noqa: BLE001 - cannot be listed: nothing says it is the same measurement
+        return False
+    default = choices.default_variant() if choices is not None else None
+    return default is None or variant.measurement == default.measurement
+
+
+def default_variant_entry_of_file(file_path, store=None) -> Optional[str]:
+    """The name of the entry the store holds for ``file_path`` and its default variant, or None.
+
+    A file the viewer holds as another variant has an entry of that variant (named after it); that
+    one is not this file's entry for batch v2, whose data are the processed patterns of the first
+    measurement. Views of a dataset (copies, crops) are never the file's own entry, as in
+    ``CalibrationStore.name_of_file``. ``store``: the calibration store to ask (the app's by default)."""
+    if store is None:
+        from backend.api.services.calibration_store import calibration_store as store
+    c = _canonical_file(file_path)
+    for name, entry in store.get_all().items():
+        if entry.file_key == c and not entry.is_view_of_parent and _holds_default_variant(name, file_path):
+            return name
+    return None
+
+
+def variant_entry_of_file(file_path, store=None) -> Optional[str]:
+    """The entry the viewer registered for ``file_path`` as a variant other than the default, or
+    None (see :func:`default_variant_entry_of_file`)."""
+    if store is None:
+        from backend.api.services.calibration_store import calibration_store as store
+    c = _canonical_file(file_path)
+    for name, entry in store.get_all().items():
+        if entry.file_key == c and not entry.is_view_of_parent and not _holds_default_variant(name, file_path):
+            return name
+    return None
+
+
+def store_name_for_file(file_path) -> str:
+    """The name under which the calibration store holds (or would hold) THIS file for batch v2.
+
+    The store is keyed by name (the file stem), so two files with one stem need two names:
+    the entry already registered for the file's canonical path wins (whatever it is
+    called); else the stem when no entry has it; else - an entry of that stem belongs to
+    another file, or to no file known (registered without a path) - the stem plus a short
+    hash of the canonical path. A caller that shows or writes a PC of a file goes through
+    this name, never through the bare stem.
+
+    Batch v2 reads the file's default variant (the processed patterns), so the name is that of an
+    entry holding it: an entry the viewer made for another variant of the same file (named after
+    the variant) is not taken, it would label processed data as the unprocessed ones.
+    """
+    from backend.api.services.calibration_store import calibration_store
+    c = _canonical_file(file_path)
+    own = default_variant_entry_of_file(file_path)
+    if own is not None:
+        return own
+    stem = display_stem(file_path)
+    if calibration_store.get_entry(stem) is None:
+        return stem
+    return stem + _path_suffix(c)
+
+
+def assign_batch_dataset_names(files) -> Dict[str, Tuple[str, str]]:
+    """Name every file of a batch (see :func:`store_name_for_file`) and the suffix its
+    OUTPUTS carry. Files whose stems collide within the batch, or whose store name is not
+    the plain stem, get ``__<hash8>`` in their output names, so no two files overwrite each
+    other; the others keep the plain name. Deterministic (the hash is of the canonical
+    path) and remembered for the calibration, the exports and the guards. Returns
+    ``{canonical path: (dataset name, output suffix)}`` for these files."""
+    from collections import Counter
+    canon = {}
+    for f in files:
+        canon.setdefault(_canonical_file(f), str(f))
+    stems = Counter(display_stem(f) for f in canon.values())
+    out = {}
+    taken = set()
+    for c, f in canon.items():
+        stem = display_stem(f)
+        name = store_name_for_file(f)
+        if name in taken:                      # two files of the batch, one still-unregistered name
+            name = stem + _path_suffix(c)
+        taken.add(name)
+        suffix = _path_suffix(c) if (stems[stem] > 1 or name != stem) else ""
+        out[c] = (name, suffix)
+    _batch_names.update(out)
+    return out
+
+
+def dataset_name_for(file_path) -> str:
+    """The calibration name of ``file_path`` in the batch that is (or was last) set up."""
+    return _batch_names.get(_canonical_file(file_path), (display_stem(file_path), ""))[0]
+
+
+def name_suffix_for(file_path) -> str:
+    return _batch_names.get(_canonical_file(file_path), (None, ""))[1]
+
+
 def _register_signal_calibration(signal, file_path: str):
     """Register signal's detector/PC in CalibrationStore."""
     from backend.api.services.calibration_store import calibration_store
-    dataset_name = display_stem(file_path)
+    dataset_name = dataset_name_for(file_path)
     if dataset_name not in calibration_store:
-        calibration_store.register(dataset_name, signal)
+        calibration_store.register(dataset_name, signal, file_key=_canonical_file(file_path))
 
 
 #: The spherical engines a batch request may ask for. Re-exported from
@@ -185,8 +504,29 @@ from indexing_controller import SPHERICAL_BACKENDS as _SPHERICAL_BACKENDS
 def _get_detector_for_file(file_path: str, signal=None):
     """Get the best available detector for a file. Never returns None."""
     from backend.api.services.calibration_store import calibration_store
-    dataset_name = display_stem(file_path)
+    from backend.api.services.pc_guard import PcMissingError, is_pc_missing, pc_missing_message
+    dataset_name = dataset_name_for(file_path)
+    if is_pc_missing(dataset_name, calibration_store, signal, _canonical_file(file_path)):
+        # The store's detector would hold kikuchipy's placeholder PC.
+        raise PcMissingError(pc_missing_message(dataset_name))
     detector = calibration_store.get_detector(dataset_name)
+    if detector is not None and signal is not None:
+        # The entry has to describe THIS file's patterns: another pattern shape means it
+        # is another detector's (an entry of another file), and indexing would die far
+        # from here or, with the same shape, use a PC that is not this file's.
+        try:
+            sig_shape = tuple(int(v) for v in signal.axes_manager.signal_shape[::-1])
+            if tuple(int(v) for v in detector.shape) != sig_shape:
+                from backend.api.services.pc_guard import DetectorMismatchError
+                raise DetectorMismatchError(
+                    f"The calibration held for '{dataset_name}' is for a "
+                    f"{tuple(detector.shape)} detector, but the patterns of "
+                    f"{display_stem(file_path)} are {sig_shape}: it belongs to another file. "
+                    "Load this file again, or set its PC.")
+        except DetectorMismatchError:
+            raise
+        except Exception:  # noqa: BLE001 - a stand-in signal without axes
+            pass
     if detector is None and signal is not None:
         detector = getattr(signal, "detector", None)
     if detector is None:
@@ -218,6 +558,7 @@ def run_single_indexing_job(
     grid_shape: Tuple[int, int],
     job_config: Optional[Dict] = None,
     progress_callback: Optional[Callable] = None,
+    scan_geometry: Optional[Dict] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Dict]:
     """Run indexing for one signal x one phase.
 
@@ -229,6 +570,8 @@ def run_single_indexing_job(
     grid_shape : (n_rows, n_cols)
     job_config : dict with method-specific parameters (keep_n, bandwidth, etc.)
     progress_callback : optional
+    scan_geometry : the stamp (``ScanGeometry.to_dict()``) of the grid this file was loaded with, which the
+        batch read once at the load. ``None`` (a direct call) reads it off ``signal``.
 
     Returns
     -------
@@ -349,12 +692,31 @@ def run_single_indexing_job(
         # above); a JSON null still reports as "null/missing".
         from indexing_controller import resolve_spherical_backend
         backend_choice = resolve_spherical_backend(config)
+        # The stamp is this job's own file's geometry, not the viewer's dataset's (the default
+        # of `scan_geometry` downstream): this file is never the active dataset. The batch reads it
+        # once when it loads the file and passes it in; a direct call reads it off the signal.
+        # Unknown is `None`, which the run reads as "not hexagonal" and never as a reason to look
+        # at the viewer. Both backends get it: EMSphInx refuses a hexagonal scan by it.
+        if scan_geometry is not None:
+            _scan_stamp = scan_geometry
+        else:
+            try:
+                from backend.api.services import scan_geometry as _scan_geometry
+                _scan_stamp = _scan_geometry.geometry_of_signal(signal).to_dict()
+            except Exception:  # noqa: BLE001 - a geometry that cannot be read is unknown
+                logger.warning("could not read the scan geometry of %s; its hexagonal note is "
+                               "left out", display_stem(file_path), exc_info=True)
+                _scan_stamp = None
         if backend_choice == "spherical_gpu":
             result = spherical_gpu_index_patterns(
                 h5_path=file_path,
                 config=config,
                 detector_params=det_params,
                 progress_callback=progress_callback,
+                scan_geometry=_scan_stamp,
+                # This job's own signal: batch v2 loads its file into a signal of its own and never
+                # activates it in the viewer, so the viewer's patterns are some other dataset's.
+                signal=signal,
             )
         else:
             result = spherical_index_patterns(
@@ -362,6 +724,10 @@ def run_single_indexing_job(
                 config=config,
                 detector_params=det_params,
                 progress_callback=progress_callback,
+                scan_geometry=_scan_stamp,
+                # This job's file as it is on disk, never the viewer's processed
+                # patterns - not even when the viewer shows this same file.
+                use_viewer_patterns=False,
             )
     elif method == "dictionary":
         import kikuchipy as kp
@@ -450,6 +816,20 @@ def run_single_indexing_job(
         "duration_sec": duration,
         "started_at": "",
     }
+    # What the run recorded about itself, carried to the checkpoint and from there to
+    # the exports (every other export path writes the same two records): the citation
+    # steps that ran and, for Hough, the reflector list each phase was indexed with.
+    from backend.api.services.citations.provenance import get_steps
+    _steps = get_steps(result)
+    if _steps:
+        metadata["citation_steps"] = [dict(s) for s in _steps]
+    _md = getattr(result, "metadata", None)
+    _hough = _md.get("hough_reflectors") if isinstance(_md, dict) else None
+    if isinstance(_hough, dict) and _hough:
+        metadata["hough_reflectors"] = _hough
+    _caveats = _md.get("caveats") if isinstance(_md, dict) else None
+    if isinstance(_caveats, list) and _caveats:
+        metadata["caveats"] = _caveats
 
     # Pull the crystallographic symmetry off the indexed xmap so the
     # checkpoint keeps it for later .ang / .ctf / .h5 exports. Without
@@ -508,6 +888,8 @@ class BatchManager:
         self.guardian = MemoryGuardian()
         self._paused = False
         self._stopped = False
+        #: batch id -> {source file: what was exported for it} (name suffix included)
+        self.exports: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     def create_batch(
         self,
@@ -594,8 +976,18 @@ class BatchManager:
 
         preprocessing_config = batch_config.get("preprocessing", {})
         checkpoints: Dict[str, CheckpointWriter] = {}
+        # What this run calls each of its files (stems that collide get a path hash).
+        assign_batch_dataset_names([j["file_path"] for j in self.queue.get_jobs(batch_id)])
+        #: file -> {"dataset", "name_suffix", "outputs"}: what was exported for it
+        self.exports[batch_id] = {}
+        # The PC and tilts each file was indexed at, taken when the file is loaded: the
+        # export at the end of the batch states THESE, not what the store holds by then
+        # (a PC typed while the batch ran is not the PC of its orientations).
+        pc_records: Dict[str, Optional[dict]] = {}
         current_signal = None
         current_file = None
+        current_geometry = None          # ScanGeometry of current_file, read at its load
+        current_stamp = None             # the same as the dict the indexer takes
 
         while True:
             if self._stopped:
@@ -629,8 +1021,18 @@ class BatchManager:
                     current_signal = _load_signal(file_path)
                     current_file = file_path
 
+                    # The grid this file was loaded with, read once, here: everything that follows (the
+                    # averaging, the checkpoint's stamp, the indexer) works from THIS, never from a dataset
+                    # the viewer may have open. A loader that disagrees with its own signal raises, and the
+                    # file fails with that.
+                    from backend.api.services import scan_geometry as scan_geometry_service
+                    current_geometry = scan_geometry_service.geometry_of_signal(current_signal)
+                    current_stamp = current_geometry.to_dict()
+
                     # Register calibration (preserves any PC set via copy-pc)
                     _register_signal_calibration(current_signal, file_path)
+                    from backend.api.services.pc_record import pc_run_record
+                    pc_records[file_path] = pc_run_record(dataset_name_for(file_path))
 
                     # Get grid shape from signal. navigation_shape is (nx, ny)
                     # for 2D scans and (n,) for 1D line scans; handle both so
@@ -650,7 +1052,7 @@ class BatchManager:
                     applied_preprocessing = {}
                     if preprocessing_config and first_method != "spherical":
                         current_signal, applied_preprocessing = _apply_preprocessing(
-                            current_signal, preprocessing_config
+                            current_signal, preprocessing_config, current_geometry
                         )
                         if applied_preprocessing:
                             logger.info(
@@ -672,30 +1074,75 @@ class BatchManager:
                     all_jobs = self.queue.get_jobs(batch_id)
                     for j in all_jobs:
                         if j["file_path"] == file_path and j["status"] == "pending":
-                            self.queue.update_job(j["id"], status="failed", error_msg=f"Load failed: {e}")
+                            # keep the code of a coded refusal (a hexagonal scan, an APEX file that
+                            # needs a measurement): the interface translates on it
+                            self.queue.update_job(j["id"], status="failed", error_msg=f"Load failed: {e}",
+                                                  error_code=getattr(e, "code", None))
                     current_file = None
                     current_signal = None
+                    current_geometry = current_stamp = None
                     continue
 
             # --- Checkpoint management ---
             if file_path not in checkpoints:
-                # Pull the real µm step from the signal's axes_manager so the
-                # exporter can stamp .ang/.ctf/.light with the right scale.
-                # Without this every downstream tool reconstructs an axes
-                # manager with scale=1.0 and µm distances are meaningless.
-                step_size_um = _extract_step_size_um(current_signal, file_path)
-                if step_size_um <= 0.0:
-                    raise ValueError(
-                        f"Could not determine step size for {Path(file_path).name}: "
-                        "signal axes_manager has no scale and h5oina header "
-                        "lacks 'X Step'. Refusing to start batch — exports "
-                        "would be unusable for any quantitative analysis."
+                # The checkpoint carries the grid of the file (writers and the resume check work from it). A
+                # hexagonal geometry is the truth about the file's grid, and its step is the file's step: it is
+                # taken first, so that axes without a scale cannot refuse a file whose geometry states its step.
+                # A square one is stamped only when it states the step recorded here: when the axes carry no
+                # scale (placeholder 1.0) and the step came from the file's header, the two differ, the
+                # checkpoint keeps the step as it always has and gets no stamp (it reads as square).
+                #
+                # Nothing in this block may end the batch thread (no caller reads its outcome, the status would
+                # stay "running" and the other files "pending"): a step that cannot be found, a checkpoint of
+                # another pairing and a checkpoint that cannot be read all fail THIS file, with their text.
+                stage = "step"
+                try:
+                    stamp_geometry = current_geometry
+                    if current_geometry.is_hex:
+                        step_size_um = current_geometry.step_x
+                    else:
+                        # Pull the real µm step from the signal's axes_manager so the exporter can stamp
+                        # .ang/.ctf/.light with the right scale. Without this every downstream tool
+                        # reconstructs an axes manager with scale=1.0 and µm distances are meaningless.
+                        step_size_um = _extract_step_size_um(current_signal, file_path)
+                        if step_size_um <= 0.0:
+                            raise ValueError(
+                                f"Could not determine step size for {Path(file_path).name}: "
+                                "signal axes_manager has no scale and h5oina header "
+                                "lacks 'X Step'. This file is not indexed, because its exports "
+                                "would be unusable for any quantitative analysis; the batch goes on "
+                                "with the other files."
+                            )
+                        if not math.isclose(step_size_um, current_geometry.step_x, rel_tol=1e-9):
+                            stamp_geometry = None
+                    stage = "checkpoint"
+                    writer = CheckpointWriter(file_path)
+                    writer.init_metadata(
+                        grid_shape=grid_shape, batch_id=batch_id,
+                        method=job["method"], step_size_um=step_size_um,
+                        geometry=stamp_geometry, apex=scan_geometry_service.apex_of_signal(current_signal),
                     )
-                checkpoints[file_path] = CheckpointWriter(file_path)
-                checkpoints[file_path].init_metadata(
-                    grid_shape=grid_shape, batch_id=batch_id,
-                    method=job["method"], step_size_um=step_size_um,
-                )
+                except (ValueError, OSError, TypeError) as e:     # TypeError: a grid_shape that is no pair
+                    # A changed pairing has its own code; a checkpoint that cannot be read (a damaged or missing
+                    # stamp, no /metadata, not an HDF5 file) gets "checkpointUnreadable"; a missing step keeps
+                    # its text and has no code.
+                    code = getattr(e, "code", None)
+                    if stage == "checkpoint":
+                        code = code or "checkpointUnreadable"
+                        message = str(e) if isinstance(e, CheckpointPairingChanged) else (
+                            f"The checkpoint of {Path(file_path).name} cannot be read: {e}")
+                    else:
+                        message = str(e)
+                    logger.exception("Checkpoint of %s refused: %s", display_stem(file_path), message)
+                    for j in self.queue.get_jobs(batch_id):
+                        if j["file_path"] == file_path and j["status"] == "pending":
+                            self.queue.update_job(j["id"], status="failed", error_msg=message,
+                                                  error_code=code)
+                    current_file = None
+                    current_signal = None
+                    current_geometry = current_stamp = None
+                    continue
+                checkpoints[file_path] = writer
                 # Record preprocessing at file level (same preprocessing is
                 # applied once before all phases run against that file).
                 try:
@@ -749,6 +1196,7 @@ class BatchManager:
                     progress_callback=lambda msg, pct=None: (
                         progress_callback(job, msg) if progress_callback else None
                     ),
+                    scan_geometry=current_stamp,
                 )
 
                 cw.write_phase_result(phase_name, ci_map, orientation_map, metadata)
@@ -766,7 +1214,12 @@ class BatchManager:
 
             except Exception as e:
                 logger.exception("Failed: %s x %s", display_stem(file_path), phase_name)
-                self.queue.update_job(job["id"], status="failed", error_msg=str(e))
+                # a coded failure also carries the values its translated text needs
+                # (a refused Hough library: the phases, their rows, the one-click count)
+                _params = getattr(e, "params", None)
+                self.queue.update_job(job["id"], status="failed", error_msg=str(e),
+                                      error_code=getattr(e, "code", None),
+                                      error_params=_params if isinstance(_params, dict) else None)
 
             self.guardian.force_cleanup()
 
@@ -780,6 +1233,9 @@ class BatchManager:
         ci_thr   = float(postproc.get("ci_threshold", 0) or 0)
         unc_thr  = float(postproc.get("uncertainty_threshold", 0) or 0)
         min_clst = int(postproc.get("min_cluster_size", 0) or 0)
+        # What went wrong between the runs and the files, by file: the export that follows is made from
+        # the map as it stands, so the record of that file must say what was not applied to it.
+        postprocessing_notes: Dict[str, List[str]] = {}
         for file_path, cw in checkpoints.items():
             jobs_for_file = [j for j in self.queue.get_jobs(batch_id) if j["file_path"] == file_path]
             if all(j["status"] in ("done", "skipped") for j in jobs_for_file):
@@ -787,6 +1243,10 @@ class BatchManager:
                     cw.compute_auto_assignment()
                 except Exception as e:
                     logger.warning("Auto-assignment failed for %s: %s", file_path, e)
+                    postprocessing_notes.setdefault(file_path, []).append(Note(
+                        f"The best phase of each point could not be assigned ({e}); the files of "
+                        "this scan may not hold the assignment you expect.",
+                        "autoAssignmentFailed", detail=str(e)))
                 # Optional cleanup: applies MTEX-style filters to the winning
                 # phase assignment so the exports don't propagate noise-pixel
                 # false positives. Nothing happens when all thresholds are 0.
@@ -800,6 +1260,9 @@ class BatchManager:
                         logger.info("Cleanup applied to %s: %s", display_stem(file_path), stats)
                     except Exception as e:
                         logger.warning("Cleanup failed for %s: %s", file_path, e)
+                        postprocessing_notes.setdefault(file_path, []).append(Note(
+                            f"The cleanup of the phase map failed ({e}); the files hold the map "
+                            "as it was before the cleanup.", "cleanupFailed", detail=str(e)))
 
         # --- Export results for completed files ---
         export_dir = batch_config.get("export_dir", "")
@@ -815,11 +1278,25 @@ class BatchManager:
                     continue
                 try:
                     out = export_dir or str(Path(file_path).parent)
-                    pc_entry = calibration_store.get_entry(display_stem(file_path))
-                    pc_val = [float(v) for v in pc_entry.pc_single] if pc_entry else None
-                    s_tilt = pc_entry.sample_tilt if pc_entry else 70.0
+                    pc_entry = calibration_store.get_entry(dataset_name_for(file_path))
+                    # the PC the file was indexed at (None: the file carries none), see above
+                    run_rec = pc_records.get(file_path)
+                    pc_val = run_rec["pc"] if run_rec else None
+                    s_tilt = run_rec["sample_tilt"] if run_rec else 70.0
                     d_shape = pc_entry.detector_shape if pc_entry else None
+                    # what the phases recorded about their runs (read from the checkpoint,
+                    # so phases resumed from an earlier run are included)
+                    try:
+                        record = cw.read_run_record()
+                    except Exception as rec_err:    # the record is documentation: never lose the export over it
+                        logger.warning("Could not read the run record of %s: %s", file_path, rec_err)
+                        record = {"citation_steps": None, "hough_reflectors": None}
 
+                    # the grid the checkpoint was written for decides which files this scan can have
+                    file_formats, grid_kind, notes = _export_plan(export_formats, cw.checkpoint_path)
+                    include_eds = bool(batch_config.get("include_eds", True))
+                    notes = list(notes) + _eds_notes(file_path, file_formats, include_eds)
+                    notes += postprocessing_notes.get(file_path, [])
                     results = export_all(
                         source_h5_path=file_path,
                         checkpoint_path=cw.checkpoint_path,
@@ -828,16 +1305,46 @@ class BatchManager:
                         pc=pc_val,
                         sample_tilt=s_tilt,
                         detector_shape=d_shape,
-                        formats=export_formats,
+                        formats=file_formats,
                         # Default ON: full EDS in .light is required for the
                         # phase-vorauswahl workflow (FEAT-10) — the .light
                         # is useless for EDS-driven phase filtering without
                         # the original spectra alongside the indexing data.
-                        include_eds=bool(batch_config.get("include_eds", True)),
+                        include_eds=include_eds,
+                        # two files with one stem must not overwrite each other's outputs
+                        name_suffix=name_suffix_for(file_path),
+                        citation_steps=record["citation_steps"],
+                        hough_reflectors=record["hough_reflectors"],
+                        caveats=record.get("caveats"),
                     )
+                    errors = dict(results.get("_errors") or {})
+                    errors.update(_unwritten(file_formats, results, errors))
+                    self.exports[batch_id][file_path] = {
+                        "dataset": dataset_name_for(file_path),
+                        "name_suffix": name_suffix_for(file_path) or None,
+                        "outputs": {k: v for k, v in results.items()
+                                    if k in ("h5_rich", "h5_light", "ang", "ctf", "ang_square")},
+                        "errors": {fmt: str(reason) for fmt, reason in errors.items()} or None,
+                        # the same reasons with the code and numbers the page words them with
+                        "error_items": _error_items(errors),
+                        # which grid the files hold, the APEX measurement the checkpoint was written for
+                        # (None: the file had none) and what the resampled files did to the scan
+                        "grid_kind": grid_kind,
+                        "pairing": read_checkpoint_pairing(cw.checkpoint_path),
+                        "notes": [str(n) for n in notes],
+                        "note_items": _items(notes),
+                    }
                     logger.info("Exported %s: %s", display_stem(file_path), {k: v for k, v in results.items() if v})
                 except Exception as e:
-                    logger.warning("Export failed for %s: %s", file_path, e)
+                    logger.exception("Export failed for %s", file_path)
+                    # the file gets a record too: an export that never started is a missing file as well
+                    self.exports[batch_id][file_path] = {
+                        "dataset": dataset_name_for(file_path),
+                        "name_suffix": name_suffix_for(file_path) or None,
+                        "outputs": {}, "errors": {"export": str(e)},
+                        "error_items": _error_items({"export": str(e)}),
+                        "grid_kind": None, "pairing": None, "notes": [], "note_items": [],
+                    }
 
         # --- Final status ---
         if not self._paused and not self._stopped:

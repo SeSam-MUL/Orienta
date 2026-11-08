@@ -8,7 +8,7 @@ present". These tests drive the real route and the real
 ``run_per_phase_indexing`` with the one thing that costs time stubbed -- the
 indexing of a single phase -- and read what each phase was handed.
 
-The expectations are written by hand from what the user asked for ("each phase
+The expectations are written by hand from the intended behaviour ("each phase
 only on its own pixels, with its own file and the backend I chose"), not
 computed with the code under test.
 """
@@ -87,8 +87,8 @@ class Recorder:
         self._metadata_for = metadata_for
 
     def __call__(self, signal, detector, phase_config, method, config,
-                 selection_mask, h5_path="", detector_params=None,
-                 progress_callback=None, cancel_check=None):
+                 selection_mask, h5_path="", detector_params=None, variant=None,
+                 progress_callback=None, cancel_check=None, scan_geometry=None):
         if self.on_call is not None:
             self.on_call(len(self.calls))
         self.calls.append({
@@ -122,7 +122,8 @@ class Recorder:
             # what an indexer does: a message with ITS phase's fraction
             progress_callback(f"indexer of {phase_config.name} says hello", 0.99)
             from backend.api.routes import indexing as route
-            self.bar.extend(t["progress"] for t in route._indexing_tasks.values())
+            # The newest task is this run's; another test's finished one may sit in the dict.
+            self.bar.append(next(reversed(route._indexing_tasks.values()))["progress"])
         if self.fail_after_record:
             raise RuntimeError("stop after recording")
         return pmr

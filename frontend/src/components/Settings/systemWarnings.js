@@ -4,8 +4,7 @@
  * The backend sends `warnings` (English prose, every producer) and
  * `warning_items` (the subset that carries `{code, values, message}`). The
  * Settings → System Status used to show the English sentence because prose was
- * all there was — reported from the 0.4.5 laptop test, where the GPU blocksize
- * warning appeared in English mid-German. (The standalone installer wizard,
+ * all there was, so a warning appeared in English in the middle of German. (The standalone installer wizard,
  * electron/setup/, has its own warningCode scheme and never shows these.)
  *
  * Rules, in order:

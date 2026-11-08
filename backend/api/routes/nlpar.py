@@ -58,6 +58,15 @@ def _is_hex_scan(path) -> bool:
         return False
 
 
+def _is_hex_geometry() -> bool:
+    """Does the geometry registry say the active dataset is a hexagonal scan, whatever file it
+    came from (an EDAX APEX ``.up1`` is none of the OIM ``.h5`` files ``_is_hex_scan`` knows)?
+    ``POST /nlpar`` is refused for it by ``hex_guard``; this lets the advice say so too."""
+    from backend.api.services import scan_geometry
+    geometry = scan_geometry.geometry_for(ev._active_dataset)
+    return geometry is not None and geometry.kind == "hex"
+
+
 def _available_ram() -> int:
     import psutil
     return int(psutil.virtual_memory().available)
@@ -65,7 +74,11 @@ def _available_ram() -> int:
 
 @router.post("/nlpar")
 async def nlpar(req: NlparRequest):
-    """Denoise the active dataset's patterns with NLPAR, in place."""
+    """Denoise the active dataset's patterns with NLPAR, in place.
+
+    A hexagonal scan is refused before this body runs: ``hex_guard.GUARDED`` lists the route, and
+    the router carries the gate (``400``, code ``hex_neighbourhood_unsupported``). The check of an
+    OIM hexagonal ``.h5`` below stays as the older, file-based guard."""
     signal = ev._get_active_signal()
     if signal is None:
         raise HTTPException(status_code=400, detail="No EBSD data loaded")
@@ -211,7 +224,9 @@ async def nlpar_advice():
     explains: NLPAR will help), ``not_recommended`` (they differ far more: clean scan or
     structure finer than the search window, NLPAR then blurs boundaries), ``applied``
     (the dataset already carries the NLPAR mark: the control must be disabled, a second
-    run is refused) or ``unavailable`` with a ``reason`` code. The user can still run it.
+    run is refused) or ``unavailable`` with a ``reason`` code. The user can still run it, except
+    on a hexagonal scan (``reason`` ``hex``: an OIM hexagonal file, or any dataset whose registered
+    geometry is hexagonal): ``POST /nlpar`` is refused there.
     """
     signal = ev._get_active_signal()
     if signal is None:
@@ -223,7 +238,7 @@ async def nlpar_advice():
     nav = tuple(int(s) for s in signal.axes_manager.navigation_shape)
     if len(nav) != 2 or min(nav) < 5:
         return {**base, "recommendation": "unavailable", "reason": "too_small"}
-    if _is_hex_scan(ev._ebsd_file_path):
+    if _is_hex_scan(ev._ebsd_file_path) or _is_hex_geometry():
         return {**base, "recommendation": "unavailable", "reason": "hex"}
     try:
         est = await asyncio.to_thread(nlpar_service.estimate_noise, signal.data)

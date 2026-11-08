@@ -30,9 +30,14 @@
     "scanning": "Scanning...",
     "filesLoaded": "{{count}} file(s) loaded",
     "hint": "Click \"Add Folder\" to scan for EBSD files",
+    "patternSource": "The batch indexes each file's default patterns: the first measurement, processed where the file has them, whichever measurement or patterns you chose in the loading dialog.",
     "enterFolderPrompt": "Enter folder path:",
     "noFilesFound": "No EBSD files found",
-    "scanFailed": "Scan failed"
+    "scanFailed": "Scan failed",
+    "gridHex": "hexagonal, {{rows}} x {{cols}}",
+    "gridSquare": "square, {{rows}} x {{cols}}",
+    "pairingPaired": "Metadata: {{file}}, measurement {{name}}",
+    "pairingNone": "No metadata found"
   },
   "step2": {
     "title": "Pattern Center (PC)",
@@ -80,6 +85,9 @@
     "ctf": ".ctf",
     "ctfDesc": "Oxford/MTEX format",
     "ctfTooltip": "Export results in Oxford/MTEX .ctf format.",
+    "angSquare": ".ang (square grid)",
+    "angSquareDesc": "hexagonal scans only, resampled",
+    "angSquareTooltip": "Export the results of a hexagonal scan resampled onto a square grid as a square .ang (each cell takes the nearest measured point).",
     "richH5": "Rich .h5",
     "richH5Desc": "copies the source file — size = source size per result!",
     "richH5Tooltip": "Export full HDF5 copying the source file — size equals source per result.",
@@ -112,7 +120,8 @@
     "phaseChipTooltip": "Select or deselect this phase for indexing.",
     "selected": "{{count}} selected",
     "applyToAll": "Apply to All Files",
-    "applyToAllTooltip": "Assign the selected phases to every file in the batch."
+    "applyToAllTooltip": "Assign the selected phases to every file in the batch.",
+    "methodChangedClearedPhases": "Method changed: choose the phases again — the phase files differ per method."
   },
   "step5": {
     "sphericalTitle": "Spherical",
@@ -175,14 +184,19 @@
     "manualPcTitle": "Manual Pattern Center",
     "manualPcFile": "File: {{name}}",
     "manualPcFractional": "Values are detector-fractional (0–1).",
+    "pcConvention": "Convention:",
     "pcx": "PCx:",
     "pcy": "PCy:",
     "pcz": "PCz:",
+    "manualPcApplying": "Applying…",
+    "msgPcConventionNeedsSize": "This file's pattern size is not known yet, so numbers in this convention cannot be converted. Choose Bruker, or quick-load the file first.",
+    "msgPcConversionFailed": "Could not convert these numbers to Bruker's convention.",
     "msgPcCopied": "PC copied to {{count}} file(s)",
     "msgPcCopyPartial": "{{failed}}/{{total}} target(s) failed: {{error}}",
     "msgCopyPcFailed": "Copy PC failed: {{detail}}",
     "msgApplyAllLackedPc": "Apply All: {{failed}}/{{total}} target(s) lacked PC",
     "msgAppliedTo": "Applied to {{count}} file(s)",
+    "msgSkippedSource": "{{count}} skipped (source = target)",
     "msgApplyAllFailed": "Apply All failed: {{detail}}",
     "msgInvalidPc": "Invalid PC values — must be three numbers",
     "msgManualPcSet": "Manual PC set",
@@ -283,6 +297,7 @@
     "startBatch": "Start Batch ({{files}} × {{phases}})"
   },
   "hoverTips": {
+    "pcConventionSelect": "The kind of numbers typed below — Bruker (Orienta's own), EDAX/TSL or Oxford.",
     "pcXInput": "Pattern center PCx (detector-fractional, 0–1) for the active file.",
     "pcYInput": "Pattern center PCy (detector-fractional, 0–1) for the active file.",
     "pcZInput": "Pattern center PCz / detector distance (detector-fractional, 0–1) for the active file.",
@@ -295,5 +310,48 @@
     "openRefinement": "Open this file in Refinement (reads the _multiphase.h5 checkpoint next to the source).",
     "openAnalysis": "Open this file in Analysis (loads the .ang/.ctf/light .h5 export).",
     "openPhaseMap": "Open this file in Phase Map (loads the .ang/.ctf/light .h5 export)."
+  },
+  "formats": {
+    "hexResampled": ".ctf and square .ang of hexagonal scans are resampled onto a square grid."
+  },
+  "exports": {
+    "title": "Files written",
+    "gridHex": "Grid: hexagonal",
+    "gridSquare": "Grid: square",
+    "missing": "Not written, {{format}}: {{reason}}",
+    "formats": {
+      "h5_light": "light .h5",
+      "h5_rich": "rich .h5",
+      "ang": ".ang",
+      "ctf": ".ctf",
+      "ang_square": "resampled square .ang",
+      "ang_ctf": ".ang / .ctf",
+      "export": "all files of this scan"
+    },
+    "notes": {
+      "resampledFromHex": "Resampled from a hexagonal scan to a square grid by nearest neighbour at step {{step}} µm (source points {{sourcePoints}}, points written {{written}}, source points unused {{unused}}); nothing was interpolated.",
+      "rowOffsetAssumedRight": "The direction of the row offset is an assumption (no file states it): the odd rows are placed half a step to the right of the even rows.",
+      "rowOffsetAssumedLeft": "The direction of the row offset is an assumption (no file states it): the odd rows are placed half a step to the left of the even rows.",
+      "noSquareAngForSquareScan": "No resampled square .ang was written: this scan is already on a square grid.",
+      "edsNotCopied": "The light .h5 holds no EDS data: this scan's patterns are in another file format, which carries none.",
+      "cleanupFailed": "The cleanup of the phase map failed, so the files hold the map as it was before the cleanup. Technical detail: {{detail}}",
+      "autoAssignmentFailed": "The best phase of each point could not be assigned, so the files of this scan may not hold the assignment you expect. Technical detail: {{detail}}"
+    },
+    "errors": {
+      "fileNotWritten": "the file was not written; the program log says why.",
+      "writerFailed": "the file could not be written. Technical detail: {{detail}}",
+      "exportFailed": "the export stopped with an error. Technical detail: {{detail}}",
+      "richNeedsHdf5Source": "a rich .h5 needs an HDF5 source; this scan's patterns are in another file format. Use the light .h5."
+    }
+  },
+  "errors": {
+    "edaxHexUpUnsupported": "Hexagonal scan without metadata: put its APEX .h5 in the same folder.",
+    "apexNeedsMeasurement": "This is a metadata file; add its .up1/.up2 files.",
+    "emsphinxSourceRefused": "EMSphInx (CPU) cannot index this file; use GPU, Hough or Dictionary.",
+    "checkpointPairingChanged": "Checkpoint from other metadata or grid; delete it.",
+    "hexFrameAverageRefused": "Frame averaging could not run on this hexagonal scan: use an odd window below the limit.",
+    "checkpointUnreadable": "The checkpoint of this file cannot be read; delete it.",
+    "pc_missing": "This file carries no pattern centre (PC); kikuchipy's placeholder would give wrong orientations. Calibrate the PC in PC Refinement, or put the .osc / metadata file that holds it next to the scan, then start again.",
+    "detector_shape_mismatch": "The calibration held for this file is for another detector than its patterns (another pattern size): it belongs to another file. Load the file again, or set its PC, then start again."
   }
 }

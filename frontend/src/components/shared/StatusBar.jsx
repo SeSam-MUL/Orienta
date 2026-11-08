@@ -13,6 +13,7 @@ import { colors, layout } from '../../theme/tokens';
 import useDataStore from '../../stores/useDataStore';
 import useProgressStore from '../../stores/useProgressStore';
 import { simApi } from '../../services/api';
+import { isHexScan } from '../../services/scanGeometry';
 
 function StatusDot({ color, label }) {
   return (
@@ -44,7 +45,7 @@ export function backendStateLabel(t, status) {
 
 export default function StatusBar({ backendStatus, onNavigate }) {
   const { t } = useTranslation('shell');
-  const { isFileOpen, filePath, gridShape, patternCount, detector, stepSize, edsElements } = useDataStore();
+  const { isFileOpen, filePath, gridShape, scanGeometry, hexResampled, patternCount, detector, stepSize, edsElements } = useDataStore();
   const { tasks } = useProgressStore();
   const [sysStatus, setSysStatus] = useState(null);
 
@@ -140,6 +141,18 @@ export default function StatusBar({ backendStatus, onNavigate }) {
               {/* The escape must sit inside an expression: text between JSX
                   tags is literal, so a bare \u00d7 renders as those 6 chars. */}
               <span>{gridShape[0]}{'\u00d7'}{gridShape[1]}</span>
+              {isHexScan(scanGeometry) && (
+                <span title={t('shell:status.hexGridTitle')}
+                      style={{ marginLeft: 6, color: colors.yellow, whiteSpace: 'nowrap' }}>
+                  {t('shell:status.hexGrid')}
+                </span>
+              )}
+              {hexResampled === true && (
+                <span title={t('shell:status.hexResampledTitle')}
+                      style={{ marginLeft: 6, color: colors.yellow, whiteSpace: 'nowrap' }}>
+                  {t('shell:status.hexResampled')}
+                </span>
+              )}
             </>
           )}
           {detector?.has_detector && detector.pc?.length === 3 && (

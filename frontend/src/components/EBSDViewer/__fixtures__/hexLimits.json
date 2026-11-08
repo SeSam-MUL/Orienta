@@ -1,0 +1,143 @@
+{
+  "groups": {
+    "before_indexing": [
+      {
+        "key": "nlpar",
+        "category": "preprocessing",
+        "what": "NLPAR denoising",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      },
+      {
+        "key": "crystal_hint_averaging",
+        "category": "preprocessing",
+        "what": "The crystal hint's neighbourhood averaging",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": true,
+        "affects": [],
+        "parameters": [
+          "avg_radius"
+        ]
+      },
+      {
+        "key": "crystal_hint_averaging",
+        "category": "preprocessing",
+        "what": "The crystal hint's neighbourhood averaging",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": true,
+        "affects": [],
+        "parameters": [
+          "avg_radius"
+        ]
+      },
+      {
+        "key": "crystal_hint_averaging",
+        "category": "preprocessing",
+        "what": "The crystal hint's neighbourhood averaging",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": true,
+        "affects": [],
+        "parameters": [
+          "avg_radius"
+        ]
+      },
+      {
+        "key": "pixelwise_pc_calibration",
+        "category": "refinement",
+        "what": "The pixel-wise pattern-centre calibration",
+        "code": "hex_pc_grid_pending",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      }
+    ],
+    "after_indexing": [
+      {
+        "key": "grain_phase_assignment",
+        "category": "grains_and_boundaries",
+        "what": "The grain-based phase assignment",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      },
+      {
+        "key": "grain_reconstruction",
+        "category": "grains_and_boundaries",
+        "what": "The grain reconstruction",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      },
+      {
+        "key": "grain_size",
+        "category": "grains_and_boundaries",
+        "what": "The grain-size analysis",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      },
+      {
+        "key": "deformation_analysis",
+        "category": "grains_and_boundaries",
+        "what": "The deformation analysis (KAM, boundaries)",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      },
+      {
+        "key": "analysis_map",
+        "category": "maps",
+        "what": "The maps of the Analysis page",
+        "code": "hex_analysis_page_pending",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      },
+      {
+        "key": "refinement_compute",
+        "category": "refinement",
+        "what": "The joint R+PC refinement (its smoothness step)",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      },
+      {
+        "key": "refinement_resmooth",
+        "category": "refinement",
+        "what": "The smoothness step of the R+PC refinement",
+        "code": "hex_neighbourhood_unsupported",
+        "partial": false,
+        "affects": [],
+        "parameters": []
+      }
+    ]
+  },
+  "categories": [
+    "preprocessing",
+    "grains_and_boundaries",
+    "maps",
+    "cleanup",
+    "refinement"
+  ],
+  "not_limited": [
+    {
+      "key": "image_export",
+      "what": "Exporting an image (PNG) of a phase map, a map in the viewer or a pattern"
+    },
+    {
+      "key": "file_export",
+      "what": "Saving a result as .ang or .h5, or resampled"
+    },
+    {
+      "key": "global_pc_refinement",
+      "what": "Refining one global pattern centre"
+    }
+  ]
+}

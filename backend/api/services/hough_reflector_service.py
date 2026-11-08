@@ -130,6 +130,52 @@ def change(phase, key, spec, extended=False):
     return table(phase, key, extended)
 
 
+def fit(phase, key, extended=False):
+    """Register the largest default list that fits this machine's memory budget.
+
+    The one-click answer to a refusal: an ordinary auto spec, the default
+    construction with ``max_rows`` set to the count
+    (``hough_reflectors.largest_list_that_fits``), stored per phase through
+    ``change`` like any choice of the user's (registry, provenance, "own
+    selection" row, persistence). Refused with ``no_fit`` when no count the
+    ladder allows fits, and with ``low_symmetry`` for a monoclinic or triclinic
+    phase (never a shorter default list there); the message names the other ways
+    out.
+    """
+    stored = hr.get_spec(key)
+    if stored is not None and stored["mode"] == "custom":
+        raise ReflectorError(
+            "own_selection",
+            "This phase has a selection of families of its own; the largest default list "
+            "would replace it. Remove families from it, or reset it to the default first.")
+    found = hr.largest_list_that_fits(phase)
+    if found["fits"]:
+        raise ReflectorError(
+            "already_fits", "The default list already fits in memory.",
+            rows=found["rows"], budget_bytes=found["budget_bytes"])
+    if found["reason"] == "low_symmetry":
+        raise ReflectorError(
+            "low_symmetry",
+            "No shorter default list is offered for a monoclinic or triclinic phase: "
+            "shorter lists measurably lose orientations there. Index fewer phases at a "
+            "time, free memory, use Spherical or Dictionary indexing, or shorten the "
+            "list by hand in the reflector panel, knowing that it may lose orientations.",
+            reason=found["reason"], full_bytes=found["full_bytes"],
+            budget_bytes=found["budget_bytes"])
+    if found["rows"] is None:
+        raise ReflectorError(
+            "no_fit",
+            "No list of at least %d rows and %d families fits in the memory budget; "
+            "edit the families by hand, or index this phase with Dictionary or "
+            "Spherical indexing." % (hr._eu().MIN_FIT_ROWS, hr._eu().MIN_FIT_FAMILIES),
+            reason=found["reason"], full_bytes=found["full_bytes"],
+            budget_bytes=found["budget_bytes"])
+    spec = {"mode": "auto", "rule": dict(hr.DEFAULT_RULE, max_rows=found["rows"])}
+    out = change(phase, key, spec, extended)
+    out["fit"] = found
+    return out
+
+
 def _library_rows(phase, rows):
     """Rows the band-triplet library of this reflector list needs; 0 when it is
     smaller than the probe cap (negligible). Raises whatever PyEBSDIndex raises
@@ -138,25 +184,12 @@ def _library_rows(phase, rows):
     Builds the BandIndexer of the phase only - the same call kikuchipy's
     ``get_indexer`` makes first - and not a whole EBSDIndexer, which on a machine
     with OpenCL also opens a GPU context for its Radon plan: one per call, and
-    this is called on every click.
+    this is called on every click. (Lives in ``ebsd_utils._library_rows_for``: the
+    default reflector list needs the same prediction.)
     """
-    import re
-
     import ebsd_utils as eu
-    from kikuchipy.indexing._hough_indexing import _get_pyebsdindex_phaselist
-    from orix.crystal_map import PhaseList
 
-    p = phase.deepcopy()
-    fixed = eu._standard_setting_phase_list(PhaseList(p))
-    try:
-        with eu._capped_triplet_library(eu._PREDICT_PROBE_ROWS):
-            _get_pyebsdindex_phaselist(fixed, [rows])
-    except MemoryError as exc:
-        m = re.search(r"need ([0-9,]+) rows", str(exc))
-        if m:
-            return int(m.group(1).replace(",", ""))
-        raise
-    return 0
+    return eu._library_rows_for(phase, rows)
 
 
 def _probe_library(phase, spec):
@@ -210,10 +243,21 @@ def cost(phase, key, n_bands=12):
     budget = eu._triplet_library_budget_bytes()
     needed = _library_rows(phase, rows)
     nbytes = needed * eu._TRIPLET_ROW_BYTES
-    return {
+    out = {
         "bytes": int(nbytes),
         "rows": int(needed),
         "fits": bool(nbytes <= budget),
         "budget_bytes": int(budget),
         "n_rows": int(len(rows)),
     }
+    stored = hr.get_spec(key)
+    if not out["fits"] and (stored is None or stored["mode"] == "auto"):
+        # what the one-click answer would register (see ``fit``); a selection of
+        # families made by hand is never replaced by it. Only when the DEFAULT list
+        # does not fit: a stored rule that is too big while the default fits is
+        # answered by resetting the rule, and a button that ends in "already fits"
+        # is a dead button.
+        found = hr.largest_list_that_fits(phase, budget)
+        if not found["fits"]:
+            out["fit"] = found
+    return out

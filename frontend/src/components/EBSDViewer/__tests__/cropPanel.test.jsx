@@ -135,6 +135,19 @@ describe('CropPanel', () => {
     expect(onExport).toHaveBeenCalled();
   });
 
+  it('promises EDS maps and electron images for a square crop, not for a hexagonal one', () => {
+    const crop = { source_file: 'D:/scans/Scan1.h5oina', row0: 4, col0: 6, rows: 8, cols: 10 };
+    const { rerender } = render(<CropPanel bbox={null} mask={null} patternShape={[128, 156]}
+                      bytesPerPixel={1} onCrop={() => {}} onExport={() => {}} origin={crop} />);
+    expect(screen.getByTestId('crop-export').title).toContain('EDS maps and electron images cut to match');
+    rerender(<CropPanel bbox={null} mask={null} patternShape={[128, 156]}
+                      bytesPerPixel={1} onCrop={() => {}} onExport={() => {}} origin={crop} hex />);
+    const hint = screen.getByTestId('crop-export').title;
+    expect(hint).toContain('.h5 file');
+    expect(hint).toContain('EDS maps and electron images are not carried');
+    expect(hint).not.toContain('cut to match');
+  });
+
   it('shows no Save crop button for a full scan', () => {
     render(<CropPanel bbox={null} mask={null} patternShape={[128, 156]}
                       bytesPerPixel={1} onCrop={() => {}}

@@ -28,7 +28,8 @@
     "notLoaded": "— not loaded —",
     "openPcRefinement": "Open PC Refinement",
     "openPcRefinementTip": "Open the Pattern Center Refinement window",
-    "pcLine": "PC: ({{x}}, {{y}}, {{z}})"
+    "pcLine": "PC: ({{x}}, {{y}}, {{z}})",
+    "mapMean": " (mean of the PC map)"
   },
   "method": {
     "label": "Method:",
@@ -273,6 +274,8 @@
     "exportTip": "Export indexing results (.ang/.ctf = orientations only, .h5 = full data with EDS + detector)",
     "exportH5": ".h5 (Full + EDS + Detector)",
     "exportAng": ".ang (EDAX TSL)",
+    "exportAngSquare": ".ang (square grid, resampled)",
+    "exportCtf": ".ctf (square grid, resampled)",
     "patternMatches": "Pattern Matches",
     "patternMatchesTip": "Show NCC score heatmap and pattern comparison for dictionary indexing results",
     "refine": "Refine",
@@ -396,6 +399,8 @@
     "fileBrowseRequiresElectron": "File browsing requires Electron desktop mode.",
     "exporting": "Exporting as .{{fmt}}...",
     "exportComplete": "Export complete: indexing_result.{{fmt}}",
+    "exportResampled": "Export complete: {{name}}. Resampled onto a square grid of {{rows}} × {{cols}} points; each took the nearest measured point.",
+    "exportResampledPlain": "Export complete: {{name}}. It was resampled onto a square grid; each point took the nearest measured point.",
     "exportFailed": "Export failed: {{error}}",
     "sentToAnalysis": "Sent to Analysis: {{phases}} phase(s), shape {{shape}}",
     "analysisLoadFailed": "Analysis load failed: {{detail}}",
@@ -404,6 +409,7 @@
     "gpuReleasedResidual": " · backend GPU memory released (torch now {{torch}} GB); {{used}} GB still used on the shared GPU by other programs (Windows desktop/dwm, browsers, Aztec …) + the ~1-2 GB CUDA context — this button can't free those",
     "gpuReleasedEvicted": " — evicted {{count}} cached phase-test backend(s)",
     "gpuReleasedPhases": " — cleared {{count}} cached render phase(s)",
+    "gpuReleasedWorker": " — ended the idle compute process",
     "gpuReleaseNoCuda": "GPU release: no CUDA device — nothing to do",
     "cachesReleased": "Caches released: {{backends}} phase-test backend(s), {{phases}} render phase(s), {{tables}} table(s)",
     "gpuReleaseFailed": "GPU release failed: {{error}}",
@@ -572,6 +578,8 @@
     "batchComplete": "Batch complete",
     "succeeded": "{{count}} succeeded",
     "failed": "{{count}} failed",
+    "exportNotWritten": "Indexed, but no export file was written: {{reason}}",
+    "exportsMissing": "{{count}} without export file",
     "stopBatch": "Stop Batch",
     "startBatch": "Start Batch ({{count}} files)",
     "close": "Close",
@@ -790,6 +798,15 @@
     "unavailable": "Reflector cost unavailable for this file.",
     "measuring": "Measuring reflector cost..."
   },
+  "houghRefusal": {
+    "title": "Hough indexing did not start: the reflector list needs more memory than this machine can spare. Nothing ran out of memory; the build was refused before it asked.",
+    "phase": "{{name}}: {{rows}} reflector rows would need a band-triplet library of {{size}}; the budget is {{budget}}.",
+    "own": "This phase has a selection of families of its own: remove families from it or reset it to the default in the {{card}} card.",
+    "other": "Otherwise free memory, edit the families by hand in the {{card}} card, or index this phase with Dictionary or Spherical indexing.",
+    "lowSymmetry": "No shorter default list is offered for this phase (monoclinic or triclinic): shorter lists measurably lose orientations there. Index fewer phases at a time, free memory, use Spherical or Dictionary indexing, or shorten the list by hand in the {{card}} card, knowing that it may lose orientations.",
+    "runAgain": "Start the run again.",
+    "log": "Hough indexing was not started: a reflector list needs more memory than this machine can spare (see the notice above)."
+  },
   "reflectorFamilies": {
     "title": "Reflector families",
     "summaryDefault": "{{used}} used - default list",
@@ -834,6 +851,11 @@
     "cost": "Library memory: {{size}}",
     "costFits": "fits",
     "costTooBig": "does not fit the memory free now",
+    "fitButton": "Use the largest list that fits ({{rows}} rows)",
+    "fitTip": "Limit the default list of this phase to its {{rows}} strongest rows, the most this machine's memory can build. The list is the same on every machine, only the number of rows differs; it is kept for this phase and recorded with the result.",
+    "fitDone": "Using the {{rows}} strongest rows of the default list (library {{size}}).",
+    "fitNone": "No list of at least 40 rows and 4 families fits in the memory free now. Edit the families by hand, or index this phase with Dictionary or Spherical indexing.",
+    "fitNoneLowSym": "No shorter list is offered for a monoclinic or triclinic phase: shorter lists measurably lose orientations there. Index fewer phases at a time, free memory, use Spherical or Dictionary indexing, or shorten the list by hand below, knowing that it may lose orientations.",
     "costMeasuring": "Measuring memory...",
     "costUnavailable": "Memory cost unavailable.",
     "costTiny": "negligible",
@@ -844,6 +866,10 @@
     "addedParallel": "Added {{label}}. It has the same pole as {{other}}; PyEBSDIndex uses only the first of the two.",
     "errors": {
       "generic": "The reflector families could not be changed.",
+      "no_fit": "No list of at least 40 rows and 4 families fits in the memory free now. Edit the families by hand, or index this phase with Dictionary or Spherical indexing.",
+      "low_symmetry": "No shorter list is offered for a monoclinic or triclinic phase: shorter lists measurably lose orientations there. Index fewer phases at a time, free memory, use Spherical or Dictionary indexing, or shorten the list by hand, knowing that it may lose orientations.",
+      "already_fits": "The default list already fits in memory.",
+      "own_selection": "This phase has a selection of its own; remove families from it or reset it to the default first.",
       "bad_hkl": "Enter three whole numbers (hkl), or four (hkil) for a hexagonal phase.",
       "zero_vector": "(000) is not a reflection.",
       "forbidden": "{{hkl}} is not a reflection of this crystal (forbidden by the lattice centring, or a zero structure factor).",
@@ -868,5 +894,17 @@
     "showWeaker": "Show weaker families",
     "hideWeaker": "Hide weaker families",
     "tipWeaker": "Also list the families that are weaker than the default threshold or finer than 1 Å, down to a spacing of 0.7 Å. This is a calculation of its own and takes a while for a large unit cell."
+  },
+  "caveats": {
+    "title": "Note on this result",
+    "houghTrigonalSetting_one": "Phase {{phases}}: For this space group PyEBSDIndex uses the two-fold axes of the other trigonal setting, and Hough often cannot tell apart orientations 60° apart about c. Spherical or Dictionary indexing may help.",
+    "houghTrigonalSetting_other": "Phases {{phases}}: For these space groups PyEBSDIndex uses the two-fold axes of the other trigonal setting, and Hough often cannot tell apart orientations 60° apart about c. Spherical or Dictionary indexing may help.",
+    "houghHexagonalLaue_one": "Phase {{phases}}: Hough often returns an orientation related to the true one by a rotation that is a symmetry of the hexagonal cell but not of this crystal (depending on the crystal class, 180° about an axis in the basal plane or 60° about c). Spherical or Dictionary indexing may help.",
+    "houghHexagonalLaue_other": "Phases {{phases}}: Hough often returns an orientation related to the true one by a rotation that is a symmetry of the hexagonal cell but not of these crystals (depending on the crystal class, 180° about an axis in the basal plane or 60° about c). Spherical or Dictionary indexing may help.",
+    "houghHexagonalVariants_one": "Phase {{phases}}: Hough cannot always tell apart orientations related by a rotation that is a symmetry of the hexagonal cell but not of this crystal (60° about c). For important results, Spherical or Dictionary indexing may help.",
+    "houghHexagonalVariants_other": "Phases {{phases}}: Hough cannot always tell apart orientations related by a rotation that is a symmetry of the hexagonal cell but not of these crystals (60° about c). For important results, Spherical or Dictionary indexing may help."
+  },
+  "errors": {
+    "pc_missing": "This file carries no pattern centre (PC); kikuchipy's placeholder would give wrong orientations. Calibrate the PC in PC Refinement, or put the .osc / metadata file that holds it next to the scan, then start again."
   }
 }

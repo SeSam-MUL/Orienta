@@ -1,0 +1,47 @@
+{
+  "_about": "ONE table of cases for the two implementations of 'is this folder only Orienta's leftovers': electron/leftovers.js (tests/electron/leftovers.test.js) and electron/nsis/uninstall.nsh (tests/test_uninstall_nsis.py). A case is the files of a folder; 'leftover' is the verdict both must give. The user-data cases are the ones that once lost data: a folder is Orienta's by SHAPE, never by the name logs, pending, electron, python or runtime.",
+  "shapes": [
+    { "name": "electron_userdata", "leftover": true, "files": ["electron/userData/prefs"] },
+    { "name": "electron_all_children", "leftover": true, "files": ["electron/sessionData/a", "electron/temp/b", "electron/.writable"] },
+    { "name": "logs_orienta", "leftover": true, "files": ["logs/orienta-shell.log", "logs/orienta-shell.log.1", "logs/orienta-setup.log"] },
+    { "name": "logs_backend", "leftover": true, "files": ["logs/backend-console.log", "logs/orienta.log.2"] },
+    { "name": "pending_pair", "leftover": true, "files": ["pending/orienta-runtime-v0.4.6.zip", "pending/orienta-runtime-v0.4.6.zip.sha256", "pending.json"] },
+    { "name": "setup_tmp", "leftover": true, "files": ["setup-tmp/cpython-3.11.9-install_only.tar.gz", "setup-tmp/python-unpacked/python/python.exe", "setup-tmp/extract-result.json", "setup-tmp/package-sync-report.json", "setup-tmp/orienta-macos-lock.yml", "setup-tmp/lock.json.1234.tmp"] },
+    { "name": "state_files", "leftover": true, "files": [".python_path", ".install_mode", ".install_incomplete", ".packages_lock.json", ".packages_sync.json", ".packages_sync_failed.json"] },
+    { "name": "os_litter_beside_leftovers", "leftover": true, "files": ["Thumbs.db", "electron/userData/p"] },
+    { "name": "chain_after_five_restarts", "leftover": true, "files": ["electron/userData/p", "logs/orienta-shell.log", "Orienta/electron/userData/p", "Orienta/logs/orienta-shell.log", "Orienta/Orienta/electron/sessionData/q", "Orienta/Orienta/logs/orienta-setup.log", "Orienta/Orienta/Orienta/electron/userData/r"] },
+
+    { "name": "log_rotation_with_a_non_digit", "leftover": false, "files": ["logs/orienta.log.~"] },
+    { "name": "log_rotation_with_a_letter", "leftover": false, "files": ["logs/orienta.log.x"] },
+    { "name": "log_rotation_with_two_digits", "leftover": false, "files": ["logs/orienta.log.12"] },
+    { "name": "empty_foreign_dir", "leftover": true, "nsis_leftover": false, "files": [], "dirs": ["SomeEmptyFolder"], "note": "the one deliberate difference: the setup ignores empty folders when it decides whether a folder is free, the uninstaller keeps them (it only ever removes what it recognised by shape)" },
+    { "name": "user_logs", "leftover": false, "files": ["logs/mydata.csv"] },
+    { "name": "user_logs_beside_ours", "leftover": false, "files": ["logs/orienta-shell.log", "logs/mydata.csv"] },
+    { "name": "user_pending", "leftover": false, "files": ["pending/report.docx"] },
+    { "name": "user_electron", "leftover": false, "files": ["electron/notes.txt"] },
+    { "name": "user_electron_beside_ours", "leftover": false, "files": ["electron/userData/p", "electron/thesis.docx"] },
+    { "name": "user_python", "leftover": false, "files": ["python/myscript.py"] },
+    { "name": "user_runtime", "leftover": false, "files": ["runtime/x.txt"] },
+    { "name": "user_setup_tmp", "leftover": false, "files": ["setup-tmp/mine.docx"] },
+    { "name": "log_named_like_ours_but_not_a_log", "leftover": false, "files": ["logs/orienta-notes.docx"] },
+    { "name": "log_in_a_subfolder", "leftover": false, "files": ["logs/sub/orienta-shell.log"] },
+    { "name": "log_named_like_ours_but_a_folder", "leftover": false, "files": ["logs/orienta-old.log/x"] },
+    { "name": "a_log_that_is_not_ours", "leftover": false, "files": ["logs/mydata.log"] },
+    { "name": "pending_record_alone", "leftover": false, "files": ["pending.json"] },
+    { "name": "chain_level_with_user_logs", "leftover": false, "files": ["Orienta/logs/mydata.csv"] },
+    { "name": "chain_level_with_user_file", "leftover": false, "files": ["Orienta/Orienta/thesis.docx"] },
+    { "name": "user_database", "leftover": false, "files": ["Database/mine.cif"] },
+    { "name": "conda_style_folders", "leftover": false, "files": ["envs/x/y", "micromamba/z/w"] },
+    { "name": "folder_named_like_litter_holding_data", "leftover": false, "files": ["electron/userData/p", "Thumbs.db/mine.txt"] },
+    { "name": "user_file", "leftover": false, "files": ["thesis.docx"] }
+  ],
+  "recognition": [
+    { "name": "marker", "ours": true, "files": [".orienta-home"] },
+    { "name": "version_and_python_path", "ours": true, "files": ["runtime/VERSION", ".python_path"] },
+    { "name": "version_and_interpreter", "ours": true, "files": ["runtime/VERSION", "python/python.exe"] },
+    { "name": "version_alone", "ours": false, "files": ["runtime/VERSION"] },
+    { "name": "version_and_a_python_folder_without_interpreter", "ours": false, "files": ["runtime/VERSION", "python/Lib/os.py"] },
+    { "name": "python_path_alone", "ours": false, "files": [".python_path"] },
+    { "name": "interpreter_alone", "ours": false, "files": ["python/python.exe"] }
+  ]
+}

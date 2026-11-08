@@ -9,6 +9,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { indexApi } from '../../services/api';
+import { problemText, failureText } from '../../services/problemText';
 import { colors as C } from '../../theme/tokens';
 import { Button, GroupBox, NumberInput, Select, ProgressBar } from '../../theme/components';
 
@@ -127,7 +128,7 @@ export default function BatchIndexingDialog({ open, onClose, sphericalParams = n
       await indexApi.batchStart(datasets, autoExport, exportDir, cleanupMemory);
       setRunning(true);
     } catch (err) {
-      alert(t('batchDialog.startFailed', { error: err.response?.data?.detail || err.message }));
+      alert(t('batchDialog.startFailed', { error: problemText(err, t, 'indexing') || err.message }));
     }
   }, [files, autoExport, exportDir, cleanupMemory, sphericalParams, t]);
 
@@ -296,7 +297,7 @@ export default function BatchIndexingDialog({ open, onClose, sphericalParams = n
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                 {files.map((f, i) => (
                   <div key={i} style={{
-                    display: 'flex', gap: 6, alignItems: 'center',
+                    display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center',
                     background: C.bg, borderRadius: 4, padding: '4px 8px', fontSize: '9pt',
                   }}>
                     <span style={{ color: C.accent, fontWeight: 'bold', width: 20 }}>{i + 1}</span>
@@ -322,6 +323,26 @@ export default function BatchIndexingDialog({ open, onClose, sphericalParams = n
                         {status.results.find(r => r.file_path === f.path).error ? t('batchDialog.statusFail') : t('batchDialog.statusCi', { ci: status.results.find(r => r.file_path === f.path).mean_ci?.toFixed(3) || '?' })}
                       </span>
                     )}
+                    {(() => {
+                      // WHY the file failed, in the language of the page (the code is translated)
+                      const r = status?.results?.find(x => x.file_path === f.path);
+                      const reason = r?.error ? failureText(r, t, 'indexing') : '';
+                      return reason ? (
+                        <span data-testid="batch-file-failure"
+                          style={{ flexBasis: '100%', color: C.red, fontSize: '9pt' }}>{reason}</span>
+                      ) : null;
+                    })()}
+                    {(() => {
+                      // A file that was indexed but whose auto-export wrote no file: the backend's reason
+                      // (its own sentence; the legacy batch carries no code for it)
+                      const r = status?.results?.find(x => x.file_path === f.path);
+                      return r?.export_error ? (
+                        <span data-testid="batch-file-export-error"
+                          style={{ flexBasis: '100%', color: C.red, fontSize: '9pt' }}>
+                          {t('batchDialog.exportNotWritten', { reason: r.export_error })}
+                        </span>
+                      ) : null;
+                    })()}
                     <button onClick={() => removeFile(i)} title={t('hoverTips.batchRemoveFile')} aria-label={t('hoverTips.batchRemoveFile')} style={{
                       background: 'none', border: 'none', color: C.red, cursor: 'pointer', fontWeight: 'bold',
                     }}>X</button>
@@ -382,6 +403,11 @@ export default function BatchIndexingDialog({ open, onClose, sphericalParams = n
                     {status.results.some(r => r.error) && (
                       <span style={{ color: C.red, marginLeft: 8 }}>
                         {t('batchDialog.failed', { count: status.results.filter(r => r.error).length })}
+                      </span>
+                    )}
+                    {status.results.some(r => r.export_error) && (
+                      <span data-testid="batch-export-missing-count" style={{ color: C.red, marginLeft: 8 }}>
+                        {t('batchDialog.exportsMissing', { count: status.results.filter(r => r.export_error).length })}
                       </span>
                     )}
                   </div>

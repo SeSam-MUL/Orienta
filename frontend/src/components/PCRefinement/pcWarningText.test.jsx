@@ -11,7 +11,8 @@ import { pcWarningText } from './PCRefinement';
 const t = (key, opts = {}) => {
   const table = {
     'warnings.pcDrift': 'Das verfeinerte PC hat sich um {{deviation}} vom Start-PC entfernt',
-    'warnings.smallPatterns': 'Kleine Muster ({{h}}×{{w}} px)',
+    'warnings.pcOnBoxEdge': 'Am Rand des Suchbereichs in {{axes}}',
+    'warnings.pcUnclear': 'Nicht eindeutig (Kontrast {{contrast}})',
   };
   const hit = table[key];
   if (hit === undefined) return opts.defaultValue ?? key;
@@ -30,11 +31,20 @@ describe('pcWarningText', () => {
     const out = pcWarningText({
       pc_warning: 'a  b',
       pc_warning_codes: [
-        { code: 'smallPatterns', params: { h: 60, w: 60 } },
+        { code: 'pcOnBoxEdge', params: { axes: 'y, z' } },
         { code: 'pcDrift', params: { deviation: '0.082' } },
       ],
     }, t);
-    expect(out).toBe('Kleine Muster (60×60 px)  Das verfeinerte PC hat sich um 0.082 vom Start-PC entfernt');
+    expect(out).toBe('Am Rand des Suchbereichs in y, z  Das verfeinerte PC hat sich um 0.082 vom Start-PC entfernt');
+  });
+
+  it('says nothing about clarity while the search does not judge: the backend sends no pcUnclear then', () => {
+    // state "notJudged" brings no pcUnclear code; the page then says only that the result is to be checked.
+    expect(pcWarningText({ pc_warning: null, pc_warning_codes: [] }, t)).toBe('');
+    expect(pcWarningText({
+      pc_warning: 'English fallback',
+      pc_warning_codes: [{ code: 'pcUnclear', params: { contrast: 0.1 } }],
+    }, t)).toBe('Nicht eindeutig (Kontrast 0.1)');
   });
 
   it('falls back to the English sentence when a code has no text', () => {

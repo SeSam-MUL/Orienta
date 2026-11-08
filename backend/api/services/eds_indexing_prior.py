@@ -8,6 +8,7 @@ strengths 0) or no EDS => the caller passes None and indexing is bit-identical.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -50,8 +51,8 @@ _COMPOSITION_NOTICE_AT_PCT = 2.0
 #: Above this the two sources are not two descriptions of one compound, and
 #: the structure is REFUSED rather than adopted.
 #:
-#: Calibrated on two cases, measured with
-#: tasks/eds_prior_audit/09_cif_vs_filename.py over the 30-master library:
+#: Calibrated on two cases, measured by comparing each CIF with its file name
+#: over the 30-master library:
 #: alpha-Al(Fe,Mn)Si at 4.8 at% (the CIF refines the mixed site the file name
 #: idealises -- adopt) and `MgCu2 (sd_1816951)` at 46.7 (stored as Mg 80 /
 #: Cu 20 for a compound that is Cu 66.7 / Mg 33.3 -- refuse). Adopting the
@@ -171,7 +172,7 @@ def _reconcile(formula_at: dict, structure_at: dict, path: str) -> dict:
     that a genuine MgCu2 pixel is the wrong phase.
 
     Scanned over the whole 30-master library
-    (``tasks/eds_prior_audit/09_cif_vs_filename.py``, re-run 2026-09-13): 28
+    (CIF-versus-file-name comparison, re-run 2026-09-13): 28
     element sets agree, 1 disagrees (beta), 1 resolves no readable CIF
     (``MgCu2``, refused by the multi-block guard before it reaches here) and 1
     of the 28 differs in the SPLIT by more than 2 at% — alpha by 4.8, the
@@ -275,6 +276,44 @@ def _build_at_pct_maps_for_loaded_file():
     return _f()
 
 
+@dataclass(frozen=True)
+class RunChemistry:
+    """The EDS chemistry of the dataset a run started on, read ONCE when the run started.
+
+    A run lasts minutes to hours. The chemistry that steers it must be the chemistry of the dataset
+    and measurement it runs on; every reader of "the loaded file" follows the viewer, and the viewer
+    can be switched to another measurement (or another file) while the run is going. A prior built
+    after the indexer, or a rescue after the run, would then pair the run's patterns with another
+    measurement's chemistry; equal grids pass the grid guard.
+
+    ``at_maps`` is None when the chemistry could not be read at the start (no EDS, a refused window,
+    ...): the prior then behaves as it did when the read failed late, no weights, and the active state
+    is NOT asked again. ``nav_shape`` is the navigation grid (rows, cols) of the run's own signal, the
+    shape the EDS grid is checked against."""
+
+    at_maps: Optional[dict]
+    n_rows: int = 0
+    n_cols: int = 0
+    nav_shape: Optional[tuple] = None
+    #: why a snapshot that was configured was dropped (a read that failed, a viewer that was switched
+    #: during it); the run says it in its progress. None for chemistry that was never there.
+    dropped: Optional[str] = None
+
+
+def read_run_chemistry(nav_shape: Optional[tuple]) -> RunChemistry:
+    """Read the chemistry of the active dataset now, as the snapshot a run holds. Never raises."""
+    try:
+        at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
+    except Exception as exc:  # noqa: BLE001 - the run goes on without the prior, but says why
+        logger.warning("EDS chemistry could not be read for this run (%s: %s): the prior is off",
+                       type(exc).__name__, exc, exc_info=True)
+        return RunChemistry(None, nav_shape=nav_shape,
+                            dropped=f"the chemistry could not be read ({type(exc).__name__}: {exc})")
+    if not at_maps:
+        return RunChemistry(None, nav_shape=nav_shape)
+    return RunChemistry(at_maps, int(n_rows), int(n_cols), nav_shape)
+
+
 class EdsGridMismatch(ValueError):
     """EDS map grid differs from the EBSD navigation grid.
 
@@ -287,6 +326,7 @@ class EdsGridMismatch(ValueError):
 def measured_atpct_per_pixel(
     selection_mask: Optional[np.ndarray] = None,
     expected_shape: Optional[tuple] = None,
+    chemistry: Optional[RunChemistry] = None,
 ) -> Optional[list]:
     """Per RESULT-pixel At.% dicts (0-100), row-major over the nav grid. With
     selection_mask, only selected pixels in row-major (ascending-flat) order — the
@@ -295,11 +335,18 @@ def measured_atpct_per_pixel(
     ``expected_shape`` is the (n_rows, n_cols) of the EBSD navigation grid. When
     given — or derivable from ``selection_mask`` — it is compared against the EDS
     grid and a mismatch raises :class:`EdsGridMismatch`.
+
+    ``chemistry`` is the snapshot a run took when it started (:func:`read_run_chemistry`): the maps
+    come from it and the loaded file is not asked. Without it, the loaded file is read now (the
+    request-time callers).
     """
-    try:
-        at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
-    except Exception:
-        return None
+    if chemistry is not None:
+        at_maps, n_rows, n_cols = chemistry.at_maps, chemistry.n_rows, chemistry.n_cols
+    else:
+        try:
+            at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
+        except Exception:
+            return None
     if not at_maps:
         return None
 

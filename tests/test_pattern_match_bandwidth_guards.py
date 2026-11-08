@@ -80,7 +80,7 @@ class TestVramGuard:
         with pytest.raises(svc.SHTRenderError) as e:
             svc._check_vram_for_bandwidth(384)
         msg = str(e.value)
-        assert "5.7 GB" in msg and "0.8 GB" in msg, msg
+        assert "5.9 GB" in msg and "0.8 GB" in msg, msg
         assert "256 or 128" in msg
 
     def test_bw384_passes_with_room(self, cuda_with):
@@ -91,10 +91,30 @@ class TestVramGuard:
     def test_bw256_needs_less(self, cuda_with):
         from backend.api.services import sht_pattern_renderer as svc
         cuda_with(free_gb=2.5)
-        svc._check_vram_for_bandwidth(256)          # 1.7 * 1.15 < 2.5
+        svc._check_vram_for_bandwidth(256)          # 1.8 * 1.15 = 2.07 < 2.5
         cuda_with(free_gb=1.0)
         with pytest.raises(svc.SHTRenderError):
             svc._check_vram_for_bandwidth(256)
+
+    def test_the_gate_edges_are_the_measured_need_with_headroom(self, cuda_with):
+        """Worked by hand from the smallest budget the render grid LOADED in on
+        an RTX 4070 (a VRAM probe measured the
+        load only; what the render steps after it need on top is not
+        measured): bw 384 loaded in 5.81-5.85 GiB, rounded up to 5.9, times
+        1.15 headroom = 6.785 GiB. bw 256 loaded in 1.76-1.80 GiB, rounded up
+        to 1.8, times 1.15 = 2.07 GiB. No constant of the module is used
+        here."""
+        from backend.api.services import sht_pattern_renderer as svc
+        cuda_with(free_gb=6.78)
+        with pytest.raises(svc.SHTRenderError):
+            svc._check_vram_for_bandwidth(384)
+        cuda_with(free_gb=6.80)
+        svc._check_vram_for_bandwidth(384)          # no raise
+        cuda_with(free_gb=2.06)
+        with pytest.raises(svc.SHTRenderError):
+            svc._check_vram_for_bandwidth(256)
+        cuda_with(free_gb=2.08)
+        svc._check_vram_for_bandwidth(256)          # no raise
 
     def test_128_and_none_are_never_refused(self, cuda_with):
         from backend.api.services import sht_pattern_renderer as svc
@@ -102,11 +122,16 @@ class TestVramGuard:
         svc._check_vram_for_bandwidth(128)
         svc._check_vram_for_bandwidth(None)
 
-    def test_cpu_renderer_is_never_refused(self, monkeypatch):
+    def test_cpu_renderer_is_not_refused_for_vram(self, monkeypatch):
+        """The CPU has no VRAM to run out of; its RAM is checked separately
+        (tests/test_sphere_ram_guard.py), here with plenty available."""
         import types
         from backend.api.services import sht_pattern_renderer as svc
         dev = types.SimpleNamespace(type="cpu", index=None, __str__=lambda s: "cpu")
         monkeypatch.setattr(svc, "get_renderer", lambda: types.SimpleNamespace(device=dev))
+        import psutil
+        monkeypatch.setattr(psutil, "virtual_memory",
+                            lambda: types.SimpleNamespace(available=64 * 2**30, total=64 * 2**30))
         svc._check_vram_for_bandwidth(384)
 
     def test_a_memory_query_failure_does_not_refuse(self, monkeypatch):

@@ -83,6 +83,43 @@ describe('breadcrumbs', () => {
     expect(getBreadcrumbs()).toHaveLength(0);
   });
 
+  // The state-version poll runs every 1.5 s; 60 answers, failed ones included,
+  // would fill the ring.
+  it('ignores the state-version poll, answered or failing', () => {
+    for (let i = 0; i < 70; i += 1) {
+      expect(addHttpBreadcrumb({ method: 'get', url: '/api/state-version', status: 200 })).toBe(false);
+      expect(addHttpBreadcrumb({ method: 'get', url: '/api/state-version', status: 500, detail: 'boom' })).toBe(false);
+      expect(addHttpBreadcrumb({ method: 'get', url: '/api/state-version' })).toBe(false);
+    }
+    expect(getBreadcrumbs()).toHaveLength(0);
+  });
+
+  // The sphere viewer asks every 2 s while a sphere computes; a Max sphere
+  // takes minutes on a CPU, which would fill the ring with this one line.
+  it('ignores the jobs poll of the sphere viewer', () => {
+    for (let i = 0; i < 70; i += 1) {
+      expect(addHttpBreadcrumb({ url: '/api/jobs?job=sphere', status: 200 })).toBe(false);
+    }
+    expect(addHttpBreadcrumb({ url: '/api/jobs', status: 200 })).toBe(false);
+    // axios hands the interceptor the url without the params, and a lower-case method
+    expect(addHttpBreadcrumb({ method: 'get', url: '/api/jobs', status: 200 })).toBe(false);
+    expect(getBreadcrumbs()).toHaveLength(0);
+  });
+
+  // Only the list poll is ignored. Submitting, waiting for, cancelling or
+  // looking up a job is an event a bug report must be able to show, and a
+  // failed one most of all.
+  it('still records every other call of the jobs routes, failed ones as errors', () => {
+    expect(addHttpBreadcrumb({ method: 'post', url: '/api/jobs', status: 200 })).toBe(true);
+    expect(addHttpBreadcrumb({ method: 'get', url: '/api/jobs/abc123', status: 200 })).toBe(true);
+    expect(addHttpBreadcrumb({ method: 'get', url: '/api/jobs/abc123/wait', status: 200 })).toBe(true);
+    expect(addHttpBreadcrumb({ method: 'post', url: '/api/jobs/abc123/cancel', status: 500 })).toBe(true);
+    const trail = getBreadcrumbs();
+    expect(trail).toHaveLength(4);
+    expect(trail[3].type).toBe('http-error');
+    expect(trail[3].message).toContain('/api/jobs/abc123/cancel');
+  });
+
   it('formats with relative times, newest last', () => {
     const now = 10_000;
     addBreadcrumb('nav', 'first');

@@ -101,7 +101,7 @@ def test_compute_layer_rgba_bc_sourced_via_pattern_quality_service():
     )
     called = {}
 
-    def fake_read(source_file, n_r=None, n_c=None):
+    def fake_read(source_file, n_r=None, n_c=None, variant=None):
         called["source_file"] = source_file
         return known_bc
 

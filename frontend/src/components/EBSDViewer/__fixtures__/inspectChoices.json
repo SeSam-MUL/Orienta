@@ -1,0 +1,67 @@
+{
+  "kind": "choices",
+  "path": "<path>",
+  "format": "oxford",
+  "n_variants": 3,
+  "measurements": [
+    {
+      "name": "1",
+      "label": "1",
+      "n_rows": 2,
+      "n_cols": 3,
+      "sources": [
+        {
+          "key": "processed",
+          "dataset": "1/EBSD/Data/Processed Patterns",
+          "n_patterns": 6,
+          "pattern_shape": [
+            4,
+            5
+          ],
+          "dtype": "uint8",
+          "has_background": true,
+          "loadable": true,
+          "problem": null
+        },
+        {
+          "key": "unprocessed",
+          "dataset": "1/EBSD/Data/Unprocessed Patterns",
+          "n_patterns": 6,
+          "pattern_shape": [
+            4,
+            5
+          ],
+          "dtype": "int16",
+          "has_background": true,
+          "loadable": true,
+          "problem": null
+        }
+      ]
+    },
+    {
+      "name": "2",
+      "label": "2",
+      "n_rows": 2,
+      "n_cols": 3,
+      "sources": [
+        {
+          "key": "processed",
+          "dataset": "2/EBSD/Data/Processed Patterns",
+          "n_patterns": 6,
+          "pattern_shape": [
+            4,
+            5
+          ],
+          "dtype": "uint8",
+          "has_background": false,
+          "loadable": true,
+          "problem": null
+        }
+      ]
+    }
+  ],
+  "default_variant": {
+    "measurement": "1",
+    "pattern_source": "processed"
+  }
+}

@@ -55,7 +55,7 @@ describe('unreadable masters', () => {
   it('speaks German to a German user, in the polite form', async () => {
     await show([refused('x_master.h5')], 'de');
     const note = await screen.findByTestId('unreadable-masters');
-    expect(note.textContent).toMatch(/Simulieren Sie/);
+    expect(note.textContent).toMatch(/Löschen Sie die Datei und simulieren Sie/);
     expect(note.textContent).toContain('x_master.h5');
   });
 });

@@ -6,8 +6,6 @@ Endpoints:
   GET  /api/crystal-hint/presets             List material presets
   GET  /api/crystal-hint/presets/{key}       Get one preset
   GET  /api/crystal-hint/library             List local CIF/SHT library entries
-
-Spec: docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md
 """
 from __future__ import annotations
 
@@ -261,7 +259,7 @@ def analyze_pixel(req: AnalyzePixelRequest):
     pattern = _fetch_active_pattern(req.pixel_index)
     if pattern is None:
         try:
-            pattern = h5_session.get_cached_pattern(req.pixel_index, pattern_type=req.pattern_type)
+            pattern = h5_session.get_loaded_pattern(req.pixel_index, pattern_type=req.pattern_type)
         except Exception as exc:
             raise HTTPException(status_code=500, detail=f"Failed to load pattern: {exc}") from exc
     if pattern is None:
@@ -757,7 +755,7 @@ def _collect_neighbour_patterns(
         p = _fetch_active_pattern(idx)
         if p is None:
             try:
-                p = h5_session.get_cached_pattern(idx, pattern_type=pattern_type)
+                p = h5_session.get_loaded_pattern(idx, pattern_type=pattern_type)
             except Exception:
                 continue
         if p is None:
@@ -786,7 +784,7 @@ def _region_pattern(idx: int, pattern_type: str = "processed") -> Optional[np.nd
     if p is not None:
         return p
     try:
-        return h5_session.get_cached_pattern(idx, pattern_type=pattern_type)
+        return h5_session.get_loaded_pattern(idx, pattern_type=pattern_type)
     except Exception:
         logger.debug("pattern fetch failed for flat index %d", idx, exc_info=True)
         return None
@@ -831,15 +829,17 @@ def _gather_detector_geom() -> Optional[dict]:
             return None
 
         # det.pc is a list/ndarray [PCx, PCy, PCz] in Bruker convention.
-        # For per-pixel PC datasets it may be 2-D (n_patterns × 3); flatten
-        # and take the first triplet either way.
+        # For per-pixel PC datasets it is a map (rows x cols x 3): the one PC the
+        # lattice estimate needs is the MEAN of the map, not the corner pixel
+        # (0, 0), which sits at the edge of the scan where the PC differs most.
         pc = getattr(det, "pc", None)
         if pc is None:
             return None
         import numpy as _np
-        pc_arr = _np.asarray(pc, dtype=float).reshape(-1)
-        if pc_arr.size < 3:
+        pc_all = _np.asarray(pc, dtype=float)
+        if pc_all.size < 3 or pc_all.size % 3:
             return None
+        pc_arr = pc_all.reshape(-1, 3).mean(axis=0)
         # Pattern shape from signal axes manager
         sig_shape = signal.axes_manager.signal_shape
         pat_w = int(sig_shape[0]) if sig_shape else None
@@ -849,7 +849,8 @@ def _gather_detector_geom() -> Optional[dict]:
         voltage = None
         try:
             if _ev._ebsd_file_path:
-                voltage = _ev._extract_beam_energy(_ev._ebsd_file_path)
+                voltage = _ev._extract_beam_energy(
+                    _ev._ebsd_file_path, signal, _ev.active_variant(_ev._ebsd_file_path))
         except Exception:
             voltage = None
         if voltage is None or not (1.0 < float(voltage) < 100.0):

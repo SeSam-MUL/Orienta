@@ -28,7 +28,8 @@
     "notLoaded": "— 未加载 —",
     "openPcRefinement": "打开 PC 精修",
     "openPcRefinementTip": "打开花样中心精修窗口",
-    "pcLine": "PC: ({{x}}, {{y}}, {{z}})"
+    "pcLine": "PC: ({{x}}, {{y}}, {{z}})",
+    "mapMean": " (PC 图的均值)"
   },
   "method": {
     "label": "方法:",
@@ -273,6 +274,8 @@
     "exportTip": "导出标定结果（.ang/.ctf = 仅取向，.h5 = 含 EDS + 探测器的完整数据）",
     "exportH5": ".h5（完整 + EDS + 探测器）",
     "exportAng": ".ang（EDAX TSL）",
+    "exportAngSquare": ".ang（方形网格，已重采样）",
+    "exportCtf": ".ctf（方形网格，已重采样）",
     "patternMatches": "花样匹配",
     "patternMatchesTip": "显示 Dictionary 标定结果的 NCC 分数热图和花样对比",
     "refine": "精修",
@@ -396,6 +399,8 @@
     "fileBrowseRequiresElectron": "文件浏览需要 Electron 桌面模式。",
     "exporting": "正在导出为 .{{fmt}}...",
     "exportComplete": "导出完成: indexing_result.{{fmt}}",
+    "exportResampled": "导出完成：{{name}}。已重采样到 {{rows}} × {{cols}} 点的方形网格；每个点取最近的实测点。",
+    "exportResampledPlain": "导出完成：{{name}}。已重采样到方形网格；每个点取最近的实测点。",
     "exportFailed": "导出失败: {{error}}",
     "sentToAnalysis": "已发送到分析: {{phases}} 个相，形状 {{shape}}",
     "analysisLoadFailed": "加载到分析失败: {{detail}}",
@@ -404,6 +409,7 @@
     "gpuReleasedResidual": " · 后端 GPU 显存已释放（Torch 现为 {{torch}} GB）；其余 {{used}} GB 被共享 GPU 上的其他程序占用（Windows 桌面/dwm、浏览器、Aztec …）＋ 约 1-2 GB 的 CUDA 上下文——此按钮无法释放它们",
     "gpuReleasedEvicted": " — 已驱逐 {{count}} 个缓存的相测试后端",
     "gpuReleasedPhases": " — 已清除 {{count}} 个缓存的渲染相",
+    "gpuReleasedWorker": " — 已结束空闲的计算进程",
     "gpuReleaseNoCuda": "GPU 释放: 无 CUDA 设备 — 无需操作",
     "cachesReleased": "已释放缓存: {{backends}} 个相测试后端、{{phases}} 个渲染相、{{tables}} 个表",
     "gpuReleaseFailed": "GPU 释放失败: {{error}}",
@@ -572,6 +578,8 @@
     "batchComplete": "批处理完成",
     "succeeded": "{{count}} 个成功",
     "failed": "{{count}} 个失败",
+    "exportNotWritten": "已完成标定，但未写出导出文件：{{reason}}",
+    "exportsMissing": "{{count}} 个无导出文件",
     "stopBatch": "停止批处理",
     "startBatch": "开始批处理（{{count}} 个文件）",
     "close": "关闭",
@@ -790,6 +798,15 @@
     "unavailable": "无法获取该文件的衍射面开销。",
     "measuring": "正在测量衍射面开销..."
   },
+  "houghRefusal": {
+    "title": "Hough 标定未开始：反射面列表需要的内存超过本机可用的内存。并非内存耗尽，而是在申请之前就拒绝了构建。",
+    "phase": "{{name}}：{{rows}} 行衍射面需要 {{size}} 的带三元组库，预算为 {{budget}}。",
+    "own": "该物相有自己的族选择：请在{{card}}卡片中从中移除族，或将其重置为默认。",
+    "other": "否则请释放内存、在{{card}}卡片中手动编辑族，或用 Dictionary 或 Spherical 索引处理该物相。",
+    "lowSymmetry": "对该相（单斜或三斜）不提供更短的默认列表：在这类相上，更短的列表会明显丢失取向。请减少一次索引的相数、释放内存、改用 Spherical 或 Dictionary 索引，或在知道可能丢失取向的前提下，在 {{card}} 卡片中手动缩短列表。",
+    "runAgain": "请重新开始运行。",
+    "log": "Hough 标定未开始：反射面列表需要的内存超过本机可用的内存 (见上方提示)。"
+  },
   "reflectorFamilies": {
     "title": "衍射面族",
     "summaryDefault": "使用 {{used}} 个 - 默认列表",
@@ -834,6 +851,11 @@
     "cost": "库内存: {{size}}",
     "costFits": "可容纳",
     "costTooBig": "超出当前可用内存",
+    "fitButton": "使用能放入内存的最大列表 ({{rows}} 行)",
+    "fitTip": "把该物相的默认列表限制为最强的 {{rows}} 行，这是本机内存能建立的最大值。列表在任何机器上都相同，只有行数不同；它按物相保存，并随结果一起记录。",
+    "fitDone": "使用默认列表中最强的 {{rows}} 行 (库 {{size}})。",
+    "fitNone": "当前可用内存放不下至少 40 行且至少 4 个族的列表。请手动编辑族，或用 Dictionary 或 Spherical 索引处理该物相。",
+    "fitNoneLowSym": "对单斜或三斜相不提供更短的列表：在这类相上，更短的列表会明显丢失取向。请减少一次索引的相数、释放内存、改用 Spherical 或 Dictionary 索引，或在知道可能丢失取向的前提下，在下方手动缩短列表。",
     "costMeasuring": "正在测量内存...",
     "costUnavailable": "无法获取内存开销。",
     "costTiny": "可忽略",
@@ -844,6 +866,10 @@
     "addedParallel": "已添加 {{label}}。它与 {{other}} 是同一极点，PyEBSDIndex 只使用两者中靠前的一个。",
     "errors": {
       "generic": "无法更改衍射面族。",
+      "no_fit": "当前可用内存放不下至少 40 行且至少 4 个族的列表。请手动编辑族，或用 Dictionary 或 Spherical 索引处理该物相。",
+      "low_symmetry": "对单斜或三斜相不提供更短的列表：在这类相上，更短的列表会明显丢失取向。请减少一次索引的相数、释放内存、改用 Spherical 或 Dictionary 索引，或在知道可能丢失取向的前提下，手动缩短列表。",
+      "already_fits": "默认列表已能放入内存。",
+      "own_selection": "该物相有自己的选择；请先从中移除族，或将其重置为默认。",
       "bad_hkl": "请输入三个整数 (hkl)，六方物相也可输入四个 (hkil)。",
       "zero_vector": "(000) 不是衍射。",
       "forbidden": "{{hkl}} 不是该晶体的衍射 (被点阵中心禁止，或结构因子为零)。",
@@ -868,5 +894,17 @@
     "showWeaker": "显示较弱的族",
     "hideWeaker": "隐藏较弱的族",
     "tipWeaker": "同时列出弱于默认阈值或细于 1 Å 的族，最小间距到 0.7 Å。这是单独的计算，大晶胞需要一些时间。"
+  },
+  "caveats": {
+    "title": "关于此结果的提示",
+    "houghTrigonalSetting_one": "相 {{phases}}：对上述相的空间群，PyEBSDIndex 使用的是另一种三方晶设定的二重轴，Hough 标定常常无法区分绕 c 轴相差 60° 的取向。Spherical 或 Dictionary 标定可能有帮助。",
+    "houghTrigonalSetting_other": "相 {{phases}}：对上述相的空间群，PyEBSDIndex 使用的是另一种三方晶设定的二重轴，Hough 标定常常无法区分绕 c 轴相差 60° 的取向。Spherical 或 Dictionary 标定可能有帮助。",
+    "houghHexagonalLaue_one": "相 {{phases}}：Hough 标定常常给出与真实取向相差一个旋转的取向，该旋转是六方晶胞的对称操作，但不是晶体本身的对称操作（取决于晶类，为绕基面内某一轴 180°，或绕 c 轴 60°）。Spherical 或 Dictionary 标定可能有帮助。",
+    "houghHexagonalLaue_other": "相 {{phases}}：Hough 标定常常给出与真实取向相差一个旋转的取向，该旋转是六方晶胞的对称操作，但不是晶体本身的对称操作（取决于晶类，为绕基面内某一轴 180°，或绕 c 轴 60°）。Spherical 或 Dictionary 标定可能有帮助。",
+    "houghHexagonalVariants_one": "相 {{phases}}：Hough 标定不一定能区分彼此相差一个旋转的取向，该旋转是六方晶胞的对称操作，但不是晶体本身的对称操作（绕 c 轴 60°）。对于重要结果，Spherical 或 Dictionary 标定可能有帮助。",
+    "houghHexagonalVariants_other": "相 {{phases}}：Hough 标定不一定能区分彼此相差一个旋转的取向，该旋转是六方晶胞的对称操作，但不是晶体本身的对称操作（绕 c 轴 60°）。对于重要结果，Spherical 或 Dictionary 标定可能有帮助。"
+  },
+  "errors": {
+    "pc_missing": "此文件不含花样中心 (PC)；kikuchipy 的占位值会得出错误的取向。请在 PC 精修页面校准 PC，或将含 PC 的 .osc／元数据文件放在扫描文件旁，然后重新开始。"
   }
 }

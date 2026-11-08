@@ -39,6 +39,9 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from backend.api.services.cif_citation import (
+    MAX_CITATION_CHARS, _clean_text, apply_citation, read_citation,
+)
 from path_utils import sanitize_filename
 from phase_metadata import (
     KNOWN_ELEMENTS, _SHT_REGEX, _cif_block_role, _iter_cif_blocks,
@@ -77,9 +80,6 @@ _URL = re.compile(r"https?://[^\s\"'<>()\[\]]+")
 #: A bracket pair left empty once its URL was removed.
 _EMPTY_BRACKETS = re.compile(r"\(\s*\)|\[\s*\]")
 
-_ENTITY = re.compile(r"&#x([0-9a-fA-F]+);")
-_TAGS = re.compile(r"<[^>]+>")
-
 #: Database ids as they appear in a FILE STEM. `mp` needs the letter guard and
 #: the digit class: `r"mp-([0-9a-z]+)"` with `re.I` matches the `MP-` of
 #: `Fe3Si_MP-mp-2199` and captures the literal string `mp`, so four phases
@@ -94,27 +94,13 @@ _ID_PATTERNS = (("icsd", r"ICSD[-_ ]?(\d+)"),
 # citation
 # --------------------------------------------------------------------------
 
-#: The tags a CIF states a DOI in. ONE list for every reader of a CIF's source
-#: (the phase card, the CIF info panel, the CIF -> .xtal converter): each of them
-#: used to carry its own, and they named different tags.
-_DOI_TAGS = ("_journal_paper_doi", "_publ_section_doi",
-             "_citation_doi", "_citation_journal_doi")
-
-
-#: Public names for the two patterns the CIF WRITER (``PATCH /cif/{f}/meta``)
-#: must agree with: it has to replace exactly what the reader reads.
-DOI_TAGS = _DOI_TAGS
-REFS_BLOCK = _REFS
-
-
 def read_doi_tag(text: str) -> Optional[str]:
-    """The bare DOI from an explicit DOI tag, or None. Not the references text."""
-    for tag in _DOI_TAGS:
-        raw = _parse_cif_field(text or "", tag)
-        m = _DOI.search(raw or "")
-        if m:
-            return m.group(0).rstrip(".,;")
-    return None
+    """The bare DOI from an explicit DOI tag, or None. Not the references text.
+
+    :func:`~backend.api.services.cif_citation.read_citation` knows the tags, reads a
+    DOI column of a loop and refuses a value that is not a DOI.
+    """
+    return read_citation(text or "").doi or None
 
 
 def read_doi(text: str) -> Optional[str]:
@@ -193,9 +179,7 @@ def read_reference_text(text: str) -> tuple[Optional[str], Optional[str]]:
     m = _REFS.search(text or "")
     if not m:
         return None, None
-    ref = _TAGS.sub("", m.group(1))
-    ref = _ENTITY.sub(lambda x: chr(int(x.group(1), 16)), ref)
-    ref = " ".join(ref.replace("&amp;", "&").split()).strip()
+    ref = _clean_text(m.group(1))
     if not ref:
         return None, "empty"
     if ref.startswith("_"):
@@ -224,6 +208,8 @@ def read_reference(text: str) -> tuple[Optional[str], Optional[str]]:
     """
     ref, reason = read_reference_text(text)
     if ref is None:
+        if reason is None:                # no block: the journal fields can still cite it
+            return read_citation(text or "").reference or None, None
         return None, reason
 
     # Strip URLs ANYWHERE, not just words that begin with one. The first version
@@ -277,52 +263,35 @@ def cif_source(text: str) -> dict:
     card refuses. The card keeps its stricter rules in :func:`read_reference`;
     both come from one cleaning step. ``url`` is the first link in the block
     (the whole reference, when the reference is only a link).
+
+    A file with no references block has no text of its own, so the citation
+    composed from its journal and author fields stands in
+    (:func:`~backend.api.services.cif_citation.read_citation`): a COD file is a
+    published structure, not an unreferenced one. The text is capped like typed
+    text, because it ends up in the header of every SHT file made from the CIF.
     """
     reference, _why = read_reference_text(text)
-    return {"doi": read_doi(text) or "", "reference": reference or "",
+    reference = reference or read_citation(text or "").reference
+    return {"doi": read_doi(text) or "", "reference": reference[:MAX_CITATION_CHARS],
             "url": read_url(text) or ""}
 
 
 def set_cif_source(content: str, doi: str = "", reference: str = "") -> str:
     """``content`` with its DOI and/or reference replaced (or added) -- THE writer.
 
-    The counterpart of :func:`cif_source`: it replaces exactly what that reads.
-    ``PATCH /cif/{f}/meta`` (the info panel) and ``inject_cif_reference`` (the
-    Materials Project download) both call it; each used to carry its own regexes,
-    and both had the same two faults: the reference block was found with
-    ``;.*?;``, which ends at the first ";" INSIDE a citation and leaves the rest of
-    the old text in the file, and only ``_publ_section_doi`` was updated while the
-    reader takes the first present tag of :data:`DOI_TAGS` (``_journal_paper_doi``
-    first), so a DOI edit on a COD file was invisible.
+    The counterpart of :func:`cif_source`, on
+    :func:`~backend.api.services.cif_citation.apply_citation`: ``PATCH /cif/{f}/meta``
+    (the info panel), ``inject_cif_reference`` (the Materials Project download) and
+    the symmetrised copy all write through that one function. Each used to carry
+    its own regexes, and the two faults were the same: the reference block was found
+    with ``;.*?;``, which ends at the first ";" INSIDE a citation and leaves the rest
+    of the old text in the file, and only ``_publ_section_doi`` was updated, so a DOI
+    edit on a COD file was invisible.
 
-    * DOI: EVERY DOI tag present is updated; ``_publ_section_doi`` is appended only
-      when there is none.
-    * Reference: the block the READER finds (:data:`REFS_BLOCK`, every data block)
-      is replaced, or one is appended. A line of the text that starts with ";" would
-      close a CIF text field early, so that one character is neutralised; a ";"
-      inside a line is legal and kept.
-    * Empty arguments change nothing. Substitution is by function, so a backslash
-      in the typed text is not read as a group reference.
+    Raises ``CitationError`` for a ``doi`` that is not one and for a text over the
+    limit. Empty arguments change nothing.
     """
-    doi = (doi or "").strip()
-    reference = (reference or "").strip()
-    if doi:
-        wrote = False
-        for tag in _DOI_TAGS:
-            pat = re.compile(r"(?m)^([ \t]*" + re.escape(tag)
-                             + r"[ \t]+)(?:'[^'\n]*'|\"[^\"\n]*\"|\S+)")
-            content, n = pat.subn(lambda m: f"{m.group(1)}'{doi}'", content)
-            wrote = wrote or n > 0
-        if not wrote:
-            content = content.rstrip() + f"\n_publ_section_doi      '{doi}'\n"
-    if reference:
-        ref = re.sub(r"(?m)^;", ",", reference)
-        block = f"_publ_section_references\n;\n{ref}\n;"
-        if _REFS.search(content):
-            content = _REFS.sub(lambda m: block, content)
-        else:
-            content = content.rstrip() + f"\n{block}\n"
-    return content
+    return apply_citation(content, doi=doi or "", reference=reference or "")[0]
 
 
 # --------------------------------------------------------------------------

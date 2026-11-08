@@ -28,7 +28,8 @@
     "notLoaded": "— nicht geladen —",
     "openPcRefinement": "PC-Verfeinerung öffnen",
     "openPcRefinementTip": "Fenster zur Musterzentrum-Verfeinerung öffnen",
-    "pcLine": "PC: ({{x}}, {{y}}, {{z}})"
+    "pcLine": "PC: ({{x}}, {{y}}, {{z}})",
+    "mapMean": " (Mittelwert der PC-Karte)"
   },
   "method": {
     "label": "Methode:",
@@ -273,6 +274,8 @@
     "exportTip": "Indizierungs-Ergebnisse exportieren (.ang/.ctf = nur Orientierungen, .h5 = vollständige Daten mit EDS + Detektor)",
     "exportH5": ".h5 (vollständig + EDS + Detektor)",
     "exportAng": ".ang (EDAX TSL)",
+    "exportAngSquare": ".ang (quadratisches Raster, umgerechnet)",
+    "exportCtf": ".ctf (quadratisches Raster, umgerechnet)",
     "patternMatches": "Muster-Treffer",
     "patternMatchesTip": "NCC-Score-Heatmap und Mustervergleich für Dictionary-Indizierungsergebnisse anzeigen",
     "refine": "Verfeinern",
@@ -396,6 +399,8 @@
     "fileBrowseRequiresElectron": "Datei-Browsing erfordert den Electron-Desktop-Modus.",
     "exporting": "Exportiere als .{{fmt}}...",
     "exportComplete": "Export abgeschlossen: indexing_result.{{fmt}}",
+    "exportResampled": "Export abgeschlossen: {{name}}. Auf {{rows}} × {{cols}} Punkte übertragen; jeder Punkt übernahm den nächsten gemessenen.",
+    "exportResampledPlain": "Export abgeschlossen: {{name}}. Auf ein Quadratraster übertragen; jeder Punkt übernahm den nächsten gemessenen.",
     "exportFailed": "Export fehlgeschlagen: {{error}}",
     "sentToAnalysis": "An Analyse gesendet: {{phases}} Phase(n), Form {{shape}}",
     "analysisLoadFailed": "Laden in Analyse fehlgeschlagen: {{detail}}",
@@ -404,6 +409,7 @@
     "gpuReleasedResidual": " · Backend-GPU-Speicher freigegeben (Torch jetzt {{torch}} GB); {{used}} GB belegen andere Programme auf der geteilten GPU (Windows-Desktop/dwm, Browser, Aztec …) + der ~1-2 GB CUDA-Kontext — die kann dieser Button nicht freigeben",
     "gpuReleasedEvicted": " — {{count}} gecachte Phasentest-Backend(s) entfernt",
     "gpuReleasedPhases": " — {{count}} gecachte Render-Phase(n) geräumt",
+    "gpuReleasedWorker": " — wartenden Rechenprozess beendet",
     "gpuReleaseNoCuda": "GPU-Freigabe: kein CUDA-Gerät — nichts zu tun",
     "cachesReleased": "Zwischenspeicher freigegeben: {{backends}} Phasentest-Backend(s), {{phases}} Render-Phase(n), {{tables}} Tabelle(n)",
     "gpuReleaseFailed": "GPU-Freigabe fehlgeschlagen: {{error}}",
@@ -572,6 +578,8 @@
     "batchComplete": "Stapel abgeschlossen",
     "succeeded": "{{count}} erfolgreich",
     "failed": "{{count}} fehlgeschlagen",
+    "exportNotWritten": "Indiziert, aber keine Exportdatei geschrieben: {{reason}}",
+    "exportsMissing": "{{count}} ohne Exportdatei",
     "stopBatch": "Stapel stoppen",
     "startBatch": "Stapel starten ({{count}} Dateien)",
     "close": "Schließen",
@@ -790,6 +798,15 @@
     "unavailable": "Reflektorkosten für diese Datei nicht ermittelbar.",
     "measuring": "Reflektorkosten werden gemessen..."
   },
+  "houghRefusal": {
+    "title": "Die Hough-Indizierung wurde nicht gestartet: Die Reflektorliste braucht mehr Speicher, als dieser Rechner erübrigen kann. Es ist kein Speicher ausgegangen; der Aufbau wurde abgelehnt, bevor er angefordert wurde.",
+    "phase": "{{name}}: {{rows}} Reflektorzeilen würden eine Triplett-Bibliothek von {{size}} brauchen; das Budget beträgt {{budget}}.",
+    "own": "Diese Phase hat eine eigene Familienauswahl: Entfernen Sie Familien daraus oder setzen Sie sie in der Karte {{card}} auf die Standardliste zurück.",
+    "other": "Sonst Speicher freigeben, die Familien in der Karte {{card}} von Hand bearbeiten oder diese Phase mit Dictionary- oder Spherical-Indizierung indizieren.",
+    "lowSymmetry": "Für diese Phase (monoklin oder triklin) wird keine kürzere Standardliste angeboten: kürzere Listen verlieren dort messbar Orientierungen. Weniger Phasen auf einmal indizieren, Speicher freigeben, Spherical- oder Dictionary-Indizierung verwenden oder die Liste von Hand in der Karte {{card}} kürzen, im Wissen, dass dabei Orientierungen verloren gehen können.",
+    "runAgain": "Starten Sie den Lauf erneut.",
+    "log": "Die Hough-Indizierung wurde nicht gestartet: Eine Reflektorliste braucht mehr Speicher, als dieser Rechner erübrigen kann (siehe Hinweis oben)."
+  },
   "reflectorFamilies": {
     "title": "Reflektorfamilien",
     "summaryDefault": "{{used}} verwendet - Standardliste",
@@ -834,6 +851,11 @@
     "cost": "Bibliotheksspeicher: {{size}}",
     "costFits": "passt",
     "costTooBig": "passt nicht in den jetzt freien Speicher",
+    "fitButton": "Größte passende Liste verwenden ({{rows}} Zeilen)",
+    "fitTip": "Begrenzt die Standardliste dieser Phase auf ihre {{rows}} stärksten Zeilen, das Meiste, was der Speicher dieses Rechners aufbauen kann. Die Liste ist auf jedem Rechner dieselbe, nur die Zeilenzahl unterscheidet sich; sie wird für diese Phase gespeichert und mit dem Ergebnis festgehalten.",
+    "fitDone": "Verwendet werden die {{rows}} stärksten Zeilen der Standardliste (Bibliothek {{size}}).",
+    "fitNone": "Keine Liste mit mindestens 40 Zeilen und 4 Familien passt in den jetzt freien Speicher. Familien von Hand bearbeiten oder diese Phase mit Dictionary- oder Spherical-Indizierung indizieren.",
+    "fitNoneLowSym": "Für eine monokline oder trikline Phase wird keine kürzere Liste angeboten: kürzere Listen verlieren dort messbar Orientierungen. Weniger Phasen auf einmal indizieren, Speicher freigeben, Spherical- oder Dictionary-Indizierung verwenden oder die Liste unten von Hand kürzen, im Wissen, dass dabei Orientierungen verloren gehen können.",
     "costMeasuring": "Speicherbedarf wird gemessen...",
     "costUnavailable": "Speicherbedarf nicht ermittelbar.",
     "costTiny": "vernachlässigbar",
@@ -844,6 +866,10 @@
     "addedParallel": "{{label}} hinzugefügt. Es hat denselben Pol wie {{other}}; PyEBSDIndex verwendet nur die erste der beiden.",
     "errors": {
       "generic": "Die Reflektorfamilien konnten nicht geändert werden.",
+      "no_fit": "Keine Liste mit mindestens 40 Zeilen und 4 Familien passt in den jetzt freien Speicher. Familien von Hand bearbeiten oder diese Phase mit Dictionary- oder Spherical-Indizierung indizieren.",
+      "low_symmetry": "Für eine monokline oder trikline Phase wird keine kürzere Liste angeboten: kürzere Listen verlieren dort messbar Orientierungen. Weniger Phasen auf einmal indizieren, Speicher freigeben, Spherical- oder Dictionary-Indizierung verwenden oder die Liste von Hand kürzen, im Wissen, dass dabei Orientierungen verloren gehen können.",
+      "already_fits": "Die Standardliste passt bereits in den Speicher.",
+      "own_selection": "Diese Phase hat eine eigene Auswahl; entfernen Sie zuerst Familien daraus oder setzen Sie sie auf die Standardliste zurück.",
       "bad_hkl": "Drei ganze Zahlen (hkl) eingeben, bei hexagonalen Phasen auch vier (hkil).",
       "zero_vector": "(000) ist kein Reflex.",
       "forbidden": "{{hkl}} ist kein Reflex dieses Kristalls (durch die Gitterzentrierung verboten oder Strukturfaktor null).",
@@ -868,5 +894,17 @@
     "showWeaker": "Schwächere Familien anzeigen",
     "hideWeaker": "Schwächere Familien ausblenden",
     "tipWeaker": "Zusätzlich die Familien auflisten, die schwächer als die Standardschwelle oder feiner als 1 Å sind, bis zu einem Abstand von 0,7 Å. Das ist eine eigene Rechnung und dauert bei einer großen Elementarzelle eine Weile."
+  },
+  "caveats": {
+    "title": "Hinweis zu diesem Ergebnis",
+    "houghTrigonalSetting_one": "Phase {{phases}}: Für diese Raumgruppe verwendet PyEBSDIndex die Zweizähler der anderen trigonalen Aufstellung, und Hough kann Orientierungen, die um 60° um c gegeneinander gedreht sind, oft nicht unterscheiden. Spherical- oder Dictionary-Indizierung kann helfen.",
+    "houghTrigonalSetting_other": "Phasen {{phases}}: Für diese Raumgruppen verwendet PyEBSDIndex die Zweizähler der anderen trigonalen Aufstellung, und Hough kann Orientierungen, die um 60° um c gegeneinander gedreht sind, oft nicht unterscheiden. Spherical- oder Dictionary-Indizierung kann helfen.",
+    "houghHexagonalLaue_one": "Phase {{phases}}: Hough liefert oft eine Orientierung, die sich von der wahren durch eine Drehung unterscheidet, die eine Symmetrie der hexagonalen Zelle, aber nicht dieses Kristalls ist (je nach Kristallklasse 180° um eine Achse in der Basisebene oder 60° um c). Spherical- oder Dictionary-Indizierung kann helfen.",
+    "houghHexagonalLaue_other": "Phasen {{phases}}: Hough liefert oft eine Orientierung, die sich von der wahren durch eine Drehung unterscheidet, die eine Symmetrie der hexagonalen Zelle, aber nicht dieser Kristalle ist (je nach Kristallklasse 180° um eine Achse in der Basisebene oder 60° um c). Spherical- oder Dictionary-Indizierung kann helfen.",
+    "houghHexagonalVariants_one": "Phase {{phases}}: Hough kann Orientierungen nicht immer sicher voneinander unterscheiden, die durch eine Drehung ineinander übergehen, die eine Symmetrie der hexagonalen Zelle, aber nicht dieses Kristalls ist (60° um c). Bei wichtigen Ergebnissen kann Spherical- oder Dictionary-Indizierung helfen.",
+    "houghHexagonalVariants_other": "Phasen {{phases}}: Hough kann Orientierungen nicht immer sicher voneinander unterscheiden, die durch eine Drehung ineinander übergehen, die eine Symmetrie der hexagonalen Zelle, aber nicht dieser Kristalle ist (60° um c). Bei wichtigen Ergebnissen kann Spherical- oder Dictionary-Indizierung helfen."
+  },
+  "errors": {
+    "pc_missing": "Diese Datei enthält kein Pattern Center (PC); der Platzhalter von kikuchipy würde falsche Orientierungen liefern. Kalibrieren Sie das PC in der PC-Verfeinerung oder legen Sie die .osc-/Metadaten-Datei mit dem PC neben den Scan und starten Sie erneut."
   }
 }

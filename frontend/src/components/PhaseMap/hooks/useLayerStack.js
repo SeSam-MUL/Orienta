@@ -16,6 +16,7 @@ import { layerStackReducer, initialState } from '../layerStackReducer';
 import { parseAddonLayerId } from '../addonLayerDrain';
 import { findLayerDef } from '../layerSources';
 import { isCropWarning } from '../../common/CropWarningChip';
+import { overviewMismatch } from '../../EBSDViewer/hexOverview';
 import { applyPreset } from '../presets';
 import { phaseMapApi, ebsdApi, h5Api, analysisApi } from '../../../services/api';
 import { addonsApi } from '../../../services/addonsApi';
@@ -76,7 +77,8 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
       // `scale` is present only where the colours mean a number (CI, band
       // contrast, the diagnostics). It carries the range ACTUALLY painted, so
       // the legend states what the map shows rather than a nominal 0..1.
-      return { base64: res.data.image, keyToAlpha: false, scale: res.data.scale ?? null };
+      return { base64: res.data.image, keyToAlpha: false, scale: res.data.scale ?? null,
+               display: res.data.display ?? null };
     }
     case 'diagnostics':
     case 'refinement': {
@@ -89,7 +91,8 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
       const res = await phaseMapApi.layer(kind, cleanupParams);
       // The backend already emits a transparent-background RGBA PNG
       // (NaN / non-indexed pixels → alpha 0), so no colour-keying needed.
-      return { base64: res.data.image, keyToAlpha: false, scale: res.data.scale ?? null };
+      return { base64: res.data.image, keyToAlpha: false, scale: res.data.scale ?? null,
+               display: res.data.display ?? null };
     }
     case 'addon': {
       const p = parseAddonLayerId(layer.id);
@@ -108,8 +111,10 @@ async function fetchLayerImage({ layer, cleanupParams, colorOverrides }) {
     }
     case 'ebsd': {
       if (layer.id === 'vbse') {
-        const res = await ebsdApi.virtualBSE();
-        return { base64: res.data.image, keyToAlpha: true };
+        // 'raster': a hexagonal scan is drawn on the display raster like the other layers of the stack
+        // (the backend ignores it for a square scan).
+        const res = await ebsdApi.virtualBSE('gray', '', '', { display: 'raster' });
+        return { base64: res.data.image, keyToAlpha: true, display: res.data.display ?? null };
       }
       throw new Error(`Unsupported ebsd layer: ${layer.id}`);
     }
@@ -173,10 +178,44 @@ export function cleanupAffectsLayer(id) {
   );
 }
 
+/** The two shapes ([height, width]) are the same raster, or both are absent. */
+function sameShape(a, b) {
+  if (!a || !b) return !a && !b;
+  return a[0] === b[0] && a[1] === b[1];
+}
+
+/**
+ * @param {number[]|null} expectedShape  [height, width] every layer must have: the display raster of a
+ *   hexagonal result. null = no raster is expected (a square scan, or a geometry nobody knows): a picture
+ *   whose answer names a raster (`display`) is then not drawn either.
+ * @param {boolean} shapePending  true while the geometry `expectedShape` comes from is being re-read.
+ *   A picture that does not fit the expectation then proves nothing (the expectation may be the stale
+ *   one), so it is dropped without a message and fetched again once the geometry is known.
+ * @param {function|null} rasterMatches  (display) => bool: is the raster an answer says it drew the expected
+ *   one (same shape, factor, pixel size and origin)? Judged on top of the picture's size.
+ * @param {string} rasterId  names the expected raster including its origin; a change of it re-checks the
+ *   pictures already held.
+ */
 export function useLayerStack({ cleanupParams, resetSignal, frameSig,
                                colorOverrides = null, resultId = null,
-                               seedResultId = null }) {
+                               seedResultId = null,
+                               expectedShape = null, shapePending = false,
+                               rasterMatches = null, rasterId = '' }) {
   const [state, dispatch] = useReducer(layerStackReducer, initialState);
+  // The expectation is read when an answer LANDS, not when its request left: a closure over the value of
+  // the request would judge a late answer by the geometry it was asked under.
+  const expectedShapeRef = useRef(expectedShape);
+  expectedShapeRef.current = expectedShape;
+  const shapePendingRef = useRef(shapePending);
+  shapePendingRef.current = shapePending;
+  const rasterMatchesRef = useRef(rasterMatches);
+  rasterMatchesRef.current = rasterMatches;
+  // layerId → the `display` of the answer the cached picture came from (null where it said none)
+  const displayRef = useRef(new Map());
+  // Layers whose message is "not on the raster", so a change of geometry can lift exactly those.
+  const shapeErrorsRef = useRef(new Set());
+  // An answer was dropped without a verdict while the geometry was pending; fetch again when it is known.
+  const shapeDeferredRef = useRef(false);
   const cacheRef = useRef(new Map());           // layerId → ImageBitmap
   // layerId → { min, max, unit, cmap, stops } for layers whose colours mean a
   // number. Kept beside the bitmaps so a legend can never outlive its map.
@@ -271,6 +310,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
         // state the range of a picture that is no longer on screen.
         scaleRef.current.delete(id);
         cropRef.current.delete(id);
+        displayRef.current.delete(id);
         const idx = order.indexOf(id);
         if (idx !== -1) order.splice(idx, 1);
       }
@@ -278,7 +318,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
     // Also flush matching error entries — otherwise stale errors from
     // long-removed layers stick around in the LayeredCanvas overlay.
     for (const id of [...errors.keys()]) {
-      if (!predicate || predicate(id)) errors.delete(id);
+      if (!predicate || predicate(id)) { errors.delete(id); shapeErrorsRef.current.delete(id); }
     }
     force();
   }, []);
@@ -305,7 +345,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
     fetchingRef.current.add(layer.id);
     const epoch = epochRef.current;  // snapshot; a flush mid-flight bumps this
     try {
-      const { base64, keyToAlpha, scale, crop } = await fetchLayerImage({ layer, cleanupParams, colorOverrides });
+      const { base64, keyToAlpha, scale, crop, display } = await fetchLayerImage({ layer, cleanupParams, colorOverrides });
       if (!base64) throw new Error('Empty image payload');
       const bitmap = await pngBase64ToBitmap(base64, { keyToAlpha });
       // Result/file switched while we were fetching → this bitmap belongs to
@@ -322,13 +362,39 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
         force();
         return;
       }
+      // On a hexagonal result every layer must be on the display raster. One that is not (an add-on map,
+      // an analysis map, an index-grid image) would be drawn half a step off the others: refuse it by name.
+      // The answer also says which raster it drew (`display`); a picture of the right size on a raster with
+      // another origin (a crop that starts on an odd row) is as wrong as one of the wrong size.
+      const expected = expectedShapeRef.current;
+      const matches = rasterMatchesRef.current;
+      // The reverse: the answer names a raster, but the page expects none (the geometry is still unknown, or
+      // the scan is square). Its pixels would be read as cells of the index grid, so it is not drawn.
+      const rasterNotExpected = !expected && overviewMismatch(null, display);
+      if (rasterNotExpected || (expected && (bitmap.height !== expected[0] || bitmap.width !== expected[1]
+          || (display && matches && !matches(display))))) {
+        try { bitmap.close(); } catch { /* ignore */ }
+        if (shapePendingRef.current) {
+          // The geometry is being re-read (another dataset, another measurement): this may be the
+          // right picture for the new one. No message; the effect below asks again once it is known.
+          shapeDeferredRef.current = true;
+          return;
+        }
+        shapeErrorsRef.current.add(layer.id);
+        errorRef.current.set(layer.id, tRef.current(rasterNotExpected
+          ? 'phasemap:layers.hexRasterNotExpected' : 'phasemap:layers.notOnHexRaster'));
+        force();
+        return;
+      }
       cacheSet(layer.id, bitmap);
+      displayRef.current.set(layer.id, display ?? null);
       if (scale) scaleRef.current.set(layer.id, scale);
       else scaleRef.current.delete(layer.id);
       // Only a complaint is worth keeping — see cropRef's declaration.
       if (isCropWarning(crop)) cropRef.current.set(layer.id, crop);
       else cropRef.current.delete(layer.id);
       errorRef.current.delete(layer.id);
+      shapeErrorsRef.current.delete(layer.id);
     } catch (err) {
       // Translated here rather than at the display, because the error is
       // stored as a string that several consumers only test for truth. A
@@ -383,6 +449,39 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
   useEffect(() => {
     cacheFlush(cleanupAffectsLayer);
   }, [cleanupSignature, cacheFlush]);
+
+  // A picture belongs to the geometry it was fetched for. When the expected raster changes (another
+  // result, dataset or measurement), a picture of the old geometry must not be shown under the new one,
+  // a message that said "not on the raster" about the old expectation must not outlive it, and an answer
+  // still on its way was asked for under the old one (the flush bumps the epoch, so it is dropped).
+  // Pictures that fit the new expectation stay: they were fetched for it.
+  const prevExpectedRef = useRef({ shape: expectedShape, id: rasterId });
+  const expectedKey = expectedShape ? `${expectedShape[0]}x${expectedShape[1]}` : '';
+  useEffect(() => {
+    const before = prevExpectedRef.current;
+    const now = { shape: expectedShapeRef.current, id: rasterId };
+    prevExpectedRef.current = now;
+    if (sameShape(before.shape, now.shape) && before.id === now.id) return;
+    const fits = (id) => {
+      const bmp = cacheRef.current.get(id);
+      if (!now.shape) {
+        return !(before.shape && bmp.height === before.shape[0] && bmp.width === before.shape[1]);
+      }
+      if (bmp.height !== now.shape[0] || bmp.width !== now.shape[1]) return false;
+      // the same size on another origin is another raster
+      const display = displayRef.current.get(id);
+      const matches = rasterMatchesRef.current;
+      return !(display && matches && !matches(display));
+    };
+    cacheFlush((id) => shapeErrorsRef.current.has(id) || (cacheRef.current.has(id) && !fits(id)));
+  }, [expectedKey, rasterId, cacheFlush]);
+
+  // The geometry is known again: pictures dropped while it was pending are fetched once more.
+  useEffect(() => {
+    if (shapePending || !shapeDeferredRef.current) return;
+    shapeDeferredRef.current = false;
+    force();
+  }, [shapePending]);
 
   // Frame (coordinate-system) change → invalidate ONLY the orientation-colored
   // layers so they refetch through the new R_user. Phase/CI/BC/EDS are

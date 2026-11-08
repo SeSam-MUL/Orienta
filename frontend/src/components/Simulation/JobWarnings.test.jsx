@@ -74,7 +74,7 @@ describe('JobWarnings', () => {
   });
 
   it.each([
-    ['de', /Simulieren Sie sie erneut/],
+    ['de', /Löschen Sie die Datei und simulieren Sie die Phase neu/],
     ['ja', /辞書インデックス法に使用できません/],
     ['zh', /无法用于字典索引/],
   ])('speaks %s', async (lang, pattern) => {

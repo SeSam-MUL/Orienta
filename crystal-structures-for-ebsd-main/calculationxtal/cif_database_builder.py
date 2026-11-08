@@ -300,7 +300,9 @@ def parse_cif_file(cif_path: Path) -> dict:
         # editable); a link-only reference is that link.
         found_ref_text = source["reference"] or source["url"] or "none found"
         warnings, is_fit = [], True
-        if found_doi == "none found" and found_ref_text == "none found": is_fit = False; warnings.append("No reference or DOI found.")
+        # A missing reference is a warning, not a gate: the Crystal Database
+        # asks for one (or an explicit "unpublished") when the file is converted.
+        if found_doi == "none found" and found_ref_text == "none found": warnings.append("No reference or DOI found.")
         if len(structure) == 0: is_fit = False; warnings.append("No atomic sites.")
         if spg_number is None or spg_number < 1: is_fit = False; warnings.append("No space group.")
         if not structure.is_ordered: warnings.append("Disordered structure.")

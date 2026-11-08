@@ -24,6 +24,8 @@ import ExportBar from './ExportBar';
 import DatabaseViewer from './DatabaseViewer';
 import DwfDialog from './DwfDialog';
 import SyncDialog from './SyncDialog';
+import ReferenceDialog from './ReferenceDialog';
+import { errorText, errorCode } from './cifWarnings';
 
 // ---------------------------------------------------------------------------
 // Status bar color logic
@@ -64,6 +66,11 @@ export default function CrystalDatabasePage({ onNavigate, isActive = false }) {
   // --- Convert state ---
   const [converting, setConverting] = useState(false);
   const [batchConverting, setBatchConverting] = useState(false);
+  // CIF files without DOI/reference that wait for the user's decision:
+  // { mode: 'single' | 'batch', files, convertible?, unfit? } or null.
+  const [referenceAsk, setReferenceAsk] = useState(null);
+  // CIF file name -> name of the symmetrised copy that exists for it (this session).
+  const [savedCopies, setSavedCopies] = useState({});
 
   // --- Sync state ---
   const [syncAvailable, setSyncAvailable] = useState(false);
@@ -145,6 +152,17 @@ export default function CrystalDatabasePage({ onNavigate, isActive = false }) {
     // Use cached parsedInfo if available
     if (file.parsedInfo) {
       setCrystalInfo(file.parsedInfo);
+      // The list's batch parse carries no fit verdict, warning codes or symmetry
+      // finding, so the badge and the "Save symmetrised copy" action would never
+      // show for a file the list parsed. Ask for the full answer in the background.
+      if (!file.parsedInfo.fit_warning_codes) {
+        try {
+          const res = await dbApi.cifInfo(file.name);
+          const full = res.data;
+          setCrystalInfo(cur => (cur && cur.filename === file.name ? full : cur));
+          setCifFiles(prev => prev.map(f => f.name === file.name ? { ...f, parsedInfo: full } : f));
+        } catch { /* the cached answer stays */ }
+      }
       return;
     }
 
@@ -223,10 +241,12 @@ export default function CrystalDatabasePage({ onNavigate, isActive = false }) {
     let added = 0;
     let duplicates = 0;
     let failed = 0;
+    let hiddenSymmetry = 0;
     setStatus(t('status.importing', { count: paths.length }));
     for (const p of paths) {
       try {
         const res = await dbApi.addCif(p);
+        if (res.data?.detected_space_group) hiddenSymmetry++;
         if (res.data?.duplicate) {
           duplicates++;
           const name = p.split(/[/\\]/).pop();
@@ -244,6 +264,7 @@ export default function CrystalDatabasePage({ onNavigate, isActive = false }) {
     if (added) parts.push(t('status.addedCount', { count: added }));
     if (duplicates) parts.push(t('status.alreadyInDb', { count: duplicates }));
     if (failed) parts.push(t('status.failedCount', { count: failed }));
+    if (hiddenSymmetry) parts.push(t('status.p1Hidden', { count: hiddenSymmetry }));
     setStatus(parts.join(', ') || t('status.noFilesImported'));
     await refreshCifList();
   };
@@ -251,22 +272,118 @@ export default function CrystalDatabasePage({ onNavigate, isActive = false }) {
   // =========================================================================
   // Convert to .xtal
   // =========================================================================
-  const handleConvert = async () => {
-    const file = cifFiles[selectedIdx];
-    if (!file) return;
+  // One conversion. `declaration` is '' or 'unpublished'. A CIF the backend finds
+  // without reference opens the decision dialog instead of failing (the cached
+  // info may be stale).
+  const convertOne = async (idx, declaration = '') => {
+    const file = cifFiles[idx];
+    if (!file) return false;
     setConverting(true);
     setStatus(t('status.converting', { name: file.name }));
     try {
-      const res = await dbApi.convertCifToXtal(file.path);
+      const res = await dbApi.convertCifToXtal(file.path, '', declaration);
       const data = res.data;
-      setStatus(t('status.converted', { name: data.name, spaceGroup: data.space_group, atoms: data.n_atoms }));
+      const key = data.reference_status === 'declared_unpublished' ? 'status.convertedDeclared' : 'status.converted';
+      setStatus(t(key, { name: data.name, spaceGroup: data.space_group, atoms: data.n_atoms }));
       // Update hasXtal for this file
-      setCifFiles(prev => prev.map((f, i) => i === selectedIdx ? { ...f, hasXtal: true } : f));
+      setCifFiles(prev => prev.map((f, i) => i === idx ? { ...f, hasXtal: true } : f));
       setXtalCount(c => c + 1);
+      return true;
     } catch (err) {
-      setStatus(t('status.conversionFailed', { error: err.response?.data?.detail || err.message }));
+      if (errorCode(err) === 'reference_missing') {
+        setReferenceAsk({ mode: 'single', files: [file] });
+        setStatus(t('status.ready'));
+      } else {
+        setStatus(t('status.conversionFailed', { error: errorText(err) }));
+      }
+      return false;
     } finally {
       setConverting(false);
+    }
+  };
+
+  const handleConvert = async () => {
+    const file = cifFiles[selectedIdx];
+    if (!file) return;
+    // The cached info says it before the backend has to.
+    if ((crystalInfo ?? file.parsedInfo)?.reference_missing) {
+      setReferenceAsk({ mode: 'single', files: [file] });
+      return;
+    }
+    await convertOne(selectedIdx);
+  };
+
+  // Single file, after the dialog: write the DOI / citation into the CIF, then convert.
+  const handleReferenceSubmitted = async ({ doi, reference }) => {
+    const file = referenceAsk?.files?.[0];
+    setReferenceAsk(null);
+    if (!file) return;
+    const idx = cifFiles.findIndex(f => f.path === file.path);
+    try {
+      await dbApi.updateCifMeta(file.name, { ...(doi ? { doi } : {}), ...(reference ? { reference } : {}) });
+      const res = await dbApi.cifInfo(file.name);
+      setCifFiles(prev => prev.map((f, i) => i === idx ? { ...f, parsedInfo: res.data } : f));
+      if (idx === selectedIdx) setCrystalInfo(res.data);
+    } catch (err) {
+      setStatus(t('status.conversionFailed', { error: errorText(err) }));
+      return;
+    }
+    await convertOne(idx);
+  };
+
+  const handleReferenceDeclared = async () => {
+    const ask = referenceAsk;
+    setReferenceAsk(null);
+    if (!ask) return;
+    if (ask.mode === 'single') {
+      await convertOne(cifFiles.findIndex(f => f.path === ask.files[0].path), 'unpublished');
+    } else {
+      await runBatch(ask.convertible, new Set(ask.files.map(f => f.path)), 0, ask.unfit);
+    }
+  };
+
+  const handleReferenceSkipped = async () => {
+    const ask = referenceAsk;
+    setReferenceAsk(null);
+    if (!ask || ask.mode !== 'batch') return;
+    const missing = new Set(ask.files.map(f => f.path));
+    const rest = ask.convertible.filter(f => !missing.has(f.path));
+    if (rest.length === 0) {
+      setStatus(t('status.skippedNoReference', { count: ask.files.length }));
+      return;
+    }
+    await runBatch(rest, new Set(), ask.files.length, ask.unfit);
+  };
+
+  // A symmetrised copy was saved (or refused) from the parameters panel.
+  const handleSymmetrised = async (result) => {
+    if (!result.ok) {
+      // The backend refuses with a code; the sentence is the fallback only.
+      const reason = t(`symmetriseReasons.${result.code}`, { defaultValue: result.error, existing: result.existing });
+      // The same crystal is already there under another name: that file is the copy.
+      if (result.code === 'same_content_exists' && result.existing) {
+        setSavedCopies(prev => ({ ...prev, [result.file]: result.existing }));
+      }
+      setStatus(t('status.symmetriseFailed', { error: reason }));
+      return;
+    }
+    const d = result.data;
+    setSavedCopies(prev => ({ ...prev, [result.file]: d.name }));
+    // Reload first: the list refresh writes its own status line.
+    await refreshCifList();
+    // Say what happened to the cell: kept as in the source, or converted.
+    const cell = d.cell || {};
+    const base = { name: d.name, symbol: d.space_group_symbol, number: d.space_group_number };
+    const chosen = d.tolerance_chosen ? t('status.toleranceChosen', { symprec: d.symprec }) : '';
+    if (cell.kept_source_axes === false) {
+      setStatus(t('status.symmetrisedConverted', {
+        ...base,
+        before: cell.atoms_before,
+        after: cell.atoms_after,
+        axes: cell.axes ? t('status.axesSuffix', { axes: cell.axes }) : '',
+      }) + chosen);
+    } else {
+      setStatus(t('status.symmetrised', base) + chosen);
     }
   };
 
@@ -283,29 +400,46 @@ export default function CrystalDatabasePage({ onNavigate, isActive = false }) {
       setStatus(t('status.noneFit', { count: skipped.length }));
       return;
     }
+    // One question for all files without a reference, before anything is converted.
+    const noReference = convertible.filter(f => f.parsedInfo?.reference_missing === true);
+    if (noReference.length > 0) {
+      setReferenceAsk({ mode: 'batch', files: noReference, convertible, unfit: skipped.length });
+      return;
+    }
+    await runBatch(convertible, new Set(), 0, skipped.length);
+  };
+
+  // Convert `files` one by one. Files whose path is in `declared` are converted
+  // with the declaration "unpublished"; `skippedNoRef` and `unfit` only feed the
+  // summary line.
+  const runBatch = async (files, declared, skippedNoRef, unfit) => {
     setBatchConverting(true);
+    const done = new Set();
     let ok = 0, fail = 0;
-    for (const file of convertible) {
+    for (const file of files) {
       try {
-        await dbApi.convertCifToXtal(file.path);
+        await dbApi.convertCifToXtal(file.path, '', declared.has(file.path) ? 'unpublished' : '');
         ok++;
+        done.add(file.path);
         setStatus(t('status.convertingProgress', {
           done: ok + fail,
-          total: convertible.length,
-          skipped: skipped.length ? t('status.convertingSkippedSuffix', { count: skipped.length }) : '',
+          total: files.length,
+          skipped: unfit ? t('status.convertingSkippedSuffix', { count: unfit }) : '',
         }));
       } catch {
         fail++;
       }
     }
     const parts = [t('status.convertedCount', { count: ok })];
+    if (declared.size) parts.push(t('status.declaredUnpublishedCount', { count: declared.size }));
     if (fail) parts.push(t('status.failedCount', { count: fail }));
-    if (skipped.length) parts.push(t('status.skippedNotFit', { count: skipped.length }));
+    if (skippedNoRef) parts.push(t('status.skippedNoReference', { count: skippedNoRef }));
+    if (unfit) parts.push(t('status.skippedNotFit', { count: unfit }));
     setStatus(t('status.batchComplete', { parts: parts.join(', ') }));
     setBatchConverting(false);
-    // Update hasXtal for converted files
+    // Only what was converted gets its badge; the checkboxes are cleared either way.
     setCifFiles(prev => prev.map(f => {
-      if (f.checked && f.parsedInfo?.fit_for_xtal !== false) return { ...f, hasXtal: true, checked: false };
+      if (done.has(f.path)) return { ...f, hasXtal: true, checked: false };
       if (f.checked) return { ...f, checked: false };
       return f;
     }));
@@ -568,6 +702,8 @@ export default function CrystalDatabasePage({ onNavigate, isActive = false }) {
             loading={infoLoading}
             selectedFileName={selectedFile?.name}
             hasXtal={!!selectedFile?.hasXtal}
+            savedCopy={savedCopies[selectedFile?.name]}
+            onSymmetrised={handleSymmetrised}
             onInfoUpdated={async () => {
               if (!selectedFile) return;
               try {
@@ -614,6 +750,16 @@ export default function CrystalDatabasePage({ onNavigate, isActive = false }) {
           {t('counts.cifXtal', { cif: cifFiles.length, xtal: xtalCount })}
         </span>
       </div>
+
+      {referenceAsk && (
+        <ReferenceDialog
+          files={referenceAsk.files}
+          onSubmitReference={handleReferenceSubmitted}
+          onDeclareUnpublished={handleReferenceDeclared}
+          onSkip={handleReferenceSkipped}
+          onCancel={() => setReferenceAsk(null)}
+        />
+      )}
 
       <PromptDialog {...promptProps} />
     </div>
