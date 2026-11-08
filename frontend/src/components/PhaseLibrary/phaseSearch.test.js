@@ -78,8 +78,8 @@ describe('§2.1 acceptance — the queries that were measured to fail', () => {
     expect(new Set(keys('Ni'))).toEqual(new Set(expected));
   });
 
-  // Measured before: 1, where 13 phases contain all three. The system name
-  // Sebastian himself uses.
+  // Measured before: 1, where 13 phases contain all three. A system name
+  // that metallurgists use.
   it('`Al-Fe-Si` is an element combination, not a string', () => {
     const got = keys('Al-Fe-Si');
     expect(new Set(got.filter((k) => AL_FE_SI.includes(k)))).toEqual(new Set(AL_FE_SI));

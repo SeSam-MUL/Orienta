@@ -67,9 +67,6 @@ anything that does not change the particles themselves.
 
 Pure numpy/scipy: no request, no session, no loaded file, so this is unit
 testable without data and reusable from a batch driver.
-
-Spec: docs/superpowers/specs/2026-08-27-eds-presets-and-export-design.md
-      (sections 3.4 and 6)
 """
 from __future__ import annotations
 

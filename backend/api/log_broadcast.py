@@ -50,7 +50,7 @@ _SUPPRESSED_LOGGERS = frozenset({
 # A guard on a `_from_ws_broadcast` record attribute used to sit in emit(),
 # described as stopping records that originate from the broadcast itself.
 # Nothing in this repository has ever set that attribute (only the design note
-# it was copied from, docs/superpowers/plans/2026-03-27-global-dev-panel.md),
+# it was copied from),
 # so it never fired once. Removed rather than left standing: a brake that does
 # nothing, next to brakes that do, is how the next reader mis-reads this file.
 

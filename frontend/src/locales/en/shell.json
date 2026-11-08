@@ -1,6 +1,14 @@
 {
   "appSubtitle": "EBSD Pattern Analysis",
   "appTitle": "Orienta",
+  "backendEnded": {
+    "title": "The backend stopped unexpectedly at {{time}} ({{exit}}).",
+    "lastRequest": "It was working on {{request}}.",
+    "restarting": "Orienta is starting it again. Files and results that were loaded are gone: open the file again.",
+    "notRestarting": "It is not started again automatically any more. Close Orienta completely and start it again.",
+    "details": "The reason and the backend's last state are in logs/backend-console.log (Settings → Report a problem includes it).",
+    "dismiss": "Dismiss"
+  },
   "crash": {
     "title": "This module crashed"
   },

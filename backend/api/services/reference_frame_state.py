@@ -7,7 +7,6 @@ Holds a FrameSpec per canonical source_file path. A FrameSpec resolves to:
   * plot    — pole-figure plotting convention (display-only).
 
 NEVER mutates xmap.rotations — this is a render-time setting only.
-See docs/superpowers/specs/2026-06-22-pole-figure-coordinate-system-design.md.
 """
 from __future__ import annotations
 

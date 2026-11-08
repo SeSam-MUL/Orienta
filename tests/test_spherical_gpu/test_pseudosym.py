@@ -114,7 +114,7 @@ def test_is_pseudosymmetric():
 # mmm 0.26 / 100 %, but -43m 58 % with the rest exactly 90 deg off; on 81 real
 # S-phase patterns (7050) the sphere renders 0.711 vs Hough 0.703 and sits
 # 0.33 deg from it. So only -43m (and a z_rot==2 master of unknown class) still
-# takes Hough; see tasks/retire-hough/.
+# takes Hough.
 # ----------------------------------------------------------------------
 def test_zrot2_pointgroup_is_the_fact_not_the_gate():
     from backend.spherical_gpu.pseudosym import zrot2_pointgroup

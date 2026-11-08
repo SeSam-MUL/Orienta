@@ -1,6 +1,5 @@
 """Ratio matching and the enrichment gate.
 
-Spec: docs/superpowers/specs/2026-08-20-eds-ratio-matching-design.md
 
 The two things this replaces, and why:
   - the relative missing-major veto (measured >= a fraction of NOMINAL)
@@ -176,7 +175,7 @@ def test_the_gate_may_not_stand_down_just_because_a_map_is_flat():
     cannot reach is not evidence about any pixel, so stand the gate down. It
     separates that map from both real datasets cleanly — 0 pixels clear either
     bar there, 18 575 to 25 031 clear every bar on the reference scan and the
-    Al/Si file (tasks/eds_prior_audit/15_vacuous_gate.py).
+    Al/Si file.
 
     It is still wrong, because "this map has no contrast in that element"
     covers two opposite situations. This is the other one, stated as its own

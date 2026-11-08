@@ -1,5 +1,5 @@
 /**
- * The profile card (spec §2.3): one phase, one card, the same everywhere.
+ * The profile card: one phase, one card, the same everywhere.
  *
  * It loads when the popover opens and not before -- `Popover` calls its
  * children as a function for exactly this reason, so no card is fetched for

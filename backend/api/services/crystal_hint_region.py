@@ -10,8 +10,6 @@ Reports:
 
 Sampling strategy: cap at `max_pixels` (default 256) to keep total time
 under ~30s on a typical scan. ROI shapes: rectangle, polygon, whole.
-
-See docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md Section 6.
 """
 from __future__ import annotations
 

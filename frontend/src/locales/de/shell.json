@@ -1,6 +1,14 @@
 {
   "appSubtitle": "EBSD-Musteranalyse",
   "appTitle": "Orienta",
+  "backendEnded": {
+    "title": "Das Backend wurde um {{time}} unerwartet beendet ({{exit}}).",
+    "lastRequest": "Es arbeitete gerade an {{request}}.",
+    "restarting": "Orienta startet es neu. Geladene Dateien und Ergebnisse sind weg: die Datei bitte neu öffnen.",
+    "notRestarting": "Es wird nicht mehr von selbst neu gestartet. Orienta ganz schließen und neu starten.",
+    "details": "Ursache und letzter Zustand des Backends stehen in logs/backend-console.log (Einstellungen → Problem melden nimmt sie mit).",
+    "dismiss": "Schließen"
+  },
   "crash": {
     "title": "Dieses Modul ist abgestürzt"
   },

@@ -266,7 +266,7 @@ function codesignSignArgs(target) {
 /**
  * Does ad-hoc signing actually WORK here, not merely exist?
  *
- * Researched 2026-09-23 (spec appendix A): `/usr/bin/codesign` is a
+ * `/usr/bin/codesign` is a
  * base-system binary on every macOS we support, and ad-hoc signing has needed
  * no Xcode tools since macOS 12, when Apple moved signature allocation
  * in-process. So "is the file there" tests the one thing that cannot fail.
@@ -327,7 +327,7 @@ async function installMacosEnvironment({
       + `package. [${err.message}]`);
   }
   try {
-    // Not "is codesign there" -- it always is (spec appendix A.1). This signs
+    // Not "is codesign there" -- it always is. This signs
     // a throwaway copy of a system binary, which is what micromamba is about
     // to do many times over, and so fails HERE instead of mid-transaction.
     await codesign({

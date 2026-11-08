@@ -2,8 +2,7 @@
 """Vendor-general EBSD reference-frame correction.
 
 Brings orientations from any supported vendor into one canonical frame
-(CS1 / raw vendor Euler — the MTEX default import; see
-docs/superpowers/specs/2026-05-19-orientation-reference-frame-fix-design.md).
+(CS1 / raw vendor Euler — the MTEX default import).
 """
 from __future__ import annotations
 
@@ -151,8 +150,8 @@ VENDOR_FRAME_ADAPTERS: dict[str, VendorAdapter] = {
 # vendor_transform inside apply_reference_frame_correction.
 #
 # "vendor"        identity by definition (vendor solution IS the canonical frame).
-# "spherical_gpu" identity — measured 2026-05-19 in
-#                 tasks/orientation_synthetic_report.md (synthetic round-trip,
+# "spherical_gpu" identity — measured 2026-05-19
+#                 (synthetic round-trip,
 #                 cubic Oh, median residual 1.17° at L=88 = indexer quantization
 #                 noise; backend natively produces canonical orientations).
 # "emsphinx"      identity — empirically verified 2026-05-21 (cross-method
@@ -235,7 +234,7 @@ def apply_reference_frame_correction(
 # KIKUCHIPY = identity. MTEX's default loadEBSD_h5oina applies NO rotation, so
 # "match Aztec in MTEX" == "write the Oxford-frame Euler".
 #
-# Empirically pinned 2026-06-05 on Oxford SampleB (tasks/repro_90z_oxford.py):
+# Empirically pinned 2026-06-05 on the Oxford reference scan:
 # our_rotation * Rz(+90deg) (orix right-multiply) drives the symmetry-reduced
 # median disorientation vs Aztec from 36deg down to 5deg (the residual being
 # the indexer/PC quantization noise) — every other candidate stays at 36deg.

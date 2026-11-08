@@ -6,8 +6,6 @@ Works well for zone-axis-near patterns; degrades gracefully (low confidence)
 for off-axis patterns.
 
 Future: spherical projection + rotation in SO(3) for off-axis robustness.
-
-See docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md Section 2.
 """
 from __future__ import annotations
 

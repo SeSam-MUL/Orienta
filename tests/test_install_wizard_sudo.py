@@ -1,7 +1,7 @@
 """The EMsoft install wizard must never put the sudo password where it does
 not belong.
 
-Three defects (tasks/install-security-audit-2026-09-09.md, M1 + O1):
+Three defects:
 
 1. The wrapper defined ``sudo() { echo "$PW" | command sudo -S "$@"; }``. The
    pipe REPLACES stdin, so every ``echo <path> | sudo tee <file>`` in

@@ -363,8 +363,7 @@ Colour toggles need no re-indexing, they re-render layers only.
   pixel). **Addressed 2026-07-12 by the render-verified Phase Verification
   tool** (Phase Maps → Advanced tools): read-only "Check phases" margin layer
   + grain-based "Reassign" with Hough-anchored candidates, margin hysteresis
-  0.05 and undo (spec:
-  `docs/superpowers/specs/2026-07-12-render-verified-phase-reassignment-design.md`).
+  0.05 and undo.
   v1 limitation: synchronous, no progress/cancel — v2 (async + budget) planned.
 - Compare-phases underestimates `z_rot==2` phases (it re-runs spherical
   per phase instead of using the stored/Hough-anchored orientation) — use the

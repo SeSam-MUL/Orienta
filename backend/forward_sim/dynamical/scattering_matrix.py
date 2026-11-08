@@ -39,8 +39,8 @@ math is unchanged; only the matrix it is fed here is the corrected one.
 > **The historical ``π·U`` off-diagonal was wrong** and has been removed; the
 > ``i·π·λ`` / real-``π`` prefactors belong to the *expm scattering-matrix* and
 > ``GetDynMat`` mode-``'A'`` (Struc) conventions, NOT the CalcLgh eigen-integral
-> the EBSD master uses (see ``tasks/forward_sim/lessons.md`` §"DynMat off-diagonal
-> i*pi*U DIAGNOSIS REFUTED").
+> the EBSD master uses (the earlier suspicion that the DynMat off-diagonal
+> needs an ``i*pi*U`` factor was refuted).
 
 :func:`scattering_matrix` (``S(z) = expm(2πi·A·z)``) is a *separate* convention
 used only by its own spike test, kept for the validated ``torch.matrix_exp``
@@ -63,7 +63,7 @@ _TWOPI = 2.0 * math.pi
 # A per-pair single-weak-beam contribution is kept only when its magnitude is
 # ≤ τ·(the direct coupling it perturbs).  τ = 0.1 (≲10 %) is the standard
 # "the correction must be small vs the direct term" perturbation bound — see
-# the module/``build_A`` docstrings and ``tasks/forward_sim/lessons.md`` §iter-12.
+# the module/``build_A`` docstrings.
 _WEAK_PERT_TAU = 0.1
 
 
@@ -924,7 +924,6 @@ def scattering_matrix(A: torch.Tensor, z: torch.Tensor | float) -> torch.Tensor:
        This is a **distinct convention** (the ``S = expm(2πi·A·z)`` propagator)
        used only by its own spike test — the EBSD master path consumes ``build_A``
        through ``CalcLgh`` (eigen-decomposition), not through this exponential.
-       See ``tasks/forward_sim/lessons.md`` §"DynMat off-diagonal … REFUTED".
 
     Args:
         A: ``(..., n, n)`` complex dynamical matrix (any leading batch dims).

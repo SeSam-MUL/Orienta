@@ -209,7 +209,7 @@ class TestTheJobsListPollStaysOutOfTheDevLog:
 
 
 class TestTheWatchdogAsksBothBeforeExiting:
-    """The gate itself. os._exit(0) cannot be run in a test, so this reads the
+    """The gate itself. The exit (lifecycle.exit_now, an os._exit) cannot be run in a test, so this reads the
     source of the loop and pins the order of its checks."""
 
     def test_both_predicates_gate_the_exit(self):
@@ -220,8 +220,8 @@ class TestTheWatchdogAsksBothBeforeExiting:
         assert "_ui_parent_is_alive()" in tail
         assert "seconds_since_http_activity()" in tail
         # and the exit comes after both of them
-        assert tail.index("_ui_parent_is_alive()") < tail.rindex("os._exit(0)")
-        assert tail.index("seconds_since_http_activity()") < tail.rindex("os._exit(0)")
+        assert tail.index("_ui_parent_is_alive()") < tail.rindex("lifecycle.exit_now(0")
+        assert tail.index("seconds_since_http_activity()") < tail.rindex("lifecycle.exit_now(0")
 
     def test_it_says_why_it_is_not_shutting_down(self):
         """A watchdog that silently declines is as hard to debug as one that

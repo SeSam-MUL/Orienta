@@ -50,8 +50,8 @@ def iter_tiles(n_total: int, tile: int) -> Iterator[slice]:
 
 
 # How much VRAM the resident path peaks at, as a multiple of the fp32
-# dictionary. Measured through the real ``run_single_phase_method`` on this
-# project's RTX 4070 (tasks/multiphase_vram_audit/m4_*.py): 3.76x at both
+# dictionary. Measured through the real ``run_single_phase_method`` on
+# an RTX 4070: 3.76x at both
 # 40,000 and 80,000 entries. It is the dictionary tensor, its flattened copy,
 # the normalised copy, and the transient inside the normalisation, plus the
 # experimental and top-k buffers.

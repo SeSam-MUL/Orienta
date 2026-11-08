@@ -163,10 +163,9 @@ describe('the decision', () => {
   });
 
   // --- same tag, different build ------------------------------------------
-  // 0.4.6 was rebuilt four times, and Sebastian's machine holds Build 3 under
-  // that tag. Comparing tags alone answers "nothing to do" and leaves the
-  // program files a build behind beneath a new shell: this module's own bug,
-  // returning through the version number. These four cases are the whole of it.
+  // Installed builds of one version can carry the same tag. Comparing tags
+  // alone answers "nothing to do" and leaves the program files a build behind
+  // beneath a new shell. These four cases are the whole of it.
   describe('the same version rebuilt', () => {
     const A = 'a'.repeat(64);
     const B = 'b'.repeat(64);

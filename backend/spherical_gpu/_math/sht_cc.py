@@ -130,7 +130,7 @@ def rs2cc_sparse(
     # Switching the entire step into a single torch.einsum lets the optimizer pick
     # a kernel that emits the (B, m, k, n) output layout in one pass, removing both
     # the intermediate (B, k, m, n) tensor and the final permute+contiguous. Micro-
-    # bench (tasks/bench_rs2cc_variants.py) measured V0 28.15 ms vs V1 23.91 ms
+    # bench measured V0 28.15 ms vs V1 23.91 ms
     # median across 7 repeats — 1.18x speedup with 0.00e+00 max relative error
     # (bit-identical output).
     spectrum = torch.einsum("blmk,blkn->bmkn", F_lmk, G_lkn)

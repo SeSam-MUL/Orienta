@@ -1,6 +1,6 @@
 """The local backend must not act on requests a web page can forge.
 
-Threat model (tasks/install-security-audit-2026-09-09.md, H1-H3): the backend
+Threat model: the backend
 binds 127.0.0.1 and has no authentication, so it trusts every caller as the
 user. A browser tab on any website can still reach it — a POST with only query
 parameters is a CORS "simple request" that is sent without preflight, a

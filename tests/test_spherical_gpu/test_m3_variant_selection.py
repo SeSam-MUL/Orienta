@@ -1,8 +1,7 @@
 """Closed loop on an m-3 master: render, index, get the SAME orientation back.
 
-Background (2026-09-09, tasks/spherical-indexer-fidelity-2026-09-09.md and
-tasks/fidelity/01_reproduce.md)
------------------------------------------------------------------------
+Background (2026-09-09)
+-----------------------
 On the SampleB alpha particle Orienta's raw spherical answer is, pixel for
 pixel, the 90-degree cubic coset partner of what EMSphInx returns from the SAME
 master (20/20 sampled pixels: ~88.4 deg apart under m-3, ~1.8 deg under m-3m).
@@ -36,8 +35,8 @@ import pytest
 torch = pytest.importorskip("torch")
 
 
-# SampleB geometry, verbatim from the EMSphInx export used all evening
-# (tasks/fidelity/data_s11/emsphinx_s11.h5, attr 'detector_geometry').
+# The Oxford reference scan geometry, verbatim from an EMSphInx export
+# (attribute 'detector_geometry').
 DET = {
     "pc_x": 0.5026211263239384,
     "pc_y": 0.3272601428659012,
@@ -116,7 +115,7 @@ def _index(sht_path: str, patterns: np.ndarray) -> np.ndarray:
 
 def _angle_deg(qa, qb, group):
     """Misorientation in degrees under `group`, via Orientation.angle_with --
-    never a hand formula (lessons.md 2026-09-09: symmetry acts on the LEFT and
+    never a hand formula (symmetry acts on the LEFT, and
     a hand-rolled reduction confirmed its own error)."""
     from orix.quaternion import Orientation, Rotation
     a = Orientation(Rotation(np.atleast_2d(qa)), symmetry=group)

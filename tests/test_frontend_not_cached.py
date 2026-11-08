@@ -1,6 +1,6 @@
 """The entrypoint must never be served from a cache after an update.
 
-Measured on Sebastian's machine on 2026-09-27, after the runtime update landed:
+Measured on a development machine on 2026-09-27, after the runtime update landed:
 Settings -> About reported **v0.4.6** and the Indexing toolbar showed **no**
 collection button. Both were true. The backend was the new one and answered
 `/api/system/version` correctly; the renderer was showing the **0.4.4**

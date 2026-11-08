@@ -5,7 +5,6 @@ Scans `Database/CIF_Library/`, `Database/XTAL_Library/`, and
 index of all available phases. The index is queried by symmetry, lattice
 range, and chemistry to suggest candidate phases for unindexed patterns.
 
-See docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md Section 4.
 """
 from __future__ import annotations
 
@@ -274,6 +273,19 @@ def _parse_cif(cif_path: Path) -> dict:
         return {"error": str(exc)}
 
 
+def _parse_cif_kept(cif_path: Path) -> dict:
+    """``_parse_cif`` through the on-disk cache (cif_parse_cache): an unchanged CIF is not
+    parsed again on the next start (11.2 s for the 46 library CIFs). A failed parse is not
+    kept, nor one whose space group could not be read (it may be pymatgen's, not the file's)."""
+    from backend.api.services import cif_parse_cache
+    info = cif_parse_cache.cached("crystal-hint-cif-1", cif_path, _parse_cif,
+                                  keep=lambda v: (isinstance(v, dict) and "error" not in v
+                                                  and v.get("space_group_number") is not None))
+    if isinstance(info, dict) and isinstance(info.get("elements"), list):
+        info = {**info, "elements": tuple(info["elements"])}
+    return info
+
+
 def _parse_xtal(xtal_path: Path) -> dict:
     """Parse a .xtal HDF5 file (EMsoft format). Lattice in nm in EMsoft."""
     try:
@@ -378,7 +390,7 @@ def build_index() -> dict[str, LocalEntry]:
             if _is_backup(cif):
                 continue
             key = cif.stem
-            info = _parse_cif(cif)
+            info = _parse_cif_kept(cif)
             if "error" in info:
                 # The STRUCTURE path refused (e.g. AmbiguousCifError: the blocks
                 # give two compositions). That does not mean the file says

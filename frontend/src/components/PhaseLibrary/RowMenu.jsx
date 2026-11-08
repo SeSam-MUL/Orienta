@@ -1,7 +1,7 @@
 /**
  * The `⋯` menu on a group row.
  *
- * A REAL MENU AND NOT A `<select>` (spec §2.5.1). A select is a list of
+ * A real menu and not a `<select>`. A select is a list of
  * values you pick one of; these are actions, and three of them are
  * destructive. A select also swallows the keyboard on Windows -- arrow keys
  * change the value as you move, so a keyboard user "visits" Delete on the

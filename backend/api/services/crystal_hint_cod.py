@@ -14,8 +14,6 @@ The result columns vary; we parse defensively and return a list of CodResult.
 
 Results are cached on disk under .cache/crystal_hint/cod_<sha256>.json with
 a 7-day TTL.
-
-See docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md Section 4.
 """
 from __future__ import annotations
 

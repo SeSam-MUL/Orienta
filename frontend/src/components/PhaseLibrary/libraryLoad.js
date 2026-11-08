@@ -1,6 +1,6 @@
 /**
  * Loading the phase library, with the four states the page must be able to
- * show (spec §2.8).
+ * show.
  *
  * WHY THIS IS NOT `useEffect(() => { fetch().then(setPhases) }, [])`:
  *

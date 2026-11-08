@@ -5,8 +5,6 @@
   q vs -q double-cover singularity).
 - Disorientation in degrees for diagnostic layers.
 - Sparse 4-neighbour graph Laplacian for the Stage-2 smoothness solve.
-
-See spec: docs/superpowers/specs/2026-05-14-joint-r-pc-refinement-design.md
 """
 from __future__ import annotations
 

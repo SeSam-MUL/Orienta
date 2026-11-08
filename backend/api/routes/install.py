@@ -37,8 +37,8 @@ def _install_script_path() -> Path:
 
 
 # The first command sent to a freshly registered distro boots the WSL VM and
-# initialises the distro: measured 41 s on a warm desktop (Stage 2 smoke test,
-# tasks/install_smoke/wizard_wsl.ps1). The old 10 s made the wizard's very
+# initialises the distro: measured 41 s on a warm desktop.
+# The old 10 s made the wizard's very
 # first action after "Install" fail with "WSL is not responding".
 WSL_COLD_START_S = 90
 WSL_CMD_S = 60

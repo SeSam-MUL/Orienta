@@ -10,7 +10,7 @@ decay ``exp(-qold·iz)`` is bounded by EMsoft's sign guard).  We implement the
 **eigen-decomposition analytic depth integral** to match ``CalcLgh`` term-for-term.
 
 Verified verbatim against EMsoft ``MBmodule.f90::CalcLgh`` (develop source,
-2026-06-10) — see the task brief and ``tasks/forward_sim/lessons.md``:
+2026-06-10):
 
 * eigen-decompose the dynamical matrix ``A`` (= EMsoft ``DynMat``):
   ``W, CGG = eig(A)`` (eigenvalues ``W``, right eigenvectors as the **columns**
@@ -104,8 +104,7 @@ def depth_integrated_Lgh(
             is the machine-precision parity oracle for that GPU route.  On real
             Ni/Al masters the guard changes the result by <2 % on ~1 % of pixels and
             does **not** improve fidelity vs the EMsoft oracle (NCC vs EMsoft is
-            identical to 2e-5 with or without it — see ``tasks/forward_sim/lessons.md``
-            §19), so the un-guarded integral is just as physically faithful.
+            identical to 2e-5 with or without it), so the un-guarded integral is just as physically faithful.
 
     .. note::
 
@@ -290,7 +289,7 @@ def depth_integrated_Lgh_propagate(
         matrix_exp_method: how to compute ``S1`` — ``"matrix_exp"``
             (``torch.matrix_exp``), ``"squaring"`` (manual batched
             scaling-and-squaring Taylor, all cuBLAS matmuls), or ``"auto"``
-            (default).  **Benchmarked on the RTX 4070 (SP4 lessons §19):** for the
+            (default).  **Benchmarked on the RTX 4070 (batched solve):** for the
             small ``n``≈18–30 matrices the EBSD master produces, ``torch.matrix_exp``
             is the **winner** (≈2× faster than manual squaring at complex128, and
             competitive at complex64) — the PyTorch #107291 sequential-per-matrix
@@ -352,7 +351,7 @@ def depth_integrated_Lgh_propagate(
 
     method = matrix_exp_method
     if method == "auto":
-        # Benchmarked winner on both devices for n≈18–30 (lessons §19):
+        # Benchmarked winner on both devices for n≈18–30:
         # torch.matrix_exp beats manual squaring ~2× at complex128 here.
         method = "matrix_exp"
 

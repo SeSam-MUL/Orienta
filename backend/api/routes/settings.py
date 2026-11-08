@@ -171,8 +171,12 @@ async def test_api_key(body: ApiKeyTestRequest):
 
 
 @router.post("/server/test")
-async def test_server_connection(body: TestServerRequest):
-    """Check whether the given database root is reachable and report subdirectory status."""
+def test_server_connection(body: TestServerRequest):
+    """Check whether the given database root is reachable and report subdirectory status.
+
+    A plain ``def``, so FastAPI runs it in its thread pool: it counts every file below each
+    standard folder of a root that is usually a network share, and as ``async def`` that held
+    every other request for as long (5.1 s at a start-up, measured 2026-11-08)."""
     root = Path(body.database_root)
 
     if not body.database_root:
@@ -200,7 +204,7 @@ async def test_server_connection(body: TestServerRequest):
 
 
 @router.post("/server/create-dirs")
-async def create_server_dirs(body: TestServerRequest):
+def create_server_dirs(body: TestServerRequest):
     """Create missing standard subdirectories on the server database root."""
     root = Path(body.database_root)
 

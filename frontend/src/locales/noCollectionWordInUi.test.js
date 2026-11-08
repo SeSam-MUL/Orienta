@@ -1,8 +1,7 @@
 /**
  * The word "collection" must not reach the screen.
  *
- * Sebastian did not like it, and with the manager dialog gone the library
- * calls these things GROUPS. The routes, the JSON files in
+ * With the manager dialog gone the library calls these things GROUPS. The routes, the JSON files in
  * `Database/Collections` and the code's own identifiers keep their names --
  * renaming those would be churn with a migration attached. This is about
  * what a person reads.

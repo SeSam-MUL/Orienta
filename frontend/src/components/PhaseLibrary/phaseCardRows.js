@@ -1,6 +1,6 @@
 /**
  * What the profile card shows, decided here so it can be tested without a
- * browser (spec §2.3).
+ * browser.
  *
  * NAMED `phaseCardRows`, because `PhaseCard.jsx` sits beside it and Windows
  * cannot tell two names apart that differ only in case. THIRD time in this

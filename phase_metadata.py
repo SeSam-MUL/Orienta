@@ -1077,7 +1077,9 @@ def derive_pearson_for_xtal(xtal_path) -> str:
 
 @lru_cache(maxsize=1024)
 def _derive_pearson_cached(cif_path_str: str, mtime: float) -> str:
-    return _derive_pearson_from_cif(Path(cif_path_str))
+    from backend.api.services import cif_parse_cache  # noqa: PLC0415
+    return cif_parse_cache.cached("pearson-1", cif_path_str, _derive_pearson_from_cif,
+                                  keep=bool)
 
 
 def derive_pearson_for_cif(cif_path) -> str:
@@ -1093,14 +1095,21 @@ def derive_pearson_for_cif(cif_path) -> str:
         return ""
 
 
-@lru_cache(maxsize=1024)
-def _composition_cached(cif_path_str: str, mtime: float) -> str:
+def _composition_of(cif_path: Path) -> str:
     try:
         from pymatgen.core import Structure  # noqa: PLC0415
-        s = Structure.from_file(cif_path_str, primitive=False)
+        s = Structure.from_file(str(cif_path), primitive=False)
         return format_formula_subscripts(s.composition.reduced_formula)
     except Exception:
         return ""
+
+
+@lru_cache(maxsize=1024)
+def _composition_cached(cif_path_str: str, mtime: float) -> str:
+    # In memory for this process, on disk across starts (the phase discovery parses the
+    # whole library with pymatgen otherwise, about 12 s for 46 CIFs on every start).
+    from backend.api.services import cif_parse_cache  # noqa: PLC0415
+    return cif_parse_cache.cached("composition-1", cif_path_str, _composition_of, keep=bool)
 
 
 def composition_for_cif(cif_path) -> str:

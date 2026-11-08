@@ -134,7 +134,7 @@ class PhaseMember:
 
 @dataclass
 class PhaseCollection:
-    """A named set of phases. Membership is a TAG, not a folder (spec §2.5).
+    """A named set of phases. Membership is a TAG, not a folder.
 
     `id` is the identity and `name` is a label. They were one thing until schema
     2, and that is what broke on two machines: the file is named after the name,
@@ -831,7 +831,7 @@ def assign(keys: list[str], to_name: Optional[str],
            position: Optional[int] = None, *, move: bool = False) -> None:
     """Add phases to a collection, or remove them from every one (``to_name=None``).
 
-    ADDING IS THE DEFAULT (spec §2.5): membership is a tag, so putting `Al2Cu`
+    ADDING IS THE DEFAULT: membership is a tag, so putting `Al2Cu`
     in "Cu systems" leaves it in "Al systems". `move=True` is the named action
     "move here (remove from others)" -- the ⋯ menu entry, and Alt-drag.
 
@@ -905,7 +905,7 @@ def assign(keys: list[str], to_name: Optional[str],
 
 @_serialised
 def unassign_from(name: str, keys: list[str]) -> None:
-    """Take phases out of ONE collection (spec 6.1).
+    """Take phases out of ONE collection.
 
     Distinct from ``assign(keys, None)``, which un-files them everywhere. The
     route needs this one: a user removing a phase from A must not also lose it

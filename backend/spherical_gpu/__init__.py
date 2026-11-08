@@ -3,7 +3,7 @@
 Public API: :func:`backend.spherical_gpu.api.gpu_spherical_index_patterns`
 
 The implementation parallels EMSphInx's IndexEBSD pipeline but runs on
-GPU via PyTorch. See ``docs/superpowers/specs/2026-04-30-gpu-spherical-indexing-design.md``.
+GPU via PyTorch.
 """
 from .exceptions import (
     DetectorConventionError,

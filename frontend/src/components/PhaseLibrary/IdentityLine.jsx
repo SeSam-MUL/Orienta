@@ -1,5 +1,5 @@
 /**
- * The identity line, drawn (spec §2.2).
+ * The identity line, drawn.
  *
  *     [synonym] · formula · Pearson · space group · source      (key, small)
  *

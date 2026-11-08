@@ -19,9 +19,9 @@ const COLS = [{
 /**
  * Hough files ARE named by the stem, so the stem is the key. Spherical and
  * Dictionary files are not: an .sht is `Formula (CIF_stem) [Pearson] {kV}.sht`
- * (spec §2.6) and a master is `..._master_...h5`. The first draft filtered all
- * three on `keyForPath(f.path)` and its test used only CIF paths, where stem
- * == key — so it stayed green while Spherical and Dictionary would have been
+ * and a master is `..._master_...h5`. Filtering all
+ * three on `keyForPath(f.path)` with a test that uses only CIF paths, where stem
+ * == key, would stay green while Spherical and Dictionary would have been
  * filtered down to nothing. Those two go through the server's `resolve`, which
  * reads `LocalEntry.sht_path` and `_master_h5_for_phase`, and match on PATH.
  */

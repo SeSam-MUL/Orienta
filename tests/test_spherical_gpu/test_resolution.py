@@ -317,8 +317,8 @@ def test_resolve_map_sampleb_fixes_wrong_spherical_variant():
     assert res["method"] == "hough"
     assert res["nmatch"].shape == (len(pixels),)
 
-    # RE-BASELINED 2026-09-10, crystal-frame fix (tasks/fidelity/03_fix_round1.md).
-    # Until the fix, the raw spherical answer was the SYSTEMATIC 90-degree cubic
+    # Baseline for the corrected crystal frame.
+    # Before the correction, the raw spherical answer was the SYSTEMATIC 90-degree cubic
     # coset partner of the truth on every pixel, so "raw is far from Hough" held
     # everywhere and this loop asserted d_raw > 25 on all three grains. With the
     # constant left C2<1 -1 0> removed from the decode, raw is a legitimate
@@ -389,8 +389,8 @@ def test_resolve_map_sampleb_fixes_wrong_spherical_variant():
         exp = _dynbg(frame_avg[i])
         nh, nr = _render_ncc(hough[i], exp), _render_ncc(raw[i], exp)
         nccs_hough.append(nh); nccs_raw.append(nr)
-        # RE-BASELINED TWICE, both times because raw got BETTER, never because
-        # a bar was in the way.
+        # Baselines for the two decode corrections; raw only got better, and no bar
+        # was lowered to make it pass.
         #   shipped defect  : raw 0.19-0.21 (the 90-degree partner, noise floor)
         #   crystal-frame fix: raw 0.507 / 0.501 / 0.208, Hough 0.516/0.480/0.296
         #   half-bin fix     : raw 0.613 / 0.609 / 0.280, Hough unchanged
@@ -413,8 +413,8 @@ def test_resolve_map_sampleb_fixes_wrong_spherical_variant():
     # substitution is now behind raw on the median by 0.129 (0.480 vs 0.609) —
     # it was ahead only while raw carried the crystal-frame defect, and the
     # half-bin fix widened the gap. That is the input to the separate decision
-    # on retiring the m-3 / z_rot==2 Hough substitution (tasks/fidelity/03_plan.md
-    # risk 2, tasks/fidelity/03_fix_round2.md); asserting either direction here
+    # on retiring the m-3 / z_rot==2 Hough substitution;
+    # asserting either direction here
     # would freeze a question three pixels cannot answer.
     # The fix in its own right: raw must render the measured patterns, not sit
     # at the ~0.20 noise floor it did as the 90-degree partner.

@@ -77,13 +77,12 @@ def test_smooth_nc_vol_preserves_shape(setup_pipeline):
 
 
 @pytest.mark.xfail(
-    reason="Tier-2 inherits Tier-1's indexImage-fidelity gap (NOT an axis-"
-    "convention bug — see "
-    "tasks/_archive/handoff-typ-b-axis-bug-investigation.md sec.13). Tier-2 "
-    "can only refine near the chosen Tier-1 cc-volume peak; "
+    reason="The refiner inherits the indexer's indexImage-fidelity gap (NOT an axis-"
+    "convention bug). The refiner "
+    "can only refine near the chosen indexer cc-volume peak; "
     "it cannot jump to a different basin. On the ~62 percent of pixels "
     "where indexImage picks the wrong cc-volume peak (and we replicate "
-    "that failure faithfully), Tier-2 sub-bin refinement just sharpens the "
+    "that failure faithfully), sub-bin refinement just sharpens the "
     "wrong answer. Same root cause as "
     "test_05_indexer_tier1.py::test_tier1_soft_gate_disorientation.",
     strict=False,

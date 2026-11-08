@@ -3,8 +3,7 @@
  * The glossary: every term explained, in every language, and reachable
  * without a mouse.
  *
- * A first-time-user agent read "cF4" and "Cu" on a card about aluminium and
- * concluded the entry was wrong. `Cu` there is the structure type -- pure Al
+ * "cF4" and "Cu" on a card about aluminium look like a wrong entry. `Cu` there is the structure type -- pure Al
  * and pure Ni both have it -- and nothing on the screen said so. Eight terms
  * are like that; these tests check that all eight are explained rather than
  * a convenient subset.

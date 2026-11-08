@@ -15,7 +15,7 @@ pass an explicit ``sample_tilt_deg`` to ``PhaseConfig``. The production
 captured at a tilt other than 70 deg (LoGainNi: 75.7 deg) the recovered
 orientation had a fixed rotation offset equal to the gap.
 
-Empirical magnitude verified by ``tasks/_kikuchipy_oracle_roundtrip.py``:
+Empirical magnitude verified by a kikuchipy oracle round trip:
 median symmetry-reduced disorientation jumped from 5.80 deg (before fix)
 to 1.39 deg (after fix), with the best pixels at 0.11 deg — the sub-bin
 quantization floor at L=88.

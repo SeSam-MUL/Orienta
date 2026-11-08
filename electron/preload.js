@@ -41,6 +41,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Opens the folder holding orienta.log / backend-console.log in the file
   // manager. Takes no argument: the main process knows the folder.
   openLogFolder: () => ipcRenderer.invoke('app:openLogFolder'),
+  // The backend ended without the app stopping it (a crash, a kill from outside):
+  // `listener(notice)` gets { at, exit, lastRequest, running, commitMiB, restarting }.
+  // Returns the function that removes the listener. `lastBackendEnd()` is the last
+  // such notice of this session, for a page that loads after it.
+  onBackendEnded: (listener) => {
+    const wrapped = (_event, notice) => listener(notice);
+    ipcRenderer.on('backend:ended', wrapped);
+    return () => ipcRenderer.removeListener('backend:ended', wrapped);
+  },
+  lastBackendEnd: () => ipcRenderer.invoke('backend:lastEnd'),
 });
 
 /**

@@ -611,12 +611,12 @@ def chemistry_fit(
     # matrix stay at 100 % vetoed.
     #
     # 2026-09-12: _ABSENT raised 0.012 -> 0.020. IT IS AN ABSOLUTE At.% FLOOR,
-    # SO IT IS TIED TO THE QUANTIFICATION SCALE, and the k-factors were
-    # corrected that day (tasks/eds-quantification-wrong-2026-09-10.md). The
+    # SO IT IS TIED TO THE QUANTIFICATION SCALE, which the corrected k-factors
+    # set. The
     # 2026-08-05 note above places it by naming its two populations -- matrix
     # and Si-boundary pixels "at Mn ~0.3 at%" against a real alpha particle
     # "at Mn 1.8-2.2". Both moved. Re-measured on the corrected scale over the
-    # 268x201 reference scan (tasks/eds_prior_audit/06_veto_constants.py), Mn
+    # 268x201 reference scan (veto-constant sweep), Mn
     # At.% per region of the pattern-only 4-phase map:
     #
     #     Al matrix    p05 0.52   median 0.78   p95 1.55
@@ -687,13 +687,13 @@ def chemistry_fit(
     # contaminated by Cu L emission), so part of this cost is paid in the
     # least trustworthy currency available. It is 1.14 of the 2.01 points the
     # Al-matrix region loses; the rest is the interaction-volume halo, which
-    # tasks/eds_prior_audit/14_matrix_misses.py shows is real (the pixels handed
+    # a check of the matrix misses shows is real (the pixels handed
     # over have lower band contrast, p = 1.6e-223, Fe 5.35 against 0.80 at%, and
     # sit a median 6 px from a particle). Weighting Cu and Zn down is the proper
     # repair and is a feature, not a constant.
     #
     # Sweep of the per-pixel top-1 rate over the four reference phases
-    # (tasks/eds_prior_audit/07_joint_sweep.py, at _ABSENT = 0.020):
+    # (joint sweep, at _ABSENT = 0.020):
     #
     #   floor   alpha  Al7Cu2Fe   beta   matrix    ALL
     #    0.05   43.84    99.92   99.90   85.03   78.63

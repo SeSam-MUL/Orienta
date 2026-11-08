@@ -4,8 +4,6 @@
  *  - Single Pixel Deep (Mode 1)
  *  - Region / Whole Scan (Mode 2)
  *  - Quality Check (Mode 3)
- *
- * Spec: docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';

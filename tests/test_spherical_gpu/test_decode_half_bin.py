@@ -1,7 +1,7 @@
 """The cc-volume decode must place the half turn at pi, not at floor(size/2) bins.
 
-Background (2026-09-10, tasks/fidelity/03_fix_round2.md)
---------------------------------------------------------
+Background (2026-09-10)
+-----------------------
 The alpha and gamma axes of the SO(3) cc volume carry a half-turn offset.  All
 four copies of the decode expressed it as an INTEGER number of bins -- ``size //
 2`` in ``indexer._decode_peak`` / ``_decode_peak_skip_vol``, ``L - 1`` in
@@ -9,14 +9,14 @@ four copies of the decode expressed it as an INTEGER number of bins -- ``size //
 length ``size = 2L - 1`` is odd, so half a turn is ``size / 2`` bins (87.5 at
 L = 88).  The floor was short by exactly half a bin on alpha and on gamma; beta
 has no offset and was correct, which is how the defect was localised
-(``tasks/fidelity/exp_r2_subbin.py``: the ground-truth cell sat at argmax -0.51
+(closed-loop check: the ground-truth cell sat at argmax -0.51
 bins on alpha, -0.49 on gamma, -0.03 on beta).
 
 Cost: a ~1.6 deg orientation error at L = 88 that scaled with the bin (1.4 deg
 at L = 68, 1.2 deg at L = 128), on EVERY phase and every bandwidth -- it is
 independent of symmetry, unlike the crystal-frame C2<1 -1 0> of
 ``test_m3_variant_selection.py``.  It is why the raw spherical answer trailed
-EMSphInx by 1.7 deg after that fix (tasks/fidelity/04_verify.md criterion 2).
+EMSphInx by 1.7 deg after that fix.
 """
 from __future__ import annotations
 

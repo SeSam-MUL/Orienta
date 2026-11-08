@@ -8,7 +8,7 @@ kikuchipy-gui", from `app.name` — fixed in electron/main.js, covered by
 tests/electron/appName.test.js.
 
 The config path still says "Kikuchipy" and is still not renamed here: it holds
-live user data and needs a migration. See tasks/mac-tester/naming-audit.md.
+live user data and needs a migration.
 
 This guard covers the surfaces that CAN be renamed freely, because the old
 name kept coming back in exactly those places (a stale doc claiming the
@@ -121,8 +121,8 @@ class TestNothingTheUserReadsSaysTheOldName:
 
         `com.kikuchipy.gui` carries the update path and the uninstaller entry of
         every installed copy. Changing it orphans them, so it must stay until
-        someone plans that migration. If this fails, read
-        tasks/mac-tester/naming-audit.md before "fixing" it.
+        someone plans that migration. If this fails, check the
+        config-path naming before "fixing" it.
         """
         pkg = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
         assert pkg["build"]["appId"] == "com.kikuchipy.gui"

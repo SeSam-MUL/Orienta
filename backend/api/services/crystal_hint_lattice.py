@@ -6,8 +6,6 @@ d-spacing ratios.
 
 v1: cubic-focused with FCC/BCC/diamond ratio tables. Hexagonal /
 tetragonal can be added later.
-
-See docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md Section 3.
 """
 from __future__ import annotations
 

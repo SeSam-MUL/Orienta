@@ -6,8 +6,6 @@
  * (real shaded spheres, cylinder bonds, translucent coordination polyhedra, unit
  * cell) via the imperative scene in crystalScene3d.js, which is dynamically
  * imported so `three` stays out of the Database page's initial bundle.
- *
- * See docs/superpowers/specs/2026-07-14-cif-xtal-crystal-structure-viewer-design.md
  */
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';

@@ -31,6 +31,10 @@ os.environ.setdefault("ORIENTA_NO_PHASE_LIMIT_STORE", "1")
 # enters the app lifespan (`with TestClient(app)`) would end a simulation that
 # someone else is running; tests/test_startup_reaper_switch.py covers the switch.
 os.environ.setdefault("ORIENTA_NO_STARTUP_REAPER", "1")
+# The on-disk CIF parse cache would hand a test the parse of an earlier run instead of
+# the parser it patched, and would write to the developer's home folder;
+# tests/test_cif_parse_cache.py switches it on for itself.
+os.environ.setdefault("ORIENTA_CIF_PARSE_CACHE", "0")
 # Starlette's TestClient sends `Host: testserver` from client address
 # ("testclient", 50000); the backend's local-only guard (backend/api/security.py)
 # would otherwise refuse every request. Set unconditionally: a developer who

@@ -1,6 +1,14 @@
 {
   "appSubtitle": "EBSD パターン解析",
   "appTitle": "Orienta",
+  "backendEnded": {
+    "title": "バックエンドが {{time}} に予期せず終了しました ({{exit}})。",
+    "lastRequest": "処理中だったリクエスト: {{request}}。",
+    "restarting": "Orienta が再起動しています。読み込んでいたファイルと結果は失われたので、ファイルを開き直してください。",
+    "notRestarting": "これ以上自動では再起動しません。Orienta を完全に終了してから起動し直してください。",
+    "details": "原因とバックエンドの最後の状態は logs/backend-console.log にあります (設定 → 問題を報告 に含まれます)。",
+    "dismiss": "閉じる"
+  },
   "crash": {
     "title": "このモジュールがクラッシュしました"
   },

@@ -4,7 +4,7 @@ Translation of kikuchipy._vector2lambert (lines 578-615) and
 kikuchipy._lambert2vector (lines 764-807) of
 kikuchipy/signals/util/_master_pattern.py.
 
-Critical conventions (see tasks/kikuchipy_projection_reference.md):
+Critical conventions (they follow kikuchipy's projection code):
 
 vector_to_lambert
   * Output range is [-sqrt(pi)/2, +sqrt(pi)/2] (uses SQRT_PI_OVER_2),

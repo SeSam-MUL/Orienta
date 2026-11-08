@@ -55,10 +55,10 @@ describe('the invitation', () => {
   });
 
   it('says who named it and when, because the library is shared', () => {
-    show({}, { display_name: 'S-Phase', name_author: 'irmgard',
+    show({}, { display_name: 'S-Phase', name_author: 'alice',
       name_updated: '2026-09-20T08:11:00Z' });
     expect(screen.getByTestId('name-author').textContent)
-      .toBe('named by irmgard, 2026-09-20');
+      .toBe('named by alice, 2026-09-20');
   });
 
   it('says nothing about an author when nobody signed it', () => {

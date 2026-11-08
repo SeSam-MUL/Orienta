@@ -1,17 +1,16 @@
 /**
  * Giving a phase a name people actually use.
  *
- * The library is named after files. Sebastian, holding the shipped app: "ich
- * bin generell damit unzufrieden wie wir phasen wo anzeigen und nennen", and
- * the phases in question are called `sd_0302719` and
+ * The library is named after files, which is not how phases are shown and
+ * named in practice: the phases in question are called `sd_0302719` and
  * `Al2Cu_mp-985806_conventional_standard` while the group in the corridor
  * calls them "die Alpha" and "Theta". Both names are true; only one of them
  * is in the program.
  *
  * A NAME STANDS IN FRONT OF THE KEY, NEVER INSTEAD OF IT. The key is still
  * in the row, still indexed, still searchable, and the card still shows it.
- * The complaint this page answers was "ich musste ewig suchen um das cif zu
- * finden" -- a rename that hid the filename would bring it straight back.
+ * Finding the CIF of a phase must stay easy -- a rename that hid the filename
+ * would make it hard again.
  *
  * SEARCH TERMS ARE A SEPARATE FIELD from the display name, because they do
  * different jobs. The display name is what the list should read; a search

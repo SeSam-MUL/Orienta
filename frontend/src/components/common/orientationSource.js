@@ -6,7 +6,7 @@
  * arbitration (2026-09-09) and the decode fix (2026-09-10) a run routinely
  * keeps BOTH: the resolver substitutes on the z_rot==2 phases, then the arbiter
  * hands disputed pixels back to the sphere wherever the sphere renders better
- * (on the ICAA20 crop: all 676 of them). The backend now counts what survived
+ * (on a cropped alloy scan: all 676 of them). The backend now counts what survived
  * and can report "mixed"; the counts are in orientation_source_reason.
  *
  * One resolver so the badge and the "this pixel may sit on a wrong variant"

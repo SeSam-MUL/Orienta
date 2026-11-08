@@ -57,8 +57,7 @@ masked at low ``s`` (the Kirkland 5 % cross-check still "passed"), but inflated
 compressing dynamical band contrast on dense cells.  The fix (caller passes
 ``s = |g|``) restores the EMsoft WEKO ``S`` and the absorptive FPHON/DEWA/FCORE
 ``G = swk·s`` simultaneously.  The s→0 analytic limit is unchanged: ``f_el(0) =
-Σ A_i·B_i`` (matches Kirkland ``f_e(0)`` to <0.7 %).  Full details + citations in
-``tasks/forward_sim/lessons.md``.  Sources: Weickenmeier & Kohl 1991 (Acta Cryst
+Σ A_i·B_i`` (matches Kirkland ``f_e(0)`` to <0.7 %).  Sources: Weickenmeier & Kohl 1991 (Acta Cryst
 A47 590); Callahan & De Graef 2013 (Microsc Microanal 19 1255); Doyle & Turner 1968
 (Acta Cryst A24 390); EMsoft ``others.f90`` FSCATT/WEKO + ``diffraction.f90``
 CalcUcg.
@@ -82,7 +81,7 @@ import torch
 # bit-for-bit against EMsoftOO ``Source/EMsoftOOLib/mod_others.f90`` (fetched
 # 2026-06-11).  A in Å, B in Å² (WK units).  The Al(13)/Ni(28) rows are unchanged
 # from the SP0 table (verified 2026-06-10); Mg(12)/Fe(26)/Zn(30) match the
-# iter9-injected values (lessons.md §21).  This unlocks master-pattern builds for
+# values the earlier Al/Ni-only build injected.  This unlocks master-pattern builds for
 # ANY crystal/CIF whose species fall in Z=1..98 (no more Al/Ni-only restriction).
 WK_COEFFS: Dict[int, Tuple[Tuple[float, ...], Tuple[float, ...]]] = {
     1: (  # H
@@ -555,7 +554,7 @@ def _fphon(G: torch.Tensor, UL: float, A: torch.Tensor, B: torch.Tensor) -> torc
        The physics is honest (full FPHON), not a faked constant.  If absorption
        turns out to matter for the NCC gate, this is the obvious place to (a) push
        the integrals onto the GPU or (b) swap in the simpler Hashimoto-Howie-Whelan
-       absorptive model — both are diagnose-loop replacements, tracked in lessons.md.
+       absorptive model — both are possible replacements, not done yet.
     """
     import numpy as np
     from scipy.special import expi as _expi  # exponential integral Ei(x)
@@ -715,7 +714,7 @@ def _fcore(G: torch.Tensor, Z: int, voltage_kV: float) -> torch.Tensor:
     value carries **no net 4π** (it has a single ``2π``, which is intrinsic to the
     Rose azimuth-averaged solid-angle integral and is accounted for by HI), so it
     is fed through the identical ``γ²/K0`` and ``/(4π)`` scaling as FPHON — see the
-    ``wk_scattering_factor`` absorptive block and ``lessons.md`` §2/§12.
+    ``wk_scattering_factor`` absorptive block.
 
     .. note::
 
@@ -828,7 +827,7 @@ def wk_scattering_factor(
               localised to bound electrons that move with the nucleus); FPHON is
               already DW-corrected internally.  The combined sum passes through the
               identical ``γ²/K0`` and ``/(4π)`` scaling as the phonon-only case
-              (both channels are 4π-free — see ``lessons.md`` §12).
+              (both channels are 4π-free).
 
             ``absflg`` only affects the imaginary part and only when
             ``absorptive=True``.  Other values raise ``ValueError``.
@@ -897,7 +896,7 @@ def wk_scattering_factor(
             # elastic part (UL=0 → DEWA=1 when B=0, matching EMsoft).  This sum
             # happens BEFORE the single γ²/K0 (and /4π) scaling below — exactly as
             # EMsoft assembles FIMA — so the FCORE channel inherits the identical
-            # scaling as FPHON (both are 4π-free; see lessons.md §12).
+            # scaling as FPHON (both are 4π-free).
             G_arr = SWK * s
             dewa_abs = torch.exp(
                 -0.5 * (UL * UL) * (G_arr * G_arr)
@@ -908,7 +907,7 @@ def wk_scattering_factor(
             # EMsoft FSCATT scales FIMA by γ²/K0 (no 4π — unlike FREAL which
             # carries an explicit 4π).  K0 = 0.5068·sqrt(1022·V + V²) is the
             # relativistic |k| = 2π/λ in Å⁻¹ (FSCATT works in Å; the nm→Å factor
-            # of ten is baked into the 0.5068 prefactor — see lessons.md §2).
+            # of ten is baked into the 0.5068 prefactor).
             k0 = 0.5068 * math.sqrt(1022.0 * voltage_kV + voltage_kV * voltage_kV)
             # The additional /FOURPI mirrors EMsoft's single `pref = .../(4π)`:
             # that /(4π) is matched to the 4π *inside* FREAL, but it also divides

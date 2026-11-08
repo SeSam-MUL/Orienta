@@ -11,7 +11,7 @@ approximates the histogram equalization in EMSphInx's ``imprc.hpp:histeq``.
 The approximation is exact for arbitrary monotone histogram targets and
 matches CDF-based AHE up to interpolation at tile boundaries. If the per-pixel
 correlation in ``test_04`` shows a systematic bias on patterns with strong
-illumination gradients, a research-agent should re-extract the EMSphInx
+illumination gradients, someone should re-extract the EMSphInx
 formula and we patch the implementation.
 """
 from __future__ import annotations
@@ -133,8 +133,8 @@ def nregions(patterns: torch.Tensor, n: int = 10) -> torch.Tensor:
     # as the original 100-iteration loop (V0):  9x9 interior + 9 right col +
     # 9 bottom row + 1 corner. Each of the 4 groups has uniform tile size
     # within the group, so it runs as a single batched argsort. Result is
-    # bit-identical to the loop fallback (verified via
-    # tasks/bench_nregions_variants.py: max_abs_diff = 0.000e+00) while
+    # bit-identical to the loop fallback (verified by a
+    # benchmark: max_abs_diff = 0.000e+00) while
     # collapsing 100 sort kernel launches into 4.
     # Bench (RTX 4070, B=32, 128x156, n=10): V0 loop 29.3 ms -> V2 1.33 ms = 22x.
     th = max(H // n, 1)

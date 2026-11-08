@@ -47,8 +47,8 @@ from .xtal_io import CrystalStructure
 #   resulting U_g matches EMsoft's convention bit-for-bit in the limit of equal
 #   scattering factors.
 #
-#   (NB: an earlier lessons.md draft wrote ``pref = .../vol_A3`` — that was wrong;
-#   EMsoft ``cell%vol`` is in nm³, confirmed in crystal.f90::CalcMatrices.)
+#   (NB: ``pref`` divides by the volume in nm³, not Å³: EMsoft ``cell%vol`` is in
+#   nm³, confirmed in crystal.f90::CalcMatrices.)
 PREF_BARE = 0.04787801          # EMsoft WK numerator; with /vol_nm3/(4π) gives pref
 PREG = 0.664840340614319        # = 2·m_e·e/h²·1e-18  (V → nm⁻²)
 _TWOPI = 2.0 * math.pi
@@ -347,8 +347,7 @@ def compute_Ug_table(
 # ---------------------------------------------------------------------------
 #
 # Verified verbatim against EMsoft ``gvectors.f90::Apply_BethePotentials`` and
-# ``diffraction.f90::CalcsgSingle`` (develop source, 2026-06-10).  Full physics
-# write-up with citations in ``tasks/forward_sim/lessons.md`` §11.
+# ``diffraction.f90::CalcsgSingle`` (develop source, 2026-06-10).
 #
 # Excitation error (CalcsgSingle), all dot/length in reciprocal-cartesian ('r'):
 #
@@ -547,8 +546,8 @@ def bethe_partition(
       ``m_self = sgp / |U_g|`` (``U_g = U_{g-0}``, the reflection's own structure
       factor) satisfies ``m_self ≤ c3`` — or, for a double-diffraction reflection
       (``|U_g| = 0``), when ``|s_g| ≤ sgdbdiff``.  Reflections failing this gate are
-      **never listed** (and so are neither strong nor weak); see the lessons.md §
-      "c3 reflection-list pre-filter".  This bounds the list to reflections actually
+      **never listed** (and so are neither strong nor weak) -- the c3
+      reflection-list pre-filter.  This bounds the list to reflections actually
       near the Ewald sphere — a pure geometric ``|g| ≤ 1/dmin`` sphere (our
       :func:`reflection_list`) is far larger and would inject reflections with
       astronomically large ``s_g`` that EMsoft never solves.

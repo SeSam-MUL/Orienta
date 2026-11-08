@@ -14,8 +14,6 @@ happens there. The mean is taken over the cluster's ERODED interior:
 ``grain_phase_assignment`` records that measuring over a full region instead
 of its interior made "every real particle inhomogeneous" (44.5 at% spread vs
 0.0), because the interaction volume mixes at the rim.
-
-Spec: docs/superpowers/specs/2026-08-19-eds-chemistry-phase-map-design.md
 """
 from __future__ import annotations
 
@@ -238,8 +236,8 @@ def choose_k_by_bic(X: np.ndarray, k_range: Tuple[int, int] = (2, 12)) -> int:
 #:
 #: THIS NUMBER IS IN AT% AND THEREFORE TIED TO THE QUANTIFICATION SCALE.
 #: It was 2.0 until 2026-09-12, calibrated when the standardless Cliff-Lorimer
-#: k-factors were flat and read the heavy elements about 3x too low
-#: (tasks/eds-quantification-wrong-2026-09-10.md). Correcting them spread
+#: k-factors were flat and read the heavy elements about 3x too low.
+#: Correcting them spread
 #: Fe/Mn/Cu/Zn out by roughly that factor, the whole gap ladder moved up with
 #: them, and 2.0 stopped being the value that picks the right k: on SampleB it
 #: went k=7 -> 10, Fe-particle retention 95.6 -> 60.2 %, coherence 0.955 ->
@@ -248,7 +246,7 @@ def choose_k_by_bic(X: np.ndarray, k_range: Tuple[int, int] = (2, 12)) -> int:
 #: wrong with the data -- only with this threshold.
 #:
 #: Re-measured 2026-09-12 on the corrected scale
-#: (tasks/eds_quant_audit/07_distinct_gap_recalibration.py). Minimum pairwise
+#: (distinct-gap recalibration). Minimum pairwise
 #: gap on SampleB:
 #:   k=5 13.30 / k=6 8.12 / k=7 8.60 / k=8 2.26 / k=10 2.03 / k=12 1.97
 #: The cliff between k=7 (8.60) and k=8 (2.26) is where the real chemistries

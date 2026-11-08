@@ -7,8 +7,7 @@
  * broke together, and neither recovered:
  *
  *   - Settings → About showed "unknown (no git information found)" forever,
- *     pointing at git, while GET /api/system/version was answering v0.4.6.
- *     Sebastian saw this after installing build 3.
+ *     pointing at git, while GET /api/system/version was answering with the version.
  *   - ProblemReportDialog swallowed the failure in an empty catch. A bug
  *     report filed right after an update therefore carried no version at
  *     all, and `canOpenIssue` — gated on `versionInfo?.repo_url` — stayed

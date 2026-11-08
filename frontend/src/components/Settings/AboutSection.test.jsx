@@ -86,12 +86,11 @@ describe('AboutSection', () => {
     });
   });
 
-  // This test used to make the FETCH fail and expect "unknown". That encoded
-  // the defect Sebastian hit after installing build 3: the first start after a
+  // A failed FETCH must not read "unknown": the first start after a
   // runtime update is exactly when the backend is not up yet, the one fetch on
-  // mount failed, and the line read "unknown (no git information found)"
-  // forever while the endpoint was answering v0.4.6 the whole time. "Unknown"
-  // is now reserved for what it says: the backend answered, and it does not
+  // mount failed, and the line would read "unknown (no git information found)"
+  // forever while the endpoint was answering with the version. "Unknown"
+  // is reserved for what it says: the backend answered, and it does not
   // know its own version.
   it('says "unknown" when the backend answers and really does not know', async () => {
     mockGetAppVersion.mockResolvedValueOnce({ app: 'Orienta', version: 'unknown' });
@@ -113,8 +112,8 @@ describe('AboutSection', () => {
   });
 
   // "Could not ask" and "asked, no git information" are different facts and
-  // must read differently. Sebastian saw the second sentence while the first
-  // was true, so the line accused git of something the backend had already
+  // must read differently. If the second sentence were shown while the first
+  // is true, the line would accuse git of something the backend had already
   // answered. This also keeps the string itself honest: without a test the
   // branch renders a bare i18n key and nobody notices.
   it('says the backend is not answering, not that git is missing', async () => {

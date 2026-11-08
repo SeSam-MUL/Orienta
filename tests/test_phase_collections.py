@@ -129,7 +129,7 @@ def test_unassign_from_takes_a_phase_out_of_one_collection_only():
     # save()/assign() (both cross-strip on save) — so B's copy of Si is
     # written directly to disk, the same hand-edit bypass
     # test_a_key_in_two_collections_is_reported_not_resolved uses. That is a
-    # real state the app must tolerate (spec 10.3): a duplicate key, exactly
+    # real state the app must tolerate: a duplicate key, exactly
     # what a hand-edited file produces.
     pc.save(_c("A", ["Al", "Si"]))
     pc.save(_c("B", []))
@@ -154,7 +154,7 @@ def test_unassign_from_an_unknown_collection_raises_rather_than_mutating():
 
 
 def test_assign_adds_and_only_move_removes():
-    """REVERSED BY SCHEMA 2 (spec §2.5): membership is a tag, not a folder.
+    """REVERSED BY SCHEMA 2: membership is a tag, not a folder.
 
     This used to assert that `assign` MOVES -- filing `Si` into B emptied it out
     of A. Under tags that is wrong by default: a phase belongs in every group it
@@ -180,7 +180,7 @@ def test_assign_adds_and_only_move_removes():
 
 
 def test_a_key_in_two_collections_is_normal_and_not_a_problem():
-    """REVERSED BY SCHEMA 2 (spec §2.5).
+    """REVERSED BY SCHEMA 2.
 
     This used to assert a `duplicate_key` problem: with one home per phase, being
     in two collections was a contradiction the app must report rather than
@@ -374,7 +374,7 @@ def test_assign_into_exclusive_collection_leaves_the_working_set_intact():
 
 
 def test_the_exclusive_flag_no_longer_changes_anything():
-    """REVERSED BY SCHEMA 2 (spec §2.5): the flag is read, written and ignored.
+    """REVERSED BY SCHEMA 2: the flag is read, written and ignored.
 
     This used to assert that filing into an exclusive collection strips the key
     from the other exclusive ones. That behaviour is gone -- not renamed: the

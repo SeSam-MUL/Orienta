@@ -44,7 +44,7 @@ describe('when a group is active', () => {
   });
 
   it('says "Group", not "Collection"', async () => {
-    // Sebastian did not like the word, and with the manager gone it has no
+    // The interface says "group"; with the manager gone the old word has no
     // business surviving in the interface. The routes and the files keep
     // their names; this is about what a person reads.
     await show({ active: 'Al systems', hidden: [] });

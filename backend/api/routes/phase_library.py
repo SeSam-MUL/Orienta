@@ -1,4 +1,4 @@
-"""The phase library's index endpoint (spec §3.1).
+"""The phase library's index endpoint.
 
 ONE route, ONE response: the phases and the library totals together.
 Splitting them into two requests lets a number arrive before the list it
@@ -47,7 +47,7 @@ def phase_library_index():
 
 @router.get("/phase")
 def phase_library_detail(key: str = Query(..., min_length=1)):
-    """One phase's card (spec §2.3), keyed on the library stem.
+    """One phase's card, keyed on the library stem.
 
     THE KEY IS A QUERY PARAMETER, NOT A PATH SEGMENT. Library keys contain
     spaces, dots, parentheses and Greek (`Al4Fe1.7Si (τ11)`, `α-(AlMnSi)`), and
@@ -81,7 +81,7 @@ def phase_library_detail(key: str = Query(..., min_length=1)):
 
 
 class NamesRequest(BaseModel):
-    """A display name and/or search terms for one phase (spec §2.4).
+    """A display name and/or search terms for one phase.
 
     `null` MEANS "LEAVE IT ALONE"; `""` CLEARS. Both fields are partial updates,
     so a caller can set a display name without touching the search terms and the

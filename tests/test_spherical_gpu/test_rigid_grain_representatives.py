@@ -8,7 +8,7 @@ representative-independent only when ``C`` normalises the crystal group; for a
 general ``C`` the images ``C·S_i·q`` of two pixels that carry the SAME physical
 orientation are DIFFERENT orientations, and the grain comes back speckled.
 ``variant_unification.nearest_representative`` was written for exactly that,
-after 53 of 61 speckle pixels in the ICAA20 crop turned out to be this.
+after 53 of 61 speckle pixels in a cropped alloy scan turned out to be this.
 
 ``phase_reassignment.rigid_grain_quats`` has the same shape -- it carries
 ``C = q_seed · q_click⁻¹`` across a grain by left-multiplying the STORED

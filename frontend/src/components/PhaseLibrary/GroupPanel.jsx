@@ -1,14 +1,13 @@
 /**
  * The groups, down the left-hand side.
  *
- * Sebastian, on the collections this replaces: "ich will auch was haben mit
- * dem ich per drag and drop phasen herumschieben kann". So a phase is filed
- * by dragging it onto a group -- and by a button, and by a menu item, because
+ * The collections this replaces had no way to move phases around by drag and
+ * drop. So a phase is filed by dragging it onto a group -- and by a button, and by a menu item, because
  * a drag is the one gesture a keyboard cannot make and 93 rows is a long way
  * to reach with a mouse (§2.9).
  *
  * THREE WAYS TO FILE THE SAME PHASE, on purpose:
- *   drag a row onto a group          the gesture he asked for
+ *   drag a row onto a group          the gesture users expect
  *   Alt-drag                         file it HERE and nowhere else
  *   "+ N" on the group row           the selection, no drag, keyboard-reachable
  *   the ⋯ menu                       the same, named, with move alongside

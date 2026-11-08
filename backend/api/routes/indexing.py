@@ -6970,9 +6970,39 @@ def _render_sim_for_ncc(sht_path, quat, det, max_bandwidth: int = 128):
     return np.asarray(_Img.open(_io.BytesIO(_b64.b64decode(b64))), dtype=np.float32)
 
 
+#: Peak memory of one ``newton_refine`` call is about this many bytes times L**4: autograd keeps
+#: the Wigner-d intermediates of every degree l for the Hessian (sht_newton._wigner_d_small).
+#: Measured 2026-11-08 on the GPU: L=48 1.21 GiB, L=64 3.76 GiB (242 and 240 B * L**4). At the
+#: bandwidth 128 this route used to ask for that is about 62 GiB: every refine ran out of GPU
+#: memory, spilled into host memory (backend at 32-42 GiB after the request) and was skipped.
+NEWTON_BYTES_PER_L4 = 245
+#: Share of the free memory one refine may plan for (the rest: the backend build, the renders).
+NEWTON_MEMORY_SHARE = 0.6
+#: Below this bandwidth the cc surface is too smooth to polish an orientation to < 2 deg.
+MIN_NEWTON_BANDWIDTH = 32
+#: Wall-clock limit of the per-pixel polish; the pixels not reached keep their snapped orientation.
+REFINE_TIME_LIMIT_S = 60.0
+
+
+def _newton_bandwidth(requested: int) -> tuple:
+    """``(L, free_bytes, device)``: the largest bandwidth <= ``requested`` whose Newton step fits
+    in ``NEWTON_MEMORY_SHARE`` of the free memory of the device the refine runs on."""
+    import torch
+    if torch.cuda.is_available():
+        free = int(torch.cuda.mem_get_info()[0])
+        device = "GPU"
+    else:
+        import psutil
+        free = int(psutil.virtual_memory().available)
+        device = "main"
+    fit = int((NEWTON_MEMORY_SHARE * free / NEWTON_BYTES_PER_L4) ** 0.25)
+    return min(int(requested), fit), free, device
+
+
 def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
                          *, max_move_deg: float = 2.0, sample_n: int = 8,
-                         bandwidth: int = 128):
+                         bandwidth: int = 128,
+                         time_limit_s: float = REFINE_TIME_LIMIT_S):
     """Guarded per-pixel Newton polish of the snapped grain orientations.
 
     PHYSICS CAUTION: for the z_rot==2 phases this tool exists for, the SHT
@@ -6989,6 +7019,11 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
     Returns ``(refined_by_flat | None, summary dict)`` — `refined_by_flat`
     maps flat grid index -> (4,) quaternion for ACCEPTED pixels only. Never
     raises: any failure returns ``(None, {"status": "error", ...})``.
+
+    Bounded: the Newton step runs at the largest bandwidth whose memory fits the free memory
+    (``_newton_bandwidth``; the summary names it), and the polish stops after ``time_limit_s``
+    (the pixels not reached keep their snapped orientation; the summary counts them). Runs in a
+    worker thread (the route awaits it), so it must not change ``result``.
     """
     import torch
     from orix.quaternion import Rotation as _R
@@ -7048,7 +7083,12 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
             _put_phase_compare_backend(cache_key, backend)
         backend._ensure_built(det)
         indexer = backend._indexers[0]
-        L = indexer.bandwidth
+        L, free_bytes, device = _newton_bandwidth(indexer.bandwidth)
+        if L < MIN_NEWTON_BANDWIDTH:
+            need = NEWTON_BYTES_PER_L4 * MIN_NEWTON_BANDWIDTH ** 4 / NEWTON_MEMORY_SHARE
+            return None, {"status": "skipped", "reason": (
+                f"not enough free {device} memory for the refine: {free_bytes / 2**30:.1f} GiB "
+                f"free, about {need / 2**30:.1f} GiB needed. The variant flip itself was applied.")}
 
         pats = np.stack([p for (_fi, p, _q) in pairs]).astype(np.float32)
         pats_t = torch.as_tensor(pats, device=indexer.device)
@@ -7074,8 +7114,12 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
             np.stack([_e0, _e1, _e2], axis=-1), device=indexer.device)
 
         refined_by_flat: dict[int, np.ndarray] = {}
-        moves, n_guard = [], 0
+        moves, n_guard, n_not_reached = [], 0, 0
+        started = _time.monotonic()
         for i, (fi, _p, q0) in enumerate(pairs):
+            if _time.monotonic() - started > time_limit_s:
+                n_not_reached = len(pairs) - i
+                break
             cc0 = float(cc_at_rotation(flm, gln[i], _zxz_to_zyz(eu_seed[i]), L))
             eu_i, cc_i, converged = newton_refine(flm, gln[i], eu_seed[i], L)
             move = None
@@ -7095,9 +7139,11 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
                 moves.append(move)
             else:
                 n_guard += 1
+        limits = {"bandwidth": int(L), "n_not_reached": int(n_not_reached),
+                  "time_limit_s": float(time_limit_s)}
         if not refined_by_flat:
             return None, {"status": "rejected", "reason": "guards",
-                          "n_refined": 0, "n_guard_rejected": n_guard}
+                          "n_refined": 0, "n_guard_rejected": n_guard, **limits}
 
         # Render-NCC spot check — the honest gate. Median must improve.
         acc = sorted(refined_by_flat.keys())
@@ -7118,7 +7164,7 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
                 "status": "rejected", "reason": "render_ncc_gate",
                 "n_refined": 0, "n_guard_rejected": n_guard,
                 "median_render_ncc_delta": median_delta,
-                "n_sampled": len(deltas),
+                "n_sampled": len(deltas), **limits,
             }
         return refined_by_flat, {
             "status": "applied",
@@ -7126,7 +7172,7 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
             "n_guard_rejected": n_guard,
             "median_render_ncc_delta": median_delta,
             "mean_move_deg": float(np.mean(moves)) if moves else 0.0,
-            "n_sampled": len(deltas),
+            "n_sampled": len(deltas), **limits,
         }
     except Exception as e:  # noqa: BLE001 — refine must never break the apply
         logger.warning("[grain-flip] refine failed (snap results kept): %s",
@@ -7148,9 +7194,37 @@ def _grain_newton_refine(result, det, sht_path, point_group, coords, quats,
                 "then re-apply (or uncheck 'Refine'). The variant flip itself "
                 "was applied.")}
         return None, {"status": "error", "reason": msg[:200]}
+    finally:
+        # The Newton graphs are gone with the frames; hand their memory back now, not at the
+        # next allocation (torch keeps freed blocks cached).
+        try:
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
 
 
 MAX_REFINE_GRAIN_PX = 1500
+
+#: One refine at a time: each plans its bandwidth from the same free GPU memory and they share
+#: the cached renderer backends, so two at once (a double click, two windows) would book the
+#: memory twice. A second one is refused at once instead of after its GPU time.
+_refine_lock = threading.Lock()
+
+
+def _orientation_fingerprint(result) -> tuple:
+    """What a write-back of this result depends on: the result object, its orientations and
+    phases, and the undo slot. Compared before and after an ``await``: equal means no other
+    request changed the result in between."""
+    import hashlib
+    xmap = result.xmap
+    h = hashlib.blake2b(digest_size=16)
+    h.update(np.ascontiguousarray(np.asarray(xmap.rotations.data, dtype=np.float64)).tobytes())
+    h.update(np.ascontiguousarray(np.asarray(xmap.phase_id)).tobytes())
+    md = result.metadata if isinstance(getattr(result, "metadata", None), dict) else {}
+    return (id(result), id(xmap), h.hexdigest(), id(md.get("grain_flip_undo")))
 
 
 def _release_compute_worker() -> bool:
@@ -7203,11 +7277,12 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
     # Self-heal the OOM: free the interactive variant-render VRAM (and end the
     # idle compute worker) BEFORE the result is read, so a refine or a
     # propagation render fits and the user never has to press 'Release GPU'.
-    # The release waits for the worker, so it runs off the event loop. This is
-    # the ONLY await of the route: everything from the first read of the result
-    # to the write-back below runs without a suspension, so a second request
-    # cannot change the result in between and be overwritten by this one's
-    # older copy. Cost: the worker is freed even if the refine ends up skipped
+    # The release waits for the worker, so it runs off the event loop. Apart
+    # from the refine (which re-checks the result after its own await, see
+    # there), this is the only await of the route: everything from the first
+    # read of the result to the write-back below runs without a suspension, so
+    # a second request cannot change the result in between and be overwritten
+    # by this one's older copy. Cost: the worker is freed even if the refine ends up skipped
     # or no sibling grain qualifies.
     # The result is bound BEFORE the await: the client sends no result_id, and
     # if the user activates another result in the gallery while the release
@@ -7264,9 +7339,25 @@ async def apply_variant_to_grain(req: GrainApplyRequest):
             refine_summary = {"status": "skipped",
                               "reason": f"grain > {MAX_REFINE_GRAIN_PX} px"}
         else:
-            # The interactive render VRAM was freed at the top of the route.
-            refined, refine_summary = _grain_newton_refine(
-                result, det, sht_path, pg, grain, new_q_map)
+            # The interactive render VRAM was freed at the top of the route. The polish runs in
+            # a thread: on the loop it held every request for 45 s (measured 2026-11-01). That
+            # is the second await of the route, so the write-back below must not use what was
+            # read before it if another request changed the result meanwhile: compared, and a
+            # change is a 409 with nothing written.
+            if not _refine_lock.acquire(blocking=False):
+                raise HTTPException(status_code=409, detail=(
+                    "Another grain is being refined; nothing was applied. Apply again when it "
+                    "has finished."))
+            try:
+                before = _orientation_fingerprint(result)
+                refined, refine_summary = await asyncio.to_thread(
+                    _grain_newton_refine, result, det, sht_path, pg, grain, new_q_map)
+            finally:
+                _refine_lock.release()
+            if _get_result(rid) is not result or _orientation_fingerprint(result) != before:
+                raise HTTPException(status_code=409, detail=(
+                    "The indexing result changed while the grain was being refined (another "
+                    "correction, a clean-up or a new result). Nothing was applied; apply again."))
             if refined:
                 new_q_map.update(refined)
 
@@ -10911,6 +11002,11 @@ async def hough_reflector_cost(cif_path: str, n_bands: int = 12):
     path = Path(cif_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"CIF not found: {cif_path}")
+    if path.suffix.lower() != ".cif":
+        # Hough reads CIFs; anything else (an .sht master after a method switch) would be
+        # parsed as one and fail with an encoding traceback.
+        raise HTTPException(status_code=400, detail=(
+            f"{path.name} is not a CIF file; the Hough reflector cost is read from a phase's CIF."))
     try:
         import kikuchipy as kp
         from orix.crystal_map import PhaseList
@@ -10981,8 +11077,11 @@ async def discover_files(method: str, material_hint: str = "", current_pc: str =
             except ValueError:
                 pc_list = None
 
-        result = discover_files_for_method(
-            method_map[method], material_hint,
+        # Off the event loop: the discovery reads every phase file of the library and parses its
+        # CIF with pymatgen (33.8 s on a cold start, measured 2026-11-08), and on the loop every
+        # other request, the health poll included, waited for it.
+        result = await asyncio.to_thread(
+            discover_files_for_method, method_map[method], material_hint,
             current_pc=pc_list,
         )
         files = result["files"] if isinstance(result, dict) else result

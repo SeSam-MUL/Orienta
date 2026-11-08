@@ -16,8 +16,6 @@ REQUIRES.
 
 ``rel_req=0.0`` reproduces ``chemistry_fit`` exactly, so this module can be
 diffed against it in tests.
-
-Spec: docs/superpowers/specs/2026-08-19-eds-chemistry-phase-map-design.md
 """
 from __future__ import annotations
 
@@ -32,18 +30,19 @@ from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
 # tests/test_eds_scorer_constants.py pins the two together.
 #
 # 2026-09-12: _ABSENT 0.012 -> 0.020 and _PRESENT_SIG 0.05 -> 0.02, because
-# both are ABSOLUTE At.% floors and the k-factors were corrected that day.
+# both are ABSOLUTE At.% floors, tied to the quantification scale that the
+# corrected k-factors set.
 # Swept on this module's own consumer as well as on the prior's:
-# tasks/eds_prior_audit/10_phase_map_constants.py runs the five numbers
+# a sweep over the five numbers
 # tests/test_eds_phase_map_accuracy.py asserts on, over the pair, and the
 # phase map does not move ON SampleB -- Fe-bad 0.611 %, particle 95.43 %,
 # Si 100 %, matrix 100 %, cluster coherence 0.960, r(BC) -0.748, identical
 # to three decimals at every pair tried.
 #
 # THAT IS ONE FILE. On the 7050 Cu-bearing scan
-# (Test_data/batch_test/... Arbeitsbereich 1) the per-pixel classifier moves
+# (an Oxford scan of an aluminium-alloy extrusion, not included in the repository) the per-pixel classifier moves
 # 392 of 5304 pixels, 7.4 %, and the median best score falls 0.921 -> 0.875
-# (tasks/eds_prior_audit/18_mgcu2_and_7050.py). There is no reference on that
+# (sweep on that scan). There is no reference on that
 # file, so that is an UNASSESSED behaviour change, not a measured gain: the
 # direction is mixed (Al7FeCu2 -> Al and Al -> Al7FeCu2 both appear) and the
 # falling score is expected, since a lower unexplained floor charges every
@@ -238,8 +237,6 @@ def score_phase_vectorised(
 # ---------------------------------------------------------------------------
 # Ratio matching
 #
-# Spec: docs/superpowers/specs/2026-08-20-eds-ratio-matching-design.md
-#
 # WHY THIS EXISTS. EDS acquired during an EBSD session is bad data by
 # construction: the accelerating voltage and beam current are chosen for
 # Kikuchi patterns, not for X-rays, so the interaction volume is large
@@ -293,7 +290,7 @@ _PRESENCE_FLOOR = _ABSENT
 # from 186.1 to 173.1 and moved this whole sweep down by about 0.12.
 #
 # Calibrated on SampleB 2026-08-20, RE-MEASURED 2026-09-12 on the corrected
-# at% scale (tasks/eds_quant_audit/08_enrichment_sweep.py). Columns: share of
+# at% scale (enrichment sweep). Columns: share of
 # pixels holding an Fe-phase with <25 % of its required Fe, and share of the
 # ground-truth Fe particle still assigned an Fe-bearing phase.
 #
@@ -449,7 +446,7 @@ def score_phase_ratio(
     # tests/test_eds_suggest_no_match_reason.py) is 'a bar the map's own
     # MAXIMUM cannot reach is not a bar, so stand the gate down'. It separates
     # the Mg2Si map from both real datasets cleanly
-    # (tasks/eds_prior_audit/15_vacuous_gate.py: 0 pixels clear either bar
+    # (vacuous-gate sweep: 0 pixels clear either bar
     # there, 18 575 to 25 031 clear every bar here) -- and it is still wrong,
     # because 'this map has no contrast in that element' covers TWO opposite
     # situations. The other one is

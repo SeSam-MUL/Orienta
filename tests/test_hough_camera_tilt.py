@@ -25,7 +25,7 @@ Losing it is a silent failure, and that is the point of these tests:
   route scores 0.834 on the same pixels) -- the render-NCC peak is only a couple
   of degrees wide, so 4.3 deg off is already anti-correlated.
 
-History: a measurement harness written for the ICAA20 talk built its Hough
+History: a measurement harness written for a conference talk built its Hough
 reference detector without the elevation and produced a 4.20 / 3.74 / 4.31 deg
 "Hough vs spherical" disagreement per phase that looked like a product bug. It
 was not -- ``hough_index_patterns`` threads the detector through untouched. These

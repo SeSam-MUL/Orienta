@@ -45,6 +45,11 @@ function formatBytes(bytes, t) {
 export default function ReflectorBudget({
   cifPath, value = null, onChange, nBands = 12, showFamilies = true,
 }) {
+  // Hough reads its phases from CIFs. A method switch renders the old method's phases once
+  // more before they are cleared (an .sht master of Spherical, a dictionary .h5): no Hough
+  // controls and no lookup for those, which the backend would answer by reading a binary
+  // file as a CIF.
+  if (!/\.cif$/i.test(cifPath || '')) return null;
   return (
     <>
       {showFamilies && cifPath ? (

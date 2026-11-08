@@ -1,5 +1,5 @@
 /**
- * The popover the profile card lives in (spec §2.3, task 9).
+ * The popover the profile card lives in.
  *
  * A POPOVER AND NOT A HOVER CARD, and the spec is unusually firm about it:
  * Radix's own documentation says a hover card is "intended for sighted users

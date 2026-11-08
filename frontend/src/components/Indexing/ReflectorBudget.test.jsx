@@ -146,3 +146,26 @@ describe('ReflectorBudget', () => {
     expect(indexApi.houghReflectorCost).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('ReflectorBudget for a file that is not a CIF', () => {
+  beforeEach(() => { indexApi.houghReflectorCost.mockReset(); });
+  afterEach(() => cleanup());
+
+  // Switching the Indexing page from Spherical to Hough renders the selected phases once more
+  // before they are cleared, with method "hough" and the Spherical phase's .sht master path.
+  // The cost lookup went out with that path; the backend read a binary master as a CIF
+  // (logs/orienta.log, 2026-10-27: "Could not read Al (Al) [cF4] {20kV}.sht: bad encoding").
+  it('asks nothing and shows nothing for an .sht master', async () => {
+    const { container } = render(
+      <ReflectorBudget cifPath="C:/lib/EBSD_SHT_Database/Al/Al (Al) [cF4] {20kV}.sht" onChange={() => {}} />);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(indexApi.houghReflectorCost).not.toHaveBeenCalled();
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('still asks for a CIF, whatever the case of its extension', async () => {
+    indexApi.houghReflectorCost.mockResolvedValue({ data: CUBIC });
+    render(<ReflectorBudget cifPath="C:/lib/Al.CIF" showFamilies={false} onChange={() => {}} />);
+    await waitFor(() => expect(indexApi.houghReflectorCost).toHaveBeenCalledWith('C:/lib/Al.CIF', 12));
+  });
+});

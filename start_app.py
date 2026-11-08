@@ -35,7 +35,7 @@ NPM = "npm.cmd" if sys.platform == "win32" else "npm"
 # fresh installation imports the whole scientific stack cold (torch, kikuchipy,
 # numba compiles its kernels) and was measured well past the old 15 s limit —
 # the launcher then printed "Backend failed to start!" and killed a backend
-# that was still loading. Found by tasks/install_smoke/fresh_install.ps1.
+# that was still loading.
 BACKEND_START_TIMEOUT_S = 180
 
 

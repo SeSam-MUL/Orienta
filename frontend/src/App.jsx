@@ -35,6 +35,7 @@ import StatusBar from './components/shared/StatusBar';
 import ToastContainer from './components/shared/ToastContainer';
 import DevPanel from './components/shared/DevPanel';
 import { backendBanner, readEverConnected, rememberEverConnected, monoNow } from './components/shared/backendBanner';
+import BackendEndedNotice from './components/shared/BackendEndedNotice';
 // Dashboard is the initial route — keep it synchronous so the first paint is fast.
 import Dashboard from './components/Dashboard/Dashboard';
 
@@ -611,6 +612,10 @@ function App() {
             </div>
           );
         })()}
+
+        {/* The backend ended without the app stopping it: how, what it was doing, whether it
+            is being restarted (desktop app only; electron/backend_exit.js). */}
+        <BackendEndedNotice />
 
         {/* Content area — true QStackedWidget: all pages stay mounted, only active is visible */}
         {/* Each page gets its own ErrorBoundary so a crash in one page doesn't lock all others */}

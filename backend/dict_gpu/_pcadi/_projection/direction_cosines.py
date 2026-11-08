@@ -3,7 +3,7 @@
 Translation of kikuchipy._get_direction_cosines_for_fixed_pc (lines 149-235
 of kikuchipy/signals/util/_master_pattern.py), vectorised in PyTorch.
 
-Critical conventions (see tasks/kikuchipy_projection_reference.md):
+Critical conventions (they follow kikuchipy's projection code):
   - xpc = ncols * (0.5 - pcx)
   - ypc = nrows * (0.5 - pcy)   <-- uses nrows
   - zpc = nrows * pcz           <-- uses nrows

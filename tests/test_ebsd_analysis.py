@@ -8,7 +8,6 @@ Tests cover:
     - EDX channel detection
     - Phase/orientation access
 
-Reference: tasks/MTEX_to_Python_Architecture.md (internal, not shipped)
 """
 
 import pytest

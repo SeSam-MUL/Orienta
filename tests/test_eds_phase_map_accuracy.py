@@ -30,7 +30,7 @@ pytestmark = pytest.mark.skipif(
 #: Used as the *particle* threshold below. It is an anchor taken from the
 #: phase, not from the data, which is the point: the earlier threshold of
 #: 4.0 at% was a third of this because the quantification under-read Fe by
-#: ~0.46x (see tasks/eds-quantification-wrong-2026-09-10.md, fixed
+#: ~0.46x (fixed
 #: 2026-09-12). With that fixed, 4.0 at% no longer selects the particle -- it
 #: selects the particle plus the interaction-volume halo around it, 6941 px
 #: instead of 3401. Pixels in that halo are a genuine particle/matrix mixture
@@ -47,7 +47,7 @@ ALPHA_NOMINAL_FE_AT_PCT = 11.6
 #: better (k=7: -0.748 vs -0.737), so it was the threshold, not the data.
 #:
 #: Re-measured and set to 3.5 on 2026-09-12
-#: (tasks/eds_quant_audit/07_distinct_gap_recalibration.py). The three tests
+#: (distinct-gap recalibration). The three tests
 #: below were xfail(strict) between the k-factor fix and that recalibration;
 #: they pass again, and on the corrected scale they pass BETTER than they did
 #: before any of this: coherence 0.980 against 0.955, r(BC) -0.748 against
@@ -300,7 +300,6 @@ def test_unmeasured_pixels_are_never_assigned_a_phase(sampleb):
 
 # ---------------------------------------------------------------------------
 # Ratio matching — the case the relative veto made impossible.
-# Spec: docs/superpowers/specs/2026-08-20-eds-ratio-matching-design.md
 # ---------------------------------------------------------------------------
 
 CU_FILE = ROOT / "Test_data" / "batch_test" / (

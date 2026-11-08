@@ -171,7 +171,7 @@ def test_removing_a_member_affects_only_the_named_collection(client):
     # and since an exclusive collection cannot legitimately share a member
     # through the normal API (both `save()` and `assign()` cross-strip), B's
     # copy of Si is written directly to the collection file on disk, the same
-    # hand-edit a duplicate-key state (spec 10.3) always is.
+    # hand-edit a duplicate-key state always is.
     client.post("/api/phase-collections/", json={"name": "A"})
     client.post("/api/phase-collections/", json={"name": "B"})
     client.post("/api/phase-collections/members",

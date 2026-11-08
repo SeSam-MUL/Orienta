@@ -1,7 +1,7 @@
 """The grain-flip Newton polish must hand its seed to Newton in the VOLUME frame.
 
-Background (2026-09-10, ``tasks/fidelity/REPORT.md`` open item 3)
------------------------------------------------------------------
+Background (2026-09-10)
+-----------------------
 ``backend/spherical_gpu/pipeline/_frame.py`` draws the line: everything inside
 the spherical pipeline -- the cc volume, the Wigner-d chain, ``cc_at_rotation``
 and ``newton_refine`` -- speaks the *volume* frame, and every orientation that

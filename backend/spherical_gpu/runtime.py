@@ -60,12 +60,12 @@ _MAX_BATCH = 256
 # to the validated value — they're known good. compute_safe_batch can go
 # higher when free memory permits, but we don't *recommend* exceeding
 # these without re-running the regression suite at the new batch size.
-# Re-validate by running tasks/test_phase1_regression.py after raising.
+# Re-validate by re-running the regression suite after raising.
 _VALIDATED_BATCH_CEILING = {
     53: 256,    # smallest L; cc volume is 105^3 — easy
     68: 88,     # primary validation point (iter-15I/J/K/L on RTX 4070)
-    88: 56,     # validated by tasks/test_phase2_runtime.py
-    113: 24,    # validated by tasks/test_phase2_runtime.py
+    88: 56,     # validated
+    113: 24,    # validated
 }
 
 

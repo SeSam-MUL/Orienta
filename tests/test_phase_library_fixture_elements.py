@@ -13,7 +13,7 @@ structure disagree" when they do not. Measured on the real library: the
 first one was the only phantom that reached the fixture, and it made three
 disagreements out of the two that are real.
 
-This pins the rule, because the backend endpoint (spec §3) has to derive the
+This pins the rule, because the backend endpoint has to derive the
 same two sets, and the phantoms are invisible in the output -- M and P are
 perfectly good elements.
 """

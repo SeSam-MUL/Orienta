@@ -1,5 +1,5 @@
 /**
- * Groups: membership is a TAG, not a folder (spec §2.5).
+ * Groups: membership is a TAG, not a folder.
  *
  * The decision behind every function here, made by b9 after the personas
  * disagreed: a phase can be in several groups at once. Dragging ADDS;
@@ -28,7 +28,7 @@ export function makeGroup({ id, name, parent = null, author = null, now = null }
   return {
     id,
     name: clean,
-    parent,                    // one level of nesting, no more (spec §2)
+    parent,                    // one level of nesting, no more
     members: [],               // library keys, in the order they were added
     created: now,
     updated: now,

@@ -2,8 +2,7 @@
 /**
  * A group in the library, used for a run.
  *
- * Sebastian, on the collections this replaces: "ich will sie aus jeder
- * Anzeige heraus benutzen". The way to honour that was NOT a second path.
+ * A group can be used from every view that shows phases. That is NOT a second path.
  * Indexing and the phase tester already read the ACTIVE collection through
  * `useCollectionStore` and `collectionsApi.resolve`, and that is where the
  * per-method availability is worked out (`Al -> no_master` for Dictionary).

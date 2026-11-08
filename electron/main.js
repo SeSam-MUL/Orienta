@@ -11,6 +11,7 @@ const removeDataModule = require('./remove_data.js');
 const saveDialogs = require('./save_dialogs.js');
 const { openLogFolder } = require('./log_folder.js');
 const { waitForBackend: waitForBackendHealth } = require('./backend_wait.js');
+const backendExit = require('./backend_exit.js');
 const { spawn, execSync } = require('child_process');
 const path = require('path');
 const http = require('http');
@@ -330,6 +331,14 @@ function logBackendLine(line) {
 // interpreter rather than asking a question whose answer may have changed.
 let lastPythonCmd = null;
 let lastProjectRoot = null;
+// Why the app stopped a backend process is kept on that process
+// (`proc.orientaStopReason`, set by killBackend): an end with a reason is ours,
+// logged as such and never restarted. An end without one is unexpected: logged
+// with the backend's last state, shown on the page, and restarted
+// (maybeRestartBackend). On the process, not in one variable, so the exit of a
+// process the app stopped can never be read as the unexpected end of the next.
+// The last unexpected end, for a page that loads after it (backend:lastEnd).
+let lastBackendEnd = null;
 
 function startBackend(pythonCmd, projectRootArg) {
   // The root comes from the PLAN, never re-derived here. Re-deriving it meant
@@ -359,6 +368,9 @@ function startBackend(pythonCmd, projectRootArg) {
   const pythonCmdResolved = resolved;
   logBackendLine(`Using Python: ${pythonCmdResolved}`);
 
+  // The backend writes what it is doing there every few seconds (backend/lifecycle.py),
+  // which is what is left to read after a hard kill or a native crash.
+  const stateFile = path.join(projectRoot, 'logs', 'backend-state.json');
   backendProcess = spawn(pythonCmdResolved, [
     '-m', 'uvicorn',
     'backend.api.main:app',
@@ -392,8 +404,10 @@ function startBackend(pythonCmd, projectRootArg) {
       // whether a browser tab is still open. Without this flag the watchdog
       // could never exit on that path at all.
       KIKUCHIPY_UI_PARENT: '1',
+      ORIENTA_BACKEND_STATE_FILE: stateFile,
     },
   });
+  const proc = backendProcess;
 
   backendProcess.stdout.on('data', (data) => {
     logBackendLine(data.toString().trim());
@@ -409,11 +423,25 @@ function startBackend(pythonCmd, projectRootArg) {
     dialog.showErrorBox('Backend Error', `Failed to start Python backend: ${err.message}`);
   });
 
-  backendProcess.on('exit', (code) => {
-    logBackendLine(`Backend exited with code ${code}`);
-    backendProcess = null;
-    maybeRestartBackend(code);
+  backendProcess.on('exit', (code, signal) => {
+    const stopReason = proc.orientaStopReason || (userInitiatedQuit ? 'the app is quitting' : null);
+    const state = backendExit.readBackendState(stateFile, proc.pid);
+    logBackendLine(backendExit.backendEndLine({ code, signal, stopReason, state }));
+    // Only the CURRENT process: the exit of one the app already replaced must not
+    // forget the new one.
+    if (backendProcess === proc) backendProcess = null;
+    if (stopReason) return;
+    maybeRestartBackend(code, { code, signal, state });
   });
+}
+
+// Tell the page that the backend ended on its own, so it says so instead of only
+// "reconnecting". The page asks for the last one when it loads (backend:lastEnd).
+function notifyBackendEnded(notice) {
+  lastBackendEnd = notice;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('backend:ended', notice);
+  } catch { /* a window that is going away cannot be told */ }
 }
 
 // --- Is somebody else already on our port? -------------------------------
@@ -521,18 +549,23 @@ async function resolveBusyPort() {
 const MAX_BACKEND_RESTARTS = 3;
 let backendRestarts = 0;
 
-async function maybeRestartBackend(code) {
+async function maybeRestartBackend(code, ended = { code, signal: null, state: null }) {
   if (userInitiatedQuit || keepBackendOnQuit) return;
+  // The page is told once the path is known: `restarting` only where a start follows.
+  const tell = (restarting) => notifyBackendEnded(backendExit.backendEndNotice({ ...ended, restarting }));
   // Exit code 1 within seconds of spawning is "could not bind": do not loop,
   // resolve the port instead (asks the user, stops the stale one on request).
   if (await probeBackendHealth()) {
     logBackendLine('Backend exited but the port still answers — another backend owns it.');
-    if (await resolveBusyPort()) {
+    const freed = await resolveBusyPort();
+    tell(freed);
+    if (freed) {
       startBackend();
     }
     return;
   }
   if (backendRestarts >= MAX_BACKEND_RESTARTS) {
+    tell(false);
     logBackendLine(`Backend died ${backendRestarts} times — not restarting again.`);
     dialog.showErrorBox(
       'Backend keeps stopping',
@@ -542,6 +575,7 @@ async function maybeRestartBackend(code) {
     return;
   }
   backendRestarts += 1;
+  tell(true);
   logBackendLine(`Backend stopped unexpectedly (exit code ${code}) — restarting (${backendRestarts}/${MAX_BACKEND_RESTARTS}) in 1 s`);
   setTimeout(() => {
     if (userInitiatedQuit) return;
@@ -1278,6 +1312,10 @@ ipcMain.handle('dialog:saveText', async (event, options) => {
 // Settings > About > "Show log files". The folder is worked out HERE, from the
 // project root the backend log is written under; the renderer sends nothing, so
 // this channel cannot be used to open any other folder.
+// The last unexpected end of the backend in this session (null: none), for a page
+// that loads after it happened.
+ipcMain.handle('backend:lastEnd', () => lastBackendEnd);
+
 ipcMain.handle('app:openLogFolder', () =>
   openLogFolder({ shell, projectRoot: lastProjectRoot || resolveProjectRoot() }));
 
@@ -1376,7 +1414,7 @@ ipcMain.handle('data:remove', async (event, options = {}) => {
   // runtime/ under a live interpreter leaves it half-working: already
   // imported modules keep going, the next import fails in the user's face.
   // So: ask it to stop, then WAIT until the port stops answering.
-  try { killBackend(); } catch { /* may already be gone */ }
+  try { killBackend('the data folder is being removed'); } catch { /* may already be gone */ }
   const stopped = await waitForBackendToStop(15000);
   if (!stopped) {
     logShellLine('[data] the backend is still answering; nothing was removed');
@@ -1991,10 +2029,11 @@ app.whenReady().then(async () => {
   }
 });
 
-function killBackend() {
+function killBackend(reason = 'the app stopped it') {
   if (!backendProcess) return;
   const pid = backendProcess.pid;
-  console.log(`Stopping backend (PID ${pid})...`);
+  backendProcess.orientaStopReason = reason;
+  logBackendLine(`Stopping backend (PID ${pid}): ${reason}`);
 
   // 1. Graceful: ask backend to shut itself down via API
   try {
@@ -2051,7 +2090,7 @@ app.on('before-quit', () => {
   // way — it's frontend-only.
   if (!keepBackendOnQuit) {
     userInitiatedQuit = true;
-    killBackend();
+    killBackend('the app is quitting');
   }
   const viteCacheDir = path.join(projectRoot, 'frontend', 'node_modules', '.vite');
   try { fs.rmSync(viteCacheDir, { recursive: true, force: true }); } catch {}

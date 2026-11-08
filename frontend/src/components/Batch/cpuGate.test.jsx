@@ -11,8 +11,8 @@
  *
  *  1. the rule itself — one predicate, used by both screens;
  *  2. the wiring — the start button must not reach the API before the user has
- *     said yes. A rendered-but-unwired dialog is the failure this project keeps
- *     meeting (see tasks/lessons.md), and no predicate test can see it.
+ *     said yes. A rendered-but-unwired dialog is a failure
+ *     no predicate test can see.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';

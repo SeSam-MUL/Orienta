@@ -19,11 +19,11 @@ const REPO_URL = 'https://github.com/SeSam-MUL/Orienta';
 
 /**
  * `null` means "the backend has not answered yet", which is NOT the same as
- * "the backend has no version". Sebastian hit the difference after installing
- * build 3: the first start following a runtime update is exactly the moment
+ * "the backend has no version". The difference shows after an update:
+ * the first start following a runtime update is exactly the moment
  * the backend is not up yet, the single fetch on mount failed, and the line
  * then read "unknown (no git information found)" forever — while
- * `GET /api/system/version` was answering `v0.4.6` the whole time.
+ * `GET /api/system/version` was answering with the version the whole time.
  */
 /** True only when the backend answered with a version it actually knows. */
 function hasVersion(info) {

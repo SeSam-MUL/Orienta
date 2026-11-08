@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """The one constant that separates the cc-volume decode from the renderer.
 
-Measured 2026-09-09/10 (``tasks/fidelity/03_plan.md``): the SO(3) cc-volume to
+Measured 2026-09-09/10: the SO(3) cc-volume to
 Bunge-ZXZ decode inside :class:`~backend.spherical_gpu.pipeline.indexer.Tier1Indexer`
 labels every peak with an orientation that sits a constant **crystal-frame
 (left) 180 deg rotation about <1 -1 0>** away from the orientation Orienta's own
@@ -27,8 +27,7 @@ correction is applied exactly where an orientation LEAVES the pipeline
 The correction is deliberately a named constant in its own module rather than
 folded into the decode formula: the fix aligns the indexer *to the renderer*,
 and the absolute convention is anchored only on cubic phases where ``C2y`` is
-invisible.  If the renderer's Driscoll-Healy polar axis is ever corrected
-(``tasks/fidelity/02_harmonics.md`` part_f), this constant becomes ``Rz(+90)``
+invisible.  If the renderer's Driscoll-Healy polar axis is ever corrected, this constant becomes ``Rz(+90)``
 alone -- one line, one place.
 """
 from __future__ import annotations
@@ -57,8 +56,8 @@ def apply_frame_fix_zxz(phi1, Phi, phi2):
     """Left-multiply ``CRYSTAL_FRAME_FIX_QUAT`` onto a Bunge ZXZ triple.
 
     Works elementwise on scalars, numpy arrays and torch tensors alike (only
-    ``+``, ``-`` and ``%`` are used).  ``tasks/fidelity/exp_decide_form.py``
-    checks this substitution against ``Rotation.from_axes_angles([1,-1,0], 180)``
+    ``+``, ``-`` and ``%`` are used).  A check
+    of this substitution against ``Rotation.from_axes_angles([1,-1,0], 180)``
     over 4000 random triples with ``Phi`` spanning the full ``[0, 2pi)`` the
     decode can produce: max deviation 0.0 deg.
 
@@ -97,7 +96,7 @@ def decode_cells_to_zxz(a, b, c, bandwidth):
     large, gamma the same amount too small.  Beta has no offset in the decode
     and showed no error, which is how the defect was localised.
 
-    Measured (``tasks/fidelity/exp_r2_subbin.py``, closed loop against the
+    Measured (closed loop against the
     forward renderer): the ground-truth cell sat at ``argmax - 0.51`` bins on
     alpha and ``- 0.49`` on gamma and at ``-0.03`` on beta.  Sweeping the
     offset as a continuous parameter (``exp_r2_offset_sweep.py`` /

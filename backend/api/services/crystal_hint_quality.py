@@ -11,8 +11,6 @@ For each pixel:
   3. Compatible iff indexed_system ∈ detected.compatible_systems
 
 Returns a 2D mismatch mask + summary counts + per-pixel detail.
-
-See docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md Section 6.
 """
 from __future__ import annotations
 

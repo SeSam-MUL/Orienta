@@ -2,8 +2,6 @@
 
 Loads `backend/api/data/crystal_hint_material_presets.json` once at module
 import time. Provides query helpers for the API layer.
-
-See docs/superpowers/specs/2026-05-26-crystal-hint-feature-design.md Section 7.
 """
 from __future__ import annotations
 

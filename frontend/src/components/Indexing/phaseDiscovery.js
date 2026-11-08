@@ -6,8 +6,8 @@
  *
  *     } catch { setDiscoveredFiles([]); setDiscoveredGroups([]); }
  *
- * so a backend that had not started yet — the first start after an update,
- * the case Sebastian reported — produced exactly the state "the library is
+ * so a backend that had not started yet — the first start after an update —
+ * produced exactly the state "the library is
  * empty", and the dropdown then said **"No phases found"**. That is a claim
  * about the library, made at the one moment the program had failed to ask
  * it. `useCollectionStore.load()` has always done the opposite, with the

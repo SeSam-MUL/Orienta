@@ -1,5 +1,5 @@
 /**
- * The identity line (spec §2.2):
+ * The identity line:
  *
  * NAMED `identityParts`, NOT `identityLine`, because `IdentityLine.jsx` sits
  * beside it and Windows cannot tell the two apart -- the second time that

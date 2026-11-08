@@ -4,9 +4,9 @@
  *
  *  1. The Tolerance slider is GONE. It was inert - `auto_classify_pixels`
  *     never read it, `eds_clustering.py` references it zero times - and it
- *     sat on screen behind a grey label saying so. A tester's verdict: "that
- *     your provenance says `tolerance_effective: false` is admirable; that it
- *     is still on my screen is not." A control that cannot change the result
+ *     sat on screen behind a grey label saying so. A
+ *     provenance that says `tolerance_effective: false` is honest, but a
+ *     control that is still on screen is not. A control that cannot change the result
  *     has no claim on the panel. The value is still sent and still recorded,
  *     so the i18n keys stay; only the widget goes.
  *  2. Min score now explains itself where the user is standing. The sentence

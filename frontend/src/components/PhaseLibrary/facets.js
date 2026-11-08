@@ -17,7 +17,7 @@
  * information that the element exists at all.
  *
  * Elements combine with AND, not OR. `Al-Fe-Si` in the search box already
- * means "all three present" (spec §2.1), and a facet that meant something
+ * means "all three present", and a facet that meant something
  * else than the search box would be two different languages for one
  * question. Measured on the real library: Al 28, +Fe 18, +Si 13, +Mn 4 --
  * narrowing, which is what a person picking elements off a list expects.
@@ -106,7 +106,7 @@ export function filterChips(rows, text, nameLookup = () => []) {
 
 
 // ---------------------------------------------------------------------------
-// Capabilities (spec §2.7): three questions with three different answers
+// Capabilities: three questions with three different answers
 // ---------------------------------------------------------------------------
 
 /**

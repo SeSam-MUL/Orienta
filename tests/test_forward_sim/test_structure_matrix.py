@@ -285,7 +285,7 @@ def test_absflg3_core_loss_raises_ug_imag_ni111():
     FCORE core-loss absorption adds to the imaginary channel only; the elastic real
     part is unchanged.  Measured Ni(111) 20 kV (post-AMP_2, s = |g|): absflg=1
     Im/Re = 0.0902, absflg=3 Im/Re = 0.1161 (a +28.7 % increase), within the
-    ~0.06–0.15 metals band (lessons.md §2/§12).
+    ~0.06–0.15 metals band.
     """
     s = read_crystal_structure(NI)
     u1 = _ug_of(s, (1, 1, 1), absflg=1)

@@ -36,7 +36,7 @@ class CreateRequest(BaseModel):
     #: Who made this group. Optional, and never invented server-side: this app
     #: has no user identity, so an author is only ever what a caller states.
     #: It matters because the folder is copied and mailed between machines
-    #: (spec §2.5.3) -- on the other end, "who was that" has no other answer.
+    #: -- on the other end, "who was that" has no other answer.
     author: str = ""
 
 

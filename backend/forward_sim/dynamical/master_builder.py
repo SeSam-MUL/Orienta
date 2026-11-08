@@ -138,7 +138,7 @@ def relativistic_wavelength_nm(voltage_kV: float) -> float:
     ``λ = 1226.426 / sqrt(V·(1 + 0.97845e-6·V))`` pm with ``V`` in volts, i.e. the
     relativistic de Broglie wavelength ``λ = h / sqrt(2 m_e e V (1 + eV/(2 m_e c²)))``.
     At 20 kV this gives 8.589 pm (= 0.008589 nm, ``1/λ = 116.4 nm⁻¹``) — matching
-    the lessons.md verification.
+    the textbook value.
 
     Args:
         voltage_kV: accelerating voltage in kV.
@@ -651,8 +651,8 @@ def build_master(
             ``device='cuda'``: ``torch.linalg.eig`` has a known CUDA
             sequential-sync defect (PyTorch #107291) that makes the batched GPU
             eig ~20× SLOWER than the batched CPU LAPACK call for these small
-            (``n``≈10–37) matrices — measured on the RTX 4070, see
-            ``tasks/forward_sim/lessons.md`` §17.  **Bit-faithful** to the serial
+            (``n``≈10–37) matrices — measured on the RTX 4070.
+            **Bit-faithful** to the serial
             path: the final ``Lgh`` is a FULL bilinear sum over ALL eigenpairs,
             invariant to the eigenvector ordering/phase the batched ``eig`` may
             pick differently — so the master matches the serial oracle to FP
@@ -667,8 +667,8 @@ def build_master(
             writes a disjoint set of grid pixels), and ``torch.linalg.eig`` on CPU
             LAPACK **releases the GIL**, so a ``ThreadPoolExecutor`` over chunks
             with intra-op threads pinned to 1 scales near-linearly with cores
-            (measured ~9× at 12 workers, ~11× at 24 on this 24-thread box; see
-            ``tasks/forward_sim/lessons.md`` §18).  **Critically, batched eig is
+            (measured ~9× at 12 workers, ~11× at 24 on this 24-thread box).
+            **Critically, batched eig is
             run at intra-op = 1**: torch's default 12 intra-op threads make the
             batched LAPACK eig pathologically slow (severe contention — the same
             wall got ~50–100× WORSE), so the parallelism MUST be across the batch,
@@ -696,7 +696,7 @@ def build_master(
             depth integral as the eig path with EMsoft's overflow guard off —
             bit-identical to the no-flip eig integral (~1e-14), NCC ≥ 0.9999 vs the
             production flip-eig master, and **equally faithful to the EMsoft oracle**
-            (NCC vs EMsoft identical to 2e-5 — see lessons §19).  The eig path
+            (NCC vs EMsoft identical to 2e-5).  The eig path
             (lever 3) stays the correctness oracle/fallback.  Explicit
             ``True``/``False`` overrides the device default.
         propagation_s1_dtype: precision for the single ``S1 = expm(…)`` step of the
@@ -1482,7 +1482,7 @@ def _lever3_eval(
 
     The batched ``eig`` runs on **CPU** even when ``dev`` is CUDA: ``torch.linalg.eig``
     has a known CUDA sequential-sync defect (PyTorch #107291) making the GPU batched
-    eig ~20× slower than CPU LAPACK for ``n``≈10–37 (measured RTX 4070; lessons §17).
+    eig ~20× slower than CPU LAPACK for ``n``≈10–37 (measured RTX 4070).
     The Sgh contraction is therefore also done on CPU; only the resulting scalar
     master values are written to ``out`` (on ``dev``).
 

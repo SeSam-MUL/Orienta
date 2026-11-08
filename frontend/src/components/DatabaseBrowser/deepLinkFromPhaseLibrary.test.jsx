@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * "Show me this file in the database browser", arriving from the phase
- * library's profile card (spec §2.3, task 14).
+ * library's profile card.
  *
  * It arrives as a CATEGORY and a NAME, never as a row index: the library
  * does not know this table's ordering, and an index would go stale the

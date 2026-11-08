@@ -254,8 +254,8 @@ def test_an_older_bundle_never_rolls_the_installation_back(tmp_path):
 def test_the_same_version_rebuilt_still_replaces_the_program_files(tmp_path):
     """Build 3 -> Build 4 under ONE tag, through the real applier and the real JS.
 
-    This is the case Sebastian's "the release stays 0.4.6" decision creates, and
-    the one a tag comparison gets wrong: his machine holds Build 3 as v0.4.6, so
+    This is the case that keeping the release at 0.4.6 creates, and
+    the one a tag comparison gets wrong: an install holds Build 3 as v0.4.6, so
     "same version" would mean "nothing to do" and the program files would stay a
     build behind beneath a new shell. The whole lifecycle is asserted here because
     each step only makes sense given the next: apply, record, do not loop, and

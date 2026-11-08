@@ -1,4 +1,4 @@
-"""Every write endpoint takes an IDENTITY as well as a name (spec §2.5.1).
+"""Every write endpoint takes an IDENTITY as well as a name.
 
 Half the API was made identity-aware and half was not, and the summary I sent
 said "send the id from now on" -- which would have made every group

@@ -16,7 +16,7 @@ three inputs are:
 ``point_group_order >= 12 -> emsoft`` test, otherwise the T-phase
 (pg=24, refl=12196) routes to EMsoft — which did-not-finish in the benchmark.
 
-Caveats (documented; see ``tasks/forward_sim/iterations/AUTOROUTE/design.md`` §5):
+Caveats:
 
 1. All benchmark data is npx=50; production npx (≈500) shifts the absolute
    crossovers (relative ordering is robust).

@@ -5,11 +5,11 @@
  * displayed it. Choosing moved to the library, where the group lives and
  * where you can see what is in it; this keeps the other half, and that half
  * is the one worth keeping: it is the only thing on an Indexing or a Phase
- * Test screen that says YOUR PHASE CHOICE IS NARROWED. Remove it and a run
+ * Test screen that says your phase choice is narrowed. Remove it and a run
  * over five phases instead of thirty-six looks exactly like a run over
  * thirty-six.
  *
- * IT CARRIES THE FAILURE, and that is why it was hardened rather than
+ * It carries the failure, and that is why it is hardened rather than
  * dropped. The regression it survived was precisely this line lying: `GET /`
  * began sending ids where the filter compares names, the filter found
  * nothing and widened the run to the whole library, and this chip went on
@@ -17,7 +17,7 @@
  * resolves to nothing says so here, in red, and the run is blocked with the
  * same reason.
  *
- * THE WORD IS "GROUP". Sebastian did not like "collection", and with the
+ * The word is "group". The interface says "group" rather than "collection", and with the
  * manager dialog gone the word has no business surviving in the interface.
  * The routes and the files on disk keep their names; this is about what a
  * person reads.
@@ -50,7 +50,7 @@ export default function ActiveGroupChip({ onOpenLibrary }) {
   const asked = useRef(false);
 
   /**
-   * SOMEBODY HAS TO ASK THE SERVER, and it used to be the dropdown this
+   * Somebody has to ask the server, and it used to be the dropdown this
    * replaces. Removing that left nothing loading the store at start-up:
    * measured in the running app, the toolbar showed no chip at all until
    * some other page happened to load it, while `_local.json` had an active

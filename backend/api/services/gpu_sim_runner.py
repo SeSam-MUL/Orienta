@@ -12,7 +12,7 @@ Wraps the full pipeline:
          (a) load from existing MC .h5 (free, ~instant)
          (b) run the Orienta Engine GPU MC via run_gpu_mc (engine="auto" -> cupy CUDA kernel,
              ~1.4 s / 50M e⁻) when CUDA + cupy are available.  The full-pipeline
-             benchmark (tasks/forward_sim/iterations/PIPE2/pipe2.json) proved our
+             benchmark proved our
              GPU MC is FASTER than EMsoft EMMCOpenCL (~14 s / 500M default) AND
              master-NCC-equivalent (0.9999 vs the EMsoft oracle).
          (c) run the Orienta Engine numba CPU MC (engine="auto" -> numba njit prange loop) when
@@ -332,8 +332,7 @@ def run_gpu_simulation(
     # the writer's identity copy-mirror (mLPSH = mLPNH); every NON-cubic cell needs
     # its true southern hemisphere computed directly — even a centrosymmetric one.
     # (Verified: monoclinic-centro Al13Fe4 has NH that is NOT flip-invariant, so the
-    # identity copy gives SH NCC 0.76 vs the correct 1.00 from a direct south build;
-    # see tasks/forward_sim/iterations/SIMFIX/backend_report.md L3.)
+    # identity copy gives SH NCC 0.76 vs the correct 1.00 from a direct south build.)
     structure_is_cubic = _is_cubic(structure)
     if not structure_is_cubic:
         log_cb(
@@ -348,7 +347,7 @@ def run_gpu_simulation(
     numsx_mc = 501  # EMsoft default; also used for scan_missing glob
 
     # Shared kV label (round) — MUST agree with scan_missing's glob and the
-    # EMsoft naming so "Simulate All Missing" detects this file (M1 fix).
+    # EMsoft naming so "Simulate All Missing" detects this file.
     kv_int = ekev_to_kv_label(ekev)
     expected_mc_path = mc_h5_path(stem, kv_int, sig, numsx_mc)
 

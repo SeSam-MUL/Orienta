@@ -318,9 +318,8 @@ describe('with no groups at all', () => {
 });
 
 describe('subgroups', () => {
-  // Sebastian, after the collections merge: "habe ich jetzt eigentlich noch
-  // die Al-Fe-Si usw untergategorien?" -- he did not, and the only place
-  // that could make one was the dialog this panel replaces.
+  // Sub-groups such as Al-Fe-Si must be possible to make here; the only other
+  // place that could make one was the dialog this panel replaces.
   const nested = () => [
     { id: 'g1', name: 'Al-Fe', parent: null, members: ['Al'] },
     { id: 'g2', name: 'Mg systems', parent: null, members: [] },

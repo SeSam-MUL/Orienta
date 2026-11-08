@@ -54,6 +54,12 @@ if _LOG_FILE is not None:
     logger.info("Python %s on %s", sys.version.split()[0], sys.platform)
     logger.info("Log file: %s", _LOG_FILE)
 
+# Every end of this process leaves its reason in the log: an end line through
+# atexit or lifecycle.exit_now, the Python stacks of a native crash in
+# logs/backend-fault.log, and a state file the desktop app reads after a hard kill.
+from backend import lifecycle
+lifecycle.install(_LOG_FILE.parent if _LOG_FILE is not None else None)
+
 # macOS: PyEBSDIndex's band detector on the CPU path, before any route imports
 # it (see pyebsdindex_mode). After the file log exists, so a Mac bug report
 # shows which detector ran. No-op on other platforms.
@@ -211,7 +217,8 @@ async def _frontend_watchdog():
                 continue
             logger.info("No frontend reconnected after %ds and no HTTP for %.0fs "
                         "- shutting down backend.", grace_period, idle)
-            os._exit(0)
+            lifecycle.exit_now(0, f"frontend watchdog: no window connected for {grace_period} s "
+                                  f"and no HTTP request for {idle:.0f} s")
 
 
 async def _prewarm_kikuchipy_imports():
@@ -404,7 +411,8 @@ async def _parent_watchdog():
     except Exception:
         logger.warning("Parent watchdog: parent PID %d not found at startup — "
                        "exiting rather than outliving it", parent_pid)
-        os._exit(0)
+        lifecycle.exit_now(0, f"parent watchdog: the launching process (PID {parent_pid}) "
+                              "was not there at startup")
 
     interval = 3.0
     logger.info("Parent watchdog enabled — exiting when PID %d goes away "
@@ -416,7 +424,8 @@ async def _parent_watchdog():
             continue
         logger.info("Parent (PID %d) gone (%s) — shutting the backend down.",
                     parent_pid, gone)
-        os._exit(0)
+        lifecycle.exit_now(0, f"parent watchdog: the launching process (PID {parent_pid}) "
+                              f"is gone ({gone})")
 
 
 @asynccontextmanager
@@ -424,6 +433,9 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     global _frontend_heartbeat_task
     logger.info("Orienta Backend starting...")
+    # A held event loop is what the page sees as "backend gone"; the log says where it was held.
+    from backend.loop_watch import start_loop_watch
+    _loop_watch = start_loop_watch()
     _frontend_heartbeat_task = asyncio.create_task(_frontend_watchdog())
     # Hard guarantee that closing the desktop app (or its console) takes the
     # backend with it — see _parent_watchdog for why the other two paths fail.
@@ -455,6 +467,9 @@ async def lifespan(app: FastAPI):
         # uvicorn drop lifespan.shutdown entirely, and the watchdogs call
         # os._exit. Both are covered by the other brakes in log_broadcast.)
         logger.info("Orienta Backend shutting down...")
+        _loop_watch.stop()
+        lifecycle.note_reason("orderly server shutdown (Ctrl+C, a stop signal, or the end of the "
+                              "process)")
         if _frontend_heartbeat_task:
             _frontend_heartbeat_task.cancel()
         # Detach the dev-panel log handler BEFORE the loop closes. Left
@@ -494,6 +509,17 @@ class HTTPTimingMiddleware(BaseHTTPMiddleware):
         # activity clock existed when the 09:54 shutdown was measured.)
         note_http_activity()
 
+        # Health polls and the socket would be every "last request"; everything else is
+        # noted, so the line a dying backend leaves names what it was doing.
+        if path.startswith(("/api/health", "/ws")):
+            return await call_next(request)
+        token = lifecycle.request_started(request.method, path)
+        try:
+            return await self._dispatch_noted(request, call_next, path)
+        finally:
+            lifecycle.request_finished(token)
+
+    async def _dispatch_noted(self, request: Request, call_next, path: str):
         if any(path.startswith(p) for p in self._EXCLUDED_PREFIXES):
             return await call_next(request)
         if any(path.endswith(ext) for ext in self._EXCLUDED_EXTENSIONS):
@@ -722,7 +748,11 @@ async def shutdown():
     if _shutdown_task is not None and not _shutdown_task.done():
         return {"status": "shutting_down", "grace_s": grace}
     logger.info("Shutdown requested via API — exiting in %.0f s unless a client reconnects.", grace)
-    _shutdown_task = asyncio.create_task(schedule_shutdown(ws_manager, grace))
+    _shutdown_task = asyncio.create_task(schedule_shutdown(
+        ws_manager, grace,
+        exit_fn=lambda code: lifecycle.exit_now(
+            code, f"the page asked to stop (/api/shutdown) and no window reconnected within "
+                  f"{grace:.0f} s")))
     return {"status": "shutting_down", "grace_s": grace}
 
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * The keyboard pass (spec §2.9).
+ * The keyboard pass.
  *
  * "Die Mockups haben KEINEN Tastaturpfad" -- so this file checks the things
  * that are easy to leave out and impossible to notice with a mouse: that the

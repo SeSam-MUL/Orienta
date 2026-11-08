@@ -102,10 +102,10 @@ function installedTag(home, deps = {}) {
 /**
  * The digest of the package the installed runtime came from, or null.
  *
- * `runtime/VERSION` answers "which version", and from 0.4.6 onwards that is not
- * enough: a release may be rebuilt under the same tag, and then the tag says
- * "nothing to do" while the program files are a build behind — the exact failure
- * this module exists to close, coming back through the version number.
+ * `runtime/VERSION` answers "which version", and that is not enough: installed
+ * builds of one version can carry the same tag, so the build identifier is
+ * compared as well. Otherwise the tag says "nothing to do" while the program
+ * files are a build behind.
  *
  * null is the honest answer for every installation made before the applier began
  * recording this, and the decision below treats it as "cannot tell" rather than
@@ -170,11 +170,10 @@ function updateDecision({
     };
   }
   if (order === 0) {
-    // SAME TAG, which since 0.4.6 no longer means same build: that release was
-    // rebuilt four times, and Sebastian's machine holds Build 3 as v0.4.6. Tags
-    // alone would answer "nothing to do" and leave the program files a build
-    // behind under a new shell — this module's own bug, returning through the
-    // version number. So compare what the builds actually are.
+    // SAME TAG, which does not mean the same build: installed builds of one
+    // version can carry the same tag. Tags alone would answer "nothing to do"
+    // and leave the program files a build behind under a new shell. So compare
+    // what the builds actually are.
     if (bundledDigest && installedDigest && bundledDigest === installedDigest) {
       return {
         action: 'none',

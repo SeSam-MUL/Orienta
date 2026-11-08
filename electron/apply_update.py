@@ -306,11 +306,9 @@ def _result(applied=False, tag=None, error=None, dirty=False, terminal=False) ->
 
 
 #: Beside `VERSION`, and for the question `VERSION` cannot answer: WHICH build of
-#: that version is installed. Sebastian's 0.4.6 decision made this load-bearing —
-#: Build 4 carries the same tag as Build 3, and comparing tags alone says "nothing
-#: to do", so the shell would be new while the program files stayed old. That is
-#: the bug this whole module was written to close, returning through the version
-#: number instead of the shell.
+#: that version is installed. Installed builds of one version can carry the same
+#: tag, so the build identifier is compared as well: comparing tags alone says "nothing
+#: to do", so the shell would be new while the program files stayed old.
 #:
 #: Not inside the package: a zip cannot state its own digest. Written by whoever
 #: unpacked it, from the digest that was verified anyway, so no file is ever

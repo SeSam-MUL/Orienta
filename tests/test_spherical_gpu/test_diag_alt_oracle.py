@@ -66,8 +66,7 @@ def _quat_to_zxz_eulers(qu: np.ndarray) -> np.ndarray:
     not ALT_ORACLE_CSV.is_file(),
     reason=(
         f"Alt-oracle CSV {ALT_ORACLE_CSV.name} not present — regenerate "
-        "via the WSL EMSphInx BatchIndexDump CLI to enable this diagnostic. "
-        "Tracked in tasks/phase_a_followups.md item #1."
+        "via the WSL EMSphInx BatchIndexDump CLI to enable this diagnostic."
     ),
 )
 def test_alt_oracle_vs_main_oracle():
@@ -118,8 +117,7 @@ def test_alt_oracle_vs_main_oracle():
     not ALT_ORACLE_CSV.is_file(),
     reason=(
         f"Alt-oracle CSV {ALT_ORACLE_CSV.name} not present — regenerate "
-        "via the WSL EMSphInx BatchIndexDump CLI to enable this diagnostic. "
-        "Tracked in tasks/phase_a_followups.md item #1."
+        "via the WSL EMSphInx BatchIndexDump CLI to enable this diagnostic."
     ),
 )
 def test_our_pipeline_vs_alt_oracle():

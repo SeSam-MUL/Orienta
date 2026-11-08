@@ -1,9 +1,9 @@
 /**
- * The eight terms this page uses without explaining them (spec §2.3).
+ * The eight terms this page uses without explaining them.
  *
  * They are not jargon to the person who wrote the library and they are
- * opaque to everyone else: a first-time-user agent read "cF4" and "Cu" in a
- * card about aluminium and concluded the entry was wrong. `Cu` there is the
+ * opaque to everyone else: "cF4" and "Cu" in a
+ * card about aluminium look like a wrong entry. `Cu` there is the
  * STRUCTURE TYPE -- pure Al and pure Ni have it too -- and nothing on the
  * screen said so.
  *

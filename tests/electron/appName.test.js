@@ -1,16 +1,13 @@
 /**
  * The macOS menu bar must say Orienta.
  *
- * M5 tester, 2026-09-25 (tasks/mac-test-m5-2026-09-25/bericht.md, point 4):
- * the menu bar of the signed dmg read "About kikuchipy-gui" and
+ * On macOS the menu bar of the signed dmg read "About kikuchipy-gui" and
  * "Quit kikuchipy-gui". macOS builds those labels from `app.name`, and Electron
  * reads that from package.json `name`; `productName` lives under `build`, where
  * only electron-builder looks.
  *
- * This corrects an earlier audit of mine (tasks/mac-tester/naming-audit.md)
- * which reasoned that `name` was "only visible in a dev run". It is visible in
- * the menu bar of the packaged app, and the tester's report is the measurement
- * that says so.
+ * `name` is not "only visible in a dev run": it is visible in
+ * the menu bar of the packaged app.
  *
  * main.js cannot be imported in a test — it spawns the backend on load — so
  * these read the source. What is under test is a decision, not a computation.

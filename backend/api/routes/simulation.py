@@ -8,6 +8,7 @@ Wraps SimulationController for:
 - System status checks
 """
 
+import asyncio
 import json
 import logging
 import threading
@@ -377,6 +378,19 @@ def _build_system_status() -> dict:
     }
 
 
+_system_status_lock: tuple = (None, None)      # (loop, lock)
+
+
+def _system_status_build_lock() -> "asyncio.Lock":
+    """The lock of the running loop. An asyncio lock belongs to the loop it first waited in, so
+    a new loop (another server in the same process, a test) gets its own."""
+    global _system_status_lock
+    loop = asyncio.get_running_loop()
+    if _system_status_lock[0] is not loop:
+        _system_status_lock = (loop, asyncio.Lock())
+    return _system_status_lock[1]
+
+
 @router.get("/system-status")
 async def system_status(force: bool = False):
     """Check system status (EMsoft, WSL, OpenCL).
@@ -392,9 +406,19 @@ async def system_status(force: bool = False):
             cached["cached"] = True
             return cached
 
-        value = _build_system_status()
-        _system_status_cache["value"] = value
-        _system_status_cache["expires_at"] = now + _SYSTEM_STATUS_TTL_SEC
+        # One check at a time, off the event loop: it spawns WSL (`wsl echo ok`, up to 10 s
+        # each) and on the loop it held every request for 21.7 s at a cold start (measured
+        # 2026-11-08). The page asks from three places at start-up; the ones that waited
+        # take the answer the first one built.
+        async with _system_status_build_lock():
+            if (not force and _system_status_cache["value"] is not None
+                    and _time.time() < _system_status_cache["expires_at"]):
+                cached = dict(_system_status_cache["value"])
+                cached["cached"] = True
+                return cached
+            value = await asyncio.to_thread(_build_system_status)
+            _system_status_cache["value"] = value
+            _system_status_cache["expires_at"] = _time.time() + _SYSTEM_STATUS_TTL_SEC
         return {**value, "cached": False}
     except Exception as e:
         return {"error": str(e)}
@@ -415,7 +439,8 @@ async def forward_sim_capabilities_endpoint(include_emsoft: bool = True):
     ``emsoft_available`` is reported as ``None`` (not probed).
     """
     try:
-        caps = forward_sim_capabilities()
+        # Off the event loop: the EMsoft probe spawns WSL.
+        caps = await asyncio.to_thread(forward_sim_capabilities)
         # Honour include_emsoft=false: report the EMsoft probe result only when
         # asked (forward_sim_capabilities already ran the cheap WSL test -f, so we
         # simply suppress reporting it; the WSL probe is itself fail-safe + fast).

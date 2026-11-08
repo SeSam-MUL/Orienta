@@ -77,8 +77,7 @@ def smooth_nc_vol(
     # Pre-pad (circular wrap) on all three axes ONCE; each separable conv
     # then consumes its axis's padding. Previous implementation re-padded
     # Y and Z before their convs on top of this pre-pad, leaving 6 extra
-    # samples in each of those dims at the output. See
-    # tasks/_archive/handoff-smooth-nc-vol-shape.md for the trace.
+    # samples in each of those dims at the output.
     padded = F.pad(nc_vol.unsqueeze(1), (radius,) * 6, mode="circular")
     smoothed = F.conv3d(padded,   g_1d.view(1, 1, k_size, 1,      1))
     smoothed = F.conv3d(smoothed, g_1d.view(1, 1, 1,      k_size, 1))

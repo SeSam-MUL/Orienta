@@ -1,8 +1,7 @@
 /**
  * "Suggest groups" — an arrangement proposed from the library itself.
  *
- * Sebastian, on the feature this ports: "das mit den auto suggest sachen ist
- * zwar cool". It is the only thing in the program that turns 36 unsorted
+ * This ports the auto-suggest feature of the old collections dialog. It is the only thing in the program that turns 36 unsorted
  * phases into a starting order without somebody doing it by hand, and it is
  * what a person opening a colleague's library wants first.
  *

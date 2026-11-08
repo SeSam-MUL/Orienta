@@ -1,6 +1,14 @@
 {
   "appSubtitle": "EBSD 花样分析",
   "appTitle": "Orienta",
+  "backendEnded": {
+    "title": "后端于 {{time}} 意外停止 ({{exit}})。",
+    "lastRequest": "当时正在处理: {{request}}。",
+    "restarting": "Orienta 正在重新启动它。已加载的文件和结果已丢失，请重新打开文件。",
+    "notRestarting": "不会再自动重启。请完全关闭 Orienta 后重新启动。",
+    "details": "原因和后端的最后状态记录在 logs/backend-console.log 中 (设置 → 报告问题 会包含它)。",
+    "dismiss": "关闭"
+  },
   "crash": {
     "title": "此模块已崩溃"
   },

@@ -110,12 +110,10 @@ def test_tier1_scores_correlate_with_oracle_no_refine(tier1_result, oracle):
 
 
 @pytest.mark.xfail(
-    reason="indexImage-fidelity gap (NOT an axis-convention bug — see "
-    "tasks/_archive/handoff-typ-b-axis-bug-investigation.md sec.13 for the "
-    "2026-05-20 "
-    "discriminator that retired the axis-bug hypothesis). Our Tier-1 pipeline "
+    reason="indexImage-fidelity gap (NOT an axis-convention bug; a "
+    "discriminator test retired the axis-bug hypothesis). Our indexer pipeline "
     "replicates EMSphInx's Indexer::indexImage faithfully (median 1.93 deg "
-    "vs alt-oracle on the 666/2842 pixels where indexImage succeeds — iter-15B), "
+    "vs alt-oracle on the 666/2842 pixels where indexImage succeeds), "
     "but the oracle.no_refine ground truth is from IndexEBSD CLI which has "
     "an additional pseudo-symmetry resolution step beyond indexImage. The "
     "remaining ~62 percent of pixels are where indexImage itself fails and "

@@ -455,17 +455,26 @@ def test_apply_stays_on_the_result_it_was_started_on_when_another_is_activated(
     assert "grain_flip_undo" not in res_b.metadata
 
 
-def test_apply_to_grain_has_one_await_and_it_is_the_release():
+def test_apply_to_grain_awaits_only_the_release_and_the_guarded_refine():
     """The race test above runs one interleaving. This pins the property behind
     it: between the first read of the result and the write-back the route must
-    not be able to suspend, so no ``await`` may be added there (or in the
-    propagation helper, which must stay a plain function)."""
+    not be able to suspend unguarded. Two awaits are allowed: the release before
+    the first read, and the refine (45 s on the loop otherwise, 2026-11-01),
+    which must be followed by the check that the result is unchanged
+    (tests/test_grain_refine_bounded.py runs that interleaving). The propagation
+    helper must stay a plain function."""
     import ast
     import inspect
     import textwrap
 
-    tree = ast.parse(textwrap.dedent(inspect.getsource(route.apply_variant_to_grain)))
-    awaits = [n for n in ast.walk(tree) if isinstance(n, ast.Await)]
-    assert len(awaits) == 1
-    assert "_free_interactive_gpu_caches" in ast.unparse(awaits[0])
+    src = textwrap.dedent(inspect.getsource(route.apply_variant_to_grain))
+    tree = ast.parse(src)
+    awaits = [ast.unparse(n) for n in ast.walk(tree) if isinstance(n, ast.Await)]
+    assert len(awaits) == 2, awaits
+    assert any("_free_interactive_gpu_caches" in a for a in awaits)
+    refine = [a for a in awaits if "_grain_newton_refine" in a]
+    assert len(refine) == 1
+    after = src[src.index("_grain_newton_refine, result"):]
+    guard = after.index("_orientation_fingerprint(result) != before")
+    assert guard < after.index("new_q_map.update(refined)")
     assert not inspect.iscoroutinefunction(route._propagate_to_similar_grains)

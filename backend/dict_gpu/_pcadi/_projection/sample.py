@@ -6,7 +6,7 @@ Translation of kikuchipy's
 of `kikuchipy/signals/util/_master_pattern.py`, fused into a single
 `torch.nn.functional.grid_sample` call per hemisphere.
 
-Critical conventions (see tasks/kikuchipy_projection_reference.md):
+Critical conventions (they follow kikuchipy's projection code):
 
   1. Lambert -> pixel coords rescaling:
          xy = scale * _vector2lambert(v) / SQRT_PI_HALF
