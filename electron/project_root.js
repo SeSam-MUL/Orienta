@@ -335,7 +335,9 @@ function startupPlan(decision, context = {}) {
     };
   }
 
-  const page = backendServesUi ? 'waiting' : 'devServer';
+  // Both wait for the backend first: the dev server's page shown before the
+  // backend answers fetched its settings into the void and never again.
+  const page = 'waiting';
   const thenLoad = backendServesUi ? backendUrl : devServerUrl;
 
   if (portBusy && keepExisting) {

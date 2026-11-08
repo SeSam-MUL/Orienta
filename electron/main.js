@@ -963,14 +963,17 @@ function createWindow(decision = { mode: 'dev' }) {
     // does not exist yet. The wizard is plain HTML for the same reason, and
     // `loadSetupPlaceholder` falls back to a static page if it is missing.
     loadSetupPlaceholder(mainWindow, decision);
-  } else if (isDev) {
-    mainWindow.loadURL(`http://localhost:${FRONTEND_DEV_PORT}`);
   } else {
     // In production the backend SERVES the built frontend, so there is nothing
     // to show until it answers — and a cold start takes 30-40 s. Loading the
     // URL now would leave Chromium's ERR_CONNECTION_REFUSED page on screen with
     // nothing to reload it. whenReady() swaps in the real URL once /api/health
     // responds.
+    //
+    // A dev start waits the same way. Loading the dev server at once showed the
+    // page about 13 s before the backend answered: settings and presets failed
+    // and were never fetched again, and with the dev port on the backend the
+    // window stayed blank until Ctrl+R.
     mainWindow.loadFile(path.join(__dirname, 'setup', 'waiting.html'));
     stopWaitingClock = startWaitingPageClock(mainWindow);
   }
@@ -1057,6 +1060,21 @@ function createWindow(decision = { mode: 'dev' }) {
   });
 }
 
+/**
+ * The home the dialogs keep their folder memory in, or null. orientaHome()
+ * throws on a malformed ORIENTA_HOME; a dialog must still open then, only
+ * without the memory (save_dialogs.js treats a null home as "nothing
+ * remembered").
+ */
+function dialogHome() {
+  try {
+    return orientaHome();
+  } catch (err) {
+    logShellLine(`[dialog] no folder memory: ${err.message}`);
+    return null;
+  }
+}
+
 // Handle file open dialog from renderer
 ipcMain.handle('dialog:openFile', async (event, options) => {
   // `multiple: true` (the CIF import) returns an ARRAY of paths; every other
@@ -1065,6 +1083,13 @@ ipcMain.handle('dialog:openFile', async (event, options) => {
   const multiple = options?.multiple === true;
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: multiple ? ['openFile', 'multiSelections'] : ['openFile'],
+    // Where the last file was opened (save_dialogs.js, its own memory apart
+    // from the save folder). Without it every Browse started in Downloads and
+    // the user walked to the data folder each time.
+    defaultPath: saveDialogs.resolveOpenPath({
+      requested: options?.defaultPath,
+      lastDir: saveDialogs.readLastDir(dialogHome(), 'open'),
+    }),
     filters: options?.filters || [
       { name: 'HDF5 Files', extensions: ['h5oina', 'h5', 'hdf5'] },
       { name: 'CIF Files', extensions: ['cif'] },
@@ -1072,6 +1097,7 @@ ipcMain.handle('dialog:openFile', async (event, options) => {
     ],
   });
   if (result.canceled || !result.filePaths?.length) return null;
+  saveDialogs.rememberDir(dialogHome(), result.filePaths[0], { kind: 'open' });
   return multiple ? result.filePaths : result.filePaths[0];
 });
 
@@ -1090,14 +1116,17 @@ ipcMain.handle('dialog:openFolder', async (event, options) => {
   // remembered save folder. This handler also serves the pickers for a folder
   // of scans or CIFs to read; remembering those would open the next "Export
   // image…" in the raw-data folder.
+  // A folder to READ (scans, CIFs) starts in, and updates, the open-dialog
+  // memory instead, so a batch folder is found next to the last opened scan.
   const remember = !!options?.remember;
+  const kind = remember ? 'save' : 'open';
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'createDirectory'],
-    defaultPath: remember ? (saveDialogs.readLastDir(orientaHome()) || undefined) : undefined,
+    defaultPath: saveDialogs.readLastDir(dialogHome(), kind) || undefined,
   });
   if (result.canceled || !result.filePaths?.[0]) return null;
   grantedFolders.add(path.resolve(result.filePaths[0]));
-  if (remember) saveDialogs.rememberDir(orientaHome(), result.filePaths[0], { isDirectory: true });
+  saveDialogs.rememberDir(dialogHome(), result.filePaths[0], { isDirectory: true, kind });
   return result.filePaths[0];
 });
 
@@ -1165,7 +1194,7 @@ ipcMain.handle('dialog:saveFile', async (event, options) => {
     // Downloads made the user walk there each time.
     defaultPath: saveDialogs.resolveDefaultPath({
       requested: options?.defaultPath,
-      lastDir: saveDialogs.readLastDir(orientaHome()),
+      lastDir: saveDialogs.readLastDir(dialogHome()),
       fallbackDir: defaultSaveDirectory(),
     }),
     filters: options?.filters || [
@@ -1175,7 +1204,7 @@ ipcMain.handle('dialog:saveFile', async (event, options) => {
     ],
   });
   if (result.canceled || !result.filePath) return null;
-  saveDialogs.rememberDir(orientaHome(), result.filePath);
+  saveDialogs.rememberDir(dialogHome(), result.filePath);
   return result.filePath;
 });
 
@@ -1196,7 +1225,7 @@ ipcMain.handle('dialog:saveImage', async (event, options) => {
     // save_dialogs.js), then in Downloads; a caller's absolute path wins.
     defaultPath: saveDialogs.resolveDefaultPath({
       requested: options?.defaultPath || 'image.png',
-      lastDir: saveDialogs.readLastDir(orientaHome()),
+      lastDir: saveDialogs.readLastDir(dialogHome()),
       fallbackDir: defaultSaveDirectory(),
     }),
     filters: options?.filters || [
@@ -1208,7 +1237,7 @@ ipcMain.handle('dialog:saveImage', async (event, options) => {
   });
   if (result.canceled || !result.filePath) return null;
   await fs.promises.writeFile(result.filePath, Buffer.from(options.base64, 'base64'));
-  saveDialogs.rememberDir(orientaHome(), result.filePath);
+  saveDialogs.rememberDir(dialogHome(), result.filePath);
   return result.filePath;
 });
 
@@ -1941,6 +1970,17 @@ app.whenReady().then(async () => {
       mainWindow?.loadURL(`http://127.0.0.1:${BACKEND_PORT}/${startLanguage.queryFor(langDir)}`)
         .then(() => startLanguage.consumed(langDir))
         .catch((err) => logShellLine(`Could not load the interface: ${err.message}`));
+    } else if (plan.thenLoad === 'devServer') {
+      // Started without Vite, or Vite moved to another port: say so instead of
+      // leaving the waiting page with its clock stopped.
+      mainWindow?.loadURL(`http://localhost:${FRONTEND_DEV_PORT}`)
+        .catch((err) => {
+          logShellLine(`Could not load the dev server: ${err.message}`);
+          dialog.showErrorBox('Dev server not reachable',
+            `The backend is running, but nothing answers at http://localhost:${FRONTEND_DEV_PORT}. `
+            + 'Start it with "npm run dev" in frontend/ (or start the app with "npm run electron:dev"), '
+            + 'then press Ctrl+R in the Orienta window.');
+        });
     }
     return;
   } catch (err) {

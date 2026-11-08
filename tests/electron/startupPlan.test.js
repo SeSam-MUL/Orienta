@@ -32,9 +32,9 @@ describe('the root and the interpreter always come from the decision', () => {
 });
 
 describe('where the window points', () => {
-  it('uses the dev server in a checkout', () => {
+  it('uses the dev server in a checkout, after the waiting page', () => {
     const plan = startupPlan(DEV, { packaged: false });
-    expect(plan.page).toBe('devServer');
+    expect(plan.page).toBe('waiting');
     expect(plan.thenLoad).toBe('devServer');
   });
 

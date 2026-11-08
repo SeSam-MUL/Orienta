@@ -89,3 +89,44 @@ describe('resolveDefaultPath', () => {
     expect(sd.resolveDefaultPath({ requested: rel, lastDir, fallbackDir })).toBe(rel);
   });
 });
+
+describe('open dialogs keep their own folder', () => {
+  it('remembers the folder of an opened file apart from the save folder', () => {
+    const scans = path.join(home, 'scans');
+    const report = path.join(home, 'report');
+    fs.mkdirSync(scans);
+    fs.mkdirSync(report);
+    sd.rememberDir(home, path.join(report, 'figure.png'));
+    expect(sd.rememberDir(home, path.join(scans, 'map.h5oina'), { kind: 'open' })).toBe(scans);
+    expect(sd.readLastDir(home, 'open')).toBe(scans);
+    expect(sd.readLastDir(home)).toBe(report);
+    expect(sd.lastDirFile(home, 'open')).not.toBe(sd.lastDirFile(home));
+  });
+
+  it('remembers a chosen folder of scans itself', () => {
+    const batch = path.join(home, 'batch');
+    fs.mkdirSync(batch);
+    sd.rememberDir(home, batch, { isDirectory: true, kind: 'open' });
+    expect(sd.readLastDir(home, 'open')).toBe(batch);
+    expect(sd.readLastDir(home)).toBeNull();
+  });
+});
+
+describe('resolveOpenPath', () => {
+  const lastDir = path.join('C:', 'data', 'scans');
+
+  it('starts in the folder of the last opened file', () => {
+    expect(sd.resolveOpenPath({ lastDir })).toBe(lastDir);
+  });
+
+  it('lets an absolute path from the caller win', () => {
+    const abs = path.resolve(path.join('D:', 'other', 'map.h5oina'));
+    expect(sd.resolveOpenPath({ requested: abs, lastDir })).toBe(abs);
+  });
+
+  it('ignores a relative or empty request, and is undefined with no memory', () => {
+    expect(sd.resolveOpenPath({ requested: 'map.h5oina', lastDir })).toBe(lastDir);
+    expect(sd.resolveOpenPath({ requested: '  ', lastDir })).toBe(lastDir);
+    expect(sd.resolveOpenPath({})).toBeUndefined();
+  });
+});

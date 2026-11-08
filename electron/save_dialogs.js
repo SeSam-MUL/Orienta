@@ -18,15 +18,23 @@ const path = require('node:path');
 
 const FILE_NAME = 'last-save-dir.txt';
 
-function lastDirFile(home) {
-  return path.join(home, 'electron', FILE_NAME);
+/**
+ * Open dialogs keep their own memory. Every "Browse" that picked a scan opened
+ * in Downloads, and sharing the save folder would
+ * be wrong both ways: the next export would open among the raw data, and the
+ * next scan would be looked for in the report folder.
+ */
+const OPEN_FILE_NAME = 'last-open-dir.txt';
+
+function lastDirFile(home, kind = 'save') {
+  return path.join(home, 'electron', kind === 'open' ? OPEN_FILE_NAME : FILE_NAME);
 }
 
 /** The remembered folder, or null when there is none or it no longer exists. */
-function readLastDir(home) {
+function readLastDir(home, kind = 'save') {
   if (!home) return null;
   try {
-    const dir = fs.readFileSync(lastDirFile(home), 'utf8').trim();
+    const dir = fs.readFileSync(lastDirFile(home, kind), 'utf8').trim();
     if (!dir) return null;
     // A UNC path is not probed: stat on an unreachable share blocks the main
     // process for the SMB timeout, right when the user clicked Save. The
@@ -39,12 +47,12 @@ function readLastDir(home) {
 }
 
 /** Remember the folder of a file the user just saved (or a folder they chose). */
-function rememberDir(home, filePath, { isDirectory = false } = {}) {
+function rememberDir(home, filePath, { isDirectory = false, kind = 'save' } = {}) {
   if (!home || !filePath) return null;
   const dir = isDirectory ? path.resolve(filePath) : path.dirname(path.resolve(filePath));
   try {
-    fs.mkdirSync(path.dirname(lastDirFile(home)), { recursive: true });
-    fs.writeFileSync(lastDirFile(home), dir + '\n', 'utf8');
+    fs.mkdirSync(path.dirname(lastDirFile(home, kind)), { recursive: true });
+    fs.writeFileSync(lastDirFile(home, kind), dir + '\n', 'utf8');
     return dir;
   } catch {
     return null;
@@ -72,4 +80,18 @@ function resolveDefaultPath({ requested, lastDir, fallbackDir } = {}) {
   return base ? path.join(base, req) : req;
 }
 
-module.exports = { FILE_NAME, lastDirFile, readLastDir, rememberDir, resolveDefaultPath };
+/**
+ * The `defaultPath` for an open dialog: an absolute path the caller names (the
+ * file already in the input field) wins, else the folder of the last file or
+ * folder opened, else nothing and the dialog keeps its own default.
+ */
+function resolveOpenPath({ requested, lastDir } = {}) {
+  const req = requested == null ? '' : String(requested).trim();
+  if (req && path.isAbsolute(req)) return req;
+  return lastDir || undefined;
+}
+
+module.exports = {
+  FILE_NAME, OPEN_FILE_NAME, lastDirFile, readLastDir, rememberDir, resolveDefaultPath,
+  resolveOpenPath,
+};
