@@ -15,6 +15,7 @@ import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
 import { useZoomViews, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
+import { useFitReadyCount, useSpectrumFitStatus } from '../EDS/hooks/useSpectrumFitStatus';
 import { viewToTransform, zoomedRect, isZoomed } from '../EDS/zoomView';
 import useWheelZoom from '../common/useWheelZoom';
 
@@ -183,7 +184,20 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   // chemistry filter will keep/drop) follows the crosshair, instead of being
   // frozen on the pixel of the last completed run. ``null`` = no EDS / loading.
   const [livePixelAtPct, setLivePixelAtPct] = useState(null);
+  // Why the live chemistry is null, when that is the spectrum fit
+  // ("spectrum_fit_running" / "spectrum_fit_failed"). A bare null reads as
+  // "this scan has no EDS", which for a file whose spectra are still being
+  // evaluated is false.
+  const [livePixelReason, setLivePixelReason] = useState(null);
   const chemReqRef = useRef(0);
+  // The spectrum fit of the open file. Its state is an input of the live
+  // chemistry below: when the fit finishes the pixel's chemistry exists, and
+  // nothing else would ask for it again until the crosshair moved.
+  const spectrumFit = useSpectrumFitStatus(open && fileLoaded ? filePath : null,
+    { active: !!open });
+  // Bumps when the fit turns ready: the element list and the overlay maps
+  // asked for during the fit (503) are asked again.
+  const fitReady = useFitReadyCount(spectrumFit.state);
 
   useEffect(() => { if (typeof currentIndex === 'number') setPixelIndex(currentIndex); }, [currentIndex]);
 
@@ -345,23 +359,26 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
   // Fetch the live EDS chemistry for the active pixel whenever it changes, so
   // the EDS readout tracks the crosshair (not the last run's pixel).
   useEffect(() => {
-    if (!open || !fileLoaded) { setLivePixelAtPct(null); return; }
+    if (!open || !fileLoaded) { setLivePixelAtPct(null); setLivePixelReason(null); return; }
     const myReq = ++chemReqRef.current;
     let cancelled = false;
     indexApi.phaseTestPixelChemistry(pixelIndex)
       .then((res) => {
         if (cancelled || myReq !== chemReqRef.current) return;  // stale
         setLivePixelAtPct(res?.data?.pixel_at_pct || null);
+        setLivePixelReason(res?.data?.pixel_chemistry_reason || null);
       })
       .catch(() => {
         if (cancelled || myReq !== chemReqRef.current) return;
         setLivePixelAtPct(null);
+        setLivePixelReason(null);
       });
     return () => { cancelled = true; };
-  }, [open, fileLoaded, pixelIndex, filePath]);
+  }, [open, fileLoaded, pixelIndex, filePath, spectrumFit.state]);
 
-  // Fetch the list of EDS elements once when the dialog opens, to populate the
-  // scan-picker overlay selector. Empty list → the overlay control hides.
+  // Fetch the list of EDS elements when the dialog opens -- and again when
+  // the spectrum fit turns ready -- to populate the scan-picker overlay
+  // selector. Empty list → the overlay control hides.
   // A hexagonal scan's picture is the display raster, not the index grid an element map is drawn on: no overlay
   // control there, so nothing is fetched for it.
   const isHex = !!hexMap;
@@ -372,21 +389,31 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
       .then((r) => { if (!cancelled) setEdsElements(Array.isArray(r?.data?.elements) ? r.data.elements : []); })
       .catch(() => { if (!cancelled) setEdsElements([]); });
     return () => { cancelled = true; };
-  }, [open, fileLoaded, filePath, isHex]);
+  }, [open, fileLoaded, filePath, fitReady, isHex]);
+
+  // Fetch one element's colour-tinted map into edsOverlayMaps (tint is stable
+  // per element so a colour always means the same element).
+  const fetchOverlayMap = useCallback((sym) => {
+    const idx = Math.max(0, edsElements.findIndex((e) => edsSym(e) === sym));
+    const color = EDS_COLORS[idx % EDS_COLORS.length];
+    edsApi.getMap(sym, 'counts', 'hot', color)
+      .then((r) => { if (r?.data?.image) setEdsOverlayMaps((m) => ({ ...m, [sym]: r.data.image })); })
+      .catch(() => { /* overlay just won't show for this element */ });
+  }, [edsElements]);
 
   // Toggle an EDS element overlay on/off. On first activation, fetch its
-  // colour-tinted element map (cached in edsOverlayMaps; tint is stable per
-  // element so a colour always means the same element).
+  // map (cached in edsOverlayMaps).
   const toggleEdsEl = useCallback((sym) => {
     setEdsOverlaySel((sel) => (sel.includes(sym) ? sel.filter((x) => x !== sym) : [...sel, sym]));
-    if (!edsOverlayMaps[sym]) {
-      const idx = Math.max(0, edsElements.findIndex((e) => edsSym(e) === sym));
-      const color = EDS_COLORS[idx % EDS_COLORS.length];
-      edsApi.getMap(sym, 'counts', 'hot', color)
-        .then((r) => { if (r?.data?.image) setEdsOverlayMaps((m) => ({ ...m, [sym]: r.data.image })); })
-        .catch(() => { /* overlay just won't show for this element */ });
-    }
-  }, [edsOverlayMaps, edsElements]);
+    if (!edsOverlayMaps[sym]) fetchOverlayMap(sym);
+  }, [edsOverlayMaps, fetchOverlayMap]);
+
+  // The fit is ready: fetch the maps of the elements switched on while it
+  // ran (their request got a 503 and nothing cached).
+  useEffect(() => {
+    if (!fitReady) return;
+    edsOverlaySel.filter((sym) => !edsOverlayMaps[sym]).forEach(fetchOverlayMap);
+  }, [fitReady]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bug fix: when the ACTIVE FILE changes, drop everything cached from the
   // previous file (result/preview/overview/phases) so a stale pattern from the
@@ -727,6 +754,19 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
             // Prefer the LIVE chemistry of the active crosshair pixel; fall
             // back to the last run's pixel only until the live fetch lands.
             const edsPct = livePixelAtPct || result?.pixel_at_pct;
+            // No chemistry because the spectrum fit is not done (or failed):
+            // say so, rather than show nothing, which reads as "no EDS".
+            const reason = edsPct ? null
+              : (livePixelReason || result?.pixel_chemistry_reason || null);
+            if (reason === 'spectrum_fit_running' || reason === 'spectrum_fit_failed') {
+              return (
+                <span data-phase-test-chem-reason={reason}
+                  style={{ fontSize: 10, color: reason === 'spectrum_fit_failed' ? C.red : C.textSecondary }}>
+                  {t(reason === 'spectrum_fit_failed'
+                    ? 'phaseTest.edsFitFailed' : 'phaseTest.edsPending')}
+                </span>
+              );
+            }
             if (!edsPct) return null;
             // Only the elements actually present (>0.5 at%) to keep it readable.
             const shown = Object.entries(edsPct).filter(([, v]) => v >= 0.5);

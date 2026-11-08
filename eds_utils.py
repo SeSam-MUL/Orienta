@@ -19,8 +19,7 @@ so a weight fraction is **proportional to k times intensity**::
 
 Until 2026-09-12 this module divided by k instead of multiplying, while the
 table it divided by was labelled "typical Oxford/Bruker defaults" -- i.e. the
-values were inverted on top of being flat. See
-``tasks/eds-quantification-wrong-2026-09-10.md``.
+values were inverted on top of being flat.
 
 What the k-factors are now
 --------------------------
@@ -83,6 +82,7 @@ Sources
   "Scanning Electron Microscopy and X-Ray Microanalysis".
 """
 
+import json
 import logging
 import math
 import re
@@ -417,9 +417,8 @@ class ElementLine(str):
 class QuantMap(dict):
     """A ``{element: array}`` result that carries how it was produced.
 
-    A plain dict in every respect; ``.provenance`` is the extra. Point 4 of
-    ``tasks/eds-quantification-wrong-2026-09-10.md``: the docstring knew the
-    numbers were uncalibrated, the surface did not.
+    A plain dict in every respect; ``.provenance`` is the extra. The docstring
+    knew the numbers were uncalibrated, the surface did not.
     """
 
     provenance: Dict
@@ -484,10 +483,110 @@ def _sub_line_rank(sub_line: str) -> int:
     return 2
 
 
+#: What kind of per-element intensity a counts dict holds. They are not
+#: interchangeable, and the response curve is measured per kind:
+#:
+#: ``"window"``   -- the vendor's Window Integral: a raw band sum, background
+#:                   included. The default, and what every pre-existing caller
+#:                   hands in.
+#: ``"spectrum"`` -- NET line intensity from ``backend/eds_spectrum`` (background
+#:                   subtracted, overlaps deconvolved, pile-up modelled).
+QUANT_SOURCES = ("window", "spectrum")
+
+
+def _check_source(source: str) -> str:
+    if source not in QUANT_SOURCES:
+        raise ValueError(
+            f"EDS quantification: unknown intensity source {source!r}; "
+            f"expected one of {', '.join(QUANT_SOURCES)}."
+        )
+    return source
+
+
+class CountsByElement(dict):
+    """``{ElementLine: counts}`` that remembers which kind of intensity it holds.
+
+    A plain dict in every respect; ``.source`` is the extra, one of
+    :data:`QUANT_SOURCES`. :func:`counts_to_weight_pct` reads it so a dict of
+    net line intensities is priced with the net-intensity response curve and
+    never with the window one. ``.copy()``, ``copy.copy`` and pickling keep it;
+    ``dict(counts)`` and a dict comprehension do NOT (they are plain dicts and
+    therefore read as ``"window"``) -- pass ``source=`` explicitly when you
+    rebuild a counts dict by hand.
+    """
+
+    source: str
+
+    def __init__(self, *args, source: str = "window", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.source = _check_source(source)
+
+    def copy(self) -> "CountsByElement":
+        return CountsByElement(self, source=self.source)
+
+
+#: Per element, the line the SPECTRUM source quantifies through when more than
+#: one family is offered; every other element keeps :func:`default_line_for`
+#: (K where excited). The window source ignores this table.
+#:
+#: Cu goes through L. Measured 2026-10-25 on the Al7Cu2Fe box of the reference scan
+#: (rows 153-186, cols 89-149; nominal Al 70 / Cu 20 / Fe 10 at%) with the
+#: net-intensity standard: Cu L reads Cu 17.9 at% (max deviation 2.09), Cu K
+#: reads 16.0 at% (max deviation 4.03). Zn deliberately stays on K: Zn L carries
+#: the Cu L overlap residual (quality warning -0.21 in Al7Cu2Fe), Zn K is clean.
+_SPECTRUM_LINE_PREFERENCE = {"Cu": "L"}
+
+
+def _window_rank(symbol: str, beam_kv: float, source: str):
+    """Sort key over ONE element's :class:`ElementLine` keys, kept one first.
+
+    The line :func:`default_line_for` picks at this voltage (on the spectrum
+    source overridden by ``_SPECTRUM_LINE_PREFERENCE``), then K, L, M among
+    the rest; within one shell the alpha sub-line before beta.
+    """
+    try:
+        preferred = default_line_for(symbol, beam_kv)
+    except UnknownLineError:
+        preferred = ""
+    if source == "spectrum":
+        preferred = _SPECTRUM_LINE_PREFERENCE.get(symbol, preferred)
+    order = [preferred] + [f for f in ("K", "L", "M") if f != preferred]
+
+    def rank(key):
+        fam = key.line or ""
+        return (order.index(fam) if fam in order else len(order),
+                _sub_line_rank(key.sub_line))
+
+    return rank
+
+
+def preferred_windows(raw_names, beam_kv: float = 20.0,
+                      source: str = "window") -> Dict[str, str]:
+    """``{element symbol: raw name}``: per element, the name among ``raw_names``
+    that :func:`build_counts_by_element` keeps.
+
+    For a caller that has to name ONE line of an element the way the
+    quantification does -- a map asked for by bare symbol ("Cu") on a scan that
+    offers Cu K and Cu L. Logs nothing.
+    """
+    _check_source(source)
+    by_symbol: Dict[str, list] = {}
+    for raw_name in raw_names:
+        key = parse_element_name(raw_name)
+        by_symbol.setdefault(str(key), []).append((key, raw_name))
+    out: Dict[str, str] = {}
+    for symbol, windows in by_symbol.items():
+        rank = _window_rank(symbol, beam_kv, source)
+        windows.sort(key=lambda win: rank(win[0]))
+        out[symbol] = windows[0][1]
+    return out
+
+
 def build_counts_by_element(
     raw_counts,
     beam_kv: float = 20.0,
-) -> Dict[ElementLine, np.ndarray]:
+    source: str = "window",
+) -> "CountsByElement":
     """Build the ``{element: counts}`` dict quantification expects.
 
     Use this instead of ``counts[parse_element_name(name)] = array`` in a
@@ -503,16 +602,25 @@ def build_counts_by_element(
        at this beam voltage -- the same single policy used for a bare name --
        falling back to K, then L, then M among the windows actually present;
     3. within one shell prefer the alpha sub-line over beta;
-    4. log which window was dropped.
+    4. log which window was dropped (at DEBUG on the spectrum source, where
+       every element with two fitted families has two entries by design).
 
     Args:
         raw_counts: a mapping ``{raw_name: array}`` or any iterable of
             ``(raw_name, array)`` pairs. ``None`` arrays are skipped.
         beam_kv: accelerating voltage, for the line preference.
+        source: ``"window"`` (vendor window integrals, the default) or
+            ``"spectrum"`` (net line intensities from the spectrum fit). It
+            is stored on the result and decides which response curve
+            :func:`counts_to_weight_pct` uses. The choice of window per
+            element is the same for both, except for the elements in
+            ``_SPECTRUM_LINE_PREFERENCE`` (Cu: L) on the spectrum source.
 
     Returns:
-        ``{ElementLine: np.ndarray}`` with exactly one entry per element.
+        :class:`CountsByElement` -- ``{ElementLine: np.ndarray}`` with exactly
+        one entry per element, carrying ``.source``.
     """
+    _check_source(source)
     items = (raw_counts.items() if hasattr(raw_counts, "items")
              else list(raw_counts))
 
@@ -523,23 +631,18 @@ def build_counts_by_element(
         key = parse_element_name(raw_name)
         by_symbol.setdefault(str(key), []).append((key, raw_name, data))
 
-    result: Dict[ElementLine, np.ndarray] = {}
+    result = CountsByElement(source=source)
     for symbol, windows in by_symbol.items():
         if len(windows) > 1:
-            try:
-                preferred = default_line_for(symbol, beam_kv)
-            except UnknownLineError:
-                preferred = ""
-            order = [preferred] + [f for f in ("K", "L", "M") if f != preferred]
-
-            def rank(win):
-                key = win[0]
-                fam = key.line or ""
-                return (order.index(fam) if fam in order else len(order),
-                        _sub_line_rank(key.sub_line))
-
-            windows.sort(key=rank)
-            logger.warning(
+            rank = _window_rank(symbol, beam_kv, source)
+            windows.sort(key=lambda win: rank(win[0]))
+            # On the spectrum source the extractor offers EVERY fitted family
+            # (Cu K and Cu L, Fe K and Fe L, ...) by design, so two lines per
+            # element are the normal case there, on every call; the choice is
+            # in the provenance ("lines"). A warning is for a vendor file that
+            # exported two windows of one element.
+            log = logger.debug if source == "spectrum" else logger.warning
+            log(
                 "EDS quantification: %d windows for %s (%s); using %r and "
                 "ignoring %s. An element gets one column, so one window has "
                 "to win -- see build_counts_by_element.",
@@ -639,19 +742,18 @@ def _emission_k(element: str, family: str, beam_kv: float) -> float:
 #: emission model above does not describe is lumped into R(E_line) and
 #: measured here, once.
 #:
-#: Region: the alpha-Al(Fe,Mn)Si interior of SampleB, phase 4 of the 4-phase
-#: spherical-GPU map `sampleb_4ph.npz`, eroded twice with a 3x3 element so no
+#: Region: the alpha-Al(Fe,Mn)Si interior of an Oxford reference scan, phase 4 of its 4-phase
+#: spherical-GPU map, eroded twice with a 3x3 element so no
 #: boundary pixel (which the 20 kV interaction volume mixes with the Al matrix)
-#: contributes: 12744 px -> 10225 px. File: "...B_SA_EBSD Arbeitsbereich 4
-#: Elementverteilungsdaten 11.h5oina", 268 x 201, 20 kV, Oxford SATW detector
-#: UVA11191. Reference: Aztec Tru-Q on the same raw spectra, normalised.
-#: Measured 2026-09-12; see tasks/eds-quantification-wrong-2026-09-10.md.
+#: contributes: 12744 px -> 10225 px. Scan: 268 x 201, 20 kV, Oxford SATW detector.
+#: Reference: Aztec Tru-Q on the same raw spectra, normalised.
+#: Measured 2026-09-12.
 _CALIBRATION_STANDARD = {
-    "label": "SampleB alpha-Al(Fe,Mn)Si interior vs Oxford Aztec Tru-Q",
+    "label": "Reference-scan alpha-Al(Fe,Mn)Si interior vs Oxford Aztec Tru-Q",
     "matrix": "Al-rich intermetallic in an Al extrusion alloy",
     "beam_kv": 20.0,
     "n_px": 10225,
-    "detector": "Oxford SATW, serial UVA11191",
+    "detector": "Oxford Ultim Max 100, SATW window",
     "measured_on": "2026-09-12",
     # mean raw Window-Integral counts over the region
     "counts": {
@@ -690,32 +792,61 @@ _SPECTRAL_OVERLAPS = [
         "measured": "Zn counts ~ 0.29 * Cu counts + const across the three "
                     "phase regions of SampleB (holds to ~5 % over an 8x range "
                     "in Cu), 2026-09-12",
-        "fix": "quantify from 1/EDS/Data/Spectrum with peak deconvolution "
-               "(point 3 of tasks/eds-quantification-wrong-2026-09-10.md)",
+        "fix": "quantify from 1/EDS/Data/Spectrum with peak deconvolution",
     },
 ]
 
 
-def _build_response_curve():
-    """Derive R(E_line) from the stored standard.
+def _anchor_line(key: str, standard: dict) -> Tuple[str, str]:
+    """``(element, family)`` of one entry of a standard's ``"counts"``.
+
+    Two shapes are accepted. The window standard keys its counts by element
+    (``"Cu"``) and names the line in ``standard["lines"]``; the spectrum
+    standard keys them by line label (``"Cu K"``, ``"Cu L"``) because Cu enters
+    with both lines as anchors.
+    """
+    key = str(key)
+    if " " in key:
+        element, family = key.split()
+        if family not in _XRAY_LINES:
+            raise ValueError(
+                f"calibration standard: {key!r} is not '<element> <K|L|M>'.")
+        return element, family
+    lines = standard.get("lines") or {}
+    if key not in lines:
+        raise ValueError(
+            f"calibration standard: counts key {key!r} carries no line and "
+            "standard['lines'] does not name one; use '<element> <K|L|M>' "
+            "or add it to 'lines'.")
+    return key, lines[key]
+
+
+def build_response_curve(standard: dict):
+    """Derive R(E_line) from a calibration standard.
 
     Deriving rather than hard-coding the anchors keeps the calibration honest
     if a physics constant above is ever corrected: R is *defined* as
     "measured k over model k", so the pair always reproduces the standard.
+
+    ``standard`` needs ``beam_kv``, ``counts`` and ``reference_at_pct``; the
+    optional ``excluded`` names elements (``"Zn"``) or single lines
+    (``"Zn L"``) that stay out of the curve. See :func:`_anchor_line` for the
+    two shapes of ``counts``.
     """
-    std = _CALIBRATION_STANDARD
+    std = standard
     kv = std["beam_kv"]
     ref_at = std["reference_at_pct"]
+    excluded = std.get("excluded") or {}
     # At.% -> Wt.%
     grams = {el: ref_at[el] * ATOMIC_MASSES[el] for el in ref_at}
     total = sum(grams.values())
     ref_wt = {el: 100.0 * g / total for el, g in grams.items()}
 
     anchors = []
-    for el, counts in std["counts"].items():
-        if el in std["excluded"]:
+    for key, counts in std["counts"].items():
+        el, family = _anchor_line(key, std)
+        if el in excluded or str(key) in excluded:
             continue
-        family = std["lines"][el]
         # measured k (Cliff-Lorimer: C ~ k I) and model k, both up to the same
         # arbitrary global scale -- which cancels in the 100 % normalisation.
         k_measured = ref_wt[el] / counts
@@ -733,6 +864,11 @@ def _build_response_curve():
     return energies, responses
 
 
+def _build_response_curve():
+    """The window response curve, from the stored window standard."""
+    return build_response_curve(_CALIBRATION_STANDARD)
+
+
 _RESPONSE_ENERGY_KEV, _RESPONSE_VALUE = _build_response_curve()
 _LOG_RESPONSE_ENERGY = np.log(_RESPONSE_ENERGY_KEV)
 _LOG_RESPONSE_VALUE = np.log(_RESPONSE_VALUE)
@@ -744,14 +880,110 @@ RESPONSE_CALIBRATED_RANGE_KEV = (
 )
 
 
-def instrument_response(line_kev: float) -> float:
-    """Measured response at a line energy: log-log interpolation, clamped."""
-    return float(np.exp(np.interp(
-        math.log(line_kev), _LOG_RESPONSE_ENERGY, _LOG_RESPONSE_VALUE)))
+#: The same, for NET line intensities from the spectrum fit
+#: (``backend/eds_spectrum``), measured on 2026-10-25 (below). It stays
+#: ``Optional``: set to ``None``, every spectrum-source quantification
+#: refuses (``_standard_for`` raises) instead of falling back, because a net
+#: intensity must never be priced with the window curve, which has the
+#: background pedestal of its calibration region folded into every anchor.
+#: Shape: as ``_CALIBRATION_STANDARD`` but ``counts`` keyed by line label
+#: (``"Cu K"``, ``"Cu L"``, ``"Al K"`` ...).
+#:
+#: Measured 2026-10-25 on the SAME region and the SAME Aztec Tru-Q reference as
+#: ``_CALIBRATION_STANDARD`` (alpha-Al(Fe,Mn)Si interior of the Oxford reference scan, phase 4 of
+#: its 4-phase map eroded twice with a 3x3 element, 10225 px; 268 x 201, 20 kV, Oxford
+#: SATW detector), but through the production spectrum path
+#: (``backend/eds_spectrum``, model "eds-spectrum-fit/1"): sum-spectrum fit ->
+#: ``project_cube`` -> mean over the region of the per-pixel NET main-line
+#: intensity, counts per live second. ``counts`` are those means. Cu enters on
+#: both lines (Cu K and Cu L), the response curve is anchored on Al K, Si K,
+#: Mn K, Fe K, Cu K and Cu L. Zn K / Zn L are stored but do not anchor: the
+#: reference is 0.7 at%, too small to define a response, and AZtec deconvolves it
+#: with its own model. Pinned by
+#: ``tests/test_eds_spectrum_calibration.py``.
+_CALIBRATION_STANDARD_SPECTRUM: Optional[dict] = {
+    "label": "Reference-scan alpha-Al(Fe,Mn)Si interior vs Oxford Aztec Tru-Q",
+    "matrix": "Al-rich intermetallic in an Al extrusion alloy",
+    "beam_kv": 20.0,
+    "n_px": 10225,
+    "detector": "Oxford Ultim Max 100, SATW window",
+    "measured_on": "2026-10-25",
+    "model_version": "eds-spectrum-fit/1",
+    # mean NET main-line intensity per pixel over the region, counts per live second
+    "counts": {
+        "Al K": 198572.392, "Si K": 22087.092, "Fe K": 22658.233,
+        "Mn K": 5956.443, "Cu K": 10134.675, "Cu L": 24586.931,
+        "Zn K": 601.022, "Zn L": 1542.377,
+    },
+    # Aztec Tru-Q At.% for the same region (identical to the window standard)
+    "reference_at_pct": {
+        "Al": 66.0, "Si": 10.0, "Fe": 14.0, "Mn": 3.7, "Cu": 5.7, "Zn": 0.7,
+    },
+    "excluded": {
+        "Zn": "0.7 at% reference too small to anchor; AZtec deconvolves it "
+              "with its own model",
+    },
+}
+
+
+def _standard_for(source: str) -> dict:
+    """The calibration standard behind a source, or fail loud."""
+    _check_source(source)
+    if source == "window":
+        return _CALIBRATION_STANDARD
+    std = _CALIBRATION_STANDARD_SPECTRUM
+    if std is None:
+        raise UnknownLineError(
+            "EDS quantification: the 'spectrum' source has no net-intensity "
+            "calibration yet (_CALIBRATION_STANDARD_SPECTRUM is None). Net "
+            "line intensities are not priced with the window response curve "
+            "-- it carries the background pedestal of its calibration region "
+            "-- so there is no fallback; measure the net-intensity standard "
+            "first."
+        )
+    return std
+
+
+_SPECTRUM_CURVE_CACHE: Tuple[Optional[str], Optional[tuple]] = (None, None)
+
+
+def _curve_for(source: str):
+    """``(E, R, log E, log R, (lo, hi))`` for a source's response curve.
+
+    The window curve is read from the module globals at call time (audit
+    scripts swap them). The spectrum curve is derived from the current
+    ``_CALIBRATION_STANDARD_SPECTRUM`` and cached on its contents, so
+    replacing or editing the standard takes effect.
+    """
+    global _SPECTRUM_CURVE_CACHE
+    if source == "window":
+        return (_RESPONSE_ENERGY_KEV, _RESPONSE_VALUE, _LOG_RESPONSE_ENERGY,
+                _LOG_RESPONSE_VALUE, RESPONSE_CALIBRATED_RANGE_KEV)
+    std = _standard_for(source)
+    key = json.dumps(std, sort_keys=True, default=str)
+    if _SPECTRUM_CURVE_CACHE[0] != key:
+        e, r = build_response_curve(std)
+        _SPECTRUM_CURVE_CACHE = (key, (
+            e, r, np.log(e), np.log(r), (float(e[0]), float(e[-1]))))
+    return _SPECTRUM_CURVE_CACHE[1]
+
+
+def instrument_response(line_kev: float, source: str = "window") -> float:
+    """Measured response at a line energy: log-log interpolation, clamped.
+
+    ``source`` picks the curve: ``"window"`` (default, vendor window
+    integrals) or ``"spectrum"`` (net line intensities; raises
+    :class:`UnknownLineError` until that standard has been measured).
+    """
+    if source == "window":
+        return float(np.exp(np.interp(
+            math.log(line_kev), _LOG_RESPONSE_ENERGY, _LOG_RESPONSE_VALUE)))
+    _e, _r, log_e, log_r, _rng = _curve_for(source)
+    return float(np.exp(np.interp(math.log(line_kev), log_e, log_r)))
 
 
 def k_factor(element: str, line: Optional[str] = None,
-             beam_kv: float = 20.0) -> float:
+             beam_kv: float = 20.0, source: str = "window") -> float:
     """Cliff-Lorimer k-factor for one element on one X-ray line.
 
     Convention: ``C_i = k_i * I_i / sum_j (k_j * I_j)``. Larger k means the
@@ -766,12 +998,15 @@ def k_factor(element: str, line: Optional[str] = None,
             measured response curve does not (it was taken at 20 kV), so
             quantification well away from 20 kV drifts -- the provenance
             flags it.
+        source: ``"window"`` (default) or ``"spectrum"``: which response
+            curve (and which calibration beam voltage) the k is built on.
 
     Raises:
         ValueError: for an element or line we hold no data for, or one the
             beam cannot excite. Never returns a silent 1.0.
     """
     element = str(element)
+    std = _standard_for(source)
     family = (line or "").upper() or default_line_for(element, beam_kv)
     if family not in _XRAY_LINES:
         raise UnknownLineError(
@@ -783,35 +1018,59 @@ def k_factor(element: str, line: Optional[str] = None,
     line_kev = _XRAY_LINES[family][element][1]
     # Reference the scale to Si K at the calibration voltage so the returned
     # numbers read as "relative to Si Kalpha", the usual convention.
-    k_si = _emission_k("Si", "K", _CALIBRATION_STANDARD["beam_kv"])
-    return (k_model / k_si) * instrument_response(line_kev)
+    k_si = _emission_k("Si", "K", std["beam_kv"])
+    # The window call stays one-argument: audit scripts and tests swap
+    # ``instrument_response`` for a one-argument stand-in.
+    response = (instrument_response(line_kev) if source == "window"
+                else instrument_response(line_kev, source))
+    return (k_model / k_si) * response
 
 
-def quantification_provenance(beam_kv: float = 20.0) -> Dict:
-    """The standing caveats on any At.%/Wt.% this module produces."""
-    std = _CALIBRATION_STANDARD
-    lo, hi = RESPONSE_CALIBRATED_RANGE_KEV
-    return {
-        "summary": (
+def quantification_provenance(beam_kv: float = 20.0,
+                              source: str = "window") -> Dict:
+    """The standing caveats on any At.%/Wt.% this module produces.
+
+    ``source="spectrum"`` describes the net-intensity path and raises
+    :class:`UnknownLineError` while its calibration standard is missing.
+    """
+    std = _standard_for(source)
+    lo, hi = _curve_for(source)[4]
+    if source == "window":
+        summary = (
             "k-factors: Bethe/Green-Cosslett ionisation x Krause fluorescence "
             "yields x measured instrument response, calibrated on an Al-rich "
             f"matrix at {std['beam_kv']:g} kV ({std['label']}). "
             "NO ZAF matrix correction -- treat as semi-quantitative."
-        ),
+        )
+        source_data = "vendor Window Integral (background included)"
+    else:
+        summary = (
+            "k-factors: Bethe/Green-Cosslett ionisation x Krause fluorescence "
+            "yields x measured instrument response of NET line intensities "
+            "from the spectrum fit, calibrated on "
+            f"{std.get('matrix', 'the reference region')} at "
+            f"{std['beam_kv']:g} kV "
+            f"({std.get('label', 'net-intensity standard')}). "
+            "NO ZAF matrix correction -- treat as semi-quantitative."
+        )
+        source_data = ("spectrum fit (eds-spectrum-fit/1): background "
+                       "subtracted, overlaps deconvolved, pile-up modelled")
+    prov = {
+        "summary": summary,
         "method": "standardless Cliff-Lorimer, C_i proportional to k_i * I_i",
         "matrix_correction": None,
-        "source_data": "vendor Window Integral, not the spectrum cube",
+        "source_data": source_data,
         "beam_kv": float(beam_kv),
         "calibration": {
-            "standard": std["label"],
-            "matrix": std["matrix"],
-            "reference": "Oxford Aztec Tru-Q",
+            "standard": std.get("label"),
+            "matrix": std.get("matrix"),
+            "reference": std.get("reference", "Oxford Aztec Tru-Q"),
             "beam_kv": std["beam_kv"],
-            "n_px": std["n_px"],
-            "detector": std["detector"],
-            "measured_on": std["measured_on"],
+            "n_px": std.get("n_px"),
+            "detector": std.get("detector"),
+            "measured_on": std.get("measured_on"),
             "response_range_kev": [lo, hi],
-            "excluded": dict(std["excluded"]),
+            "excluded": dict(std.get("excluded") or {}),
         },
         "lines": {},
         "spectral_overlaps": [],
@@ -821,9 +1080,12 @@ def quantification_provenance(beam_kv: float = 20.0) -> Dict:
         "excluded_windows": [],
         "warnings": [],
     }
+    if source != "window":
+        prov["source"] = source
+    return prov
 
 
-def _resolve_k_factors(counts, k_factors, beam_kv):
+def _resolve_k_factors(counts, k_factors, beam_kv, source="window"):
     """Pick a k per element, recording where each one came from.
 
     **The blast radius of an unusable window is that window.** A stray label,
@@ -848,8 +1110,9 @@ def _resolve_k_factors(counts, k_factors, beam_kv):
     generic "nothing quantifiable" keeps the message specific to what actually
     went wrong.
     """
-    prov = quantification_provenance(beam_kv)
-    lo, hi = RESPONSE_CALIBRATED_RANGE_KEV
+    prov = quantification_provenance(beam_kv, source)
+    lo, hi = _curve_for(source)[4]
+    cal_kv = _standard_for(source)["beam_kv"]
     resolved: Dict[str, float] = {}
     first_failure: Optional[UnknownLineError] = None
 
@@ -857,7 +1120,7 @@ def _resolve_k_factors(counts, k_factors, beam_kv):
         symbol = str(elem)
         try:
             _resolve_one_k(elem, symbol, counts, k_factors, beam_kv,
-                           resolved, prov, lo, hi)
+                           resolved, prov, lo, hi, source)
         except UnknownLineError as exc:
             if first_failure is None:
                 first_failure = exc
@@ -889,10 +1152,10 @@ def _resolve_k_factors(counts, k_factors, beam_kv):
             raise first_failure
         return resolved, prov
 
-    if abs(beam_kv - _CALIBRATION_STANDARD["beam_kv"]) > 0.51:
+    if abs(beam_kv - cal_kv) > 0.51:
         prov["warnings"].append(
             f"beam voltage {beam_kv:g} kV differs from the "
-            f"{_CALIBRATION_STANDARD['beam_kv']:g} kV the response curve was "
+            f"{cal_kv:g} kV the response curve was "
             "measured at; the absorption part of the response no longer applies"
         )
 
@@ -900,7 +1163,9 @@ def _resolve_k_factors(counts, k_factors, beam_kv):
     # prov["lines"] to read a line off, and it contributes no counts either.
     present = {(str(e), getattr(e, "line", "") or
                 prov["lines"][str(e)].get("line")) for e in resolved}
-    for overlap in _SPECTRAL_OVERLAPS:
+    # The overlaps are window-integral interferences; the spectrum fit
+    # deconvolves them, so there is nothing to report for it.
+    for overlap in (_SPECTRAL_OVERLAPS if source == "window" else ()):
         if overlap["window"] in present and overlap["interferer"] in present:
             prov["spectral_overlaps"].append(dict(overlap))
             prov["warnings"].append(
@@ -912,7 +1177,7 @@ def _resolve_k_factors(counts, k_factors, beam_kv):
 
 
 def _resolve_one_k(elem, symbol, counts, k_factors, beam_kv, resolved, prov,
-                   lo, hi) -> None:
+                   lo, hi, source="window") -> None:
     """One element's k and provenance, or :class:`UnknownLineError`.
 
     Split out of :func:`_resolve_k_factors` so that function can catch a
@@ -945,7 +1210,7 @@ def _resolve_one_k(elem, symbol, counts, k_factors, beam_kv, resolved, prov,
     if not family:
         family = default_line_for(symbol, beam_kv)
         assumed = True
-    k = k_factor(symbol, family, beam_kv)
+    k = k_factor(symbol, family, beam_kv, source)
     line_kev = _XRAY_LINES[family][symbol][1]
     entry = {"line": family, "k": k, "line_kev": line_kev,
              "source": "model+response"}
@@ -987,6 +1252,7 @@ def counts_to_weight_pct(
     counts: Dict[str, np.ndarray],
     k_factors: Optional[Dict[str, float]] = None,
     beam_kv: float = 20.0,
+    source: Optional[str] = None,
 ) -> QuantMap:
     """
     Convert raw EDS counts to weight percent by standardless Cliff-Lorimer.
@@ -1006,6 +1272,16 @@ def counts_to_weight_pct(
         k_factors: optional override per element, in the convention above.
             Elements not listed fall back to :func:`k_factor`.
         beam_kv: accelerating voltage, for the overvoltage term.
+        source: ``"window"`` (vendor window integrals) or ``"spectrum"`` (net
+            line intensities from the spectrum fit); ``None`` reads
+            ``counts.source`` (a :class:`CountsByElement`) and treats a plain
+            dict as ``"window"``. The two use different response curves. With
+            ``"spectrum"`` each element's counts are clipped at 0 before
+            weighting (the fit delivers unclipped nets so that region sums
+            stay linear) and the number of clipped values per element is
+            recorded in ``provenance["clipped_negative"]``. There is no
+            fallback to the window curve: a missing net-intensity calibration
+            raises :class:`UnknownLineError`.
 
     Returns:
         :class:`QuantMap` -- a dict of weight-percent arrays that also carries
@@ -1017,10 +1293,14 @@ def counts_to_weight_pct(
         ValueError: if an element or line has no physics data, or the beam
             cannot excite it. It never falls back to a silent k = 1.0.
     """
-    if not counts:
-        return QuantMap(provenance=quantification_provenance(beam_kv))
+    if source is None:
+        source = getattr(counts, "source", "window")
+    _check_source(source)
 
-    resolved, prov = _resolve_k_factors(counts, k_factors, beam_kv)
+    if not counts:
+        return QuantMap(provenance=quantification_provenance(beam_kv, source))
+
+    resolved, prov = _resolve_k_factors(counts, k_factors, beam_kv, source)
 
     # Weight-proportional signal per element: k_i * I_i.
     # Over `resolved`, not over `counts`: a window with no usable k-factor was
@@ -1028,10 +1308,20 @@ def counts_to_weight_pct(
     # with a fabricated k. The remaining elements renormalise to 100 % without
     # it — see _resolve_k_factors for why that is a warning and not an error.
     weighted: Dict[str, np.ndarray] = {}
+    clipped: Dict[str, int] = {}
     for elem, data in counts.items():
         if elem not in resolved:
             continue
-        weighted[elem] = np.asarray(data, dtype=np.float64) * resolved[elem]
+        arr = np.asarray(data, dtype=np.float64)
+        if source == "spectrum":
+            # Clip at use, not in the fit: unclipped nets keep region sums
+            # linear, but a negative weight-proportional signal is not a
+            # composition.
+            clipped[str(elem)] = int(np.count_nonzero(arr < 0))
+            arr = np.maximum(arr, 0.0)
+        weighted[elem] = arr * resolved[elem]
+    if source == "spectrum":
+        prov["clipped_negative"] = clipped
 
     total = None
     for arr in weighted.values():
@@ -1106,6 +1396,7 @@ def counts_to_all(
     counts: Dict[str, np.ndarray],
     k_factors: Optional[Dict[str, float]] = None,
     beam_kv: float = 20.0,
+    source: Optional[str] = None,
 ) -> Tuple[Dict[str, np.ndarray], QuantMap, QuantMap]:
     """
     Convert raw counts to both weight percent and atomic percent.
@@ -1114,12 +1405,13 @@ def counts_to_all(
         counts: Dict mapping element symbol -> counts array
         k_factors: Optional custom k-factors (C ~ k * I convention)
         beam_kv: Accelerating voltage, for the overvoltage term
+        source: ``"window"`` / ``"spectrum"``; ``None`` reads ``counts.source``
 
     Returns:
         Tuple of (counts, weight_pct, atomic_pct); the latter two carry
         ``.provenance``.
     """
-    wt_pct = counts_to_weight_pct(counts, k_factors, beam_kv)
+    wt_pct = counts_to_weight_pct(counts, k_factors, beam_kv, source)
     at_pct = weight_pct_to_atomic_pct(wt_pct)
     return counts, wt_pct, at_pct
 
@@ -1156,9 +1448,10 @@ def get_pixel_composition(
             pixel_counts[elem] = 0.0
 
     # Convert to arrays for the conversion functions
-    pixel_counts_arrays = {
-        elem: np.array([val]) for elem, val in pixel_counts.items()
-    }
+    pixel_counts_arrays = CountsByElement(
+        {elem: np.array([val]) for elem, val in pixel_counts.items()},
+        source=getattr(counts, "source", "window"),
+    )
 
     wt_pct_arrays = counts_to_weight_pct(pixel_counts_arrays, k_factors, beam_kv)
     at_pct_arrays = weight_pct_to_atomic_pct(wt_pct_arrays)

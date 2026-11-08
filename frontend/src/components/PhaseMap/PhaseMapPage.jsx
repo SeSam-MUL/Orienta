@@ -93,6 +93,7 @@ import ThresholdHistogram from '../EDS/ThresholdHistogram';
 import LinescanProfilePlot from '../EDS/LinescanProfilePlot';
 import MagnifierLens from '../EDS/MagnifierLens';
 import { useRectangleDrag } from '../EDS/hooks/useRectangleDrag';
+import { useFitReadyCount, useSpectrumFitStatus } from '../EDS/hooks/useSpectrumFitStatus';
 import { useHeatmapPick } from '../common/useHeatmapPick';
 import { useZoomViews, SYNC_ALL, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
 import { IDENTITY_VIEW, isZoomed, zoomedRect, wheelFactor, viewToTransform } from '../EDS/zoomView';
@@ -1813,7 +1814,8 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const indexingResult = useResultStore((s) => s.indexingResult);
   const indexingMethod = useResultStore((s) => s.indexingMethod);
   const resultsList = useResultStore((s) => s.resultsList);
-  const { stepSize: storeStepSize, pixelSizes: storePixelSizes } = useDataStore();
+  const { stepSize: storeStepSize, pixelSizes: storePixelSizes,
+          isFileOpen, filePath: openFilePath } = useDataStore();
   const syncFromBackend = useDataStore((s) => s.syncFromBackend);
   // The result the backend would draw right now, whether or not this browser
   // session produced it. The result store only holds runs made here, so it is
@@ -2038,7 +2040,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const [mapLoading, setMapLoading] = useState(false);
   const [mapError, setMapError] = useState(null);
 
-  // Phase B: Forward-NCC map state
+  // Forward-NCC map state
   const [forwardNccState, setForwardNccState] = useState({
     ready: false,        // is a cached map available?
     computing: false,    // are we currently computing?
@@ -2156,10 +2158,20 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
     () => gallery[selectedGalleryIdx]?.result_id ?? null,
     [gallery, selectedGalleryIdx]);
 
+  // The open file's spectrum fit: while it runs (or is not known yet) an
+  // `eds:` layer waits instead of being refused (503), and it is fetched
+  // once the maps exist. No file open: nothing to wait for ("none").
+  const edsFit = useSpectrumFitStatus(isFileOpen ? openFilePath : null,
+                                      { active: isActive });
+  const edsFitReadyCount = useFitReadyCount(edsFit.state);
+
   const layerStack = useLayerStack({ cleanupParams, resetSignal, frameSig,
                                      colorOverrides: phaseColorOverrides,
                                      resultId: shownResultId ?? null,
                                      seedResultId: selectedEntryResultId,
+                                     edsFitReadyCount,
+                                     edsFitState: isFileOpen ? edsFit.state : 'none',
+                                     edsFitProgress: edsFit.progress,
                                      // every layer must be on the display raster of a hexagonal result;
                                      // while the dataset's geometry is being re-read, a picture that does
                                      // not fit proves nothing and is fetched again, not refused
@@ -3091,7 +3103,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   // ---------------------------------------------------------------------------
   // Handlers (defined before useEffects that reference them)
   // ---------------------------------------------------------------------------
-  // Phase B handler: triggers compute or fetches the cached forward-NCC heatmap
+  // Triggers compute or fetches the cached forward-NCC heatmap
   const handleComputeForwardNcc = useCallback(async (force = false) => {
     setForwardNccState(s => ({ ...s, computing: true, needsCompute: false }));
     setMapLoading(true);
@@ -3132,7 +3144,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
   const handleRefreshPreview = useCallback(async () => {
     const requestNo = ++previewRequestRef.current;
     const isLatest = () => previewRequestRef.current === requestNo;
-    // Phase B: Forward-NCC has its own load path
+    // Forward-NCC has its own load path
     if (displayMode === 'forward_ncc') {
       setMapLoading(true);
       setMapError(null);
@@ -4133,7 +4145,7 @@ export default function PhaseMapPage({ onNavigate, isActive = false }) {
               </button>
             );
           })}
-          {/* Phase B: Original/Refined view toggle — only when a refined
+          {/* Original/Refined view toggle — only when a refined
               result exists for the active indexing result. */}
           {refinedResultId && (
             <>

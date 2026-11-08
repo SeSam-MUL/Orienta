@@ -685,7 +685,7 @@ export function FormRow({ label, children, tip, style: extra = {} }) {
 // ---------------------------------------------------------------------------
 // ProgressBar — matches PyQt5 QProgressBar
 // ---------------------------------------------------------------------------
-export function ProgressBar({ value = 0, max = 100, label, color, visible = true, style: extra = {} }) {
+export function ProgressBar({ value = 0, max = 100, label, ariaLabel, color, visible = true, style: extra = {} }) {
   if (visible === false) return null;
   const pct = max > 0 ? Math.min(100, (value / max) * 100) : 0;
   const isActive = pct > 0 && pct < 100;
@@ -708,7 +708,7 @@ export function ProgressBar({ value = 0, max = 100, label, color, visible = true
         aria-valuenow={Math.round(pct)}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-label={label || 'Progress'}
+        aria-label={ariaLabel || label || 'Progress'}
         style={{
           height: 8,
           background: colors.bg,

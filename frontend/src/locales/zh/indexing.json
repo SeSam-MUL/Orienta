@@ -691,7 +691,9 @@
     "unsupportedCount_one": "请求的 {{count}} 个相无法测试",
     "unsupportedCount_other": "请求的 {{count}} 个相无法测试",
     "unsupportedRowNoSht": "{{key}} — 没有模拟主图（.sht），因此没有可比较的对象",
-    "unsupportedRow": "{{key}} — {{reason}}"
+    "unsupportedRow": "{{key}} — {{reason}}",
+    "edsPending": "EDS：此图的能谱仍在评估中，因此该像素暂无化学成分。",
+    "edsFitFailed": "EDS：能谱拟合失败，因此此文件没有 EDS 化学成分。"
   },
   "hoverTips": {
     "degeneracyReduceToOne": "仅保留此简并组中的一个相，并移除冗余的重复项",

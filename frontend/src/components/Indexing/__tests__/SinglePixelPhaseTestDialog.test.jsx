@@ -13,11 +13,12 @@ vi.mock('../../../services/api', () => ({
     phaseTestPixelChemistry: vi.fn(),
   },
   ebsdApi: { overview: vi.fn(), getPattern: vi.fn() },
-  edsApi: { elements: vi.fn(), getMap: vi.fn() },
+  edsApi: { elements: vi.fn(), getMap: vi.fn(), spectrumFitStatus: vi.fn() },
 }));
 vi.mock('../../../stores/useDataStore', () => ({
   default: (sel) => sel({ currentIndex: 11, gridShape: [3, 4],
-    setPosition: () => {}, ebsdLoaded: true, isFileOpen: true }),
+    setPosition: () => {}, ebsdLoaded: true, isFileOpen: true,
+    filePath: '/data/SampleB.h5oina' }),
 }));
 
 import { indexApi, ebsdApi, edsApi } from '../../../services/api';
@@ -42,6 +43,75 @@ describe('SinglePixelPhaseTestDialog', () => {
     // so existing tests still see only the mask-radius range input.
     edsApi.elements.mockResolvedValue({ data: { elements: [] } });
     edsApi.getMap.mockResolvedValue({ data: { image: 'EDSB64' } });
+    edsApi.spectrumFitStatus.mockResolvedValue({ data: { state: 'none', progress: 0 } });
+  });
+
+  // pixel_at_pct is null for a file without EDS chemistry -- and also while
+  // the spectra of a file are still being evaluated, or after the fit
+  // failed. The backend says which (`pixel_chemistry_reason`); without it
+  // the dialog showed no EDS line at all, which reads as "no EDS".
+  it('says the spectra are still being evaluated instead of showing nothing', async () => {
+    indexApi.phaseTestPixelChemistry.mockResolvedValue({ data: {
+      pixel_index: 11, pixel_at_pct: null,
+      pixel_chemistry_reason: 'spectrum_fit_running' } });
+    render(<SinglePixelPhaseTestDialog open onClose={() => {}} />);
+    expect(await screen.findByText(/still being evaluated/i)).toBeInTheDocument();
+  });
+
+  it('says the spectrum fit failed when it did', async () => {
+    indexApi.phaseTestPixelChemistry.mockResolvedValue({ data: {
+      pixel_index: 11, pixel_at_pct: null,
+      pixel_chemistry_reason: 'spectrum_fit_failed' } });
+    render(<SinglePixelPhaseTestDialog open onClose={() => {}} />);
+    expect(await screen.findByText(/spectrum fit failed/i)).toBeInTheDocument();
+  });
+
+  it('asks for the pixel chemistry again when the spectrum fit is done', async () => {
+    edsApi.spectrumFitStatus
+      .mockResolvedValueOnce({ data: { state: 'running', progress: 0.5 } })
+      .mockResolvedValue({ data: { state: 'ready', progress: 1, fit: {} } });
+    indexApi.phaseTestPixelChemistry
+      .mockResolvedValueOnce({ data: { pixel_index: 11, pixel_at_pct: null,
+        pixel_chemistry_reason: 'spectrum_fit_running' } })
+      .mockResolvedValue({ data: { pixel_index: 11,
+        pixel_at_pct: { Al: 97.2, Si: 2.8 }, pixel_chemistry_reason: null } });
+    render(<SinglePixelPhaseTestDialog open onClose={() => {}} />);
+    expect(await screen.findByText(/still being evaluated/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Al 97%/, {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(screen.queryByText(/still being evaluated/i)).toBeNull();
+  });
+
+  // The element list was asked once when the dialog
+  // opened; during the spectrum fit that was a 503, and the overlay chips
+  // never came. They are asked again when the fit is ready.
+  it('lists the EDS elements once the fit is ready, after a 503 during it', async () => {
+    edsApi.spectrumFitStatus
+      .mockResolvedValueOnce({ data: { state: 'running', progress: 0.5 } })
+      .mockResolvedValue({ data: { state: 'ready', progress: 1, fit: {} } });
+    edsApi.elements
+      .mockRejectedValueOnce(Object.assign(new Error('503'), { response: { status: 503 } }))
+      .mockResolvedValue({ data: { elements: ['Al', 'Fe'] } });
+    render(<SinglePixelPhaseTestDialog open onClose={() => {}} />);
+    expect(await screen.findByRole('button', { name: 'Al' }, { timeout: 3000 }))
+      .toBeInTheDocument();
+    expect(edsApi.elements).toHaveBeenCalledTimes(2);
+  });
+
+  it('an overlay element switched on during the fit gets its map when it is ready', async () => {
+    let release;
+    edsApi.spectrumFitStatus
+      .mockResolvedValueOnce({ data: { state: 'running', progress: 0.5 } })
+      .mockReturnValueOnce(new Promise((r) => { release = r; }));
+    edsApi.elements.mockResolvedValue({ data: { elements: ['Al', 'Fe'] } });
+    edsApi.getMap
+      .mockRejectedValueOnce(Object.assign(new Error('503'), { response: { status: 503 } }))
+      .mockResolvedValue({ data: { image: 'EDSB64' } });
+    render(<SinglePixelPhaseTestDialog open onClose={() => {}} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Fe' }));
+    await waitFor(() => expect(edsApi.getMap).toHaveBeenCalledTimes(1));
+    release({ data: { state: 'ready', progress: 1, fit: {} } });
+    await waitFor(() => expect(edsApi.getMap).toHaveBeenCalledTimes(2), { timeout: 3000 });
+    expect(edsApi.getMap).toHaveBeenLastCalledWith('Fe', 'counts', 'hot', expect.any(String));
   });
 
   it('shows "preview failed" (not "no pattern") when the measured-pattern fetch errors', async () => {

@@ -1224,11 +1224,17 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
         from backend.api.services.h5_session import (
             open_file as h5_open, is_open as h5_is_open,
             get_active_extractor, close_file as h5_close, get_current_path,
+            start_spectrum_fit,
         )
         if h5_is_open() and get_current_path() != path:
             h5_close()
         if not h5_is_open():
             h5_open(path)
+        else:
+            # Already open, so open_file -- and the spectrum-fit start in it --
+            # is skipped. Loading the file again is still the retry of a fit
+            # that failed (a no-op for one that is running or ready).
+            start_spectrum_fit(path)
         features = get_active_extractor().detect_available_features()
         ext_elements = [str(e) for e in features.get('eds_elements', [])]
         ext_images = [str(e) for e in features.get('electron_images', [])]
@@ -1515,6 +1521,7 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None,
             from backend.api.services.h5_session import (
                 open_file as h5_open, is_open as h5_is_open,
                 get_active_extractor, close_file as h5_close, get_current_path,
+                start_spectrum_fit,
             )
             # Reopen h5_session if it's pointing at a different file — otherwise
             # EDS / element / electron-image queries keep returning data for
@@ -1524,6 +1531,11 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None,
                 h5_close()
             if not h5_is_open():
                 h5_open(path)
+            else:
+                # Already open, so open_file -- and the spectrum-fit start in
+                # it -- is skipped. Loading the file again is still the retry
+                # of a fit that failed (a no-op for one running or ready).
+                start_spectrum_fit(path)
             ext = get_active_extractor()
             features = ext.detect_available_features()
             has_eds = features.get('has_eds', False)
@@ -2510,7 +2522,11 @@ async def list_datasets():
         from backend.api.services.h5_session import is_open, get_active_extractor
         if is_open():
             ext = get_active_extractor()
-            elems = ext.get_available_elements()
+            # The windows the FILE carries, like get_metadata() reports them
+            # -- AZtec's labels, not the spectrum source's composition labels
+            # get_available_elements() lists on a file with a cube; "has EDS"
+            # needs no spectrum fit.
+            elems = ext.detect_available_features().get("eds_elements", [])
             has_eds = len(elems) > 0
             eds_elements = [str(e) for e in elems]
     except Exception:
@@ -3447,7 +3463,7 @@ async def set_signal_mask(req: SignalMaskRequest):
 # tasks). These metrics are intrinsic to the measurement and unaffected by
 # our in-app preprocessing, so they're safe to read straight from disk.
 # Each value is a list of candidate dataset names tried in priority order.
-# See session 2026-06-01 (overview never appeared on a 3.3 GB lazy file).
+# (Without this the overview never appeared on a 3.3 GB lazy file.)
 _STORED_OVERVIEW_DATASETS = {
     "bc": ["Band Contrast"],
     "std": ["Band Slope", "Pattern Quality"],
@@ -3563,7 +3579,7 @@ async def overview(mode: str = "mean", display: Optional[str] = None):
     Without ``asyncio.to_thread`` this happens on the event-loop thread
     and blocks every other endpoint — most importantly the progress-poll
     GET that the LoadProgressModal depends on — for the full duration
-    (3+ minutes was observed on a slow USB disk, session 2026-05-27).
+    (3+ minutes was observed on a slow USB disk).
     Running it in a thread releases the event loop so progress polls,
     /pattern, /metadata and friends stay responsive while the overview
     cooks in the background.

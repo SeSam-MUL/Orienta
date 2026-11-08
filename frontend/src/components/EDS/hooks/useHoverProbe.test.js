@@ -48,6 +48,24 @@ describe('useHoverProbe', () => {
     expect(result.current.probe).toEqual(expect.objectContaining({ bc: 42 }));
   });
 
+  it('does not cache an answer whose EDS part is still pending', async () => {
+    // The probe answers without its EDS values while the spectrum fit runs
+    // (`eds_status`). Cached, the pixel would keep saying "pending" after the
+    // values exist, for as long as the page stays open.
+    edsApi.probe
+      .mockResolvedValueOnce({ data: { bc: 42, elements: {}, phase: null,
+        eds_status: { state: 'pending', code: 'eds_spectrum_fit_running', progress: 0.5 } } })
+      .mockResolvedValueOnce({ data: { bc: 42, elements: { Al: { at_pct: 97 } }, phase: null } });
+    const { result } = renderHook(() => useHoverProbe({ displayMode: 'at_pct', debounceMs: 1 }));
+    act(() => { result.current.requestProbe(5, 5); });
+    await act(async () => { await new Promise(r => setTimeout(r, 25)); });
+    expect(result.current.probe.eds_status.state).toBe('pending');
+    act(() => { result.current.requestProbe(5, 5); });
+    await act(async () => { await new Promise(r => setTimeout(r, 25)); });
+    expect(edsApi.probe).toHaveBeenCalledTimes(2);
+    expect(result.current.probe.elements.Al.at_pct).toBe(97);
+  });
+
   it('refetches when displayMode changes for the same pixel', async () => {
     edsApi.probe.mockResolvedValueOnce({ data: { bc: 1, elements: {}, phase: null } })
                 .mockResolvedValueOnce({ data: { bc: 2, elements: {}, phase: null } });

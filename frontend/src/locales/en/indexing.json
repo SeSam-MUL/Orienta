@@ -691,7 +691,9 @@
     "unsupportedCount_one": "{{count}} phase was asked for and cannot be tested",
     "unsupportedCount_other": "{{count}} phases were asked for and cannot be tested",
     "unsupportedRowNoSht": "{{key}} — no simulated master (.sht), so there is nothing to compare against",
-    "unsupportedRow": "{{key}} — {{reason}}"
+    "unsupportedRow": "{{key}} — {{reason}}",
+    "edsPending": "EDS: the spectra of this map are still being evaluated, so there is no chemistry for this pixel yet.",
+    "edsFitFailed": "EDS: the spectrum fit failed, so this file has no EDS chemistry."
   },
   "hoverTips": {
     "degeneracyReduceToOne": "Keep only one phase from this degenerate group and drop the redundant duplicates",

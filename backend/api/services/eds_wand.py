@@ -27,12 +27,10 @@ return the IDENTICAL 98 154 px, then 25 % -> 280 340 px. Once the threshold
 clears the cheapest bridge between feature and matrix, the map floods. The
 caller therefore gets a growth curve and drives the slider by pixel count,
 which is monotone and has no dead band.
-
-Spec: docs/superpowers/specs/2026-08-24-eds-magic-wand-design.md
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from scipy import ndimage
@@ -48,6 +46,14 @@ DEFAULT_SMOOTH = 5
 # Number of points on the growth curve. The slider interpolates between
 # them, so this is the resolution of "how many pixels do I get".
 GROWTH_STEPS = 64
+
+# How a reported composition of a set of pixels was made. Every response that
+# carries one says which, as ``composition_method``: the mean of the pixels'
+# at% (window source), or one quantification of the pixels' SUMMED net counts
+# (spectrum source -- the per-pixel at% clip negative nets at 0, so
+# their mean reads a weak element too high).
+COMPOSITION_MEAN_OF_PIXELS = "mean_of_pixel_at_pct"
+COMPOSITION_SUMMED_NETS = "summed_net_counts"
 
 
 def _smoothed_stack(
@@ -191,20 +197,34 @@ def selection_stats(
     at_pct_per_element: Dict[str, np.ndarray],
     mask: np.ndarray,
     background: Optional[Dict[str, float]] = None,
+    composition_of: Optional[Callable[[np.ndarray], Dict[str, float]]] = None,
 ) -> Dict:
-    """Mean composition of a selection, and how enriched it is.
+    """Composition of a selection, and how enriched it is.
 
     Reported live so the user judges the selection on chemistry rather than
     on its shape. Enrichment is against the map's own background — the
     quantity the classifier itself gates on — so the number in the readout
     and the number in the classifier mean the same thing.
+
+    ``composition_of`` supplies the composition on the spectrum source: called
+    with the flat boolean mask, it returns ``{element: at%}`` quantified from
+    the selection's SUMMED net counts (``routes.eds._composition_of``), and
+    that replaces the mean of the pixels' at%. ``None`` (the window source)
+    keeps the mean. ``composition_method`` says which it was. Enrichment is
+    computed from whichever composition is reported.
     """
-    flat = mask.ravel()
+    flat = np.asarray(mask, dtype=bool).ravel()
     n = int(flat.sum())
+    method = (COMPOSITION_MEAN_OF_PIXELS if composition_of is None
+              else COMPOSITION_SUMMED_NETS)
     if n == 0:
-        return {"n_pixels": 0, "mean_at_pct": {}, "enrichment": {}}
-    mean = {el: float(np.asarray(v, dtype=float).ravel()[flat].mean())
-            for el, v in at_pct_per_element.items()}
+        return {"n_pixels": 0, "mean_at_pct": {}, "enrichment": {},
+                "composition_method": method}
+    if composition_of is None:
+        mean = {el: float(np.asarray(v, dtype=float).ravel()[flat].mean())
+                for el, v in at_pct_per_element.items()}
+    else:
+        mean = {el: float(v) for el, v in composition_of(flat).items()}
     enrich: Dict[str, float] = {}
     if background:
         total = sum(v for el, v in mean.items() if el not in _CHEM_IGNORE)
@@ -217,4 +237,5 @@ def selection_stats(
         "n_pixels": n,
         "mean_at_pct": {el: round(v, 2) for el, v in mean.items() if v >= 0.05},
         "enrichment": enrich,
+        "composition_method": method,
     }

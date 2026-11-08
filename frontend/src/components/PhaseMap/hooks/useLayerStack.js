@@ -10,6 +10,7 @@
  *     reorder / applyPreset / clear methods.
  */
 import { problemText } from '../../../services/problemText';
+import { edsDetailText, edsNamespaceT, isSpectrumFitRefusal } from '../../EDS/edsDetailText';
 import { useTranslation } from 'react-i18next';
 import { useReducer, useRef, useCallback, useEffect, useState } from 'react';
 import { layerStackReducer, initialState } from '../layerStackReducer';
@@ -185,6 +186,19 @@ function sameShape(a, b) {
 }
 
 /**
+ * @param {number} [edsFitReadyCount] how often the open file's spectrum fit
+ *   has turned ready ({@link useFitReadyCount}). An `eds:` layer refused
+ *   while the fit runs (503) is kept as errored -- the fetch loop never
+ *   retries an errored layer -- so when this count moves, the `eds:` layers'
+ *   errors are dropped and they are fetched again.
+ * @param {?string} [edsFitState] the open file's fit state
+ *   ({@link useSpectrumFitStatus}): `null` (not known yet) or `"running"`
+ *   means every EDS map would be refused, so an `eds:` layer is not asked
+ *   for at all -- its row says why instead (a refused request is a console
+ *   error) -- and it is fetched as soon as the state turns `"ready"` or
+ *   `"none"`. `"none"` (the default: no cube, or no file open) and
+ *   `"failed"` fetch as before.
+ * @param {number} [edsFitProgress] the fit's progress (0..1), for that row.
  * @param {number[]|null} expectedShape  [height, width] every layer must have: the display raster of a
  *   hexagonal result. null = no raster is expected (a square scan, or a geometry nobody knows): a picture
  *   whose answer names a raster (`display`) is then not drawn either.
@@ -198,7 +212,8 @@ function sameShape(a, b) {
  */
 export function useLayerStack({ cleanupParams, resetSignal, frameSig,
                                colorOverrides = null, resultId = null,
-                               seedResultId = null,
+                               seedResultId = null, edsFitReadyCount = 0,
+                               edsFitState = 'none', edsFitProgress = 0,
                                expectedShape = null, shapePending = false,
                                rasterMatches = null, rasterId = '' }) {
   const [state, dispatch] = useReducer(layerStackReducer, initialState);
@@ -233,6 +248,10 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
   const { t: tNow } = useTranslation('phasemap');
   const tRef = useRef(tNow);
   tRef.current = tNow;
+  // The fit-ready count as of this render, for a fetch to compare against
+  // the count it started under (see the catch in fetchLayer).
+  const fitReadyRef = useRef(edsFitReadyCount);
+  fitReadyRef.current = edsFitReadyCount;
   // Remember the last user-chosen "mode" (single quick-mode layer or
   // preset) so a result-change can re-apply it instead of forcing the
   // user back to Phase every time they click a different gallery entry.
@@ -344,6 +363,7 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
     if (cacheRef.current.has(layer.id)) { cacheTouch(layer.id); return; }
     fetchingRef.current.add(layer.id);
     const epoch = epochRef.current;  // snapshot; a flush mid-flight bumps this
+    const fitReadyAtStart = fitReadyRef.current;
     try {
       const { base64, keyToAlpha, scale, crop, display } = await fetchLayerImage({ layer, cleanupParams, colorOverrides });
       if (!base64) throw new Error('Empty image payload');
@@ -396,12 +416,23 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
       errorRef.current.delete(layer.id);
       shapeErrorsRef.current.delete(layer.id);
     } catch (err) {
+      // A 503 that started before the fit turned ready and answered after:
+      // the error-clearing effect below has already run, so recording it
+      // would strand the layer. Ping instead; the fetch loop asks again.
+      if (isSpectrumFitRefusal(err) && fitReadyRef.current !== fitReadyAtStart) {
+        force();
+        return;
+      }
+      // The spectrum fit's two codes ("still evaluating" / "failed") are the
+      // EDS page's sentences; everything else goes through problemText.
       // Translated here rather than at the display, because the error is
       // stored as a string that several consumers only test for truth. A
       // language change after the failure leaves this sentence in the old
       // language until the layer is retried, which it is on any reload.
       errorRef.current.set(layer.id,
-        problemText(err, tRef.current, 'phasemap') || 'fetch failed');
+        (isSpectrumFitRefusal(err)
+          && edsDetailText(err, edsNamespaceT(tRef.current)))
+        || problemText(err, tRef.current, 'phasemap') || 'fetch failed');
       force();
     } finally {
       fetchingRef.current.delete(layer.id);
@@ -416,6 +447,18 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
   // new overrides. No-op when overrides are unchanged (identical signature).
   const colorSignature = JSON.stringify(colorOverrides ?? {});
   const prevColorSigRef = useRef(colorSignature);
+  // The `eds:` layers whose error is the waiting sentence (not a real
+  // failure), so the sentence follows the fit's progress instead of keeping
+  // the first percent it saw.
+  const edsWaitIdsRef = useRef(new Set());
+
+  // The spectrum fit has not delivered the EDS maps yet (state not known, or
+  // the fit runs): `eds:` layers wait with a sentence instead of a request.
+  const edsWaiting = edsFitState === null || edsFitState === 'running';
+  const edsWaitText = edsFitState === 'running'
+    ? tNow('eds:spectrumFit.running',
+           { percent: Math.round(100 * (Number(edsFitProgress) || 0)) })
+    : tNow('eds:spectrumFit.checking');
 
   // Whenever the layer list (or colour overrides) change, ensure all visible
   // layers have bitmaps.
@@ -423,6 +466,21 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
     if (prevColorSigRef.current !== colorSignature) {
       prevColorSigRef.current = colorSignature;
       cacheFlush((id) => id === 'phase');
+    }
+    if (edsWaiting) {
+      let marked = false;
+      for (const l of state.layers) {
+        if (!l.visible || !String(l.id).startsWith('eds:')
+            || cacheRef.current.has(l.id)) continue;
+        // A real error stays; a waiting sentence is updated.
+        if (errorRef.current.has(l.id) && !edsWaitIdsRef.current.has(l.id)) continue;
+        if (errorRef.current.get(l.id) !== edsWaitText) {
+          errorRef.current.set(l.id, edsWaitText);
+          edsWaitIdsRef.current.add(l.id);
+          marked = true;
+        }
+      }
+      if (marked) force();
     }
     Promise.all(
       state.layers
@@ -434,14 +492,52 @@ export function useLayerStack({ cleanupParams, resetSignal, frameSig,
         .filter((l) => l.visible
           && !cacheRef.current.has(l.id)
           && !fetchingRef.current.has(l.id)
-          && !errorRef.current.has(l.id))
+          && !errorRef.current.has(l.id)
+          && !(edsWaiting && String(l.id).startsWith('eds:')))
         .map((l) => fetchLayer(l))
     );
     // bitmapVersion is in deps so the effect re-runs after ANY cache mutation
     // (flush / set / dropped-fetch force()). That re-run is how a layer
     // stranded by the rapid-switch race gets re-fetched, and how frame/cleanup
     // flushes reliably reload their invalidated layers.
-  }, [state.layers, fetchLayer, colorSignature, cacheFlush, bitmapVersion]);
+  }, [state.layers, fetchLayer, colorSignature, cacheFlush, bitmapVersion,
+      edsWaiting, edsWaitText]);
+
+  // The wait is over (ready, or a file without a cube): drop the waiting
+  // sentences of the `eds:` layers, so the loop above fetches them.
+  const prevEdsWaitingRef = useRef(edsWaiting);
+  useEffect(() => {
+    const was = prevEdsWaitingRef.current;
+    prevEdsWaitingRef.current = edsWaiting;
+    if (!was || edsWaiting) return;
+    edsWaitIdsRef.current.clear();
+    let dropped = false;
+    for (const id of [...errorRef.current.keys()]) {
+      if (String(id).startsWith('eds:')) {
+        errorRef.current.delete(id);
+        dropped = true;
+      }
+    }
+    if (dropped) force();
+  }, [edsWaiting]);
+
+  // The spectrum fit turned ready → the EDS maps exist now. An `eds:` layer
+  // that was refused while the fit ran is errored, and an errored layer is
+  // never fetched again by itself (the loop above skips it), so it would
+  // keep saying "still being evaluated" for good. Drop those errors; the
+  // loop then fetches them. A layer errored for any other reason is dropped
+  // too and simply asked once more.
+  useEffect(() => {
+    if (!edsFitReadyCount) return;
+    let dropped = false;
+    for (const id of [...errorRef.current.keys()]) {
+      if (String(id).startsWith('eds:')) {
+        errorRef.current.delete(id);
+        dropped = true;
+      }
+    }
+    if (dropped) force();
+  }, [edsFitReadyCount]);
 
   // Cleanup-param change → drop the cached bitmap of every layer the backend
   // renders differently under those params (see cleanupAffectsLayer).

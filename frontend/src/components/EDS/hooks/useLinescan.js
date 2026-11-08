@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { edsApi } from '../../../services/api';
+import { edsDetailText } from '../edsDetailText';
 
 /**
  * Manages linescan state: the current line (start + end pixel coords) and
@@ -27,7 +28,7 @@ export function useLinescan({ layerIds, displayMode = 'at_pct', nSamples = 128 }
       });
       setData(r.data);
     } catch (e) {
-      setError(e?.response?.data?.detail || e?.message || 'linescan failed');
+      setError(edsDetailText(e) || e?.message || 'linescan failed');
       setData(null);
     } finally {
       setLoading(false);

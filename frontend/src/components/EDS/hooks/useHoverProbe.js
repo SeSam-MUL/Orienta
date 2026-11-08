@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { edsApi } from '../../../services/api';
+import { edsDetailText } from '../edsDetailText';
 
 const CACHE_MAX = 32;
 
@@ -34,17 +35,22 @@ export function useHoverProbe({ displayMode = 'at_pct', debounceMs = 60 } = {}) 
         const res = await edsApi.probe(row, col, displayMode);
         if (token.cancel) return;
         const data = res.data;
-        // LRU insert: evict oldest if at capacity.
-        if (cacheRef.current.size >= CACHE_MAX) {
-          const firstKey = cacheRef.current.keys().next().value;
-          cacheRef.current.delete(firstKey);
+        // An answer whose EDS part was left out (`eds_status`: the spectrum
+        // fit still running, or failed) is not cached: the values arrive
+        // later, and a cached "pending" would outlive them.
+        if (!data?.eds_status) {
+          // LRU insert: evict oldest if at capacity.
+          if (cacheRef.current.size >= CACHE_MAX) {
+            const firstKey = cacheRef.current.keys().next().value;
+            cacheRef.current.delete(firstKey);
+          }
+          cacheRef.current.set(key, data);
         }
-        cacheRef.current.set(key, data);
         setProbe(data);
         setError(null);
       } catch (e) {
         if (token.cancel) return;
-        setError(e?.response?.data?.detail || e?.message || 'probe failed');
+        setError(edsDetailText(e) || e?.message || 'probe failed');
         setProbe(null);
       }
     }, debounceMs);

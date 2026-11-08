@@ -31,6 +31,7 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 
 import { edsExportApi } from '../../services/api';
+import { edsDetailText } from './edsDetailText';
 import { fileLine } from './writtenFileLine';
 import {
   colors as C, alpha, Button, NumberInput, Input, Label,
@@ -410,7 +411,7 @@ export default function ExportDialog({
         } catch (e) {
           if (!cancelled) {
             setPreview(null);
-            setPreviewErr(e?.response?.data?.detail || e?.message || String(e));
+            setPreviewErr(edsDetailText(e, t) || e?.message || String(e));
           }
         } finally {
           if (!cancelled) setPreviewing(false);
@@ -454,7 +455,7 @@ export default function ExportDialog({
       setCopied(null);
       onExported?.(res?.data || null);
     } catch (e) {
-      setError(e?.response?.data?.detail || e?.message || String(e));
+      setError(edsDetailText(e, t) || e?.message || String(e));
     } finally {
       setBusy(false);
     }

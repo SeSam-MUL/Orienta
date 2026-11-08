@@ -691,7 +691,9 @@
     "unsupportedCount_one": "要求された {{count}} 件の相はテストできません",
     "unsupportedCount_other": "要求された {{count}} 件の相はテストできません",
     "unsupportedRowNoSht": "{{key}} — シミュレーション済みマスター（.sht）がないため、比較対象がありません",
-    "unsupportedRow": "{{key}} — {{reason}}"
+    "unsupportedRow": "{{key}} — {{reason}}",
+    "edsPending": "EDS: このマップのスペクトルはまだ評価中のため、この画素の化学組成はまだありません。",
+    "edsFitFailed": "EDS: スペクトルフィットに失敗したため、このファイルには EDS の化学組成がありません。"
   },
   "hoverTips": {
     "degeneracyReduceToOne": "この縮退グループから1つの相だけを残し、冗長な重複を削除します",

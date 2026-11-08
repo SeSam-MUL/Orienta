@@ -72,16 +72,71 @@ def warn_once(key: str, message: str, *args) -> bool:
     return True
 
 
-def _give_up(code: str, detail: str, expected: bool = True) -> ChemistryUnavailable:
+def _give_up(code: str, detail: str, expected: bool = True,
+             key: Optional[str] = None) -> ChemistryUnavailable:
+    """The reason, logged once per ``key`` (default: the detail) if unexpected."""
     reason = ChemistryUnavailable(code, detail, expected)
     if not expected:
-        warn_once(
-            detail,
-            "EDS chemistry prior is OFF for this dataset (%s): %s "
-            "-- phase ranking falls back to pattern evidence only. "
-            "(further pixels with this cause are not logged again)",
-            code, detail)
+        if code == "spectrum_fit_running":
+            warn_once(
+                key or detail,
+                "EDS chemistry is not available yet (%s): %s -- until then "
+                "phase ranking uses pattern evidence only. (logged once)",
+                code, detail)
+        else:
+            warn_once(
+                key or detail,
+                "EDS chemistry prior is OFF for this dataset (%s): %s "
+                "-- phase ranking falls back to pattern evidence only. "
+                "(further pixels with this cause are not logged again)",
+                code, detail)
     return reason
+
+
+def spectrum_fit_refusal(ext=None) -> Optional[ChemistryUnavailable]:
+    """Why the active dataset has no EDS chemistry YET (or at all), else None.
+
+    A file with a spectrum cube gets its EDS numbers from the spectrum fit
+    (``eds_spectrum_service``); until that is done every map read raises
+    ``SpectrumFitPending``, after a failure ``SpectrumFitFailed``. A caller
+    that evaluates chemistry for many pixels asks THIS once, before the first
+    pixel, and decides for the whole run: switched off pixel by pixel, an
+    indexing run started right after a load would have the prior off for its
+    first pixels and on for the rest.
+
+    ``ext``: the extractor to ask; None asks the active one. Anything that is
+    not a fit question (no file, a crop that does not fit) is not answered
+    here -- None, and the caller reports it as it always did.
+    """
+    from backend.api.services.eds_spectrum_service import (
+        SpectrumFitFailed, SpectrumFitPending,
+    )
+    if ext is None:
+        if not _is_open():
+            return None
+        try:
+            ext = _get_extractor()
+        except Exception:
+            return None
+    check = getattr(ext, "require_fit", None)
+    if not callable(check):
+        return None
+    try:
+        check()
+    except SpectrumFitPending as exc:
+        return ChemistryUnavailable(
+            "spectrum_fit_running",
+            f"the spectra of this map are still being evaluated "
+            f"({int(round(100 * exc.progress))} %); EDS chemistry is "
+            f"available when that is done",
+            expected=False)
+    except SpectrumFitFailed as exc:
+        return ChemistryUnavailable(
+            "spectrum_fit_failed",
+            f"the spectrum fit of this file failed ({exc.error}); EDS "
+            f"chemistry is not available for it",
+            expected=False)
+    return None
 
 
 def _is_open() -> bool:
@@ -103,7 +158,28 @@ def _get_active_signal():
     return _ev._get_active_signal()
 
 
-def _window_counts(ext, elements, pixel_index: int) -> Iterator[tuple]:
+def chemistry_source() -> Optional[str]:
+    """The EDS numbers this module's chemistry is made of.
+
+    The prior's (``eds_indexing_prior.PRIOR_EDS_SOURCE``): the single-pixel
+    phase test and the crystal hint rank candidates with the same
+    ``chemistry_fit`` the prior weighs with, and that scorer got worse on the
+    spectrum numbers (alpha picks 89.37 -> 74.55 % on a reference scan not included in the repository).
+    ``"window"``: AZtec's raw
+    window maps with the window calibration, no spectrum fit needed;
+    ``None``: the open file's own source.
+    """
+    from backend.api.services.eds_indexing_prior import PRIOR_EDS_SOURCE
+    return PRIOR_EDS_SOURCE
+
+
+def chemistry_waits_for_fit() -> bool:
+    """Does a pixel's chemistry wait for the spectrum fit? Not on the window
+    numbers -- then no spectrum-fit reason may be reported for a null."""
+    return chemistry_source() != "window"
+
+
+def _window_counts(read, elements, pixel_index: int) -> Iterator[tuple]:
     """``(raw window name, one-pixel counts)`` pairs for build_counts_by_element.
 
     Do NOT build the ``{element: counts}`` dict here in a loop. It is keyed by
@@ -114,7 +190,7 @@ def _window_counts(ext, elements, pixel_index: int) -> Iterator[tuple]:
     that lands straight in the phase-selection prior.
     """
     for el_name in elements:
-        data = ext.get_element_map(el_name)
+        data = read(el_name)
         if data is None or pixel_index >= len(data):
             continue
         yield el_name, np.array([float(data[pixel_index])])
@@ -133,7 +209,23 @@ def get_pixel_at_pct_with_reason(
         if not _is_open():
             return None, _give_up("no_file", "no file is open")
         ext = _get_extractor()
-        elements = ext.get_available_elements()
+        from backend.api.services.eds_spectrum_service import (
+            quant_source_of, window_maps)
+        if chemistry_waits_for_fit():
+            # Before any per-pixel read: the same answer for every pixel
+            # while the spectrum fit runs, logged once (keyed on the code --
+            # the detail carries the progress and changes on every call).
+            refusal = spectrum_fit_refusal(ext)
+            if refusal is not None:
+                return None, _give_up(refusal.code, refusal.detail,
+                                      refusal.expected, key=refusal.code)
+            elements, read = ext.get_available_elements(), ext.get_element_map
+            source = quant_source_of(ext)
+        else:
+            # The window numbers (chemistry_source): AZtec's raw windows,
+            # cut to the crop, priced with the window curve. No fit needed.
+            elements, read = window_maps(ext)
+            source = "window"
         if not elements:
             return None, _give_up("no_eds", "this scan carries no EDS windows")
         n_rows, n_cols = ext.get_grid_dimensions()
@@ -156,8 +248,10 @@ def get_pixel_at_pct_with_reason(
         except Exception:
             pass  # can't cross-check → proceed (fail-soft)
 
+        # The source tells the quantification which response curve to use:
+        # net line intensities (spectrum fit) or AZtec's window integrals.
         counts = build_counts_by_element(
-            _window_counts(ext, elements, pixel_index))
+            _window_counts(read, elements, pixel_index), source=source)
         if not counts:
             return None, _give_up(
                 "no_counts", "no EDS window has data at this pixel")

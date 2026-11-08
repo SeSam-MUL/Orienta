@@ -70,6 +70,54 @@ def _ebsd_nav_shape() -> Optional[tuple[int, int]]:
         return None
 
 
+def _median_window_counts() -> Optional[float]:
+    """Median over pixels of the summed RAW window counts, or None.
+
+    at% is closed to 100 %, so it cannot show weak signal; counts can.
+    LOW_COUNTS_PER_PX is a threshold on counts as AZtec integrates them
+    (background included), so these are AZtec's windows even on a file whose
+    EDS numbers come from the spectrum fit -- read through
+    ``eds_spectrum_service.window_maps``, which needs no fit.
+    """
+    try:
+        from backend.api.routes.eds import get_extractor  # type: ignore
+        from backend.api.services.eds_spectrum_service import window_maps
+        labels, read = window_maps(get_extractor())
+        tot = None
+        for name in labels:
+            d = read(name)
+            if d is None:
+                continue
+            a = np.asarray(d, dtype=np.float64).reshape(-1)
+            tot = a if tot is None else tot + a
+        if tot is not None and tot.size:
+            return float(np.median(tot))
+    except Exception:
+        return None
+    return None
+
+
+def _signal_check() -> dict:
+    median_counts = _median_window_counts()
+    if median_counts is None:
+        return {"severity": "warn", "ok": True,
+                "median_counts_per_px": None,
+                "code": "countsUnavailable", "params": {},
+                "detail": "raw counts unavailable — cannot judge signal"}
+    weak = median_counts < LOW_COUNTS_PER_PX
+    return {
+        "severity": "warn" if weak else "ok", "ok": True,
+        "median_counts_per_px": round(median_counts, 1),
+        "detail": (f"median {median_counts:,.0f} counts/pixel — thin, the "
+                   f"at% conversion is noise-dominated"
+                   if weak else f"median {median_counts:,.0f} counts/pixel"),
+        "code": "signalThin" if weak else "signalOk",
+        # Raw, not pre-formatted: "12,345" reads as twelve point three
+        # four five in German. The page formats it for its own locale.
+        "params": {"median": round(median_counts)},
+    }
+
+
 def run_preflight(phase_files: list[str],
                   phase_formulas: Optional[list[str]] = None) -> dict:
     """Evaluate EDS readiness for ``phase_files``.
@@ -86,15 +134,27 @@ def run_preflight(phase_files: list[str],
     at_maps = None
     eds_rows = eds_cols = None
     try:
-        from backend.api.routes.eds import _build_at_pct_maps_for_loaded_file
-        at_maps, eds_rows, eds_cols, _ = _build_at_pct_maps_for_loaded_file()
+        # The PRIOR's numbers (eds_indexing_prior.PRIOR_EDS_SOURCE): this
+        # check predicts what the prior will veto, so it must read the same
+        # source -- the window maps while the prior is kept on them.
+        from backend.api.services import eds_indexing_prior as _prior
+        at_maps, eds_rows, eds_cols, _ = _prior._build_at_pct_maps_for_loaded_file()
     except Exception as exc:
+        from backend.api.services.eds_spectrum_service import SPECTRUM_FIT_ERRORS
+        detail = getattr(exc, "detail", exc)
+        if isinstance(detail, dict):      # the spectrum fit's 503 / 500
+            detail = detail.get("message") or detail
         checks["eds_present"] = {
             "severity": "block", "ok": False,
-            "detail": str(getattr(exc, "detail", exc))[:200], "elements": [],
+            "detail": str(detail)[:200], "elements": [],
             "code": "edsUnavailable", "params": {},
         }
         blocking.append("eds_present")
+        if isinstance(exc, SPECTRUM_FIT_ERRORS):
+            # The at% wait for the spectrum fit (only when the prior reads the
+            # file's own source); the counts per pixel are AZtec's raw
+            # windows and do not.
+            checks["signal"] = _signal_check()
         return {"checks": checks, "phases": [], "can_index": False,
                 "blocking": blocking, "eds_usable": False}
 
@@ -123,40 +183,7 @@ def run_preflight(phase_files: list[str],
         blocking.append("grid")
 
     # ---- 3. signal strength ---------------------------------------------
-    # at% is closed to 100 %, so it cannot show weak signal. Use raw counts.
-    median_counts = None
-    try:
-        from backend.api.routes.eds import get_extractor  # type: ignore
-        ext = get_extractor()
-        tot = None
-        for name in ext.get_available_elements():
-            d = ext.get_element_map(name)
-            if d is None:
-                continue
-            a = np.asarray(d, dtype=np.float64).reshape(-1)
-            tot = a if tot is None else tot + a
-        if tot is not None and tot.size:
-            median_counts = float(np.median(tot))
-    except Exception:
-        median_counts = None
-    if median_counts is None:
-        checks["signal"] = {"severity": "warn", "ok": True,
-                            "median_counts_per_px": None,
-                            "code": "countsUnavailable", "params": {},
-                            "detail": "raw counts unavailable — cannot judge signal"}
-    else:
-        weak = median_counts < LOW_COUNTS_PER_PX
-        checks["signal"] = {
-            "severity": "warn" if weak else "ok", "ok": True,
-            "median_counts_per_px": round(median_counts, 1),
-            "detail": (f"median {median_counts:,.0f} counts/pixel — thin, the "
-                       f"at% conversion is noise-dominated"
-                       if weak else f"median {median_counts:,.0f} counts/pixel"),
-            "code": "signalThin" if weak else "signalOk",
-            # Raw, not pre-formatted: "12,345" reads as twelve point three
-            # four five in German. The page formats it for its own locale.
-            "params": {"median": round(median_counts)},
-        }
+    checks["signal"] = _signal_check()
 
     # ---- 4 + 5. per-phase coverage and plausibility ----------------------
     n_px = int(eds_rows) * int(eds_cols)

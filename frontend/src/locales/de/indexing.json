@@ -691,7 +691,9 @@
     "unsupportedCount_one": "{{count}} angeforderte Phase kann nicht getestet werden",
     "unsupportedCount_other": "{{count}} angeforderte Phasen können nicht getestet werden",
     "unsupportedRowNoSht": "{{key}} — kein simulierter Master (.sht), es gibt also nichts zum Vergleichen",
-    "unsupportedRow": "{{key}} — {{reason}}"
+    "unsupportedRow": "{{key}} — {{reason}}",
+    "edsPending": "EDS: Die Spektren dieser Karte werden noch ausgewertet, daher gibt es für dieses Pixel noch keine Chemie.",
+    "edsFitFailed": "EDS: Der Spektren-Fit ist fehlgeschlagen, daher hat diese Datei keine EDS-Chemie."
   },
   "hoverTips": {
     "degeneracyReduceToOne": "Nur eine Phase aus dieser entarteten Gruppe behalten und die redundanten Duplikate entfernen",

@@ -50,6 +50,12 @@ describe('defaultLayersFor', () => {
     expect(elLayers).toHaveLength(3);
     expect(elLayers.map(l => l.element)).toEqual(['Al', 'Fe', 'Cu']);
   });
+  it('seeds three different elements, not two families of one (same at% map)', () => {
+    const out = defaultLayersFor({ hasSE: false, hasBC: false,
+      elements: ['Al Kα1', 'Cu Kα1', 'Cu Lα1,2', 'Fe Kα1', 'Fe Lα1,2'] });
+    const elLayers = out.filter(l => l.kind === 'eds-element');
+    expect(elLayers.map(l => l.element)).toEqual(['Al Kα1', 'Cu Kα1', 'Fe Kα1']);
+  });
   it('seeds all default layers visible with At.% display mode', () => {
     const out = defaultLayersFor({ hasSE: true, hasBC: true, electronImageName: 'SE1', elements: ['Al'] });
     for (const l of out) expect(l.visible).toBe(true);

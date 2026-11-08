@@ -6,13 +6,32 @@
  * Optional "Heatmap" toggle: falls back to matplotlib colormaps.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { edsApi } from '../../services/api';
 import { colors as C, alpha } from '../../theme/tokens';
 import useEdsColorStore from '../../stores/useEdsColorStore';
+import { useFitReadyCount } from '../EDS/hooks/useSpectrumFitStatus';
+import { elementsForDisplayMode } from '../EDS/edsLayerSources';
 
-export default function EdsOverlayPanel({ enabled, available, onToggle, onLayersChange, fileKey }) {
+/**
+ * ``fitState`` / ``fitProgress``: the open file's spectrum fit
+ * (``useSpectrumFitStatus`` on the Indexing page). While it runs the element
+ * maps answer 503; the panel says so, and when the fit turns ready it asks
+ * again for the element list and for the maps of the elements switched on
+ * meanwhile -- it used to ask once per file and keep a 503 for good, "No EDS
+ * elements found in dataset" on a file with eight.
+ *
+ * ``fitLines``: the fit's ``lines`` (the line each element is quantified
+ * through), ``null`` for a window file or a fit not ready. In Wt.% / At.% the
+ * panel lists and draws ONE label per element -- on the spectrum source
+ * ``Fe Lα1,2`` is the same quantified Fe map as ``Fe Kα1`` -- and in Counts
+ * one per fitted family (``elementsForDisplayMode``).
+ */
+export default function EdsOverlayPanel({
+  enabled, available, onToggle, onLayersChange, fileKey,
+  fitState = 'none', fitProgress = 0, fitLines = null,
+}) {
   const { t } = useTranslation('indexing');
   const UNIT_OPTIONS = [
     { value: 'counts', label: t('eds.unitCounts') },
@@ -39,6 +58,11 @@ export default function EdsOverlayPanel({ enabled, available, onToggle, onLayers
   // PNG). getState().getColor() alone was a non-reactive snapshot, so edits
   // never showed until some other prop forced a re-render.
   const elementColors = useEdsColorStore((s) => s.colors);
+  // Bumps when the spectrum fit turns ready: the fetches below run again.
+  const fitReady = useFitReadyCount(fitState);
+  // The labels this unit offers (one per element in wt% / at%).
+  const shown = useMemo(() => elementsForDisplayMode(elements, unit, fitLines),
+                        [elements, unit, fitLines]);
 
   // Drop toggled elements + cached overlay images when the underlying dataset
   // changes — otherwise file-A's "Al" stays toggled with file-A's PNG painted
@@ -58,7 +82,7 @@ export default function EdsOverlayPanel({ enabled, available, onToggle, onLayers
       const els = r.data?.elements || r.data || [];
       setElements(Array.isArray(els) ? els : []);
     }).catch(() => setElements([]));
-  }, [available, fileKey]);
+  }, [available, fileKey, fitReady]);
 
   // Clean element symbol for color lookup: "Window Integral Al Ka1" → "Al"
   const getElementInfo = useCallback((rawEl) => {
@@ -116,6 +140,26 @@ export default function EdsOverlayPanel({ enabled, available, onToggle, onLayers
     return () => { cancelled = true; };
   }, [unit, cmap, useElementColors, enabled, elementColors]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The fit is ready: fetch the maps the 503s left out.
+  useEffect(() => {
+    if (!fitReady) return undefined;
+    const missing = Object.entries(activeElements)
+      .filter(([, v]) => v.on && !v.image).map(([k]) => k);
+    if (missing.length === 0) return undefined;
+    let cancelled = false;
+    (async () => {
+      for (const rawEl of missing) {
+        const img = await fetchElementMap(rawEl);
+        if (cancelled) return;
+        if (img) {
+          setActiveElements(prev => (prev[rawEl]?.on && !prev[rawEl].image
+            ? { ...prev, [rawEl]: { ...prev[rawEl], image: img } } : prev));
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [fitReady]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Toggle element on/off
   const toggleElement = useCallback(async (rawEl, on) => {
     if (on) {
@@ -148,15 +192,21 @@ export default function EdsOverlayPanel({ enabled, available, onToggle, onLayers
   // Propagate layer changes to parent
   useEffect(() => {
     if (!enabled) { onLayersChange([]); return; }
+    const offered = new Set(shown);
     const layers = Object.entries(activeElements)
-      .filter(([, v]) => v.on && v.image)
+      .filter(([el, v]) => v.on && v.image && offered.has(el))
       .map(([el, v]) => ({ element: el, image: v.image, opacity: v.opacity }));
     onLayersChange(layers);
-  }, [activeElements, enabled, onLayersChange]);
+  }, [activeElements, enabled, onLayersChange, shown]);
 
   if (!available) return null;
 
-  const activeCount = Object.values(activeElements).filter(v => v.on).length;
+  const activeCount = shown.filter((el) => activeElements[el]?.on).length;
+  // While the spectra are evaluated (or before that is known) there is no
+  // map to draw yet, and an empty list is not "no elements".
+  const fitWait = fitState === 'running'
+    ? t('eds:spectrumFit.running', { percent: Math.round(100 * (Number(fitProgress) || 0)) })
+    : fitState == null ? t('eds:spectrumFit.checking') : null;
 
   return (
     <div style={{
@@ -196,6 +246,12 @@ export default function EdsOverlayPanel({ enabled, available, onToggle, onLayers
         )}
       </div>
 
+      {enabled && fitWait && (
+        <span data-eds-fit-wait style={{ color: C.textSecondary, fontSize: '8pt', fontStyle: 'italic' }}>
+          {fitWait}
+        </span>
+      )}
+
       {enabled && elements.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {/* Controls row */}
@@ -221,7 +277,7 @@ export default function EdsOverlayPanel({ enabled, available, onToggle, onLayers
 
           {/* Element list */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {elements.map(rawEl => {
+            {shown.map(rawEl => {
               const { label, symbol, color } = getElementInfo(rawEl);
               const state = activeElements[rawEl] || { on: false, opacity: 0.5 };
               return (
@@ -244,7 +300,7 @@ export default function EdsOverlayPanel({ enabled, available, onToggle, onLayers
         </div>
       )}
 
-      {enabled && elements.length === 0 && (
+      {enabled && elements.length === 0 && !fitWait && (
         <span style={{ color: C.textSecondary, fontSize: '8pt', fontStyle: 'italic' }}>
           {t('eds.noElements')}
         </span>

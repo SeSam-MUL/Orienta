@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { edsExportApi } from '../../services/api';
+import { edsDetailText } from './edsDetailText';
 import useDataStore from '../../stores/useDataStore';
 import {
   colors as C, alpha, Button, Select, Input, Label,
@@ -196,7 +197,27 @@ export async function saveTextFile(text, filename) {
   return { via: 'download', path: filename };
 }
 
-const errText = (e) => e?.response?.data?.detail || e?.message || String(e);
+const errText = (e) => edsDetailText(e) || e?.message || String(e);
+
+/**
+ * A compatibility warning in the reader's language, where this build knows
+ * the code; the backend's own sentence otherwise.
+ *
+ * `preset_made_on_other_source` is the one that needs it most: every
+ * built-in preset was made on AZtec window numbers, so it warns on EVERY file
+ * with spectra. Shown as the backend's raw "check the result before trusting
+ * it", on every apply, it reads like an error; it is an expected, truthful
+ * note that the thresholds were kept as written.
+ */
+export function presetWarningText(w, t) {
+  const prose = typeof w?.message === 'string' ? w.message : '';
+  if (w?.code === 'preset_made_on_other_source') {
+    const key = w.detail?.preset === 'spectrum'
+      ? 'presets.otherSourceSpectrum' : 'presets.otherSourceWindow';
+    return t(key, prose ? { defaultValue: prose } : undefined);
+  }
+  return prose;
+}
 
 /* ------------------------------------------------------------------------ *
  * Finding one preset among a hundred.
@@ -902,7 +923,9 @@ export default function PresetBar({ handle = {}, onApplied }) {
         <div data-preset-warnings style={{ fontSize: '8pt', color: C.orange }}>
           <div>{t('presets.warnTitle')}</div>
           {warnings.map((w, i) => (
-            <div key={w.code || i}>· {w.message}</div>
+            <div key={w.code || i} data-preset-warning={w.code || 'unknown'}>
+              · {presetWarningText(w, t)}
+            </div>
           ))}
         </div>
       )}

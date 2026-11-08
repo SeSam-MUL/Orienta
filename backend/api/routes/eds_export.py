@@ -6,7 +6,7 @@ rather than requests; this file only turns the loaded file into that data and
 turns exceptions into status codes. The split is what lets a future batch
 driver walk a folder without going through FastAPI, and it is the reason the
 batch feature could be deferred honestly instead of silently omitted
-(spec section 2).
+.
 
 WHY IT REUSES ``routes/eds.py``. ``_build_at_pct_maps_for_loaded_file`` and
 ``_eds_step_um`` are imported, not reimplemented. The dominant defect class in
@@ -15,8 +15,7 @@ maintained; a second step-size reader that
 drifted from the first would put one length in the phase map and a different
 one in the export of the same phase map, and nothing would ever fail.
 
-Contract: docs/superpowers/specs/2026-08-27-eds-presets-and-export-design.md
-          section 8, frozen — the frontend builds against it.
+The response shapes are a contract the frontend builds against.
 """
 from __future__ import annotations
 
@@ -39,6 +38,7 @@ from backend.api.services.eds_export import (
 from backend.api.services.eds_particles import CONNECTIVITY, find_particles
 from backend.api.problem import problem
 from backend.api.services.load_choices import LoadChoiceError
+from backend.api.services.eds_spectrum_service import SPECTRUM_FIT_ERRORS
 from backend.api.services.phase_map_store import get_phase_map_store
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,27 @@ def _at_maps():
     """The At.% maps for the loaded file, through the one existing builder."""
     from backend.api.routes.eds import _build_at_pct_maps_for_loaded_file
     return _build_at_pct_maps_for_loaded_file()
+
+
+def _maps_source(at_maps) -> str:
+    from backend.api.routes.eds import _maps_source
+    return _maps_source(at_maps)
+
+
+def _composition_of(at_maps):
+    """The region-composition helper for ``at_maps`` -- the inspector's own.
+
+    Summed net counts on the spectrum source, ``None`` (mean of the pixels'
+    at%) otherwise; see ``routes.eds._SummedNetComposition``.
+    """
+    from backend.api.routes.eds import _composition_of as composition_of
+    return composition_of(at_maps)
+
+
+def _current_quant_source() -> str:
+    """The EDS source of the loaded scan; "window" when no scan is open."""
+    from backend.api.routes.eds import _open_file_source
+    return _open_file_source() or "window"
 
 
 def _step_um():
@@ -216,6 +237,9 @@ def _compat_inputs() -> Dict[str, Any]:
         "available_phase_keys": phase_keys,
         "dominant_element": dominant,
         "step_um": step_x,
+        # From the maps the check measures against, so the verdict and the
+        # numbers it is about cannot name different sources.
+        "quant_source": _maps_source(at_maps),
     }
 
 
@@ -496,6 +520,7 @@ async def export(req: ExportRequest):
     state = _state_or_400()
     at_maps, n_rows, n_cols, file_path = _at_maps()
     _guard_grid(state, n_rows, n_cols)
+    composition_of = _composition_of(at_maps)
 
     dest = Path(req.dest_dir).expanduser()
     if not dest.is_dir():
@@ -543,7 +568,7 @@ async def export(req: ExportRequest):
 
     try:
         tables = build_tables(state, at_maps, geometry=_geometry(state, file_path),
-                              options=opts)
+                              options=opts, composition_of=composition_of)
         result = write_export(tables, dest, options=opts, source_path=file_path)
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -626,6 +651,10 @@ def _authored_against_loaded_file(
         try:
             at_maps, _n_rows, _n_cols, _fp = _at_maps()
             elements = [str(k) for k in at_maps.keys()]
+        except SPECTRUM_FIT_ERRORS:
+            # A file whose spectra are still being evaluated HAS elements; a
+            # preset saved now would be born without its portability record.
+            raise
         except Exception:
             # No file open (HTTPException 400) or no EDS data — leave it empty.
             logger.debug("preset save: no loaded scan to record elements from",
@@ -664,6 +693,11 @@ async def save_preset(req: PresetSaveRequest):
     pressed Save" is not "all of them"), so the choice stays with them and only
     the consequence of not choosing is made visible.
     """
+    # A preset records the scan it was authored against; while that scan's
+    # EDS numbers are being made (or after their fit failed) refuse -- here,
+    # before anything is written.
+    from backend.api.routes.eds import _require_spectrum_fit
+    _require_spectrum_fit()
     authored_elements, authored_step_um = _authored_against_loaded_file(
         list(req.authored_elements or []), req.authored_step_um)
     try:
@@ -674,6 +708,9 @@ async def save_preset(req: PresetSaveRequest):
             authored_elements=authored_elements,
             authored_step_um=authored_step_um,
             matrix_element=req.matrix_element,
+            # Which numbers the recipe is being written on; no scan open means
+            # nothing says otherwise, and the check then warns on spectrum files.
+            quant_source=_current_quant_source(),
         )
         path = presets_svc.save_preset(p, overwrite=req.overwrite)
     except FileExistsError as exc:

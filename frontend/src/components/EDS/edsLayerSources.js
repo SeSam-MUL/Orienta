@@ -80,7 +80,19 @@ export function defaultLayersFor({
       visible: true, opacity: 0.5, blend: 'multiply',
     });
   }
-  for (const el of elements.slice(0, 3)) {
+  // The seeded layers are at%, where two families of one element (the
+  // spectrum source's `Cu Kα1` and `Cu Lα1,2`) draw the same quantified map:
+  // seed three different elements, not three labels.
+  const seenSymbols = new Set();
+  const seeded = [];
+  for (const el of elements) {
+    const symbol = String(el).split(' ')[0];
+    if (seenSymbols.has(symbol)) continue;
+    seenSymbols.add(symbol);
+    seeded.push(el);
+    if (seeded.length === 3) break;
+  }
+  for (const el of seeded) {
     out.push({
       id: `eds-${el}`,
       kind: 'eds-element',
@@ -91,6 +103,27 @@ export function defaultLayersFor({
     });
   }
   return out;
+}
+
+/**
+ * The element labels to offer as maps in `displayMode`.
+ *
+ * On the spectrum source the element list carries one label per fitted
+ * family -- the Oxford reference scan: 12 labels for AZtec's 8 windows, `Fe Kα1` AND
+ * `Fe Lα1,2`. In counts mode each is its own net map. In wt% / at% mode both
+ * would draw the same quantified Fe map, so only the line the quantification
+ * uses (`lines`, the fit status's `fit.lines`: `{Fe: {label, family}}`) is
+ * kept per element. An element whose chosen label is not in the list keeps
+ * all its labels (never drop an element); without `lines` (window files, a
+ * fit not ready) the list is returned unchanged.
+ */
+export function elementsForDisplayMode(elements = [], displayMode = 'counts', lines = null) {
+  if (displayMode === 'counts' || !lines || typeof lines !== 'object') return elements;
+  const present = new Set(elements);
+  return elements.filter((label) => {
+    const chosen = lines[String(label).split(' ')[0]]?.label;
+    return !chosen || !present.has(chosen) || chosen === label;
+  });
 }
 
 /**

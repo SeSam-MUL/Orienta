@@ -33,6 +33,24 @@ const lastPost = (url) => {
 
 beforeEach(() => { vi.clearAllMocks(); });
 
+describe('GET /api/eds/spectrum-fit/status — a short timeout of its own', () => {
+  it('does not wait the instance\'s 5 minutes for an answer', async () => {
+    // The EDS page shows nothing but its header until the first answer
+    // arrives. With the instance default (300 s) a busy backend kept a file
+    // without spectra behind that header for up to five minutes; with a
+    // short timeout the request fails, is retried every second, and the page
+    // says it is still checking.
+    await edsApi.spectrumFitStatus();
+    const call = axios.__inst.get.mock.calls.find(
+      (c) => c[0] === '/api/eds/spectrum-fit/status');
+    expect(call, 'the status route was not called').toBeTruthy();
+    const timeout = call[1]?.timeout;
+    expect(typeof timeout).toBe('number');
+    expect(timeout).toBeGreaterThan(0);
+    expect(timeout).toBeLessThanOrEqual(5000);
+  });
+});
+
 describe('POST /api/eds/auto-classify — one statement about the smoothing box', () => {
   it('sends scale_um, and NOT scale, when a physical width is given', async () => {
     await edsApi.autoClassify({ scale: 7, scaleUm: 2.5 });

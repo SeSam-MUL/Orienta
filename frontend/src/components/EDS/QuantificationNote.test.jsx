@@ -49,7 +49,7 @@ const CLEAN = {
   matrix_correction: null,
   beam_kv: 20.0,
   calibration: {
-    standard: 'SampleB alpha-Al(Fe,Mn)Si interior vs Oxford Aztec Tru-Q',
+    standard: 'Reference-scan alpha-Al(Fe,Mn)Si interior vs Oxford Aztec Tru-Q',
     matrix: 'Al-rich intermetallic in an Al extrusion alloy',
     beam_kv: 20.0,
   },
@@ -197,5 +197,77 @@ describe('the wire it depends on', () => {
     // it actually used calibration.matrix, not a placeholder
     expect(screen.getByText(/quantNote\.calibratedOn/).textContent)
       .toContain(CLEAN.calibration.matrix);
+  });
+});
+
+describe('where the numbers come from', () => {
+  /**
+   * `_quant_provenance` carries `source` ("spectrum" | "window") and
+   * `source_data`, the sentence `eds_utils.quantification_provenance` writes.
+   * The page shows a provenance line, and for a file WITHOUT
+   * spectra a visible label that its numbers include the background -- so
+   * this line is outside the collapsed part, always on screen.
+   */
+  const SPECTRUM = {
+    ...CLEAN,
+    source: 'spectrum',
+    source_data: 'spectrum fit (eds-spectrum-fit/1): background subtracted, '
+      + 'overlaps deconvolved, pile-up modelled',
+    fit: { model_version: 'eds-spectrum-fit/1', chi2_red: 5.18,
+           detected_not_exported: [], quality_warnings: [] },
+  };
+  const WINDOW = {
+    ...CLEAN,
+    source: 'window',
+    source_data: 'vendor Window Integral (background included)',
+  };
+
+  it('a spectrum-fit result says so without being opened', () => {
+    render(<QuantificationNote provenance={SPECTRUM} />);
+    const line = document.querySelector('[data-quant-source]');
+    expect(line).toBeTruthy();
+    expect(line.getAttribute('data-quant-source')).toBe('spectrum');
+    expect(line.textContent).toContain('quantNote.sourceSpectrum');
+    expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('a window result says the background is included', () => {
+    render(<QuantificationNote provenance={WINDOW} />);
+    const line = document.querySelector('[data-quant-source]');
+    expect(line.getAttribute('data-quant-source')).toBe('window');
+    expect(line.textContent).toContain('quantNote.sourceWindow');
+  });
+
+  it('reads the sentence when the short field is missing', () => {
+    const { source: _drop, ...noShort } = SPECTRUM;
+    render(<QuantificationNote provenance={noShort} />);
+    expect(document.querySelector('[data-quant-source]')
+      .getAttribute('data-quant-source')).toBe('spectrum');
+  });
+
+  it('a provenance from before the source existed shows no source line', () => {
+    render(<QuantificationNote provenance={CLEAN} />);
+    expect(document.querySelector('[data-quant-source]')).toBeNull();
+  });
+
+  it('a fit-quality warning is a specific caveat, named when opened', () => {
+    const p = { ...SPECTRUM, fit: { ...SPECTRUM.fit,
+      quality_warnings: [{ family: 'Fe K', residual_fraction: 0.081 }] } };
+    render(<QuantificationNote provenance={p} />);
+    const button = screen.getByRole('button');
+    expect(button.textContent).toContain('"count":1');
+    fireEvent.click(button);
+    expect(screen.getByText(/spectrumFit\.quality/).textContent).toContain('Fe K');
+  });
+
+  it('every language has both source lines, and the English is the brief\'s', () => {
+    for (const [name, bundle] of Object.entries({ en, de, ja, zh })) {
+      expect(bundle.quantNote.sourceSpectrum, name).toBeTruthy();
+      expect(bundle.quantNote.sourceWindow, name).toBeTruthy();
+    }
+    expect(en.quantNote.sourceSpectrum).toBe(
+      'From the spectra: background subtracted, overlapping lines separated, pile-up modelled.');
+    expect(en.quantNote.sourceWindow).toBe(
+      "From AZtec's window maps: background is included (this file has no spectra).");
   });
 });

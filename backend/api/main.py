@@ -582,7 +582,15 @@ async def _log_http_exception(request: Request, exc: _StarletteHTTPException):
     """
     path = request.url.path
     if not any(path.startswith(p) for p in _QUIET_ERROR_PATHS):
-        log = logger.error if exc.status_code >= 500 else logger.warning
+        detail = exc.detail
+        if (exc.status_code == 503 and isinstance(detail, dict)
+                and detail.get("code") == "eds_spectrum_fit_running"):
+            # Not an error: the EDS numbers of a file with a spectrum cube are
+            # still being computed (eds_spectrum_service) and the page polls
+            # until they are. Logged, but not as one ERROR line per poll.
+            log = logger.info
+        else:
+            log = logger.error if exc.status_code >= 500 else logger.warning
         log("HTTP %s on %s %s: %s", exc.status_code, request.method, path, exc.detail)
     return await _default_http_handler(request, exc)
 

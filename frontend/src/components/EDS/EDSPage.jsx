@@ -12,12 +12,16 @@
 import { useState, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { edsApi } from '../../services/api';
+import { edsDetailText } from './edsDetailText';
 import {
   colors, alpha, spacing,
-  Button, NumberInput, GroupBox, Label,
+  Button, NumberInput, GroupBox, Label, ProgressBar,
 } from '../../theme/components';
 import QuantificationNote from './QuantificationNote';
-import QuantTable, { quantRowsFromResponse } from './quantTable';
+import QuantTable, { RegionQuantTable, quantRowsFromResponse } from './quantTable';
+import { regionAverageIsSummed, regionClipboardText } from './regionAverage';
+import SpectrumFitNotice from './SpectrumFitNotice';
+import { useSpectrumFitStatus } from './hooks/useSpectrumFitStatus';
 import useDataStore from '../../stores/useDataStore';
 import useResultStore from '../../stores/useResultStore';
 import { CursorSyncProvider, useCursorSync } from './CursorSyncContext';
@@ -37,7 +41,7 @@ import SuggestLibrarySkipped from './SuggestLibrarySkipped';
 import { useActiveDatasetKey } from './hooks/useActiveDatasetKey';
 import { useDefaultLayers } from './hooks/useDefaultLayers';
 import { useEdsLayerStack } from './hooks/useEdsLayerStack';
-import { allMapsLayersFor } from './edsLayerSources';
+import { allMapsLayersFor, elementsForDisplayMode } from './edsLayerSources';
 import { useHoverProbe } from './hooks/useHoverProbe';
 import { useLinescan } from './hooks/useLinescan';
 import { useSuggestPhases } from './hooks/useSuggestPhases';
@@ -160,45 +164,6 @@ function ModeToggle({ value, onChange }) {
   );
 }
 
-function RegionQuantTable({ data }) {
-  const { t } = useTranslation('eds');
-  if (!data?.data || Object.keys(data.data).length === 0) return null;
-  const th = { padding: '5px 8px', textAlign: 'left', color: colors.textSecondary, fontWeight: 600, fontSize: '8pt', borderBottom: `1px solid ${colors.border}`, whiteSpace: 'nowrap' };
-  const td = (i) => ({ padding: '4px 8px', fontSize: '8pt', borderBottom: `1px solid ${alpha(colors.border, 13)}`, background: i % 2 === 0 ? 'transparent' : alpha(colors.border, 20) });
-  const fmtStat = (s) => {
-    if (!s) return t('table.empty');
-    if (typeof s === 'number') return s.toFixed(2);
-    return `${s.mean?.toFixed(1) ?? t('table.empty')} ± ${s.std?.toFixed(1) ?? t('table.empty')}`;
-  };
-  const entries = Object.entries(data.data);
-  return (
-    <div style={{ overflowX: 'auto' }}>
-      <div style={{ fontSize: '8pt', color: colors.textSecondary, marginBottom: 4 }}>
-        {t('region.summary', { rowStart: data.row_start, colStart: data.col_start, rowEnd: data.row_end, colEnd: data.col_end, nPixels: data.n_pixels })}
-      </div>
-      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-        <thead>
-          <tr>
-            {[t('table.element'), t('region.countsHeader'), t('region.wtPctHeader'), t('region.atPctHeader')].map((h) => (
-              <th key={h} style={th}>{h}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {entries.map(([el, vals], i) => (
-            <tr key={el}>
-              <td style={{ ...td(i), color: colors.cyan, fontWeight: 600 }}>{el}</td>
-              <td style={td(i)}>{fmtStat(vals.counts)}</td>
-              <td style={td(i)}>{fmtStat(vals.wt_pct)}</td>
-              <td style={td(i)}>{fmtStat(vals.at_pct)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
 // Map a LayerStackPanel quick-mode id into an EDS layer object that
 // useEdsLayerStack.addLayer accepts. The quick-mode buttons (phase / ipf-z /
 // bc / ci) are hardcoded in LayerStackPanel; here we wire them up as
@@ -270,7 +235,151 @@ function HoverProbeLayer({ probe, error, displayMode, requestProbe, clearProbe }
   );
 }
 
+/**
+ * Back button, title, and whatever the caller puts on the right (the file
+ * switcher at least -- switching to another file must never wait for this
+ * one's spectra).
+ */
+function PageHeader({ onNavigate, children }) {
+  const { t } = useTranslation('eds');
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <button onClick={() => onNavigate?.('ebsdviewer')}
+        style={{
+          background: 'transparent', border: `1px solid ${colors.border}`,
+          borderRadius: 5, padding: '4px 10px', cursor: 'pointer',
+          color: colors.textSecondary, fontSize: '9pt',
+          transition: 'all 0.15s',
+        }}
+        onMouseEnter={(e) => { e.target.style.borderColor = colors.cyan; e.target.style.color = colors.cyan; }}
+        onMouseLeave={(e) => { e.target.style.borderColor = colors.border; e.target.style.color = colors.textSecondary; }}
+        title={t('header.backTooltip')}>
+        {t('header.back')}
+      </button>
+      <div>
+        <h1 style={{ margin: 0, fontSize: '18pt', fontWeight: 700, color: colors.accent }}>{t('header.title')}</h1>
+        <div style={{ fontSize: '10pt', color: colors.textSecondary, marginTop: 2 }}>
+          {t('header.subtitle')}
+        </div>
+      </div>
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const PAGE_STYLE = {
+  display: 'flex', flexDirection: 'column', height: '100%',
+  color: colors.text, fontFamily: "'Segoe UI', system-ui, sans-serif",
+  padding: spacing.outerMargin, gap: spacing.outerSpacing, boxSizing: 'border-box',
+};
+
+/**
+ * "The program is not answering" -- the status request of the spectrum fit
+ * got no answer (timed out, connection dropped). Shown wherever the page is
+ * waiting on that answer, so a frozen progress bar or a bare header is never
+ * all there is on screen. The hook asks again every second.
+ */
+function SpectrumFitUnreachable() {
+  const { t } = useTranslation('eds');
+  return (
+    <div
+      data-spectrum-fit-unreachable
+      role="status"
+      style={{
+        fontSize: '9pt', color: colors.orange || colors.textSecondary, flexShrink: 0,
+        background: alpha(colors.orange || colors.border, 8),
+        border: `1px solid ${alpha(colors.orange || colors.border, 30)}`,
+        borderRadius: 4, padding: '4px 8px',
+      }}
+    >
+      {t('spectrumFit.unreachable')}
+    </div>
+  );
+}
+
+/**
+ * The page while the spectra of the open file are being evaluated.
+ *
+ * Every EDS-number endpoint answers 503 until then, and the hooks below that
+ * load the element list and the default layers would load them EMPTY on that
+ * 503 and never ask again. So the tabs are not mounted at all until the fit
+ * is done; they mount fresh when it is, and ask for what now exists. Window
+ * numbers in the meantime would be a silent fallback.
+ *
+ * `fit.state === null` (no answer yet for this file) says it is checking --
+ * for a file without spectra that is one short request, but a busy backend
+ * can take longer, and a bare header says nothing. A request that got no
+ * answer adds the "not answering" note; the hook keeps asking.
+ */
+function SpectrumFitWait({ fit, onNavigate }) {
+  const { t } = useTranslation('eds');
+  const percent = Math.round(100 * (Number(fit?.progress) || 0));
+  return (
+    <div style={PAGE_STYLE}>
+      <PageHeader onNavigate={onNavigate}>
+        <FileSwitcher />
+      </PageHeader>
+      {fit?.state == null && (
+        <div data-spectrum-fit-checking role="status"
+          style={{ fontSize: '10pt', color: colors.textSecondary }}>
+          {t('spectrumFit.checking')}
+        </div>
+      )}
+      {fit?.unreachable && <SpectrumFitUnreachable />}
+      {fit?.state === 'running' && (
+        <div
+          data-spectrum-fit-progress
+          style={{
+            background: colors.bgSecondary, border: `1px solid ${colors.border}`,
+            borderRadius: 6, padding: '18px 24px', maxWidth: 560,
+            display: 'flex', flexDirection: 'column', gap: 8,
+          }}
+        >
+          <div role="status" style={{ fontSize: '10pt', color: colors.text }}>
+            {t('spectrumFit.running', { percent })}
+          </div>
+          <ProgressBar value={percent} max={100}
+            ariaLabel={t('spectrumFit.running', { percent })} />
+          {fit?.runner === 'in_process_fallback' && (
+            <div data-spectrum-fit-in-process role="note"
+              style={{ fontSize: '9pt', color: colors.orange || colors.textSecondary }}>
+              {t('spectrumFit.inProcess', { reason: fit.runnerReason || '?' })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The EDS page, behind the spectrum fit.
+ *
+ * A file with a spectrum cube gets its EDS numbers from the fit of its spectra
+ * (eds_spectrum_service); a file without one keeps AZtec's window maps
+ * (`state: "none"`). While the fit runs the page shows its progress; after it
+ * the page as always, plus what the fit has to say (SpectrumFitNotice) -- or,
+ * when it failed, that it failed. The rest of the page stays usable then
+ * (electron images, band contrast, a saved phase map) and every EDS number
+ * says why it is missing.
+ */
 export default function EDSPage({ onNavigate, isActive = true }) {
+  const isFileOpen = useDataStore((s) => s.isFileOpen);
+  const filePath = useDataStore((s) => s.filePath);
+  const fitStatus = useSpectrumFitStatus(isFileOpen ? filePath : null,
+    { active: isActive });
+  if (!isFileOpen) return <EmptyState />;
+  if (fitStatus.state === null || fitStatus.state === 'running') {
+    return <SpectrumFitWait fit={fitStatus} onNavigate={onNavigate} />;
+  }
+  return (
+    <EDSPageBody onNavigate={onNavigate} isActive={isActive} fitStatus={fitStatus} />
+  );
+}
+
+function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
   const { t } = useTranslation(['eds', 'imageexport']);
   const isFileOpen = useDataStore((s) => s.isFileOpen);
   const filePath = useDataStore((s) => s.filePath);
@@ -299,13 +408,27 @@ export default function EDSPage({ onNavigate, isActive = true }) {
   // shows EVERY detected map (all elements + electron images + BC) via its own
   // uncapped stack with a larger bitmap cache. The composite `stack` above
   // stays curated/capped (MAX_LAYERS) for the overlay + LayerStackPanel.
+  // The element maps to offer in this display mode: in wt% / at% one per
+  // element (the line the quantification uses), in counts one per fitted
+  // family -- on the spectrum source `Fe Kα1` and `Fe Lα1,2` would otherwise
+  // be two tiles of the same quantified Fe map. Window files: unchanged.
+  // Keyed on the CONTENT of the lines and on counts-vs-not, so a status
+  // re-ask or a wt% <-> at% switch does not rebuild (and so re-seed) the grid.
+  const quantLines = fitStatus?.state === 'ready' ? (fitStatus.fit?.lines ?? null) : null;
+  const quantLinesKey = quantLines ? JSON.stringify(quantLines) : '';
+  const countsMode = displayMode === 'counts';
+  const shownElements = useMemo(
+    () => elementsForDisplayMode(def.elements, countsMode ? 'counts' : 'at_pct',
+                                 quantLinesKey ? JSON.parse(quantLinesKey) : null),
+    [def.elements, countsMode, quantLinesKey],
+  );
   const allMapsLayers = useMemo(
     () => allMapsLayersFor({
-      elements: def.elements,
+      elements: shownElements,
       electronImages: def.electronImages,
       hasBC: def.layers.some((l) => l.id === 'bc'),
     }),
-    [def.elements, def.electronImages, def.layers],
+    [shownElements, def.electronImages, def.layers],
   );
   const allMaps = useEdsLayerStack({
     initialLayers: allMapsLayers, displayMode, cacheSize: 64, datasetKey,
@@ -354,7 +477,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     // `def` is the page's own probe of what this file holds - the same source
     // the tile grid is built from, so the picker cannot offer a map the page
     // could not draw.
-    const els = (def.elements || []).map((e) => (
+    const els = (shownElements || []).map((e) => (
       typeof e === 'string' ? e : (e.symbol || e.name)
     )).filter(Boolean);
     if (els.length) {
@@ -373,7 +496,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       });
     }
     return groups;
-  }, [def.elements, def.electronImages, t]);
+  }, [shownElements, def.electronImages, t]);
   // Warn instead of quietly showing a shifted overlay: the two rasters only
   // register when they cover the same field of view.
   const bgFov = fovRatio(pixelSizes, phaseMapHandle.phaseMap?.n_cols,
@@ -411,6 +534,9 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     quantify: handleRegionQuantify, onRegionSelected,
   } = useRegionAverage(displayMode, t);
   const [regionCopied, setRegionCopied] = useState(false);
+  // Summed composition (spectrum source) or mean of pixels (window source):
+  // the panel's description and tooltip say which.
+  const regionSummed = regionAverageIsSummed(regionData, fitStatus?.state);
 
   // Phase Suggestion state (lifted). The suggestion is per-pixel, so the hook
   // also tracks WHICH pixel the shown list belongs to and follows the cursor
@@ -488,7 +614,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       setQuantData(quantRowsFromResponse(res.data));
       setQuantProv(res.data?.quantification || null);
     } catch (err) {
-      setQuantError(err.response?.data?.detail || err.message || t('quantify.error'));
+      setQuantError(edsDetailText(err, t) || err.message || t('quantify.error'));
       setQuantProv(null);
     } finally { setQuantLoading(false); }
   }, [pixelRow, pixelCol, displayMode, t]);
@@ -588,8 +714,9 @@ export default function EDSPage({ onNavigate, isActive = true }) {
       });
     }
 
-    // From EDS metadata: every element not already in the stack
-    for (const el of (def.elements || [])) {
+    // From EDS metadata: every element not already in the stack (one per
+    // element in wt% / at%, see shownElements)
+    for (const el of (shownElements || [])) {
       opts.push({
         value: `eds-${el}`,
         label: t('addLayer.eds', { element: el }),
@@ -597,7 +724,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     }
 
     return opts.filter((opt) => !existing.has(opt.value));
-  }, [hasIndexingResult, stack.layers, def.electronImages, def.elements, t]);
+  }, [hasIndexingResult, stack.layers, def.electronImages, shownElements, t]);
 
   // Map a dropdown id to a full EDS layer object with reasonable defaults
   // (kind, blend, opacity, label). useEdsLayerStack's reducer dedupes on
@@ -649,6 +776,16 @@ export default function EDSPage({ onNavigate, isActive = true }) {
     // Unknown id — silently no-op (reducer would dedupe anyway).
     console.warn('[EDSPage.onAddLayer] unknown layer id:', id);
   }, [stack, displayMode, t]);
+
+  // "Add as map" on an element the spectrum shows and AZtec did not export.
+  // `label` is the fitted family's label, which `/elements` lists (so the
+  // tile grid already has it); this puts it on the composite overlay, on the
+  // element tab -- which is where the page goes, or the click would appear to
+  // do nothing from the phase-map tab.
+  const onAddFitMap = useCallback((label) => {
+    setEdsTab('elements');
+    onAddLayer(`eds-${label}`);
+  }, [onAddLayer]);
 
   // Per-layer threshold control — scalar/element layers only (BC, V-BSE, EDS).
   // PhaseMap layers (phase/IPF/CI) skip the histogram: thresholding on a
@@ -920,31 +1057,33 @@ export default function EDSPage({ onNavigate, isActive = true }) {
         padding: spacing.outerMargin, gap: spacing.outerSpacing, boxSizing: 'border-box',
       }}>
         {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <button onClick={() => onNavigate?.('ebsdviewer')}
+        <PageHeader onNavigate={onNavigate}>
+          <FileSwitcher />
+          <Label secondary small style={{ marginRight: 4 }}>{t('header.displayLabel')}</Label>
+          <ModeToggle value={displayMode} onChange={setDisplayMode} />
+        </PageHeader>
+
+        {/* What the spectrum fit has to say about this file's numbers: that
+            there are none (it failed), or what it found beyond AZtec's maps.
+            Above the tabs, because it is true of both. */}
+        {fitStatus?.state === 'failed' && (
+          <div
+            data-spectrum-fit-failed
+            role="alert"
             style={{
-              background: 'transparent', border: `1px solid ${colors.border}`,
-              borderRadius: 5, padding: '4px 10px', cursor: 'pointer',
-              color: colors.textSecondary, fontSize: '9pt',
-              transition: 'all 0.15s',
+              fontSize: '9pt', color: colors.red, flexShrink: 0,
+              background: alpha(colors.red, 8),
+              border: `1px solid ${alpha(colors.red, 30)}`,
+              borderRadius: 4, padding: '4px 8px',
             }}
-            onMouseEnter={(e) => { e.target.style.borderColor = colors.cyan; e.target.style.color = colors.cyan; }}
-            onMouseLeave={(e) => { e.target.style.borderColor = colors.border; e.target.style.color = colors.textSecondary; }}
-            title={t('header.backTooltip')}>
-            {t('header.back')}
-          </button>
-          <div>
-            <h1 style={{ margin: 0, fontSize: '18pt', fontWeight: 700, color: colors.accent }}>{t('header.title')}</h1>
-            <div style={{ fontSize: '10pt', color: colors.textSecondary, marginTop: 2 }}>
-              {t('header.subtitle')}
-            </div>
+          >
+            {t('spectrumFit.failed', { error: fitStatus.error || '?' })}
           </div>
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-            <FileSwitcher />
-            <Label secondary small style={{ marginRight: 4 }}>{t('header.displayLabel')}</Label>
-            <ModeToggle value={displayMode} onChange={setDisplayMode} />
-          </div>
-        </div>
+        )}
+        {fitStatus?.state === 'ready' && (
+          <SpectrumFitNotice fit={fitStatus.fit} onAddMap={onAddFitMap} />
+        )}
+        {fitStatus?.unreachable && <SpectrumFitUnreachable />}
 
         {/* --- Tabs --------------------------------------------------- */}
         <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
@@ -1365,7 +1504,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                 {quantError && <div role="alert" style={{ fontSize: '9pt', color: colors.red, animation: 'fadeSlideIn 0.2s ease-out' }}>{quantError}</div>}
                 {quantData && (
                   <div style={{ overflowX: 'auto', marginTop: 4, animation: 'fadeSlideIn 0.2s ease-out' }}>
-                    <QuantTable data={quantData} />
+                    <QuantTable data={quantData} source={quantProv?.source} />
                     {/* Same note as the region panel: standardless, no ZAF —
                         and the place where a window that could not be priced
                         is NAMED, since the table can only show an empty
@@ -1401,7 +1540,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
             <GroupBox title={t('regionAvg.title')}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: spacing.innerSpacing }}>
                 <Label secondary small>
-                  {t('regionAvg.description')}
+                  {t(regionSummed ? 'regionAvg.descriptionSummed' : 'regionAvg.description')}
                 </Label>
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-end' }}>
                   <div>
@@ -1428,7 +1567,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                   onClick={() => handleRegionQuantify()}
                   disabled={regionLoading}
                   style={{ width: '100%' }}
-                  title={t('regionAvg.computeTooltip')}
+                  title={t(regionSummed ? 'regionAvg.computeTooltipSummed' : 'regionAvg.computeTooltip')}
                 >
                   {regionLoading ? <span className="btn-loading">{t('regionAvg.compute')}</span> : t('regionAvg.compute')}
                 </Button>
@@ -1442,16 +1581,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
                     <QuantificationNote provenance={regionData.quantification} />
                     <button
                       onClick={() => {
-                        const header = 'Element\tCounts (mean±σ)\tWt.% (mean±σ)\tAt.% (mean±σ)';
-                        const fmtStat = (s) => {
-                          if (!s) return '';
-                          if (typeof s === 'number') return s.toFixed(2);
-                          return `${s.mean?.toFixed(1) ?? ''} ± ${s.std?.toFixed(1) ?? ''}`;
-                        };
-                        const rows = Object.entries(regionData.data).map(([el, vals]) =>
-                          `${el}\t${fmtStat(vals.counts)}\t${fmtStat(vals.wt_pct)}\t${fmtStat(vals.at_pct)}`
-                        );
-                        navigator.clipboard.writeText([header, ...rows].join('\n')).then(() => {
+                        navigator.clipboard.writeText(regionClipboardText(regionData, t)).then(() => {
                           setRegionCopied(true);
                           setTimeout(() => setRegionCopied(false), 1200);
                         }).catch(() => {});

@@ -1,5 +1,6 @@
 import { useCallback, useState } from 'react';
 import { edsApi } from '../../../services/api';
+import { edsDetailText } from '../edsDetailText';
 import { normalizeRect } from '../../../services/rect';
 
 /**
@@ -59,7 +60,7 @@ export function useRegionAverage(displayMode, t) {
       );
       setData(res.data);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || t('regionAvg.error'));
+      setError(edsDetailText(err, t) || err.message || t('regionAvg.error'));
     } finally { setLoading(false); }
   }, [rowStart, rowEnd, colStart, colEnd, displayMode, t]);
 

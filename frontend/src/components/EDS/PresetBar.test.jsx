@@ -315,6 +315,55 @@ describe('the compatibility gate', () => {
     });
   });
 
+  it('a preset made on window numbers says it is expected, in the user\'s language', async () => {
+    // Every built-in preset reads "window" and warns on EVERY spectrum file.
+    // The backend's English sentence says "check the result"; shown raw, on
+    // every apply, it reads like an error. Translated on the code instead,
+    // with the direction from `detail`.
+    checkPreset.mockResolvedValue({
+      data: {
+        ok: true, blockers: [],
+        warnings: [{
+          code: 'preset_made_on_other_source',
+          message: 'The preset was made on window numbers, this scan\'s EDS numbers are spectrum. ...',
+          detail: { preset: 'window', current: 'spectrum' },
+        }],
+      },
+    });
+    const { handle } = await mount();
+    select('Al matrix');
+    fireEvent.click(screen.getByRole('button', { name: 'presets.apply' }));
+    await waitFor(() => expect(handle.setMode).toHaveBeenCalled());
+    const box = await waitFor(() => {
+      const el = document.querySelector('[data-preset-warning="preset_made_on_other_source"]');
+      expect(el).toBeTruthy();
+      return el;
+    });
+    // The translation is what is shown; the backend's English travels only
+    // as the fallback for a build without the string.
+    expect(box.textContent.trim()).toMatch(/^· presets\.otherSourceWindow/);
+    expect(box.textContent).toContain('defaultValue');
+  });
+
+  it('a preset made on spectrum numbers, applied to a window file, gets the other sentence', async () => {
+    checkPreset.mockResolvedValue({
+      data: {
+        ok: true, blockers: [],
+        warnings: [{
+          code: 'preset_made_on_other_source', message: 'x',
+          detail: { preset: 'spectrum', current: 'window' },
+        }],
+      },
+    });
+    const { handle } = await mount();
+    select('Al matrix');
+    fireEvent.click(screen.getByRole('button', { name: 'presets.apply' }));
+    await waitFor(() => expect(handle.setMode).toHaveBeenCalled());
+    await waitFor(() => expect(document.querySelector(
+      '[data-preset-warning="preset_made_on_other_source"]').textContent)
+      .toContain('presets.otherSourceSpectrum'));
+  });
+
   it('a refusal describes ONE preset — changing the selection clears it', async () => {
     checkPreset.mockResolvedValue({
       data: {

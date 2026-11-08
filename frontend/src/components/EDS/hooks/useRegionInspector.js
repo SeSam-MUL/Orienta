@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { edsApi } from '../../../services/api';
+import { edsDetailText } from '../edsDetailText';
 
 export default function useRegionInspector({ selectedRegionId, setSelectedRegionId, mapVersion }) {
   const [detail, setDetail] = useState(null);
@@ -31,7 +32,7 @@ export default function useRegionInspector({ selectedRegionId, setSelectedRegion
       return res.data;
     } catch (e) {
       if (mine !== token.current) return null;
-      setError(e.response?.data?.detail || String(e));
+      setError(edsDetailText(e) || String(e));
       setDetail(null);
       return null;
     } finally {
@@ -57,7 +58,7 @@ export default function useRegionInspector({ selectedRegionId, setSelectedRegion
       setSelectedRegionId?.(res.data.region_id);
     } catch (e) {
       if (mine !== token.current) return;
-      setError(e.response?.data?.detail || String(e));
+      setError(edsDetailText(e) || String(e));
     } finally {
       if (mine === token.current) setLoading(false);
     }

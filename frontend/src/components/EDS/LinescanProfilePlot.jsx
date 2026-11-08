@@ -42,7 +42,20 @@ export default function LinescanProfilePlot({ data, layers }) {
       line: { color: defaultColorFor(id), width: 2 },
     }));
 
+  // A counts linescan on the spectrum source plots NET counts, and the
+  // backend deliberately does not clip them (a profile's dip below zero is
+  // the noise level, which is worth seeing). Said rather than hidden.
+  const netCounts = data.display_mode === 'counts'
+    && data.quantification?.source === 'spectrum';
+
   return (
+    <>
+    {netCounts && (
+      <div data-linescan-net-counts
+        style={{ fontSize: '8pt', color: colors.textSecondary, marginBottom: 2 }}>
+        {t('linescan.netCountsNote')}
+      </div>
+    )}
     <Plot
       data={orderedSeries}
       layout={{
@@ -53,11 +66,15 @@ export default function LinescanProfilePlot({ data, layers }) {
         plot_bgcolor: colors.bg,
         font: { color: colors.text, size: 10 },
         xaxis: { gridcolor: colors.border, zerolinecolor: colors.border, title: t('linescan.axisSample') },
-        yaxis: { gridcolor: colors.border, zerolinecolor: colors.border, title: t('linescan.axisValue') },
+        yaxis: {
+          gridcolor: colors.border, zerolinecolor: colors.border,
+          title: netCounts ? t('linescan.axisNetCounts') : t('linescan.axisValue'),
+        },
         legend: { orientation: 'h', y: 1.18 },
       }}
       style={{ width: '100%' }}
       config={{ displayModeBar: false, responsive: true }}
     />
+    </>
   );
 }

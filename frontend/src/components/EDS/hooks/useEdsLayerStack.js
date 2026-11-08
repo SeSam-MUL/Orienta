@@ -19,6 +19,7 @@
 import { useReducer, useRef, useCallback, useEffect } from 'react';
 import { layerStackReducer, initialState } from '../../PhaseMap/layerStackReducer';
 import { edsApi, ebsdApi, h5Api, phaseMapApi } from '../../../services/api';
+import { edsDetailText } from '../edsDetailText';
 import useEdsColorStore from '../../../stores/useEdsColorStore';
 import { isCropWarning } from '../../common/CropWarningChip';
 
@@ -289,7 +290,7 @@ export function useEdsLayerStack({ initialLayers, displayMode, cacheSize = CACHE
     } catch (err) {
       errorRef.current.set(
         layer.id,
-        err?.response?.data?.detail ?? err.message ?? 'fetch failed',
+        edsDetailText(err) ?? err.message ?? 'fetch failed',
       );
       force();
     } finally {

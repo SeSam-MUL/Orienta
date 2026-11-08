@@ -63,7 +63,21 @@ describe('EDS locale key parity', () => {
         // identical everywhere — "px" and "µm" are not words.
         'phaseMap.scaleUnitTooltip', 'phaseMap.scaleNoStep',
         'presets.saveMatrixTooltip', 'presets.authoredAgainstNothing',
-        'export.art.definitions']) {
+        'export.art.definitions',
+        // The spectrum fit's own sentences (progress, failure, the element
+        // notice, the provenance line, the saved-map and preset notices).
+        'spectrumFit.running', 'spectrumFit.failed', 'spectrumFit.detected',
+        'spectrumFit.addMap', 'spectrumFit.addMapTooltip', 'spectrumFit.quality',
+        'spectrumFit.edsPending', 'spectrumFit.edsFailed',
+        'quantNote.sourceSpectrum', 'quantNote.sourceWindow',
+        'phaseMap.notice.otherSource', 'phaseMap.notice.otherSourceSpectrum',
+        'presets.otherSourceWindow', 'presets.otherSourceSpectrum',
+        'table.netCounts', 'table.netCountsTooltip', 'region.netCountsHeader',
+        'probe.netCounts', 'linescan.axisNetCounts', 'linescan.netCountsNote',
+        'composition.summed', 'composition.mean', 'composition.classifier',
+        'inspector.compositionHintSummed', 'defs.previewMeanTooltipSummed',
+        'spectrumFit.checking', 'spectrumFit.unreachable',
+        'region.wtPctSummedHeader', 'region.atPctSummedHeader']) {
         expect(flat[key], `${lang}.${key}`).not.toBe(enFlat[key]);
       }
     }

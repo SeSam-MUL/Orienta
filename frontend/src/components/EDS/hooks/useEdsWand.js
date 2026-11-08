@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { edsApi } from '../../../services/api';
+import { edsDetailText } from '../edsDetailText';
 
 /**
  * Seeded selection ("magic wand") on the EDS phase map.
@@ -69,7 +70,7 @@ export function useEdsWand() {
       setStep(start);
     } catch (err) {
       clear();
-      setError(err.response?.data?.detail || err.message || 'Wand failed.');
+      setError(edsDetailText(err) || err.message || 'Wand failed.');
     } finally {
       setLoading(false);
     }
@@ -152,7 +153,7 @@ export function useEdsWand() {
       clear();                 // disarm: the next click must not re-seed by accident
       return res.data;
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || 'Assign failed.');
+      setError(edsDetailText(err) || err.message || 'Assign failed.');
       return null;
     } finally {
       setLoading(false);

@@ -10,9 +10,9 @@ well-spaced colours regardless of how many CIFs the user has.
 Holds the result of an auto-classification (per-pixel CIF assignment)
 and any subsequent manual edits, so:
 
-- M3 visualises the phase map without re-classifying on every redraw
-- M4 lets the user paint a region with a different phase id
-- M5 hands per-phase pixel masks to the indexing pipeline
+- the phase map can be drawn without re-classifying on every redraw
+- the user can paint a region with a different phase id
+- per-phase pixel masks can be handed to the indexing pipeline
 
 Lifecycle is **per backend process**: cleared on file open/close so
 stale phase maps from a previous EBSD file can never leak into the
@@ -124,6 +124,33 @@ def _jsonable(value):
     return str(value)
 
 
+_QUANT_SOURCES = ("window", "spectrum")
+
+
+def _quant_source_or_raise(value: Optional[str]) -> str:
+    """A caller's ``quant_source``: absent is "window", unknown is an error."""
+    if value is None or value == "":
+        return "window"
+    if value in _QUANT_SOURCES:
+        return value
+    raise ValueError(
+        f"quant_source must be one of {', '.join(_QUANT_SOURCES)} (got {value!r})")
+
+
+def _quant_source_from_sidecar(value: Any, sidecar: Path) -> str:
+    """The source a sidecar records. Absent reads as "window" (every sidecar
+    written before the spectrum source existed). An unreadable value does not
+    cost the user the map - it is logged and read as "window", the source the
+    app had before it learned to write this key."""
+    if value is None or value == "":
+        return "window"
+    if isinstance(value, str) and value in _QUANT_SOURCES:
+        return value
+    logger.warning("Phase-map sidecar %s records quant_source %r, which this "
+                   "build does not know - reading it as 'window'.", sidecar, value)
+    return "window"
+
+
 def _sidecar_path_for(file_path: str, measurement: Optional[str] = None) -> Path:
     """Return ``<file_path>.phase_map.npz`` — the canonical sidecar name.
 
@@ -207,6 +234,11 @@ class PhaseMapState:
     # Deliberately NOT a second copy of the map - a detail says which regions
     # and how many pixels moved, never which pixels.
     edit_log: List[Dict[str, Any]] = field(default_factory=list)
+    # Which EDS numbers the map was classified from: "window" (AZtec's window
+    # integrals) or "spectrum" (net intensities fitted from the spectrum cube).
+    # A sidecar without the key was written before the spectrum source existed,
+    # i.e. on window numbers. Optional in the sidecar - the schema stays 4.
+    quant_source: str = "window"
     # Every edit ever recorded, including any the cap dropped. len(edit_log)
     # is what is RETAINED; this is what HAPPENED.
     edit_log_total: int = 0
@@ -353,6 +385,7 @@ class PhaseMapStore:
             edit_counts=dict(st.edit_counts or {}),
             edits_tracked=bool(st.edits_tracked),
             region_grid_edited=bool(st.region_grid_edited),
+            quant_source=st.quant_source,
         )
         self._undo_label = label
         self._record_edit(st, label, detail)
@@ -447,16 +480,22 @@ class PhaseMapStore:
         region_defs: Optional[List[dict]] = None,
         element_weights: Optional[Dict[str, float]] = None,
         settings: Optional[Dict[str, Any]] = None,
+        quant_source: Optional[str] = None,
         measurement: Optional[str] = None,
     ) -> None:
         """Replace the stored classification with a freshly computed one.
+
+        ``quant_source`` says which EDS numbers the map was made from
+        ("window" / "spectrum"); a caller that does not say made it on window
+        numbers, which is the truth about every caller from before the spectrum
+        source. Anything else raises.
 
         ``measurement`` names the measurement of ``file_path`` the map is classified on (None: the
         default one); it decides the sidecar the map is saved to.
 
         ``preserve_locked`` carries the user's hand-assigned pixels across
         the re-classify. ``locked_mask`` has been written on every manual
-        edit since M4 and read by NOTHING: this method used to hardcode
+        edit and was read by NOTHING: this method used to hardcode
         ``locked_mask=None``, so every re-classify silently destroyed the
         corrections the mask exists to protect. The docstring on the field
         says it is there "so the next auto-classify round does not silently
@@ -474,6 +513,7 @@ class PhaseMapStore:
         Auto-saves a sidecar when ``file_path`` is known, so a backend
         restart doesn't lose the classification.
         """
+        source = _quant_source_or_raise(quant_source)
         with self._lock:
             self._snapshot("re-classify")
             n_rows, n_cols = phase_grid.shape
@@ -524,6 +564,7 @@ class PhaseMapStore:
                 region_defs=list(region_defs or []),
                 element_weights=dict(element_weights or {}),
                 settings=dict(settings or {}),
+                quant_source=source,
                 # A fresh classification starts a fresh record: the counts are
                 # "since this classification", the only span in which they
                 # mean anything. Tracked from here on, so 0 is a measurement.
@@ -541,7 +582,7 @@ class PhaseMapStore:
         with self._lock:
             return self._state
 
-    # --- Editing (M4) ---
+    # --- Editing ---
 
     def assign_region(
         self,
@@ -1085,6 +1126,9 @@ class PhaseMapStore:
                 "edit_counts": {str(k): int(v)
                                 for k, v in (state.edit_counts or {}).items()},
                 "region_grid_edited": bool(state.region_grid_edited),
+                # OPTIONAL as well (schema stays 4): which EDS numbers the map
+                # was made from. A sidecar without it reads as "window".
+                "quant_source": state.quant_source,
                 # OPTIONAL, like the keys above: which measurement of the file the map is for (absent
                 # = the default one, which is every sidecar written before it was recorded).
                 "measurement": measurement,
@@ -1233,6 +1277,8 @@ class PhaseMapStore:
                 edit_counts={str(k): int(v) for k, v in
                              (meta.get("edit_counts") or {}).items()},
                 region_grid_edited=bool(meta.get("region_grid_edited", False)),
+                quant_source=_quant_source_from_sidecar(
+                    meta.get("quant_source"), sidecar),
             )
             # Splitting and snapping need the composition, which is derived
             # data and deliberately not in the sidecar. Both fail loud with a
@@ -1244,7 +1290,7 @@ class PhaseMapStore:
                     sidecar, len(entries), n_rows, n_cols)
         return True
 
-    # --- Read API for indexing (M5) and visualisation (M3) ---
+    # --- Read API for indexing and visualisation ---
 
     def phase_summary(self) -> List[Dict]:
         """Per-phase counts + percentage for the legend / phase list UI."""
@@ -1288,7 +1334,7 @@ class PhaseMapStore:
     def get_phase_masks(self) -> Tuple[List[CifPhaseEntry], Dict[int, np.ndarray]]:
         """Return ``({phase_index: bool_mask_2d}, ordered_phase_entries)``.
 
-        Used by the indexing pipeline (M5) to drive a per-phase run:
+        Used by the indexing pipeline to drive a per-phase run:
         for each entry that has a non-empty mask, run indexing only on
         those pixels with that phase as the candidate. Unclassified
         pixels are excluded entirely — those need to be either

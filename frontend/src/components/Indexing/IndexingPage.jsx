@@ -53,9 +53,11 @@ import SinglePixelPhaseTestDialog from './SinglePixelPhaseTestDialog';
 import { useHeatmapPick } from '../common/useHeatmapPick';
 import SelectedPhasesList from './SelectedPhasesList';
 import EdsPreflightPanel from './EdsPreflightPanel';
+import { chemMaskErrorText } from './chemMaskError';
 import { buildEdsPhaseStrengths, edsPriorActive } from './edsPriorParams';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useZoomViews, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
+import { useSpectrumFitStatus } from '../EDS/hooks/useSpectrumFitStatus';
 import ScaleLegend from '../PhaseMap/ScaleLegend';
 import { isZoomed, viewToTransform } from '../EDS/zoomView';
 import { zoomRectPct } from '../EBSDViewer/zoomOverlay';
@@ -1032,6 +1034,9 @@ function NavigationMapPanel({
   onEdsLayersChange,
   edsOverlayLayers,
   edsFileKey,
+  edsFitState,     // the open file's spectrum fit: the overlay waits for it
+  edsFitProgress,
+  edsFitLines,     // the line each element is quantified through (fit.lines)
   maskOverlayData,
   // Chemistry filter
   chemFilters,
@@ -1342,6 +1347,9 @@ function NavigationMapPanel({
         onToggle={onEdsOverlayToggle}
         onLayersChange={onEdsLayersChange}
         fileKey={edsFileKey}
+        fitState={edsFitState}
+        fitProgress={edsFitProgress}
+        fitLines={edsFitLines}
       />
     </div>
   );
@@ -1474,6 +1482,54 @@ export function useAllowedPaths(activeName, method, collections) {
     return () => { cancelled = true; };
   }, [activeName, method, membersSignature]);
   return allowedPaths;
+}
+
+/**
+ * The EDS pre-flight for the indexing run: `{result, loading, error}`.
+ *
+ * Asked when its inputs change -- the EDS switch (`enabled`), the dataset,
+ * the phase list (`phaseKey`, newline-joined paths) -- AND when the spectrum
+ * fit of the open file changes state (`fitState`, from
+ * useSpectrumFitStatus). The pre-flight reads the prior's
+ * numbers -- AZtec's window maps (backend eds_indexing_prior.PRIOR_EDS_SOURCE)
+ * -- and is not blocked while the spectra are being evaluated. The fit state
+ * stays an input: a prior switched to the spectrum numbers would be blocked
+ * until the fit is done, and then nothing else would ask again.
+ *
+ * Debounced so click-through phase selection doesn't fire one request per
+ * click. A failed fetch degrades to "check unavailable" and NEVER blocks
+ * indexing. Exported so it can be tested without rendering the page.
+ */
+export function useEdsPreflight({ enabled, dataset, phaseKey, fitState }) {
+  const [result, setResult] = useState(null);          // last response
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);            // string | null
+  useEffect(() => {
+    if (!enabled) {
+      setResult(null);
+      setError(null);
+      setLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setLoading(true);
+    const timer = setTimeout(() => {
+      indexApi.edsPreflight(phaseKey ? phaseKey.split('\n') : [])
+        .then(r => {
+          if (cancelled) return;
+          setResult(r.data || null);
+          setError(null);
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setResult(null);
+          setError(err?.response?.data?.detail || err?.message || 'error');
+        })
+        .finally(() => { if (!cancelled) setLoading(false); });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [enabled, dataset, phaseKey, fitState]);
+  return { result, loading, error };
 }
 
 // ---------------------------------------------------------------------------
@@ -1641,7 +1697,7 @@ export default function IndexingPage({ isActive }) {
   const [filterStats, setFilterStats]   = useState(null); // per-filter pixel counts from backend
 
   // --- Per-phase routing (EDS phase-map handoff) ---
-  // When the user comes in via "→ Send to Indexing", the M5 handoff
+  // When the user comes in via "→ Send to Indexing", the phase-map handoff
   // useEffect installs the union mask AND switches this on by default
   // so the run uses per-phase pixel routing instead of letting every
   // phase compete for every classified pixel. Toggle is visible only
@@ -1676,9 +1732,8 @@ export default function IndexingPage({ isActive }) {
   // the map. Only two states are meaningful: off, or on for EVERY phase.
   // Default ON; buildParams omits the field entirely when off.
   const [edsEnabled, setEdsEnabled] = useState(true);
-  const [edsPreflight, setEdsPreflight] = useState(null);          // last response
-  const [edsPreflightLoading, setEdsPreflightLoading] = useState(false);
-  const [edsPreflightError, setEdsPreflightError] = useState(null); // string | null
+  // The pre-flight's own state lives in useEdsPreflight (below, where its
+  // inputs are known).
 
   // --- Required files ---
   const [discoveredFiles, setDiscoveredFiles] = useState([]);
@@ -2712,38 +2767,25 @@ export default function IndexingPage({ isActive }) {
     phasePaths: effectivePhasePaths,
   });
 
-  // Re-run the check when the dataset or the phase list changes. Debounced so
-  // click-through phase selection doesn't fire one request per click. A failed
-  // fetch degrades to "check unavailable" and NEVER blocks indexing.
+  // Re-run the check when the dataset or the phase list changes -- and when
+  // the spectrum fit of the open file changes state. The check reads the
+  // window numbers and is not blocked by a running fit; the fit state only
+  // matters if the prior is ever switched to the spectrum numbers (see
+  // useEdsPreflight).
   // The dependency is the joined string, not the array: the memo above yields a
   // fresh array whenever selectedDictPaths is replaced, which would re-fire the
   // request for an unchanged list. Newline-joined — real paths contain spaces.
   const edsPreflightKey = effectivePhasePaths.join('\n');
-  useEffect(() => {
-    if (!edsEnabled || !edsOverlayAvailable || !dataLoaded) {
-      setEdsPreflight(null);
-      setEdsPreflightError(null);
-      setEdsPreflightLoading(false);
-      return undefined;
-    }
-    let cancelled = false;
-    setEdsPreflightLoading(true);
-    const timer = setTimeout(() => {
-      indexApi.edsPreflight(edsPreflightKey ? edsPreflightKey.split('\n') : [])
-        .then(r => {
-          if (cancelled) return;
-          setEdsPreflight(r.data || null);
-          setEdsPreflightError(null);
-        })
-        .catch(err => {
-          if (cancelled) return;
-          setEdsPreflight(null);
-          setEdsPreflightError(err?.response?.data?.detail || err?.message || 'error');
-        })
-        .finally(() => { if (!cancelled) setEdsPreflightLoading(false); });
-    }, 300);
-    return () => { cancelled = true; clearTimeout(timer); };
-  }, [edsEnabled, edsOverlayAvailable, dataLoaded, selectedDataset, edsPreflightKey]);
+  const spectrumFit = useSpectrumFitStatus(dataLoaded ? filePath : null,
+    { active: isActive });
+  const {
+    result: edsPreflight, loading: edsPreflightLoading, error: edsPreflightError,
+  } = useEdsPreflight({
+    enabled: !!(edsEnabled && edsOverlayAvailable && dataLoaded),
+    dataset: selectedDataset,
+    phaseKey: edsPreflightKey,
+    fitState: spectrumFit.state,
+  });
 
   // Blocking pre-flight verdict (today: an EDS/EBSD grid mismatch, which would
   // pair every pattern with the wrong pixel's chemistry). Only bites while the
@@ -3067,7 +3109,7 @@ export default function IndexingPage({ isActive }) {
         });
       }
     } catch (err) {
-      setChemPreview(t('mask.maskFailed', { error: err.response?.data?.detail || err.message }));
+      setChemPreview(chemMaskErrorText(err, t));
     }
   }
 
@@ -3187,6 +3229,9 @@ export default function IndexingPage({ isActive }) {
       onEdsLayersChange={handleEdsLayersChange}
       edsOverlayLayers={edsOverlayLayers}
       edsFileKey={`${filePath || ''}::${selectedDataset || ''}`}
+      edsFitState={spectrumFit.state}
+      edsFitProgress={spectrumFit.progress}
+      edsFitLines={spectrumFit.state === 'ready' ? (spectrumFit.fit?.lines ?? null) : null}
       maskOverlayData={maskOverlayData}
       chemFilters={chemFilters}
       onAddChemFilter={addChemFilter}

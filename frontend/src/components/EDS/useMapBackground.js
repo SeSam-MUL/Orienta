@@ -19,6 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { edsApi, h5Api } from '../../services/api';
+import { edsDetailText } from './edsDetailText';
 
 export const BG_NONE = 'none';
 
@@ -84,7 +85,7 @@ export default function useMapBackground({ displayMode = 'at_pct', datasetKey } 
       setCrop(res.data?.crop || null);
     }).catch((e) => {
       if (mine !== token.current) return;
-      setError(e.response?.data?.detail || String(e));
+      setError(edsDetailText(e) || String(e));
       setImage(null); setShape(null); setCrop(null);
     }).finally(() => {
       if (mine === token.current) setLoading(false);

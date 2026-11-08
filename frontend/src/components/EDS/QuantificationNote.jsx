@@ -20,10 +20,34 @@ import { colors, alpha } from '../../theme/components';
  * (amber) when there is something specific to say: a spectral overlap, an
  * extrapolated line, a beam voltage the calibration does not cover.
  */
+/**
+ * Where the intensities came from: `"spectrum"` (net line intensities from
+ * the spectrum fit), `"window"` (AZtec's window integrals, background
+ * included) or null for a provenance from before the source was recorded.
+ *
+ * The short `source` field first; the sentence `source_data`
+ * (`eds_utils.quantification_provenance`) as the fallback, read by its
+ * opening words.
+ */
+export function quantSourceOf(provenance) {
+  const src = provenance?.source;
+  if (src === 'spectrum' || src === 'window') return src;
+  const data = String(provenance?.source_data || '');
+  if (data.startsWith('spectrum fit')) return 'spectrum';
+  if (data.startsWith('vendor')) return 'window';
+  return null;
+}
+
 export default function QuantificationNote({ provenance }) {
   const { t } = useTranslation('eds');
   const [open, setOpen] = useState(false);
   if (!provenance) return null;
+  const source = quantSourceOf(provenance);
+  // Lines the spectrum fit leaves a residual of more than 5 % of their area
+  // at: a specific caveat about THESE numbers, so it counts like one.
+  const quality = source === 'spectrum'
+    ? (provenance.fit?.quality_warnings || []).filter((q) => q && q.family)
+    : [];
 
   const assumedKv = provenance.beam_kv_assumed === true;
   // The backend puts the assumed-voltage note in `warnings` too, so that log
@@ -34,7 +58,8 @@ export default function QuantificationNote({ provenance }) {
     .filter((w) => !(assumedKv && typeof w === 'string'
       && w.startsWith('beam voltage ')));
   const overlaps = provenance.spectral_overlaps || [];
-  const hasSpecifics = warnings.length > 0 || overlaps.length > 0 || assumedKv;
+  const hasSpecifics = warnings.length > 0 || overlaps.length > 0 || assumedKv
+    || quality.length > 0;
   const tone = hasSpecifics ? colors.yellow : colors.textSecondary;
 
   return (
@@ -63,10 +88,25 @@ export default function QuantificationNote({ provenance }) {
       >
         {hasSpecifics ? '⚠ ' : 'ⓘ '}
         {t('quantNote.headline', {
-          count: warnings.length + overlaps.length + (assumedKv ? 1 : 0),
+          count: warnings.length + overlaps.length + (assumedKv ? 1 : 0)
+            + quality.length,
         })}
         <span style={{ marginLeft: 6, opacity: 0.7 }}>{open ? '▴' : '▾'}</span>
       </button>
+
+      {/* Where the numbers come from, always on screen rather than behind
+          the click: a file without
+          spectra gets a visible label (its numbers include the background), and the spectrum
+          source is what makes a negative net count or a changed at% make
+          sense. */}
+      {source && (
+        <div
+          data-quant-source={source}
+          style={{ marginTop: 3, color: colors.textSecondary, lineHeight: 1.4 }}
+        >
+          {t(source === 'spectrum' ? 'quantNote.sourceSpectrum' : 'quantNote.sourceWindow')}
+        </div>
+      )}
 
       {open && (
         <div style={{ marginTop: 5, lineHeight: 1.5 }}>
@@ -95,6 +135,14 @@ export default function QuantificationNote({ provenance }) {
               {t('quantNote.overlap', {
                 window: (o.window || []).join(' '),
                 interferer: (o.interferer || []).join(' '),
+              })}
+            </div>
+          ))}
+          {quality.map((q) => (
+            <div key={`fit-${q.family}`} style={{ marginTop: 3 }}>
+              {t('spectrumFit.quality', {
+                pct: Math.abs(100 * Number(q.residual_fraction || 0)).toFixed(1),
+                line: q.family,
               })}
             </div>
           ))}

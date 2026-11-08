@@ -24,6 +24,7 @@ import PhaseRollup from './PhaseRollup';
 import OpacitySlider from '../common/OpacitySlider';
 import CropWarningChip from '../common/CropWarningChip';
 import { BG_NONE } from './useMapBackground';
+import { compositionMethodKey } from './compositionMethod';
 
 /** Short, readable composition: the elements that actually carry signal. */
 export function describeComposition(meanAtPct, maxElements = 4) {
@@ -231,6 +232,17 @@ export default function RegionPanel({ handle }) {
       <Label secondary small style={{ display: 'block' }}>
         {t('regions.reclassifyHint')}
       </Label>
+
+      {/* How the compositions below were made: on the spectrum source the
+          summed net counts of each region, quantified once; on the window
+          source the mean of its pixels. Absent while they are left out. */}
+      {compositionMethodKey(regions[0]?.composition_method) && (
+        <div data-composition-method={regions[0].composition_method}
+             style={{ fontSize: '7.5pt', color: C.textSecondary, marginTop: 4,
+                      lineHeight: 1.35 }}>
+          {t(compositionMethodKey(regions[0].composition_method))}
+        </div>
+      )}
 
       {/* --- the regions --------------------------------------------- */}
       <div

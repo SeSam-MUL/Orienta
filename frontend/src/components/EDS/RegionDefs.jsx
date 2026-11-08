@@ -33,6 +33,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next';
 
 import { edsApi } from '../../services/api';
+import { edsDetailText } from './edsDetailText';
+import { COMPOSITION_SUMMED_NETS } from './compositionMethod';
 import { Label, colors as C, alpha, spacing } from '../../theme/components';
 
 const NUM = { width: 52, fontSize: '8.5pt', padding: '1px 3px' };
@@ -181,7 +183,7 @@ export default function RegionDefs({
         setPreviewErr(t('defs.seedPixelNothing', { row, col }));
       }
     } catch (err) {
-      setPreviewErr(err.response?.data?.detail || err.message);
+      setPreviewErr(edsDetailText(err, t) || err.message);
     }
   }, [defs, setDefs, scale, t]);
 
@@ -237,7 +239,7 @@ export default function RegionDefs({
       const res = await edsApi.previewRegionDefs({ regionDefs: list, scale });
       setPreview(res.data);
     } catch (err) {
-      setPreviewErr(err.response?.data?.detail || err.message);
+      setPreviewErr(edsDetailText(err, t) || err.message);
     } finally {
       setPreviewing(false);
     }
@@ -434,7 +436,10 @@ export default function RegionDefs({
             {pv?.mean_at_pct && Object.keys(pv.mean_at_pct).length > 0 && (
               <div style={{ fontSize: '8pt', color: C.textSecondary,
                             marginTop: 1 }}
-                   title={t('defs.previewMeanTooltip')}>
+                   data-composition-method={preview?.composition_method || undefined}
+                   title={preview?.composition_method === COMPOSITION_SUMMED_NETS
+                     ? t('defs.previewMeanTooltipSummed')
+                     : t('defs.previewMeanTooltip')}>
                 {Object.entries(pv.mean_at_pct).slice(0, 5)
                   .map(([el, v]) => `${el} ${v}`).join(' · ')} at%
               </div>

@@ -25,6 +25,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { edsApi } from '../../services/api';
+import { edsDetailText, edsStatusText } from './edsDetailText';
+import { compositionMethodKey } from './compositionMethod';
 import {
   colors as C, alpha,
   Button, NumberInput, GroupBox, Label,
@@ -164,12 +166,12 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
   const [tolerance, setTolerance] = useState(DEFAULT_TOLERANCE);
   const [minScore, setMinScore] = useState(DEFAULT_MIN_SCORE);
 
-  // Manual region paint state (M4)
+  // Manual region paint state
   const [selectedPhaseIndex, setSelectedPhaseIndex] = useState(null);
   const [region, setRegion] = useState({ rowStart: 0, rowEnd: 0, colStart: 0, colEnd: 0 });
   const [assignBusy, setAssignBusy] = useState(false);
 
-  // Paint mode: 'rectangle' uses drag-to-rect (M4-rect), 'polygon' uses
+  // Paint mode: 'rectangle' uses drag-to-rect, 'polygon' uses
   // click-to-add-vertex with explicit close (added later — rectangle is
   // good for axis-aligned regions, polygon for irregular grain
   // outlines).
@@ -537,7 +539,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       setMapVersion((v) => v + 1);
       return res.data;
     } catch (e) {
-      setError(e.response?.data?.detail || String(e));
+      setError(edsDetailText(e) || String(e));
       return null;
     } finally {
       setRegionBusy(false);
@@ -633,7 +635,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       // hand describe groups that no longer exist.
       setHandNamedRegionIds(new Set());
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || t('phaseMap.errorClassify'));
+      setError(edsDetailText(err, t) || err.message || t('phaseMap.errorClassify'));
     } finally {
       setLoading(false);
     }
@@ -675,7 +677,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       setSelectedPhaseIndex(null);
       setHandNamedRegionIds(new Set());
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || t('phaseMap.errorClear'));
+      setError(edsDetailText(err, t) || err.message || t('phaseMap.errorClear'));
     } finally {
       setLoading(false);
     }
@@ -691,7 +693,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
         Number(row), Number(row), Number(col), Number(col), Number(phaseIndex));
       setPhaseMap(res.data);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || t('phaseMap.errorAssign'));
+      setError(edsDetailText(err, t) || err.message || t('phaseMap.errorAssign'));
     } finally {
       setAssignBusy(false);
     }
@@ -703,7 +705,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       const res = await edsApi.phaseMapUndo();
       setPhaseMap(res.data);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || t('phaseMap.errorAssign'));
+      setError(edsDetailText(err, t) || err.message || t('phaseMap.errorAssign'));
     }
   }, [t]);
 
@@ -717,7 +719,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       const res = await edsApi.replacePhase(Number(fromIdx), Number(toIdx));
       setPhaseMap(res.data);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || t('phaseMap.errorAssign'));
+      setError(edsDetailText(err, t) || err.message || t('phaseMap.errorAssign'));
     } finally {
       setAssignBusy(false);
     }
@@ -735,7 +737,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       );
       setPhaseMap(res.data);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || t('phaseMap.errorAssign'));
+      setError(edsDetailText(err, t) || err.message || t('phaseMap.errorAssign'));
     } finally {
       setAssignBusy(false);
     }
@@ -754,7 +756,7 @@ export function usePhaseMap({ onIndexingHandoff } = {}) {
       setPhaseMap(res.data);
       setPolygonVertices([]);
     } catch (err) {
-      setError(err.response?.data?.detail || err.message || t('phaseMap.errorPolygon'));
+      setError(edsDetailText(err, t) || err.message || t('phaseMap.errorPolygon'));
     } finally {
       setAssignBusy(false);
     }
@@ -1544,6 +1546,68 @@ export function ClassifyWarnings({ warnings, t }) {
 }
 
 /**
+ * What the phase-map payload says about itself: `notices` and `eds_status`.
+ *
+ * `notices` (`_source_notices` in routes/eds.py): the saved map was made on
+ * the other EDS numbers than the open file serves. Its regions, definitions
+ * and rules were set on those; nothing was converted, so the same thresholds
+ * may now select other pixels -- and saying so is the only protection there
+ * is. `eds_status` (`fit_status_marker`): the map is shown while
+ * the spectrum fit runs, or after it failed, WITHOUT its region compositions;
+ * an empty composition with no reason reads as "no chemistry here".
+ *
+ * Translated on the code; the backend's English sentence is the fallback for
+ * a code this build does not know. Module level, like ClassifyWarnings.
+ */
+export function PhaseMapNotices({ notices, edsStatus, t }) {
+  const list = (Array.isArray(notices) ? notices : [])
+    .filter((n) => n && (n.code || n.message));
+  if (list.length === 0 && !edsStatus) return null;
+  const ORANGE = C.orange || '#f0b429';
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      {list.map((n, i) => {
+        const code = String(n.code || '');
+        const prose = typeof n.message === 'string' && n.message.trim() ? n.message : '';
+        const key = code === 'sidecar_made_on_other_source'
+          ? (n.detail?.sidecar === 'spectrum'
+            ? 'phaseMap.notice.otherSourceSpectrum' : 'phaseMap.notice.otherSource')
+          : null;
+        return (
+          <div
+            key={code || i}
+            data-phase-map-notice={code || 'unknown'}
+            role="status"
+            style={{
+              fontSize: '8.5pt', lineHeight: 1.35, color: ORANGE,
+              background: alpha(ORANGE, 8),
+              border: `1px solid ${alpha(ORANGE, 30)}`,
+              borderRadius: 4, padding: '4px 6px',
+            }}
+          >
+            {key ? t(key, prose ? { defaultValue: prose } : undefined) : prose}
+          </div>
+        );
+      })}
+      {edsStatus && (
+        <div
+          data-eds-status={edsStatus.state}
+          role={edsStatus.state === 'failed' ? 'alert' : 'status'}
+          style={{
+            fontSize: '8.5pt', lineHeight: 1.35,
+            color: edsStatus.state === 'failed' ? C.red : C.textSecondary,
+            border: `1px solid ${alpha(edsStatus.state === 'failed' ? C.red : C.border, 40)}`,
+            borderRadius: 4, padding: '4px 6px',
+          }}
+        >
+          {edsStatusText(edsStatus, t)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * The hand-edit counters, in the order a reviewer reads them.
  *
  * Mirrors `_OP_COUNTER` in `phase_map_store.py`. A counter the backend adds
@@ -2012,6 +2076,14 @@ export function PhaseMapControls({ handle }) {
             for a while and nothing on this page was listening. --- */}
         <ClassifyWarnings warnings={classifyWarnings} t={t} />
 
+        {/* --- What the map payload says about itself: made on the other
+                EDS numbers, or shown without its compositions while the
+                spectrum fit runs or after it failed. --- */}
+        {hasMap && (
+          <PhaseMapNotices notices={phaseMap?.notices}
+                           edsStatus={phaseMap?.eds_status} t={t} />
+        )}
+
         {/* --- What a human changed after the classifier had its say ---
             The counts, not the pixels. A reviewer signing a map off has to be
             able to tell "merged nothing" from "merged until it looked
@@ -2044,6 +2116,15 @@ export function PhaseMapControls({ handle }) {
               maxHeight: 240, overflowY: 'auto', marginTop: 4,
               border: `1px solid ${C.border}`, borderRadius: 4, padding: 4,
             }}>
+              {/* These means are the classifier's (each group's smoothed
+                  interior pixels), not the region composition the region
+                  list and the inspector show; side by side they must not
+                  read as the same number. */}
+              <div data-cluster-composition-note
+                style={{ fontSize: '7.5pt', color: C.textSecondary,
+                         padding: '0 2px 3px', lineHeight: 1.35 }}>
+                {t('composition.classifier')}
+              </div>
               {clusters.map((c) => (
                 <div key={c.cluster_id} style={{
                   padding: '4px 2px',
@@ -2228,7 +2309,7 @@ export function PhaseMapControls({ handle }) {
                    title={t('regions.handToolsTooltip')}>
             {t('regions.handTools')}
           </summary>
-        {/* --- Region painting (M4) --- */}
+        {/* --- Region painting --- */}
         {hasMap && (
           <div style={{
             display: 'flex', flexDirection: 'column', gap: 4,
@@ -2342,7 +2423,11 @@ export function PhaseMapControls({ handle }) {
               style={{ width: '100%', accentColor: C.cyan, marginTop: 2 }}
             />
             {wand.stats && wand.stats.n_pixels > 0 && (
-              <div style={{ fontSize: '8pt', color: C.textSecondary, marginTop: 2 }}>
+              <div style={{ fontSize: '8pt', color: C.textSecondary, marginTop: 2 }}
+                   data-composition-method={wand.stats.composition_method || undefined}
+                   title={compositionMethodKey(wand.stats.composition_method)
+                     ? t(compositionMethodKey(wand.stats.composition_method))
+                     : undefined}>
                 {Object.entries(wand.stats.mean_at_pct)
                   .sort((a, b) => b[1] - a[1]).slice(0, 5)
                   .map(([el, v]) => el + ' ' + v).join(' · ')}
@@ -2562,7 +2647,7 @@ export function PhaseMapControls({ handle }) {
 
         </details>
 
-        {/* --- Send to indexing (M5 entry point) --- */}
+        {/* --- Send to indexing --- */}
         {hasMap && realPhases.length > 0 && (
           <Button
             variant="primary"

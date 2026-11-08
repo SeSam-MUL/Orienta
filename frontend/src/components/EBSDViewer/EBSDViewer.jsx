@@ -216,11 +216,13 @@ function EdsOverlay({ composition, mode }) {
 // ---------------------------------------------------------------------------
 import { toast } from '../../stores/useToastStore';
 import { disambiguateNames } from './disambiguateNames';
+import { useViewerEds, edsCompositionText } from './useViewerEds';
 
 export default function EBSDViewer({ onNavigate, isActive }) {
   const { t } = useTranslation(['ebsdviewer', 'imageexport', 'common']);
   const { ebsdLoaded, ebsdInfo, setEBSDLoaded, setFileData, setMetadata,
-          setNavigationGrid, setPendingChemMask, stepSize } = useDataStore();
+          setNavigationGrid, setPendingChemMask, stepSize,
+          isFileOpen, filePath: openFilePath } = useDataStore();
   const [askConfirm, confirmProps] = useConfirm();
   const [askPrompt, promptProps] = usePrompt();
 
@@ -279,7 +281,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   // Band Contrast is sourced from Aztec's precomputed per-pixel array (read
   // in ~ms regardless of file size). Mean Intensity, by contrast, has to read
   // every pattern off a lazy multi-GB signal, so it must not be the default —
-  // it made the overview appear to hang on large files (session 2026-06-01).
+  // it made the overview appear to hang on large files.
   const [overviewMode, setOverviewMode] = useState('Band Contrast');
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewError, setOverviewError] = useState(null);
@@ -326,8 +328,15 @@ export default function EBSDViewer({ onNavigate, isActive }) {
 
   // --- EDS ---
   const [edsMode, setEdsMode] = useState('At.%');
-  const [edsComposition, setEdsComposition] = useState(null);
-  const [edsPhases, setEdsPhases] = useState(null);
+  // One pixel's composition and phase suggestions, asked again when the
+  // spectrum fit of the open file turns ready (./useViewerEds.js). Keyed on
+  // the OPEN file, not on `filePath` above -- that one is the path field.
+  const {
+    composition: edsComposition, phases: edsPhases, fetchEds, fetchEdsAfterLoad,
+    fit: edsFit,
+  } = useViewerEds({
+    filePath: isFileOpen ? openFilePath : null, active: isActive, edsMode,
+  });
   const [showEdsOverlay, setShowEdsOverlay] = useState(false);
 
   // --- Zoom/pan for the two images ---
@@ -729,18 +738,6 @@ export default function EBSDViewer({ onNavigate, isActive }) {
   }, [isActive, overviewStale, overviewLoading, geometryKey, overviewMode, fetchDatasets, fetchOverview]);
 
 
-  const fetchEds = useCallback(async (r, c) => {
-    try {
-      const modeMap = { 'Counts': 'counts', 'Wt.%': 'wt_pct', 'At.%': 'at_pct' };
-      const res = await edsApi.quantifyPixel(r, c, modeMap[edsMode] || 'at_pct');
-      setEdsComposition(res.data);
-    } catch { setEdsComposition(null); }
-    try {
-      const res = await edsApi.suggestPhases(r, c);
-      setEdsPhases(res.data);
-    } catch { setEdsPhases(null); }
-  }, [edsMode]);
-
   const navigateTo = useCallback((r, c) => {
     const nr = Math.max(0, Math.min(r, maxRow));
     const nc = Math.max(0, Math.min(c, maxCol));
@@ -832,7 +829,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         refreshLoadedFiles(),
       ]);
       fetchOverview(overviewMode); // background — runs server-side in to_thread
-      fetchEds(0, 0);
+      fetchEdsAfterLoad(0, 0);
       fetchAtlas(); // load pattern atlas in background for instant drag
       const fname = path.split(/[\\/]/).pop();
       if (info.content_mode === 'eds_only') {
@@ -876,7 +873,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } finally {
       setLoadLoading(false);
     }
-  }, [log, t, onNavigate, setEBSDLoaded, setFileData, setMetadata, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+  }, [log, t, onNavigate, setEBSDLoaded, setFileData, setMetadata, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEdsAfterLoad, fetchAtlas]);
 
   // Every way of opening a file (typed path, Browse, recent list, drop, the HDF5 viewer's hand-off)
   // comes through here. An EDAX APEX metadata file lists measurements and holds no patterns, so it
@@ -1034,7 +1031,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
         refreshLoadedFiles(),
       ]);
       fetchOverview(overviewMode);
-      fetchEds(0, 0);
+      fetchEdsAfterLoad(0, 0);
       fetchAtlas();
       log(t('logMessages.switchedFile', { name: fname }));
       toast.success(t('logMessages.switchedToast', { name: fname }));
@@ -1053,7 +1050,7 @@ export default function EBSDViewer({ onNavigate, isActive }) {
     } finally {
       setFileSwitching(false);
     }
-  }, [filePath, fileSwitching, log, t, onNavigate, setEBSDLoaded, setFileData, setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+  }, [filePath, fileSwitching, log, t, onNavigate, setEBSDLoaded, setFileData, setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEdsAfterLoad, fetchAtlas]);
 
   // The header <FileSwitcher/> does the backend switch + global-store sync
   // itself. This callback re-syncs the EBSD viewer's OWN local state
@@ -1082,9 +1079,9 @@ export default function EBSDViewer({ onNavigate, isActive }) {
       refreshLoadedFiles(),
     ]);
     fetchOverview(overviewMode);
-    fetchEds(0, 0);
+    fetchEdsAfterLoad(0, 0);
     fetchAtlas();
-  }, [setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEds, fetchAtlas]);
+  }, [setFilePath, loadPattern, loadDetector, fetchMetadata, fetchDatasets, refreshLoadedFiles, fetchOverview, overviewMode, fetchEdsAfterLoad, fetchAtlas]);
 
   // A result activated on another page brought up its file or variant: the same re-read. Compared
   // with the count at mount, because a viewer that opens later reads the backend by itself.
@@ -2563,13 +2560,8 @@ export default function EBSDViewer({ onNavigate, isActive }) {
           fontSize: '9pt', color: colors.textSecondary, marginBottom: spacing.innerSpacing,
           minHeight: 28, wordBreak: 'break-word',
         }}>
-          {edsComposition?.data
-            ? Object.entries(edsComposition.data).map(([el, vals]) => {
-                const modeKey = { 'Counts': 'counts', 'Wt.%': 'wt_pct', 'At.%': 'at_pct' }[edsMode] || 'at_pct';
-                const v = vals[modeKey] ?? vals.counts ?? 0;
-                return `${el}: ${typeof v === 'number' ? v.toFixed(1) : v}${edsMode !== 'Counts' ? '%' : ''}`;
-              }).join(' | ')
-            : t('eds.noData')}
+          {edsCompositionText(edsComposition, edsMode, edsFit,
+            !!(isFileOpen && openFilePath), t)}
         </div>
 
         {/* Phase suggestions */}

@@ -32,6 +32,17 @@ from backend.api.services.h5_session import (
     active_measurement, get_active_extractor as get_extractor, is_open,
     sync_phase_map_store,
 )
+# On a file with a spectrum cube every map read raises one of these (HTTP 503
+# while the fit runs, 500 when it failed). They are HTTPExceptions, so every
+# `except HTTPException: raise` passes them. Two kinds of response, two rules:
+# one whose PURPOSE is EDS numbers raises them (and an endpoint that changes
+# state checks first, so it refuses before writing anything); a composite
+# whose purpose is something else (the phase-map state, the hover probe's
+# other layers) leaves out only its EDS part and says why in "eds_status".
+from backend.api.services.eds_spectrum_service import (
+    SPECTRUM_FIT_ERRORS, detected_only_labels, fit_status_marker,
+    quant_source_of, window_maps,
+)
 from backend.api.services.cif_phase_library import (
     auto_classify_pixels,
     candidates_for,
@@ -47,6 +58,7 @@ from backend.api.services.eds_clustering import (
     DEFAULT_SCALE, cluster_and_match, scale_box_um, scale_px_from_um,
 )
 from backend.api.services.eds_wand import (
+    COMPOSITION_MEAN_OF_PIXELS, COMPOSITION_SUMMED_NETS,
     flood_from, global_growth_curve, selection_stats, wand_field,
 )
 from backend.api.services.phase_map_store import (
@@ -60,6 +72,101 @@ from backend.api.services.phase_map_store import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _require_spectrum_fit() -> None:
+    """Refuse (503 / 500) unless the active dataset's EDS numbers are ready.
+
+    For endpoints whose purpose is EDS numbers and that change state: called
+    first, so nothing is written before the refusal. Asks the very extractor
+    the endpoint will read (a raw one has no fit to wait for). Anything else
+    that goes wrong getting it is left to the endpoint to report as before.
+    """
+    if not is_open():
+        return
+    try:
+        ext = get_extractor()
+    except Exception:
+        return
+    check = getattr(ext, "require_fit", None)
+    if callable(check):
+        check()
+
+
+def _quant_source(ext) -> str:
+    """``"spectrum"`` when ``ext`` serves net line intensities, else ``"window"``.
+
+    Every ``build_counts_by_element`` call here passes it: the counts dict is
+    what tells the quantification which response curve to price them with,
+    and a net intensity priced with the window curve is a wrong number that
+    looks like a right one (measured on the Oxford reference scan before this was wired: C at
+    -0.14 at% on a pixel, because the window path does not clip negatives).
+    """
+    return quant_source_of(ext)
+
+
+def _maps_source(maps) -> str:
+    """Which source the numbers in ``maps`` came from, by their provenance.
+
+    ``"spectrum"`` only when the maps say so; maps without provenance (a plain
+    dict, ``None``) are window maps -- the same reading ``_composition_of``
+    gives them.
+    """
+    prov = getattr(maps, "provenance", None)
+    if isinstance(prov, dict) and prov.get("source") == "spectrum":
+        return "spectrum"
+    return "window"
+
+
+def _open_file_source() -> Optional[str]:
+    """The EDS source of the open file, or ``None`` when no file is open.
+
+    Read off the active extractor, so it needs no fit: a file whose fit is
+    still running already declares ``"spectrum"``.
+    """
+    if not is_open():
+        return None
+    try:
+        return _quant_source(get_extractor())
+    except Exception:
+        return None
+
+
+def _note_spectrum_fit(maps, ext) -> None:
+    """Attach the spectrum fit's own account to numbers made from its maps.
+
+    The status ``fit`` block (model version, chi2, the line per element, the
+    elements the spectrum shows that AZtec did not export, quality warnings)
+    travels in the result's provenance, so every route and the export can
+    say which fit produced them. No-op for the window source.
+    """
+    prov = getattr(maps, "provenance", None)
+    if not isinstance(prov, dict) or _quant_source(ext) != "spectrum":
+        return
+    prov["fit"] = ext.spectrum_fit_summary()
+
+
+def _annotate(maps, ext, beam_kv) -> None:
+    """Everything a quantified result has to say about itself beyond eds_utils."""
+    _note_assumed_voltage(maps, beam_kv)
+    _note_spectrum_fit(maps, ext)
+
+
+def _source_provenance(ext, beam_kv) -> dict:
+    """Where the intensities of a response that ran NO quantification come from.
+
+    Counts-only responses (``/map`` in counts mode, a counts linescan, a mask
+    of counts filters) still show numbers whose meaning depends on the
+    source -- background included or subtracted -- so they carry the same
+    ``source`` / ``source_data`` (and ``fit``) keys as a quantified response.
+    """
+    from eds_utils import quantification_provenance
+    src = _quant_source(ext)
+    out = {"source": src,
+           "source_data": quantification_provenance(beam_kv, src)["source_data"]}
+    if src == "spectrum":
+        out["fit"] = ext.spectrum_fit_summary()
+    return out
 
 
 class BeamVoltage(float):
@@ -106,7 +213,7 @@ def _quant_provenance(maps):
     prov = getattr(maps, "provenance", None)
     if not prov:
         return None
-    return {
+    out = {
         "summary": prov.get("summary"),
         "method": prov.get("method"),
         # None means "no ZAF", and the UI is expected to say so; the key is
@@ -129,6 +236,16 @@ def _quant_provenance(maps):
         "excluded_windows": [dict(e) for e in prov.get("excluded_windows", [])],
         "warnings": list(prov.get("warnings", [])),
     }
+    # Which intensities were priced: "window" (AZtec's window integrals,
+    # background included) or "spectrum" (net line intensities from the
+    # spectrum fit). For the spectrum source also the fit that produced them
+    # (see _note_spectrum_fit) and how many pixel values per element were
+    # negative nets clipped at 0 before weighting.
+    out["source"] = prov.get("source", "window")
+    if out["source"] == "spectrum":
+        out["fit"] = prov.get("fit")
+        out["clipped_negative"] = dict(prov.get("clipped_negative") or {})
+    return out
 
 
 def _note_assumed_voltage(maps, beam_kv) -> None:
@@ -210,6 +327,11 @@ def _beam_kv(ext, default: float = 20.0) -> float:
 def _window_counts(ext, elements=None, index=None, indices=None,
                    dtype=np.float64):
     """``(raw window name, counts)`` pairs for ``build_counts_by_element``.
+
+    The names are the extractor's labels: AZtec's window names on the window
+    source, one label per fitted family on the spectrum source (``Cu Kα1``
+    AND ``Cu Lα1,2``) -- pass ``source=_quant_source(ext)`` with them, so the
+    one rule picks the line per element and the right curve prices it.
 
     Hand this to :func:`eds_utils.build_counts_by_element`; do **not** build
     the ``{element: counts}`` dict in a loop here. That dict is keyed by
@@ -308,26 +430,109 @@ class PhaseSuggestionRequest(BaseModel):
     col: int
 
 
+@router.get("/spectrum-fit/status")
+async def spectrum_fit_status():
+    """State of the spectrum fit of the open file (see eds_spectrum_service).
+
+    ``state`` is ``"none"`` for a file without a spectrum cube (window
+    numbers), else ``"running"`` / ``"ready"`` / ``"failed"``; ``fit`` carries
+    the model version, chi2, parameters, the line per element, the elements
+    the spectrum shows that AZtec did not export, and fit-quality warnings.
+    Cheap and never blocking: the EDS page polls it while the fit runs.
+    """
+    if not is_open():
+        raise HTTPException(status_code=400, detail="No file open")
+    from backend.api.services import eds_spectrum_service
+    from backend.api.services.h5_session import get_current_path
+    path = get_current_path()
+    # open_file started the job; should it have been dropped since (two other
+    # files evaluated meanwhile), start it again rather than answer "no cube"
+    # for a file that has one.
+    eds_spectrum_service.spectrum_applies(path)
+    return eds_spectrum_service.status(path)
+
+
 @router.get("/elements")
 async def get_elements():
-    """Get available EDS elements from the open file."""
+    """Get available EDS elements from the open file.
+
+    ``elements``: the composition's labels (what every quantification reads).
+    ``detected_only``: labels of elements the spectrum shows but AZtec did
+    not export -- ``/map`` draws their net maps, nothing quantifies them.
+    Empty on the window source.
+    ``not_quantified``: labels in ``elements`` the quantification leaves out on
+    purpose (the matrix-corrected spectrum source: C, see
+    ``eds_utils.MATRIX_EXCLUDED_ELEMENTS``) -- counts maps yes, wt%/at% no;
+    the default overlay does not seed them.
+
+    The labels come from the file's header and answer at once, also while
+    the spectrum fit runs or after it failed: a list that waited
+    for the fit made every widget that asked once show "no EDS elements".
+    Which elements the spectrum shows beyond the export needs the fit, so
+    ``detected_only`` stays empty until then and ``eds_status`` says why --
+    the maps and numbers still answer 503 / 500 until it is done.
+    """
     if not is_open():
         raise HTTPException(status_code=400, detail="No file open")
     ext = get_extractor()
     elements = ext.get_available_elements()
-    return {"elements": elements}
+    try:
+        return {"elements": elements, "detected_only": detected_only_labels(ext)}
+    except SPECTRUM_FIT_ERRORS as exc:
+        return {"elements": elements, "detected_only": [],
+                "eds_status": fit_status_marker(exc)}
 
 
 def _resolve_element_name(element: str, ext) -> str:
-    """Resolve short element names (e.g. 'Al') to full H5OINA names (e.g. 'Al Kα1')."""
+    """Resolve short element names (e.g. 'Al') to full H5OINA names (e.g. 'Al Kα1').
+
+    A bare symbol with more than one line on offer -- the spectrum source
+    offers every fitted family, ``Cu Kα1`` and ``Cu Lα1,2`` -- resolves to the
+    line the quantification uses for that element (``preferred_windows``, the
+    rule ``build_counts_by_element`` applies), so a map asked for by symbol
+    shows the intensity its at% come from. The phase-test dialog asks by
+    symbol.
+    """
     available = ext.get_available_elements()
     if element in available:
         return element
     # Try matching by prefix (short name)
-    for full_name in available:
-        if full_name.startswith(element + " ") or full_name.split()[0] == element:
-            return full_name
+    matches = [full_name for full_name in available
+               if full_name.startswith(element + " ")
+               or full_name.split()[0] == element]
+    if len(matches) > 1:
+        from eds_utils import preferred_windows
+        chosen = preferred_windows(matches, beam_kv=_beam_kv(ext),
+                                   source=_quant_source(ext))
+        if len(chosen) == 1:
+            return next(iter(chosen.values()))
+    if matches:
+        return matches[0]
     return element  # Return as-is, let the caller handle 404
+
+
+def _counts_for_display(raw_data, ext):
+    """``(map to draw, quantification block)`` for ``/map`` in counts mode.
+
+    A NET intensity is negative where its line is absent (counting noise; the
+    fit keeps it unclipped so region sums stay linear). Drawn as it is, the
+    colour scale would start below zero and an empty area would not read as
+    empty. So counts mode clips at 0 FOR DISPLAY, and says so
+    (``clipped_for_display``, ``n_clipped``). wt%/at% are clipped inside the
+    quantification already (``clipped_negative``). Window counts are never
+    negative and are drawn as they are.
+    """
+    quant = _source_provenance(ext, _beam_kv(ext))
+    spectrum = quant["source"] == "spectrum"
+    data, n_clipped = raw_data, 0
+    if spectrum:
+        data = np.array(raw_data, copy=True)
+        negative = data < 0          # NaN compares False and stays NaN
+        n_clipped = int(np.count_nonzero(negative))
+        data[negative] = 0
+    quant["clipped_for_display"] = spectrum
+    quant["n_clipped"] = n_clipped
+    return data, quant
 
 
 def _quantified_map(maps, el, mode: str):
@@ -372,8 +577,17 @@ async def get_eds_map(element: str, mode: str = "counts", cmap: str = "hot", col
     if raw_data is None:
         raise HTTPException(status_code=404, detail=f"No data for element: {element}")
 
-    if mode == "counts":
-        data = raw_data
+    # An element the spectrum shows but AZtec did not export has a net map
+    # and no composition: drawn as net counts
+    # in every mode, and the response says so rather than a 400 for the
+    # "add as map" button on a page that shows at%.
+    detected = detected_only_labels(ext)
+    detected_only = (resolved in detected or str(resolved).split(" ")[0]
+                     in {lab.split(" ")[0] for lab in detected})
+
+    quantification = None
+    if mode == "counts" or detected_only:
+        data, quantification = _counts_for_display(raw_data, ext)
     else:
         # Convert using eds_utils
         try:
@@ -383,19 +597,25 @@ async def get_eds_map(element: str, mode: str = "counts", cmap: str = "hot", col
             # Get all element maps for quantification
             beam_kv = _beam_kv(ext)
             counts_dict = build_counts_by_element(_window_counts(ext),
-                                                  beam_kv=beam_kv)
+                                                  beam_kv=beam_kv,
+                                                  source=_quant_source(ext))
 
             if mode == "wt_pct":
                 from eds_utils import counts_to_weight_pct
                 wt_maps = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
+                _annotate(wt_maps, ext, beam_kv)
+                quantification = _quant_provenance(wt_maps)
                 data = _quantified_map(wt_maps, el, mode).reshape(raw_data.shape)
             elif mode == "at_pct":
                 from eds_utils import counts_to_weight_pct, weight_pct_to_atomic_pct
                 wt_maps = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
                 at_maps = weight_pct_to_atomic_pct(wt_maps)
+                _annotate(at_maps, ext, beam_kv)
+                quantification = _quant_provenance(at_maps)
                 data = _quantified_map(at_maps, el, mode).reshape(raw_data.shape)
             else:
                 data = raw_data
+                quantification = _source_provenance(ext, beam_kv)
         except ImportError:
             data = raw_data
         except _UnknownLineError as exc:
@@ -407,14 +627,19 @@ async def get_eds_map(element: str, mode: str = "counts", cmap: str = "hot", col
     else:
         image_b64 = colormap_array_to_base64(data, cmap)
 
-    return {
+    out = {
         "image": image_b64,
         "element": element,
-        "mode": mode,
+        "mode": "counts" if detected_only else mode,
         "min_val": float(np.nanmin(data)),
         "max_val": float(np.nanmax(data)),
         "shape": list(data.shape),
+        "quantification": quantification,
     }
+    if detected_only:
+        out["detected_only"] = True
+        out["requested_mode"] = mode
+    return out
 
 
 @router.post("/quantify/pixel")
@@ -451,12 +676,13 @@ async def quantify_pixel(req: QuantifyRequest):
     try:
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(
-            _window_counts(ext, elements, index=index), beam_kv=beam_kv)
+            _window_counts(ext, elements, index=index), beam_kv=beam_kv,
+            source=_quant_source(ext))
 
         # Single pixel quantification
         wt_pct = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
         at_pct = weight_pct_to_atomic_pct(wt_pct)
-        _note_assumed_voltage(at_pct, beam_kv)
+        _annotate(at_pct, ext, beam_kv)
 
         result = {}
         for el in counts_dict:
@@ -479,6 +705,8 @@ async def quantify_pixel(req: QuantifyRequest):
         }
     except _UnknownLineError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    except HTTPException:
+        raise   # incl. the spectrum fit's 503 "still running" / 500 "failed"
     except Exception as e:
         logger.exception("Failed to quantify pixel (%d, %d)", req.row, req.col)
         raise HTTPException(status_code=500, detail=str(e))
@@ -518,7 +746,7 @@ async def region_quantify(req: RegionQuantifyRequest):
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(
             _window_counts(ext, elements, indices=linear_indices),
-            beam_kv=beam_kv)
+            beam_kv=beam_kv, source=_quant_source(ext))
 
         if not counts_dict:
             return {"row_start": r0, "row_end": r1, "col_start": c0, "col_end": c1,
@@ -526,24 +754,47 @@ async def region_quantify(req: RegionQuantifyRequest):
 
         wt_pct = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
         at_pct = weight_pct_to_atomic_pct(wt_pct)
-        _note_assumed_voltage(at_pct, beam_kv)
+        _annotate(at_pct, ext, beam_kv)
 
-        def _stats(arr):
+        # ONE composition for the region. Spectrum source: the region's
+        # summed net counts quantified once (_SummedNetComposition); window
+        # source: the mean of the pixels' at%. std/min/max are the pixels'
+        # either way, and `composition_method` says which "mean" this is.
+        comp_wt = comp_at = None
+        quant = at_pct
+        method = COMPOSITION_MEAN_OF_PIXELS
+        if _quant_source(ext) == "spectrum":
+            mask = np.zeros(n_rows * n_cols, dtype=bool)
+            mask[linear_indices] = True
+            _counts, comp_wt, comp_at = _SummedNetComposition(
+                ext, beam_kv).quantify(mask)
+            _annotate(comp_at, ext, beam_kv)
+            quant, method = comp_at, COMPOSITION_SUMMED_NETS
+
+        def _stats(arr, composition=None):
             # None, not a block of zeros: an element the quantification left
             # out has no wt%/at%, and "mean 0.00 +- 0.00" is a measurement
             # nobody made. See eds_utils._resolve_k_factors.
             if arr is None:
                 return None
-            return {"mean": float(np.mean(arr)), "std": float(np.std(arr)),
+            mean = (float(np.mean(arr)) if composition is None
+                    else float(composition[0]))
+            return {"mean": mean, "std": float(np.std(arr)),
                     "min": float(np.min(arr)), "max": float(np.max(arr))}
+
+        def _of(maps, el, per_pixel):
+            # The summed composition has exactly the elements the per-pixel
+            # one has (same labels, same k resolution); a missing one is a
+            # bug, and KeyError says so.
+            return None if maps is None or el not in per_pixel else maps[el]
 
         result = {}
         for el in counts_dict:
             c_arr = counts_dict[el]
             result[el] = {
                 "counts": _stats(c_arr),
-                "wt_pct": _stats(wt_pct.get(el)),
-                "at_pct": _stats(at_pct.get(el)),
+                "wt_pct": _stats(wt_pct.get(el), _of(comp_wt, el, wt_pct)),
+                "at_pct": _stats(at_pct.get(el), _of(comp_at, el, at_pct)),
             }
 
         return {
@@ -551,7 +802,8 @@ async def region_quantify(req: RegionQuantifyRequest):
             "col_start": c0, "col_end": c1,
             "n_pixels": int(len(linear_indices)),
             "data": result,
-            "quantification": _quant_provenance(at_pct),
+            "composition_method": method,
+            "quantification": _quant_provenance(quant),
         }
     except _UnknownLineError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -641,10 +893,12 @@ async def suggest_phases(req: PhaseSuggestionRequest):
 
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(
-            _window_counts(ext, elements, index=index), beam_kv=beam_kv)
+            _window_counts(ext, elements, index=index), beam_kv=beam_kv,
+            source=_quant_source(ext))
 
         wt = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
         at = weight_pct_to_atomic_pct(wt)
+        _annotate(at, ext, beam_kv)
         at_scalar = {el: float(v[0]) for el, v in at.items()}
 
         # 1) Try the user's curated CIF library first. Off the event loop:
@@ -665,6 +919,8 @@ async def suggest_phases(req: PhaseSuggestionRequest):
                 whole_map, _mr, _mc, _fp = _build_at_pct_maps_for_loaded_file()
                 matrix_element = infer_matrix_element(whole_map)
                 background = background_levels(whole_map)
+            except SPECTRUM_FIT_ERRORS:
+                raise
             except Exception:
                 logger.exception("could not derive map-level EDS statistics")
                 matrix_element, background = None, None
@@ -699,6 +955,7 @@ async def suggest_phases(req: PhaseSuggestionRequest):
                     # not offer them and the only trace is a log line.
                     "library_skipped": library_skipped,
                     "map_phase": _map_phase_at(req.row, req.col),
+                    "quantification": _quant_provenance(at),
                 }
 
         # Nothing from the CIF library. Say WHY before falling back: the
@@ -732,6 +989,7 @@ async def suggest_phases(req: PhaseSuggestionRequest):
             # that skipped the user's phase is one reason the CIF branch above
             # found nothing and we fell back to the hardcoded list.
             "library_skipped": library_skipped,
+            "quantification": _quant_provenance(at),
         }
         # Only when the panel really has nothing to show. With hardcoded hits
         # on screen, "here is why there is nothing" is a contradiction, and the
@@ -841,7 +1099,8 @@ async def generate_chemistry_mask(req: ChemMaskRequest):
         # Build element data maps
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(_window_counts(ext, elements),
-                                              beam_kv=beam_kv)
+                                              beam_kv=beam_kv,
+                                              source=_quant_source(ext))
 
         # Pre-compute unit maps to avoid redundant conversions
         wt_maps_cache = None
@@ -928,7 +1187,18 @@ async def generate_chemistry_mask(req: ChemMaskRequest):
         mask_2d = combined.reshape(n_rows, n_cols)
         mask_img = colormap_array_to_base64(mask_2d.astype(np.float32), "gray")
 
+        # wt% and at% share one provenance. A mask of counts filters only
+        # quantified nothing, but its counts still mean one source or the
+        # other.
+        quantified = at_maps_cache if at_maps_cache is not None else wt_maps_cache
+        if quantified is not None:
+            _annotate(quantified, ext, beam_kv)
+            quantification = _quant_provenance(quantified)
+        else:
+            quantification = _source_provenance(ext, beam_kv)
+
         return {
+            "quantification": quantification,
             "mask": combined.tolist(),
             "n_selected": n_selected,
             "n_total": n_pixels,
@@ -941,6 +1211,8 @@ async def generate_chemistry_mask(req: ChemMaskRequest):
         raise HTTPException(status_code=400, detail=str(exc))
     except ImportError:
         raise HTTPException(status_code=500, detail="eds_utils not available for chemistry mask generation")
+    except HTTPException:
+        raise   # incl. the spectrum fit's 503 "still running" / 500 "failed"
     except Exception as e:
         logger.exception("Failed to generate chemistry mask")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1318,14 +1590,25 @@ def _region_feature_matrix(at_maps, n_rows: int, n_cols: int,
     return X if X.size else None
 
 
-def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
+def _build_at_pct_maps_for_loaded_file(
+        source: Optional[str] = None) -> tuple[dict, int, int, str]:
     """Compute At.% maps for all elements in the currently loaded file.
 
     Returns ``({element_symbol: 1D array}, n_rows, n_cols, file_path_for_tagging)``.
     Raises HTTPException 400 if no file is open or eds_utils is unavailable —
     same failure surface as quantify-pixel so the frontend can show the
     same error UX.
+
+    ``source``: ``None`` (default) quantifies what the active extractor
+    serves -- net intensities on a file with a spectrum cube. ``"window"``
+    quantifies AZtec's raw window maps with the window calibration whatever
+    the file serves (both halves, never window calibration on net
+    maps); it needs no spectrum fit. For consumers kept on the window path
+    after a before/after measurement of window versus spectrum numbers
+    on the AZtec reference scan.
     """
+    if source not in (None, "window"):
+        raise ValueError(f"unknown EDS source {source!r}")
     if not is_open():
         raise HTTPException(status_code=400, detail="No file open")
 
@@ -1338,12 +1621,23 @@ def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
         raise HTTPException(status_code=500, detail="eds_utils not available — At.% conversion impossible")
 
     ext = get_extractor()
-    elements = ext.get_available_elements()
     n_rows, n_cols = ext.get_grid_dimensions()
 
     beam_kv = _beam_kv(ext)
-    counts_dict = build_counts_by_element(_window_counts(ext, elements),
-                                          beam_kv=beam_kv)
+    if source == "window":
+        # AZtec's windows (cut to the crop by a CroppedExtractor), read
+        # without the fit, priced with the window curve.
+        labels, read = window_maps(ext)
+        counts_dict = build_counts_by_element(
+            ((name, np.asarray(data, dtype=np.float64))
+             for name in labels
+             for data in (read(name),) if data is not None),
+            beam_kv=beam_kv, source="window")
+    else:
+        elements = ext.get_available_elements()
+        counts_dict = build_counts_by_element(_window_counts(ext, elements),
+                                              beam_kv=beam_kv,
+                                              source=_quant_source(ext))
 
     if not counts_dict:
         raise HTTPException(status_code=400, detail="No EDS element data in this file")
@@ -1351,7 +1645,11 @@ def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
     try:
         wt_maps = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
         at_maps = weight_pct_to_atomic_pct(wt_maps)
-        _note_assumed_voltage(at_maps, beam_kv)
+        if source == "window":
+            # No fit summary: these numbers were not made from it.
+            _note_assumed_voltage(at_maps, beam_kv)
+        else:
+            _annotate(at_maps, ext, beam_kv)
     except _UnknownLineError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1367,6 +1665,89 @@ def _build_at_pct_maps_for_loaded_file() -> tuple[dict, int, int, str]:
         file_path = None
 
     return at_maps, int(n_rows), int(n_cols), str(file_path) if file_path else None
+
+
+class _SummedNetComposition:
+    """One composition for a set of pixels, from its SUMMED net counts.
+
+    Spectrum source only. Per pixel a net line
+    intensity is unclipped and noisy, and per-pixel at% clips a negative net
+    at 0 -- so the MEAN of the pixels' at% reads a weak element too high
+    (the Oxford reference scan, rows 40-49 x cols 50-69: Ti 0.64 at% as a mean of pixels, while
+    the box's summed Ti net is negative). The projection is linear, so the sum
+    of the pixels' nets is the net of the region's summed spectrum: quantified
+    once, it carries no clip bias. COUNTS, not cps: each pixel's net cps is
+    weighted by its live time, because dead time differs between phases.
+
+    The one place a region composition is made on the spectrum source:
+    ``/region-quantify``, the region inspector, the wand statistics and the
+    export (regions, particles with all pixels and core, phases) all come
+    here. Same labels, same line per element (``build_counts_by_element``
+    with ``source="spectrum"``) and the same beam voltage as the per-pixel
+    maps. Spread statistics (sd, min, max) stay per pixel: they describe the
+    pixels, not the composition.
+    """
+
+    def __init__(self, ext, beam_kv):
+        if _quant_source(ext) != "spectrum":
+            raise ValueError("a summed-net composition needs the spectrum "
+                             "source; this extractor serves window maps")
+        from eds_utils import preferred_windows
+        lt = np.asarray(ext.get_live_time(), dtype=np.float64).ravel()
+        self.beam_kv = beam_kv
+        self._n = int(lt.size)
+        # Only the label per element the quantification keeps (Cu L, not
+        # also Cu K): the others would be multiplied out for nothing, on
+        # every wand preview of a 485k-pixel map.
+        names = list(preferred_windows(ext.get_available_elements(), beam_kv,
+                                       source="spectrum").values())
+        self._counts = []
+        for name, cps in _window_counts(ext, names):
+            if cps.shape != lt.shape:
+                raise ValueError(f"net map {name!r} has {cps.size} pixels, "
+                                 f"the live time {lt.size}")
+            self._counts.append((name, cps * lt))
+
+    def quantify(self, mask):
+        """``(counts, wt, at)`` of the pixels in ``mask``, one value per element.
+
+        ``mask``: boolean, flat or 2-D, over the active (possibly cropped)
+        grid. ``counts`` are the summed net counts the composition is made of.
+        """
+        from eds_utils import (build_counts_by_element, counts_to_weight_pct,
+                               weight_pct_to_atomic_pct)
+        flat = np.asarray(mask, dtype=bool).ravel()
+        if flat.size != self._n:
+            raise ValueError(f"the mask covers {flat.size} pixels, the map "
+                             f"has {self._n}")
+        idx = np.flatnonzero(flat)
+        counts = build_counts_by_element(
+            ((name, np.array([float(c[idx].sum())]))
+             for name, c in self._counts),
+            beam_kv=self.beam_kv, source="spectrum")
+        wt = counts_to_weight_pct(counts, beam_kv=self.beam_kv)
+        return counts, wt, weight_pct_to_atomic_pct(wt)
+
+    def __call__(self, mask) -> Dict[str, float]:
+        """``{element: at%}`` of the pixels in ``mask``."""
+        _counts, _wt, at = self.quantify(mask)
+        return {el: float(v[0]) for el, v in at.items()}
+
+
+def _composition_of(at_maps) -> Optional[_SummedNetComposition]:
+    """The region-composition helper that belongs to ``at_maps``, or None.
+
+    For maps of the spectrum source (their provenance says so): the summed-net
+    composition of the open file. For anything else ``None``, which every
+    consumer reads as "the mean of the pixels' at%" -- the window source, and
+    maps without provenance. Decided on the MAPS a response is built from,
+    so its composition and its per-pixel spread come from the same source.
+    """
+    prov = getattr(at_maps, "provenance", None)
+    if not isinstance(prov, dict) or prov.get("source") != "spectrum":
+        return None
+    ext = get_extractor()
+    return _SummedNetComposition(ext, _beam_kv(ext))
 
 
 def _state_to_response(include_image: bool = True) -> dict:
@@ -1441,13 +1822,24 @@ def _state_to_response(include_image: bool = True) -> dict:
     # What an undo would take back, so the button can name it instead of
     # asking the user to remember.
     response["undo_label"] = store.undo_label
-    response["regions"] = _regions_payload(state)
+    notes: dict = {}
+    response["regions"] = _regions_payload(state, notes)
+    # The map is not an EDS number: while the spectrum fit runs (or after it
+    # failed) it is still shown, without the region compositions, and this
+    # says why they are missing.
+    response.update(notes)
     # How this map was made, so a reload gets the editor back rather than an
     # empty one next to a map it can no longer explain. A segmentation built
     # by hand is work; losing it to a page refresh would make the manual path
     # unusable for anything real.
     response["region_defs"] = list(state.region_defs or [])
     response["element_weights"] = dict(state.element_weights or {})
+    # Which numbers the map was made on, and a notice when that is not the
+    # source the open file serves now. The map is shown either way and nothing
+    # in it is converted: a threshold-based region or rule set on window counts
+    # selects differently on net intensities, and the user is told so.
+    response["quant_source"] = state.quant_source
+    response["notices"] = _source_notices(state.quant_source)
     if include_image:
         response["image"] = render_phase_map_to_base64(state, _COLOR_OVERRIDES)
         if state.region_grid is not None:
@@ -1455,13 +1847,46 @@ def _state_to_response(include_image: bool = True) -> dict:
     return response
 
 
-def _regions_payload(state) -> list:
+def _source_notices(map_source: str) -> list:
+    """``[{code, message, detail}]`` for a map made on the other source.
+
+    Empty when the sources agree, and when no file is open (nothing to compare
+    with). The UI translates on ``code``, never on the prose.
+    """
+    current = _open_file_source()
+    if current is None or current == map_source:
+        return []
+    return [{
+        "code": "sidecar_made_on_other_source",
+        "message": (
+            f"This phase map was made on {map_source} EDS numbers, this file's "
+            f"are {current}. Nothing in the map was changed or converted; its "
+            f"regions and rules were set on the other numbers, so re-run the "
+            f"classification before relying on them."
+        ),
+        "detail": {"sidecar": map_source, "current": current},
+    }]
+
+
+def _regions_payload(state, notes: Optional[dict] = None) -> list:
     """One entry per region: how big, what it is made of, what it is called.
 
     The composition is the honest content of a region - it is what grouped
     those pixels in the first place - so the legend can show it without the
     frontend recomputing anything. Ranked CIF candidates come with it, because
     naming a region is the one action the legend exists for.
+
+    While the spectrum fit runs, or after it failed, the regions come without
+    compositions and ``notes["eds_status"]`` says why: this payload answers
+    every phase-map write, and a write must neither fail after it committed
+    nor wait for EDS numbers it does not need.
+
+    One region, one composition: on the spectrum source ``mean_at_pct`` is
+    the region's summed net counts quantified once -- the inspector's, the
+    wand's and the export's helper (``_composition_of``) -- so the legend and
+    the inspector cannot show two numbers for the same pixels; on the window
+    source it stays the mean of the pixels' at%. Each entry says which in
+    ``composition_method`` (``None`` while compositions are left out).
     """
     if state.region_grid is None:
         return []
@@ -1474,13 +1899,22 @@ def _regions_payload(state) -> list:
     counts = _np.bincount(flat[flat >= 0], minlength=n_s)
     total = int(state.n_rows * state.n_cols) or 1
 
-    at_maps = None
+    at_maps = composition_of = None
     try:
         at_maps, n_rows, n_cols, _fp = _build_at_pct_maps_for_loaded_file()
         if n_rows != state.n_rows or n_cols != state.n_cols:
             at_maps = None      # a different file is open; do not mix them
+        else:
+            composition_of = _composition_of(at_maps)
+    except SPECTRUM_FIT_ERRORS as exc:
+        at_maps = composition_of = None
+        if notes is not None:
+            notes["eds_status"] = fit_status_marker(exc)
     except Exception:
-        at_maps = None
+        at_maps = composition_of = None
+    method = (None if at_maps is None
+              else COMPOSITION_MEAN_OF_PIXELS if composition_of is None
+              else COMPOSITION_SUMMED_NETS)
 
     out = []
     for sid in range(n_s):
@@ -1491,10 +1925,14 @@ def _regions_payload(state) -> list:
             # excluded from the clustering (`_CHEM_IGNORE`), so listing them
             # in a region's description would imply they helped decide it.
             from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
-            for el, arr in at_maps.items():
+            if composition_of is not None:
+                comp = composition_of(m)
+            else:
+                comp = {el: float(_np.asarray(arr, dtype=float).ravel()[m].mean())
+                        for el, arr in at_maps.items()}
+            for el, v in comp.items():
                 if el in _CHEM_IGNORE:
                     continue
-                v = float(_np.asarray(arr, dtype=float).ravel()[m].mean())
                 if v >= 0.5:
                     mean[el] = round(v, 2)
         phase_idx = int(state.region_phase[sid])
@@ -1506,6 +1944,7 @@ def _regions_payload(state) -> list:
             "percentage": round((int(counts[sid]) if sid < len(counts) else 0)
                                 / total * 100, 2),
             "mean_at_pct": dict(sorted(mean.items(), key=lambda kv: -kv[1])),
+            "composition_method": method,
             "phase_index": phase_idx,
             "cif_filename": entry.cif_filename if entry else None,
             "formula": entry.formula if entry else None,
@@ -1524,6 +1963,8 @@ async def auto_classify(req: AutoClassifyRequest):
     previous classification (any manual edits from M4 are lost — by
     design, the re-classify is the "I want to start over" path).
     """
+    # EDS numbers in, a replaced map out: refuse before anything changes.
+    _require_spectrum_fit()
     # ...WITH the skips, not without. This route is the one that USES a
     # stored composition -- it scores every candidate against every pixel --
     # so it is the last place that may drop the note saying one of those
@@ -1783,6 +2224,9 @@ def _auto_classify_blocking(req, cif_library, mode: str,
         region_defs=region_defs_to_list(region_defs or []),
         element_weights=dict(req.element_weights or {}),
         settings=settings,
+        # The numbers the map was made from, so a later session (or a preset
+        # check) can tell it apart from one made on the other source.
+        quant_source=_maps_source(at_maps),
     )
     response = _state_to_response(include_image=True)
     response["mode"] = mode
@@ -2194,6 +2638,8 @@ async def probe(req: ProbeRequest):
 
     # --- Element values (reuse quantify_pixel's math) ---
     elements_out: Dict[str, dict] = {}
+    eds_status: Optional[dict] = None
+    quantification: Optional[dict] = None
     try:
         from eds_utils import (
             build_counts_by_element, counts_to_weight_pct,
@@ -2202,10 +2648,14 @@ async def probe(req: ProbeRequest):
         index = req.row * n_cols + req.col
         beam_kv = _beam_kv(ext)
         counts_dict = build_counts_by_element(
-            _window_counts(ext, index=index), beam_kv=beam_kv)
+            _window_counts(ext, index=index), beam_kv=beam_kv,
+            source=_quant_source(ext))
         wt_pct = (counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
                   if counts_dict else {})
         at_pct = weight_pct_to_atomic_pct(wt_pct) if wt_pct else {}
+        if at_pct:
+            _annotate(at_pct, ext, beam_kv)
+            quantification = _quant_provenance(at_pct)
         for el, c in counts_dict.items():
             elements_out[el] = {
                 "counts": float(c[0]),
@@ -2250,6 +2700,12 @@ async def probe(req: ProbeRequest):
                     "wt_pct": None,
                     "at_pct": None,
                 }
+    except SPECTRUM_FIT_ERRORS as exc:
+        # The tooltip keeps band contrast and phase; the EDS part is missing
+        # because the spectra are still being evaluated (or the fit failed),
+        # and the response says so -- an empty list alone reads as "no EDS".
+        elements_out = {}
+        eds_status = fit_status_marker(exc)
     except Exception:
         logger.exception("EDS probe element extraction failed at (%d, %d)", req.row, req.col)
         # Don't fail the whole probe — return empty elements + the other layers.
@@ -2269,7 +2725,7 @@ async def probe(req: ProbeRequest):
     # --- Phase ---
     phase_info = _probe_phase_at_safe(req.row, req.col)
 
-    return {
+    out = {
         "row": req.row,
         "col": req.col,
         "elements": elements_out,
@@ -2278,6 +2734,11 @@ async def probe(req: ProbeRequest):
         "phase": phase_info,
         "display_mode": req.display_mode,
     }
+    if quantification is not None:
+        out["quantification"] = quantification
+    if eds_status is not None:
+        out["eds_status"] = eds_status
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -2355,6 +2816,7 @@ async def linescan(req: LinescanRequest):
     # Cheaper than per-pixel quantify for n samples — single matrix conversion
     # then reshape-and-sample per layer.
     element_grids: Dict[str, np.ndarray] = {}
+    quantification: Optional[dict] = None
     requested_elements = [l for l in req.layers if l.startswith("eds-")]
     if requested_elements:
         try:
@@ -2367,25 +2829,45 @@ async def linescan(req: LinescanRequest):
 
             elements = ext.get_available_elements()
             beam_kv = _beam_kv(ext)
-            counts_dict = build_counts_by_element(
-                _window_counts(ext, elements, dtype=np.float32),
-                beam_kv=beam_kv)
             if req.display_mode == "counts":
-                full = counts_dict
-            elif req.display_mode == "wt_pct":
-                full = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
-            else:  # at_pct (default)
-                wt = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
-                full = weight_pct_to_atomic_pct(wt)
-            # Reshape each 1D map to 2D for sampling.
-            for lid in requested_elements:
-                el_label = lid[len("eds-"):]
-                key = parse_element_name(el_label)
-                if key in full:
-                    grid_2d = np.asarray(full[key], dtype=np.float32).reshape(
-                        n_rows, n_cols
-                    )
-                    element_grids[lid] = grid_2d
+                # A layer is ONE line ("eds-Cu Kα1"): sample its own map,
+                # the one /map draws for it. The element's quantified line
+                # can be another one (Cu L on the spectrum source), and an
+                # element-level counts dict would plot that under this label.
+                # A detected-only element has
+                # a net map like any line, and only that: counts mode only.
+                drawable = set(elements) | set(detected_only_labels(ext))
+                for lid in requested_elements:
+                    label = lid[len("eds-"):]
+                    if label not in drawable:
+                        label = _resolve_element_name(label, ext)
+                    data = ext.get_element_map(label) if label in drawable else None
+                    if data is not None:
+                        element_grids[lid] = np.asarray(
+                            data, dtype=np.float32).reshape(n_rows, n_cols)
+                quantification = _source_provenance(ext, beam_kv)
+            else:
+                counts_dict = build_counts_by_element(
+                    _window_counts(ext, elements, dtype=np.float32),
+                    beam_kv=beam_kv, source=_quant_source(ext))
+                if req.display_mode == "wt_pct":
+                    full = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
+                else:  # at_pct (default)
+                    wt = counts_to_weight_pct(counts_dict, beam_kv=beam_kv)
+                    full = weight_pct_to_atomic_pct(wt)
+                _annotate(full, ext, beam_kv)
+                quantification = _quant_provenance(full)
+                # Reshape each 1D map to 2D for sampling.
+                for lid in requested_elements:
+                    el_label = lid[len("eds-"):]
+                    key = parse_element_name(el_label)
+                    if key in full:
+                        grid_2d = np.asarray(full[key], dtype=np.float32).reshape(
+                            n_rows, n_cols
+                        )
+                        element_grids[lid] = grid_2d
+        except HTTPException:
+            raise   # the spectrum fit's 503 / 500 is not "no data"
         except Exception:
             # eds_utils unavailable or conversion failed — leave element_grids
             # empty so requested element series come back as None-arrays.
@@ -2412,6 +2894,7 @@ async def linescan(req: LinescanRequest):
         "samples": n,
         "series": series,
         "display_mode": req.display_mode,
+        "quantification": quantification,
     }
 
 
@@ -2493,11 +2976,17 @@ async def wand_field_endpoint(req: WandFieldRequest):
 
 @router.post("/phase-map/wand-stats")
 async def wand_stats_endpoint(req: WandAssignRequest):
-    """Composition and enrichment of a previewed selection, before committing."""
+    """Composition and enrichment of a previewed selection, before committing.
+
+    The composition is the region inspector's (``_composition_of``): summed
+    net counts on the spectrum source, the mean of the pixels' at% on the
+    window source; ``composition_method`` says which.
+    """
     at_maps, n_rows, n_cols, _fp = _build_at_pct_maps_for_loaded_file()
     mask = _unpack_mask(req.mask_b64, n_rows, n_cols)
     bg = background_levels(at_maps)
-    return selection_stats(at_maps, mask, background=bg)
+    return selection_stats(at_maps, mask, background=bg,
+                           composition_of=_composition_of(at_maps))
 
 
 @router.post("/phase-map/wand-assign")
@@ -2773,6 +3262,8 @@ def _region_detail(state, sid: int) -> dict:
 
     try:
         at_maps, n_rows, n_cols, _fp = _build_at_pct_maps_for_loaded_file()
+    except SPECTRUM_FIT_ERRORS:
+        raise   # "still running" is not "no composition": say so
     except Exception:
         at_maps = None
     if at_maps is None or n_rows != state.n_rows or n_cols != state.n_cols:
@@ -2784,7 +3275,13 @@ def _region_detail(state, sid: int) -> dict:
     # scored elements before dividing by the background - doing that by hand
     # here produced "Al 49.68x" on a map whose background IS aluminium.
     background = background_levels(at_maps)
-    stats = selection_stats(at_maps, mask2d, background=background)
+    # The composition: summed net counts on the spectrum source, the mean of
+    # the pixels' at% on the window source (see _SummedNetComposition). The
+    # spread below stays per pixel.
+    composition_of = _composition_of(at_maps)
+    stats = selection_stats(at_maps, mask2d, background=background,
+                            composition_of=composition_of)
+    detail["composition_method"] = stats["composition_method"]
     means = {el: v for el, v in stats["mean_at_pct"].items()
              if el not in _CHEM_IGNORE}
 
@@ -2839,9 +3336,14 @@ def _region_detail(state, sid: int) -> dict:
         om = (grid == other).ravel()
         if not om.any():
             continue
+        # Like with like: the neighbour's composition is made the same way
+        # as this region's.
+        other_comp = ({str(el): v for el, v in composition_of(om).items()}
+                      if composition_of is not None else None)
         gap = 0.0
         for el, mean in means.items():
-            ov = float(np.asarray(at_maps[el], dtype=float).ravel()[om].mean())
+            ov = (other_comp[str(el)] if other_comp is not None else
+                  float(np.asarray(at_maps[el], dtype=float).ravel()[om].mean()))
             gap = max(gap, abs(mean - ov))
         detail["neighbours"].append({
             "region_id": other,
@@ -3055,6 +3557,11 @@ async def preview_region_defs(req: RegionDefPreviewRequest):
 
     Evaluated on the SMOOTHED composition, the same values the grouping will
     use, so the preview and the run cannot disagree.
+
+    That is the SELECTION. The composition reported for the claimed pixels is
+    the region composition everything else shows (``_composition_of``): on
+    the spectrum source their summed net counts quantified once, on the
+    window source the mean of their at%; ``composition_method`` says which.
     """
     from backend.api.services.chemistry_score import background_levels
     from backend.api.services.eds_clustering import _smooth_maps
@@ -3070,14 +3577,19 @@ async def preview_region_defs(req: RegionDefPreviewRequest):
     defs = region_defs_from_list(req.region_defs)
     assign = region_labels(defs, smoothed, background=background)
     n_px = n_rows * n_cols
+    composition_of = _composition_of(at_maps)
 
     out = []
     for i, d in enumerate(defs):
         mask = assign.labels == i
         mean = {}
         if mask.any():
-            mean = {el: round(float(np.asarray(a, dtype=float)[mask].mean()), 2)
-                    for el, a in at_maps.items()}
+            if composition_of is not None:
+                comp = composition_of(mask)
+            else:
+                comp = {el: float(np.asarray(a, dtype=float)[mask].mean())
+                        for el, a in at_maps.items()}
+            mean = {el: round(v, 2) for el, v in comp.items()}
             mean = {el: v for el, v in
                     sorted(mean.items(), key=lambda kv: -kv[1]) if v >= 0.5}
         out.append({
@@ -3113,6 +3625,9 @@ async def preview_region_defs(req: RegionDefPreviewRequest):
         "unclaimed_percentage": round(unclaimed / n_px * 100, 2) if n_px else 0.0,
         "total_pixels": n_px,
         "scale": scale,
+        "composition_method": (COMPOSITION_MEAN_OF_PIXELS
+                               if composition_of is None
+                               else COMPOSITION_SUMMED_NETS),
         **scale_report,
     }
 

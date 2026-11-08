@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 import { edsApi } from '../../../services/api';
+import { edsDetailText } from '../edsDetailText';
 
 /**
  * Phase Suggestion state for the EDS page.
@@ -63,7 +64,7 @@ export function useSuggestPhases() {
       setLibrarySkipped(data.library_skipped || []);
     } catch (e) {
       if (token.cancel) return;
-      setError(e?.response?.data?.detail || e?.message || 'Phase suggestion failed.');
+      setError(edsDetailText(e) || e?.message || 'Phase suggestion failed.');
       // Drop the stale list rather than leave it under a fresh error.
       setSuggestions(null);
       setPixel(null);

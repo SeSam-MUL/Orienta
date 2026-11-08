@@ -347,6 +347,18 @@ async def get_eds_map(
     element map is cut to the same window as the phase map it sits under.
     Without that the two are composited on different grids and every feature
     on one of them is displaced.
+
+    Under "dataset" a file with a spectrum cube serves NET maps, negative
+    where the line is absent (counting noise; 12.7-49.1 % of the pixels of
+    The Oxford reference scan's maps). Drawn on a min-max scale, zero then sits 10-42 % up the
+    colour ramp, and the Al matrix -- drawn in the ramp's bottom colour on the
+    window maps, nearly invisible under the phase map -- became an opaque
+    dark-red wash. So these maps are
+    clipped at 0 FOR DISPLAY, as ``/api/eds/map`` does in counts mode
+    (``routes/eds._counts_for_display``), and the response says so in
+    ``quantification`` (``clipped_for_display``, ``n_clipped``, the source).
+    Window maps (no cube, or ``force_window_source()``) and "file" scope are
+    drawn exactly as before, with no new key.
     """
     if not is_open():
         raise HTTPException(status_code=400, detail="No HDF5 file is open")
@@ -359,18 +371,27 @@ async def get_eds_map(
     data = ext.get_element_map_2d(resolved)
     if data is None:
         raise HTTPException(status_code=404, detail=f"EDS map for {resolved} not found")
+    quantification = None
+    if scope == "dataset":
+        from backend.api.services.eds_spectrum_service import quant_source_of
+        if quant_source_of(ext) == "spectrum":
+            from backend.api.routes.eds import _counts_for_display
+            data, quantification = _counts_for_display(data, ext)
     image_b64 = (
         element_color_overlay_to_base64(data, color)
         if color
         else colormap_array_to_base64(data, cmap)
     )
-    return {
+    out = {
         "image": image_b64,
         "element": resolved,
         "min_val": float(np.nanmin(data)),
         "max_val": float(np.nanmax(data)),
         "shape": list(data.shape),
     }
+    if quantification is not None:
+        out["quantification"] = quantification
+    return out
 
 
 @router.get("/eds/pixel/{row}/{col}")

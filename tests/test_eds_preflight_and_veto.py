@@ -143,8 +143,10 @@ def test_preflight_flags_phase_with_no_chemical_support(monkeypatch):
     n_rows, n_cols = 6, 7
     n = n_rows * n_cols
     maps = {"Al": np.full(n, 92.0), "Si": np.full(n, 8.0)}   # no Fe, no Mn
+    # The pre-flight reads the PRIOR's numbers (PRIOR_EDS_SOURCE), so this
+    # is where its maps come from.
     monkeypatch.setattr(
-        "backend.api.routes.eds._build_at_pct_maps_for_loaded_file",
+        "backend.api.services.eds_indexing_prior._build_at_pct_maps_for_loaded_file",
         lambda: (maps, n_rows, n_cols, "f.h5"), raising=False)
     monkeypatch.setattr(pf, "_ebsd_nav_shape", lambda: (n_rows, n_cols))
 
@@ -162,8 +164,10 @@ def test_preflight_flags_phase_with_no_chemical_support(monkeypatch):
 def test_preflight_blocks_on_grid_mismatch(monkeypatch):
     import backend.api.services.eds_preflight as pf
     n = 6 * 7
+    # The pre-flight reads the PRIOR's numbers (PRIOR_EDS_SOURCE), so this
+    # is where its maps come from.
     monkeypatch.setattr(
-        "backend.api.routes.eds._build_at_pct_maps_for_loaded_file",
+        "backend.api.services.eds_indexing_prior._build_at_pct_maps_for_loaded_file",
         lambda: ({"Al": np.full(n, 100.0)}, 6, 7, "f.h5"), raising=False)
     monkeypatch.setattr(pf, "_ebsd_nav_shape", lambda: (7, 6))   # transposed
 
@@ -180,8 +184,10 @@ def test_preflight_upper_bound_semantics(monkeypatch):
     n = n_rows * n_cols
     fe = np.zeros(n); fe[:5] = 6.0            # Fe only on 5 % of the map
     maps = {"Al": np.full(n, 80.0), "Fe": fe, "Si": np.full(n, 14.0)}
+    # The pre-flight reads the PRIOR's numbers (PRIOR_EDS_SOURCE), so this
+    # is where its maps come from.
     monkeypatch.setattr(
-        "backend.api.routes.eds._build_at_pct_maps_for_loaded_file",
+        "backend.api.services.eds_indexing_prior._build_at_pct_maps_for_loaded_file",
         lambda: (maps, n_rows, n_cols, "f.h5"), raising=False)
     monkeypatch.setattr(pf, "_ebsd_nav_shape", lambda: (n_rows, n_cols))
 

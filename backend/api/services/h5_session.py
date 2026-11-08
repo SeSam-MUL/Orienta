@@ -108,7 +108,30 @@ def open_file(path: str):
     except Exception:
         logger.debug("phase_map_store.load_from_disk() failed during open_file", exc_info=True)
 
+    # Start evaluating the spectrum cube, if the file has one, in the
+    # background (eds_spectrum_service). Best-effort like the sidecar above.
+    start_spectrum_fit(path)
+
     return extractor, fmt
+
+
+def start_spectrum_fit(path: str) -> None:
+    """Start (or retry) the EDS spectrum fit of ``path``. Never raises.
+
+    ``open_file`` calls this, and so must every loader that finds the session
+    already holding ``path`` and therefore skips ``open_file``: loading a file
+    again is the user's retry of a fit that failed. A no-op for a job that is
+    running or ready, and for a file without a cube. A failure to START is
+    logged and never fails the load -- the first EDS read starts the job
+    again -- while a failure INSIDE the job is recorded there and served to
+    every EDS read as a 500 with code eds_spectrum_fit_failed.
+    """
+    try:
+        from backend.api.services import eds_spectrum_service
+        eds_spectrum_service.start_for_file(path)
+    except Exception:
+        logger.warning("could not start the EDS spectrum fit for %s", path,
+                       exc_info=True)
 
 
 def active_measurement() -> Optional[str]:
@@ -205,6 +228,41 @@ def get_extractor():
         return _current_extractor
 
 
+def _extractor_path(extractor) -> Optional[str]:
+    """The file an extractor reads, taken from the extractor itself.
+
+    Read off the very object being wrapped rather than from
+    ``get_current_path()``: those are two separate lock acquisitions, and a
+    file opened between them would pair file B's extractor with file A's
+    spectrum fit. Anything without a real h5py handle (test doubles) has no
+    path, and so no spectrum fit.
+    """
+    h5 = getattr(extractor, "h5file", None)
+    if h5 is None:
+        return None
+    try:
+        name = h5.filename
+    except Exception:
+        return None
+    return name if isinstance(name, str) and name else None
+
+
+def _with_spectrum_source(extractor):
+    """Wrap the raw extractor in a SpectrumNetExtractor when its file has a
+    spectrum cube, so every EDS map read gets net intensities.
+
+    Not wrapped: a file without a cube (window path, unchanged), and anything
+    run inside ``eds_spectrum_service.force_window_source()``.
+    """
+    from backend.api.services import eds_spectrum_service as spectrum
+    if spectrum.window_source_forced():
+        return extractor
+    path = _extractor_path(extractor)
+    if path is None or not spectrum.spectrum_applies(path):
+        return extractor
+    return spectrum.SpectrumNetExtractor(extractor, path)
+
+
 def get_variant_extractor():
     """The session's extractor read as the MEASUREMENT the EBSD viewer's active dataset holds.
 
@@ -244,17 +302,29 @@ def get_variant_extractor():
 def get_active_extractor():
     """The extractor as the ACTIVE DATASET sees it.
 
-    If the active dataset is a crop, this is a ``CroppedExtractor`` view whose
-    every grid-shaped read is cut to the crop window. Otherwise it is the very
-    same object ``get_extractor()`` returns — the non-crop path is unchanged,
-    not merely equivalent. (For a dataset loaded as another measurement of the
-    file it is that measurement's extractor, ``get_variant_extractor``.)
+    Two optional layers on the raw extractor, in this order:
+
+    1. a ``SpectrumNetExtractor`` when the file has a per-pixel spectrum cube
+       (``eds_spectrum_service``): EDS element maps are net line intensities,
+       and while the fit runs every map read answers HTTP 503. The fit is made of
+       the file's default measurement (the slot the session reads); a dataset
+       loaded as another measurement of the file (``get_variant_extractor``)
+       reads that measurement's window maps, never the default one's nets;
+    2. a ``CroppedExtractor`` when the active dataset is a crop, cutting every
+       grid-shaped read -- net maps included -- to the crop window.
+
+    Without either (no cube, no crop, default measurement) it is the very same
+    object ``get_extractor()`` returns -- that path is unchanged, not merely
+    equivalent.
 
     Use this from anything that works on "the dataset the user is looking at".
     Use ``get_extractor()`` from anything that must show the FILE as it is —
     the h5 viewer, format probing, preflight checks.
     """
+    raw = get_extractor()
     extractor = get_variant_extractor()
+    if extractor is raw:
+        extractor = _with_spectrum_source(extractor)
 
     # Lazy import: ebsd_viewer imports services, so a module-level import here
     # would close a cycle. Same pattern as close_file's phase_map_store import.

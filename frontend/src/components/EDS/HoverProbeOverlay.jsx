@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { colors } from '../../theme/components';
+import { edsStatusText } from './edsDetailText';
 
 /**
  * Fixed-position tooltip near the cursor showing multi-layer values at the
@@ -42,6 +43,25 @@ export default function HoverProbeOverlay({ probe, error, displayMode, visible, 
             ({probe.row}, {probe.col})
           </div>
           {probe.bc != null && <Row k={t('probe.bc')} v={probe.bc.toFixed(0)} />}
+          {/* The probe never fails for the spectrum fit: it leaves the EDS
+              values out and says why (`eds_status`). Without this line an
+              empty element list reads as "no EDS at this pixel". */}
+          {probe.eds_status && (
+            <div data-probe-eds-status={probe.eds_status.state}
+              style={{ color: probe.eds_status.state === 'failed' ? colors.red : colors.textSecondary,
+                       fontStyle: 'italic', margin: '2px 0' }}>
+              {edsStatusText(probe.eds_status, t)}
+            </div>
+          )}
+          {/* Counts on the spectrum source are net counts: background
+              subtracted, scattering around 0 where the element is absent. */}
+          {displayMode === 'counts' && probe.quantification?.source === 'spectrum'
+            && Object.keys(probe.elements || {}).length > 0 && (
+            <div data-probe-net-counts
+              style={{ color: colors.textSecondary, fontSize: '8pt', margin: '1px 0' }}>
+              {t('probe.netCounts')}
+            </div>
+          )}
           {Object.entries(probe.elements || {}).map(([el, v]) => (
             <Row key={el} k={el} v={fmtElement(v, displayMode, t)} />
           ))}

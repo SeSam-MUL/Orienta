@@ -13,8 +13,14 @@ CroppedExtractor.
 
 RETURNS a grid-shaped array — CUT to the window:
     get_grid_dimensions, flat_point_count, get_pattern_count, _flat_to_map,
-    get_element_map, get_element_map_2d, get_band_contrast_map,
-    detect_available_features
+    get_element_map, get_element_map_2d, get_window_map, get_live_time,
+    get_band_contrast_map, detect_available_features
+
+    (Over a ``SpectrumNetExtractor`` the element maps are net intensities;
+    they are cut exactly like window maps, and ``get_window_map`` cuts the
+    raw window map beside them. ``get_live_time`` is the per-pixel live time
+    that turns them into counts; it is cut the same way, or a region's
+    summed composition would pair crop pixels with full-scan live times.)
 
 PROJECTED — cut, but not by row and column number:
     get_electron_image. An electron image is a separate acquisition area on
@@ -133,6 +139,40 @@ class CroppedExtractor:
             return None
         two_d = self._to_cropped_grid(data)
         return data if two_d is None else two_d
+
+    def get_window_map(self, element_name):
+        """AZtec's window map of the CROP, flat like ``get_element_map``.
+
+        Over a ``SpectrumNetExtractor`` the element maps are net intensities
+        and this is the raw window map beside them; over a raw extractor both
+        are the window map. Without this method the attribute would forward to
+        the wrapped object and hand back the FULL scan's window map under a
+        cropped grid.
+        """
+        inner = getattr(self._ext, "get_window_map", self._ext.get_element_map)
+        data = inner(element_name)
+        if data is None:
+            return None
+        two_d = self._to_cropped_grid(data)
+        if two_d is None:
+            return data
+        return two_d.reshape(-1, *two_d.shape[2:])
+
+    def get_live_time(self):
+        """Live time per pixel of the CROP, flat like ``get_element_map``.
+
+        Only a spectrum-source extractor has one. Without this method the
+        attribute would forward and hand back the FULL scan's live time under
+        a cropped grid -- the wrong seconds for every pixel of a summed
+        region composition.
+        """
+        data = self._ext.get_live_time()
+        two_d = self._to_cropped_grid(data)
+        if two_d is None:
+            raise ValueError(
+                f"live time of {np.asarray(data).size} values is not on the "
+                f"scan grid {tuple(self._window.original_shape)}")
+        return two_d.reshape(-1)
 
     def get_band_contrast_map(self):
         bc = self._ext.get_band_contrast_map()

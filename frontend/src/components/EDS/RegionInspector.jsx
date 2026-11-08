@@ -147,7 +147,9 @@ export default function RegionInspector({
                     alignItems: 'flex-start' }}>
         {/* --- composition ---------------------------------------------- */}
         <Column title={t('inspector.composition')}
-                hint={t('inspector.compositionHint')} grow={2}>
+                hint={t(detail.composition_method === 'summed_net_counts'
+                  ? 'inspector.compositionHintSummed'
+                  : 'inspector.compositionHint')} grow={2}>
           <table style={{ width: '100%', borderCollapse: 'collapse',
                           fontSize: '8.5pt', fontVariantNumeric: 'tabular-nums' }}>
             <thead>

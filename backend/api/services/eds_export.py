@@ -111,11 +111,17 @@ and for every threshold's measured justification.
 WHY IT REPORTS THREE FRACTIONS AND NOT ONE. It reported the implausible half
 alone, and a reader completes that by subtraction into "the rest is fine".
 The rest is not fine, it is UNEXAMINED. Measured on the real 90x120 SampleB
-scan (mode=cluster, scale_um=1.5, k=7): 62.33 % of the map sits on rows a
-discriminating element contradicts, 37.67 % on rows chemistry cannot check at
-all, and 0.00 % on rows a composition check corroborates. Nothing in that map
-was corroborated, and the old wording invited the opposite conclusion while
-printing neither of the two numbers that would have stopped it. The three
+scan (mode=cluster, scale_um=1.5, k=7) on 2026-08-27, with the window
+quantification before the k-factor recalibration: 62.33 % of the map sat on rows a discriminating
+element contradicts, 37.67 % on rows chemistry cannot check at all, and
+0.00 % on rows a composition check corroborates. Nothing in that map was
+corroborated, and the old wording invited the opposite conclusion while
+printing neither of the two numbers that would have stopped it. Those figures
+are history: after the k-factor recalibration of 2026-09-12 the same request
+(now k=6) gave 23.97 / 38.09 / 37.94 % on the window numbers and 0.00 / 62.32 /
+37.68 % on the spectrum numbers (re-measured 2026-10-25
+against the AZtec reference scan). The argument does not depend on
+them. The three
 close on the whole raster — see :func:`plausibility_coverage` — so a reader
 can see that nothing fell out rather than take it on trust.
 
@@ -157,7 +163,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import (Any, Callable, Dict, Iterable, Iterator, List, Mapping,
+                    Optional, Sequence, Tuple)
 
 import numpy as np
 from scipy import ndimage
@@ -265,6 +272,87 @@ SEMI_QUANTITATIVE_CAVEAT = (
     "incomplete. Use these numbers to distinguish phases, not to certify a "
     "composition."
 )
+
+#: The same sentence for at% made from NET line intensities fitted from the
+#: per-pixel spectra (``backend/eds_spectrum``). Only the source clause
+#: differs; everything that limits the numbers still applies.
+SEMI_QUANTITATIVE_CAVEAT_SPECTRUM = (
+    "SEMI-QUANTITATIVE. The at% values in this export come from net line "
+    "intensities fitted from the per-pixel spectra (eds-spectrum-fit/1: "
+    "background subtracted, overlapping lines separated, pile-up modelled) "
+    "converted with a simplified Cliff-Lorimer style k-factor model and "
+    "renormalised over the measured elements only. There is no full ZAF "
+    "correction, no standardless absorption/fluorescence correction and no "
+    "k-factor calibration against a standard. Light elements are unreliable, "
+    "carbon and oxygen are excluded from the scoring entirely, and an element "
+    "that was neither mapped nor detected in the spectrum cannot be seen at "
+    "all — so the composition is renormalised over a set that may be "
+    "incomplete. Use these numbers to distinguish phases, not to certify a "
+    "composition."
+)
+
+
+def semi_quantitative_caveat(source: Optional[str]) -> str:
+    """The caveat for the intensities actually used.
+
+    ``"spectrum"``: net intensities from the spectrum fit. Anything else --
+    ``"window"``, or maps that carried no record (the contract before the
+    spectrum path existed) -- is AZtec's window integrals.
+    """
+    if source == "spectrum":
+        return SEMI_QUANTITATIVE_CAVEAT_SPECTRUM
+    return SEMI_QUANTITATIVE_CAVEAT
+
+
+def _quantification_block(qprov: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
+    """Which intensities the at% maps were made from, and by what.
+
+    Read off the at% maps' own provenance (``eds_utils``, plus the spectrum
+    fit's account the routes attach), so the file names the source that
+    produced its numbers and not the one a caller assumed. For the spectrum
+    source: model version, reduced chi2 of the sum-spectrum fit, the line
+    each element was quantified through, the elements the spectrum shows
+    that AZtec did not export, and the fit's quality warnings.
+    """
+    if not qprov:
+        return {
+            "source": "window",
+            "recorded": False,
+            "source_data": None,
+            "note": ("The at% maps handed to this export carried no "
+                     "quantification record. Every map made before the "
+                     "spectrum path existed is from AZtec's window "
+                     "integrals, so that is what this file assumes."),
+        }
+    source = qprov.get("source", "window")
+    out: Dict[str, Any] = {
+        "source": source,
+        "recorded": True,
+        "source_data": qprov.get("source_data"),
+        "method": qprov.get("method"),
+        "beam_kv": qprov.get("beam_kv"),
+        "calibration": dict(qprov.get("calibration") or {}),
+        "k_lines": {str(el): {"line": (e or {}).get("line"),
+                              "k": (e or {}).get("k")}
+                    for el, e in sorted((qprov.get("lines") or {}).items())},
+    }
+    if source == "spectrum":
+        fit = dict(qprov.get("fit") or {})
+        out.update({
+            "model_version": fit.get("model_version"),
+            "chi2_red": fit.get("chi2_red"),
+            "fit_params": fit.get("params"),
+            "lines": fit.get("lines"),
+            "detected_not_exported": fit.get("detected_not_exported"),
+            "quality_warnings": fit.get("quality_warnings"),
+            "exported_not_fitted": fit.get("exported_not_fitted"),
+            "clipped_negative": dict(qprov.get("clipped_negative") or {}),
+            "clipped_note": (
+                "Per element, the pixels whose net intensity was negative "
+                "(counting noise where the line is absent) and was clipped "
+                "at 0 before weighting."),
+        })
+    return out
 
 #: Why the classification cannot be replayed from the exported map alone.
 #: Applies to a map made before 2026-08-27, or restored from a sidecar
@@ -977,7 +1065,8 @@ _PEAK_OVERLAPS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 
-def _peak_overlap_block(measured: Sequence[str]) -> Dict[str, Any]:
+def _peak_overlap_block(measured: Sequence[str],
+                        source: Optional[str] = "window") -> Dict[str, Any]:
     """The overlaps that apply TO THIS SCAN, named with their energies.
 
     The manual says peak overlaps exist. A tester wanted the concrete
@@ -994,6 +1083,32 @@ def _peak_overlap_block(measured: Sequence[str]) -> Dict[str, Any]:
     have = {str(el) for el in measured}
     applies = [{"interfering": a, "affected": b, "note": text}
                for a, b, text in _PEAK_OVERLAPS if a in have and b in have]
+    if source == "spectrum":
+        # The window overlaps above are WINDOW effects. The spectrum fit
+        # models every line of every fitted family (K-beta included), so the
+        # intensity under another element's line is assigned to its emitter.
+        return {
+            "measured_elements": sorted(have),
+            "applies_to_this_scan": [],
+            "n_applicable": 0,
+            "separated_by_the_fit": applies,
+            "why": (
+                "The at% values come from NET line intensities fitted from "
+                "the per-pixel spectra (eds-spectrum-fit/1), not from window "
+                "integrals. Every line of every fitted family -- K-beta "
+                "included -- is part of the spectrum model, so a line under "
+                "another element's line is assigned to the element that "
+                "emitted it. separated_by_the_fit lists the pairs a window "
+                "integral would have suffered from on this scan."),
+            "consequence": (
+                "A residual the model does not describe can still bias a "
+                "line; the fit's own check of that is "
+                "quantification.quality_warnings."),
+            "detection": (
+                "Handled by the model, not declared: see "
+                "quantification.quality_warnings for lines the fit leaves a "
+                "systematic residual on."),
+        }
     return {
         "measured_elements": sorted(have),
         "applies_to_this_scan": applies,
@@ -1504,6 +1619,7 @@ def build_tables(
     *,
     geometry: ExportGeometry,
     options: Optional[ExportOptions] = None,
+    composition_of: Optional[Callable[[np.ndarray], Mapping[str, float]]] = None,
 ) -> ExportTables:
     """Every table this export can build, from data alone.
 
@@ -1520,6 +1636,17 @@ def build_tables(
         physical column.
     options
         See :class:`ExportOptions`. ``None`` uses the defaults.
+    composition_of
+        On the spectrum source, the composition of a set of pixels quantified
+        from its SUMMED net counts (``routes.eds._composition_of``): called
+        with a flat boolean mask, returns ``{element: at%}``. It replaces the
+        mean of the pixels' at% in every composition this export reports for
+        an object -- regions, particles (all pixels and core), phases -- and
+        in the ranking means built from them; the per-pixel at% clip negative
+        nets at 0, so their mean reads a weak element too high. ``sd_within``
+        stays the pixels'. ``None`` (the window source, and any caller with
+        at% maps alone) keeps the mean of the pixels.
+        ``provenance.composition.composition_method`` says which.
 
     Returns
     -------
@@ -1646,7 +1773,8 @@ def build_tables(
         flat_region, flat_phase, locked_flat, valid_mask, score_flat,
         entries, background, geometry, particles, ctx,
         n_px=n_px, n_valid=n_valid, n_classified=n_classified,
-        n_rows=n_rows, n_cols=n_cols, area_ok=area_ok, warnings=warnings)
+        n_rows=n_rows, n_cols=n_cols, area_ok=area_ok, warnings=warnings,
+        composition_of=composition_of)
 
     regions_table = Table(
         name="regions",
@@ -1661,14 +1789,16 @@ def build_tables(
         region_records, background, ctx, geometry=geometry, opts=opts,
         area_ok=area_ok,
         n_px=n_px, n_valid=n_valid, n_classified=n_classified,
-        particle_basis=particle_basis, warnings=warnings)
+        particle_basis=particle_basis, warnings=warnings,
+        composition_of=composition_of)
 
     # --- per-phase measurement ----------------------------------------------
     phases_table = _phase_table(
         state, entries, flat_maps, columns_el, measured_el, flat_phase,
         flat_region, locked_flat, valid_mask, score_flat, particles,
         region_records, background, geometry=geometry, area_ok=area_ok,
-        n_px=n_px, n_valid=n_valid, n_classified=n_classified)
+        n_px=n_px, n_valid=n_valid, n_classified=n_classified,
+        composition_of=composition_of)
 
     # --- definitions ---------------------------------------------------------
     definitions_table, def_claims = _definitions_table(
@@ -1755,7 +1885,9 @@ def build_tables(
         particles_table=particles_table, background=background,
         ctx=ctx, warnings=warnings, area_ok=area_ok,
         plausibility=plausibility, phases_table=phases_table,
-        colours=colours)
+        colours=colours,
+        quant_prov=getattr(at_maps, "provenance", None),
+        composition_method=_composition_method(composition_of))
     # How the `_figure.png` pictures relate to the 1:1 rasters: factor, size,
     # the bar's length. A reader measuring on the figure needs these numbers.
     provenance["map_figures"] = map_figures
@@ -2116,10 +2248,42 @@ def _background_levels(flat_maps: Mapping[str, np.ndarray]) -> Dict[str, float]:
         return {}
 
 
+def _composition_method(composition_of: Optional[Callable]) -> str:
+    """``composition_method`` of an export: how its object compositions were made.
+
+    The same two strings ``eds_wand.selection_stats`` reports, spelled here so
+    a slimmed deployment without that import still writes the record.
+    """
+    return ("mean_of_pixel_at_pct" if composition_of is None
+            else "summed_net_counts")
+
+
+def _object_composition(
+    flat_maps: Mapping[str, np.ndarray],
+    mask: np.ndarray,
+    composition_of: Optional[Callable[[np.ndarray], Mapping[str, float]]],
+) -> Dict[str, Tuple[float, float]]:
+    """``{element: (composition at%, sd_within at%)}`` of one object.
+
+    ``sd_within`` is the pixels' (population, ddof=0) either way: it describes
+    the pixels. The composition is the mean of the pixels' at% unless
+    ``composition_of`` is given (spectrum source): then it is the object's
+    SUMMED net counts quantified once -- see :func:`build_tables`. Same
+    elements as the at% maps; an empty mask gives ``{}``.
+    """
+    stats = composition_for_mask(dict(flat_maps), mask)
+    if composition_of is None or not stats:
+        return stats
+    comp = {str(el): float(v) for el, v in
+            composition_of(np.asarray(mask, dtype=bool).ravel()).items()}
+    return {el: (comp[str(el)], sd) for el, (_mean, sd) in stats.items()}
+
+
 def _ranking_means(
     flat_maps: Mapping[str, np.ndarray],
     mask_flat: np.ndarray,
     background: Mapping[str, float],
+    composition: Optional[Mapping[str, float]] = None,
 ) -> Dict[str, float]:
     """The mean dict :func:`rank_candidates` expects.
 
@@ -2135,6 +2299,11 @@ def _ranking_means(
     point. The export puts it through :func:`to_scored_basis` before
     subtracting a nominal composition from it; see that function for the
     measured cost of not doing so.
+
+    ``composition``: the object's summed-net composition, already made for
+    its composition cells (spectrum source). The inspector ranks on the same
+    composition, so it goes into ``selection_stats`` in place of the mean of
+    the pixels; passed in rather than made twice.
     """
     try:
         from backend.api.services.crystal_hint_phase_fit import _CHEM_IGNORE
@@ -2142,8 +2311,10 @@ def _ranking_means(
     except Exception:
         logger.debug("eds_export: selection_stats unavailable", exc_info=True)
         return {}
-    stats = selection_stats(dict(flat_maps), mask_flat,
-                            background=dict(background) or None)
+    stats = selection_stats(
+        dict(flat_maps), mask_flat, background=dict(background) or None,
+        composition_of=(None if composition is None
+                        else (lambda _mask: dict(composition))))
     return {el: float(v) for el, v in (stats.get("mean_at_pct") or {}).items()
             if el not in _CHEM_IGNORE}
 
@@ -2637,6 +2808,7 @@ def _region_records(
     flat_region, flat_phase, locked_flat, valid_mask, score_flat,
     entries, background, geometry, particles, ctx,
     *, n_px, n_valid, n_classified, n_rows, n_cols, area_ok, warnings,
+    composition_of=None,
 ) -> List[Dict[str, Any]]:
     region_phase = list(getattr(state, "region_phase", None) or [])
     if not region_phase and getattr(state, "region_grid", None) is None:
@@ -2711,11 +2883,13 @@ def _region_records(
         row["phase_final_formula_ascii"] = formula_ascii(
             getattr(final_entry, "formula", "") if final_entry is not None else "")
 
-        stats = composition_for_mask(dict(flat_maps), mask) if n else {}
+        stats = _object_composition(flat_maps, mask, composition_of) if n else {}
         _composition_cells("", columns_el, measured_el, stats, row)
         plain = {el: float(p[0]) for el, p in stats.items()}
         _enrichment_cells(row, columns_el, measured_el, plain, background)
         row["scored_at_pct_sum"] = _scored_sum(plain, measured_el) if n else None
+        # Smoothed stays a mean of smoothed pixels: it is the basis the
+        # regions were FORMED on, not a composition of them.
         if smoothed_maps:
             sstats = composition_for_mask(dict(smoothed_maps), mask) if n else {}
             _composition_cells("smoothed_", columns_el, measured_el, sstats, row,
@@ -2737,7 +2911,9 @@ def _region_records(
         ranked = list(ranked_all[sid]) if (n and sid < len(ranked_all)) else []
         if n and entries:
             mad = rank_candidates(
-                to_scored_basis(_ranking_means(flat_maps, mask, background)),
+                to_scored_basis(_ranking_means(
+                    flat_maps, mask, background,
+                    composition=plain if composition_of is not None else None)),
                 entries)
         else:
             mad = []
@@ -3019,6 +3195,7 @@ def _particle_table(
     columns_el, measured_el, flat_phase, flat_region, locked_flat, valid_mask,
     entries, region_records, background, ctx, *, geometry, opts, area_ok,
     n_px, n_valid, n_classified, particle_basis, warnings,
+    composition_of=None,
 ) -> Table:
     columns = _particle_columns(columns_el, area_ok)
     rows: List[Dict[str, Any]] = []
@@ -3129,7 +3306,7 @@ def _particle_table(
                 getattr(entry, "formula", "") if entry is not None else "")
             row["region_margin_score"] = None
 
-        stats = composition_for_mask(dict(flat_maps), mask)
+        stats = _object_composition(flat_maps, mask, composition_of)
         _composition_cells("", columns_el, measured_el, stats, row)
         plain = {el: float(pair[0]) for el, pair in stats.items()}
         _enrichment_cells(row, columns_el, measured_el, plain, background)
@@ -3137,14 +3314,16 @@ def _particle_table(
         # Core-only. A particle that erodes to nothing legitimately has no
         # core composition; the cells are empty, which is the true statement,
         # and n_px_core = 0 next to it says why.
-        core_stats = (composition_for_mask(dict(flat_maps), core)
+        core_stats = (_object_composition(flat_maps, core, composition_of)
                       if core.any() else {})
         _composition_cells("core_", columns_el, measured_el, core_stats, row)
 
         # This particle's own ranking, on this particle's own composition.
         ranked = list(ranked_all[k]) if k < len(ranked_all) else []
         mad = rank_candidates(
-            to_scored_basis(_ranking_means(flat_maps, mask, background)),
+            to_scored_basis(_ranking_means(
+                flat_maps, mask, background,
+                composition=plain if composition_of is not None else None)),
             entries) if entries else []
         _auto_cells(row, ranked, mad, entries, int(row["phase_index"]),
                     ctx["min_score"])
@@ -3247,7 +3426,7 @@ def _phase_table(
     state, entries, flat_maps, columns_el, measured_el, flat_phase,
     flat_region, locked_flat, valid_mask, score_flat, particles,
     region_records, background, *, geometry, area_ok, n_px, n_valid,
-    n_classified,
+    n_classified, composition_of=None,
 ) -> Table:
     """One row per phase that owns pixels, plus a real ``unclassified`` row.
 
@@ -3359,7 +3538,7 @@ def _phase_table(
             # size".
             row["particle_area_sd_um2"] = (float(areas.std())
                                            if areas.size > 1 else None)
-        stats = composition_for_mask(dict(flat_maps), mask) if n else {}
+        stats = _object_composition(flat_maps, mask, composition_of) if n else {}
         _composition_cells("", columns_el, measured_el, stats, row)
         plain = {el: float(pair[0]) for el, pair in stats.items()}
         _enrichment_cells(row, columns_el, measured_el, plain, background)
@@ -3661,9 +3840,15 @@ def _provenance(
     n_classified_valid, n_regions,
     n_particles, particle_basis, locked_flat, smoothing, flat_maps, background,
     ctx, warnings, area_ok, particles_table=None, plausibility=None,
-    phases_table=None, colours=None,
+    phases_table=None, colours=None, quant_prov=None,
+    composition_method: str = "mean_of_pixel_at_pct",
 ) -> Dict[str, Any]:
     """The full run record. Everything a reader needs to attack the numbers."""
+    quantification = _quantification_block(quant_prov)
+    # Absent on a state that predates the field: the store's own default.
+    _map_source = getattr(state, "quant_source", None)
+    if not isinstance(_map_source, str) or not _map_source:
+        _map_source = "window"
     # `particles_table` is a Table (name/columns/rows), not a sequence of
     # rows. Tolerate either, and an absent table, so a caller that builds no
     # particles still gets a record rather than a TypeError.
@@ -4056,6 +4241,33 @@ def _provenance(
                 "distribution is biased if these are not handled."),
         },
         "composition": {
+            # Which EDS numbers the phase map's regions were CLASSIFIED on
+            # (PhaseMapState.quant_source, stamped by auto-classify and kept
+            # in the sidecar). Not necessarily the source of the numbers in
+            # this export: a map made on window numbers and exported once the
+            # file's spectra are evaluated has its regions drawn by one and
+            # reported in the other.
+            "phase_map_quant_source": _map_source,
+            "phase_map_quant_source_note": (
+                None if _map_source == quantification["source"] else
+                f"The phase map's regions were classified on the "
+                f"{_map_source} numbers; the compositions in this export are "
+                f"quantified from the {quantification['source']} numbers "
+                f"(quantification.source). Re-run the classification to "
+                f"have both from one source."),
+            # How every mean_at_pct_* / core_mean_at_pct_* cell (regions,
+            # particles, phases) was made. The column keeps its name; this
+            # says what it holds.
+            "composition_method": composition_method,
+            "composition_method_note": (
+                "summed_net_counts: the object's pixels' net line counts "
+                "(net counts per live second x live time, from the spectrum "
+                "fit) are summed and quantified ONCE. Per-pixel at% clip a "
+                "negative net at 0, so their mean reads a weak element too "
+                "high; the sum is linear and carries no such bias. "
+                "mean_of_pixel_at_pct: the mean of the pixels' at% (window "
+                "integrals). sd_within_* is the pixels' spread either way. "
+                "smoothed_* stays a mean of the smoothed pixels."),
             "basis": "raw",
             "basis_note": (
                 "Regions are FORMED on smoothed composition and REPORTED on "
@@ -4244,7 +4456,9 @@ def _provenance(
             "available": False,
             "reason": "this export did not resolve the palette",
         },
-        "peak_overlaps": _peak_overlap_block(measured_el),
+        "peak_overlaps": _peak_overlap_block(measured_el,
+                                             quantification["source"]),
+        "quantification": quantification,
         "library": library_identity,
         "phases_absent": phases_absent,
         "phases_participating": [
@@ -4316,7 +4530,7 @@ def _provenance(
         "rounding": ("None. Every numeric cell carries full float precision; "
                      "rounding is presentation and belongs in whatever reads "
                      "this file."),
-        "caveat": SEMI_QUANTITATIVE_CAVEAT,
+        "caveat": semi_quantitative_caveat(quantification["source"]),
         "not_built": {
             "batch_over_folder": (
                 "Deferred. The export core is a pure function of (state, "
@@ -4334,6 +4548,9 @@ def _provenance(
                 "no ZAF correction; acquisition.beam_voltage_kv is now in "
                 "this file so the caveat can at least be weighed."),
             "peak_overlap_warnings": (
+                "Not needed: the spectrum fit separates overlapping lines; "
+                "its residual check is quantification.quality_warnings."
+                if quantification["source"] == "spectrum" else
                 "Not DETECTED. This module receives per-element at% maps and "
                 "never the spectra, so it cannot measure an overlap. The "
                 "overlaps known for this alloy system are declared in "

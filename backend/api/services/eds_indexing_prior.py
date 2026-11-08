@@ -269,11 +269,40 @@ def chemistry_weight_matrix(
     return W
 
 
+#: The EDS numbers the prior is made of -- and with it the particle rescue
+#: (``routes.indexing._apply_particle_rescue``) and the indexing pre-flight
+#: that predicts the prior (``eds_preflight.run_preflight``), so the three can
+#: never read different sources -- and every other consumer that ranks with
+#: the same ``chemistry_fit`` on measured at%: the single-pixel phase test and
+#: the crystal hint (``eds_pixel_chemistry.chemistry_source``, measured the
+#: same way: 89.37 -> 74.55 % on the alpha region of the reference scan) and grain phase
+#: assignment (``routes.indexing._grain_chemistry_maps``).
+#: ``"window"``: AZtec's raw window maps with the
+#: window calibration, whatever the open file serves; ``None``: the open
+#: file's own source (net line intensities when it has a spectrum cube).
+#:
+#: KEPT ON THE WINDOW PATH, measured window vs spectrum
+#: on the AZtec reference scan (a scan not included in the repository). Used as a per-pixel
+#: classifier against the pattern-only 4-phase map of the AZtec reference scan,
+#: the prior's chemistry (``chemistry_fit``) picks alpha-Al(Fe,Mn)Si on
+#: 89.37 % of its pixels from the window numbers and on 74.55 % from the
+#: spectrum numbers (all four phases 88.90 -> 87.03 %), and Fe >= 11.6 at%
+#: pixels of that scan keep an Fe phase on 100 -> 98.46 %. Not noise (5x5
+#: smoothing leaves 91.99 vs 77.36 %): alpha and beta score within 0.04 of each
+#: other, and the spectrum numbers -- closer to AZtec -- move the alpha
+#: pixels' Si and Fe toward beta and drop the window's spurious Zn, which had
+#: been charging beta more than alpha. The scorer's floors were tuned on the
+#: window numbers. ``None`` is only valid once they are re-measured on the
+#: spectrum at% (veto-constant and joint sweeps) and the alpha rate on the
+#: reference scan is at least 89.37 %.
+PRIOR_EDS_SOURCE: Optional[str] = "window"
+
+
 def _build_at_pct_maps_for_loaded_file():
     # Imported lazily so the pure functions above have no FastAPI/route dependency
     # and the test can monkeypatch this symbol.
     from backend.api.routes.eds import _build_at_pct_maps_for_loaded_file as _f
-    return _f()
+    return _f(source=PRIOR_EDS_SOURCE)
 
 
 @dataclass(frozen=True)
@@ -343,8 +372,18 @@ def measured_atpct_per_pixel(
     if chemistry is not None:
         at_maps, n_rows, n_cols = chemistry.at_maps, chemistry.n_rows, chemistry.n_cols
     else:
+        from backend.api.services.eds_spectrum_service import SPECTRUM_FIT_ERRORS
         try:
             at_maps, n_rows, n_cols, _ = _build_at_pct_maps_for_loaded_file()
+        except SPECTRUM_FIT_ERRORS:
+            # Only reachable with PRIOR_EDS_SOURCE = None (the window numbers
+            # need no fit). The run decided at its start that this dataset's
+            # chemistry is there (indexing._decide_eds_prior refuses the prior for
+            # the WHOLE run while a fit the prior needs runs). Losing it half-way
+            # -- the file was switched, its fit dropped -- must not switch the
+            # prior off for the rest of the run: that is the off-then-on run the
+            # decision exists to prevent. Fail loud instead.
+            raise
         except Exception:
             return None
     if not at_maps:

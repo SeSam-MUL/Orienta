@@ -948,7 +948,7 @@ export const indexApi = {
     api.post('/api/indexing/phase-reassign', {}),
   phaseReassignUndo: () =>
     api.post('/api/indexing/phase-reassign/undo', {}),
-  // Phase B — Forward-NCC quality map
+  // Forward-NCC quality map
   forwardNccStatus: () => api.get('/api/indexing/forward-ncc/status'),
   forwardNccCompute: (maxBandwidth = 256, force = false) => api.post(
     '/api/indexing/forward-ncc/compute',
@@ -1199,7 +1199,7 @@ export const batchV2Api = {
 
 // --- Phase Refinement (file-stem based per-pixel phase override) ---
 // Renamed from `refinementApi` to `phaseRefinementApi` to coexist with the new
-// `refinementApi` below, which handles Phase B joint R+PC refinement on
+// `refinementApi` below, which handles joint R+PC refinement on
 // result_id. Distinct feature, distinct shape — only the URL prefix is shared
 // (`/api/refinement/...` vs `/api/refinement/{file_stem}/...`).
 export const phaseRefinementApi = {
@@ -1430,6 +1430,15 @@ function nonUnitWeights(w) {
 }
 
 export const edsApi = {
+  // State of the spectrum fit of the open file: {state: none|running|ready|
+  // failed, progress, stage, error, fit}. Cheap and never blocking; the EDS
+  // page polls it while the fit runs (useSpectrumFitStatus). Its own short
+  // timeout, like healthCheck: the page shows nothing but its header until
+  // the first answer, and with the instance's 5 minutes a busy backend kept a
+  // file without spectra behind that header for up to five minutes. A
+  // request that times out is retried every second, and the page says so.
+  spectrumFitStatus: () => api.get('/api/eds/spectrum-fit/status',
+    { timeout: 4000 }),
   elements: () => api.get('/api/eds/elements'),
   getMap: (element, mode = 'counts', cmap = 'hot', color = '') =>
     api.get(`/api/eds/map/${element}`, { params: { mode, cmap, color } }),
@@ -1768,8 +1777,7 @@ export const forwardDiagApi = {
 };
 
 /**
- * Refinement API — Phase B (joint R+PC refinement).
- * Spec: docs/superpowers/specs/2026-05-14-joint-r-pc-refinement-design.md
+ * Refinement API (joint R+PC refinement).
  *
  * Mirrors `forwardDiagApi` above (fetch-based; null on 404 from /summary;
  * throws FastAPI's detail.error verbatim).

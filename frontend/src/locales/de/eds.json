@@ -28,13 +28,18 @@
     "wtPct": "Gew.-%",
     "atPct": "At.-%",
     "empty": "—",
-    "sumTooltip": "Summe aller Elemente. Die Quantifizierung normiert auf 100%, das bestätigt also nur, dass die Umrechnung gelaufen ist — eine Prüfung der Genauigkeit ist es nicht."
+    "sumTooltip": "Summe aller Elemente. Die Quantifizierung normiert auf 100%, das bestätigt also nur, dass die Umrechnung gelaufen ist — eine Prüfung der Genauigkeit ist es nicht.",
+    "netCounts": "Netto-Counts",
+    "netCountsTooltip": "Netto-Linien-Counts aus dem Spektren-Fit, Untergrund abgezogen. Wo ein Element fehlt, schwanken sie um 0; ein kleiner negativer Wert ist Rauschen, kein Fehler."
   },
   "region": {
     "summary": "Region ({{rowStart}},{{colStart}})–({{rowEnd}},{{colEnd}}), {{nPixels}} Pixel",
     "countsHeader": "Counts (Mittel±σ)",
     "wtPctHeader": "Gew.-% (Mittel±σ)",
-    "atPctHeader": "At.-% (Mittel±σ)"
+    "atPctHeader": "At.-% (Mittel±σ)",
+    "netCountsHeader": "Netto-Counts (Mittel±σ)",
+    "wtPctSummedHeader": "Gew.-% (summiert; ± je Pixel)",
+    "atPctSummedHeader": "At.-% (summiert; ± je Pixel)"
   },
   "overlay": {
     "title": "Composite-Overlay",
@@ -51,7 +56,9 @@
   "linescan": {
     "title": "Linescan-Profil",
     "axisSample": "Stelle",
-    "axisValue": "Wert"
+    "axisValue": "Wert",
+    "axisNetCounts": "Netto-Counts",
+    "netCountsNote": "Netto-Counts aus dem Spektren-Fit: Untergrund abgezogen, daher schwankt das Profil um 0, wo das Element fehlt."
   },
   "layers": {
     "title": "Ebenen"
@@ -97,12 +104,14 @@
   "regionAvg": {
     "title": "Regionsmittel",
     "description": "Mittlere Zusammensetzung (Mittel ± σ je Element) über einen rechteckigen Pixelblock. Damit lassen sich Korn oder Ausscheidung messen, ohne einzelne Pixel zu wählen — unten die begrenzenden Zeilen und Spalten festlegen.",
+    "descriptionSummed": "Eine Zusammensetzung aus den summierten Netto-Counts eines rechteckigen Pixelblocks, dazu die Streuung je Element über diese Pixel (± σ). Damit lassen sich Korn oder Ausscheidung messen, ohne einzelne Pixel zu wählen — unten die begrenzenden Zeilen und Spalten festlegen.",
     "rowStart": "Zeile Start",
     "rowEnd": "Zeile Ende",
     "colStart": "Spalte Start",
     "colEnd": "Spalte Ende",
     "compute": "Mittel berechnen",
     "computeTooltip": "Summiert jedes Pixel im Rechteck und liefert je Element Mittelwert und Standardabweichung. Der Einzelpixel-Quantifizierer oben gibt eine Zeile Daten; dieser hier eine ganze Region.",
+    "computeTooltipSummed": "Summiert die Netto-Counts aller Pixel im Rechteck und quantifiziert diese Summe einmal; ± ist die Streuung über die Pixel. Der Einzelpixel-Quantifizierer oben gibt eine Zeile Daten; dieser hier eine ganze Region.",
     "error": "Regions-Quantifizierung fehlgeschlagen.",
     "copy": "In Zwischenablage kopieren",
     "copied": "✓ Kopiert!",
@@ -161,7 +170,8 @@
     "loading": "Lädt…",
     "bc": "BC",
     "phase": "Phase",
-    "empty": "—"
+    "empty": "—",
+    "netCounts": "Netto-Counts (Untergrund abgezogen)"
   },
   "phaseMap": {
     "title": "Phasenkarten-Builder",
@@ -288,6 +298,10 @@
       "edge_snaps": "{{n}} Kantenschnappungen",
       "phase_replacements": "{{n}} Phasenersetzungen",
       "regionGridEdited": "Die Regionsgrenzen wurden nach der Klassifikation bearbeitet, deshalb wurden die aus Regionen abgeleiteten Partikel-IDs neu vergeben — IDs auf einer Abbildung, die vor diesen Eingriffen entstanden ist, zeigen nicht mehr auf dieselben Partikel."
+    },
+    "notice": {
+      "otherSource": "Diese gespeicherte Karte wurde auf Fensterwerten erstellt; die Schwellen sind unverändert und können jetzt andere Pixel auswählen.",
+      "otherSourceSpectrum": "Diese gespeicherte Karte wurde auf Werten aus dem Spektren-Fit erstellt, und diese Datei hat nur Fensterwerte; die Schwellen sind unverändert und können jetzt andere Pixel auswählen."
     }
   },
   "periodicTable": {
@@ -438,7 +452,8 @@
     "fromPixelArmed": "In die Karte klicken…",
     "fromPixelTooltip": "Zeig auf ein Pixel, das eindeutig das Gesuchte ist — die Mitte eines Partikels — und daraus wird ein Fenster geschrieben, aus dem, was dort wirklich drin ist. Daher kommen die Zahlen: eine Schwelle für ein Siliziumpartikel muss man an einem Siliziumpixel ablesen, nicht an einer Region, die es nicht getrennt hat.",
     "seedPixelNothing": "Bei ({{row}}, {{col}}) ist nichts angereichert — dieses Pixel liest sich wie die umgebende Matrix. Nehmen Sie eines innerhalb des gesuchten Merkmals.",
-    "firstMove": "Fangen Sie hier an: „Aus einem Pixel…“ drücken, dann in die Mitte des Partikels klicken, das die Gruppierung zusammenwirft. Auf „Ausprobieren“ leuchten die beanspruchten Pixel auf der Karte auf — die Zahl weiten oder engen, bis sie zu dem passen, was Sie sehen."
+    "firstMove": "Fangen Sie hier an: „Aus einem Pixel…“ drücken, dann in die Mitte des Partikels klicken, das die Gruppierung zusammenwirft. Auf „Ausprobieren“ leuchten die beanspruchten Pixel auf der Karte auf — die Zahl weiten oder engen, bis sie zu dem passen, was Sie sehen.",
+    "previewMeanTooltipSummed": "Die Zusammensetzung der Pixel, die dieses Fenster gefangen hat: ihre summierten Netto-Counts, einmal quantifiziert. Die Anzahl allein sagt nicht, ob es die richtigen waren — 202 px Matrix und 202 px Partikel sehen gleich aus, bis man sieht, was drin ist."
   },
   "inspector": {
     "title": "Region-Inspektor",
@@ -464,7 +479,8 @@
     "candidatesHint": "Phasen aus der Bibliothek, sortiert danach, wie nah ihre Formel an der gemessenen Zusammensetzung liegt. Anklicken legt sie auf die ganze Region.",
     "scaleLegend": "gegen Untergrund: 1,0× heißt, dieses Element ist hier nicht häufiger als sonst auf der Karte. Über 1,3× ist es hier wirklich angereichert; unter 0,77× ist es verarmt.",
     "define": "Diese Region über die Zusammensetzung festlegen →",
-    "defineTooltip": "Macht aus dieser Region ein Zusammensetzungsfenster, das Sie anpassen können: ihre eigenen Werte, auf ±2 Streuungen geweitet. Öffnet sich unter „Regionen festlegen“."
+    "defineTooltip": "Macht aus dieser Region ein Zusammensetzungsfenster, das Sie anpassen können: ihre eigenen Werte, auf ±2 Streuungen geweitet. Öffnet sich unter „Regionen festlegen“.",
+    "compositionHintSummed": "Die Netto-Counts der Region, über alle ihre Pixel summiert und einmal quantifiziert. ± ist, wie stark einzelne Pixel abweichen — ein großes ± heißt, die Region ist nicht eine Sache."
   },
   "rollup": {
     "headline": "{{regions}} Regionen → {{phases}} Phasen",
@@ -696,7 +712,9 @@
     "tagFilterTooltip": "Nur Voreinstellungen mit diesem Schlagwort zeigen. Bei zweien bleiben nur die übrig, die beide tragen.",
     "countShown": "{{shown}} von {{total}} Voreinstellungen",
     "forMaterial": "für {{material}}",
-    "noNotes": "keine Notizen hinterlegt"
+    "noNotes": "keine Notizen hinterlegt",
+    "otherSourceWindow": "Auf AZtec-Fensterwerten erstellt, wie jede mitgelieferte Voreinstellung; die Werte dieser Datei kommen aus den Spektren. Das ist erwartet, kein Fehler: Die Schwellen bleiben wie geschrieben und können hier andere Pixel auswählen, also das Ergebnis mit der Karte vergleichen.",
+    "otherSourceSpectrum": "Auf Werten aus dem Spektren-Fit erstellt; diese Datei hat nur AZtec-Fensterwerte, Untergrund eingeschlossen. Die Schwellen bleiben wie geschrieben und können hier andere Pixel auswählen, also das Ergebnis mit der Karte vergleichen."
   },
   "quantNote": {
     "headline_zero": "Wie diese Zusammensetzung gerechnet wurde",
@@ -705,6 +723,26 @@
     "noZaf": "Standardlose Cliff-Lorimer-Rechnung mit modellierten k-Faktoren. Ohne ZAF-Matrixkorrektur — halbquantitativ, keine Analyse mit Standards.",
     "calibratedOn": "Detektorantwort kalibriert an {{matrix}} bei {{kv}} kV.",
     "overlap": "Das Fenster {{window}} liegt unter der {{interferer}}-Emission und liest deshalb zu hoch, wo dieses Element vorkommt.",
-    "beamAssumed": "Die Beschleunigungsspannung steht nicht in der Datei — {{kv}} kV angenommen. Die Überspannung jedes k-Faktors hängt davon ab."
+    "beamAssumed": "Die Beschleunigungsspannung steht nicht in der Datei — {{kv}} kV angenommen. Die Überspannung jedes k-Faktors hängt davon ab.",
+    "sourceSpectrum": "Aus den Spektren: Untergrund abgezogen, überlappende Linien getrennt, Pile-up modelliert.",
+    "sourceWindow": "Aus den Fensterkarten von AZtec: Der Untergrund ist enthalten (diese Datei hat keine Spektren)."
+  },
+  "spectrumFit": {
+    "running": "Die Spektren dieser Karte werden ausgewertet … {{percent}} %",
+    "failed": "Der Spektren-Fit ist fehlgeschlagen: {{error}}. Für diese Datei gibt es keine EDS-Werte.",
+    "detected": "Außerdem im Spektrum, von AZtec nicht exportiert: {{list}}. Nicht Teil der Zusammensetzung; die at% sind sein Anteil an der ganzen Karte, wenn es dazukäme. Als Karte hinzufügen, um zu sehen, wo es liegt.",
+    "addMap": "Als Karte hinzufügen",
+    "addMapTooltip": "Legt die {{element}}-Netto-Zählratenkarte aus dem Spektren-Fit auf das Overlay (Reiter „Elementkarten“). Sie wird in jedem Anzeigemodus in Zählraten gezeigt und ist nicht Teil der Zusammensetzung.",
+    "quality": "Der Fit lässt bei {{line}} einen Rest von {{pct}} %; dieses Element mit Vorsicht behandeln.",
+    "edsPending": "EDS-Werte ausgelassen, bis die Spektren ausgewertet sind ({{percent}} %).",
+    "edsFailed": "EDS-Werte ausgelassen: Der Spektren-Fit ist fehlgeschlagen ({{error}}).",
+    "checking": "Die Spektren dieser Datei werden geprüft …",
+    "unreachable": "Das Programm antwortet nicht; es wird jede Sekunde erneut gefragt.",
+    "inProcess": "Die Spektren werden im Programm selbst ausgewertet ({{reason}}); es kann bis dahin langsam reagieren."
+  },
+  "composition": {
+    "summed": "Eine Zusammensetzung aus den summierten Netto-Counts aller dieser Pixel, einmal quantifiziert.",
+    "mean": "Das Mittel der Zusammensetzungen dieser Pixel.",
+    "classifier": "Diese Gruppenzusammensetzungen sind die des Klassifikators: das Mittel der geglätteten inneren Pixel jeder Gruppe — nicht die Zusammensetzung, die die Regionenliste zeigt."
   }
 }

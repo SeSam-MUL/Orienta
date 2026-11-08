@@ -2183,6 +2183,31 @@ def _phase_formulas_for_paths(paths: list[str]) -> list[str]:
     return out
 
 
+def _write_eds_window_maps(f, ext) -> None:
+    """``f["EDS"]``: AZtec's window maps of the dataset, under their own labels.
+
+    RAW window integrals as the file has them (cut to the crop), not the net
+    intensities a spectrum-source extractor serves: the group carries the
+    vendor's window labels, so anything else under them would be mislabelled,
+    and a batch export must neither wait for nor depend on a spectrum fit.
+    ``attrs["source"]`` says what the numbers are.
+    """
+    from backend.api.services.eds_spectrum_service import window_maps
+    from eds_utils import quantification_provenance
+    labels, read = window_maps(ext)
+    if not labels:
+        return
+    eds_grp = f.create_group("EDS")
+    eds_grp.attrs["elements"] = labels
+    eds_grp.attrs["source"] = quantification_provenance(
+        source="window")["source_data"]
+    for el_name in labels:
+        data = read(el_name)
+        if data is not None:
+            eds_grp.create_dataset(el_name.replace(" ", "_"), data=data,
+                                   compression="gzip")
+
+
 def _read_run_chemistry(req, nav_shape, run_dataset, run_variant):
     """The EDS chemistry the run holds from its start (``eds_indexing_prior.RunChemistry``), or None
     when the prior is not configured for this run (fewer than two phases, or every strength 0).
@@ -2252,6 +2277,39 @@ def _method_phase_paths(req) -> list:
     if req.method == "dictionary":
         return list(req.master_h5_paths or [])
     return list(req.cif_paths or [])
+
+
+def _decide_eds_prior(req):
+    """``(request the run uses, refusal or None)``: the EDS chemistry prior is
+    decided ONCE per run, when it starts.
+
+    A file with a spectrum cube has no EDS numbers until its spectrum fit is
+    done (``eds_spectrum_service``; seconds on a small map, up to a minute on
+    the largest). Read pixel by pixel, a run started right after a load would
+    weigh its first pixels without chemistry and the rest -- or the particle
+    rescue at the end -- with it. So: while the fit runs, or after it failed,
+    the prior is OFF for the whole run. The run gets a copy of the request
+    with no strengths, so the weight matrices, the per-phase Hough split, the
+    particle rescue and the methods record (``_eds_prior_is_on``) all see the
+    same "off". The refusal is the typed reason
+    (``eds_pixel_chemistry.ChemistryUnavailable``) the task reports.
+
+    A run that asks for no prior never asks for the fit -- and neither does a
+    prior kept on the window numbers (``eds_indexing_prior.PRIOR_EDS_SOURCE``,
+    where the spectrum numbers ranked worse): AZtec's windows
+    are there from the moment the file is open, so nothing has to wait.
+    """
+    strengths = req.eds_phase_strengths or {}
+    if not any(float(v) > 0.0 for v in strengths.values()):
+        return req, None
+    from backend.api.services.eds_indexing_prior import PRIOR_EDS_SOURCE
+    if PRIOR_EDS_SOURCE == "window":
+        return req, None
+    from backend.api.services.eds_pixel_chemistry import spectrum_fit_refusal
+    refusal = spectrum_fit_refusal()
+    if refusal is None:
+        return req, None
+    return req.model_copy(update={"eds_phase_strengths": {}}), refusal
 
 
 def _eds_prior_is_on(req) -> bool:
@@ -2758,6 +2816,31 @@ def get_pixel_at_pct_for_phase_test(pixel_index: int):
     return get_pixel_at_pct(pixel_index)
 
 
+def _pixel_chemistry_reason(pixel_at_pct) -> Optional[str]:
+    """Why ``pixel_at_pct`` is null, when the reason is the spectrum fit.
+
+    ``pixel_at_pct: null`` reads as "this scan has no EDS" in the phase-test
+    dialog. On a file with a spectrum cube it is null for another reason for
+    the first seconds after a load (``"spectrum_fit_running"``) or for good
+    when the fit failed (``"spectrum_fit_failed"``), and the dialog has to say
+    which. ``None`` otherwise: a composition in hand, or a cause that is not a
+    spectrum-fit question (those stay in the log, as before) -- and always
+    while the pixel chemistry reads the window numbers
+    (``eds_pixel_chemistry.chemistry_source``): then it never waits for the
+    fit, and a null during one has another cause.
+    """
+    if pixel_at_pct is not None:
+        return None
+    from backend.api.services import eds_pixel_chemistry
+    if not eds_pixel_chemistry.chemistry_waits_for_fit():
+        return None
+    try:
+        refusal = eds_pixel_chemistry.spectrum_fit_refusal()
+    except Exception:
+        return None
+    return refusal.code if refusal is not None else None
+
+
 def _phase_test_library_entries(phase_keys):
     """The library phases to test. THREE CASES, and they are not the same thing.
 
@@ -3163,6 +3246,9 @@ class SinglePixelPhaseTestResponse(BaseModel):
     col: int
     experimental_png: Optional[str] = None
     pixel_at_pct: Optional[dict[str, float]] = None
+    #: Why ``pixel_at_pct`` is null when that is the spectrum fit
+    #: (``"spectrum_fit_running"`` / ``"spectrum_fit_failed"``), else None.
+    pixel_chemistry_reason: Optional[str] = None
     eds_weighting_effective: str = "off"
     mask_applied: bool = False
     bandwidth: int = 128
@@ -3815,6 +3901,23 @@ def _registration_element(at2d: dict, reference) -> tuple[str, float]:
     return best_el, best_corr
 
 
+def _grain_chemistry_maps(eds_routes=None):
+    """The at% maps grain phase assignment ranks phases with.
+
+    The PRIOR's numbers (``eds_indexing_prior.PRIOR_EDS_SOURCE``): the
+    assignment ranks with ``chemistry_fit``, the scorer the prior and the
+    pixel chemistry weigh with, which got worse on the spectrum numbers
+    (on a reference scan the alpha picks fell from 89.37 to 74.55 %), and its
+    spread gate was tuned on window at%. On
+    "window" these are AZtec's raw windows on the window curve: no fit
+    needed, and the run's prior and this step decide on the same numbers.
+    """
+    from backend.api.services.eds_indexing_prior import PRIOR_EDS_SOURCE
+    if eds_routes is None:
+        from backend.api.routes import eds as eds_routes
+    return eds_routes._build_at_pct_maps_for_loaded_file(source=PRIOR_EDS_SOURCE)
+
+
 def _grain_phase_assign_blocking(active, req: GrainPhaseAssignRequest) -> dict:
     """The body of ``grain_phase_assign``; see that docstring."""
     import copy
@@ -3871,7 +3974,7 @@ def _grain_phase_assign_blocking(active, req: GrainPhaseAssignRequest) -> dict:
                       "grain on the map."))
 
     # --- the chemistry -----------------------------------------------------
-    at_maps, e_rows, e_cols, _src = _eds_routes._build_at_pct_maps_for_loaded_file()
+    at_maps, e_rows, e_cols, _src = _grain_chemistry_maps(_eds_routes)
     if (int(e_rows), int(e_cols)) != (n_rows, n_cols):
         raise HTTPException(
             status_code=400,
@@ -4231,6 +4334,10 @@ async def start_indexing(req: IndexingStartRequest):
             except load_choices.LoadChoiceError as e:
                 raise problem(400, e.code, str(e))
 
+    # The EDS chemistry prior is decided here, ONCE for the whole run, and
+    # the run below sees only the decided request (see _decide_eds_prior).
+    req, eds_refusal = _decide_eds_prior(req)
+
     task_id = str(uuid.uuid4())
     _track_task(task_id, {
         "status": "running",
@@ -4243,6 +4350,13 @@ async def start_indexing(req: IndexingStartRequest):
         # between polls — frontend appends each as a separate line.
         "pending_log": [],
     })
+    if eds_refusal is not None:
+        _msg = (f"WARNING: EDS chemistry prior OFF for this run — "
+                f"{eds_refusal.detail}. Start the run again to use it.")
+        _indexing_tasks[task_id]["eds_prior_refused"] = {
+            "code": eds_refusal.code, "detail": eds_refusal.detail}
+        _indexing_tasks[task_id]["pending_log"].append(_msg)
+        logger.warning("Indexing %s: %s", task_id, _msg)
 
     def run_indexing():
         global _active_result_id
@@ -9148,6 +9262,7 @@ async def single_pixel_phase_test(req: SinglePixelPhaseTestRequest):
 
     # EDS pre-filter
     pixel_at_pct = get_pixel_at_pct_for_phase_test(req.pixel_index)
+    chem_reason = _pixel_chemistry_reason(pixel_at_pct)
     entries, unsupported = _phase_test_library_entries(req.phase_keys)
     tested, excluded, chem_by_key, eff_mode = eds_prefilter(
         entries, pixel_at_pct, req.eds_weighting, req.eds_filter_threshold)
@@ -9182,6 +9297,7 @@ async def single_pixel_phase_test(req: SinglePixelPhaseTestRequest):
     return SinglePixelPhaseTestResponse(
         pixel_index=req.pixel_index, row=row, col=col,
         experimental_png=_png(exp_display), pixel_at_pct=pixel_at_pct,
+        pixel_chemistry_reason=chem_reason,
         eds_weighting_effective=eff_mode, mask_applied=mask is not None,
         bandwidth=req.max_bandwidth, candidates=out_candidates,
         excluded=out_excluded, unsupported=unsupported)
@@ -9235,7 +9351,7 @@ async def _run_phase_test_job(jid: str, *, exp, det_params, sht_paths_by_phase,
                               phase_names, mask, max_bandwidth,
                               id_to_entry, chem_by_key, eff_mode, excluded,
                               row, col, pixel_index, exp_display, pixel_at_pct,
-                              unsupported=()):
+                              unsupported=(), pixel_chemistry_reason=None):
     job = _phase_test_jobs[jid]
     # The first run builds the multi-phase spherical backend (~25 s) inside
     # _compute_phase_compare_results BEFORE any per-phase progress tick. Surface
@@ -9274,6 +9390,7 @@ async def _run_phase_test_job(jid: str, *, exp, det_params, sht_paths_by_phase,
         job["result"] = SinglePixelPhaseTestResponse(
             pixel_index=pixel_index, row=row, col=col,
             experimental_png=exp_display, pixel_at_pct=pixel_at_pct,
+            pixel_chemistry_reason=pixel_chemistry_reason,
             eds_weighting_effective=eff_mode, mask_applied=mask is not None,
             bandwidth=max_bandwidth, candidates=out_candidates,
             excluded=out_excluded, unsupported=list(unsupported),
@@ -9300,6 +9417,7 @@ async def _run_phase_test_job(jid: str, *, exp, det_params, sht_paths_by_phase,
                 "row": row, "col": col,
                 "pixel_index": pixel_index,
                 "pixel_at_pct": pixel_at_pct,
+                "pixel_chemistry_reason": pixel_chemistry_reason,
                 "bandwidth": max_bandwidth,
                 "rows": slim_rows,
             })
@@ -9349,6 +9467,7 @@ async def single_pixel_phase_test_start(req: SinglePixelPhaseTestRequest):
     exp_display_arr = apply_circular_mask(exp, mask) if mask is not None else exp
 
     pixel_at_pct = get_pixel_at_pct_for_phase_test(req.pixel_index)
+    chem_reason = _pixel_chemistry_reason(pixel_at_pct)
     entries, unsupported = _phase_test_library_entries(req.phase_keys)
     tested, excluded, chem_by_key, eff_mode = eds_prefilter(
         entries, pixel_at_pct, req.eds_weighting, req.eds_filter_threshold)
@@ -9370,10 +9489,11 @@ async def single_pixel_phase_test_start(req: SinglePixelPhaseTestRequest):
         id_to_entry=id_to_entry, chem_by_key=chem_by_key, eff_mode=eff_mode,
         excluded=excluded, row=row, col=col, pixel_index=req.pixel_index,
         exp_display=exp_png, pixel_at_pct=pixel_at_pct,
-        unsupported=unsupported))
+        unsupported=unsupported, pixel_chemistry_reason=chem_reason))
     return {"job_id": jid, "total": len(tested), "excluded_count": len(excluded),
             "eds_weighting_effective": eff_mode, "experimental_png": exp_png,
-            "pixel_at_pct": pixel_at_pct, "row": row, "col": col}
+            "pixel_at_pct": pixel_at_pct,
+            "pixel_chemistry_reason": chem_reason, "row": row, "col": col}
 
 
 @router.get("/single-pixel-phase-test/progress/{job_id}")
@@ -9409,7 +9529,10 @@ async def single_pixel_phase_test_pixel_chemistry(pixel_index: int):
     if pixel_index < 0:
         raise HTTPException(status_code=400, detail="pixel_index must be >= 0")
     at_pct = get_pixel_at_pct_for_phase_test(pixel_index)
-    return {"pixel_index": pixel_index, "pixel_at_pct": at_pct}
+    # Null for a file whose spectra are still being evaluated is not "no EDS";
+    # the dialog says which (see _pixel_chemistry_reason).
+    return {"pixel_index": pixel_index, "pixel_at_pct": at_pct,
+            "pixel_chemistry_reason": _pixel_chemistry_reason(at_pct)}
 
 
 def _recompute_remask(cache: dict, aperture: str, aperture_radius: float) -> dict:
@@ -9478,6 +9601,7 @@ def _recompute_remask(cache: dict, aperture: str, aperture_radius: float) -> dic
     return {
         "pixel_index": cache["pixel_index"], "row": cache["row"], "col": cache["col"],
         "experimental_png": exp_png, "pixel_at_pct": cache["pixel_at_pct"],
+        "pixel_chemistry_reason": cache.get("pixel_chemistry_reason"),
         "eds_weighting_effective": cache["eff_mode"], "mask_applied": mask is not None,
         "bandwidth": cache["bandwidth"],
         "candidates": out_candidates, "excluded": out_excluded,
@@ -10521,11 +10645,17 @@ async def import_h5_result(req: ImportH5Request):
             from backend.api.services.h5_session import (
                 open_file as h5_open, is_open as h5_is_open,
                 close_file as h5_close, get_current_path,
+                start_spectrum_fit,
             )
             if h5_is_open() and get_current_path() != str(p):
                 h5_close()
             if not h5_is_open():
                 h5_open(str(p))
+            else:
+                # Already open, so open_file -- and the spectrum-fit start in
+                # it -- is skipped. Loading the file again is still the retry
+                # of a fit that failed (a no-op for one running or ready).
+                start_spectrum_fit(str(p))
         except Exception as e:
             logger.warning(
                 "import-h5: h5_session open failed (%s) — EDS page will be empty",
@@ -13074,15 +13204,9 @@ def _fill_batch_indexed_h5(export_path, result, *, dataset_name, detector, sourc
         try:
             from backend.api.services.h5_session import get_active_extractor, is_open
             if is_open():
-                ext = get_active_extractor()
-                elements = ext.get_available_elements()
-                if elements:
-                    eds_grp = f.create_group("EDS")
-                    eds_grp.attrs["elements"] = elements
-                    for el_name in elements:
-                        data = ext.get_element_map(el_name)
-                        if data is not None:
-                            eds_grp.create_dataset(el_name.replace(" ", "_"), data=data, compression="gzip")
+                # AZtec's raw window maps under their labels, never the net intensities of a
+                # spectrum fit, and without waiting for one (see _write_eds_window_maps)
+                _write_eds_window_maps(f, get_active_extractor())
         except Exception:
             logger.debug("Batch export: no /EDS group", exc_info=True)
             if "EDS" in f:

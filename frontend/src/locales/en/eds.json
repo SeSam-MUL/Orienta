@@ -28,13 +28,18 @@
     "wtPct": "Wt.%",
     "atPct": "At.%",
     "empty": "—",
-    "sumTooltip": "Sum of all elements. The quantification normalises to 100%, so this only confirms the conversion ran — it is not a check on accuracy."
+    "sumTooltip": "Sum of all elements. The quantification normalises to 100%, so this only confirms the conversion ran — it is not a check on accuracy.",
+    "netCounts": "Net counts",
+    "netCountsTooltip": "Net line counts from the spectrum fit, background subtracted. Where an element is absent they scatter around 0, so a small negative value is noise, not an error."
   },
   "region": {
     "summary": "Region ({{rowStart}},{{colStart}})–({{rowEnd}},{{colEnd}}), {{nPixels}} pixels",
     "countsHeader": "Counts (mean±σ)",
     "wtPctHeader": "Wt.% (mean±σ)",
-    "atPctHeader": "At.% (mean±σ)"
+    "atPctHeader": "At.% (mean±σ)",
+    "netCountsHeader": "Net counts (mean±σ)",
+    "wtPctSummedHeader": "Wt.% (summed; ± per pixel)",
+    "atPctSummedHeader": "At.% (summed; ± per pixel)"
   },
   "overlay": {
     "title": "Composite Overlay",
@@ -51,7 +56,9 @@
   "linescan": {
     "title": "Linescan Profile",
     "axisSample": "sample",
-    "axisValue": "value"
+    "axisValue": "value",
+    "axisNetCounts": "net counts",
+    "netCountsNote": "Net counts from the spectrum fit: background subtracted, so the profile scatters around 0 where the element is absent."
   },
   "layers": {
     "title": "Layers"
@@ -97,12 +104,14 @@
   "regionAvg": {
     "title": "Region Average",
     "description": "Average composition (mean ± σ per element) over a rectangular block of pixels. Use it to measure a grain or a precipitate without picking individual pixels — pick the bounding rows and columns below.",
+    "descriptionSummed": "One composition from the summed net counts of a rectangular block of pixels, with each element's spread over those pixels (± σ). Use it to measure a grain or a precipitate without picking individual pixels — pick the bounding rows and columns below.",
     "rowStart": "Row start",
     "rowEnd": "Row end",
     "colStart": "Col start",
     "colEnd": "Col end",
     "compute": "Compute average",
     "computeTooltip": "Sum every pixel in the rectangle, return per-element mean and standard deviation. The single-pixel quantifier above gives you one row's worth of data; this one gives you a whole region's.",
+    "computeTooltipSummed": "Sum the net counts of every pixel in the rectangle and quantify that sum once; the ± is the spread over the pixels. The single-pixel quantifier above gives you one row's worth of data; this one gives you a whole region's.",
     "error": "Region quantification failed.",
     "copy": "Copy to Clipboard",
     "copied": "✓ Copied!",
@@ -161,7 +170,8 @@
     "loading": "Loading…",
     "bc": "BC",
     "phase": "Phase",
-    "empty": "—"
+    "empty": "—",
+    "netCounts": "Net counts (background subtracted)"
   },
   "phaseMap": {
     "title": "Phase Map Builder",
@@ -288,6 +298,10 @@
       "edge_snaps": "{{n}} edge snaps",
       "phase_replacements": "{{n}} phase replacements",
       "regionGridEdited": "Region boundaries were edited after classification, so region-derived particle ids have been renumbered — ids on a figure made before those edits no longer point at the same particles."
+    },
+    "notice": {
+      "otherSource": "This saved map was made on window numbers; the thresholds are unchanged and may now select different pixels.",
+      "otherSourceSpectrum": "This saved map was made on spectrum-fit numbers, and this file has only window numbers; the thresholds are unchanged and may now select different pixels."
     }
   },
   "periodicTable": {
@@ -438,7 +452,8 @@
     "fromPixelArmed": "Click the map…",
     "fromPixelTooltip": "Point at a pixel that is clearly the thing you want — the middle of a particle — and a window is written from what it actually contains. This is where the numbers come from: a threshold for a silicon particle has to be read off a silicon pixel, not off a region that failed to separate it.",
     "seedPixelNothing": "Nothing is concentrated at ({{row}}, {{col}}) — that pixel reads like the surrounding matrix. Pick one inside the feature you want.",
-    "firstMove": "Start here: press “From a pixel…”, then click the middle of the particle the grouping is lumping together. Press “Try it” and the pixels that window claims light up on the map — widen or narrow the number until they match what you see."
+    "firstMove": "Start here: press “From a pixel…”, then click the middle of the particle the grouping is lumping together. Press “Try it” and the pixels that window claims light up on the map — widen or narrow the number until they match what you see.",
+    "previewMeanTooltipSummed": "The composition of the pixels this window caught: their summed net counts, quantified once. The count alone cannot tell you whether you caught the right ones - 202 px of matrix and 202 px of particle look identical until you see what is in them."
   },
   "inspector": {
     "title": "Region inspector",
@@ -464,7 +479,8 @@
     "candidatesHint": "Library phases sorted by how close their formula is to the measured composition. Click one to put it on the whole region.",
     "scaleLegend": "vs background: 1.0× means this element is no more common here than anywhere else on the map. Above 1.3× it is genuinely concentrated here; below 0.77× it is depleted.",
     "define": "Define this region by composition →",
-    "defineTooltip": "Turn this region into a composition window you can adjust: its own values, widened to ±2 spreads. Opens in 'Define regions'."
+    "defineTooltip": "Turn this region into a composition window you can adjust: its own values, widened to ±2 spreads. Opens in 'Define regions'.",
+    "compositionHintSummed": "The region's net counts summed over all its pixels and quantified once. ± is how much single pixels differ — a large ± means the region is not one thing."
   },
   "rollup": {
     "headline": "{{regions}} regions → {{phases}} phases",
@@ -696,7 +712,9 @@
     "tagFilterTooltip": "Show only presets carrying this tag. Pick two and only presets carrying both are left.",
     "countShown": "{{shown}} of {{total}} presets",
     "forMaterial": "for {{material}}",
-    "noNotes": "no notes recorded"
+    "noNotes": "no notes recorded",
+    "otherSourceWindow": "Made on AZtec window numbers, like every built-in preset; this file's numbers come from the spectra. That is expected, not an error: the thresholds are kept as written and may select different pixels here, so compare the result with the map.",
+    "otherSourceSpectrum": "Made on spectrum-fit numbers; this file has only AZtec window numbers, background included. The thresholds are kept as written and may select different pixels here, so compare the result with the map."
   },
   "quantNote": {
     "headline_zero": "How this composition was calculated",
@@ -705,6 +723,26 @@
     "noZaf": "Standardless Cliff-Lorimer with modelled k-factors. No ZAF matrix correction — treat as semi-quantitative, not a standards-quality analysis.",
     "calibratedOn": "Detector response calibrated on {{matrix}} at {{kv}} kV.",
     "overlap": "The {{window}} window overlaps {{interferer}} emission, so it reads high wherever that element is present.",
-    "beamAssumed": "Beam voltage is not in the file — {{kv}} kV assumed. Every k-factor's overvoltage depends on it."
+    "beamAssumed": "Beam voltage is not in the file — {{kv}} kV assumed. Every k-factor's overvoltage depends on it.",
+    "sourceSpectrum": "From the spectra: background subtracted, overlapping lines separated, pile-up modelled.",
+    "sourceWindow": "From AZtec's window maps: background is included (this file has no spectra)."
+  },
+  "spectrumFit": {
+    "running": "Evaluating the spectra of this map… {{percent}} %",
+    "failed": "The spectrum fit failed: {{error}}. EDS numbers are not available for this file.",
+    "detected": "Also in the spectrum, not exported by AZtec: {{list}}. Not part of the composition; the at% is its share of the whole map were it added. Add it as a map to see where it is.",
+    "addMap": "Add as map",
+    "addMapTooltip": "Put the {{element}} net-count map from the spectrum fit on the overlay (Element maps tab). It is drawn in counts in every display mode and is not part of the composition.",
+    "quality": "The fit leaves a residual of {{pct}} % at {{line}}; treat that element with care.",
+    "edsPending": "EDS values left out until the spectra are evaluated ({{percent}} %).",
+    "edsFailed": "EDS values left out: the spectrum fit failed ({{error}}).",
+    "checking": "Checking this file's spectra…",
+    "unreachable": "The program is not answering; asking again every second.",
+    "inProcess": "The spectra are being evaluated inside the program itself ({{reason}}); it may answer slowly until they are done."
+  },
+  "composition": {
+    "summed": "One composition from the summed net counts of all these pixels, quantified once.",
+    "mean": "The mean of these pixels' compositions.",
+    "classifier": "These group compositions are the classifier's: the mean of each group's smoothed interior pixels — not the region composition the region list shows."
   }
 }

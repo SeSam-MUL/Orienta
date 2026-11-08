@@ -92,6 +92,28 @@ logger = logging.getLogger(__name__)
 #: wrong analysis, and there is no half-understood preset worth running.
 PRESET_SCHEMA = 1
 
+#: Where a preset's (and a saved map's) EDS numbers came from: AZtec's window
+#: integrals, or net intensities fitted from the spectrum cube. A threshold
+#: chosen on one does not mean the same on the other, so the recipe says which
+#: it was made on. A file without the field was written before the spectrum
+#: source existed, i.e. on window numbers -- the truth, not a default.
+QUANT_SOURCES = ("window", "spectrum")
+
+
+def quant_source_of_record(value: Any) -> str:
+    """``"window"`` / ``"spectrum"`` from a stored value; absent means window.
+
+    Anything else raises: a source this build does not know is not a source it
+    can compare against, and guessing would hide the very mismatch the field
+    exists to report.
+    """
+    if value is None or value == "":
+        return "window"
+    if isinstance(value, str) and value in QUANT_SOURCES:
+        return value
+    raise ValueError(
+        f"quant_source must be one of {', '.join(QUANT_SOURCES)} (got {value!r})")
+
 # --- what a preset carries --------------------------------------------------
 #
 # The keys of ``AutoClassifyRequest`` that change a number, plus ``scale_um``
@@ -431,6 +453,11 @@ class EdsPreset:
     #: inverts the whole measure, so a preset that re-infers it per scan can
     #: quietly become a different analysis on the next file.
     matrix_element: str = ""
+    #: Which numbers the preset was made on -- see :data:`QUANT_SOURCES`. NOT
+    #: part of the content hash: the hash answers "is this the same recipe?";
+    #: this answers "was it made on the same numbers?", and check_compatibility
+    #: warns on a difference. The thresholds are never converted.
+    quant_source: str = "window"
     #: Shipped with the app, read-only. Set from WHERE the file was found, never
     #: from what the file claims — otherwise a mailed JSON could declare itself
     #: built-in and become unwritable.
@@ -485,6 +512,7 @@ class EdsPreset:
             "authored_elements": list(self.authored_elements),
             "authored_step_um": self.authored_step_um,
             "matrix_element": self.matrix_element,
+            "quant_source": self.quant_source,
             "builtin": bool(self.builtin),
             # Derived — written for the human reading the file and for a diff.
             # Recomputed on read, never trusted.
@@ -536,6 +564,7 @@ class EdsPreset:
             ],
             authored_step_um=_coerce_float(payload.get("authored_step_um")),
             matrix_element=matrix,
+            quant_source=quant_source_of_record(payload.get("quant_source")),
             builtin=bool(builtin),
             schema=PRESET_SCHEMA,
         )
@@ -554,6 +583,7 @@ class EdsPreset:
 _META_KEYS = frozenset({
     "version", "author", "created", "notes", "material_class", "tags",
     "authored_elements", "authored_step_um", "matrix_element", "builtin",
+    "quant_source",
 })
 
 
@@ -586,6 +616,7 @@ def preset_from_settings(name: str, settings: dict, **meta: Any) -> EdsPreset:
         authored_elements=[e for e in authored if e],
         authored_step_um=_coerce_float(meta.get("authored_step_um")),
         matrix_element=matrix,
+        quant_source=quant_source_of_record(meta.get("quant_source")),
         builtin=bool(meta.get("builtin", False)),
     )
 
@@ -913,6 +944,7 @@ def check_compatibility(
     available_phase_keys: Optional[Iterable[str]],
     dominant_element: str = "",
     step_um: Optional[float] = None,
+    quant_source: str = "window",
 ) -> CompatibilityReport:
     """Can this recipe mean here what it meant where it was written?
 
@@ -1110,6 +1142,27 @@ def check_compatibility(
                 "detail": {"authored_step_um": float(authored_step),
                            "step_um": float(step_um)},
             })
+
+    # --- the numbers it was made on -----------------------------------------
+    #
+    # A WARNING, never a blocker: the recipe still runs, and its thresholds are
+    # not converted -- a conversion between window counts and net intensities
+    # would be an invention. What the user needs is to know that "Si >= 40" was
+    # read off one kind of number and is about to be applied to the other.
+    current_source = quant_source_of_record(quant_source)
+    if p.quant_source != current_source:
+        warnings.append({
+            "code": "preset_made_on_other_source",
+            "message": (
+                f"The preset was made on {p.quant_source} numbers, this scan's "
+                f"EDS numbers are {current_source}. Net line intensities and "
+                f"AZtec window integrals differ (background, overlapping "
+                f"lines), so the same threshold can select different pixels "
+                f"here. The thresholds were kept as written, not converted -- "
+                f"check the result against the map before trusting it."
+            ),
+            "detail": {"preset": p.quant_source, "current": current_source},
+        })
 
     # --- guards that could not run at all -----------------------------------
     #

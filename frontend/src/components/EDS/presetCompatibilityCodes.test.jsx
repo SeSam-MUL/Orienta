@@ -62,6 +62,7 @@ const PINNED_BACKEND_CODES = [
   'phase_list_not_pinned',
   'phases_not_checked',
   'portability_not_checkable',
+  'preset_made_on_other_source',
   'step_size_differs',
   // --- classify warnings (routes/eds.py) ---
   // Emitted by `_excluded_signal_warning` and `_degenerate_candidate_warnings`
@@ -71,6 +72,11 @@ const PINNED_BACKEND_CODES = [
   'indistinguishable_after_excluding_c_and_o',
   'phase_has_no_scoreable_chemistry',
   'scoring_ignores_c_and_o',
+  // --- phase-map notices (routes/eds.py) ---
+  // `notices: [...]` on `GET /phase-map`: the saved map was made on the other
+  // EDS source (window integrals vs spectrum-fit net intensities) than the
+  // open file serves now.
+  'sidecar_made_on_other_source',
   // --- export warnings ---
   'below_size_limit',
   'composition_implausible',
