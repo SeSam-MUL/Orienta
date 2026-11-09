@@ -10,6 +10,7 @@ These tests pin ``pixel_chemistry_reason`` on every response that carries
 job start, the job result and the re-mask.
 """
 import asyncio
+import time
 import types
 
 import numpy as np
@@ -161,12 +162,16 @@ def test_job_start_and_result_carry_the_reason(_wired, monkeypatch):
     start = r.json()
     assert start["pixel_chemistry_reason"] == "spectrum_fit_running"
 
+    # Wait on the clock, not on a number of requests: the job runs in a thread,
+    # and on a busy machine 50 back-to-back polls can all come before it ends.
     body = None
-    for _ in range(50):
+    deadline = time.monotonic() + 180.0
+    while time.monotonic() < deadline:
         body = client.get("/api/indexing/single-pixel-phase-test/progress/"
                           f"{start['job_id']}").json()
         if body["status"] in ("done", "error", "cancelled"):
             break
+        time.sleep(0.05)
     assert body["status"] == "done", body
     assert body["result"]["pixel_chemistry_reason"] == "spectrum_fit_running"
 
