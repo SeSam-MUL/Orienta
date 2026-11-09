@@ -325,6 +325,19 @@ describe('the summary line', () => {
     expect(byKey['export.sum.deterministic']).toEqual({ seed: '0' });
   });
 
+  it('a matrix-corrected export does not claim it has no correction', () => {
+    // provenance.json's quantification block, as eds_export writes it: the
+    // backend's own caption switches on this same field.
+    const corrected = { ...PROV, quantification: { source: 'spectrum',
+      matrix_correction: { model: 'xpp-tilt-reed/1', tilt_deg: 70, exit_angle_deg: 81 } } };
+    const keys = summaryClauses({ provenance: corrected }).map((c) => c.key);
+    expect(keys).toContain('export.sum.semiQuantMatrix');
+    expect(keys).not.toContain('export.sum.semiQuant');
+    const plain = { ...PROV, quantification: { source: 'window', matrix_correction: null } };
+    expect(summaryClauses({ provenance: plain }).map((c) => c.key))
+      .toContain('export.sum.semiQuant');
+  });
+
   it('omits a clause it has no value for, rather than printing a placeholder', () => {
     const thin = {
       provenance: {

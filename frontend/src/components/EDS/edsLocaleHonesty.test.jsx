@@ -70,6 +70,8 @@ describe('EDS locale key parity', () => {
         'spectrumFit.addMap', 'spectrumFit.addMapTooltip', 'spectrumFit.quality',
         'spectrumFit.edsPending', 'spectrumFit.edsFailed',
         'quantNote.sourceSpectrum', 'quantNote.sourceWindow',
+        'quantNote.uncalibrated', 'quantNote.detectorOnly',
+        'export.sum.semiQuantMatrix',
         'phaseMap.notice.otherSource', 'phaseMap.notice.otherSourceSpectrum',
         'presets.otherSourceWindow', 'presets.otherSourceSpectrum',
         'table.netCounts', 'table.netCountsTooltip', 'region.netCountsHeader',
@@ -115,6 +117,21 @@ describe('the quantification tooltips do not overclaim', () => {
     for (const [lang, bundle] of Object.entries(LOCALES)) {
       for (const re of marks[lang]) {
         expect(re.test(bundle.mode.wtPctTip), `${lang}.mode.wtPctTip`).toBe(true);
+      }
+    }
+  });
+
+  it('the Wt.% tooltip and both export caveats say there is no standard calibration', () => {
+    const marks = {
+      en: /[Nn]ot calibrated on reference standards|no standard calibration/,
+      de: /[Nn]icht an Referenzstandards kalibriert|ohne Standardkalibrierung/,
+      ja: /標準試料による校正(はしていません|なし)/,
+      zh: /未用参考标样校准|未使用标准样品校准/,
+    };
+    for (const [lang, bundle] of Object.entries(LOCALES)) {
+      for (const v of [bundle.mode.wtPctTip, bundle.export.sum.semiQuant,
+        bundle.export.sum.semiQuantMatrix]) {
+        expect(marks[lang].test(v), `${lang}: ${v}`).toBe(true);
       }
     }
   });

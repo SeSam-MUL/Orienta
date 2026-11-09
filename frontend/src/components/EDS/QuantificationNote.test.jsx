@@ -260,7 +260,7 @@ describe('where the numbers come from', () => {
     expect(screen.getByText(/spectrumFit\.quality/).textContent).toContain('Fe K');
   });
 
-  it('every language has both source lines, and the English is the brief\'s', () => {
+  it('every language has both source lines, and the English wording is fixed', () => {
     for (const [name, bundle] of Object.entries({ en, de, ja, zh })) {
       expect(bundle.quantNote.sourceSpectrum, name).toBeTruthy();
       expect(bundle.quantNote.sourceWindow, name).toBeTruthy();
@@ -299,5 +299,73 @@ describe('QuantificationNote — matrix-corrected spectrum source', () => {
       expect(loc.quantNote.matrixCorrected).toMatch(/\{\{tilt\}\}.*\{\{psi\}\}/);
       expect(loc.quantNote.calibratedAfterMatrix).toMatch(/\{\{standard\}\}.*\{\{kv\}\}/);
     }
+  });
+});
+
+
+describe('the calibration caveat is on screen, not behind the click', () => {
+  /**
+   * No path is calibrated on a measured standard: the one fitted step, the
+   * detector response, was measured on one detector, mostly against AZtec's
+   * own standardless numbers. Behind the click, a number quoted from the
+   * panel would travel without that. So the line is outside the collapsed
+   * part, on every source, and the detector it belongs to is named inside.
+   */
+  const CORRECTED = {
+    matrix_correction: { model: 'xpp-tilt-reed/1', exit_angle_deg: 81.0, tilt_deg: 70.0 },
+    beam_kv: 20.0,
+    calibration: { standard: 'Al7Cu2Fe stoichiometry + AZtec 6.3 Tru-Q', beam_kv: 20.0,
+                   detector: 'Oxford Ultim Max 100, SATW window' },
+    lines: {}, spectral_overlaps: [], warnings: [], source: 'spectrum',
+  };
+
+  it('every source shows it while the note is closed', () => {
+    for (const p of [CLEAN, { ...CLEAN, source: 'window' }, CORRECTED]) {
+      render(<QuantificationNote provenance={p} />);
+      expect(screen.getByRole('button').getAttribute('aria-expanded')).toBe('false');
+      const line = document.querySelector('[data-quant-uncalibrated]');
+      expect(line, JSON.stringify(p.source)).toBeTruthy();
+      expect(line.textContent).toBe('quantNote.uncalibrated');
+      cleanup();
+    }
+  });
+
+  it('is not counted as a caveat and stays grey next to an amber warning', () => {
+    // It is true of every number, so it must not make a clean result look
+    // like one with a specific problem, nor take the amber of one that has.
+    render(<QuantificationNote provenance={CLEAN} />);
+    expect(screen.getByRole('button').textContent).toContain('"count":0');
+    const quiet = document.querySelector('[data-quant-uncalibrated]').style.color;
+    cleanup();
+    render(<QuantificationNote provenance={WITH_OVERLAP} />);
+    const loudButton = screen.getByRole('button').style.color;
+    const loudLine = document.querySelector('[data-quant-uncalibrated]').style.color;
+    expect(loudLine).toBe(quiet);
+    expect(loudLine).not.toBe(loudButton);
+  });
+
+  it('names the detector the response was measured on, when opened', () => {
+    render(<QuantificationNote provenance={CORRECTED} />);
+    expect(screen.queryByText(/quantNote\.detectorOnly/)).toBeNull();
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.getByText(/quantNote\.detectorOnly/).textContent)
+      .toContain('Oxford Ultim Max 100');
+  });
+
+  it('says nothing about a detector the provenance does not name', () => {
+    render(<QuantificationNote provenance={CLEAN} />);
+    fireEvent.click(screen.getByRole('button'));
+    expect(screen.queryByText(/quantNote\.detectorOnly/)).toBeNull();
+  });
+
+  it('every language carries both strings, with only the token the component passes', () => {
+    for (const [name, bundle] of Object.entries({ en, de, ja, zh })) {
+      expect(bundle.quantNote.uncalibrated, `${name}.uncalibrated`).toBeTruthy();
+      expect([...bundle.quantNote.uncalibrated.matchAll(/\{\{(\w+)\}\}/g)]).toEqual([]);
+      expect([...bundle.quantNote.detectorOnly.matchAll(/\{\{(\w+)\}\}/g)]
+        .map((m) => m[1]), `${name}.detectorOnly`).toEqual(['detector']);
+    }
+    expect(en.quantNote.uncalibrated).toMatch(/^Not calibrated on reference standards/);
+    expect(de.quantNote.uncalibrated).toMatch(/^Nicht an Referenzstandards kalibriert/);
   });
 });

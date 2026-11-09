@@ -18,7 +18,7 @@
     "counts": "Counts",
     "countsTip": "Rohe Röntgen-Counts vom Detektor",
     "wtPct": "Gew.-%",
-    "wtPctTip": "Gewichtsprozent — Cliff-Lorimer-Normierung ohne Standards und ohne vollständige ZAF-Korrektur. Halbquantitativ.",
+    "wtPctTip": "Gewichtsprozent, standardlos und auf 100 % normiert. Mit den Spektren und der Messgeometrie der Datei mit einer φ(ρz)-Matrixkorrektur, sonst eine Cliff-Lorimer-Normierung ohne ZAF-Korrektur. Nicht an Referenzstandards kalibriert. Halbquantitativ.",
     "atPct": "At.-%",
     "atPctTip": "Atomprozent — die Grundlage für die Phasenidentifikation. Aus den halbquantitativen Gew.-% umgerechnet und mit demselben Vorbehalt."
   },
@@ -630,7 +630,8 @@
       "smoothingPx": "Glättung {{px}} px.",
       "app": "{{app}}.",
       "deterministic": "Deterministisch (random_state={{seed}}).",
-      "semiQuant": "Halbquantitativ: ohne vollständige ZAF-Korrektur, ohne Standardkalibrierung."
+      "semiQuant": "Halbquantitativ: ohne vollständige ZAF-Korrektur, ohne Standardkalibrierung.",
+      "semiQuantMatrix": "Halbquantitativ: standardlos mit φ(ρz)-Matrixkorrektur, nicht an Referenzstandards kalibriert."
     },
     "summaryHint": "Alles darin stammt aus der provenance.json. Was dieser Lauf nicht liefert, fehlt, statt geraten zu werden.",
     "summaryTitle": "Zusammenfassungszeile",
@@ -724,6 +725,8 @@
     "calibratedOn": "Detektorantwort kalibriert an {{matrix}} bei {{kv}} kV.",
     "matrixCorrected": "Standardlos mit φ(ρz)-Matrixkorrektur (XPP nach Pouchou & Pichoir, Probenkippung {{tilt}}°, Austrittswinkel {{psi}}°, Fluoreszenz nach Reed), auf 100 % normiert.",
     "calibratedAfterMatrix": "Geräteantwort nach der Matrixkorrektur gemessen an {{standard}} bei {{kv}} kV.",
+    "uncalibrated": "Nicht an Referenzstandards kalibriert: die Absolutwerte können abweichen, an einem anderen Gerät oder einer anderen Legierung stärker. Gut zum Vergleichen von Bereichen und zur Phasenwahl.",
+    "detectorOnly": "Die Geräteantwort wurde an einem Detektor gemessen ({{detector}}). Ein anderer Detektor, ein anderes Fenster oder eine andere Geometrie hat eine eigene Antwort; dort können die Werte um einen nicht gemessenen Betrag abweichen.",
     "overlap": "Das Fenster {{window}} liegt unter der {{interferer}}-Emission und liest deshalb zu hoch, wo dieses Element vorkommt.",
     "beamAssumed": "Die Beschleunigungsspannung steht nicht in der Datei — {{kv}} kV angenommen. Die Überspannung jedes k-Faktors hängt davon ab.",
     "sourceSpectrum": "Aus den Spektren: Untergrund abgezogen, überlappende Linien getrennt, Pile-up modelliert.",

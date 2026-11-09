@@ -18,7 +18,7 @@
     "counts": "Counts",
     "countsTip": "Raw X-ray counts from the detector",
     "wtPct": "Wt.%",
-    "wtPctTip": "Weight percent — Cliff-Lorimer normalisation without standards and without a full ZAF correction. Semi-quantitative.",
+    "wtPctTip": "Weight percent, standardless and normalised to 100 %. With the spectra and the acquisition geometry of the file it carries a φ(ρz) matrix correction; otherwise it is a Cliff-Lorimer normalisation without a ZAF correction. Not calibrated on reference standards. Semi-quantitative.",
     "atPct": "At.%",
     "atPctTip": "Atomic percent — the basis for phase identification. Converted from the semi-quantitative Wt.%, so it carries the same caveat."
   },
@@ -630,7 +630,8 @@
       "smoothingPx": "Smoothing {{px}} px.",
       "app": "{{app}}.",
       "deterministic": "Deterministic (random_state={{seed}}).",
-      "semiQuant": "Semi-quantitative: no full ZAF correction, no standard calibration."
+      "semiQuant": "Semi-quantitative: no full ZAF correction, no standard calibration.",
+      "semiQuantMatrix": "Semi-quantitative: standardless with a φ(ρz) matrix correction, not calibrated on reference standards."
     },
     "summaryHint": "Everything in it comes from provenance.json. A clause this run could not supply is left out rather than guessed.",
     "summaryTitle": "Summary line",
@@ -724,6 +725,8 @@
     "calibratedOn": "Detector response calibrated on {{matrix}} at {{kv}} kV.",
     "matrixCorrected": "Standardless with a φ(ρz) matrix correction (XPP after Pouchou & Pichoir, specimen tilt {{tilt}}°, exit angle {{psi}}°, Reed fluorescence), normalised to 100 %.",
     "calibratedAfterMatrix": "Instrument response measured after the matrix correction on {{standard}} at {{kv}} kV.",
+    "uncalibrated": "Not calibrated on reference standards: absolute values can be off, more so on another instrument or alloy. Good for comparing regions and choosing phases.",
+    "detectorOnly": "The response was measured on one detector ({{detector}}). Another detector, window or geometry has its own response, so values there can be off by an amount that has not been measured.",
     "overlap": "The {{window}} window overlaps {{interferer}} emission, so it reads high wherever that element is present.",
     "beamAssumed": "Beam voltage is not in the file — {{kv}} kV assumed. Every k-factor's overvoltage depends on it.",
     "sourceSpectrum": "From the spectra: background subtracted, overlapping lines separated, pile-up modelled.",

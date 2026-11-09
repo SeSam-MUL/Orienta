@@ -223,8 +223,14 @@ export function summaryClauses(result) {
   }
 
   // 7. the caveat that must not be dropped when the numbers are quoted:
-  //    standardless Cliff-Lorimer, no ZAF, no standard calibration.
-  out.push({ key: 'export.sum.semiQuant', vars: {} });
+  //    no standard calibration either way; with or without the phi(rho z)
+  //    correction as the backend recorded it (the same test as the
+  //    backend's own caption, eds_export).
+  out.push({
+    key: prov.quantification?.matrix_correction
+      ? 'export.sum.semiQuantMatrix' : 'export.sum.semiQuant',
+    vars: {},
+  });
   return out;
 }
 

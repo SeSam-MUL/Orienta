@@ -4,9 +4,11 @@
 
 The EDS (Energy-Dispersive X-ray Spectroscopy) module turns the per-pixel
 element counts stored inside an Oxford H5OINA scan into a chemistry view of your
-sample. It reads each element's count map, converts counts to **Weight %** and
-**Atomic %** on the fly (Cliff–Lorimer-style normalisation), and presents the
-result as:
+sample. It quantifies every pixel as **Weight %** and **Atomic %**: from the
+fitted spectra with a matrix correction when the file holds the spectrum of
+every pixel, otherwise from AZtec's element maps without one (see
+[How the composition is calculated](#how-the-composition-is-calculated)). It
+presents the result as:
 
 - a curated **composite overlay** (a small stack of layers — phase, IPF, band
   contrast, chosen elements — blended together), and
@@ -38,8 +40,8 @@ Use EDS after loading a scan with EDS data (in the EBSD Viewer), and typically
 
 - See where each element sits across the scan and identify chemically distinct
   regions (matrix vs. intermetallics, precipitates, inclusions).
-- Read the exact composition (At.% / Wt.% / counts) at a pixel or averaged over a
-  region you draw.
+- Read the composition (At.% / Wt.% / counts) at a pixel or over a region you
+  draw.
 - Get a short list of **candidate phases** that match the measured chemistry, so
   you index against plausible phases rather than guessing.
 - Build a **chemistry-based phase map** and hand its phase list and pixel masks
@@ -50,9 +52,10 @@ Use EDS after loading a scan with EDS data (in the EBSD Viewer), and typically
   inspector is a measurement you can check, and why every automatic decision can
   be overruled.
 
-EDS quantification is semi-quantitative (no per-element standards or full ZAF
-correction) — treat it as a guide for phase selection and regional comparison,
-not as a certified composition measurement.
+EDS quantification is standardless and **not calibrated on reference
+standards** — treat it as a guide for phase selection and regional comparison,
+not as a certified composition measurement. What that means for the numbers is
+in [How the composition is calculated](#how-the-composition-is-calculated).
 
 ## How to use it — step by step
 
@@ -1531,8 +1534,9 @@ not know about is preserved rather than dropped. Where no header can be read,
 beam voltage nobody measured would be worse than none.
 
 This is what the semi-quantitative caveat has to be weighed against. The file
-asserts "no k-factor calibration"; you cannot judge that claim without knowing
-the kV, and until now the kV was in the scan and never in the export.
+states how the composition was calibrated (`not_built.k_factor_calibration`);
+you cannot judge that statement without knowing the kV, and until now the kV
+was in the scan and never in the export.
 
 **`provenance.interaction_volume`** turns the kV into a length: the
 Kanaya–Okayama electron range in the **matrix element the classification
@@ -1755,15 +1759,20 @@ Stated plainly, because the alternative is that you assume otherwise.
   at a different smoothing width or Min score. Re-run and compare by hand.
 - **No standard errors.** See `sd_within` above — a considered refusal, not a
   gap.
-- **No k-factor calibration against a standard.** The composition is the same
-  semi-quantitative Cliff–Lorimer-style normalisation used everywhere else on
-  this page, and that caveat is written into `provenance.json` as literal text
+- **No calibration against a measured standard.** The composition is the same
+  one used everywhere else on this page (see
+  [How the composition is calculated](#how-the-composition-is-calculated)),
+  and its caveat — which path, which correction, which reference set — is
+  written into `provenance.json` (`caveat`, `quantification`) as literal text
   so it travels with the numbers instead of staying in this manual.
-- **No peak-overlap *detection*.** The overlaps that apply to this scan are now
-  declared in `provenance.peak_overlaps` (above), but nothing measures one:
-  this export receives per-element at% maps and never the spectra, so an empty
+- **No peak-overlap *detection* on the window path.** For a file without
+  spectra, the overlaps that apply to this scan are declared in
+  `provenance.peak_overlaps` (above), but nothing measures one: this export
+  receives per-element at% maps and never the spectra, so an empty
   `applies_to_this_scan` means no declared pair had both its elements mapped
-  here — never that the spectra were checked and found clean.
+  here — never that the spectra were checked and found clean. On the spectrum
+  path the fit separates overlapping lines, and lines it could not fit well are
+  listed in `quantification.quality_warnings`.
 - **No per-element raw counts, and no pre-normalisation total.** The counts →
   wt% → at% conversion happens upstream and renormalises to 100 on the way, so
   no function in the exporter has ever seen the un-normalised total. It is
@@ -1779,11 +1788,171 @@ Stated plainly, because the alternative is that you assume otherwise.
   it is recorded as `tolerance_effective: false` rather than being presented as
   though it had done something.
 
+## How the composition is calculated
+
+> **Not calibrated on reference standards.** Every Wt.% and At.% on this page
+> is standardless. No reference standard has been measured to calibrate it.
+> The one measured step, the detector response, was fitted on a single Oxford
+> detector, mostly to AZtec's own standardless results. Use the numbers to
+> compare regions and to choose candidate phases. For an absolute composition,
+> check them against a standard measured on your own instrument.
+
+The composition is calculated in two steps: first the X-ray intensity of each
+element line, then the composition that would produce those intensities. Which
+way each step goes depends on what the file holds. The line under every
+composition on the page says which source was used.
+
+### Step 1: line intensities
+
+- **From the spectra** (the file holds the spectrum of every pixel,
+  `/1/EDS/Data/Spectrum`, as an AZtec `.h5oina` does when it is exported with
+  spectra). When the file is opened,
+  a model of the spectrum is fitted in the background: Gaussian peaks for the
+  lines of the elements AZtec exported and of a fixed list of common
+  candidate elements, their silicon escape peaks, the
+  incomplete-charge tails of Al K and Si K, pulse pile-up, and the continuum
+  (Kramers' law × detector efficiency × absorption in the sample × a smooth
+  correction). Energy offset, gain, peak width and absorption are fitted once
+  on the summed spectrum of the whole file; each pixel then gets only the
+  linear part of the fit. The result is the **net** intensity of each line:
+  background removed and overlapping lines separated, for example Zn L under
+  Cu L. The note says *"From the spectra: background subtracted, overlapping
+  lines separated, pile-up modelled."* Lines the fit leaves more than 5 % of
+  their area unexplained are named in the note.
+- **From AZtec's window maps** (the file holds no spectra). The intensity of
+  each element is AZtec's *Window Integral* map: the counts summed over a band
+  of 45 to 90 eV around the line, **background included**. Lines that share a
+  window cannot be separated; the known case, Zn L under Cu L, is named in the
+  note wherever both are present. The note says *"From AZtec's window maps:
+  background is included (this file has no spectra)."*
+
+### Step 2: from intensities to composition
+
+**With a matrix correction** — on the spectrum path, when the file header
+holds the acquisition geometry (beam energy, detector elevation, specimen
+tilt). The measured intensity of a line `i` of element `e` is modelled as
+
+```
+I_i = G · R(E_i) · K_i · C_e · Q_i(E0) · ZA_i(C) · Fl_i(C)
+```
+
+- `C_e` the mass fraction of the element, the unknown;
+- `ZA_i(C)` the depth distribution of the ionisations, φ(ρz), times the
+  absorption of the X-rays on their way out to the detector. This carries the
+  atomic-number and absorption effects of the matrix. The model is XPP by
+  Pouchou & Pichoir, transcribed from NIST's EPQ library (DTSA-II); the mass
+  attenuation coefficients come from xraylib;
+- `Fl_i(C)` the secondary fluorescence of K lines excited by the other
+  elements (Reed). L and M lines get no fluorescence term;
+- `Q_i(E0)` the ionisation cross-section at the beam energy; `K_i` the
+  fluorescence yield, the line's share of the shell emission, the shell
+  electrons and Bethe constant, and the atomic mass; `R(E_i)` the instrument
+  response, the fraction of the emitted photons that is detected (below); and
+  `G` beam current × solid angle, which cancels.
+
+The composition is found by iteration, because `ZA` and `Fl` depend on it, and
+normalised to 100 wt%. The specimen tilt is handled by scaling the depth of the
+ionisation curve with √cos(tilt). This was checked against Monte Carlo
+simulation only for a 70° specimen tilt with the specimen tilted towards the
+detector, an exit angle of 81°. The note gives the tilt and exit angle it used.
+
+**Without a matrix correction** — on the window path, and on the spectrum path
+when the header has no usable geometry (no tilt or detector elevation, a tilt
+outside 0 to 89.5°, or a detector the specimen shadows; a warning says which).
+This is standardless Cliff–Lorimer:
+
+```
+C_i = k_i · I_i / Σ_j (k_j · I_j) × 100 %
+k   = A / (ω · p · n · b · ln(U) / E_c) × r(E_line)
+```
+
+with `A` the atomic mass, `ω` the fluorescence yield, `p` the share of the
+shell's emission in the measured line, `n` and `b` the shell electrons and the
+Bethe constant, `U` the overvoltage and `E_c` the edge energy. `r` is a
+measured correction per line energy: on a reference region, the k that
+reproduces the reference composition divided by the k of the physics alone.
+It contains the detector efficiency and also the absorption in the Al-rich
+matrix it was measured in: on a very different matrix, such as an oxide or a
+steel, the numbers drift.
+
+Atomic % follows from weight % with the atomic masses. Both are normalised to
+100 %, so **the sum is always 100 % and says nothing about accuracy.**
+
+### The instrument response: the one measured step
+
+The instrument response (`R` with the matrix correction, `r` without it) is
+everything the physics above leaves out: mostly the detector efficiency (the
+transmission of the detector window and the losses in the detector itself),
+plus the residual error of the tabulated constants, and without the matrix
+correction also the absorption in the reference matrix. It is the only part of
+the calculation that was fitted to data. It was fitted at 20 kV on one Oxford
+Ultim Max 100 detector with a SATW window, separately for each path:
+
+- **with the matrix correction**, after the correction, on three reference
+  regions: an Al₇Cu₂Fe region against its nominal stoichiometry, and the Al
+  matrix and an α-Al(Fe,Mn)Si region against AZtec's own standardless
+  (Tru-Q) result on the same scan;
+- **without the matrix correction**, on the α-Al(Fe,Mn)Si region against
+  AZtec Tru-Q.
+
+What follows from that:
+
+- Another detector, window or geometry has its own response. On another
+  instrument the numbers can be off by an amount that has not been measured.
+- At another beam voltage, the physics follows the voltage but the fitted
+  response may not; the note warns when the voltage differs from 20 kV, and
+  when the file does not state the voltage and 20 kV was assumed.
+- Lines with no reference measurement behind their response (Mg, Ni and Cr on
+  the corrected path) are named in a warning, and so are lines outside the
+  energy range the response was measured over. Oxygen-bearing areas were not
+  tested.
+- With physics alone and no fitted response at all, the typical agreement
+  with the references is the same (median 0.47 at% instead of 0.5 at%); the
+  fitted response mainly pulls in the largest deviations, mostly Cu K and Al in
+  Al₇Cu₂Fe, partly because that phase is itself one of the references.
+
+### How well it agrees, and what that does not tell you
+
+On the scans the response was measured on, the corrected composition was
+compared with the reference values, each calibration region against a
+response fitted without it (28 element values from 7 regions; two of the test
+regions share pixels with calibration regions, so the values are not fully
+independent): the deviation had a median of 0.5 at%, 25 of 28 values were at
+or below 1.9 at%, and the largest was 2.5 at%. Two of the
+three references are AZtec's own standardless numbers, so this is agreement
+with AZtec and with one stoichiometry, **not accuracy against a true
+composition**, and it holds for one detector, one geometry and one alloy
+family. For other alloys the deviation was not measured. On two scans of a
+7050 alloy (scans not included in the repository) the correction moved zinc from 3.71 and 3.73 wt% to 6.57 and
+6.75 wt%; the limits published for alloy 7050 are 5.7 to 6.7 wt% (quoted from the literature, not checked against a specification), but the scanned
+areas hold particles, so this is no comparison with a known composition.
+
+### Elements that are treated differently
+
+- **Carbon** is left out of the corrected composition: its signal is mostly
+  the contamination layer on the surface. Its map stays.
+- **Copper** is quantified from its K lines on the corrected path and from its
+  L lines on the uncorrected spectrum path.
+- **Elements the spectrum shows but AZtec did not export** are not added to
+  the composition. The page names them and offers each as a net-count map.
+
+### Where you see what was used
+
+- **Under every composition** (pixel, region, phase map): the source line and
+  *"Not calibrated on reference standards"* are always shown. Click *How this
+  composition was calculated* for the method, the reference set and every
+  warning that applies to these numbers; it turns amber when there is a
+  warning.
+- **In the export**: `provenance.json` holds the full record under
+  `quantification` and the caveat as text under `caveat`; `caption.txt`
+  carries it in short.
+
 ## Inputs & outputs
 
 - **Inputs:**
   - An open H5OINA scan containing per-element EDS count maps (`/1/EDS/Data/Window
-    Integral/<element>`).
+    Integral/<element>`), and, when present, the spectrum of every pixel
+    (`/1/EDS/Data/Spectrum`) with the acquisition geometry in the EDS header.
   - Optionally your curated CIF library
     (`Database/crystal_database.xlsx`) for phase suggestion and auto-classify;
     optionally an indexing result for Phase/IPF/CI overlay layers.
@@ -1820,9 +1989,11 @@ Stated plainly, because the alternative is that you assume otherwise.
 - **Match phases on At.%, not counts.** Counts are raw detector readings; the
   At.% conversion is what makes chemistry comparable to a crystal formula. The UI
   defaults to At.% for exactly this reason.
-- **Semi-quantitative.** The conversion is a simplified normalisation, not a
-  standards-based ZAF quantification. Use it for relative comparison and phase
-  shortlisting.
+- **Standardless, not calibrated on standards.** With spectra the composition
+  carries a matrix correction, without spectra it does not; neither is a
+  standards-based quantification (see
+  [How the composition is calculated](#how-the-composition-is-calculated)).
+  Use it for relative comparison and phase shortlisting.
 - **Auto-classify needs a CIF library.** If `Database/crystal_database.xlsx` is
   missing or contains no phase whose elements are a subset of the measured
   elements, auto-classify reports an error — build/curate the database first

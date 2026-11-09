@@ -14,9 +14,11 @@ import { colors, alpha } from '../../theme/components';
  * semi-quantitative. That is the recurring shape in this project: a warning
  * the backend builds correctly and nobody ever reads.
  *
- * Deliberately one line, collapsed. The caveat is permanent — it applies to
- * every number this page shows — so a banner would be noise within a day and
- * get ignored, which is the same as not having it. It only raises its voice
+ * Deliberately small and grey, with the details collapsed. The caveat is
+ * permanent — it applies to every number this page shows — so a banner would
+ * be noise within a day and get ignored, which is the same as not having it.
+ * Two short lines stay open: where the intensities came from, and that
+ * nothing here is calibrated on a measured standard. It only raises its voice
  * (amber) when there is something specific to say: a spectral overlap, an
  * extrapolated line, a beam voltage the calibration does not cover.
  */
@@ -116,6 +118,18 @@ export default function QuantificationNote({ provenance }) {
         </div>
       )}
 
+      {/* Also always on screen: no path here was calibrated on a measured
+          standard, and the one fitted step (the detector response) belongs
+          to one detector. Behind the click, nobody who quotes a number from
+          this panel would know that. Grey, like the source line: it is true
+          of every number, so it is not a warning. */}
+      <div
+        data-quant-uncalibrated
+        style={{ marginTop: 3, color: colors.textSecondary, lineHeight: 1.4 }}
+      >
+        {t('quantNote.uncalibrated')}
+      </div>
+
       {open && (
         <div style={{ marginTop: 5, lineHeight: 1.5 }}>
           {/* The standing caveat, always — it is true of every number here.
@@ -140,6 +154,11 @@ export default function QuantificationNote({ provenance }) {
                   matrix: provenance.calibration.matrix,
                   kv: provenance.calibration.beam_kv,
                 })}
+            </div>
+          )}
+          {provenance.calibration?.detector && (
+            <div style={{ color: colors.textSecondary, marginTop: 3 }}>
+              {t('quantNote.detectorOnly', { detector: provenance.calibration.detector })}
             </div>
           )}
           {/* Loudest of the specifics: every k-factor's overvoltage term

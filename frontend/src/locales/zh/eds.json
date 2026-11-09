@@ -18,7 +18,7 @@
     "counts": "Counts",
     "countsTip": "来自探测器的原始 X 射线计数",
     "wtPct": "Wt.%",
-    "wtPctTip": "重量百分比 — 未使用标样、也未做完整 ZAF 校正的 Cliff-Lorimer 归一化，属半定量结果。",
+    "wtPctTip": "重量百分比，无标样，归一化到 100 %。文件含有谱图和采集几何时做 φ(ρz) 基体校正，否则为不做 ZAF 校正的 Cliff-Lorimer 归一化。未用参考标样校准，属半定量结果。",
     "atPct": "At.%",
     "atPctTip": "原子百分比 — 相鉴定以此为准。它由半定量的重量百分比换算而来，因此带有同样的保留。"
   },
@@ -630,7 +630,8 @@
       "smoothingPx": "平滑 {{px}} px。",
       "app": "{{app}}。",
       "deterministic": "确定性结果（random_state={{seed}}）。",
-      "semiQuant": "半定量：未做完整 ZAF 校正，未使用标准样品校准。"
+      "semiQuant": "半定量：未做完整 ZAF 校正，未使用标准样品校准。",
+      "semiQuantMatrix": "半定量：无标样，含 φ(ρz) 基体校正，未用参考标样校准。"
     },
     "summaryHint": "其中内容全部来自 provenance.json。本次运行无法提供的部分直接省略，而不是猜测。",
     "summaryTitle": "摘要行",
@@ -724,6 +725,8 @@
     "calibratedOn": "探测器响应在 {{matrix}}、{{kv}} kV 下标定。",
     "matrixCorrected": "无标样定量，采用 φ(ρz) 基体校正（Pouchou & Pichoir 的 XPP，样品倾斜 {{tilt}}°，出射角 {{psi}}°，Reed 荧光校正），归一化至 100 %。",
     "calibratedAfterMatrix": "仪器响应在基体校正后于 {{standard}}（{{kv}} kV）上测定。",
+    "uncalibrated": "未用参考标样校准：绝对值可能有偏差，在其他仪器或合金上偏差可能更大。适合比较区域和选择物相。",
+    "detectorOnly": "仪器响应仅在一台探测器（{{detector}}）上测定。其他探测器、窗口或几何有各自的响应，其偏差未经测定。",
     "overlap": "{{window}} 窗口与 {{interferer}} 的发射峰重叠，因此在含该元素处读数偏高。",
     "beamAssumed": "文件中没有加速电压 — 按 {{kv}} kV 假定。每个 k 因子的过电压都取决于它。",
     "sourceSpectrum": "来自能谱：已扣除背底，已分离重叠谱线，已对堆积峰建模。",
@@ -740,7 +743,7 @@
     "edsFailed": "不显示 EDS 数值：能谱拟合失败（{{error}}）。",
     "checking": "正在检查此文件的能谱…",
     "unreachable": "程序没有响应；每秒重新询问一次。",
-    "inProcess": "光谱正在程序本身中评估（{{reason}}）；完成之前程序可能响应缓慢。"
+    "inProcess": "能谱正在程序本身中评估（{{reason}}）；完成之前程序可能响应缓慢。"
   },
   "composition": {
     "summed": "由所有这些像素的净计数求和后一次定量得到的成分。",
