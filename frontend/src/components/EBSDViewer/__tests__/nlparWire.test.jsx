@@ -73,8 +73,10 @@ describe('POST /api/ebsd/nlpar/cancel/{id}', () => {
 });
 
 describe.skipIf(!existsSync(routeFile))('the client against the backend route module', () => {
-  const py = existsSync(routeFile) ? readFileSync(routeFile, 'utf8') : '';
-  const js = readFileSync(apiFile, 'utf8');
+  // Sources are read with CRLF turned into LF: a Windows checkout with core.autocrlf=true
+  // gives them CRLF line endings, and the searches below are written with LF.
+  const py = existsSync(routeFile) ? readFileSync(routeFile, 'utf8').replace(/\r\n/g, '\n') : '';
+  const js = readFileSync(apiFile, 'utf8').replace(/\r\n/g, '\n');
 
   it('every field the client sends is a field of NlparRequest', () => {
     const model = py.match(/class NlparRequest\(BaseModel\):([\s\S]*?)\n\n/)[1];
@@ -95,7 +97,7 @@ describe.skipIf(!existsSync(routeFile))('the client against the backend route mo
   });
 
   it('the advice route exists and answers with every field and value the panel reads', () => {
-    const service = readFileSync(resolve(here, '../../../../../backend/api/services/nlpar.py'), 'utf8');
+    const service = readFileSync(resolve(here, '../../../../../backend/api/services/nlpar.py'), 'utf8').replace(/\r\n/g, '\n');
     expect(py).toContain('@router.get("/nlpar/advice")');
     expect(js).toContain("'/api/ebsd/nlpar/advice'");
     const advice = py.slice(py.indexOf('async def nlpar_advice'));
@@ -108,7 +110,7 @@ describe.skipIf(!existsSync(routeFile))('the client against the backend route mo
     for (const value of ['recommended', 'not_recommended']) {
       expect(service, `advice_for never answers "${value}"`).toContain(`"${value}"`);
     }
-    const view = readFileSync(resolve(here, '../NlparControls.jsx'), 'utf8');
+    const view = readFileSync(resolve(here, '../NlparControls.jsx'), 'utf8').replace(/\r\n/g, '\n');
     for (const value of ['recommended', 'not_recommended', 'applied', 'too_small', 'hex', 'uniform']) {
       expect(view, `adviceView does not handle "${value}"`).toContain(value);
     }

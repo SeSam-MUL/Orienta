@@ -15,7 +15,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const MAIN = fs.readFileSync(path.join(here, '../../electron/main.js'), 'utf8');
+// Sources are read with CRLF turned into LF: a Windows checkout with core.autocrlf=true
+// gives them CRLF line endings, and the searches below are written with LF.
+const MAIN = fs.readFileSync(path.join(here, '../../electron/main.js'), 'utf8').replace(/\r\n/g, '\n');
 
 function body(startPattern, endPattern) {
   const start = MAIN.search(startPattern);

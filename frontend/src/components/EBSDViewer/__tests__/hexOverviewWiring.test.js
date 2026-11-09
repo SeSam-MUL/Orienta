@@ -12,8 +12,10 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = readFileSync(join(here, '..', 'EBSDViewer.jsx'), 'utf8');
-const api = readFileSync(join(here, '..', '..', '..', 'services', 'api.js'), 'utf8');
+// Sources are read with CRLF turned into LF: a Windows checkout with core.autocrlf=true
+// gives them CRLF line endings, and the searches below are written with LF.
+const source = readFileSync(join(here, '..', 'EBSDViewer.jsx'), 'utf8').replace(/\r\n/g, '\n');
+const api = readFileSync(join(here, '..', '..', '..', 'services', 'api.js'), 'utf8').replace(/\r\n/g, '\n');
 
 /** The text between `start` and the first `end` after it. */
 function between(start, end) {
