@@ -189,6 +189,10 @@ def refine_harness(monkeypatch):
     monkeypatch.setattr(pc, "compute_ncc_scalar",
                         lambda exp, sim: -float(np.asarray(sim).ravel()[0]))
     monkeypatch.setattr(ix, "_get_phase_compare_backend", lambda key: _FakeBackend())
+    # The frame is under test here, not the memory budget (tests/test_grain_refine_bounded.py):
+    # in a suite run earlier GPU tests leave little free memory, and the budget would skip the
+    # polish before Newton is ever seeded.
+    monkeypatch.setattr(ix, "_newton_bandwidth", lambda requested: (int(requested), 1 << 40, "GPU"))
 
     def call():
         result = types.SimpleNamespace(original_shape=(1, 1))
