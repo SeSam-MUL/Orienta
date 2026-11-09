@@ -19,10 +19,10 @@ Implementation:
     reconstruction (``a_{l,-m} = (-1)^m * conj(a_{l,m})``), and take the
     real part of the (theoretically real) spherical signal.
 
-Phase A truncates the file's bandwidth to ``max_bandwidth=128`` by default
+By default the file's bandwidth is truncated to ``max_bandwidth=128``
 to keep the CSHT setup memory bounded (Wigner tables scale O(L^3)). For
 visual pattern comparison this is plenty (corresponds to ~1.4 deg
-detail on the unit sphere). Higher fidelity is a Phase B option.
+detail on the unit sphere). Higher fidelity needs a larger ``max_bandwidth``.
 """
 from __future__ import annotations
 
