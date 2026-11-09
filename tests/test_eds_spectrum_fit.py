@@ -183,6 +183,8 @@ BENCH_FAMS = ([(e, "K") for e in ("C", "N", "O", "Mg", "Al", "Si")]
               + [("Zr", "L")])
 
 
+@pytest.mark.skipif(not (BENCH / "bench.npz").is_file(),
+                    reason="needs the benchmark spectra, which are not distributed")
 def test_matches_bench_on_alpha_sum():
     z = np.load(BENCH / "bench.npz")
     info = json.loads((BENCH / "bench.json").read_text(encoding="utf-8"))
