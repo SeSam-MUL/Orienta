@@ -9,8 +9,8 @@
  *
  * THAT IS WHY THE COUNT LINE SAYS BOTH NUMBERS. "93" alone reads as a
  * library three times the size it is; "36" alone leaves the reader counting
- * the same card three times and wondering. The spec asks for "N Phasen, M
- * Platzierungen" in as many words, and this is the reason.
+ * the same card three times and wondering. The count line must name both numbers in as many words (in German "N Phasen, M
+ * Platzierungen"), and this is the reason.
  *
  * BANDS GROW BY THEMSELVES. One band per element that occurs in at least one
  * STRUCTURE -- so a new Ti CIF produces a Ti band with no configuration, and
