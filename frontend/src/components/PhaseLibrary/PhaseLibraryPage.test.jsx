@@ -670,9 +670,7 @@ describe('a name somebody gave a phase reaches the search', () => {
 
   it('the KEY is still what a row is, and is still searchable', async () => {
     // b9's guard: a display name stands in FRONT OF the key, never instead
-    // of it. Renaming a phase must not make its file unfindable -- the whole
-    // complaint this page answers was "ich musste ewig suchen um das cif zu
-    // finden".
+    // of it. Renaming a phase must not make its file unfindable.
     await show(withName('sd_1814127', { display_name: 'S-Phase' }));
     await waitFor(() => expect(screen.getByTestId('phase-list')).toBeTruthy());
     type('sd_1814127');

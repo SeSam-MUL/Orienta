@@ -161,7 +161,7 @@ export default function OverlayCard({
   };
   const onLinePointerMove = (e) => {
     if (!linescanMode || !lineStartRef.current || !hostRef.current) return;
-    // M2 fix: if the user released the button outside the canvas, e.buttons === 0
+    // If the user released the button outside the canvas, e.buttons === 0
     // on re-entry. Treat that as cancelling the drag.
     if (e.buttons === 0) {
       lineStartRef.current = null;

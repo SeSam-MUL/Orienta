@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * What the user loop after M1 changed, and why.
+ * What a walk-through of the built page changed, and why.
  *
  * Four readers walked the built page against the real library without a
  * manual. Three of them independently concluded the page was broken, for

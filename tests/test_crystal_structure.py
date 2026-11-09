@@ -146,7 +146,7 @@ def test_every_library_cif_loads(path):
     which come out as Mg2Cu and Mg4Cu. Picking one silently is the failure
     mode that put 16 atoms in Si.cif (2026-09-14); refusing is the fix.
 
-    This test is older (2026-07-14) than that guard and demanded a payload
+    This test is older than that guard and demanded a payload
     from every file, so it went red on the one file the guard protects us
     from. What must never happen is a *silent* wrong structure, and that is
     what the two branches below pin.

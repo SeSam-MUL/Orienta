@@ -4,7 +4,7 @@
  * This is the first thing built and everything downstream inherits it, so the
  * rules are written here once and measured against the real library.
  *
- * WHAT WENT WRONG BEFORE, all measured on the mockups and on the shipped app:
+ * Behaviour this search must keep (each case was observed in the app):
  *
  *   `Al`        -> 36 of 36, because "al" is inside "Journal" and "Metallkunde"
  *   `aluminium` -> 4 paper titles, and pure Al NOT among them
@@ -14,8 +14,7 @@
  *   `Im3`       -> 0, because the file writes `Im-3`
  *   `s phase`   -> 10, because "s" is inside almost every word
  *
- * A first-time user hit the fourth and fifth of those and said he would close
- * the program and ask a colleague for a list of filenames. So:
+ * So:
  *
  * TWO HIT CLASSES, AND THEY LOOK DIFFERENT ON SCREEN. A phase either IS the
  * thing you typed (its name, formula, elements, symmetry) or it is MENTIONED
@@ -32,7 +31,7 @@
  *
  * A query can match as several shapes at once; the union is returned, and each
  * hit records WHY it matched, because a hit with no visible reason reads as a
- * bug (a tester reported exactly that).
+ * bug.
  */
 import { ELEMENT_NAMES } from './elementNames';
 
@@ -181,9 +180,8 @@ const IDENTITY_FIELDS = [
  * somebody edits one of them.
  *
  * A DISPLAY NAME STANDS IN FRONT OF THE KEY, NEVER INSTEAD OF IT. The key
- * is still in the row, still indexed, still searchable: the complaint this
- * page answers was "ich musste ewig suchen um das cif zu finden", and a
- * rename that hides the filename would bring it back.
+ * is still in the row, still indexed, still searchable: finding the CIF of a
+ * phase must stay easy, and a rename that hides the filename would make it hard.
  */
 export function phaseLabel(phase) {
   return phase.display_name || phase.formula_label || phase.key;
