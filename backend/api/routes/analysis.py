@@ -121,8 +121,8 @@ _rx_cache: dict = {}
 
 # Held by POST /grain-size and the reconstruct task while they read or write the grains of ``_dataset``,
 # the parameters they were made with and the stored statistics settings, so a settings write from an
-# analysis of older grains cannot land after a newer reconstruction. ``GET /status`` and the start of
-# ``_collect_export_results`` take their snapshot (dataset, grains, parameters, settings) under it, so
+# analysis of older grains cannot land after a newer reconstruction. ``GET /status``, ``grain_citation_step`` and
+# the start of ``_collect_export_results`` take their snapshot (dataset, grains, parameters, settings) under it, so
 # they see the grains of one reconstruction with its own parameters; the export then works on that
 # snapshot for its whole run (it does not see a reconstruction that finishes meanwhile). ``/load`` and
 # ``restore_dataset_for_file`` replace ``_dataset`` and reset the settings without it, in two statements:
@@ -2026,6 +2026,42 @@ async def get_texture_components(preset: str = "FCC_Rolling"):
 _WARNING_REASON_MAX = 300      # characters of one export warning (orix and sklearn messages can be long)
 
 
+def _grain_citations(recon, settings: dict, grain_size=None) -> dict:
+    """What to cite for grains reconstructed with ``recon`` under the statistics ``settings``, in the answer
+    shape of ``GET /api/citations/result/{id}``."""
+    from backend.api.services.citations.bundle import citation_bundle
+    from backend.api.services.citations.grains import grain_reconstruction_step
+    step = grain_reconstruction_step(recon, edge_rule=settings["edge_rule"], ecd_basis=settings["ecd_basis"],
+                                     stats_phase=settings.get("stats_phase"), grain_size=grain_size)
+    return citation_bundle([step])
+
+
+def grain_citation_step() -> Optional[dict]:
+    """The ``analysis.grain_reconstruction`` step of the grains the page holds, or None without grains.
+
+    Read under ``_grain_state_lock`` like ``/status`` and the export, so the parameters belong to the grains;
+    the grain-size statistics are computed again from that snapshot for the edge-grain counts (a failure
+    there leaves them out and the sentence states the rule only)."""
+    from backend.api.services.citations.grains import grain_reconstruction_step
+    with _grain_state_lock:
+        dataset = _dataset
+        grains = getattr(dataset, "grains", None) if dataset is not None else None
+        if grains is None:
+            return None
+        recon = dict(getattr(dataset, "grain_recon_params", None) or {})
+        settings = dict(_grain_stats_settings)
+    gs = None
+    if grains.n_grains > 0:
+        try:
+            from analysis.grain_analysis import analyze_grain_size
+            gs = analyze_grain_size(dataset, grains, edge_rule=settings["edge_rule"],
+                                    ecd_basis=settings["ecd_basis"], stats_phase=settings["stats_phase"])
+        except Exception:
+            logger.warning("grain-size statistics for the citation step failed", exc_info=True)
+    return grain_reconstruction_step(recon, edge_rule=settings["edge_rule"], ecd_basis=settings["ecd_basis"],
+                                     stats_phase=settings.get("stats_phase"), grain_size=gs)
+
+
 def _collect_export_results(warnings: Optional[list] = None) -> dict:
     """Collect all available analysis results from the loaded dataset for Excel export.
 
@@ -2112,6 +2148,13 @@ def _collect_export_results(warnings: Optional[list] = None) -> dict:
         results["basic_info"].update(grain_size_basic_info(gs))
     except Exception as e:
         warn("grain_size", e)
+
+    # Citations (sheet "Citations"): the method the grains were reconstructed with, with the settings of this
+    # snapshot and the edge-grain counts of the statistics above
+    try:
+        results["citations"] = _grain_citations(recon, settings, results.get("grain_size"))
+    except Exception as e:
+        warn("citations", e)
 
     # Deformation
     try:

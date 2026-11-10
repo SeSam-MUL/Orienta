@@ -9,6 +9,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
+  // the Grain tab's citation panel asks for the grains' citations; left pending, it shows its loading line
+  citationsApi: { forAnalysis: vi.fn(() => new Promise(() => {})) },
   analysisApi: {
     reconstructGrains: vi.fn(),
     getTaskStatus: vi.fn(),
@@ -202,6 +204,23 @@ describe('GrainTab: edge rule and ECD basis', () => {
     fireEvent.change(screen.getByLabelText('Edge grains'), { target: { value: 'mtex' } });
     await waitFor(() => expect(analysisApi.grainSize).toHaveBeenCalledTimes(2));
     expect(analysisApi.grainSize).toHaveBeenLastCalledWith('mtex', 'measured_pixels', null);
+  });
+
+  it('the citation panel asks again once the statistics follow another setting', async () => {
+    const { citationsApi } = await import('../../../services/api');
+    await reconstructWith({});
+    await waitFor(() => expect(citationsApi.forAnalysis).toHaveBeenCalledTimes(1));
+    analysisApi.grainSize.mockResolvedValue({
+      data: { success: true, mean_ecd: 20.5, std_ecd: 5.5, mean_aspect_ratio: 1.25, ...EDGE_FIELDS, ecd_basis: 'measured_pixels' },
+    });
+    fireEvent.change(screen.getByLabelText('ECD from'), { target: { value: 'measured_pixels' } });
+    await waitFor(() => expect(citationsApi.forAnalysis).toHaveBeenCalledTimes(2));
+    analysisApi.grainSize.mockResolvedValue({
+      data: { success: true, mean_ecd: 20.5, std_ecd: 5.5, mean_aspect_ratio: 1.25, ...EDGE_FIELDS,
+        ecd_basis: 'measured_pixels', edge_rule: 'keep_all', n_edge_grains: 0, n_grains_used: 98 },
+    });
+    fireEvent.change(screen.getByLabelText('Edge grains'), { target: { value: 'keep_all' } });
+    await waitFor(() => expect(citationsApi.forAnalysis).toHaveBeenCalledTimes(3));
   });
 
   it('without grains, picking an option only changes the setting', () => {

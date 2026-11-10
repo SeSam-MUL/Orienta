@@ -79,7 +79,7 @@ def test_broken_library_degrades_instead_of_500(
         raise FileNotFoundError("CITATION.cff")
 
     monkeypatch.setattr(
-        "backend.api.routes.citations.load_library", _boom
+        "backend.api.services.citations.bundle.load_library", _boom
     )
 
     with caplog.at_level(logging.ERROR, logger="backend.api.routes.citations"):

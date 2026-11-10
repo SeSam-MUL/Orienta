@@ -468,6 +468,12 @@ class BatchProcessor:
                 if split_left_out:
                     results["texture_by_rx_left_out"] = True
 
+            # Sheet "Citations": the grain method with this file's reconstruction and statistics settings
+            try:
+                results["citations"] = self._grain_citations(grain_size_result)
+            except Exception as e:
+                self._warn(file_path, f"citations: {type(e).__name__}: {e}")
+
             logger.info(f"Successfully processed {dataset_name}")
             return results
 
@@ -478,6 +484,17 @@ class BatchProcessor:
             if isinstance(e, AngGridRefused):
                 self.failed_codes[str(file_path)] = e.code
             return None
+
+    def _grain_citations(self, grain_size_result=None) -> Dict[str, Any]:
+        """What to cite for a file's grains: the answer of ``GET /api/citations/analysis`` for the batch's
+        reconstruction and statistics settings (``grain_size_result`` adds the file's edge-grain counts)."""
+        from backend.api.services.citations.bundle import citation_bundle
+        from backend.api.services.citations.grains import grain_reconstruction_step
+        recon = {"gb_threshold_deg": self.gb_threshold_deg, "min_pixels": self.min_grain_pixels,
+                 "alpha": self.grain_alpha, "fill": self.grain_fill}
+        step = grain_reconstruction_step(recon, edge_rule=self.grain_edge_rule, ecd_basis=self.grain_ecd_basis,
+                                         stats_phase=self.grain_stats_phase, grain_size=grain_size_result)
+        return citation_bundle([step])
 
     def _warn(self, file_path: Path, reason: str) -> None:
         """Note an analysis step that was left out of a processed file."""

@@ -5,6 +5,8 @@
   "copy": "复制",
   "copied": "已复制",
   "error": "无法加载此结果的引用列表。",
+  "analysisTitle": "这些晶粒的引用信息",
+  "analysisError": "无法加载这些晶粒的引用列表。",
   "englishOnly": "输出仅为英文——用于写入论文手稿。",
   "scopeNote": "仅涵盖 Orienta 执行的处理。之后在其他软件中进行的操作不包含在内。",
   "undeclared_one": "有 {{count}} 个步骤运行时未声明引用：",

@@ -271,7 +271,7 @@ def test_the_single_export_and_the_batch_write_the_same_workbook_for_the_same_ma
     export_to_excel(single, "scan", results)
 
     a, b = _sheets(single), _sheets(res.workbook_path)
-    assert list(a) == list(b) and len(a) == 11
+    assert list(a) == list(b) and len(a) == 12 and list(a)[-1] == "Citations"   # the eleven, then Citations
     assert len(a["Sheet1"]) > 100
     for sheet in a:
         assert set(a[sheet]) == set(b[sheet]), (sheet, sorted(set(a[sheet]) ^ set(b[sheet]))[:10])

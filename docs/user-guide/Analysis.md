@@ -111,6 +111,26 @@ Analysis → Deformation → Texture → Recrystallization → Batch & Export**.
 
    The statistics block names the number of grains in the statistics (after the
    edge rule), the rule and the basis that were used, and the step size.
+
+   **Citations for these grains.** Below the statistics, the same citation panel
+   as on the Phase Map page lists what to cite for the grains: a methods
+   paragraph, the plain reference list and the BibTeX entries, one tab each;
+   **Copy** copies the tab shown. The paragraph states the settings the grains were made
+   with: the threshold, the minimum grain size, alpha, whether the closed pixels
+   are filled in the maps, the edge-grain rule (with the number of edge grains
+   it left out), the ECD basis and the phase of the statistics. It cites the
+   grain-detection method of Bachmann, Hielscher and Schaeben, *Ultramicroscopy*
+   111 (2011) 1720–1733, doi:10.1016/j.ultramic.2011.08.002, and the MTEX paper
+   of the same authors, *Solid State Phenomena* 160 (2010) 63–68,
+   doi:10.4028/www.scientific.net/SSP.160.63, together with Orienta, kikuchipy
+   and orix. The texts are in English only, as they are meant for a manuscript.
+   They follow the statistics settings: when the statistics have been
+   recomputed for another edge rule, ECD basis or phase, the paragraph changes
+   with them. The workbook has the same texts on its `Citations` sheet.
+   The texts are assembled automatically from the steps and settings Orienta
+   recorded and may be incomplete: a step, a setting or a source can be
+   missing. Check them against your own procedure and the cited sources before
+   you use them in a manuscript.
 6. View the result maps (BC / IPF / ECD / grain boundaries) in the per-tab map
    viewer; switch layer and colormap with its dropdowns.
 
@@ -236,7 +256,8 @@ Analysis → Deformation → Texture → Recrystallization → Batch & Export**.
 
 10. **Download Excel** exports all computed results for the current dataset to an
     `.xlsx` workbook (11 sheets, see "The workbook" below: basic info, grain-size / KAM / GOS / BC
-    histograms, GMM fit, boundaries, sphericity, texture, RX). In the browser it triggers a
+    histograms, GMM fit, boundaries, sphericity, texture, RX; with reconstructed grains also a
+    `Citations` sheet). In the browser it triggers a
     download; in the desktop app you can pick an output path. A choice made on the
     Deformation, Texture or Recrystallization tab and not run yet is applied first, so
     the workbook follows what the tabs show; the page says which settings it applied.
@@ -263,10 +284,11 @@ Analysis → Deformation → Texture → Recrystallization → Batch & Export**.
 ## The workbook (`Documentation.xlsx`)
 
 Both exports (Download Excel and Batch Processing) write the same workbook: 11 sheets, **one column per
-dataset** unless the table says otherwise. Where the dataset name stands: in row 1 of each sheet, except `KAM hist`
+dataset** unless the table says otherwise, and a twelfth sheet, `Citations`, as soon as a dataset with
+reconstructed grains is exported. Where the dataset name stands: in row 1 of each sheet, except `KAM hist`
 (row 3; rows 1 and 2 hold the KAM order and the threshold), `Grain Boundaries` (row 1 for the scalar rows and
-again in row 13 above the boundary-length bins), `BC fit (3G)` and `SmallVSLargeGrain` (one row per dataset, the
-name in column A). The sheets, with the unit of each number:
+again in row 13 above the boundary-length bins), `BC fit (3G)`, `SmallVSLargeGrain` and `Citations` (one row per
+dataset, the name in column A). The sheets, with the unit of each number:
 
 | Sheet | What is on it | Unit |
 |-------|---------------|------|
@@ -281,6 +303,7 @@ name in column A). The sheets, with the unit of each number:
 | `Grain Boundaries` | boundary lengths and densities (rows 3–10), mean sphericity (row 11), length of boundary per misorientation bin of 2° (from row 14) | µm, 1/µm, µm per bin |
 | `Sphericity per grain` | the sphericity of every grain, grain number in column A | dimensionless |
 | `SmallVSLargeGrain` | texture-component volume fractions of all grains, of the substructure grains and of the RX grains; **one row per dataset** (the name in column A, from row 3) | percent of the pixels of each group |
+| `Citations` | what to cite for the grain results: the methods paragraph of each dataset with the settings its grains were reconstructed with (**one row per dataset**, the name in column A and the paragraph in column B, from row 2), the reference list (column D) and the BibTeX entries (column F), one entry per row | text (English) |
 
 Notes:
 

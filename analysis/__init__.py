@@ -19,7 +19,7 @@ Modules:
     texture_analysis   - ODF, volume fractions, surface plane fractions
     rx_analysis        - Recrystallization classification (GOS/gBC/gKAM)
     smoothing          - Orientation smoothing (HalfQuadratic, Median)
-    excel_exporter     - Documentation.xlsx export (11 sheets)
+    excel_exporter     - Documentation.xlsx export (11 sheets, and Citations once grains exist)
     batch_processor    - Folder → Documentation.xlsx batch processing
 
 Reference:

@@ -29,6 +29,7 @@ import {
   datasetNameFromFile, batchStatsFromGrain,
 } from './grainStats';
 import GrainStatsSettings from './GrainStatsSettings';
+import CitationsPanel from '../PhaseMap/CitationsPanel';
 import { MAX_TEXTURE_TOLERANCE, textureBatchArgs, textureToleranceOf } from './textureSettings';
 import { rxCriteriaArgs, rxCriteriaLabels } from './rxCriteria';
 import { deformationArgs, deformationBody } from './deformationSettings';
@@ -1688,6 +1689,17 @@ export function GrainTab({
             )}
             </div>
           </ColoredGroupBox>
+        )}
+
+        {/* What to cite for these grains (the same panel as on the Phase Map page): the method and the settings
+            they were reconstructed with. The key changes with the grains and with the statistics settings, so
+            the methods text always describes the numbers shown above. */}
+        {hasGrains && grainStats && !busy && (
+          <CitationsPanel
+            source="analysis"
+            refreshKey={[grainsVersion, grainStats.edgeRule, grainStats.ecdBasis, grainStats.statsPhase,
+              grainStats.nEdgeGrains, grainStats.edgeSafeguardApplied].join('|')}
+          />
         )}
 
         {/* Grain Size Analysis — only after grains are available */}

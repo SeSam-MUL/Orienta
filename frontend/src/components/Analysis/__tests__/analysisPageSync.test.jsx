@@ -11,6 +11,8 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
+  // the Grain tab's citation panel asks for the grains' citations; left pending, it shows its loading line
+  citationsApi: { forAnalysis: vi.fn(() => new Promise(() => {})) },
   analysisApi: {
     status: vi.fn(),
     load: vi.fn(),

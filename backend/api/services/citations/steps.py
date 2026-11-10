@@ -36,7 +36,23 @@ list is not the full default one: a selection by hand, another rule, or fewer ro
 ``indexing.spherical_emsphinx``, ``eds.chemistry_prior``,
 ``eds.particle_rescue``, ``pseudosym.resolver``, ``indexing.hough_anchor``,
 ``calibration.pc_refinement``, ``refinement.orientation``,
-``refinement.joint_r_pc`` and ``indexing.pattern_source``.
+``refinement.joint_r_pc``, ``indexing.pattern_source`` and
+``analysis.grain_reconstruction``.
+
+``analysis.grain_reconstruction`` is the one key that is NOT recorded on an
+indexing result. The grains of the Analysis page belong to the map loaded
+there, which has no ``result_id`` and no provenance subtree, and they are
+replaced by every new reconstruction. The step is therefore built when it is
+asked for, by ``citations.grains.grain_reconstruction_step``, from the
+parameters the current grains were reconstructed with and the grain-size
+statistics settings in force: ``GET /api/citations/analysis`` for the page,
+and the "Citations" sheet of the Excel export (single file and batch). The
+sentence's slots: ``threshold_deg``, ``min_pixels``, ``culls``
+(min_pixels > 1: only then is there a second pass), ``alpha``,
+``closes_gaps`` (alpha >= 1: the closing disc has radius floor(alpha), so a
+smaller alpha closes nothing), ``fill``, ``stats_phase_text``,
+``edge_rule_text``, ``ecd_basis_text`` and ``orienta_version``; the raw
+``edge_rule``, ``ecd_basis`` and ``stats_phase`` travel with them.
 
 ``refinement.joint_r_pc`` is recorded on the REFINED result of a joint R+PC
 refinement (the parent's trail plus this one step; the parent's own trail is
@@ -248,6 +264,32 @@ _STEPS = (
             "{n_pixels_refined} pixels refined, {n_converged} converged, "
             "{n_max_iter} stopped at the iteration limit and {n_failed} "
             "failed."
+        ),
+    ),
+    StepCitation(
+        key="analysis.grain_reconstruction",
+        label="Grain reconstruction",
+        citation_ids=("orienta", "bachmann2011", "bachmann2010", "orix"),
+        sentence=(
+            "Grains were reconstructed with the grain-detection algorithm of "
+            "MTEX (Bachmann et al., 2010, 2011), independently implemented in "
+            "Orienta {orienta_version}: every measurement was given its Voronoi "
+            "cell, and neighbouring measurements of the same phase were joined "
+            "into one grain when their disorientation was below "
+            "{threshold_deg} deg. {culls:Grains of fewer than {min_pixels} "
+            "measurements were removed: their measurements were treated as not "
+            "indexed and the map was segmented again, and grains still smaller "
+            "after that were dropped|No minimum grain size was applied}. "
+            "{closes_gaps:Not-indexed areas narrower than about twice the "
+            "closing radius alpha (here {alpha}, in pixel steps) were covered by "
+            "the cells of the surrounding measurements|Not-indexed areas were "
+            "not closed (alpha {alpha}, below one pixel step)}{fill:; in the "
+            "maps, pixels inside a grain without a measurement of their own "
+            "were shown with an orientation filled in from the measurements of "
+            "that grain, which no reported value uses|}. The grain-size "
+            "statistics used "
+            "{stats_phase_text}; {edge_rule_text}, and the equivalent circle "
+            "diameter was computed from {ecd_basis_text}."
         ),
     ),
 )

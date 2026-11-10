@@ -5,6 +5,8 @@
   "copy": "Copy",
   "copied": "Copied",
   "error": "Could not load the citation list for this result.",
+  "analysisTitle": "Citations for these grains",
+  "analysisError": "Could not load the citation list for these grains.",
   "englishOnly": "Output is English only — it goes into a manuscript.",
   "scopeNote": "Covers what Orienta did. Anything you did afterwards in other software is not included.",
   "undeclared_one": "{{count}} step ran with no citation declared:",

@@ -2033,6 +2033,8 @@ export const poleFigureApi = {
 // reference list, derived from the pipeline steps the result actually ran.
 export const citationsApi = {
   forResult: (resultId) => api.get(`/api/citations/result/${resultId}`),
+  // the grains reconstructed on the Analysis page (no result id); same answer shape
+  forAnalysis: () => api.get('/api/citations/analysis'),
 };
 
 export default api;

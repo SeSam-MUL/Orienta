@@ -1,4 +1,65 @@
 {
+  "bachmann2010": {
+    "DOI": "10.4028/www.scientific.net/SSP.160.63",
+    "author": [
+      {
+        "family": "Bachmann",
+        "given": "F."
+      },
+      {
+        "family": "Hielscher",
+        "given": "R."
+      },
+      {
+        "family": "Schaeben",
+        "given": "H."
+      }
+    ],
+    "container-title": "Solid State Phenomena",
+    "id": "bachmann2010",
+    "issued": {
+      "date-parts": [
+        [
+          2010
+        ]
+      ]
+    },
+    "page": "63-68",
+    "title": "Texture Analysis with MTEX – Free and Open Source Software Toolbox",
+    "type": "article-journal",
+    "volume": "160"
+  },
+  "bachmann2011": {
+    "DOI": "10.1016/j.ultramic.2011.08.002",
+    "author": [
+      {
+        "family": "Bachmann",
+        "given": "F."
+      },
+      {
+        "family": "Hielscher",
+        "given": "R."
+      },
+      {
+        "family": "Schaeben",
+        "given": "H."
+      }
+    ],
+    "container-title": "Ultramicroscopy",
+    "id": "bachmann2011",
+    "issue": "12",
+    "issued": {
+      "date-parts": [
+        [
+          2011
+        ]
+      ]
+    },
+    "page": "1720-1733",
+    "title": "Grain detection from 2d and 3d EBSD data—Specification of the MTEX algorithm",
+    "type": "article-journal",
+    "volume": "111"
+  },
   "diffsims": {
     "DOI": "10.5281/zenodo.15580609",
     "author": [

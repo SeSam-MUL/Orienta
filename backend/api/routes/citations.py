@@ -1,26 +1,12 @@
-"""What to cite for a given result."""
+"""What to cite for a given result, and for the grains of the Analysis page."""
 from __future__ import annotations
-
-import logging
-from typing import List
 
 from fastapi import APIRouter, HTTPException
 
-from backend.api.services.app_version import get_version_info
+from backend.api.services.citations.bundle import citation_bundle
 from backend.api.services.citations.provenance import get_steps
-from backend.api.services.citations.render import (
-    load_library,
-    render_bibtex,
-    render_methods,
-    render_plain,
-)
-from backend.api.services.citations.steps import get_step
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
-
-# Always cited, whatever ran: the application and the stack under it.
-_ALWAYS = ("orienta", "kikuchipy", "orix")
 
 
 @router.get("/result/{result_id}")
@@ -37,51 +23,26 @@ def citations_for_result(result_id: str):
                 "clears all of them. Load or re-run it first."
             ),
         )
+    return citation_bundle(get_steps(result))
 
-    steps = get_steps(result)
-    warnings: List[str] = []
-    try:
-        library = load_library()
-    except Exception:
-        logger.exception(
-            "Failed to load the citation library (default library.json "
-            "merged with CITATION.cff); continuing without it."
+
+@router.get("/analysis")
+def citations_for_analysis():
+    """The same answer as ``/result/{id}``, for the grains reconstructed on the Analysis page.
+
+    The map loaded there has no ``result_id``, so its one citable step (``analysis.grain_reconstruction``)
+    is built from the parameters the current grains were reconstructed with and the grain-size
+    statistics settings in force. 404 while no grains exist.
+    """
+    from backend.api.routes.analysis import grain_citation_step
+
+    step = grain_citation_step()
+    if step is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No grains have been reconstructed for the map on the Analysis page. "
+                "Reconstruct the grains first."
+            ),
         )
-        library = {}
-        warnings.append(
-            "The bibliography could not be loaded, so BibTeX and the plain "
-            "reference list are unavailable. The methods description below "
-            "is unaffected."
-        )
-
-    ordered: List[str] = []
-    undeclared: List[str] = []
-    for cid in _ALWAYS:
-        if cid in library and cid not in ordered:
-            ordered.append(cid)
-    for entry in steps:
-        step = get_step(entry.get("key", ""))
-        if step is None:
-            # By key, once. A step appended twice to the same trail (the
-            # sites that mutate an already-stored result do that) listed its
-            # key twice here, and the panel keys its <li> on the key — a
-            # duplicate React key, and a list that reads like two different
-            # unknown steps ran. render_methods dedupes the same way.
-            key = entry.get("key", "")
-            if key not in undeclared:
-                undeclared.append(key)
-            continue
-        for cid in step.citation_ids:
-            if cid in library and cid not in ordered:
-                ordered.append(cid)
-
-    entries = [library[cid] for cid in ordered]
-    return {
-        "bibtex": render_bibtex(entries),
-        "methods": render_methods(steps),
-        "plain": render_plain(entries),
-        "steps": steps,
-        "undeclared": undeclared,
-        "warnings": warnings,
-        "app_version": get_version_info(),
-    }
+    return citation_bundle([step])

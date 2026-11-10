@@ -8,6 +8,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
 
 vi.mock('../../../services/api', () => ({
+  // the Grain tab's citation panel asks for the grains' citations; left pending, it shows its loading line
+  citationsApi: { forAnalysis: vi.fn(() => new Promise(() => {})) },
   analysisApi: {
     reconstructGrains: vi.fn(),
     getTaskStatus: vi.fn(),
@@ -68,6 +70,16 @@ describe('GrainTab polling a reconstruction task', () => {
     expect(args.slice(0, 2)).toEqual([4, 3]);
     await waitFor(() => expect(screen.getByText(/Reconstructed 98 grains/)).toBeTruthy(), POLL_TIMEOUT);
     expect(screen.queryByText('Reconstruction failed')).toBeNull();
+  });
+
+  it('the citation panel appears under the statistics once the grains exist', async () => {
+    const { citationsApi } = await import('../../../services/api');
+    analysisApi.getTaskStatus.mockResolvedValue({ data: COMPLETED });
+    mountAndStart();
+    expect(screen.queryByText('Citations for these grains')).toBeNull();      // no grains yet
+    await waitFor(() => expect(screen.getByText(/Mean ECD:\s+12\.34/)).toBeTruthy(), POLL_TIMEOUT);
+    await waitFor(() => expect(screen.getByText('Citations for these grains')).toBeTruthy());
+    expect(citationsApi.forAnalysis).toHaveBeenCalledTimes(1);
   });
 
   it('a failed task shows the backend error and stops the spinner', async () => {

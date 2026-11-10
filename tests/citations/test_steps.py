@@ -29,12 +29,13 @@ EXPECTED_KEYS = {
     "refinement.orientation",
     "indexing.pattern_source",
     "refinement.joint_r_pc",
+    "analysis.grain_reconstruction",
 }
 
 
 def test_registry_holds_exactly_the_declared_steps():
     assert set(STEP_REGISTRY) == EXPECTED_KEYS
-    assert len(STEP_REGISTRY) == 14
+    assert len(STEP_REGISTRY) == 15
 
 
 def test_the_joint_refinement_step_claims_only_what_the_code_does():

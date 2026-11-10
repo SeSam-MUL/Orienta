@@ -17,6 +17,11 @@
  * Refetches on every `resultId` change. Uses the ref-holding-the-latest-id
  * guard from `EDS/hooks/useEdsLayerStack.js`'s stale-mode race: a response
  * that arrives after `resultId` has already moved on must never be applied.
+ *
+ * `source="analysis"` shows the same panel for the grains of the Analysis
+ * page (`GET /api/citations/analysis`, same answer shape), which have no
+ * result id: `refreshKey` stands in for it. It changes whenever the grains or
+ * their statistics settings change, and `null` hides the panel (no grains).
  */
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -28,7 +33,7 @@ import {
 
 const TABS = ['bibtex', 'methods', 'plain'];
 
-function CitationsPanel({ resultId }) {
+function CitationsPanel({ resultId = null, source = 'result', refreshKey = null }) {
   const { t } = useTranslation('citations');
   // An add-on run writes its step into the SAME result, so `resultId` does not
   // change and this panel would go on showing the methods paragraph of the
@@ -40,30 +45,34 @@ function CitationsPanel({ resultId }) {
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('methods');
   const [copied, setCopied] = useState(false);
+  const forAnalysis = source === 'analysis';
+  // What identifies the request: the result id, or the analysis' refresh key.
+  const requestKey = forAnalysis
+    ? (refreshKey === null || refreshKey === undefined ? null : `analysis:${refreshKey}`)
+    : resultId;
 
   // Mirrors the latest requested resultId so an in-flight fetch for an OLDER
   // id can detect, after its await, that it is no longer the current one —
   // same pattern useEdsLayerStack.js uses for displayMode.
-  const resultIdRef = useRef(resultId);
+  const resultIdRef = useRef(requestKey);
   useEffect(() => {
-    resultIdRef.current = resultId;
-  }, [resultId]);
+    resultIdRef.current = requestKey;
+  }, [requestKey]);
 
   useEffect(() => {
-    if (!resultId) {
+    if (!requestKey) {
       setData(null);
       setError(null);
       setLoading(false);
       return;
     }
-    const startedId = resultId;
+    const startedId = requestKey;
     // Clear stale output immediately so a result switch never shows the
     // PREVIOUS result's citations while the new ones are loading.
     setData(null);
     setError(null);
     setLoading(true);
-    citationsApi
-      .forResult(resultId)
+    (forAnalysis ? citationsApi.forAnalysis() : citationsApi.forResult(resultId))
       .then((res) => {
         if (resultIdRef.current !== startedId) return; // superseded — drop it
         setData(res?.data || null);
@@ -72,13 +81,14 @@ function CitationsPanel({ resultId }) {
         if (resultIdRef.current !== startedId) return;
         setData(null);
         setError(
-          err?.response?.data?.detail || err?.message || t('citations:error'),
+          err?.response?.data?.detail || err?.message
+            || t(forAnalysis ? 'citations:analysisError' : 'citations:error'),
         );
       })
       .finally(() => {
         if (resultIdRef.current === startedId) setLoading(false);
       });
-  }, [resultId, citationTick, t]);
+  }, [requestKey, forAnalysis, resultId, citationTick, t]);
 
   // Transient "Copied" label.
   useEffect(() => {
@@ -100,10 +110,10 @@ function CitationsPanel({ resultId }) {
     setCopied(true);
   }, [activeText]);
 
-  if (!resultId) return null;
+  if (!requestKey) return null;
 
   return (
-    <CollapsibleGroup title={t('citations:title')}>
+    <CollapsibleGroup title={t(forAnalysis ? 'citations:analysisTitle' : 'citations:title')}>
       {loading && (
         <div style={{ fontSize: '8.5pt', color: colors.textSecondary }}>
           {t('citations:loading')}
@@ -137,7 +147,8 @@ function CitationsPanel({ resultId }) {
             </div>
           )}
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {/* wraps: on the narrow Analysis panel the German labels are wider than the row */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
             {TABS.map((tab) => {
               const active = activeTab === tab;
               return (

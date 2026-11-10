@@ -19,6 +19,10 @@ Exports analysis results to Documentation.xlsx with 11 sheets, one column per da
 - "SmallVSLargeGrain": texture-component volume fractions of all grains, substructure grains and RX grains,
   one row per dataset (filled when ``results["texture"]`` and ``results["texture_by_rx"]`` are given)
 
+A twelfth sheet, "Citations", is added once a dataset with reconstructed grains is exported
+(``results["citations"]``): the methods text of each dataset's grain reconstruction (one row per dataset), the
+reference list and the BibTeX entries to cite. The eleven sheets above do not change with it.
+
 Reference: matlab_testskripts/EBSDanalysis_frame.m, RxxAnalysis.m, etc.
 Architecture: the MTEX-equivalence design notes §3.3
 
@@ -154,6 +158,13 @@ GB_SEG_HEADER_ROW = 13
 GB_SEG_FIRST_ROW = 14
 
 SPHERICITY_SHEET = "Sphericity per grain"
+
+# Sheet "Citations": what to cite for the grain results, written only for a dataset with reconstructed grains
+# (``results["citations"]``). Row 1 holds the headers; dataset n has its methods text in row n + 1 (name in
+# column A, text in column B); the reference list (column D) and the BibTeX entries (column F) are the same for
+# every dataset and are written again, one entry per row from row 2, by every export.
+CITATIONS_SHEET = "Citations"
+CITATIONS_METHODS_COL, CITATIONS_PLAIN_COL, CITATIONS_BIBTEX_COL = 2, 4, 6
 
 
 def _place_on_grid(ws, col: int, first_row: int, grid: np.ndarray, centres, counts, what: str) -> int:
@@ -359,7 +370,7 @@ def incomplete_workbook_note(path) -> str:
 
 
 class ExcelExporter:
-    """Exports EBSD analysis results to Documentation.xlsx with 11 sheets.
+    """Exports EBSD analysis results to Documentation.xlsx with 11 sheets (and "Citations" once grains exist).
 
     Attributes:
         file_path: Path to output Excel file
@@ -640,6 +651,10 @@ class ExcelExporter:
         col_idx = self.dataset_count + 1  # B=2, C=3, etc.
         col_let = excel_column(col_idx)
 
+        # Citations first: if a later sheet fails, the dataset's row still names the method of the grains, and
+        # mark_dataset_failed marks it like the other sheets
+        self._export_citations(dataset_name, results)
+
         # Sheet 1: Basic Info
         ws1 = self.wb["Sheet1"]
         # Row 1 = header row with dataset names
@@ -885,6 +900,48 @@ class ExcelExporter:
         # SmallVSLargeGrain: texture components of all / substructure / RX grains, one row for the dataset
         self._export_texture_split(dataset_name, results)
 
+    def _export_citations(self, dataset_name: str, results: Dict[str, Any]) -> None:
+        """Sheet "Citations" for a dataset with ``results["citations"]`` (the answer shape of
+        ``GET /api/citations/analysis``: ``methods``, ``plain``, ``bibtex``, ``warnings``).
+
+        Created when the first such dataset is exported, also in a workbook written before the sheet existed;
+        a dataset without citations leaves its row empty. The texts are written as they come: they are meant
+        to be pasted into a manuscript and are English only.
+        """
+        cit = results.get("citations")
+        if not cit:
+            return
+        if CITATIONS_SHEET not in self.wb.sheetnames:
+            ws = self.wb.create_sheet(CITATIONS_SHEET)
+        else:
+            ws = self.wb[CITATIONS_SHEET]
+        wrap = Alignment(wrap_text=True, vertical="top")
+        ws.cell(row=1, column=1, value="Dataset")
+        ws.cell(row=1, column=CITATIONS_METHODS_COL, value="Methods text (with the settings of this dataset)")
+        ws.cell(row=1, column=CITATIONS_PLAIN_COL, value="References")
+        ws.cell(row=1, column=CITATIONS_BIBTEX_COL, value="BibTeX")
+        for col, width in ((1, 24), (CITATIONS_METHODS_COL, 100), (CITATIONS_PLAIN_COL, 80),
+                           (CITATIONS_BIBTEX_COL, 80)):
+            ws.column_dimensions[get_column_letter(col)].width = width
+
+        row = self.dataset_count + 1
+        ws.cell(row=row, column=1, value=dataset_name).alignment = wrap
+        methods_cell = ws.cell(row=row, column=CITATIONS_METHODS_COL)
+        methods_cell.value = cit.get("methods") or None        # assigned: an empty text clears an older one
+        methods_cell.alignment = wrap
+
+        plain = [line for line in (cit.get("plain") or "").splitlines() if line.strip()]
+        # render_bibtex joins the entries with one blank line; no field of an entry holds one
+        bibtex = [block.strip() for block in (cit.get("bibtex") or "").split("\n\n") if block.strip()]
+        warnings = [w for w in (cit.get("warnings") or []) if w]
+        if warnings and not plain:
+            plain = warnings              # the bibliography could not be loaded: say so where it would stand
+        for col, items in ((CITATIONS_PLAIN_COL, plain), (CITATIONS_BIBTEX_COL, bibtex)):
+            for r in range(2, ws.max_row + 1):        # an older, longer list must not stay
+                ws.cell(row=r, column=col).value = None   # (ws.cell(..., value=None) would leave the old value)
+            for r, text in enumerate(items, start=2):
+                ws.cell(row=r, column=col, value=text).alignment = wrap
+
     def _export_texture_split(self, dataset_name: str, results: Dict[str, Any]) -> None:
         """Sheet "SmallVSLargeGrain": one row per dataset with the component fractions of all, substructure and RX grains.
 
@@ -942,10 +999,11 @@ class ExcelExporter:
             ws_tx = self.wb["SmallVSLargeGrain"]
             if ws_tx.cell(row=self.dataset_count + 2, column=1).value == dataset_name:
                 ws_tx.cell(row=self.dataset_count + 2, column=1, value=marked)
-        if "BC fit (3G)" in self.wb.sheetnames:       # this sheet has one row per dataset
-            ws_fit = self.wb["BC fit (3G)"]
-            if ws_fit.cell(row=self.dataset_count + 1, column=1).value == dataset_name:
-                ws_fit.cell(row=self.dataset_count + 1, column=1, value=marked)
+        for one_row_sheet in ("BC fit (3G)", CITATIONS_SHEET):   # these sheets have one row per dataset
+            if one_row_sheet in self.wb.sheetnames:
+                ws_row = self.wb[one_row_sheet]
+                if ws_row.cell(row=self.dataset_count + 1, column=1).value == dataset_name:
+                    ws_row.cell(row=self.dataset_count + 1, column=1, value=marked)
 
     def save(self):
         """Save workbook to file. Creates parent directory if needed."""
