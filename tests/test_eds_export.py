@@ -3185,7 +3185,7 @@ def test_the_acquisition_header_reaches_the_export(fixture):
         n_rows=N_ROWS, n_cols=N_COLS, step_x_um=STEP, step_y_um=STEP,
         source_path="fixture.h5oina",
         acquisition={"Beam Voltage": 20.0, "Working Distance": 16.0366,
-                     "Process Time": 4, "Detector Serial Number": "UVA11191",
+                     "Process Time": 4, "Detector Serial Number": "TEST-0001",
                      "Window Type": "SATW", "Something Aztec Adds Later": 7})
     tables = X.build_tables(state, at_maps, geometry=geom,
                             options=X.ExportOptions(hash_source=False))
@@ -3195,7 +3195,7 @@ def test_the_acquisition_header_reaches_the_export(fixture):
     assert acq["beam_voltage_kv"] == pytest.approx(20.0)
     assert acq["working_distance_mm"] == pytest.approx(16.0366)
     assert acq["process_time"] == 4
-    assert acq["detector_serial"] == "UVA11191"
+    assert acq["detector_serial"] == "TEST-0001"
     assert acq["window_type"] == "SATW"
     # A key this exporter has never heard of survives rather than vanishing.
     assert acq["raw"]["Something Aztec Adds Later"] == 7
@@ -3274,8 +3274,16 @@ def test_the_real_scans_header_reads_back_including_its_subgroup():
     header = X.read_acquisition_header(str(path))
     assert header is not None
     assert header["Beam Voltage"] == pytest.approx(20.0)
-    assert header["Detector Serial Number"] == "UVA11191"
-    assert header["Acquisition Date"] == "2026-01-19T09:04:03"
+    import h5py
+
+    def stored(key):                                    # the value as the file stores it
+        with h5py.File(path, "r") as f:
+            raw = f[f"1/EDS/Header/{key}"][()]
+        raw = raw[0] if np.ndim(raw) else raw
+        return raw.decode() if isinstance(raw, bytes) else str(raw)
+
+    for key in ("Detector Serial Number", "Acquisition Date"):
+        assert stored(key) and header[key] == stored(key), key
     assert isinstance(header["Stage Position"], dict)
     assert "Rotation" in header["Stage Position"]
 
