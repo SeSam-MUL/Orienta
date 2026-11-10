@@ -1,7 +1,7 @@
 """Particle rescue for pattern-degenerate pairs (backend/api/services/eds_particle_rescue.py).
 
 Synthetic grids built to mirror the measured situation of 2026-09-13
-(Probe B, Arbeitsbereich 1): an Al matrix grain, Si particles diluted by the
+(sample B, area 1): an Al matrix grain, Si particles diluted by the
 EDS interaction volume, and the two ways a 30 at% Si pixel can arise -- the
 surface IS the particle (own orientation) or the beam sits on matrix beside
 or above it (orientation continues the grain).
@@ -281,7 +281,7 @@ def test_shape_errors_are_loud():
         rescue_particles(pid, q, si[:-1], _pair(), OH)
 
 
-# --- the real crop (Probe B, Arbeitsbereich 1, 80x48, 2026-09-13) ----------
+# --- the real crop (sample B, area 1, 80x48, 2026-09-13) ----------------------
 #
 # Fixture: phase ids of the run (1 = Al, 2 = Si, EDS prior on), Si at% from
 # the same quantification, and the Al-master orientation of every pixel
