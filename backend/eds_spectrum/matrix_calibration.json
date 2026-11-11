@@ -2,7 +2,7 @@
  "matrix_model": "xpp-tilt-reed/1",
  "fit_model_version": "eds-spectrum-fit/1",
  "written": "2026-11-07",
- "written_by": "calibrated outside this repository",
+ "method": "weighted least-squares fit, in logarithms, of the instrument response (one factor per X-ray line family and one prior-constrained correction per anchor line) to the three reference regions under \"references\", after the XPP matrix correction: the nominal Al7Cu2Fe composition and AZtec 6.3 Tru-Q quantifications of the matrix and alpha regions of an aluminium-alloy reference scan",
  "beam_kv": 20.0,
  "detector": "Oxford Ultim Max 100, SATW window",
  "geometry_convention": "toward",

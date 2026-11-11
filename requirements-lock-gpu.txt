@@ -61,8 +61,4 @@ nvidia-cusparse-cu12==12.5.10.65 ; platform_system != "Darwin"
 nvidia-cuda-nvrtc-cu12==12.9.86 ; platform_system != "Darwin"
 numba==0.63.1
 pytest==9.0.2
-
-# Declared in requirements.txt but NOT INSTALLED in the source
-# environment, so no version could be pinned. Install them there and
-# regenerate, or drop them from requirements.txt if they are unused:
-#   pytest-timeout
+pytest-timeout==2.4.0

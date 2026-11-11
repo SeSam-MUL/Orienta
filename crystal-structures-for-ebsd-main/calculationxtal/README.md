@@ -32,7 +32,7 @@ in this folder: `cif_database_builder.py` and `Xtal_Generator_GUI.py`.
     4.  The GUI Tool: `Xtal_Generator_GUI.py`
         4.1 Visual Overview and UI Elements
         4.2 The `DWF.xlsx` Input File: Format and Usage
-    5.  Expert Workflow: The "Magic" Update Feature
+    5.  Writing a DOI Back into the CIF File
     6.  Specific Troubleshooting
 
 
@@ -45,13 +45,12 @@ workflow. Their purpose is to turn an unsorted collection of `.cif` files
 into organized, simulation-ready `.xtal` files.
 
   > `cif_database_builder.py`:
-  >    Your tool for bulk analysis. It scans hundreds of CIF files, creates
-  >    a clear Excel database, and enriches the data with online information.
+  >    Bulk analysis. It scans a folder of CIF files, writes an Excel
+  >    database of them, and adds information found online.
 
   > `Xtal_Generator_GUI.py`:
-  >    Your "surgical" tool. With this graphical application, you process a
-  >    single crystal structure to create a perfect `.xtal` file for the
-  >    EMsoft simulation.
+  >    Single structures. With this graphical application you load one CIF
+  >    file and write the `.xtal` file for the EMsoft simulation.
 
 
 ********************************************************************************
@@ -94,7 +93,8 @@ hierarchy to achieve the best possible results:
 3. THE GENERATED EXCEL FILE (`crystal_database.xlsx`)
 ********************************************************************************
 
-This file is your central cockpit for managing the CIF collection.
+This file lists the CIF collection, one row per file, and is where you can
+correct the DOI of a file.
 
 ---------------------------------
    3.1 Meaning of the Columns
@@ -178,11 +178,11 @@ are in `DWF_SOURCES.md`.
 
 
 ********************************************************************************
-5. EXPERT WORKFLOW: THE "MAGIC" UPDATE FEATURE
+5. WRITING A DOI BACK INTO THE CIF FILE
 ********************************************************************************
 
-This is the most powerful feature of the `cif_database_builder.py` script for
-systematically improving your CIF collection.
+When the online search finds no DOI for a CIF file, you can enter it by hand;
+`cif_database_builder.py` then writes it into the file on its next run.
 
     STEP 1: Run `cif_database_builder.py`.
 
@@ -197,10 +197,9 @@ systematically improving your CIF collection.
 
     STEP 6: **Run `cif_database_builder.py` again.**
 
-    **WHAT HAPPENS NOW (THE "MAGIC"):**
-    The script will read the Excel file, detect your new manual entry, and
-    automatically and permanently write this new DOI back into the
-    original `.cif` file. Your data collection gets better with every run.
+    **WHAT HAPPENS NOW:**
+    The script reads the Excel file, detects your manual entry, and writes the
+    DOI into the original `.cif` file.
 
 
 ********************************************************************************

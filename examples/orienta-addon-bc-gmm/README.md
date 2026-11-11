@@ -186,7 +186,7 @@ the software already knows, which is worse than the gap.
 
 ## Requirements
 
-**numpy and scikit-learn.** Not scipy either, in the end: the one place it
+**numpy and scikit-learn.** No scipy: the one place it
 would have been used is the normal CDF for the fitted-probability column, and
 `math.erf` from the standard library does that exactly. No `orix`, no
 `kikuchipy`, no `diffsims`, no `torch` — those are what Orienta's own start-up

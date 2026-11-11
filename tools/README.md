@@ -12,7 +12,7 @@ indexing metadata from Oxford H5OINA and EDAX HDF5 files with lazy, cached loadi
 
 | File | Description |
 |------|-------------|
-| [`h5_viewer_backend.py`](h5_viewer_backend.py) | `H5OINADataExtractor` — reads Oxford H5OINA and EDAX HDF5 files. Lazy single-pattern loading with a small FIFO cache, grid/pattern-shape detection, EDS spectra & element maps, electron images (SE/BSE/FSE), Band Contrast, per-pixel Aztec records, EBSD/EDS header metadata, on-the-fly IPF map computation via orix, and a `enumerate_layers()` catalog of everything present in a given file. Fails loud on corrupt headers (e.g. non-positive grid dimensions) rather than silently clamping. |
+| [`h5_viewer_backend.py`](h5_viewer_backend.py) | `H5OINADataExtractor` — reads Oxford H5OINA and EDAX HDF5 files. Lazy single-pattern loading with a small FIFO cache, grid/pattern-shape detection, EDS spectra & element maps, electron images (SE/BSE/FSE), Band Contrast, per-pixel AZtec records, EBSD/EDS header metadata, on-the-fly IPF map computation via orix, and a `enumerate_layers()` catalog of everything present in a given file. Fails loud on corrupt headers (e.g. non-positive grid dimensions) rather than silently clamping. |
 | [`pattern_comparison.py`](pattern_comparison.py) | NCC-based pattern-quality utilities for dictionary/Hough/spherical indexing results: per-pixel NCC score maps, best-match simulated pattern retrieval (incl. lazy single-pattern fetch from a released GPU dictionary file via `simulation_indices`), experimental-pattern retrieval, element-wise NCC images and scalars, circular-aperture (EDAX-style) detection/masking, and a base64-PNG NCC difference renderer. |
 | [`phase_map_generator.py`](phase_map_generator.py) | Publication-quality phase-map and IPF rendering with matplotlib (headless `Agg` backend). Builds `PhaseMapData` from an orix `CrystalMap` or a raw 2D phase-ID array, computes IPF colours per phase (deriving the point group from the space group when needed), and renders/exports figures with a configurable `ScaleBarConfig` and legend. |
 | [`__init__.py`](__init__.py) | Marks the directory as a Python package (`tools`). |
@@ -37,7 +37,7 @@ services rather than called directly by the UI. For example:
 
 Keeping this logic UI-free is deliberate: it makes the functions reusable across the
 API, the test suite, and ad-hoc scripts, and keeps GUI changes from touching the
-data path. See the [project README](../README.md) for the overall architecture.
+data path. See the [project README](https://github.com/SeSam-MUL/Orienta/blob/main/README.md) for the overall architecture.
 
 ## Use notes specific to this directory
 
@@ -53,5 +53,5 @@ data path. See the [project README](../README.md) for the overall architecture.
   instead of returning misleading defaults.
 - **`phase_map_generator` uses the non-interactive `Agg` matplotlib backend** for
   headless rendering and requires the optional `matplotlib-scalebar` dependency.
-- Relevant tests live in [`../tests/`](../tests/) (e.g. `test_phase_map_generator.py`,
+- Relevant tests live in [`tests/`](https://github.com/SeSam-MUL/Orienta/tree/main/tests) (e.g. `test_phase_map_generator.py`,
   `test_pattern_comparison_mask.py`, `test_ncc_diff_png.py`).

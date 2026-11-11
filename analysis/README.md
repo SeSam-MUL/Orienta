@@ -34,7 +34,7 @@ scientific layer behind the application's "EBSD Analysis" features.
 ## How it fits the Orienta architecture
 
 This is the scientific post-processing layer of the
-[Electron + React + FastAPI](../docs/ARCHITECTURE.md) stack:
+[Electron + React + FastAPI](https://github.com/SeSam-MUL/Orienta/blob/main/docs/ARCHITECTURE.md) stack:
 
 ```
 React frontend  →  FastAPI backend  →  analysis/  →  orix / numpy / scipy / sklearn

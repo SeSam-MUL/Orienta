@@ -28,6 +28,13 @@ requires both to equal what the v0.4.6 lock of the same flavour for Linux
 resolved, which is what a fresh 0.4.6 install resolved too, so that the pin
 does not change an installed version.
 
+A third name arrives in 0.4.8: pytest-timeout 2.4.0. requirements.txt has
+declared it since 0.4.6, but the environment the Windows locks were generated
+from did not have it, so they carried a note instead of a pin. The Linux locks
+and the macOS environment of 0.4.6 already pin 2.4.0. It is a pytest plugin that
+nothing in the application imports; an update installs it and changes nothing
+else.
+
 The guards are watched failing at the end of the file: the same checks run over
 a deliberately damaged copy of each HEAD lock. Without a name the guard can
 find in the lock, "no guarded name changed" would also be true of an empty
@@ -69,7 +76,7 @@ PIP_DELTA = {
 
 #: Names that appear in the Windows locks for the first time, with the version
 #: they must have (checked against the Linux lock of 0.4.6, see the docstring).
-WINDOWS_NEW_PINS = {"threadpoolctl": "3.7.0", "packaging": "26.3"}
+WINDOWS_NEW_PINS = {"threadpoolctl": "3.7.0", "packaging": "26.3", "pytest-timeout": "2.4.0"}
 
 PIP_LOCKS = {
     # lock file -> the v0.4.6 Linux lock of the same flavour, or None for Linux itself
