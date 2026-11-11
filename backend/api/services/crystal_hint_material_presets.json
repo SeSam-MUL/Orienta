@@ -2,7 +2,7 @@
   "presets": {
     "AA226": {
       "label": "AA226 / AlSi9Cu3(Fe)",
-      "description": "Aluminium-Silicon-Copper Druckgusslegierung (die casting)",
+      "description": "Aluminium-silicon-copper die-casting alloy",
       "elements": ["Al", "Si", "Cu", "Fe", "Mg", "Zn", "Mn"],
       "expected_phases": [
         {"name": "alpha-Al", "sg": "Fm-3m", "a_A": 4.05, "category": "matrix"},

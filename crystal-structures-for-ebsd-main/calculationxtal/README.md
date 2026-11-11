@@ -10,9 +10,9 @@ in this folder: `cif_database_builder.py` and `Xtal_Generator_GUI.py`.
     +--------------------------------------------------------------------------+
     | [IMPORTANT] PREREQUISITE NOTICE                                          |
     |                                                                          |
-    | This guide assumes you have successfully completed the entire initial    |
-    | setup (Parts A, B, and C) as described in the main, top-level README     |
-    | file of this project.                                                    |
+    | This guide assumes you have met the prerequisites listed in the          |
+    | README.md of the parent folder (../README.md), mainly the Python         |
+    | environment of Orienta.                                                  |
     |                                                                          |
     | The installation of Python, the virtual environment setup, etc.,         |
     | will not be explained again here.                                        |
@@ -28,12 +28,12 @@ in this folder: `cif_database_builder.py` and `Xtal_Generator_GUI.py`.
         2.1 The Online Search Logic in Detail
     3.  The Generated Excel File (`crystal_database.xlsx`)
         3.1 Meaning of the Columns
-        3.2 Why This File Doesn't Belong on GitLab
+        3.2 Why This File Is Not Under Version Control
     4.  The GUI Tool: `Xtal_Generator_GUI.py`
         4.1 Visual Overview and UI Elements
-    5.  The `DWF.xlsx` Input File: Format and Usage
-    6.  Expert Workflow: The "Magic" Update Feature
-    7.  Specific Troubleshooting
+        4.2 The `DWF.xlsx` Input File: Format and Usage
+    5.  Expert Workflow: The "Magic" Update Feature
+    6.  Specific Troubleshooting
 
 
 ********************************************************************************
@@ -108,24 +108,21 @@ This file is your central cockpit for managing the CIF collection.
             quick overview.
 
 ---------------------------------
-   3.2 Why This File Doesn't Belong on GitLab
+   3.2 Why This File Is Not Under Version Control
 ---------------------------------
-You will notice that the `crystal_database.xlsx` file is listed in the
-project's `.gitignore` file. This is intentional and very important.
+`crystal_database.xlsx` is listed in the `.gitignore` file of the parent folder
+(`crystal-structures-for-ebsd-main/`). This is intentional.
 
-    * ANALOGY: Think of the `.cif` files as the "ingredients" and the Python
-      scripts as the "recipe". The `crystal_database.xlsx` is the "cooked meal".
+    * The CIF files are the source data and the Python scripts are the code.
+      `crystal_database.xlsx` is generated from them, so it is a local work
+      artifact and not part of the source.
 
-    * THE PROBLEM: If every user uploaded their own version of the "cooked meal"
-      (the Excel file) to GitLab, it would lead to constant conflicts ("Merge
-      Conflicts"), as the files would always differ. You would never know which
-      version is the "correct" one.
+    * If every user committed their own version of it, the files would always
+      differ and every update would produce merge conflicts, with no way to
+      tell which version is the correct one.
 
-    * THE SOLUTION: You only share the ingredients (source data like `.cif`) and
-      the recipe (the code) via GitLab. Every user then runs the script locally
-      to generate their own, up-to-date "meal" (the Excel file).
-
-    **The Excel file is a local, generated work artifact, not part of the source code.**
+    * Share the source data (the `.cif` files) and the code instead. Each user
+      runs the script locally and gets an up-to-date Excel file.
 
 
 ********************************************************************************
@@ -145,24 +142,39 @@ Launch the graphical application from the command line.
   +-------------------------------------------------------------------+
   | ... [2] Crystal Data ... | ... [3] Atom Site Table ...             |
   +-------------------------------------------------------------------+
-  | [4] Publication Reference Dropdown  [5] DWF Reference Dropdown    |
+  | [4] useReference Dropdown (editable)   [5] DWF file + Browse      |
   +-------------------------------------------------------------------+
   | [6] Generate .xtal File Button                                    |
   +-------------------------------------------------------------------+
 
-    --> `[4] Publication Reference`: Populated with references from the CIF file.
-    --> `[5] DWF Reference`: Populated from the `DWF.xlsx` file.
+    --> `[4] useReference`: Populated with the references found in the CIF file;
+        you can edit the text before generating the file.
+    --> `[5] DWF file`: The Debye-Waller factor table, `DWF.xlsx` (see 4.2). It is
+        picked up automatically when it sits next to the script; "Browse"
+        selects another file.
 
 ---------------------------------
    4.2 The `DWF.xlsx` Input File: Format and Usage
 ---------------------------------
-This is a **critical input file** for the GUI, serving as your personal database
-for Debye-Waller factors. For the GUI to read it correctly, it must have the
-following structure and column names:
+`DWF.xlsx` is the table of Debye-Waller factors that the GUI uses for the
+`DWF [nm^2]` column of every atom site. For the GUI to read it correctly, the
+first sheet must have these column names:
 
-  | ReferenceName                 | ElementName | B_iso |
-  |-------------------------------|-------------|-------|
-  | International Tables Vol. C   | Carbon      | 0.54  |
+  | Element | DWB 300 K | Reference                                     |
+  |---------|-----------|-----------------------------------------------|
+  | C       | 0.001442  | Peng 1996, Acta Cryst A52 456, Table 1, 300 K |
+
+    * `Element`: the element symbol. An element that has more than one crystal
+      structure has one row per structure, with the structure in brackets
+      (`Fe (BCC)`, `Fe (FCC)`); the GUI uses the first row of such an element.
+    * `DWB 300 K`: the isotropic Debye-Waller factor B at 300 K in nm^2
+      (B in nm^2 = B in A^2 x 0.01).
+    * `Reference`: where the value comes from. The GUI does not read this
+      column; keep it filled so that every value stays traceable.
+
+An element that is not in the table gets the generic value 0.005 nm^2. The
+sources of the shipped values and the rules for several structures per element
+are in `DWF_SOURCES.md`.
 
 
 ********************************************************************************
@@ -202,6 +214,6 @@ systematically improving your CIF collection.
     * PROBLEM: The online search fails.
         SOLUTION: The `MP_API_KEY` environment variable is likely not set.
 
-    * PROBLEM: The `DWF Reference` dropdown in the GUI is empty.
-        SOLUTION: Check if `DWF.xlsx` is in the correct folder and has the
-                  correct column format (see Section 4.2).
+    * PROBLEM: Every atom site gets the Debye-Waller factor 0.005 nm^2.
+        SOLUTION: The element is missing from `DWF.xlsx`, or the file does not
+                  have the `Element` and `DWB 300 K` columns (see Section 4.2).

@@ -55,5 +55,5 @@ The route layer is the public surface of the backend. Every endpoint the fronten
 
 - Routers are not auto-discovered — adding a new module means importing it and calling `app.include_router(...)` with a prefix and tag in [`../main.py`](../main.py).
 - The backend has **no auto-reload**: any change in this directory requires a backend restart to take effect.
-- Once the backend is running, the live, always-current endpoint reference is the auto-generated OpenAPI UI at `http://localhost:8000/docs` (the `tags` set in `main.py` group the routes there). Health check: `GET /health`.
+- Once the backend is running, the live, always-current endpoint reference is the auto-generated OpenAPI UI at `http://localhost:8000/docs` (the `tags` set in `main.py` group the routes there). Health check: `GET /api/health`.
 - Several routers depend on in-memory session state (the loaded EBSD file, the active indexing result, calibration). A restart clears that state, so data and results must be reloaded.

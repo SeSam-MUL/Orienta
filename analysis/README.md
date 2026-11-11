@@ -18,7 +18,7 @@ scientific layer behind the application's "EBSD Analysis" features.
 | [`__init__.py`](__init__.py) | Public API surface — re-exports every analysis function and result dataclass listed below. |
 | [`ebsd_dataset.py`](ebsd_dataset.py) | `EBSDDataset` (a thin adapter that normalizes quality metrics, phases, symmetry, and indexed-pixel masks across indexing methods) and `GrainSet` (per-pixel grain labels plus per-grain properties). The common data model every other module consumes. |
 | [`smoothing.py`](smoothing.py) | Orientation pre-smoothing filters (median, mean, quality-weighted mean) applied before grain reconstruction to suppress noise while preserving boundaries. |
-| [`grain_analysis.py`](grain_analysis.py) | Misorientation-based grain reconstruction (connected-component segmentation), per-grain properties (mean orientation, GOS), and grain-size analysis (ECD, MaxDim, aspect ratio, area-weighted stats). Returns `GrainSizeResult`. |
+| [`grain_analysis.py`](grain_analysis.py) | Grain reconstruction on the Voronoi cells of the measurements (neighbours of the same phase below the disorientation threshold form one grain; see `grain_reconstruction.py`), per-grain properties (mean orientation, GOS), and grain-size analysis (ECD, MaxDim, aspect ratio, area-weighted stats). Returns `GrainSizeResult`. |
 | [`orientation_math.py`](orientation_math.py) | Symmetry-aware quaternion arithmetic: disorientation angles (one-sided maximum over the point group, chunked), nearest symmetry equivalent, and grain mean orientations. |
 | [`grain_reconstruction.py`](grain_reconstruction.py) | Grain segmentation of a square grid: closing of narrow not-indexed areas, joining of similar neighbouring measurements, removal of grains below `min_pixels`. |
 | [`grain_cells.py`](grain_cells.py) | Exact Voronoi cells of the pixels (edges, areas, area moments), grain boundary loops and the grain that holds a not-indexed pixel's centre. |
@@ -28,7 +28,7 @@ scientific layer behind the application's "EBSD Analysis" features.
 | [`texture_components.py`](texture_components.py) | Phase-agnostic ideal texture-component presets (FCC rolling = 14 components, BCC rolling) defined by `{hkl}<uvw>` or Euler angles, with helpers to list, validate, and add custom components. |
 | [`texture_analysis.py`](texture_analysis.py) | Texture-component volume fractions, surface plane fractions ({111}/{100}/{110}), and ODF-based texture index / entropy. Returns `TextureResult`. |
 | [`rx_analysis.py`](rx_analysis.py) | Recrystallization classification using GOS / gBC / gKAM criteria, RX area fraction, and area-weighted GOS/gKAM histograms. Returns `RXResult`. |
-| [`excel_exporter.py`](excel_exporter.py) | Writes an 11-sheet `Documentation.xlsx` (basic info, BC histogram + GMM, grain-size / KAM / GOS / gKAM histograms, grain boundaries, texture components, surface planes, RX metrics), one column per dataset. |
+| [`excel_exporter.py`](excel_exporter.py) | Writes an 11-sheet `Documentation.xlsx` (basic info, BC histogram + GMM, grain-size / KAM / GOS / gKAM histograms, grain boundaries, texture components, surface planes, RX metrics), one column per dataset. A twelfth sheet, "Citations", is added when grains were reconstructed: the methods text of the grain reconstruction, the reference list and the BibTeX entries to cite. |
 | [`batch_processor.py`](batch_processor.py) | Scans a folder of EBSD files (`.h5`, `.h5oina`, `.ang`, `.ctf`), runs the full pipeline on each, and consolidates everything into a single `Documentation.xlsx`. |
 
 ## How it fits the Orienta architecture
@@ -74,6 +74,5 @@ CrystalMap → EBSDDataset → (smoothing) → reconstruct_grains → GrainSet
   `tests/test_bc_analysis.py`, `tests/test_texture_components.py`,
   `tests/test_excel_exporter.py`, and `tests/test_batch_processor.py`. Run them
   with `pytest tests/ -v`.
-- The MTEX scripts these modules reproduce, and the architecture mapping, are
-  documented in the MTEX-equivalence design notes and the `matlab_testskripts/`
-  reference directory at the project root.
+- The MTEX scripts these modules reproduce are in the `matlab_testskripts/`
+  reference directory of the source repository (not part of the installed package).

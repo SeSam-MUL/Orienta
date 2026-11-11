@@ -16,16 +16,16 @@ scan). EMsoft remains the validation oracle, not a runtime dependency.
 
 | File | Description |
 |------|-------------|
-| [`__init__.py`](__init__.py) | Package docstring; marks the GPU-native forward model (SP0+SP1 and beyond). |
-| [`runtime.py`](runtime.py) | Device selection. `get_device()` is fail-loud (no silent CPU fallback; raises `ForwardSimError` on a CUDA-less host unless `FORWARD_SIM_DEVICE` is set); `resolve_device_adaptive()` is the hardware-adaptive resolver used by the self-contained "Ours" engine (GPU when present, else CPU, never raises). |
+| [`__init__.py`](__init__.py) | Package docstring; marks the GPU-native forward model. |
+| [`runtime.py`](runtime.py) | Device selection. `get_device()` is fail-loud (no silent CPU fallback; raises `ForwardSimError` on a CUDA-less host unless `FORWARD_SIM_DEVICE` is set); `resolve_device_adaptive()` is the hardware-adaptive resolver used by the Orienta Engine (GPU when present, else CPU, never raises). |
 
 ## Subpackages
 
 | Subdir | Description |
 |--------|-------------|
-| [`crystal/`](crystal/) | **SP0 — crystal data → complex potential coefficients.** Read EMsoft `CrystalData` into a `CrystalStructure`, compute Weickenmeier-Kohl complex scattering factors, build the geometric reflection list and the complex `U_g` table with Bethe partitioning. (See files below.) |
-| [`dynamical/`](dynamical/) | **SP1 — dynamical scattering → master pattern.** Assemble the dynamical matrix `A` / scattering matrix `S`, evaluate the `CalcLgh` analytic depth integral, the `CalcSgh` per-atom structure weighting, the point-group symmetry-orbit reduction, and the master-pattern builder (`build_master`). |
-| [`mc/`](mc/) | **Monte Carlo.** Read an EMsoft MC `.h5` into `MCData` (the fixed SP0/SP1 input) and the GPU-native PyTorch/CuPy/numba Monte-Carlo engines (screened-Rutherford + Bethe-CSDA, Joy 1995) that make the pipeline fully EMsoft-free. |
+| [`crystal/`](crystal/) | **Crystal data → complex potential coefficients.** Read EMsoft `CrystalData` into a `CrystalStructure`, compute Weickenmeier-Kohl complex scattering factors, build the geometric reflection list and the complex `U_g` table with Bethe partitioning. (See files below.) |
+| [`dynamical/`](dynamical/) | **Dynamical scattering → master pattern.** Assemble the dynamical matrix `A` / scattering matrix `S`, evaluate the `CalcLgh` analytic depth integral, the `CalcSgh` per-atom structure weighting, the point-group symmetry-orbit reduction, and the master-pattern builder (`build_master`). |
+| [`mc/`](mc/) | **Monte Carlo.** Read an EMsoft MC `.h5` into `MCData` (the fixed input of the crystal and dynamical stages) and the GPU-native PyTorch/CuPy/numba Monte-Carlo engines (screened-Rutherford + Bethe-CSDA, Joy 1995) that make the pipeline fully EMsoft-free. |
 | [`io/`](io/) | **Serialisation + integrity checks.** Write our GPU master into EMsoft `master.h5`, EMSphInx `.sht`, and EMsoft MC `.h5`, plus `master_validation.py` to detect the disc-masked-corner artifact. (See files below.) |
 | [`validate/`](validate/) | **Validation harnesses vs the EMsoft oracle.** Master-vs-master NCC and projected pattern-vs-pattern / indexing-parity checks. |
 
@@ -55,14 +55,14 @@ scan). EMsoft remains the validation oracle, not a runtime dependency.
 | [`dynamical/depth_integral.py`](dynamical/depth_integral.py) | `Lgh` via the EMsoft `CalcLgh` eigen-decomposition analytic depth integral, weighted by the MC escape-depth distribution. |
 | [`dynamical/structure_weight.py`](dynamical/structure_weight.py) | `compute_Sgh` — the direction-independent per-atom back-scatter structure weighting (EMsoft `CalcSgh`). |
 | [`dynamical/symmetry_orbit.py`](dynamical/symmetry_orbit.py) | Point-group symmetry-orbit reduction — cuts the per-direction eigensolve count by solving only the irreducible Lambert zone and scattering by symmetry. |
-| [`dynamical/master_builder.py`](dynamical/master_builder.py) | `build_master()` — the SP1 capstone assembling the master pattern on the Lambert grid from the validated SP0/SP1 primitives. |
+| [`dynamical/master_builder.py`](dynamical/master_builder.py) | `build_master()` — the top-level builder that assembles the master pattern on the Lambert grid from the crystal and dynamical primitives. |
 
 ### `mc/`
 
 | File | Description |
 |------|-------------|
-| [`mc/emsoft_mc_input.py`](mc/emsoft_mc_input.py) | `load_mc()` reads EMsoft `EMData/MCOpenCL` (`accum_e` / `accum_z` / energy axis) into `MCData` — the fixed, validated MC input for SP0/SP1. |
-| [`mc/gpu_monte_carlo.py`](mc/gpu_monte_carlo.py) | `run_gpu_mc()` — SP2 GPU-native PyTorch Monte Carlo (step-major, all electrons in parallel) producing an EMsoft-compatible `MCData`. |
+| [`mc/emsoft_mc_input.py`](mc/emsoft_mc_input.py) | `load_mc()` reads EMsoft `EMData/MCOpenCL` (`accum_e` / `accum_z` / energy axis) into `MCData` — the fixed, validated Monte-Carlo input for the master-pattern build. |
+| [`mc/gpu_monte_carlo.py`](mc/gpu_monte_carlo.py) | `run_gpu_mc()` — GPU-native PyTorch Monte Carlo (step-major, all electrons in parallel) producing an EMsoft-compatible `MCData`. |
 | [`mc/cupy_mc_kernel.py`](mc/cupy_mc_kernel.py) | One-thread-per-electron CuPy `RawKernel` MC (each electron's full trajectory in registers, mirroring EMsoft's `EMMC.cl`). |
 | [`mc/numba_mc.py`](mc/numba_mc.py) | One-electron-per-thread numba CPU MC — the no-GPU fallback analogue of the CuPy kernel. |
 | [`mc/scattering_mc.py`](mc/scattering_mc.py) | Elastic scattering physics: screened-Rutherford (Joy 1995) + Bethe-Joy-Luo CSDA energy loss, selectable via `ElasticModel`. |
@@ -72,7 +72,7 @@ scan). EMsoft remains the validation oracle, not a runtime dependency.
 
 | File | Description |
 |------|-------------|
-| [`validate/ncc_vs_emsoft.py`](validate/ncc_vs_emsoft.py) | Builds our master, downsamples and disc-masks the EMsoft oracle master, and reports the zero-mean NCC — the SP0+SP1 acceptance gate. |
+| [`validate/ncc_vs_emsoft.py`](validate/ncc_vs_emsoft.py) | Builds our master, downsamples and disc-masks the EMsoft oracle master, and reports the zero-mean NCC — the acceptance check of the master-pattern build. |
 | [`validate/pattern_parity.py`](validate/pattern_parity.py) | Projected-pattern parity: compares detector patterns simulated from our master vs the EMsoft master (the quantity a user actually indexes against), plus indexing parity. |
 
 ## How it fits into Orienta
@@ -100,8 +100,8 @@ EMsoft at runtime.
 
 - **Device.** GPU-native. The strict indexing paths use `get_device()` from
   [`runtime.py`](runtime.py), which **fails loud** on a host without CUDA — set
-  `FORWARD_SIM_DEVICE=cpu` (or `cuda:1`, etc.) to override. The self-contained
-  "Ours" simulation engine uses `resolve_device_adaptive()` instead, which falls
+  `FORWARD_SIM_DEVICE=cpu` (or `cuda:1`, etc.) to override. The Orienta Engine
+  uses `resolve_device_adaptive()` instead, which falls
   back to CPU automatically (via the numba / PyTorch CPU MC and CPU master build).
 - **Inputs.** Crystal data is read from EMsoft `.xtal` files or master `.h5`
   (both expose the same `CrystalData` group). EMsoft conventions are honoured

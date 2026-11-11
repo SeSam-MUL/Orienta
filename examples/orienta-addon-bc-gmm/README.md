@@ -17,13 +17,15 @@ generalisation to make.
 
 ## Installing it
 
-Copy this folder into `~/.orienta/addons/`, restart the backend, and enable it:
+Copy this folder into `~/.orienta/addons/` and open the **Add-ons** page.
+Press **Rescan** if the add-on is not listed yet, then press **Enable**. The
+first time, Orienta shows who wrote the add-on, its version and DOI and where
+it sits on disk, and asks you to confirm. The same step is available as a
+request:
 
     POST /api/addons/bc-gmm/enabled
     {"enabled": true}
 
-**That call is the whole of it.** API 0 ships no add-on settings screen, so any
-message that says "enable it" means this request and not a place to click.
 Orienta puts the folder on `sys.path` itself when it runs the add-on — there is
 nothing to `pip install`. It runs in Orienta's process with your permissions,
 which is true of every add-on and is why you are asked once before it runs.
@@ -37,7 +39,9 @@ new manifest.
 
 ## Using it
 
-It needs a result with a pattern-quality map. Run it from the add-on panel, or:
+It needs a result with a pattern-quality map. On the Add-ons page, pick the
+analysis, set its parameters in the form Orienta builds from the manifest, choose
+the indexing result and press Run; or send the request directly:
 
     POST /api/addons/bc-gmm/run
     {"analysis_key": "addon.bc_gmm", "result_id": "<id>",
@@ -62,10 +66,12 @@ A handful of things are easy to get wrong, so they are spelled out here.
 function; anything else the caller sends is refused and reported back in
 `ignored_params`. An analysis with no `params_schema` takes no parameters.
 
-**Nothing validates the values.** `minimum`, `maximum`, `enum` and the types
-are documentation for a settings form that is not built yet. Today the runner
-filters parameters by **name** and passes the values through untouched, so an
-`n_components` of `0` or `"three"` reaches your function exactly as sent.
+**Nothing validates the values.** Orienta builds the settings form on the
+Add-ons page from `params_schema`: `type` and `enum` pick the control, and
+`minimum` and `maximum` are limits of the number boxes. The runner itself
+filters parameters by **name** and passes the values through untouched, so a
+request sent straight to the API, an `n_components` of `0` or `"three"`,
+reaches your function exactly as sent.
 Check your own inputs and raise with a sentence — `analysis.py` does, in
 `_positive_int` — or your user gets scikit-learn's traceback instead. And check
 against *your own* wording when you test it: `pytest.raises(match="n_components")`
@@ -73,7 +79,7 @@ passes with the guard deleted, because scikit-learn's own refusal names the
 parameter too.
 
 `default` is the exception — it **is** read, by the runner, and for that reason
-it lives in two places: the schema's is what a form will show, and your
+it lives in two places: the schema's is what the form shows, and your
 signature's is what an empty `params` actually runs with. **The signature's is
 what gets recorded**, because that is the value your analysis was given. Keep
 them equal; a test in `tests/addons/test_example_addon.py` pins that for this
@@ -90,15 +96,14 @@ recorded parameters so the methods paragraph can state what the analysis
 same name. A slot that names neither renders as `[name not recorded]`, honestly
 and visibly.
 
-**A `default` is recorded for you, so state one.** The runner records what the
-caller *sent*, and a parameter the user left alone is not sent — so a sentence
-slot naming it used to render `[n_components not recorded]` on the most
-ordinary call there is, the button with nothing typed into it. That was a
-defect in the runner, found on this add-on and fixed there: the runner now
-merges your declared `default`s — as your signature has them — into the
-recorded parameters, under anything the caller actually sent. What it cannot do is invent one, so a parameter your
-sentence names and your schema gives no `default` still renders as not
-recorded, honestly. Give every such parameter a `default`.
+**A `default` is recorded for you, so state one.** A parameter the user left
+alone is not sent with the request, so the runner merges your declared
+`default`s — as your signature has them — into the recorded parameters, under
+anything the caller actually sent. A sentence slot that names such a parameter
+therefore shows its default on the most ordinary call there is, the button with
+nothing typed into it. The runner cannot invent a value: a parameter your
+sentence names and your schema gives no `default` renders as
+`[name not recorded]`, honestly. Give every such parameter a `default`.
 
 A parameter declared with `format = "path"` is passed to you and **never
 recorded**, its `default` included: the recorded parameters go into the methods
@@ -201,8 +206,8 @@ it that says "public API". Two consequences, neither of them hidden:
 
 * **Licensing.** Orienta is GPL-3.0-or-later, and importing one of its modules
   is the kind of combination the GPL covers, so an add-on written against API 0
-  is a GPL add-on. The spec's separate process — the boundary at which an
-  add-on could carry a licence of its own — does not exist yet. If you intend
+  is a GPL add-on. A separate-process boundary, at which an
+  add-on could carry a licence of its own, does not exist yet. If you intend
   to publish under something else, wait for that boundary rather than
   work around this import.
 * **API stability.** A rename of that path breaks every add-on. It is pinned by

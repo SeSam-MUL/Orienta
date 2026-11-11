@@ -19,10 +19,8 @@ matplotlib-scalebar>=0.8
 spglib
 pymatgen
 
-# Legacy PyQt5 layer — Stage 1 of removal complete; Stage 2 needs to detangle
-# simulation/* QThread workers from backend lazy imports before PyQt5 can be
-# uninstalled. (pyqtdarktheme was dropped 2026-09-09: nothing imports it, and
-# it capped the environment at Python < 3.12.)
+# Qt bindings: used by the simulation workers (simulation/*) and the standalone
+# crystal-structure GUI.
 pyqt5>=5.15
 tqdm  # crystal-structures-for-ebsd-main/calculationxtal/cif_database_builder.py
 
@@ -57,7 +55,7 @@ psutil
 # Parallel Hough indexing (PyEBSDIndex uses Ray for multi-core band detection)
 ray
 
-# Machine Learning (EBSD AI phase classifier)
+# PyTorch (GPU spherical indexing, GPU dictionary indexing, GPU forward simulation)
 #
 # PyTorch MUST be pinned to a +cuXXX local version, not merely offered a CUDA
 # index. `--extra-index-url` makes pip consider BOTH indexes and take the
@@ -79,15 +77,15 @@ scikit-image>=0.20
 faiss-cpu
 
 # torch.compile Inductor GPU codegen on Windows (community port; required for
-# torch.compile mode="default" on CUDA in the spherical-gpu indexer hot path).
-# Authorized 2026-05-09 for the GPU spherical-indexing perf loop. Windows-only;
-# Linux users get Triton via the official PyTorch wheel and don't need this line.
+# torch.compile mode="default" on CUDA in the GPU spherical-indexing hot path).
+# Windows only; Linux users get Triton via the official PyTorch wheel and don't
+# need this line.
 triton-windows>=3.6,<3.7 ; sys_platform == "win32"
 
 # CuPy + CUDA 12 runtime packages — alternative kernel-fusion path that bypasses
-# Triton/Inductor (used by D5 / cupy.fuse mul+max kernels in the spherical-gpu
-# indexer). cupy-cuda12x 14.x stopped bundling CUDA libs and requires the
-# nvidia-* runtime wheels separately. Authorized 2026-05-09.
+# Triton/Inductor (cupy.fuse multiply-and-maximum kernels in the GPU
+# spherical indexer). cupy-cuda12x 14.x stopped bundling CUDA libs and requires
+# the nvidia-* runtime wheels separately.
 # macOS has no CUDA and no cupy-cuda12x / nvidia-*-cu12 wheels, so these are
 # skipped there via an environment marker — otherwise `pip install -r
 # requirements.txt` fails on Mac. On Linux/Windows they install as before; GPU
@@ -102,9 +100,8 @@ nvidia-cusparse-cu12 ; platform_system != "Darwin"
 nvidia-cuda-nvrtc-cu12 ; platform_system != "Darwin"
 
 # Numba — CPU njit(parallel) one-electron-per-thread Monte Carlo engine
-# (LEVER 3: the no-GPU fallback for the EMsoft-free forward MC; standard
-# Windows/Linux wheel, CPU-only njit — numba-CUDA Windows DLL issues are
-# GPU-only and irrelevant here).
+# (the no-GPU fallback of the forward-simulation Monte Carlo; standard
+# Windows/Linux wheel, CPU-only njit).
 numba>=0.59
 
 # Test infrastructure

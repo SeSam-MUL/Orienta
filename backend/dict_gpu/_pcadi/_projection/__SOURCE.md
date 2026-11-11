@@ -1,4 +1,4 @@
-# Translated from kikuchipy._master_pattern (Path A)
+# Translated from kikuchipy._master_pattern
 
 **kikuchipy version translated:** 0.11.3 (the line references below are to that release; requirements.txt now asks for 0.13.1 or later)
 **Reference file:** `kikuchipy/signals/util/_master_pattern.py`
@@ -14,8 +14,6 @@
 | `sample.py::sample_master` | `_get_lambert_interpolation_parameters` + `_get_pixel_from_master_pattern` | 627-756 | torch.nn.functional.grid_sample replaces hand-rolled bilinear (align_corners=True, padding_mode=border); hemisphere dispatch via z>=0 mask |
 | `project.py::_rotate_directions` | `kikuchipy._utils.numba.rotate_vector` | numba.py 62-81 | vectorised active rotation R(q)=qvq* expanded to a 3x3 matrix per quaternion, applied via einsum across (n, det_h, det_w, 3) |
 | `project.py::project_master_to_detector` | `_project_single_pattern_from_master_pattern` (+ batched wrapper) | 496-575, 346-415 | composes rotate + lambert + sample; vectorised over rotations in one pass; uses `q` directly (NOT q^-1) — kikuchipy's `rotate_vector(rotation, dc)` applies q itself |
-
-(later tasks add rows here)
 
 ## License notes
 

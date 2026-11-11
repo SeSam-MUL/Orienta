@@ -44,7 +44,7 @@ lives here so it can be unit-tested in isolation and shared across endpoints.
 | [`forward_diagnostics.py`](forward_diagnostics.py) | On-demand forward-simulation diagnostics for an indexing result (forward-NCC, local-anomaly, PC-sensitivity, pattern-residual maps + summary stats). |
 | [`refinement.py`](refinement.py) | Joint R+PC refinement service: per-pixel Levenberg–Marquardt (Stage 1), sparse smoothness solve (Stage 2), R-only refine (Stage 3). |
 | [`refinement_math.py`](refinement_math.py) | Pure math primitives for refinement: quaternion ↔ so(3) exponential map, disorientation in degrees, sparse 4-neighbour graph Laplacian. |
-| [`gpu_sim_runner.py`](gpu_sim_runner.py) | The self-contained "Ours" forward-sim engine — hardware-adaptive Monte-Carlo → master → SHT pipeline that needs no EMsoft/WSL (GPU cupy → numba → PyTorch fallback chain). |
+| [`gpu_sim_runner.py`](gpu_sim_runner.py) | The Orienta Engine — hardware-adaptive Monte-Carlo → master → SHT pipeline that needs no EMsoft/WSL (GPU cupy → numba → PyTorch fallback chain). |
 | [`sht_sphere.py`](sht_sphere.py) | Reconstructs an EMSphInx `.sht` master pattern onto a sphere grid (reusing the indexer's inverse-SHT) for the Database Browser's 3D viewer. |
 | [`sht_provenance.py`](sht_provenance.py) | Assembles the provenance + parameters document for one `.sht` (File Info panel); sidecar-first, then recovers from `.sht`/`.xtal`/linked CIF without inventing fields. |
 | [`engine_router.py`](engine_router.py) | Auto-routes a forward-sim job to the EMsoft or GPU engine using a measured heuristic (reflection count, point-group order, EMsoft availability). |

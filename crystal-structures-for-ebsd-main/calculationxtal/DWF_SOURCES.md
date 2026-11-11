@@ -11,34 +11,34 @@ If an element is **not** in the table, the converter falls back to a generic
 
 ## Source of the current values
 
-All values are **B at 300 K from Peng et al. (1996), Table 1**, transcribed
-from the deposited supplement (IUCr SUP82472, article zh0008):
+`DWF.xlsx` has 40 rows for 39 elements: iron has two rows, one per crystal
+structure (see below). 39 rows are **B at 300 K from Peng et al. (1996),
+Table 1**, transcribed from the deposited supplement (IUCr SUP82472, article
+zh0008):
 
 > **Peng, L.-M., Ren, G., Dudarev, S. L. & Whelan, M. J. (1996).**
 > *Debye–Waller factors and absorptive scattering factors of elemental
 > crystals.* Acta Cryst. **A52**, 456–470. doi:10.1107/S0108767396005382
 
-Peng Table 1 covers **44 elemental crystals** over 1–1000 K (from phonon DOS,
-2–3 % accuracy). 38 of them have a solid value at 300 K and are loaded here;
-the four noble gases (Ne, Ar, Kr, Xe) have no 300 K solid value and are omitted.
+Peng Table 1 covers 44 elemental crystal structures over 1–1000 K (from phonon
+DOS, 2–3 % accuracy). 39 of them (38 elements, iron in two structures) are
+loaded here. Not loaded: the four noble gases (Ne, Ar, Kr, Xe), which have no
+300 K solid value, and Ca in its BCC structure (see below).
 
-The six pre-existing legacy values (Al, Si, Mg, Ni, Fe, Mn) were checked
-against Peng during this work:
-- **Al, Si, Mg, Ni** — exact match to Peng @ 300 K (confirmed provenance).
-- **Fe** — the legacy value `0.5771` matched **neither** Peng phase
-  (Fe-BCC 0.3328, Fe-FCC 0.5710) and was an error. Corrected to the
-  **BCC** value **0.3328** (α-ferrite is the room-temperature stable phase;
-  the FCC value at 300 K is an extrapolation of a non-stable phase). For Fe in
-  intermetallics the true B is site-specific, but BCC is the RT-grounded
-  reference and the DWF only weakly affects the simulated pattern.
-- **Mn** — **not present in Peng 1996** (it has no Mn or Co), and not in
-  Butt, Bashir, Willis & Heger (1988), Acta Cryst. **A44**, 396 either (22
-  cubic elements, no Mn). Set on 2026-06-08 to **0.0037 nm²** (B ≈ 0.37 Å² at
-  300 K), read from a published B(T) plot for Mn in the La2/3Ba1/3MnO3
-  perovskite — an oxide environment, but consistent with a Debye-model
-  estimate for metallic Mn (Θ_D = 410 K → 0.39 Å²) and with the 3d neighbours
-  in Peng (Cr 0.26, Fe 0.33, Ni 0.36). The Reference column names that plot;
-  the value is the one non-Peng entry in the table.
+The one row that is **not from Peng** is manganese. It is in neither Peng 1996
+(which has no Mn or Co) nor Butt, Bashir, Willis & Heger (1988), Acta Cryst.
+**A44**, 396 (22 cubic elements, no Mn). Its value, **0.0037 nm²** (B ≈ 0.37 Å²
+at 300 K), was read from a published B(T) plot for Mn in the La2/3Ba1/3MnO3
+perovskite. That is an oxide environment, but the value is consistent with a
+Debye-model estimate for metallic Mn (Θ_D = 410 K → 0.39 Å²) and with the 3d
+neighbours in Peng (Cr 0.26, Fe 0.33, Ni 0.36 Å²). The Reference column of that
+row names the plot.
+
+Iron: the `Fe (BCC)` value 0.3328 Å² is the room-temperature value of α-ferrite,
+the stable phase at 300 K; the `Fe (FCC)` value is Peng's value for the
+FCC structure, which at 300 K is an extrapolation of a non-stable phase. For Fe
+in intermetallics the true B is site-specific; the table has no better value
+for it.
 
 ### Elements with more than one row (structure variants)
 Peng lists some elements once per crystal structure. Such an element has one
@@ -55,7 +55,7 @@ converter picks the row like this (`backend/api/services/dwf_table.py`,
   has no better value for it.
 
 Current variants: `Fe (BCC)` 0.3328 Å² and `Fe (FCC)` 0.5710 Å² (both Peng
-Table 1, 300 K; checked against the deposited supplement, page 3). Not added
+Table 1, 300 K, as printed on page 3 of the deposited supplement). Not added
 (no phase in the library needs it yet): Ca (BCC) @ 300 K = 2.6615 Å²; the `Ca`
 row is Peng's FCC value 2.0443 Å².
 
