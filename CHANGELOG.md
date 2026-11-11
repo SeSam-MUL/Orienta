@@ -197,7 +197,7 @@ lost" message after start-up.
   and Schaeben (Ultramicroscopy, 2011) and their MTEX paper (Solid State
   Phenomena, 2010), with Orienta, kikuchipy and orix. The workbook of the page
   and of the batch has the same texts on a new `Citations` sheet; the other
-  eleven sheets are unchanged.
+  eleven sheets keep their layout.
 
 #### EDS
 - **Composition from the spectra.** When an EDS file holds the spectrum of

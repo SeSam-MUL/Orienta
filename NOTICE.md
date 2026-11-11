@@ -45,12 +45,14 @@ inside that directory says so.
 ## Reference data
 
 - **Debye–Waller factors** — `crystal-structures-for-ebsd-main/calculationxtal/DWF.xlsx`
-  holds 39 room-temperature B values (one per element), 38 of them transcribed
+  holds 40 room-temperature B values for 39 elements (iron has one row per
+  crystal structure, BCC and FCC). 39 of the values are transcribed
   from **L.-M. Peng, G. Ren, S. L. Dudarev & M. J. Whelan, "Debye–Waller Factors
   and Absorptive Scattering Factors of Elemental Crystals", *Acta Cryst.* A52,
-  456–470 (1996), Table 1** (IUCr), and one (Mn) from a published plot; each row
-  carries its reference, see `DWF_SOURCES.md` next to it. These are measured
-  physical constants, not the article. The article and its supplement are not
+  456–470 (1996), Table 1** (IUCr), and one (Mn) is an estimate read from a B(T) plot for Mn in La2/3Ba1/3MnO3
+  whose publication is not recorded. Each Peng row names its table; see
+  `DWF_SOURCES.md` next to the file. The Peng values are measured physical
+  constants, not the article. The article and its supplement are not
   redistributed.
 - **Crystal structures** — no CIF, `.xtal`, `.sht` or master-pattern file from a
   database with redistribution limits (ICSD, SpringerMaterials/Pauling File) is
@@ -112,7 +114,7 @@ license:
   GPL-3.0-or-later (these GPL-3.0 upstreams are the reason the combined work is
   licensed under the GPL)
 - **PyQt5** (Riverbank Computing) — **GPL-3.0 only**. A leftover of the retired
-  Qt interface. It is pinned in both lock files and **is imported** by the
+  Qt interface. It is pinned in every lock file and **is imported** by the
   simulation helpers `simulation/crystal_sync.py`, `database_browser.py`,
   `file_sync_manager.py`, `server_mode_manager.py` and `simulation_worker.py`
   (reachable from the simulation API), and by the legacy converter window
@@ -197,7 +199,8 @@ directly by `frontend/index.html`, dashboard background only):
   is intact at the top of `three.min.js`.
 - **vanta.js** 0.5.24 (Copyright 2020 Teng Bao) — MIT. The minified bundle carries
   no header of its own, so the required notice is reproduced in
-  `frontend/public/vendor/LICENSE.vanta.txt`.
+  `frontend/public/vendor/LICENSE.vanta.txt` (in the installed package
+  `frontend/dist/vendor/LICENSE.vanta.txt`).
 
 ## Public-domain / government works
 
@@ -278,8 +281,8 @@ it means agreement of results, not shared code.
   under GPL-3.0. That grant travels with EMSphInx's code only; it does **not**
   extend to Orienta's own independent implementation, which contains none of
   it. An independent reimplementation is a defence against copyright claims,
-  not against a patent. Users who commercialise spherical indexing should take
-  their own advice.
+  not against a patent. Users who commercialise spherical indexing should seek
+  their own legal advice.
 
 ## MATLAB reference scripts (`matlab_testskripts/`)
 
@@ -294,17 +297,14 @@ version 2 or (at your option) any later version
 (`SPDX-License-Identifier: GPL-2.0-or-later`). Each of her files
 carries a header naming her and the license; the full text and the copyright
 line are in the LICENSE file of that folder
-<!-- Cited as markdown links on purpose: scripts/build_runtime_package.py
-     treats backticked LICENSE paths as files the installed package must
-     contain, and matlab_testskripts/ is deliberately not packaged. -->
-([matlab_testskripts/LICENSE](matlab_testskripts/LICENSE)), and
-[matlab_testskripts/README.md](matlab_testskripts/README.md) explains what the
+([matlab_testskripts/LICENSE](https://github.com/SeSam-MUL/Orienta/blob/main/matlab_testskripts/LICENSE)), and
+[matlab_testskripts/README.md](https://github.com/SeSam-MUL/Orienta/blob/main/matlab_testskripts/README.md) explains what the
 scripts are. The copy here is the state Orienta was ported from; the author has
 developed the scripts further since. GPL-2.0-or-later is compatible with
 Orienta's GPL-3.0: the scripts may be used under version 3 alongside the rest of
 this repository. Two third-party attributions apply to them in addition.
 
-**freezeColors (bundled).** `matlab_testskripts/freezeColors.m` (v2.3) is a
+**freezeColors (in the source repository).** `matlab_testskripts/freezeColors.m` (v2.3) is a
 third-party MATLAB utility by John Iversen, not written by this project. Its own
 header carries the author's grant, and the condition attached to it:
 
@@ -356,14 +356,15 @@ by or sponsored by any of them or by the authors of MTEX.
 ## Where the license texts are
 
 - `LICENSE` — GPL-3.0, the license of Orienta.
-- [matlab_testskripts/LICENSE](matlab_testskripts/LICENSE) — GPL-2.0-or-later, the
-  MATLAB reference scripts (not part of the installed package; a markdown link,
-  not a backticked path, for the same reason as above).
-- `licenses/` — EMsoft, SHTfile, torch-dct, freezeColors (upstream MIT, for reference), Feather Icons, micromamba (macOS),
+- [matlab_testskripts/LICENSE](https://github.com/SeSam-MUL/Orienta/blob/main/matlab_testskripts/LICENSE) — GPL-2.0-or-later, the
+  MATLAB reference scripts (not part of the installed package).
+- `licenses/` — EMsoft, SHTfile, torch-dct, freezeColors (upstream MIT, for reference), Feather Icons,
+  xraylib, the NIST EPQ notice, micromamba (macOS),
   and the components of the standalone Python (`licenses/python-build-standalone/`).
 - `backend/spherical_gpu/_math/LICENSE.ebsdtorch`, `backend/dict_gpu/_pcadi/__SOURCE.md`
   — the vendored MIT code.
-- `frontend/public/vendor/LICENSE.vanta.txt` — the two bundled JavaScript files.
+- `frontend/public/vendor/LICENSE.vanta.txt` (in the installed package
+  `frontend/dist/vendor/LICENSE.vanta.txt`) — the two bundled JavaScript files.
 - `frontend/dist/THIRD-PARTY-LICENSES.txt` — the npm packages inlined into the
   built user interface (generated at build time).
 
