@@ -17,6 +17,6 @@
 
 ## License notes
 
-kikuchipy is GPLv3. The math we translate is from published EBSD references
-(Rosca-Lambert projection, standard direction-cosine geometry); the
-*implementation* in PyTorch is independent. No code is copied verbatim.
+Translated from kikuchipy 0.11.3 (GPL-3.0-or-later) into vectorised PyTorch;
+no lines are copied verbatim. As a derived work it is covered by
+GPL-3.0-or-later; see `NOTICE.md`.

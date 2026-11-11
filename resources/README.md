@@ -26,22 +26,22 @@ app, so the icon visually signals what Orienta does.
 Orienta runs as an **Electron shell → React frontend → FastAPI backend** stack
 (see the top-level project docs). This directory serves only the Electron shell
 layer: when the desktop window is created, the main process points its window
-`icon` at [`icon.png`](icon.png) (see [`electron/main.js`](../electron/main.js),
+`icon` at [`icon.png`](icon.png) (see [`electron/main.js`](https://github.com/SeSam-MUL/Orienta/blob/main/electron/main.js),
 where the `BrowserWindow` is configured with
 `icon: path.join(__dirname, '..', 'resources', 'icon.png')`). The `.ico` is the
 Windows-native equivalent consumed by the packaging/installer step.
 
 > **Note on UI theme/styling:** the visual theme (colours, layout, component
 > styling) is **not** stored here — it lives with the React frontend as CSS under
-> [`frontend/src/`](../frontend/src). This folder is strictly the binary app-icon
+> [`frontend/src/`](https://github.com/SeSam-MUL/Orienta/tree/main/frontend/src). This folder is strictly the binary app-icon
 > assets.
 
 ## Use / regeneration notes
 
 - **Do not hand-edit** `icon.png` / `icon.ico`. They are regenerated from
-  [`branding/make_logo.py`](../branding/make_logo.py), which draws the triangle,
+  [`branding/make_logo.py`](https://github.com/SeSam-MUL/Orienta/blob/main/branding/make_logo.py), which draws the triangle,
   applies the rounded-square mask, and writes both files plus a larger
-  `512×512` web/preview copy under [`branding/`](../branding). Running that script
+  `512×512` web/preview copy under [`branding/`](https://github.com/SeSam-MUL/Orienta/tree/main/branding). Running that script
   is the canonical way to update the icon; edit the script (vertex colours, card
   background, corner radius), then re-run it.
 - **Paths are referenced relatively** (resolved from the project root via
@@ -49,4 +49,4 @@ Windows-native equivalent consumed by the packaging/installer step.
   checked out — keep the filenames `icon.png` and `icon.ico` stable so the
   Electron and packaging references continue to resolve.
 - Related branding assets (wordmarks, logo sheets, the `512×512` icon) live in the
-  sibling [`branding/`](../branding) directory, not here.
+  sibling [`branding/`](https://github.com/SeSam-MUL/Orienta/tree/main/branding) directory, not here.

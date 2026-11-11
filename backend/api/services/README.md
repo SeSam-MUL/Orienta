@@ -120,4 +120,4 @@ renderer are each shared across many routes.
   files / OOM / bad metadata rather than substituting placeholders; routes turn
   these into explicit error responses.
 - **Tests.** Each service is exercised by the suite under
-  [`../../../tests`](../../../tests); run with `pytest tests/ -v`.
+  [`tests/`](https://github.com/SeSam-MUL/Orienta/tree/main/tests); run with `pytest tests/ -v`.

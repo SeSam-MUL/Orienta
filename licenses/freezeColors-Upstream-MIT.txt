@@ -1,13 +1,13 @@
 freezeColors — third-party MATLAB utility
 =========================================
 
-File in this repository: matlab_testskripts/freezeColors.m (version 2.3)
+File in the source repository: matlab_testskripts/freezeColors.m (version 2.3)
 Upstream project:        https://github.com/jiversen/freezeColors
 MATLAB File Exchange:    submission 7943
 
 Which grant covers our copy
 ---------------------------
-The revision we ship is v2.3, whose last changelog entry is dated April 2010.
+The revision in the source repository is v2.3, whose last changelog entry is dated April 2010.
 It carries the author's own grant in its header, and that grant is the one our
 copy is distributed under:
 

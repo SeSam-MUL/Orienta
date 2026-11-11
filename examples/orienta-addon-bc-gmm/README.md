@@ -66,11 +66,11 @@ A handful of things are easy to get wrong, so they are spelled out here.
 function; anything else the caller sends is refused and reported back in
 `ignored_params`. An analysis with no `params_schema` takes no parameters.
 
-**Nothing validates the values.** Orienta builds the settings form on the
-Add-ons page from `params_schema`: `type` and `enum` pick the control, and
-`minimum` and `maximum` are limits of the number boxes. The runner itself
+**The runner does not validate the values.** Orienta builds the settings form
+on the Add-ons page from `params_schema`: `type` and `enum` pick the control,
+and `minimum` and `maximum` limit the number boxes. The runner itself only
 filters parameters by **name** and passes the values through untouched, so a
-request sent straight to the API, an `n_components` of `0` or `"three"`,
+request sent straight to the API with an `n_components` of `0` or `"three"`
 reaches your function exactly as sent.
 Check your own inputs and raise with a sentence — `analysis.py` does, in
 `_positive_int` — or your user gets scikit-learn's traceback instead. And check

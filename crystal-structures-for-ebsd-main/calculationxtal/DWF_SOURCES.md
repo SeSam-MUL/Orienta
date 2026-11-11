@@ -28,11 +28,12 @@ loaded here. Not loaded: the four noble gases (Ne, Ar, Kr, Xe), which have no
 The one row that is **not from Peng** is manganese. It is in neither Peng 1996
 (which has no Mn or Co) nor Butt, Bashir, Willis & Heger (1988), Acta Cryst.
 **A44**, 396 (22 cubic elements, no Mn). Its value, **0.0037 nm²** (B ≈ 0.37 Å²
-at 300 K), was read from a published B(T) plot for Mn in the La2/3Ba1/3MnO3
-perovskite. That is an oxide environment, but the value is consistent with a
+at 300 K), is an estimate read from a B(T) plot for Mn in the La2/3Ba1/3MnO3
+perovskite; the publication of that plot is not recorded, so the value cannot
+be traced to a citation. That is an oxide environment, but the value is consistent with a
 Debye-model estimate for metallic Mn (Θ_D = 410 K → 0.39 Å²) and with the 3d
 neighbours in Peng (Cr 0.26, Fe 0.33, Ni 0.36 Å²). The Reference column of that
-row names the plot.
+row describes the plot but names no publication.
 
 Iron: the `Fe (BCC)` value 0.3328 Å² is the room-temperature value of α-ferrite,
 the stable phase at 300 K; the `Fe (FCC)` value is Peng's value for the

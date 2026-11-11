@@ -114,6 +114,6 @@ via `detect_gpu()`.
   dictionaries, empty selections, and missing phase `point_group` (needed for
   IPF colouring) raise explicit errors.
 - **Only the NCC metric** is implemented (`metric="ncc"`).
-- **Tests** live in [`../../tests/test_dict_gpu/`](../../tests/test_dict_gpu/),
+- **Tests** live in [`tests/test_dict_gpu/`](https://github.com/SeSam-MUL/Orienta/tree/main/tests/test_dict_gpu),
   including CPU↔GPU parity, projection (Path A) correctness, and tiling/PCA/k-NN
   unit tests.
