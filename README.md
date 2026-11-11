@@ -20,7 +20,7 @@ and [diffsims](https://diffsims.readthedocs.io/) scientific stack. Hough indexin
 [PyEBSDIndex](https://github.com/USNavalResearchLaboratory/PyEBSDIndex), see
 [How to cite](#how-to-cite).
 
-> **Status: beta (v0.4.7).** Everything listed under *Features* is reachable in the
+> **Status: beta (v0.4.8).** Everything listed under *Features* is reachable in the
 > app, but some of it is newer than its test coverage, and a few pieces are less
 > complete than their name suggests. Read
 > [Known limitations](#known-limitations--to-be-done) before you rely on a result.
@@ -48,16 +48,23 @@ sits beside each download.
 
 ## Features
 
-- Load & visualize EBSD patterns (Oxford H5OINA, EDAX H5 on square grids, EDAX H5
-  on hexagonal grids resampled to a square grid, EDAX UP1/UP2 + `.osc`; lazy load
-  for large files)
-- Pattern Center refinement (incl. pixel-wise drift correction)
+- Load & visualize EBSD patterns (Oxford H5OINA; EDAX APEX measurements on square
+  and hexagonal grids, kept on their own grid; EDAX H5 from OIM Analysis, with
+  hexagonal grids resampled to a square grid; EDAX UP1/UP2 + `.osc`; lazy load for
+  large files)
+- Pattern centre: search from the scan's own patterns without a starting value
+  (Find PC), refinement (incl. pixel-wise drift correction), saved calibrations
+  that can be applied to other files
 - Indexing: Hough, Dictionary (CPU + GPU), Spherical (built-in GPU indexer —
-  the default — or EMSphInx via WSL)
-- EDS integration: element maps, Counts → Wt% → At%, chemistry-based phase suggestion
+  the default — or EMSphInx via WSL); optional NLPAR pattern denoising
+- EDS integration: element maps, composition from the fitted spectra with a φ(ρz)
+  matrix correction (or from AZtec's window maps), chemistry-based phase suggestion
+  and phase maps
 - Layered phase maps (IPF / BC / CI / EDS overlays, configurable scalebar, export)
-- EBSD analysis: grain reconstruction, KAM/GOS, texture components (14, FCC/BCC
-  presets) with texture index & entropy, recrystallization, Excel export
+- EBSD analysis: grain reconstruction from Voronoi cells (the method of
+  Bachmann et al. 2011, results checked against MTEX for Python), KAM/GOS,
+  texture components (14, FCC/BCC presets) with ODF-based texture index & entropy,
+  recrystallization, Excel export
 - Crystal database: CIF → .xtal conversion, Debye–Waller editor
 - Simulation: EMsoft Monte-Carlo + master pattern + SHT, or an EMsoft-free GPU forward model
 - HDF5 explorer (patterns, EDS maps, electron images)
@@ -115,34 +122,41 @@ or misleading — so you find it here rather than in your results. Items marked
 
 ### Data and results
 
-- **EDAX hexagonal-grid scans are resampled to a square grid.** Orienta detects an
-  EDAX H5 file whose header says `Grid Type = HexGrid` and loads it as a square map:
-  each square pixel takes the pattern of the nearest measured point (nearest
-  neighbour; patterns are never interpolated). The square step equals the in-row
-  spacing of the hex grid and the map covers the extent of the scan. The result is a
-  resampled view of the scan, not the measured points themselves: some measured
-  points are not used, and indexing, step size, pixel counts and grain statistics
-  all refer to the resampled grid. The loader reads the row layout from the stored
-  point positions and refuses the file with an error if that layout is not the
-  alternating long/short rows of an EDAX hex scan, if the X/Y positions are missing,
-  or if the number of measured points does not match the number of stored patterns.
-  Resampling applies to EDAX H5 files only. An EDAX UP1/UP2 file is refused with an
-  error when its version-3 header or its `.osc` file shows a hexagonal grid. A
-  version-1 file without its `.osc` cannot be checked, so keep the `.osc` next to it,
-  or export hexagonal scans as H5 from OIM. This detection has been tested with
-  synthetic headers only. Square-grid EDAX H5 files, and square-grid UP1/UP2 files
-  with an `.osc` sidecar, load as usual, without resampling.
-- **The "Texture Components" map layer is empty.** The layer can be selected on
-  the Analysis page but always returns a blank map. The per-component numbers in
-  the texture table and the Excel export are real; only the spatial map is a stub.
-- **"Texture index" and "entropy" are not computed from a true ODF.** They are
-  derived from texture-component volume-fraction bins, which approximate an ODF.
-  Treat them as a comparative measure between your own datasets, not as values
-  comparable with MTEX or other ODF implementations. There are no pole figures on
-  the Analysis page (the pole-figure tool lives on the Phase Map page).
-- **Two recrystallization statistics are placeholders.** `low_gkam_fraction` and
-  `low_kam_fraction` are reported as `0.0` and should be ignored. The RX fraction,
-  grain counts and the high-BC fraction are computed for real.
+- **Results saved with an earlier version can differ from this one.** Grain
+  reconstruction, the texture analysis (components, surface planes, index and
+  entropy), the recrystallization analysis, the EDS composition and the Hough
+  reflector lists of hexagonal, trigonal, monoclinic and triclinic phases were
+  reworked or corrected in v0.4.8. Recompute the results you want to compare; the
+  [CHANGELOG](CHANGELOG.md) says what changed and why.
+- **Hexagonal scans: only EDAX APEX measurements keep their grid.** An APEX
+  measurement on a hexagonal grid is loaded and shown as measured, without
+  resampling. Hexagonal-grid `.h5` files written by OIM Analysis are still resampled
+  to a square grid when they are loaded (nearest measured point), and a `.up1`/`.up2`
+  file of a hexagonal scan is refused without its APEX `.h5` file. The files do not
+  record which way every second row is offset; Orienta assumes the EDAX convention
+  and each saved file says so where it assumes it. On a hexagonal scan these are not available yet and
+  are refused with a message: NLPAR denoising, averaging neighbouring patterns in
+  Crystal Hint, the pixel-wise pattern-centre calibration, the joint
+  orientation/pattern-centre refinement, the grain-based phase assignment from EDS
+  chemistry, and the Analysis page. Loading saved hexagonal files into OIM Analysis
+  is untested. Details: [EBSD Viewer guide](docs/user-guide/EBSDViewer.md).
+- **EDS compositions are not calibrated on reference standards.** Orienta
+  quantifies standardless: from the fitted spectra with a φ(ρz) matrix
+  correction when the file holds the spectrum of every pixel and the acquisition
+  geometry, otherwise by Cliff–Lorimer on AZtec's window maps without a matrix
+  correction. The one fitted step, the detector response, was measured on a
+  single Oxford detector at 20 kV, against one phase of known stoichiometry and
+  AZtec's own standardless results. With each reference region left out of its
+  own calibration, the corrected composition agrees with those references to a
+  median of 0.5 at% (largest deviation 2.5 at%); that is agreement with AZtec and one
+  stoichiometry, not accuracy, and on another detector, beam voltage or alloy
+  the deviation has not been measured. Use the numbers to compare regions and to
+  choose phases, and check absolute values against a standard measured on your
+  own instrument. Calibration on measured standards is planned for a later
+  release. How the numbers are calculated: [EDS user
+  guide](docs/user-guide/EDS.md#how-the-composition-is-calculated).
+- **No pole figures on the Analysis page.** The pole-figure tool is on the Phase
+  Map page.
 - **Automated indexing and phase identification must be validated.** This is not a
   defect but a property of the method — see the Disclaimer below.
 
@@ -184,8 +198,8 @@ These concern installing from source; the ready-made packages under
 
 In rough priority order: ship the simulation automation module, or remove the
 engine from the UI · fix the installer's OpenCL step and make failures surface as
-failures · wire the texture component map to its existing implementation and
-compute the two placeholder RX statistics · move the CUDA packages behind an
+failures · bring the Analysis page and the remaining tools to hexagonal scans ·
+calibrate the EDS quantification on measured standards · move the CUDA packages behind an
 optional requirements file and test Python 3.12 and 3.13 · write the version
 into the release archive so downloads identify themselves.
 
@@ -341,7 +355,8 @@ Machine-readable citation metadata is in [CITATION.cff](CITATION.cff); GitHub's
 "Cite this repository" button reads it automatically.
 
 **Please also cite the underlying methods** when you use the corresponding features
-(see [NOTICE.md](NOTICE.md) → "Algorithm / method attributions"):
+(see [NOTICE.md](NOTICE.md) → "Algorithm / method attributions" and "Grain analysis
+and MTEX"):
 
 - **Spherical (SHT) indexing** — Lenthe, Singh &amp; De Graef, *Ultramicroscopy* **207**,
   112841 (2019); and the [EMSphInx](https://github.com/EMsoft-org/EMSphInx) project.
@@ -357,6 +372,18 @@ Machine-readable citation metadata is in [CITATION.cff](CITATION.cff); GitHub's
   uses PyEBSDIndex's indexing and PC optimiser.
 - **Dictionary indexing, simulation &amp; projection** — [kikuchipy](https://kikuchipy.org/)
   and [EMsoft](https://github.com/EMsoft-org/EMsoft).
+- **Grain reconstruction and grain analysis** — Bachmann, Hielscher &amp; Schaeben,
+  *Ultramicroscopy* **111**, 1720–1733 (2011), the algorithm of
+  [MTEX](https://mtex-toolbox.github.io/). Orienta's grain reconstruction in
+  `analysis/` follows this method and its results were checked against MTEX for
+  Python; it contains no MTEX code.
+
+**Citations generated in the app.** The Phase Map page (for indexing results) and
+the Grain Analysis tab (for reconstructed grains, also on the Citations sheet of the
+Excel workbook) offer a methods paragraph, a reference list and BibTeX. They are
+assembled automatically from the steps and settings Orienta recorded and may be
+incomplete: a step, a setting or a source can be missing. Check them against your
+own procedure and the cited sources before you use them in a manuscript.
 
 ## Funding &amp; acknowledgments
 

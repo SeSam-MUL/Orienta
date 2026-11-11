@@ -11,6 +11,8 @@ belongs to.
 | `SHTfile-License.txt` | tables and packing routines ported from SHTfile (`backend/forward_sim/io/sht_writer.py`, `backend/spherical_gpu/pipeline/sht_io.py`) |
 | `torch-dct-License.txt` | the weighted DCT/DST layers in `backend/spherical_gpu/_math/sht.py` |
 | `Feather-License.txt` | the SVG icons in `crystal-structures-for-ebsd-main/calculationxtal/icons/` |
+| `xraylib-License.txt` | the absorption edges, fluorescence yields and attenuation coefficients in `backend/eds_spectrum/xray_tables.json` |
+| `EPQ-NIST.txt` | the notice of the NIST EPQ library, whose equations the EDS matrix correction in `backend/eds_spectrum/matrix.py` transcribes |
 | `python-build-standalone/` | components of the standalone CPython the Windows and Linux installers download |
 | `micromamba-License.txt` | the micromamba binary the macOS installer downloads and keeps in the runtime folder |
 | `freezeColors-Upstream-MIT.txt` | `matlab_testskripts/freezeColors.m`, another author's work bundled with the MATLAB reference scripts |

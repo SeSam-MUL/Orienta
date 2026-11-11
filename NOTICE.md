@@ -28,6 +28,8 @@ restriction disappears once PyQt5 is removed from the dependency set.
 | Harmonic unpacking (`NumHarm`/`UnpackHarm`) of the `.sht` reader | `backend/spherical_gpu/pipeline/sht_io.py` | Ported from **SHTfile** `sht_file.in.hpp` | BSD-3-Clause — `licenses/SHTfile-License.txt` |
 | Oxford H5OINA reader workaround | `safe_loader.py` | Body copied verbatim from **kikuchipy** 0.11.3 `oxford_h5ebsd/_api.py`, with a widened `except` clause | GPL-3.0-or-later |
 | Ten toolbar icons (`alert-circle`, `archive`, `check-circle`, `edit-3`, `file`, `file-plus`, `files`, `folder`, `refresh-cw`, `save`) | `crystal-structures-for-ebsd-main/calculationxtal/icons/*.svg` | **Feather Icons** (Cole Bemis) | MIT — `licenses/Feather-License.txt` |
+| X-ray tables of the EDS spectrum fit: line energies and relative weights, K/L3/M5 absorption edges, K-shell fluorescence yields, total mass attenuation coefficients (0.1–30 keV) | `backend/eds_spectrum/xray_tables.json` | Generated once by `scripts/build_xray_tables.py`: the lines and weights from the element database of **exspy** (`exspy._misc.elements`, itself from the HyperSpy/EDSpy tables, Bearden 1967 and Zschornack 2007); edges, yields and μ/ρ computed with **xraylib** (EdgeEnergy, FluorYield, CS_Total; Schoonjans et al. 2011). The file's `sources` block names each origin. Neither exspy nor xraylib is a dependency or is shipped. | GPL-3.0 (exspy) and BSD-3-Clause (xraylib) — `licenses/xraylib-License.txt` |
+| phi(rho z) matrix correction for EDS: XPP (Pouchou & Pichoir) with the specimen-tilt terms of Pouchou, Pichoir & Boivin, Pouchou & Pichoir backscatter coefficient/factor, surface ionisation and stopping power, Zeller mean ionisation potential, Pouchou 1986 ionisation cross-section, Reed characteristic fluorescence with Reed 1990 depth ratio and Heinrich Lenard coefficient | `backend/eds_spectrum/matrix.py` | Equations transcribed from the **NIST EPQ** library (DTSA-II): `XPP1991.java`, `XPP1989Ext.java`, `BackscatterFactor`, `BackscatterCoefficient`, `SurfaceIonization`, `StoppingPower`, `MeanIonizationPotential`, `ProportionalIonizationCrossSection`, `Fluorescence`, `IonizationDepthRatio`, `LenardCoefficient`; mass attenuation from the vendored xraylib tables, not from EPQ | Public domain (17 U.S.C. 105), notice kept — `licenses/EPQ-NIST.txt` |
 
 Because parts of this project are derived from GPL-3.0 code (kikuchipy), the
 combined work is distributed under the GPL (see the note on the distributed
@@ -214,6 +216,29 @@ directly by `frontend/index.html`, dashboard background only):
   attributions* above and in the "How to cite" section of the README.
   Source: https://github.com/USNavalResearchLaboratory/PyEBSDIndex
 
+## Grain analysis and MTEX
+
+The grain reconstruction of `analysis/` (Voronoi cells of the measurement grid,
+grain boundaries, the treatment of not-indexed areas) and the grain quantities
+derived from it follow the method of **F. Bachmann, R. Hielscher & H. Schaeben,
+"Grain detection from 2d and 3d EBSD data — Specification of the MTEX algorithm,"
+_Ultramicroscopy_ 111, 1720–1733 (2011), doi:10.1016/j.ultramic.2011.08.002**, the
+algorithm of the MTEX toolbox (**F. Bachmann, R. Hielscher & H. Schaeben, "Texture
+analysis with MTEX — free and open source software toolbox," _Solid State
+Phenomena_ 160, 63–68 (2010), doi:10.4028/www.scientific.net/SSP.160.63**). Please
+cite these papers when you report grain results from Orienta. The app names them,
+with the settings the grains were reconstructed with, in the "Citations for these
+grains" panel of the Analysis page and on the `Citations` sheet of the Excel
+workbook.
+
+Orienta contains **no MTEX program code**; `analysis/` was written from the
+published method and from the workflow of the MATLAB reference scripts described
+below, which call MTEX functions but contain none of its code. Its results were
+compared with those of MTEX for Python 1.0.0 (GPL-2.0-only), run as a separate
+program; only the resulting numbers are kept, as test references in
+`tests/fixtures/analysis_mtex_parity/`. Where the documentation says "as in MTEX",
+it means agreement of results, not shared code.
+
 ## Optional proprietary components (NOT redistributed)
 
 - **NVIDIA CUDA runtime and cuDNN** (`nvidia-*-cu12` wheels, `cupy-cuda12x`, and
@@ -318,6 +343,15 @@ list at <https://mtex-toolbox.github.io/publications>. The foundational ones:
 > R. Hielscher, H. Schaeben: *A novel pole figure inversion method: specification
 > of the MTEX algorithm.* Journal of Applied Crystallography **41**(6) (2008),
 > 1024-1037. DOI: 10.1107/S0021889808030112
+
+## Trademarks
+
+Third-party product names appear only to identify the file formats and programs
+Orienta reads, works with or was compared against. AZtec (Oxford Instruments),
+OIM Analysis and APEX (EDAX), Bruker, NORDIF, MATLAB (The MathWorks), NVIDIA and
+CUDA, and the other product names mentioned are trademarks or registered
+trademarks of their respective owners. Orienta is not affiliated with, endorsed
+by or sponsored by any of them or by the authors of MTEX.
 
 ## Where the license texts are
 

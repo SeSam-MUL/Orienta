@@ -9,6 +9,673 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## v0.4.8 — 2026-11-11
+
+This release changes numbers you may have saved. Grain reconstruction, the
+texture analysis (components, surface planes, index and entropy), the
+recrystallization analysis and the EDS composition were reworked or corrected;
+recompute the results you want to compare with earlier ones. The same goes for
+Hough indexing of hexagonal, trigonal, monoclinic and triclinic phases, whose
+reflector lists were corrected. It also adds EDAX APEX loading, hexagonal scans,
+a Find PC search, NLPAR denoising, and fixes the "Connection to the backend
+lost" message after start-up.
+
+### Added
+
+#### Loading and EDAX/hexagonal scans
+- EDAX APEX measurements can be loaded with their metadata: open the APEX `.h5`
+  file and choose a measurement, or open a `.up1`/`.up2` pattern file with its
+  APEX file in the same folder. The grid (square or hexagonal), the step sizes,
+  the pattern centre and the camera angles come from the metadata, and nothing
+  is resampled. A pattern file is matched to its measurement by the ID in its
+  header, not by its name (a file whose header has no ID can only be assigned by
+  hand, and only if its pattern count equals the grid). Hexagonal-grid `.h5`
+  files written by OIM Analysis (not APEX) are still resampled to a square grid
+  when loaded, as before.
+- A hexagonal scan is drawn as the hexagons lie on the sample, with true
+  proportions and scale bar, in the EBSD Viewer overview, on the Phase Map page
+  and in the navigation map of the Indexing page. Hover, click and the
+  selections of the EBSD Viewer (and so a crop), and hover, click, the
+  rectangle statistics and the line scan of the Phase Map page, act on the
+  measurement point under the pointer. This is a display only: nothing is
+  resampled, and every measurement point keeps exactly one value. The files do
+  not say which way the rows are offset; the convention Orienta assumes is
+  stated in the EBSD Viewer guide.
+- On a hexagonal scan, the evaluations that compare a point with its neighbours
+  use the six neighbours of the lattice: the phase-map cleanup, the
+  grain-boundary layer, the pseudo-symmetry unification, the local-anomaly
+  layer and the grain tools of Pattern Match and Phase Verification, among
+  others (the complete list is in the EBSD Viewer guide). **Frame Average**
+  averages each pattern with the points within the same number of steps on the
+  sample, not with a square window of the index grid; its limits are in the
+  guide.
+- Results of a hexagonal scan can be saved. `.ang` (HexGrid header) and Orienta
+  `.h5` keep the hexagonal grid and load back as hexagonal; `.ctf` and the new
+  square `.ang` option are resampled onto a square grid (nearest measured
+  point, as OIM Analysis does it) and say so. The batch and Save crop accept
+  hexagonal scans. Where the row offset direction is assumed, each file says
+  so.
+- **A dialog chooses the measurement and the pattern source.** An HDF5 file
+  that offers more than one now opens a dialog instead of loading the first
+  measurement as processed patterns: one row per measurement, one choice among
+  the pattern sources, with facts and a small preview of each; the last choice
+  is preselected. A file with a single variant loads as before. For an EDAX
+  APEX file the dialog lists the measurements with their overview image,
+  hexagonal or square grid, step, the date the scan ended and the state of the
+  pattern file. A row can be ticked only when it can be opened, and the reason
+  is shown next to the greyed box. Pattern files in the folder that fit a row by
+  pattern count can be assigned to it, and all rows can be searched in another
+  folder at once. For a hexagonal measurement the dialog says plainly what is
+  assumed (every second row shifted by half a step, which the file does not
+  record) and what is not available yet. The chosen variant is remembered per
+  file, and edited copies are kept per file and variant, so work on processed
+  patterns is never restored into the unprocessed ones. Results and exports
+  record which patterns were indexed, and activating a result reloads the
+  variant it ran on. The Batch page says that it indexes the processed patterns
+  of the first measurement of each file, whichever variant the dialog chose.
+- NORDIF calibration patterns open as a scan of one row. Every loader now says
+  where the pattern centre of a file comes from (the file header, an `.osc`, the
+  APEX metadata, an Orienta export) or that the file has none, which is the case
+  for NORDIF `.dat`/`.txt`, Oxford `.ebsp` and loose pattern images. Before,
+  such files registered as having a measured pattern centre while the
+  placeholder (0.5, 0.5, 0.5) was in use.
+
+#### Pattern centre
+- **Find PC** searches the pattern centre from the scan's own patterns, without
+  a starting value. It picks nine calibration patterns from the scan (one from
+  each ninth) when fewer than five are on the list, then searches one joint
+  cost of all calibration patterns, moves its search box when the result sits on
+  an edge and tries a second box when the result is unclear. The page says how
+  the search ended, in one line: "Search ended normally." or one warning (edge of
+  the searched area, no lowest point, two about equally good positions, a PC the
+  store did not take). It also gives the PC with the number of patterns, the PC
+  in the open file's own convention, the fit contrast and how far the patterns
+  disagree (range per axis, in pixels). A result at an edge or without a lowest
+  point shows the file's pattern with the bands drawn from the PC and the
+  choices "Find PC again with other patterns" (it leaves out the positions
+  already used), "Keep this PC anyway" and the step back. Cancel stops the run
+  in every step.
+- **Global PC Refine** is the same search started at the current PC. Cancel now
+  stops the run; before, it only hid the progress bar, and the run went on and
+  later wrote its PC unseen.
+- **Type the pattern centre in the numbers you have.** The PC fields of the
+  Detector Settings take Bruker (Orienta), EDAX/TSL or Oxford numbers; the
+  selector starts at the vendor of the open file. Every conversion is made by
+  the backend (kikuchipy's), and a live line shows the Orienta (Bruker) numbers.
+  The numbers apply only when you press **Use these numbers** (Enter in a field
+  presses it). Typing no longer applies a PC: before, a change in a field was
+  sent after 500 ms and moved the crosshair and the forward preview. A PC that
+  was refused is said in words.
+- **Saved calibrations.** A PC can be saved under a name as a calibration, with
+  the acquisition settings it is valid for (pattern size and binning, tilts
+  within 0.1°, working distance within 0.1 mm when both files state one), the
+  file it was made on, the quality of the search and every earlier version.
+  Calibrations are stored as one file each in the calibrations folder next to
+  the phase library. A PC is a fraction of the pattern, so it carries over to
+  another binning of the same pattern shape but not to another height-to-width
+  ratio, and the page says so.
+  - For the open file, the PC page offers the calibrations that fit: "Use it" for
+    matching settings, "Use anyway" with the differences shown for others, each
+    with what it would replace and the size of the change in pixels.
+  - **Apply to other files** lists the files that fit, with working distance,
+    their old PC with version and the new PC, and ticks those that would change;
+    a file that does not fit can be opened with "Find PC for it". After applying,
+    each file shows what became of it and can be put back.
+  - After a search at a file that is on a saved calibration, the page asks first
+    whether the other files on that version should follow, with the change and
+    the fit contrast before and after. Nothing is passed on unless you say so.
+  - **Take PC from...** reads the PC of another file or a calibration.
+  - A result remembers the calibration version it was indexed with, and stored
+    results computed with an older version are listed.
+- **Put the PC back one step.** Every write of a PC (refine, Find PC, typed,
+  Apply, a calibration) keeps the previous state, per file family; one step, and
+  nothing is written to the file on disk.
+- The PC page names where the PC in use comes from (file, Find PC, refine,
+  typed, grid calibration, a named calibration with its version) and says when a
+  file has no PC. With a per-pixel PC map it says that the fields show the mean
+  of the map, that each pattern is indexed at the PC of its own pixel, and what a
+  typed PC or a refine did to the map.
+
+#### Analysis page
+- Grain Analysis has two new settings. **Close holes (alpha)** sets how wide a
+  not-indexed gap inside a grain may be and still be closed into that grain
+  (default 3.1 px; 0 closes nothing). **Fill holes and scratches in maps**
+  shows the closed pixels with the orientation of their grain, so IPF maps look
+  continuous. The orientation given to a filled pixel is for display only and
+  never enters a number; the area of closed pixels does count in the sizes that
+  use the cell area (see **ECD from**).
+- Grain Analysis shows and sets how the grain-size statistics are made.
+  **Edge grains** chooses which grains are left out because they touch the
+  border of the map: the rule of the MATLAB reference script
+  (`matlab_testskripts/GrainSizeAnalysis_mtex6.m`; a strip of two pixel rows
+  or columns, the default), MTEX's rule (grains that touch the border or a
+  not-indexed area open to it), the outermost pixel row only, or none. A rule
+  keeps all grains instead when it would leave fewer than 50 grains or less
+  than 15 % of them (the outermost-row rule: when it would leave out more than
+  85 %), and the page says so when that happens. **ECD from** chooses whether
+  the equivalent circle diameter comes from the area of the grain's measurement
+  cells (closed holes included, the default, as MTEX) or from the measured
+  pixels times the step size squared (as the script). **Phase** restricts the
+  statistics to one phase of the map, or, in a batch, to the phase with the
+  most measured pixels of each file. The statistics block names the number of
+  grains that entered the means, and the step size. The settings are
+  recomputed as soon as you change them and are recorded in the workbook
+  (Sheet1). After a reconstruction the page also shows the mean, median and
+  standard deviation of the equivalent circle diameter and the mean aspect
+  ratio, not only the number of grains.
+- The Deformation tab sends its three parameters: **KAM order** (1 to 5,
+  default 2), **KAM threshold** (default 7°) and **HAGB from** (default 15°;
+  boundaries from 3° up to it are low-angle). The KAM map, the boundary
+  lengths, the mean KAM, the RX analysis's KAM, the Excel export and the batch
+  use them, and the page prints the values the numbers were made with. Until
+  now the three inputs showed 1, 0.55° and 10° while the analysis always used
+  2, 7° and 15°.
+- The Texture and Recrystallization tabs have a **Phase** selection (default:
+  the phase with the most indexed pixels of the map, as the reference script
+  analyses one phase, the matrix). Each result names the phase it was made
+  with, and the workbook records it in Sheet1 (Texture: row 67). A batch uses
+  the phase with the most indexed pixels of each file. In the texture, the
+  pixels of every other phase and the not-indexed pixels are no longer compared
+  with the components or counted in the denominators; the texture components
+  are cubic, so a phase that is not cubic is refused with the cubic phases of
+  the map named. In the recrystallization analysis, the classification, the RX
+  fraction and its denominator use the grains of that phase only; grains of
+  other phases are not recrystallized and are drawn in a neutral colour on the
+  RX map.
+- The Batch tab shows the file that is being processed. It takes the grain
+  reconstruction parameters from the Grain tab and checks them (threshold above
+  0, a whole minimum grain size of 1 or more, alpha 0 to 20) before it starts.
+  Reconstruction parameters typed on the Grain tab are kept when you switch
+  tabs, until a reconstruction has used them.
+- The scalar maps (band contrast, KAM, GOS, ECD) show a colour bar under the
+  map with the smallest and largest value and the unit; the ECD map also names
+  its basis.
+- After a grain reconstruction, Grain Analysis shows **Citations for these
+  grains**, the panel already known from the Phase Map page: a methods
+  paragraph that states the reconstruction and statistics settings, a reference
+  list and BibTeX. It cites the grain-detection method of Bachmann, Hielscher
+  and Schaeben (Ultramicroscopy, 2011) and their MTEX paper (Solid State
+  Phenomena, 2010), with Orienta, kikuchipy and orix. The workbook of the page
+  and of the batch has the same texts on a new `Citations` sheet; the other
+  eleven sheets are unchanged.
+
+#### EDS
+- **Composition from the spectra.** When an EDS file holds the spectrum of
+  every pixel (a spectrum cube, as in an AZtec `.h5oina`), the EDS pages
+  quantify from a fitted model of those spectra instead of AZtec's window
+  integrals. The window integrals are raw sums over a band of 45 to 90 eV
+  around each line and include the background; the model fits the lines, the
+  escape peaks and the background, with energy offset, gain, peak width and
+  absorption fitted once per file on the summed spectrum. On a reference scan
+  with known phases, a silicon particle read 93.2 at% Si from the windows and
+  96.6 at% from the spectra, the iron reading in the matrix fell from 0.78 to
+  0.21 at%, and the largest deviation of an Al7Cu2Fe region from its
+  stoichiometry fell from 6.35 to 2.09 at%. This is the only path for a file
+  with a spectrum cube; a file without spectra uses the window path, unchanged.
+- The fit runs in the background in its own process. While it runs, the
+  quantifying pages say that the spectra are being evaluated and fill in by
+  themselves afterwards. Opening a 29 GB file until the result was ready took
+  38.5 s; for a 10 800-pixel scan the per-pixel projection takes 0.30 s and
+  opening to result 3.2 s. If you close a file and open it again within 2 s,
+  the running fit is stopped and starts again.
+- **Matrix correction.** On the spectrum path, composition is corrected for
+  absorption, atomic number and fluorescence effects with a phi(rho z) model
+  (XPP, with specimen tilt and fluorescence), using the acquisition geometry in
+  the file header (beam energy, detector elevation, specimen tilt). The tilt is
+  handled by scaling the depth of the ionisation curve; this was checked only
+  for a 70° specimen tilt with the specimen tilted towards the detector (exit
+  angle 81°). Without geometry in the header, with a specimen tilt outside 0 to
+  89.5°, or with a shadowed detector, the uncorrected spectrum result is used
+  and a warning says why. Copper
+  is quantified over its K lines on the corrected path (over L on the
+  uncorrected spectrum path). Carbon is left out of the composition, because
+  its signal is the contamination layer on the surface; its map stays. Lines of
+  Mg, Ni and Cr have no reference measurement behind their response and are
+  named in a warning, and oxygen-bearing areas were not tested. The
+  composition note and the export caveat state the correction, tilt, exit angle
+  and reference set that were used.
+- How well this agrees with AZtec was measured on one detector, one geometry
+  and one alloy family. AZtec's own quantification is standardless, so what was
+  measured is agreement with it (and with the nominal Al7Cu2Fe stoichiometry),
+  not accuracy against a true composition. Mean absolute difference per element
+  before and after the correction: small silicon particle 3.47 to 0.63 at%,
+  Al7Cu2Fe box 1.20 to 0.46 at%, a whole-map sum 0.92 to 0.76 at%, and the
+  matrix and alpha regions that carry the calibration 0.51 to 0.13 and 0.53 to
+  0.15 at%. With each reference region left out of its own calibration (28
+  values from 7 regions), the deviation from the reference had a median of
+  0.5 at%, about nine in ten values at or below 1.9 at% (25 of 28) and a
+  maximum of 2.5 at%. Other alloys will deviate by amounts that were not
+  measured; on two scans of a 7050 alloy, the corrected zinc reads 6.57 and
+  6.75 wt% instead of 3.71 and 3.73, and magnesium 2.21 instead of 1.49 wt%
+  (limits published for alloy 7050: Zn 5.7 to 6.7, Mg 1.9 to 2.6 wt%, quoted from the
+  literature, not checked against a specification), and the scanned areas hold particles.
+- Regions (Inspector, region statistics, magic wand, particle export) are
+  quantified from the summed net counts of the region instead of the mean of
+  the clipped per-pixel at%, which was biased upward for weak elements.
+- Elements that the spectrum shows but AZtec did not export are not added to
+  the composition. They can be added as a net-count map.
+- The note under every composition now says, without being opened, that the
+  composition is not calibrated on reference standards; opened, it names the
+  detector the instrument response was measured on. The Wt.% tooltip and the
+  export summary line describe the path that was used instead of saying "no
+  ZAF correction" for every result. The EDS user guide has a new section, *How
+  the composition is calculated*, with the equations of both paths, what the
+  instrument response was measured on, and what the measured agreement does
+  and does not tell you.
+
+#### Indexing
+- NLPAR pattern denoising in the EBSD Viewer (PyEBSDIndex): each pattern is
+  replaced by a weighted average of similar patterns in its neighbourhood, with
+  the strength estimated from the scan itself. It is meant for very noisy scans
+  whose raw patterns do not index: on a public nickel scan series at the
+  highest noise level, the share of pixels within 2° of a low-noise reference
+  rose from 9 % to 80 % with dictionary indexing. On scans that already index
+  well it brings nothing and can make results worse near grain boundaries and
+  small particles (by several percentage points on one aluminium-alloy scan).
+  It runs on the CPU and needs room for a second copy of the patterns, so crop
+  large scans first. Before the run, the panel estimates from a sample of the
+  scan whether NLPAR may help or may blur fine structures.
+
+#### Desktop app and backend
+- Every end of the backend is logged in `logs/orienta.log` with its reason, its
+  run time, the last request, the requests still running and its memory use; the
+  desktop app adds how the process ended (exit code or signal, and whether the
+  app stopped it) to `logs/backend-console.log`. Python stacks of a native
+  crash go to `logs/backend-fault.log`. A request that holds the backend for
+  more than 2 s is logged with where each thread was.
+- When the backend ends without the app having stopped it, the desktop app
+  shows a notice on the page: how it ended, what it was working on and whether
+  it is being restarted. A stop by the app itself (quit, removing the data) is
+  never restarted.
+- Open dialogs (Browse for a scan, a CrystalMap, a batch folder) start in the
+  folder of the last file or folder opened instead of Downloads. A save does
+  not move this folder, so an export does not open among the raw data.
+
+#### Simulation and library
+- CIF import fills the reference dialog from the CIF (authors, journal, DOI;
+  TeX and HTML accents are read as letters). A CIF stored in space group P 1
+  whose atoms have more symmetry is detected with spglib over tolerances from
+  0.01 to 0.1 Å; where the group changes along that range you choose the
+  tolerance, and no copy is written before you do. A header whose space-group
+  number and symbol contradict each other is reported. Text passed on to EMsoft
+  is written as ASCII and capped in bytes.
+
+### Changed
+
+#### Analysis page
+- Grain reconstruction on the Analysis page, in batch processing and in the
+  Excel export was rewritten, and its results change. Each measurement is now a
+  Voronoi cell (the method of Bachmann et al., 2011). Holes and thin
+  preparation scratches inside a grain no longer split it, and a grain never
+  spans two phases. Grain areas,
+  equivalent circle diameters, perimeters, aspect ratios, GOS, grain-boundary
+  lengths and KAM by grain are computed from these cells. The aspect ratio is
+  now the long over the short principal axis of the grain's shape (it used to
+  be the width over the height of the bounding box). On three test maps the
+  grains and these values agree with MTEX for Python 1.0.0 to better than
+  1e-5; before, one of them gave 96 grains where MTEX gives 176, and on a
+  three-phase map 62 of 90 grains held more than one phase. Grain counts,
+  grain-size statistics, recrystallized fractions and the Excel sheets
+  therefore differ from earlier versions; recompute results you want to
+  compare. Reconstruction is also faster: about 12 s instead of 34 min on an
+  805 × 602 map with 65 % not-indexed pixels. A map with many not-indexed
+  pixels needs about 2 GB of memory per million pixels; if that is not
+  available, the reconstruction stops with a message instead of running out of
+  memory.
+- The texture is computed on one phase (see **Phase** above). The default is
+  the phase with the most indexed pixels of the map; before, it was the lowest
+  phase number, which is not the matrix when the matrix is listed second, and
+  the page did not say which phase it used. Component fractions, surface-plane
+  fractions, the component map and the rolled-versus-recrystallized split
+  change on maps with more than one phase.
+- The **Texture Components** layer drew an empty (black) image. It now shows
+  each pixel of the texture phase in the colour of the component it is closest
+  to, grey where no component is within the tolerance and black for other
+  phases and not-indexed pixels, with a legend. The ECD, GOS and similar grain
+  maps no longer count pixels without a grain as 0: they are left out of the
+  colour scale, so the scale starts at the smallest grain value.
+- Each scalar map is drawn with its colours stretched between its own smallest
+  and largest value, so a change of a few percent in some grains (for example
+  after switching the ECD basis) was invisible; the colour bar now shows the
+  range.
+- The Batch tab keeps its own edge rule, ECD basis and phase choice when you
+  switch tabs. The minimum intercept is only recorded in the workbook: leaving
+  the field empty no longer stops a reconstruction or a batch, and the workbook
+  cell stays empty instead of showing 1.5.
+- The README listed the recrystallization statistics `low_gkam_fraction` and
+  `low_kam_fraction` as placeholders reported as 0.0. Both are computed (they
+  already were in v0.4.7; 0.0 only for a map without grains), and the README
+  no longer lists them.
+
+#### EDS
+- EDS compositions of files with a spectrum cube change (see Added), and so do
+  the phase maps and presets built from them. Presets and phase maps remember
+  which source they were built on; loading one built on the window integrals
+  shows a notice, and its thresholds stay as they are. Recompute what you want
+  to compare with earlier results.
+- Automatic classification, the plausibility report and phase suggestion use
+  the spectrum numbers. On the two scans with a reference they were better or
+  equal: the Al7Cu2Fe region is now named Al7FeCu2 instead of Al2Cu, and the
+  adjusted Rand index of one scan rose from 0.752 to 0.773.
+- The EDS prior of indexing, the pixel chemistry of the phase test and Crystal
+  Hint, particle rescue and the grain-based phase assignment stay on the window
+  integrals. With spectrum numbers the correct phase ranked first for 74.55 %
+  of the alpha-phase pixels of one scan, against 89.37 % with the windows,
+  until these scorers are recalibrated.
+
+#### Pattern centre
+- **A file without a pattern centre refuses indexing.** An EDAX `.up1`/`.up2`
+  without its `.osc` used to be indexed at kikuchipy's placeholder (0.5, 0.5,
+  0.5), which gave confident, wrong orientations (measured on a copy without its
+  `.osc`). Hough, Dictionary, Spherical and EMSphInx runs, the batches and the
+  phase test now refuse with a message that tells you to calibrate the PC or to
+  provide the `.osc` or metadata file; a batch request that brings its own PC is
+  let through. A dictionary is no longer built at the placeholder. The `.ang`
+  export of such a file writes 0 for x/y/z-star and a comment line that the PC
+  was never calibrated.
+- **A file's PC belongs to its full path.** Two files with the same name in
+  different folders no longer share one pattern centre on the PC page, in batch
+  runs or when a PC is copied to other files. A PC copied to other files follows
+  rules that keep the copies of one measurement together and ask before it
+  reaches other files; a PC typed on one measurement no longer lands on the
+  batch data of another.
+- **Every result records the pattern centre, its source and the detector tilts
+  it was indexed with**, for all methods (a per-pixel map is recorded as its
+  mean and flagged). The `.ang`, the `.h5` exports and the batch exports write
+  that record instead of whatever is set when the export is made; before, a
+  result indexed at one PC and exported after another was typed carried the new
+  PC. A result made before this version has no record: its `.h5` says "not
+  recorded" and its `.ang` has zero x/y/z-star and a note. The single PC of a
+  cropped map is the mean of the cut map. An Oxford rich export saved as `.h5`
+  is read by the Oxford reader again, with its pattern-centre map and camera
+  tilt.
+- The "PC Drift Analysis" buttons on the PC Refinement page are removed: they
+  always answered with the same placeholder sentence, which reads as "no drift".
+  AZtec's per-pixel PC map and the grid calibration's map are unchanged.
+
+#### Indexing
+- The experimental ML Hub page and the "Embedding" indexing option are no
+  longer shown; neither worked in installed copies.
+- **Hough reflector lists come from correct structure factors in every crystal
+  system.** For cells with non-orthogonal axes (hexagonal, trigonal, monoclinic,
+  triclinic) the atom sites were moved when the unit cell was completed, so the
+  structure factors and the default Hough list were wrong; for hcp Mg, {2-1-11}
+  had a non-zero structure factor although it is extinct. The default list, the
+  reflector family table, the extinction lock for a hand-added family and the
+  Kikuchi-line overlays now use the structure factors of the real cell. Cubic,
+  tetragonal and orthorhombic cells without duplicate sites keep their list row
+  for row; other phases get a different list, so recompute Hough results you
+  want to compare. The default list is a function of the phase and the rule
+  (d >= 1 Å, |F| above a tenth of the strongest, up to 70 rows, no repeated rows)
+  and never of free memory; a limit of N rows keeps the N strongest rows.
+- A Hough library that does not fit the memory budget is refused with a
+  message on the Indexing and PC Refinement pages that names the phase, its
+  rows, the predicted library and the budget. A button "Use the largest list that
+  fits (N rows)" is offered, except for monoclinic and triclinic phases (point
+  group m included), where a shorter list was measured to lose orientations, and
+  never below 40 rows: on the S phase of a real 7050 map, 32 rows gave 0.3 % of
+  the reference pixels within 5° and 40 rows gave 38.0 %. Every result records
+  the list it was indexed with (rule, families, number of rows, predicted
+  library and memory budget), exports carry that record, and the methods text
+  states a list that is not the full default one.
+- Trigonal phases of space groups 149, 151, 153, 157, 159, 162 and 163 are
+  handled in their true point-group setting: the reflector families (without it
+  a family held reflections that differ physically; 48 to 60 of 284 reflections
+  had a wrong structure factor, and Cr2N had 42 of 212), the multiplicities, a
+  hand selection of families, and the setting kept through a save and load of a
+  project or orix file. A Hough run on a trigonal or hexagonal phase carries a
+  note that variants can be confused. The m-3m grain segmentation refuses
+  trigonal phases. Orientation grids and pseudo-symmetry operators of Dictionary
+  and Spherical indexing are not changed.
+
+#### Simulation and library
+- The master-pattern sphere in the Database Browser is computed in a second
+  Python process. Memory used by a high-resolution sphere is returned to the
+  system when it is done, a sphere that fails no longer risks Orienta itself,
+  and a **Cancel** button next to the progress indicator stops a sphere you no
+  longer need. The first sphere after starting Orienta can take noticeably
+  longer, especially with a virus scanner, while the process loads its
+  libraries. Elapsed seconds and a note while the process is still starting are
+  shown; a Cancel is shown as "Cancelled." with a Retry button. The sphere
+  viewer is no longer stuck: reconstructions run one at a time (six
+  simultaneous High requests took the process from 3 GB to 13.7 GB of RAM, three
+  Max requests to 28.5 GB), identical requests share one reconstruction, a
+  request the viewer has left is dropped, and a failed one can be retried. When
+  memory runs out the sphere answers with a short message instead of a trace; on
+  a computer without a GPU, a sphere the RAM cannot hold is refused beforehand
+  instead of the machine ceasing to answer.
+- On computers with a GPU, the EMsoft route computes the master pattern on the
+  CPU. The result of EMsoft's GPU master program differs from the CPU
+  program's, and Dictionary Indexing cannot load it. The Monte-Carlo step still
+  runs on the GPU. Master patterns that an earlier version wrote with the GPU
+  program stay listed as not loadable. The Orienta Engine is not affected.
+
+#### Desktop app and backend
+- Faster start: the phase lists after the second start of the backend come from
+  a cache of what was read from the CIF files (in `~/.orienta/cache`), reused
+  only for the same file, size, modification time and reader version. Phase
+  discovery took 11.8 s and the Crystal Hint index 11.8 s (46 CIFs) on every
+  start; on the second start they take 0.1 s and 2.0 s.
+- **Release GPU** also ends the idle compute process, which keeps its own CUDA
+  memory (433 to 702 MiB measured) for 180 s after its last job.
+- A development start (`npm run electron:dev`) shows the waiting page and loads
+  the dev server once the backend answers; if the dev server does not answer,
+  the window says what to start and to press Ctrl+R.
+
+### Fixed
+
+#### Analysis page
+- **The four RX criteria on the Recrystallization tab had no effect.** The page
+  never sent them, so every classification used the script's values (GOS 1.25°,
+  gBC 0.7, gKAM 0.55°, radius 0.4 µm) whatever the fields showed. **Classify**
+  now sends them (GOS 0 to 20°, gBC 0 to 1, gKAM 0 to 10°, radius 0 to 100 µm)
+  and prints the criteria next to the numbers; the RX map, the Excel export,
+  the batch and **Run Complete Analysis** use the same ones. Red on the RX map
+  is exactly the set of grains the numbers count. The RX analysis needs the
+  band contrast of the measurement: on a map without it the page says so and
+  draws no red. Results made before with other values than the script's were
+  computed with the script's values.
+- **The preset and the tolerance angle on the Texture tab had no effect.** The
+  page never sent them, so every run used FCC rolling and 10°. They are now
+  sent with the run, remembered with the phase, and used by the component
+  fractions, the Texture Components map, the rolled-versus-recrystallized
+  comparison, the Excel export and the batch; the workbook records them
+  (Sheet 1, rows 68 and 69). Runs made with another preset or tolerance than
+  the defaults were still computed with the defaults.
+- **Texture-component fractions written by earlier versions were wrong;
+  recompute them.** The ideal orientations were built as the smallest rotation
+  that aligns one crystal direction with one sample direction, not as
+  `{hkl}<uvw>`: Inv. Goss came out equal to Cube and Goss equal to Rotated Cube
+  ND45, the other components were 18° to 45° away from their definitions, and
+  the sample symmetry (mmm) was applied on the wrong side, so every component
+  had a single variant. Each component is now `{hkl}<uvw>` (plane normal along
+  ND, a crystal equivalent of `<uvw>` perpendicular to it along RD) or its Euler
+  angles, times the sample symmetry, and a fraction is counted as the reference
+  MATLAB script counts it: the shares of pixels within the tolerance of each
+  distinct variant are added, so a pixel near two variants of one component
+  counts twice. On an aluminium map the 14 fractions equal those MTEX computes
+  for the same orientations (largest difference 2e-16 percent at 5°, 10° and
+  15°). MTEX for Python's own .h5oina loader uses another specimen frame, so
+  its numbers for the same file differ in some components. This changes the
+  component columns of the Documentation workbook, the rolled-versus-
+  recrystallized comparison sheet, the texture index and entropy, and the
+  texture component map. In the map, a pixel that two components claim equally
+  goes to the first one, and a pixel without an orientation to none.
+- **Texture index and entropy are now the ODF-based values of the reference
+  script**, not approximations from the component fractions: `norm(odf)^2` and
+  `entropy(odf)` of a kernel density of the orientations (5° half-width). A
+  texture without preferred orientation has index 1 and entropy 0. On two
+  aluminium test maps the index agrees with MTEX's to about five digits
+  (25.5737 against 25.5733 on one, 4.27622 against 4.27620 on the other), and
+  the entropy to 0.003 or better (-2.1834 against -2.1805 on the first). Values
+  written by earlier versions (between 0 and 1) are not comparable; recompute.
+  Computing them adds about 8 seconds on a map of 170 000 pixels.
+- The surface-plane fractions {111}, {100} and {110} were computed with the
+  inverse of the crystal orientation, so they were wrong for every texture
+  except a cube one (a Shear 2 `{111}<112>` orientation gave 0 % for {111}
+  instead of 100 %). They are now computed as the MATLAB script computes them,
+  and the page and the workbook also give the share of pixels with **any plane
+  of the family** in the surface, which does not depend on which symmetric
+  equivalent the file stores. On AZtec data the script's number for {100} and
+  {110} comes out near 0 %; the family value is the one to read.
+- The BCC preset's "Rot. Goss" was the same orientation as "Goss"
+  (`{110}<001>`). It is now the rotated Goss `{110}<1-10>`, Goss turned by 90° about
+  ND.
+- **The Excel workbook is never written into a file that exists.** If the
+  chosen name is taken, the export goes to `<name>_2.xlsx` (then `_3`, ...) and
+  says which file it wrote; an export that stops half-way keeps its unfinished
+  file as `<name>.incomplete.xlsx`. The GOS and gKAM sheets now give percent of
+  the total grain area (as MTEX's grain histogram), not pixel counts. An
+  analysis step that could not run for a file (for example the RX analysis on a
+  map without band contrast) is reported as a warning in the export and in the
+  batch result instead of leaving empty cells without a word.
+- **Run Complete Analysis** and **Download Excel** follow what is set on the
+  tabs: the Grain tab's parameters and statistics settings, the Deformation
+  parameters, the Texture tab's preset, tolerance and phase, and the RX
+  criteria and phase. The export used to take the values the backend had last
+  been sent; it now applies a choice that was made on the Deformation, Texture
+  or Recrystallization tab and not run yet before it exports, and says so.
+- The Texture tab's **Analyze Texture** no longer waits for a grain
+  reconstruction: the texture is computed from the pixels of the chosen phase
+  and needs no grains. A texture choice that was changed and not run yet is
+  marked on the tab, and the result names the preset and tolerance it was made
+  with.
+- The results shown on the Deformation, Texture and Recrystallization tabs, and
+  the check marks of the tab bar, stayed on screen after another map was loaded
+  elsewhere; they now go with the map.
+- The quality filter on the Data tab leaves the grains that were made before it
+  as they are; the page now says so and draws the maps again.
+- A scan just opened in the EBSD Viewer met "No indexed data loaded" on the
+  Analysis page and had to be browsed for a second time. The Data tab now fills
+  the path field with the viewer's file when the field is empty, and offers it
+  as one button while no map is loaded there or the map loaded there is another
+  file. It is offered, not loaded on its own, because after an indexing run the
+  map to analyse may be the result, not the vendor's map.
+- A failed grain reconstruction, or one the backend no longer knew after a
+  restart, left the progress indicator running; it now stops with a message.
+- Starting a grain reconstruction with an empty number field replaced the page
+  with an error screen; it now shows a message.
+
+#### Pattern centre
+- On the PC Refinement page: a refused or cancelled action is shown in words
+  (Remove, a typed PC or tilt and Add are refused while a refine runs); the
+  forward preview never borrows another phase's master (a phase without a
+  master of its own showed a preview against the first master of the list and a
+  red NCC of 0.016, which reads as a bad PC); a phase simulated at several beam
+  energies keeps its master; the pattern list and Remove stay reachable on a
+  small window; every calibration pattern of a detector with a circular aperture
+  is shown round (patterns added after background removal were square with noisy
+  corners); after a refine the CI and the preview belong to the pattern and the
+  PC shown; and after a processed copy of the data the page shows the new
+  dataset's empty session instead of the old patterns and "Phase loaded". The
+  count on "Open PC Refinement" follows the list after a removal, and indexing a
+  single pattern on demand no longer fails on a second click.
+- A refine or a grid calibration no longer writes into a file that was loaded
+  under the same name while it ran, and a PC written from the page no longer
+  collapses a per-pixel PC map unseen.
+- The batch's **Set PC manually** dialog now sets the pattern centre: the typed
+  PC never reached the backend, so the list said "PC set" while the batch kept
+  refusing the file for a missing PC. The dialog takes the numbers in Bruker,
+  EDAX/TSL or Oxford convention (preselected to the file's vendor), converts
+  them with the same conversion as the PC page, and closes only when the backend
+  has taken the PC.
+
+#### Indexing
+- Switching the Indexing method in a batch clears the picked phases; before, a
+  phase picked for Spherical kept its master path under Hough and the batch
+  indexed against the wrong candidate without any error.
+- **Indexing batch:** the `_indexed.h5` file that the batch of the Indexing page
+  writes for each scan now holds grid-shaped arrays and loads back into Orienta
+  (it could not be read back before), for square and hexagonal scans alike.
+- Switching the Indexing method no longer sends a Spherical master file to the
+  Hough reflector lookup, where the backend tried to read the binary file as a
+  CIF and logged errors. The reflector controls now show only for a CIF.
+- **Apply to grain with Refine no longer runs out of GPU memory or holds the
+  backend.** On a real file the refine held the backend for 45 s, ran out of
+  GPU memory, left the backend at 32 to 42 GiB of memory and was skipped every
+  time. Its Newton step ran at a bandwidth that needs about 62 GiB. It now runs
+  at the largest bandwidth that fits 60 % of the free memory (about 72 on a
+  free 12 GB card) and says which, stops after 60 s and counts the pixels not
+  reached, hands its memory back at the end, and runs in a worker thread. If
+  another request changed the data meanwhile, it answers with a conflict and
+  writes nothing.
+
+#### Desktop app and backend
+- **"Backend: Disconnected" and "Connection to the backend lost" right after
+  start-up.** About 35 s after connecting, the page showed "Backend:
+  Disconnected" for about 25 s, then "Connection to the backend lost", and the
+  settings answered only after up to 60 s, although the backend was running.
+  Three start-up requests held it: the phase file discovery (33.8 s), the
+  system status waiting for the WSL check (21.7 s) and the server folder check
+  (5.1 s), measured on a real page load. They now run in threads, the system
+  check once for the three requests the page makes. On the same page load the
+  page then showed "Connected" throughout, with no stall longer than 2 s from
+  these routes.
+- **Installer data folder.** "change..." in the setup no longer adds an
+  Orienta level per click (.../Orienta/Orienta/Orienta), and a reinstall is no
+  longer refused because of empty folders of such a chain. A chain of Orienta
+  folders is followed to the installation at its end, a recorded data folder
+  that was deleted is settled at start-up, and a folder that cannot be used is
+  refused before the pointer to the working one is rewritten, so choosing a
+  folder no longer strands an existing installation. A refusal names the folder
+  and what is in the way; where it holds the crystal library it tells you to
+  check and back it up instead of advising to delete it, and the uninstaller
+  recognises Orienta's leftovers by their shape.
+- The exit of a backend that the app had already replaced no longer clears the
+  state of the current one.
+
+#### Simulation and library
+- **A simulated master that kikuchipy cannot load is no longer offered for
+  Dictionary indexing.** EMsoft's GPU master program writes such files. The
+  phase library lists them by name, a simulation that produced one ends with a
+  warning naming the file and the program, and "Simulate All Missing" reports a
+  phase whose only master is such a file instead of saying that nothing is
+  missing. To get a usable master, delete the file and simulate the phase
+  again; the simulation now uses the CPU master program. A new run does not
+  replace an existing file.
+- **EMsoft simulation:** with no central database configured (blank paths),
+  results are no longer copied into the working directory.
+- **Simulation file names.** Every element is written by its symbol (Mg
+  appeared as `Z12`, N as `Z7`), phases whose main metal is magnesium are filed
+  under `Mg` in the central database, and the Pearson symbol is counted from
+  the structure (Mg and alpha-Ti are `hP2`, Si is `cF8`). Files already in a
+  library keep their names; re-simulating such a phase writes a file with the
+  corrected name beside the old one, and the phase card shows the symbol of the
+  newest file.
+- **Crystal Database:** the CIF info panel lists the atom sites as the CIF
+  writes them (asymmetric unit, coordinates in the file's own setting) with a
+  displacement parameter only when the file states one, and it no longer blocks
+  the application while parsing. DOI and reference are read by one reader
+  everywhere, typed references come back as typed, and a DOI edit reaches the
+  tag that is read. The Materials Project download writes them with the same
+  writer. New `.xtal` files store the bare DOI in `useReference` instead of a
+  link.
+- **Debye-Waller table:** iron has `Fe (BCC)` 0.3328 Å² and `Fe (FCC)` 0.5710 Å²
+  (Peng et al. 1996, 300 K). Converting an elemental iron CIF in Fm-3m uses the
+  FCC value; iron in compounds and alloys keeps the BCC value. Existing `.xtal`
+  files are unchanged.
+
+### Known limitations
+- Hexagonal scans, not yet available and each refused with a message that says
+  so: NLPAR denoising, averaging neighbouring patterns in Crystal Hint (a
+  radius of 0 works), the pixel-wise pattern-centre calibration, the joint
+  orientation/pattern-centre refinement, the automatic grain-based phase
+  assignment from EDS chemistry, and the Analysis page (grain reconstruction,
+  grain size, deformation analysis and its maps). The Analysis page draws its
+  maps on the index grid, which would put every second row half a step off;
+  using the hexagonal lattice there is open work.
+- On a hexagonal scan, one rule inside the pseudo-symmetry unification, the one
+  that tells salt-and-pepper variants from coherent twin domains, still counts
+  four neighbours of the index grid, and its thresholds have not been tested on
+  a hexagonal scan; check the result of a unification there. Loading saved
+  hexagonal files into OIM Analysis is untested.
+- EDS matrix correction: checked for one detector position and a 70° specimen
+  tilt only; another geometry needs its own check before the numbers are
+  trusted. The deviation figures above are not an uncertainty for other
+  specimens.
+
+---
+
 ## v0.4.7 — 2026-10-10
 
 This release corrects "BG Static", which imprinted the bands of one pattern on

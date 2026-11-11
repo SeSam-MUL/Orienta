@@ -26,8 +26,8 @@ authors:
     family-names: "Weißensteiner"
     orcid: "https://orcid.org/0000-0002-8917-5231"
     affiliation: "Montanuniversität Leoben"
-version: "0.4.7"
-date-released: "2026-10-10"
+version: "0.4.8"
+date-released: "2026-11-11"
 license: "GPL-3.0-or-later"
 repository-code: "https://github.com/SeSam-MUL/Orienta"
 # The concept DOI always resolves to the newest archived version — that is what
@@ -60,6 +60,9 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.23006390"
     description: "Zenodo archive of version 0.4.6"
+  - type: doi
+    value: "10.5281/zenodo.23287311"
+    description: "Zenodo archive of version 0.4.7"
   - type: doi
     value: "10.5281/zenodo.21021937"
     description: "Earlier archive lineage, kept for the example EBSD datasets"
