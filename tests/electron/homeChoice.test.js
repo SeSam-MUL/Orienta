@@ -26,7 +26,12 @@ const env = () => ({
   APPDATA: path.join(sandbox, 'Roaming'),
   LOCALAPPDATA: path.join(sandbox, 'Local'),
 });
-const opts = () => ({ platformName: 'win32', env: env() });
+// These tests play Windows on whatever machine runs them. The sandbox lies on a
+// fixed disk, so that is the drive type they report: on a POSIX runner the
+// sandbox has no drive letter, and asking the real probe there would answer
+// "unknown type" for a folder that is merely deleted. Tests about the drive
+// type pass their own.
+const opts = () => ({ platformName: 'win32', env: env(), driveType: () => 'Fixed' });
 
 beforeEach(() => {
   sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'orienta-choice-'));
