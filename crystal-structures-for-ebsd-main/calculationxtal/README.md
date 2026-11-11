@@ -10,9 +10,9 @@ in this folder: `cif_database_builder.py` and `Xtal_Generator_GUI.py`.
     +--------------------------------------------------------------------------+
     | [IMPORTANT] PREREQUISITE NOTICE                                          |
     |                                                                          |
-    | This guide assumes you have met the prerequisites listed in the          |
-    | README.md of the parent folder (../README.md), mainly the Python         |
-    | environment of Orienta.                                                  |
+    | This guide assumes Orienta's Python environment is installed as          |
+    | described in the project README:                                         |
+    | https://github.com/SeSam-MUL/Orienta/blob/main/README.md                 |
     |                                                                          |
     | The installation of Python, the virtual environment setup, etc.,         |
     | will not be explained again here.                                        |
@@ -110,8 +110,8 @@ correct the DOI of a file.
 ---------------------------------
    3.2 Why This File Is Not Under Version Control
 ---------------------------------
-`crystal_database.xlsx` is listed in the `.gitignore` file of the parent folder
-(`crystal-structures-for-ebsd-main/`). This is intentional.
+`crystal_database.xlsx` is excluded from version control by `.gitignore`. This is
+intentional.
 
     * The CIF files are the source data and the Python scripts are the code.
       `crystal_database.xlsx` is generated from them, so it is a local work
