@@ -7,13 +7,14 @@
  *   Right side: System status dots (EMsoft, WSL, EMSphinx, GPU) + Backend status
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { colors, layout } from '../../theme/tokens';
 import useDataStore from '../../stores/useDataStore';
 import useProgressStore from '../../stores/useProgressStore';
-import { simApi } from '../../services/api';
+import { simApi, ebsdApi } from '../../services/api';
 import { isHexScan } from '../../services/scanGeometry';
+import { tiltBadge } from './tiltBadge';
 
 function StatusDot({ color, label }) {
   return (
@@ -44,12 +45,30 @@ export function backendStateLabel(t, status) {
 }
 
 export default function StatusBar({ backendStatus, onNavigate }) {
-  const { t } = useTranslation('shell');
-  const { isFileOpen, filePath, gridShape, scanGeometry, hexResampled, patternCount, detector, stepSize, edsElements } = useDataStore();
+  const { t, i18n } = useTranslation('shell');
+  const { isFileOpen, filePath, gridShape, scanGeometry, hexResampled, patternCount, detector, stepSize, edsElements, tiltCheck, setTiltCheck } = useDataStore();
   const { tasks } = useProgressStore();
   const [sysStatus, setSysStatus] = useState(null);
 
   const activeTasks = Object.values(tasks).filter(t => t.status === 'running');
+
+  const tiltAskedFor = useRef(null);
+  // The tilt check comes with the load answer; a file restored from the backend's list (or opened
+  // before this check existed) has none, so it is asked for once per .h5oina.
+  useEffect(() => {
+    if (!isFileOpen || !/\.h5oina$/i.test(filePath || '')) return undefined;
+    const name = (filePath || '').split(/[\\/]/).pop();
+    if (tiltCheck && tiltCheck.datei === name) return undefined;
+    // Once per path: an answer for another file must not start a fetch loop.
+    if (tiltAskedFor.current === filePath) return undefined;
+    tiltAskedFor.current = filePath;
+    let alive = true;
+    ebsdApi.tiltCheck()
+      .then((res) => { if (alive) setTiltCheck(res.data?.tilt_check ?? null); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [isFileOpen, filePath, tiltCheck, setTiltCheck]);
+  const tilt = tiltBadge(tiltCheck, i18n.language);
 
   // Fetch system status on mount and whenever backend reconnects
   useEffect(() => {
@@ -154,6 +173,15 @@ export default function StatusBar({ backendStatus, onNavigate }) {
                 </span>
               )}
             </>
+          )}
+          {/* Outside the grid block: an EDS-only .h5oina has no pattern grid but its
+              electron images and maps can be distorted all the same. */}
+          {tilt && (
+            <span title={t(`shell:${tilt.titleKey}`, tilt.titleParams)}
+                  data-testid="tilt-distortion-badge"
+                  style={{ marginLeft: 6, color: colors.yellow, whiteSpace: 'nowrap' }}>
+              {t(`shell:${tilt.key}`, tilt.params)}
+            </span>
           )}
           {detector?.has_detector && detector.pc?.length === 3 && (
             <>

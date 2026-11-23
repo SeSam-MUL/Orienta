@@ -23,6 +23,10 @@ const useDataStore = create((set, get) => ({
   // hexagonal file is held as a square map, so `scanGeometry` is honestly square and cannot say
   // it). Written next to the geometry by the same writers; null = the backend did not say.
   hexResampled: null,
+  // Tilt distortion check of an .h5oina (backend services/tilt_distortion): { befund,
+  // faktor_korrektur, zusammenfassung, bilder, karten, hinweise, ... }; null = not an .h5oina
+  // or not asked yet.
+  tiltCheck: null,
   patternCount: 0,
   patternShape: [0, 0],
 
@@ -78,6 +82,7 @@ const useDataStore = create((set, get) => ({
     gridShape: data.grid_shape,
     scanGeometry: parseScanGeometry(data.scan_geometry),
     hexResampled: data.hex_resampled ?? null,
+    tiltCheck: data.tilt_check ?? null,
     patternCount: data.pattern_count,
     patternShape: data.pattern_shape,
     hasPatterns: data.has_patterns,
@@ -95,6 +100,7 @@ const useDataStore = create((set, get) => ({
     gridShape: [0, 0],
     scanGeometry: null,
     hexResampled: null,
+    tiltCheck: null,
     patternCount: 0,
     patternShape: [0, 0],
     hasPatterns: false,
@@ -115,6 +121,8 @@ const useDataStore = create((set, get) => ({
     axesRepr: '',
     phases: [],
   }),
+
+  setTiltCheck: (tiltCheck) => set({ tiltCheck: tiltCheck ?? null }),
 
   setPosition: (row, col, index, pattern) => set({
     currentRow: row,
@@ -257,6 +265,7 @@ const useDataStore = create((set, get) => ({
           ? [info.data_shape[2], info.data_shape[3]] : [0, 0],
         scanGeometry: parseScanGeometry(info.scan_geometry),
         hexResampled: info.hex_resampled ?? null,
+        tiltCheck: info.tilt_check ?? null,
         hasPatterns: true,
         hasRawPatterns: info.has_raw_patterns === true,
         hasEDS: Array.isArray(meta.eds_elements) && meta.eds_elements.length > 0,

@@ -47,6 +47,11 @@ This is normally the **first** module you open in a session. Use it to:
    file starts from its raw patterns when you load it again. A PC you typed,
    refined or calibrated for the file is kept and is restored on the next load
    (see [PC Refinement](PCRefinement.md)). The active file is not affected.
+4. For an `.h5oina`, the load also checks whether the electron images and maps are
+   distorted by the sample tilt (one direction foreshortened by 1/cos(tilt), 2.92
+   at 70°). The status bar shows **Tilt distortion: X foreshortened ×2.92** or
+   **Tilt distortion unclear**; hover it for the true map step and the correction.
+   See [Tilt distortion](TiltDistortion.md).
 
 ### EDAX APEX measurements and hexagonal scans
 

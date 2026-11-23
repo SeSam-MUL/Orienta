@@ -68,6 +68,13 @@
     "sphinxOk": "EMSphinx: OK",
     "tasks_one": "{{count}} 个任务",
     "tasks_other": "{{count}} 个任务",
+    "tiltDistorted": "倾斜畸变：{{axis}} 方向压缩 ×{{factor}}",
+    "tiltDistortedMapTitle": "文件头倾斜 {{tilt}}°，在图像 {{image}} 上测得 Lx/Ly {{ratio}}：图像在 {{axis}} 方向被压缩 {{factor}} 倍。EBSD/EDS 图位于同一栅格并继承该畸变：{{axis}} 方向的真实步长为 {{trueStep}} µm 而非 {{nominal}} µm。这同样影响晶粒尺寸和晶粒形状。要得到真实比例的图像，请将 {{axis}} 拉伸 {{factor}} 倍（目标尺寸 {{target}} px）。严格来说仅对基准平面有效。",
+    "tiltDistortedTitle": "文件头倾斜 {{tilt}}°，在图像 {{image}} 上测得 Lx/Ly {{ratio}}：图像在 {{axis}} 方向被压缩 {{factor}} 倍。要得到真实比例的长度，请将 {{axis}} 拉伸 {{factor}} 倍（目标尺寸 {{target}} px）；之后比例尺在水平方向有效。严格来说仅对基准平面有效。",
+    "tiltFailed": "倾斜检查失败",
+    "tiltFailedTitle": "无法运行倾斜畸变检查：{{error}}",
+    "tiltUnclear": "倾斜畸变不明确",
+    "tiltUnclearTitle": "文件头倾斜为 {{tilt}}°，但图像 {{image}} 未显示明确的压缩（Lx/Ly {{ratio}}）。可能已启用倾斜校正、倾斜值仅存在于文件头中，或图像纹理过少。请手动检查。",
     "wslDistro": "WSL: {{distro}}",
     "wslMissing": "WSL: 未安装",
     "wslOk": "WSL: OK"

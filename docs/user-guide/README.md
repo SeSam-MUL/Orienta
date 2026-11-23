@@ -20,6 +20,7 @@ workflow at the bottom of this page.
 |---|---|
 | [Dashboard](Dashboard.md) | Home screen and navigation hub — clickable cards for every module plus a recent-files list. |
 | [EBSD Viewer](EBSDViewer.md) | Load an EBSD scan, browse its Kikuchi patterns on an overview map, and apply pattern preprocessing (background removal, frame averaging, contrast). |
+| [Tilt distortion](TiltDistortion.md) | How the load checks an `.h5oina` for images and maps foreshortened by the sample tilt, and how to correct them. |
 | [HDF5 Viewer](HDF5Viewer.md) | Low-level explorer for the contents of an H5OINA / HDF5 file ("H5OINA Cockpit") — groups, datasets, patterns, and EDS spectra. |
 | [EDS](EDS.md) | Turn per-pixel EDS X-ray counts into element maps and composition (counts / wt% / at%) for chemistry-aware analysis. |
 | [EDS chemistry prior](EDS-prior.md) | How the measured chemistry weighs in on phase assignment during indexing, what it cannot do, and when to leave it off. |

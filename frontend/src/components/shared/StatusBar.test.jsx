@@ -18,6 +18,8 @@ vi.mock('../../theme/tokens', () => ({
 
 vi.mock('../../services/api', () => ({
   simApi: { systemStatus: () => Promise.resolve({ data: {} }) },
+  // An .h5oina without a tilt check in the store asks for one (StatusBar.tilt.test.jsx).
+  ebsdApi: { tiltCheck: () => Promise.resolve({ data: { tilt_check: null } }) },
 }));
 
 // StatusBar calls the stores without a selector: useDataStore()

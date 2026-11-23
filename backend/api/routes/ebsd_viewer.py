@@ -1156,6 +1156,23 @@ def _restore_registry_for_file(file_path, fresh_raw_name: str, variant_key=None)
     return True
 
 
+
+def _tilt_check_for(path: Optional[str], measurement: Optional[str] = None) -> Optional[dict]:
+    """The tilt distortion check of an ``.h5oina`` (``services/tilt_distortion``), for the load
+    answer and ``/info``. None for every other format. Never raises: a check that could not run
+    says so in ``fehler`` and the load goes on -- the check informs, it does not gate."""
+    if not path:
+        return None
+    from backend.api.services import tilt_distortion
+    if not tilt_distortion.is_h5oina(path):
+        return None
+    try:
+        return tilt_distortion.check_h5oina_cached(path, measurement)
+    except Exception as exc:  # noqa: BLE001 -- informational, never fails a load
+        logger.warning("Tilt distortion check failed for %s", path, exc_info=True)
+        return {"datei": os.path.basename(path), "befund": "unklar", "fehler": str(exc),
+                "zusammenfassung": "Verzerrt: unklar, Prüfung fehlgeschlagen."}
+
 def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> dict:
     """Open a file that has EDS / electron images but no diffraction patterns.
 
@@ -1296,6 +1313,7 @@ def _load_eds_only_blocking(path: str, probe: dict, request_id, started_at) -> d
         "eds_elements": eds_elements,
         "electron_images": electron_images,
         "request_id": request_id,
+        "tilt_check": _tilt_check_for(path),
     }
 
     _update_progress(request_id, stage="complete", stage_idx=4, stage_total=4,
@@ -1614,6 +1632,8 @@ def _load_ebsd_blocking(path: str, request_id: Optional[str] = None,
         "eds_elements": eds_elements,
         "electron_images": electron_images,
         "request_id": request_id,
+        # Tilt distortion of the electron images and maps (.h5oina only; None otherwise).
+        "tilt_check": _tilt_check_for(path, getattr(loaded, "measurement", None)),
     }
 
     _update_progress(request_id, stage="complete", stage_idx=4,
@@ -1706,7 +1726,22 @@ async def ebsd_info():
         "scan_geometry": _geometry_dict(_active_dataset),
         "hex_resampled": _signal_is_hex_resampled(signal),
         "has_raw_patterns": _has_raw_patterns(variant_registry.variant_for(_active_dataset), choices),
+        "tilt_check": await asyncio.to_thread(
+            _tilt_check_for, _ebsd_file_path,
+            getattr(variant_registry.variant_for(_active_dataset), "measurement", None)),
     }
+
+
+@router.get("/tilt-check")
+async def tilt_check():
+    """Tilt distortion check of the open ``.h5oina`` (the same answer the load gave).
+
+    ``{"tilt_check": null}`` for a file of another format or when nothing is open."""
+    if not _ebsd_file_path:
+        return {"tilt_check": None}
+    measurement = getattr(variant_registry.variant_for(_active_dataset), "measurement", None) \
+        if _active_dataset else None
+    return {"tilt_check": await asyncio.to_thread(_tilt_check_for, _ebsd_file_path, measurement)}
 
 
 # Above this final-atlas size (uint8 bytes) we refuse to build the tiled atlas

@@ -68,6 +68,13 @@
     "sphinxOk": "EMSphinx: OK",
     "tasks_one": "{{count}} 件のタスク",
     "tasks_other": "{{count}} 件のタスク",
+    "tiltDistorted": "傾斜歪み: {{axis}} 方向に圧縮 ×{{factor}}",
+    "tiltDistortedMapTitle": "ヘッダー傾斜 {{tilt}}°、画像 {{image}} で測定した Lx/Ly {{ratio}}：画像は {{axis}} 方向に {{factor}} 倍圧縮されています。EBSD/EDS マップは同じラスター上にあり歪みを引き継ぎます：{{axis}} 方向の実際のステップは {{nominal}} µm ではなく {{trueStep}} µm です。粒径や粒形にも影響します。実寸の画像を得るには {{axis}} を {{factor}} 倍に伸ばしてください（目標サイズ {{target}} px）。厳密には基準面にのみ有効です。",
+    "tiltDistortedTitle": "ヘッダー傾斜 {{tilt}}°、画像 {{image}} で測定した Lx/Ly {{ratio}}：画像は {{axis}} 方向に {{factor}} 倍圧縮されています。実寸の長さを得るには {{axis}} を {{factor}} 倍に伸ばしてください（目標サイズ {{target}} px）。その後スケールバーは水平方向に有効です。厳密には基準面にのみ有効です。",
+    "tiltFailed": "傾斜チェック失敗",
+    "tiltFailedTitle": "傾斜歪みのチェックを実行できませんでした: {{error}}",
+    "tiltUnclear": "傾斜歪み 不明",
+    "tiltUnclearTitle": "ヘッダー傾斜は {{tilt}}° ですが、画像 {{image}} に明確な圧縮は見られません（Lx/Ly {{ratio}}）。傾斜補正が有効になっている、傾斜値がヘッダーにのみ記録されている、または画像のテクスチャが少なすぎる可能性があります。手動で確認してください。",
     "wslDistro": "WSL: {{distro}}",
     "wslMissing": "WSL: 未インストール",
     "wslOk": "WSL: OK"

@@ -68,6 +68,13 @@
     "sphinxOk": "EMSphinx: OK",
     "tasks_one": "{{count}} Aufgabe",
     "tasks_other": "{{count}} Aufgaben",
+    "tiltDistorted": "Kippverzerrung: {{axis}} gestaucht ×{{factor}}",
+    "tiltDistortedMapTitle": "Header-Kippung {{tilt}}°, gemessenes Lx/Ly {{ratio}} am Bild {{image}}: Die Bilder sind in {{axis}} um den Faktor {{factor}} gestaucht. Die EBSD-/EDS-Karten liegen im selben Raster und erben die Verzerrung: Der wahre Schritt in {{axis}} beträgt {{trueStep}} µm statt {{nominal}} µm. Das betrifft auch Korngrößen und Kornformen. Für Bilder im richtigen Maßstab {{axis}} um {{factor}} strecken (Zielgröße {{target}} px). Gilt streng nur für die Grundebene.",
+    "tiltDistortedTitle": "Header-Kippung {{tilt}}°, gemessenes Lx/Ly {{ratio}} am Bild {{image}}: Die Bilder sind in {{axis}} um den Faktor {{factor}} gestaucht. Für Längen im richtigen Maßstab {{axis}} um {{factor}} strecken (Zielgröße {{target}} px); der Maßstabsbalken gilt dann horizontal. Gilt streng nur für die Grundebene.",
+    "tiltFailed": "Kippprüfung fehlgeschlagen",
+    "tiltFailedTitle": "Die Prüfung auf Kippverzerrung konnte nicht laufen: {{error}}",
+    "tiltUnclear": "Kippverzerrung unklar",
+    "tiltUnclearTitle": "Header-Kippung {{tilt}}°, aber das Bild {{image}} zeigt keine eindeutige Stauchung (Lx/Ly {{ratio}}). Möglicherweise ist eine Tilt-Korrektur aktiv, der Kippwert steht nur im Header oder das Bild ist zu texturarm. Manuell prüfen.",
     "wslDistro": "WSL: {{distro}}",
     "wslMissing": "WSL: Nicht installiert",
     "wslOk": "WSL: OK"

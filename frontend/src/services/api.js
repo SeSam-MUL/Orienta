@@ -509,6 +509,8 @@ export const ebsdApi = {
   },
 
   info: () => api.get('/api/ebsd/info'),
+  // Tilt distortion check of the open .h5oina (null for other formats).
+  tiltCheck: () => api.get('/api/ebsd/tilt-check'),
   getPattern: (row, col, config) => api.get(`/api/ebsd/pattern/${row}/${col}`, config),
   getPatternAtlas: (step = 4) => api.get(`/api/ebsd/pattern-atlas`, { params: { step } }),
   select: (indices) => api.post('/api/ebsd/select', { indices }),

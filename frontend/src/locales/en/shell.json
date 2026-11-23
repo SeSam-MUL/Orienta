@@ -68,6 +68,13 @@
     "sphinxOk": "EMSphinx: OK",
     "tasks_one": "{{count}} task",
     "tasks_other": "{{count}} tasks",
+    "tiltDistorted": "Tilt distortion: {{axis}} foreshortened ×{{factor}}",
+    "tiltDistortedMapTitle": "Header tilt {{tilt}}°, measured Lx/Ly {{ratio}} on image {{image}}: the images are foreshortened in {{axis}} by a factor of {{factor}}. The EBSD/EDS maps lie on the same raster and inherit the distortion: the true step in {{axis}} is {{trueStep}} µm instead of {{nominal}} µm. This also affects grain sizes and grain shapes. For true-to-scale images stretch {{axis}} by {{factor}} (target size {{target}} px). Strictly valid for the base plane only.",
+    "tiltDistortedTitle": "Header tilt {{tilt}}°, measured Lx/Ly {{ratio}} on image {{image}}: the images are foreshortened in {{axis}} by a factor of {{factor}}. For true-to-scale lengths stretch {{axis}} by {{factor}} (target size {{target}} px); the scale bar then holds horizontally. Strictly valid for the base plane only.",
+    "tiltFailed": "Tilt check failed",
+    "tiltFailedTitle": "The tilt distortion check could not run: {{error}}",
+    "tiltUnclear": "Tilt distortion unclear",
+    "tiltUnclearTitle": "Header tilt {{tilt}}°, but image {{image}} shows no clear foreshortening (Lx/Ly {{ratio}}). A tilt correction may be active, the tilt value may only be in the header, or the image has too little texture. Check manually.",
     "wslDistro": "WSL: {{distro}}",
     "wslMissing": "WSL: Not installed",
     "wslOk": "WSL: OK"

@@ -9,6 +9,20 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## Unreleased
+
+### Added
+- Loading an `.h5oina` checks whether its electron images and maps are
+  distorted by the sample tilt. AZtec stores them with square pixels, so at 70°
+  one direction is foreshortened by 1/cos 70° = 2.92 on the sample. The header
+  tilt says how large the distortion should be; which direction it is in is
+  measured on the SE image (autocorrelation lengths Lx/Ly), not taken from
+  `Tilt Axis`. The status bar shows the finding, with the true map step for maps
+  that inherit the distortion; a header tilt the image does not confirm is
+  reported as unclear and never corrected by a guess. `GET /api/ebsd/tilt-check`
+  and `scripts/h5oina_tilt_check.py` give the full report. See
+  [Tilt distortion](docs/user-guide/TiltDistortion.md).
+
 ## v0.4.8 — 2026-11-11
 
 This release changes numbers you may have saved. Grain reconstruction, the
