@@ -752,6 +752,11 @@
   },
   "tilt": {
     "toggle": "Wahres Seitenverhältnis ({{axis}} × {{factor}})",
-    "toggleTooltip": "Die Probe war gekippt: Auf ihr sind Bilder und Karten in {{axis}} um den Faktor {{factor}} gestaucht. Eingeschaltet werden sie in {{axis}} um {{factor}} gestreckt gezeichnet, sodass Längen und Formen maßstabsgetreu sind (nur Anzeige, die Datei bleibt unverändert). Gilt streng nur für die Grundebene: Aufragende Strukturen werden zu breit gezeichnet."
+    "toggleTooltip": "Die Probe war gekippt: Auf ihr sind Bilder und Karten in {{axis}} um den Faktor {{factor}} gestaucht. Eingeschaltet werden sie in {{axis}} um {{factor}} gestreckt gezeichnet, sodass Längen und Formen maßstabsgetreu sind (nur Anzeige, die Datei bleibt unverändert). Gilt streng nur für die Grundebene: Aufragende Strukturen werden zu breit gezeichnet.",
+    "manualLabel": "Seitenverhältnis:",
+    "manualStored": "wie gespeichert",
+    "manualAxis": "{{axis}} strecken",
+    "manualFactor": "Streckfaktor (1/cos der Kippung; 2,92 bei 70°)",
+    "manualTooltip": "Die Kippprüfung konnte für diese Datei keine Verzerrung bestätigen (unklar oder kein Elektronenbild zum Messen), deshalb wird nichts automatisch korrigiert. Wenn Sie sehen, dass die Bilder gestaucht sind, strecken Sie die Richtung hier von Hand. Vorgeschlagener Faktor: {{factor}} (1/cos der Header-Kippung). Nur Anzeige, die Datei bleibt unverändert."
   }
 }

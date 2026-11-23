@@ -30,6 +30,9 @@ const useDataStore = create((set, get) => ({
   // Show images and maps of a confirmed tilt finding with the sample's true aspect
   // ratio (EDS page). Display only; on by default, the EDS page has the switch.
   tiltDisplayCorrection: true,
+  // A correction set by hand on the EDS page for a file the check could not confirm:
+  // { path, axis: 'X'|'Y', factor }. Bound to the file it was set for.
+  tiltManual: null,
   patternCount: 0,
   patternShape: [0, 0],
 
@@ -127,6 +130,7 @@ const useDataStore = create((set, get) => ({
 
   setTiltCheck: (tiltCheck) => set({ tiltCheck: tiltCheck ?? null }),
   setTiltDisplayCorrection: (on) => set({ tiltDisplayCorrection: !!on }),
+  setTiltManual: (manual) => set({ tiltManual: manual ?? null }),
 
   setPosition: (row, col, index, pattern) => set({
     currentRow: row,

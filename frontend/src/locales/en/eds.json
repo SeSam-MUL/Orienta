@@ -752,6 +752,11 @@
   },
   "tilt": {
     "toggle": "True aspect ratio ({{axis}} × {{factor}})",
-    "toggleTooltip": "The sample was tilted: on it, the images and maps are foreshortened in {{axis}} by a factor of {{factor}}. With this on, they are drawn {{factor}}× wider in {{axis}} so lengths and shapes are true to scale (display only; the file is not changed). Strictly valid for the base plane only: structures that stand up are drawn too wide."
+    "toggleTooltip": "The sample was tilted: on it, the images and maps are foreshortened in {{axis}} by a factor of {{factor}}. With this on, they are drawn {{factor}}× wider in {{axis}} so lengths and shapes are true to scale (display only; the file is not changed). Strictly valid for the base plane only: structures that stand up are drawn too wide.",
+    "manualLabel": "Aspect ratio:",
+    "manualStored": "as stored",
+    "manualAxis": "stretch {{axis}}",
+    "manualFactor": "Stretch factor (1/cos of the tilt; 2.92 at 70°)",
+    "manualTooltip": "The tilt check could not confirm a distortion for this file (unclear, or no electron image to measure), so nothing is corrected automatically. If you can see that the images are foreshortened, stretch the direction by hand. Suggested factor: {{factor}} (1/cos of the header tilt). Display only; the file is not changed."
   }
 }

@@ -41,13 +41,41 @@ export function mapsInherit(check) {
 }
 
 /**
+ * The factor to suggest for a manual correction: k = 1/cos(tilt) from the
+ * header when it says the sample was tilted, otherwise 1/cos 70° (2.92), the
+ * usual EBSD tilt.
+ */
+export function suggestedManualFactor(check) {
+  const k = Number(check?.faktor_k_theoretisch);
+  if (Number.isFinite(k) && k > 1.001) return Math.round(k * 100) / 100;
+  return 2.92;
+}
+
+/**
+ * A manual correction the user chose (`{ axis: 'X'|'Y', factor }`) as a stretch,
+ * or null when there is none or it is not usable. Manual means the user judged
+ * the image: it applies to images and maps alike.
+ */
+export function manualStretch(manual) {
+  const k = Number(manual?.factor);
+  if (!manual || !(k > 1.001) || !Number.isFinite(k) || k > 20) return null;
+  if (manual.axis === 'X') return { sx: k, sy: 1 };
+  if (manual.axis === 'Y') return { sx: 1, sy: k };
+  return null;
+}
+
+/**
  * Stretch for one layer kind ('electron', 'eds-element', 'bc', 'vbse', 'mask', …),
  * or for the composite overlay ('composite', on the map grid).
+ *
+ * `manual` (optional): a correction the user set by hand for a file the check
+ * could not confirm. It is used only when there is no confirmed finding — a
+ * confirmed one always wins, so a hand setting cannot contradict a measurement.
  */
-export function stretchFor(check, kind, enabled = true) {
+export function stretchFor(check, kind, enabled = true, manual = null) {
   if (!enabled) return NO_STRETCH;
   const f = tiltFinding(check);
-  if (!f) return NO_STRETCH;
+  if (!f) return manualStretch(manual) || NO_STRETCH;
   if (kind === 'electron') return { sx: f.sx, sy: f.sy };
   return mapsInherit(check) ? { sx: f.sx, sy: f.sy } : NO_STRETCH;
 }

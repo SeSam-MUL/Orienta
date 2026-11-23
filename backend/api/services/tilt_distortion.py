@@ -337,15 +337,61 @@ def _image_datasets(group) -> List[Tuple[str, object]]:
     return out
 
 
-def _as_image(ds, nx: Optional[int], ny: Optional[int]) -> np.ndarray:
+def infer_width(flat: np.ndarray, *, min_side: int = 64, max_aspect: float = 3.0,
+                max_rows: int = 256) -> Optional[int]:
+    """Row width of a flat (row-major) image whose header lacks ``X Cells``.
+
+    Every divisor ``w`` of the length with a plausible aspect is tried; the
+    right one is the width at which consecutive rows look alike (highest mean
+    correlation between row i and row i+1). A wrong width shears the image and
+    neighbouring rows stop matching -- this is measured, not guessed from a
+    "nearly square" rule, because a sheared image would make the anisotropy
+    measurement meaningless. None when no candidate fits."""
+    a = np.asarray(flat, dtype=np.float64).reshape(-1)
+    n = a.size
+    best_w, best_score = None, -np.inf
+    for w in range(min_side, n // min_side + 1):
+        if n % w:
+            continue
+        h = n // w
+        if h < min_side or not (1.0 / max_aspect <= w / h <= max_aspect):
+            continue
+        rows = a.reshape(h, w)
+        step = max(1, h // max_rows)
+        r0, r1 = rows[:-1:step], rows[1::step]
+        r0 = r0 - r0.mean(axis=1, keepdims=True)
+        r1 = r1 - r1.mean(axis=1, keepdims=True)
+        den = np.sqrt((r0 * r0).sum(axis=1) * (r1 * r1).sum(axis=1))
+        ok = den > 0
+        if not ok.any():
+            continue
+        score = float(np.mean((r0 * r1).sum(axis=1)[ok] / den[ok]))
+        if score > best_score:
+            best_w, best_score = w, score
+    return best_w
+
+
+def _as_image(ds, nx: Optional[int], ny: Optional[int]) -> Tuple[np.ndarray, Optional[str]]:
+    """(2-D image, note). The note says when the size did not come from the
+    header (it was measured from the data, see :func:`infer_width`)."""
     a = np.asarray(ds[()])
+    note = None
     if a.ndim == 1:
-        if not nx or not ny or a.size != nx * ny:
-            raise ValueError(f"flat image of {a.size} values does not fit {ny} x {nx}")
-        a = a.reshape(int(ny), int(nx))      # X runs fastest
+        if nx and ny and a.size == nx * ny:
+            a = a.reshape(int(ny), int(nx))      # X runs fastest
+        else:
+            w = infer_width(a)
+            if w is None:
+                raise ValueError(f"flat image of {a.size} values: size not in the header "
+                                 "and not determinable from the data")
+            a = a.reshape(a.size // w, w)
+            note = (f"Bildgröße fehlte im Header ({ny} × {nx}); aus den Daten bestimmt: "
+                    f"{w} × {a.shape[0]} px")
     elif a.ndim == 2 and a.shape[1] in (3, 4) and nx and ny and a.shape[0] == nx * ny:
         a = a.reshape(int(ny), int(nx), a.shape[1])
-    return a
+    elif a.ndim == 3 and a.shape[-1] not in (3, 4):
+        a = a[a.shape[0] // 2]                   # a stack of frames: the middle one
+    return a, note
 
 
 def _channel_of(name: str) -> str:
@@ -441,11 +487,14 @@ def check_h5oina(path: str, measurement: Optional[str] = None) -> Dict:
             for name, ds in _image_datasets(g):
                 entry: Dict = {"name": prefix + name, "kanal": _channel_of(name)}
                 try:
-                    img = _as_image(ds, img_nx, img_ny)
+                    img, size_note = _as_image(ds, img_nx, img_ny)
                 except Exception as exc:  # noqa: BLE001 -- report, never fail the file
                     entry.update(befund=BEFUND_UNCLEAR, fehler=str(exc))
                     out["bilder"].append(entry)
                     continue
+                if size_note:
+                    entry["groesse_aus_daten"] = True
+                    out["hinweise"].append(f"{prefix}{name}: {size_note}.")
                 ny_, nx_ = img.shape[:2]
                 meas = measure_anisotropy(img)
                 v = reconcile(tilt, meas.lx_ly_median, channel=entry["kanal"])
@@ -588,7 +637,7 @@ def is_h5oina(path: str) -> bool:
 
 
 __all__ = [
-    "check_h5oina", "check_h5oina_cached", "measure_anisotropy", "classify_ratio",
+    "check_h5oina", "check_h5oina_cached", "measure_anisotropy", "classify_ratio", "infer_width",
     "reconcile", "stretch_factor", "tile_correlation_lengths", "is_h5oina",
     "BEFUND_X", "BEFUND_Y", "BEFUND_OK", "BEFUND_UNCLEAR",
 ]

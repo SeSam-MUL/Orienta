@@ -274,3 +274,34 @@ def test_tilt_check_route(tmp_path, monkeypatch):
     assert out["tilt_check"]["befund"] == td.BEFUND_X
     monkeypatch.setattr(ev, "_ebsd_file_path", None)
     assert asyncio.run(ev.tilt_check()) == {"tilt_check": None}
+
+
+# --- Electron image without its size in the header ---------------------------
+
+@pytest.mark.parametrize("h,w", [(768, 1024), (704, 1024), (384, 512)])
+def test_infer_width_from_row_correlation(h, w):
+    img = _u8(_foreshortened_x(h=h, w=w))
+    assert td.infer_width(img.ravel()) == w
+
+
+def test_file_without_image_size_in_header_is_still_measured(tmp_path):
+    p = tmp_path / "AB8.h5oina"
+    _write_h5oina(p, _u8(_foreshortened_x(h=704, w=1024)))
+    with h5py.File(p, "r+") as f:           # what the EDS page calls "geometry missing"
+        del f["1/Electron Image/Header/X Cells"]
+        del f["1/Electron Image/Header/Y Cells"]
+    r = td.check_h5oina(str(p))
+    assert r["befund"] == td.BEFUND_X
+    (img,) = r["bilder"]
+    assert img["pixel"] == [1024, 704] and img["groesse_aus_daten"] is True
+    assert any("aus den Daten bestimmt" in h for h in r["hinweise"])
+
+
+def test_file_with_a_stack_of_frames_uses_the_middle_one(tmp_path):
+    p = tmp_path / "stack.h5oina"
+    frame = _u8(_foreshortened_x())
+    _write_h5oina(p, frame)
+    with h5py.File(p, "r+") as f:
+        del f["1/Electron Image/Data/SE/Elektronenbild 33 (Input1)"]
+        f["1/Electron Image/Data/SE/Elektronenbild 33 (Input1)"] = np.stack([frame] * 3)
+    assert td.check_h5oina(str(p))["befund"] == td.BEFUND_X

@@ -23,7 +23,7 @@ import { regionAverageIsSummed, regionClipboardText } from './regionAverage';
 import SpectrumFitNotice from './SpectrumFitNotice';
 import { useSpectrumFitStatus } from './hooks/useSpectrumFitStatus';
 import useDataStore from '../../stores/useDataStore';
-import { stretchFor as tiltStretchFor, tiltFinding } from './tiltStretch';
+import { stretchFor as tiltStretchFor, tiltFinding, suggestedManualFactor } from './tiltStretch';
 import useResultStore from '../../stores/useResultStore';
 import { CursorSyncProvider, useCursorSync } from './CursorSyncContext';
 import { umPerPxForLayer, scanUmPerPx } from './layerPixelSize';
@@ -396,13 +396,19 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
   const tiltCorrect = useDataStore((s) => s.tiltDisplayCorrection ?? true);
   const setTiltCorrect = useDataStore((s) => s.setTiltDisplayCorrection);
   const tiltFound = useMemo(() => tiltFinding(tiltCheck), [tiltCheck]);
+  // Hand correction for a file the check could not confirm (it said "unclear",
+  // or there is no electron image to measure). Bound to the file it was set for.
+  const tiltManualAll = useDataStore((s) => s.tiltManual);
+  const setTiltManual = useDataStore((s) => s.setTiltManual);
+  const tiltManual = tiltManualAll && tiltManualAll.path === filePath ? tiltManualAll : null;
+  const manualFactorDefault = useMemo(() => suggestedManualFactor(tiltCheck), [tiltCheck]);
   const layerStretch = useCallback(
-    (layer) => tiltStretchFor(tiltCheck, layer?.kind, tiltCorrect),
-    [tiltCheck, tiltCorrect],
+    (layer) => tiltStretchFor(tiltCheck, layer?.kind, tiltCorrect, tiltManual),
+    [tiltCheck, tiltCorrect, tiltManual],
   );
   const overlayStretch = useMemo(
-    () => tiltStretchFor(tiltCheck, 'composite', tiltCorrect),
-    [tiltCheck, tiltCorrect],
+    () => tiltStretchFor(tiltCheck, 'composite', tiltCorrect, tiltManual),
+    [tiltCheck, tiltCorrect, tiltManual],
   );
 
   const [displayMode, setDisplayMode] = useState('at_pct');
@@ -1093,6 +1099,44 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
                 factor: tiltFound.factor.toLocaleString(i18n.language, { maximumFractionDigits: 2 }),
               })}
             </label>
+          )}
+          {!tiltFound && setTiltManual && isFileOpen && (
+            <span data-tilt-manual title={t('tilt.manualTooltip', {
+              factor: manualFactorDefault.toLocaleString(i18n.language, { maximumFractionDigits: 2 }),
+            })} style={{
+              display: 'flex', alignItems: 'center', gap: 4, fontSize: '9pt', whiteSpace: 'nowrap',
+              color: tiltManual ? colors.yellow : colors.textSecondary,
+            }}>
+              {t('tilt.manualLabel')}
+              <select
+                aria-label={t('tilt.manualLabel')}
+                value={tiltManual?.axis || ''}
+                onChange={(e) => {
+                  const axis = e.target.value;
+                  setTiltManual(axis ? {
+                    path: filePath, axis, factor: tiltManual?.factor || manualFactorDefault,
+                  } : null);
+                }}
+                style={{ fontSize: '9pt' }}
+              >
+                <option value="">{t('tilt.manualStored')}</option>
+                <option value="X">{t('tilt.manualAxis', { axis: 'X' })}</option>
+                <option value="Y">{t('tilt.manualAxis', { axis: 'Y' })}</option>
+              </select>
+              {tiltManual && (
+                <input
+                  type="number" min={1.01} max={20} step={0.01}
+                  aria-label={t('tilt.manualFactor')}
+                  title={t('tilt.manualFactor')}
+                  value={tiltManual.factor}
+                  onChange={(e) => {
+                    const f = Number(e.target.value);
+                    if (Number.isFinite(f)) setTiltManual({ ...tiltManual, factor: f });
+                  }}
+                  style={{ width: 56, fontSize: '9pt' }}
+                />
+              )}
+            </span>
           )}
           <Label secondary small style={{ marginRight: 4 }}>{t('header.displayLabel')}</Label>
           <ModeToggle value={displayMode} onChange={setDisplayMode} />
