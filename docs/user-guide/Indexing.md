@@ -121,7 +121,44 @@ Typical entry points:
 13. **Phase Test** runs the single-pixel phase identification dialog. **Batch**
     indexes multiple files. **→ Analysis** hands the result to the EBSD Analysis
     module.
+    Its **Particle comparison** section judges whole particles instead of one
+    pattern: see [Particle comparison](#particle-comparison-ncc-over-several-patterns).
 14. Use the **Export** dropdown to save the result as `.h5` (rich/light) or `.ang`.
+
+### Particle comparison (NCC over several patterns)
+
+The single-pixel Phase Test ranks the phases on one pattern. For a phase
+assignment you report, a particle is judged on several, with a spread. In the
+Phase Test dialog, below the candidate list:
+
+1. Put the crosshair on a particle, give it a name (e.g. `VL12a`) and a radius in
+   scan steps, and click **Add pixel … as a particle**. The particle is that pixel
+   and every pixel within the radius. Add as many particles as you need.
+2. Choose the candidate phases in the phase picker above (the same list as the
+   single-pixel test) and set **Best patterns per phase** (default 10).
+3. **Compare** runs every pattern of every particle through the same comparison
+   as the single-pixel test: per phase the orientation is re-indexed and refined,
+   the pattern simulated and its NCC against the measured pattern computed, with
+   the dialog's quality, background removal and mask.
+
+The result has two tables:
+
+- **Phase assignment**: per particle the phase with the highest mean NCC, the
+  NCC as mean ± standard deviation over the best patterns of that phase,
+  NCC max, the next-best phase with its mean, and ΔNCC between the two. A gap
+  below 0.01 is marked **≈ indistinguishable**: such phases (isostructural pairs
+  like Al₆Fe and MnAl₆) cannot be told apart by NCC, whichever is listed first.
+- **Candidate matrix**: the mean NCC of every candidate phase on every particle,
+  the highest per particle highlighted.
+
+**LaTeX: copy …** puts either table on the clipboard in the layout of a thesis
+table (booktabs/tabularx, German decimal comma, bold maximum, a footnote for an
+indistinguishable pair). **Save CSV** writes one row per particle and phase.
+
+The run takes about half a second per pattern for a dozen phases once the phase
+models are built (the first run builds them). At most 200 patterns per particle
+and 1000 per run are compared. The backend endpoint is
+`POST /api/indexing/particle-phase-ncc/start` (poll `…/progress/{job_id}`).
 
 ## Inputs & outputs
 

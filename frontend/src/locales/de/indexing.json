@@ -693,7 +693,44 @@
     "unsupportedRowNoSht": "{{key}} — kein simulierter Master (.sht), es gibt also nichts zum Vergleichen",
     "unsupportedRow": "{{key}} — {{reason}}",
     "edsPending": "EDS: Die Spektren dieser Karte werden noch ausgewertet, daher gibt es für dieses Pixel noch keine Chemie.",
-    "edsFitFailed": "EDS: Der Spektren-Fit ist fehlgeschlagen, daher hat diese Datei keine EDS-Chemie."
+    "edsFitFailed": "EDS: Der Spektren-Fit ist fehlgeschlagen, daher hat diese Datei keine EDS-Chemie.",
+    "particle": {
+      "title": "Partikel-Vergleich (NCC über mehrere Muster)",
+      "intro": "Ein Partikel ist das Pixel unter dem Fadenkreuz mit seinen Nachbarn im Radius. Jedes Muster wird wie im Einzelpixel-Test mit den gewählten Phasen verglichen; je Phase zählen die {{n}} Muster mit der höchsten NCC.",
+      "name": "Name",
+      "radius": "Radius (px)",
+      "radiusTip": "Alle Pixel bis zu diesem Abstand (in Rasterschritten) vom gewählten Pixel gehören zum Partikel. 0 = nur das Pixel.",
+      "add": "Pixel ({{row}}, {{col}}) als Partikel hinzufügen ({{count}} Muster)",
+      "addTip": "Fügt das Pixel unter dem Fadenkreuz mit seinen Nachbarn im Radius als Partikel hinzu.",
+      "chip": "{{name}}: ({{row}}, {{col}}), r {{radius}}, {{count}} Muster",
+      "remove": "{{name}} entfernen",
+      "topN": "Beste Muster je Phase",
+      "topNTip": "Über wie viele Muster mit der höchsten NCC je Phase gemittelt wird (Standard 10).",
+      "run_one": "{{count}} Partikel mit {{phases}} Phasen vergleichen",
+      "run_other": "{{count}} Partikel mit {{phases}} Phasen vergleichen",
+      "runTip": "Vergleicht jedes Muster der Partikel mit den oben gewählten Phasen (gleiche Qualität, Hintergrundabzug und Maske wie der Einzelpixel-Test).",
+      "progress": "{{done}}/{{total}} Muster",
+      "colParticle": "Partikel",
+      "colPhase": "Phase",
+      "colSpaceGroup": "Raumgruppe",
+      "colMean": "NCC (x̄ ± s, {{n}} beste)",
+      "colMax": "NCC max",
+      "colNext": "Nächstbeste Phase (NCC)",
+      "colDelta": "ΔNCC",
+      "matrixTitle": "Mittlere NCC aller Kandidatphasen (über je {{n}} Muster); höchster Wert je Partikel hervorgehoben.",
+      "indistinguishable": "≈ nicht unterscheidbar",
+      "indistinguishableTip": "{{a}} und {{b}} liegen weniger als 0,01 auseinander und sind anhand der NCC nicht unterscheidbar (z. B. isostrukturelle Phasen).",
+      "fewPatternsTip": "Nur {{n}} Muster mit gültiger NCC: Mittelwert über weniger Muster als eingestellt.",
+      "copyAssignment": "LaTeX: Phasenzuordnung kopieren",
+      "copyCandidates": "LaTeX: Kandidatenmatrix kopieren",
+      "copyLatexTip": "Kopiert die Tabelle als LaTeX (booktabs, tabularx, amsmath) in die Zwischenablage.",
+      "copied": "Kopiert ✓",
+      "copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen.",
+      "saveCsv": "CSV speichern",
+      "particleNameMissing": "Bitte einen Namen für das Partikel eingeben.",
+      "particleNameTaken": "Dieser Partikelname ist schon vergeben.",
+      "particlePixelMissing": "Zuerst ein Pixel im Scan wählen."
+    }
   },
   "hoverTips": {
     "degeneracyReduceToOne": "Nur eine Phase aus dieser entarteten Gruppe behalten und die redundanten Duplikate entfernen",
@@ -907,6 +944,10 @@
     "houghHexagonalVariants_other": "Phasen {{phases}}: Hough kann Orientierungen nicht immer sicher voneinander unterscheiden, die durch eine Drehung ineinander übergehen, die eine Symmetrie der hexagonalen Zelle, aber nicht dieser Kristalle ist (60° um c). Bei wichtigen Ergebnissen kann Spherical- oder Dictionary-Indizierung helfen."
   },
   "errors": {
-    "pc_missing": "Diese Datei enthält kein Pattern Center (PC); der Platzhalter von kikuchipy würde falsche Orientierungen liefern. Kalibrieren Sie das PC in der PC-Verfeinerung oder legen Sie die .osc-/Metadaten-Datei mit dem PC neben den Scan und starten Sie erneut."
+    "pc_missing": "Diese Datei enthält kein Pattern Center (PC); der Platzhalter von kikuchipy würde falsche Orientierungen liefern. Kalibrieren Sie das PC in der PC-Verfeinerung oder legen Sie die .osc-/Metadaten-Datei mit dem PC neben den Scan und starten Sie erneut.",
+    "particleNameTwice": "Jedes Partikel braucht einen eigenen Namen.",
+    "particlePixelOutside": "Ein Partikel liegt außerhalb des Scans.",
+    "particleTooLarge": "Zu viele Muster: höchstens 200 je Partikel und 1000 je Durchlauf werden verglichen. Radius verkleinern.",
+    "noTestablePhase": "Keine der gewählten Phasen hat ein Master-Pattern (SHT) für den Vergleich."
   }
 }

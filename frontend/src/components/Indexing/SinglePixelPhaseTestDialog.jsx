@@ -14,6 +14,7 @@ import { omissions } from './phaseTestOmissions';
 import LinkedPatternImage from '../PatternMatch/LinkedPatternImage';
 import { useLinkedPatternMarkers } from '../PatternMatch/useLinkedPatternMarkers';
 import PatternExportDialog from '../PatternMatch/PatternExportDialog';
+import ParticleNccPanel from './ParticleNccPanel';
 import { useZoomViews, SYNC_SINGLE } from '../EDS/hooks/useZoomViews';
 import { useFitReadyCount, useSpectrumFitStatus } from '../EDS/hooks/useSpectrumFitStatus';
 import { viewToTransform, zoomedRect, isZoomed } from '../EDS/zoomView';
@@ -1118,6 +1119,13 @@ export default function SinglePixelPhaseTestDialog({ open, onClose, currentMetho
             ))}
           </div>
         )}
+
+        <ParticleNccPanel
+          pixelIndex={pixelIndex} nRows={nRows} nCols={nCols}
+          phases={phases} selectedKeys={selectedKeys}
+          settings={{ bandwidth, bgRemove, usePixelPc, aperture, apertureRadius }}
+          blocked={collectionPhasesBlocked || noneSelected}
+        />
         </div>{/* end RIGHT column */}
         </div>{/* end 2-column body */}
         <PatternExportDialog

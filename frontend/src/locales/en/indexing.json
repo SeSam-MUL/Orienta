@@ -693,7 +693,44 @@
     "unsupportedRowNoSht": "{{key}} — no simulated master (.sht), so there is nothing to compare against",
     "unsupportedRow": "{{key}} — {{reason}}",
     "edsPending": "EDS: the spectra of this map are still being evaluated, so there is no chemistry for this pixel yet.",
-    "edsFitFailed": "EDS: the spectrum fit failed, so this file has no EDS chemistry."
+    "edsFitFailed": "EDS: the spectrum fit failed, so this file has no EDS chemistry.",
+    "particle": {
+      "title": "Particle comparison (NCC over several patterns)",
+      "intro": "A particle is the pixel under the crosshair with its neighbours within the radius. Every pattern is compared with the chosen phases as in the single-pixel test; per phase, the {{n}} patterns with the highest NCC count.",
+      "name": "Name",
+      "radius": "Radius (px)",
+      "radiusTip": "Every pixel up to this distance (in scan steps) from the chosen pixel belongs to the particle. 0 = the pixel alone.",
+      "add": "Add pixel ({{row}}, {{col}}) as a particle ({{count}} patterns)",
+      "addTip": "Adds the pixel under the crosshair with its neighbours within the radius as a particle.",
+      "chip": "{{name}}: ({{row}}, {{col}}), r {{radius}}, {{count}} patterns",
+      "remove": "Remove {{name}}",
+      "topN": "Best patterns per phase",
+      "topNTip": "How many patterns with the highest NCC per phase are averaged (default 10).",
+      "run_one": "Compare {{count}} particle with {{phases}} phases",
+      "run_other": "Compare {{count}} particles with {{phases}} phases",
+      "runTip": "Compares every pattern of the particles with the phases chosen above (same quality, background removal and mask as the single-pixel test).",
+      "progress": "{{done}}/{{total}} patterns",
+      "colParticle": "Particle",
+      "colPhase": "Phase",
+      "colSpaceGroup": "Space group",
+      "colMean": "NCC (x̄ ± s, {{n}} best)",
+      "colMax": "NCC max",
+      "colNext": "Next-best phase (NCC)",
+      "colDelta": "ΔNCC",
+      "matrixTitle": "Mean NCC of every candidate phase (over {{n}} patterns each); highest value per particle highlighted.",
+      "indistinguishable": "≈ indistinguishable",
+      "indistinguishableTip": "{{a}} and {{b}} are less than 0.01 apart and cannot be told apart by NCC (e.g. isostructural phases).",
+      "fewPatternsTip": "Only {{n}} patterns with a valid NCC: the mean is over fewer patterns than set.",
+      "copyAssignment": "LaTeX: copy phase assignment",
+      "copyCandidates": "LaTeX: copy candidate matrix",
+      "copyLatexTip": "Copies the table as LaTeX (booktabs, tabularx, amsmath) to the clipboard.",
+      "copied": "Copied ✓",
+      "copyFailed": "Copying to the clipboard failed.",
+      "saveCsv": "Save CSV",
+      "particleNameMissing": "Please enter a name for the particle.",
+      "particleNameTaken": "This particle name is already used.",
+      "particlePixelMissing": "Choose a pixel in the scan first."
+    }
   },
   "hoverTips": {
     "degeneracyReduceToOne": "Keep only one phase from this degenerate group and drop the redundant duplicates",
@@ -907,6 +944,10 @@
     "houghHexagonalVariants_other": "Phases {{phases}}: Hough cannot always tell apart orientations related by a rotation that is a symmetry of the hexagonal cell but not of these crystals (60° about c). For important results, Spherical or Dictionary indexing may help."
   },
   "errors": {
-    "pc_missing": "This file carries no pattern centre (PC); kikuchipy's placeholder would give wrong orientations. Calibrate the PC in PC Refinement, or put the .osc / metadata file that holds it next to the scan, then start again."
+    "pc_missing": "This file carries no pattern centre (PC); kikuchipy's placeholder would give wrong orientations. Calibrate the PC in PC Refinement, or put the .osc / metadata file that holds it next to the scan, then start again.",
+    "particleNameTwice": "Each particle needs its own name.",
+    "particlePixelOutside": "A particle lies outside the scan.",
+    "particleTooLarge": "Too many patterns: at most 200 per particle and 1000 per run are compared. Make the radius smaller.",
+    "noTestablePhase": "None of the chosen phases has a master pattern (SHT) to compare with."
   }
 }

@@ -976,6 +976,14 @@ export const indexApi = {
   // the crosshair live (no GPU/detector/pattern read involved).
   phaseTestPixelChemistry: (pixelIndex) =>
     api.get(`/api/indexing/single-pixel-phase-test/pixel-chemistry/${pixelIndex}`),
+  // Phase comparison per particle: NCC mean ± s over the best patterns of each
+  // particle, the next-best phase, ΔNCC, and the tables as LaTeX / CSV.
+  particleNccStart: (params) =>
+    api.post('/api/indexing/particle-phase-ncc/start', params),
+  particleNccProgress: (jobId) =>
+    api.get(`/api/indexing/particle-phase-ncc/progress/${jobId}`),
+  particleNccCancel: (jobId) =>
+    api.post(`/api/indexing/particle-phase-ncc/cancel/${jobId}`),
   // Result registry
   listResults: () => api.get('/api/indexing/results'),
   activateResult: (id) => api.post(`/api/indexing/results/activate/${id}`),

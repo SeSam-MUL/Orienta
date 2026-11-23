@@ -9,6 +9,16 @@ You can see which version you are running under **Settings → About Orienta**.
 
 ---
 
+## Unreleased
+
+### Added
+- Phase Test: **Particle comparison**. Several particles (a pixel and its
+  neighbours within a radius) are compared with the chosen phases on all their
+  patterns. Per particle: the assigned phase with NCC mean ± s over the best
+  patterns (default 10), NCC max, the next-best phase and ΔNCC, with a gap below
+  0.01 marked as indistinguishable; plus the matrix of every candidate phase on
+  every particle. Both tables can be copied as LaTeX or saved as CSV.
+
 ## v0.4.8 — 2026-11-11
 
 This release changes numbers you may have saved. Grain reconstruction, the

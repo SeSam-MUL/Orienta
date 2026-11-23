@@ -693,7 +693,44 @@
     "unsupportedRowNoSht": "{{key}} — シミュレーション済みマスター（.sht）がないため、比較対象がありません",
     "unsupportedRow": "{{key}} — {{reason}}",
     "edsPending": "EDS: このマップのスペクトルはまだ評価中のため、この画素の化学組成はまだありません。",
-    "edsFitFailed": "EDS: スペクトルフィットに失敗したため、このファイルには EDS の化学組成がありません。"
+    "edsFitFailed": "EDS: スペクトルフィットに失敗したため、このファイルには EDS の化学組成がありません。",
+    "particle": {
+      "title": "粒子比較（複数パターンのNCC）",
+      "intro": "粒子とは、十字線下のピクセルと半径内の近傍ピクセルです。各パターンを単一ピクセルテストと同様に選択した相と比較し、相ごとにNCCが最も高い{{n}}個のパターンを使用します。",
+      "name": "名前",
+      "radius": "半径 (px)",
+      "radiusTip": "選択したピクセルからこの距離（スキャンステップ単位）以内のすべてのピクセルが粒子に含まれます。0 = そのピクセルのみ。",
+      "add": "ピクセル ({{row}}, {{col}}) を粒子として追加（{{count}} パターン）",
+      "addTip": "十字線下のピクセルと半径内の近傍を粒子として追加します。",
+      "chip": "{{name}}: ({{row}}, {{col}}), r {{radius}}, {{count}} パターン",
+      "remove": "{{name}} を削除",
+      "topN": "相ごとの最良パターン数",
+      "topNTip": "相ごとにNCCが最も高いパターンをいくつ平均するか（既定値 10）。",
+      "run_one": "{{count}} 個の粒子を {{phases}} 相と比較",
+      "run_other": "{{count}} 個の粒子を {{phases}} 相と比較",
+      "runTip": "粒子の各パターンを上で選択した相と比較します（単一ピクセルテストと同じ品質、背景除去、マスク）。",
+      "progress": "{{done}}/{{total}} パターン",
+      "colParticle": "粒子",
+      "colPhase": "相",
+      "colSpaceGroup": "空間群",
+      "colMean": "NCC (x̄ ± s, 上位 {{n}})",
+      "colMax": "NCC 最大",
+      "colNext": "次点の相 (NCC)",
+      "colDelta": "ΔNCC",
+      "matrixTitle": "全候補相の平均NCC（各 {{n}} パターン）。粒子ごとの最大値を強調表示。",
+      "indistinguishable": "≈ 区別不可",
+      "indistinguishableTip": "{{a}} と {{b}} の差は 0.01 未満で、NCC では区別できません（例：同構造の相）。",
+      "fewPatternsTip": "有効なNCCを持つパターンは {{n}} 個のみ：設定より少ないパターンでの平均です。",
+      "copyAssignment": "LaTeX: 相の帰属をコピー",
+      "copyCandidates": "LaTeX: 候補行列をコピー",
+      "copyLatexTip": "表を LaTeX（booktabs、tabularx、amsmath）としてクリップボードにコピーします。",
+      "copied": "コピーしました ✓",
+      "copyFailed": "クリップボードへのコピーに失敗しました。",
+      "saveCsv": "CSV を保存",
+      "particleNameMissing": "粒子の名前を入力してください。",
+      "particleNameTaken": "この粒子名はすでに使われています。",
+      "particlePixelMissing": "先にスキャン上のピクセルを選択してください。"
+    }
   },
   "hoverTips": {
     "degeneracyReduceToOne": "この縮退グループから1つの相だけを残し、冗長な重複を削除します",
@@ -907,6 +944,10 @@
     "houghHexagonalVariants_other": "相 {{phases}}：Hough では、六方晶の単位格子の対称操作ではあっても結晶そのものの対称操作ではない回転（c 軸まわりの 60°）で互いに移り合う方位を、常に区別できるとは限りません。重要な結果には、Spherical 指数付けまたは Dictionary 指数付けが役立つ場合があります。"
   },
   "errors": {
-    "pc_missing": "このファイルにはパターンセンター (PC) がありません。kikuchipy の仮の値では誤った方位になります。PC リファインメントで PC を較正するか、PC を含む .osc／メタデータファイルをスキャンの隣に置いてから、もう一度開始してください。"
+    "pc_missing": "このファイルにはパターンセンター (PC) がありません。kikuchipy の仮の値では誤った方位になります。PC リファインメントで PC を較正するか、PC を含む .osc／メタデータファイルをスキャンの隣に置いてから、もう一度開始してください。",
+    "particleNameTwice": "各粒子には固有の名前が必要です。",
+    "particlePixelOutside": "粒子がスキャンの範囲外にあります。",
+    "particleTooLarge": "パターンが多すぎます：粒子ごとに最大 200、1 回の実行で最大 1000 まで比較します。半径を小さくしてください。",
+    "noTestablePhase": "選択した相のいずれにも比較用のマスターパターン（SHT）がありません。"
   }
 }

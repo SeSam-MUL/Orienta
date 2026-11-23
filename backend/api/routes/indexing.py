@@ -9730,6 +9730,234 @@ async def single_pixel_phase_test_phases():
              "space_group": getattr(e, "space_group", "") or ""} for e in entries]
 
 
+
+# ---------------------------------------------------------------------------
+# Phase comparison per particle (NCC statistics over several patterns).
+#
+# The single-pixel phase test ranks phases on ONE pattern. A particle is judged
+# on several: every pattern of the particle goes through the same compare
+# engine (per-phase re-index with refinement, render, NCC against the measured
+# pattern), and services/particle_phase_ncc turns the per-pattern NCCs into
+# mean +- s over the ten best patterns per phase, NCC_max, the next-best phase
+# and the gap -- plus the two LaTeX tables of a phase assignment.
+# ---------------------------------------------------------------------------
+
+#: Patterns per particle. Each costs one compare pass over all phases (~0.5 s
+#: for 12 phases once the backend is built), so this bounds a run to minutes.
+PARTICLE_NCC_MAX_PIXELS = 200
+PARTICLE_NCC_MAX_TOTAL = 1000
+_particle_ncc_jobs: "OrderedDict[str, dict]" = OrderedDict()
+_PARTICLE_NCC_JOB_MAX = 8
+_particle_ncc_busy = False
+
+
+class ParticleSpec(BaseModel):
+    name: str = Field(..., min_length=1, max_length=64)
+    #: The particle's pixels (flat scan indices). Takes precedence over the disc.
+    pixel_indices: Optional[list[int]] = None
+    #: Or: every pixel within ``radius_px`` (index-grid distance) of this one.
+    center_index: Optional[int] = Field(None, ge=0)
+    radius_px: int = Field(2, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def _has_pixels(self):
+        if not self.pixel_indices and self.center_index is None:
+            raise ValueError(f"particle {self.name!r} names no pixels: give pixel_indices "
+                             "or center_index")
+        return self
+
+
+class ParticlePhaseNccRequest(BaseModel):
+    particles: list[ParticleSpec] = Field(..., min_length=1, max_length=24)
+    #: The candidate phases, explicitly (library keys). An empty list is refused.
+    phase_keys: list[str] = Field(..., min_length=1)
+    top_n: int = Field(10, ge=1, le=100)
+    aperture: Literal["auto", "circular", "full"] = "circular"
+    aperture_radius: float = Field(1.0, ge=0.3, le=1.0)
+    max_bandwidth: int = Field(128, ge=64, le=512)
+    bg_remove: bool = True
+    use_pixel_pc: bool = False
+
+
+def _particle_ncc_plan(req: ParticlePhaseNccRequest, n_rows: int, n_cols: int) -> list:
+    """``[{"name", "pixels": [flat...]}]`` -- validated: unique names, pixels
+    inside the scan, the size limits. Raises a coded 400 otherwise."""
+    from backend.api.services.particle_phase_ncc import disc_pixels
+    names = [p.name.strip() for p in req.particles]
+    dup = sorted({n for n in names if names.count(n) > 1})
+    if dup:
+        raise problem(400, "particleNameTwice",
+                      "Each particle needs its own name; used twice: " + ", ".join(dup))
+    n = n_rows * n_cols
+    plan, total = [], 0
+    for p, name in zip(req.particles, names):
+        if p.pixel_indices:
+            pix = list(dict.fromkeys(int(i) for i in p.pixel_indices))
+            bad = [i for i in pix if not 0 <= i < n]
+            if bad:
+                raise problem(400, "particlePixelOutside",
+                              f"Particle {name}: pixel {bad[0]} is outside the "
+                              f"{n_rows} x {n_cols} scan.")
+        else:
+            try:
+                pix = disc_pixels(int(p.center_index), p.radius_px, n_rows, n_cols)
+            except ValueError as exc:
+                raise problem(400, "particlePixelOutside", f"Particle {name}: {exc}")
+        if len(pix) > PARTICLE_NCC_MAX_PIXELS:
+            raise problem(400, "particleTooLarge",
+                          f"Particle {name} has {len(pix)} patterns; at most "
+                          f"{PARTICLE_NCC_MAX_PIXELS} per particle are compared.")
+        total += len(pix)
+        plan.append({"name": name, "pixels": pix})
+    if total > PARTICLE_NCC_MAX_TOTAL:
+        raise problem(400, "particleTooLarge",
+                      f"{total} patterns in all; at most {PARTICLE_NCC_MAX_TOTAL} per run.")
+    return plan
+
+
+def _particle_ncc_pixel(signal, pixel_index, n_cols, *, bg_remove, aperture, aperture_radius):
+    """(pattern, mask) of one pixel, prepared exactly as the single-pixel test does."""
+    from tools.pattern_comparison import circular_mask, detect_circular_aperture
+    from backend.api.services.load_choices import signal_pattern
+    row, col = divmod(int(pixel_index), n_cols)
+    exp = np.asarray(signal_pattern(signal, row, col), dtype=np.float32)
+    if bg_remove:
+        exp = _bg_remove_phase_test(exp)
+    circular = detect_circular_aperture(exp) if aperture == "auto" else (aperture == "circular")
+    mask = circular_mask(exp.shape, aperture_radius) if circular else None
+    return exp, mask
+
+
+async def _run_particle_ncc_job(jid: str, *, req: ParticlePhaseNccRequest, plan: list,
+                                entries: list, signal, det_params: dict, n_cols: int):
+    global _particle_ncc_busy
+    from backend.api.services import particle_phase_ncc as pp
+    job = _particle_ncc_jobs[jid]
+    keys = [e.key for e in entries]
+    id_to_key = {i: e.key for i, e in enumerate(entries)}
+    sht_paths_by_phase = {i: str(e.sht_path) for i, e in enumerate(entries)}
+    phase_names = {i: (e.display_formula or e.formula or e.key) for i, e in enumerate(entries)}
+    cif_paths_by_phase = {i: str(e.cif_path) for i, e in enumerate(entries)
+                          if getattr(e, "cif_path", None)}
+    info = {e.key: {"label": (e.display_formula or e.formula or e.key),
+                    "space_group": getattr(e, "space_group", "") or ""} for e in entries}
+    particles = [{"name": p["name"], "scores": {k: [] for k in keys}} for p in plan]
+    patterns = []
+    job["current"] = "Building phase models — first run is slower…"
+    try:
+        for part, scored in zip(plan, particles):
+            for pix in part["pixels"]:
+                if job.get("cancelled"):
+                    job["status"] = "cancelled"
+                    return
+                job["current"] = f"{part['name']}: pattern {pix}"
+                det = det_params
+                if req.use_pixel_pc:
+                    _e, det = _get_detector_for_phase_test(pixel_index=pix, use_pixel_pc=True)
+                exp, mask = await asyncio.to_thread(
+                    _particle_ncc_pixel, signal, pix, n_cols, bg_remove=req.bg_remove,
+                    aperture=req.aperture, aperture_radius=req.aperture_radius)
+                rows = await asyncio.to_thread(
+                    _compute_phase_compare_results,
+                    exp_pattern=exp, detector_geometry=det,
+                    sht_paths_by_phase=sht_paths_by_phase, phase_names=phase_names,
+                    cif_paths_by_phase=cif_paths_by_phase, aperture_mask=mask,
+                    max_bandwidth=req.max_bandwidth,
+                    should_cancel=lambda: job.get("cancelled", False))
+                if job.get("cancelled"):
+                    job["status"] = "cancelled"
+                    return
+                if not rows:
+                    # The compare engine returns nothing when the pattern does not
+                    # match the detector geometry: a broken run, not a low score.
+                    raise RuntimeError(
+                        f"pattern {pix} could not be compared (pattern size does not match "
+                        "the detector geometry)")
+                by_key = {}
+                for r in rows:
+                    k = id_to_key.get(r["phase_id"])
+                    if k is not None:
+                        by_key[k] = r.get("r_score")
+                        scored["scores"][k].append(r.get("r_score"))
+                row, col = divmod(int(pix), n_cols)
+                patterns.append({"particle": part["name"], "pixel_index": int(pix),
+                                 "row": row, "col": col, "ncc": by_key})
+                job["done"] += 1
+        summary = pp.with_latex(pp.summarize(particles, info, top_n=req.top_n))
+        summary["patterns"] = patterns
+        summary["settings"] = {
+            "top_n": req.top_n, "max_bandwidth": req.max_bandwidth, "bg_remove": req.bg_remove,
+            "aperture": req.aperture, "aperture_radius": req.aperture_radius,
+            "use_pixel_pc": req.use_pixel_pc,
+        }
+        job["result"] = summary
+        job["status"] = "done"
+    except Exception as e:  # noqa: BLE001 -- reported through the poll
+        logger.exception("[particle-ncc job %s] failed", jid)
+        job["status"] = "error"
+        job["error"] = str(e)
+    finally:
+        _particle_ncc_busy = False
+
+
+@router.post("/particle-phase-ncc/start")
+async def particle_phase_ncc_start(req: ParticlePhaseNccRequest):
+    """Compare several particles against the chosen candidate phases.
+
+    Every pattern of every particle is run through the single-pixel compare
+    engine; the answer (via ``/progress``) is per particle the assigned phase
+    with NCC mean +- s over the ``top_n`` best patterns, NCC_max, the next-best
+    phase and the gap, the candidate matrix, the per-pattern NCCs, and both
+    tables as LaTeX and CSV."""
+    global _particle_ncc_busy
+    if _particle_ncc_busy:
+        raise HTTPException(status_code=409, detail="A particle comparison is already running.")
+    signal = _get_active_signal_for_phase_test()
+    if signal is None:
+        raise HTTPException(status_code=400, detail="No EBSD file loaded — open one first")
+    entry, det_params = _get_detector_for_phase_test()
+    if det_params is None:
+        raise HTTPException(status_code=400, detail="No detector/calibration for the active dataset")
+    _require_pc_for_phase_test(entry)
+    n_rows, n_cols = int(det_params["n_rows"]), int(det_params["n_cols"])
+    plan = _particle_ncc_plan(req, n_rows, n_cols)
+    entries, unsupported = _phase_test_library_entries(req.phase_keys)
+    if not entries:
+        raise problem(400, "noTestablePhase",
+                      "None of the chosen phases has a master pattern (SHT) to compare with.")
+
+    while len(_particle_ncc_jobs) >= _PARTICLE_NCC_JOB_MAX:
+        _particle_ncc_jobs.popitem(last=False)
+    jid = uuid.uuid4().hex[:12]
+    total = sum(len(p["pixels"]) for p in plan)
+    _particle_ncc_jobs[jid] = {"status": "running", "done": 0, "total": total,
+                               "current": None, "result": None, "error": None,
+                               "cancelled": False}
+    _particle_ncc_busy = True
+    asyncio.create_task(_run_particle_ncc_job(
+        jid, req=req, plan=plan, entries=entries, signal=signal,
+        det_params=det_params, n_cols=n_cols))
+    return {"job_id": jid, "total": total, "n_phases": len(entries),
+            "particles": [{"name": p["name"], "n_patterns": len(p["pixels"])} for p in plan],
+            "unsupported": unsupported}
+
+
+@router.get("/particle-phase-ncc/progress/{job_id}")
+async def particle_phase_ncc_progress(job_id: str):
+    job = _particle_ncc_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job_id")
+    return {k: job[k] for k in ("status", "done", "total", "current", "error", "result")}
+
+
+@router.post("/particle-phase-ncc/cancel/{job_id}")
+async def particle_phase_ncc_cancel(job_id: str):
+    job = _particle_ncc_jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Unknown job_id")
+    job["cancelled"] = True
+    return {"cancelled": True}
+
 @router.get("/ncc-heatmap")
 async def get_ncc_heatmap(result_id: str = None):
     """Get NCC score heatmap as base64 PNG image."""

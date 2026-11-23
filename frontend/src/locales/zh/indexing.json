@@ -693,7 +693,44 @@
     "unsupportedRowNoSht": "{{key}} — 没有模拟主图（.sht），因此没有可比较的对象",
     "unsupportedRow": "{{key}} — {{reason}}",
     "edsPending": "EDS：此图的能谱仍在评估中，因此该像素暂无化学成分。",
-    "edsFitFailed": "EDS：能谱拟合失败，因此此文件没有 EDS 化学成分。"
+    "edsFitFailed": "EDS：能谱拟合失败，因此此文件没有 EDS 化学成分。",
+    "particle": {
+      "title": "颗粒比较（多个花样的 NCC）",
+      "intro": "颗粒是十字线下的像素及其半径内的相邻像素。每个花样都会像单像素测试一样与所选物相比较；每个物相取 NCC 最高的 {{n}} 个花样。",
+      "name": "名称",
+      "radius": "半径 (px)",
+      "radiusTip": "距所选像素在此距离（以扫描步长计）以内的所有像素都属于该颗粒。0 = 仅该像素。",
+      "add": "将像素 ({{row}}, {{col}}) 添加为颗粒（{{count}} 个花样）",
+      "addTip": "将十字线下的像素及其半径内的相邻像素添加为一个颗粒。",
+      "chip": "{{name}}: ({{row}}, {{col}}), r {{radius}}, {{count}} 个花样",
+      "remove": "删除 {{name}}",
+      "topN": "每个物相的最佳花样数",
+      "topNTip": "每个物相对 NCC 最高的多少个花样取平均（默认 10）。",
+      "run_one": "将 {{count}} 个颗粒与 {{phases}} 个物相比较",
+      "run_other": "将 {{count}} 个颗粒与 {{phases}} 个物相比较",
+      "runTip": "将颗粒的每个花样与上方所选物相比较（质量、背景去除和掩膜与单像素测试相同）。",
+      "progress": "{{done}}/{{total}} 个花样",
+      "colParticle": "颗粒",
+      "colPhase": "物相",
+      "colSpaceGroup": "空间群",
+      "colMean": "NCC (x̄ ± s, 最佳 {{n}} 个)",
+      "colMax": "NCC 最大值",
+      "colNext": "次优物相 (NCC)",
+      "colDelta": "ΔNCC",
+      "matrixTitle": "所有候选物相的平均 NCC（各取 {{n}} 个花样）；每个颗粒的最高值已突出显示。",
+      "indistinguishable": "≈ 无法区分",
+      "indistinguishableTip": "{{a}} 与 {{b}} 相差小于 0.01，无法通过 NCC 区分（例如同构物相）。",
+      "fewPatternsTip": "仅 {{n}} 个花样具有有效 NCC：平均值所用花样少于设定值。",
+      "copyAssignment": "LaTeX：复制物相归属",
+      "copyCandidates": "LaTeX：复制候选矩阵",
+      "copyLatexTip": "将表格以 LaTeX（booktabs、tabularx、amsmath）格式复制到剪贴板。",
+      "copied": "已复制 ✓",
+      "copyFailed": "复制到剪贴板失败。",
+      "saveCsv": "保存 CSV",
+      "particleNameMissing": "请输入颗粒名称。",
+      "particleNameTaken": "该颗粒名称已被使用。",
+      "particlePixelMissing": "请先在扫描中选择一个像素。"
+    }
   },
   "hoverTips": {
     "degeneracyReduceToOne": "仅保留此简并组中的一个相，并移除冗余的重复项",
@@ -907,6 +944,10 @@
     "houghHexagonalVariants_other": "相 {{phases}}：Hough 标定不一定能区分彼此相差一个旋转的取向，该旋转是六方晶胞的对称操作，但不是晶体本身的对称操作（绕 c 轴 60°）。对于重要结果，Spherical 或 Dictionary 标定可能有帮助。"
   },
   "errors": {
-    "pc_missing": "此文件不含花样中心 (PC)；kikuchipy 的占位值会得出错误的取向。请在 PC 精修页面校准 PC，或将含 PC 的 .osc／元数据文件放在扫描文件旁，然后重新开始。"
+    "pc_missing": "此文件不含花样中心 (PC)；kikuchipy 的占位值会得出错误的取向。请在 PC 精修页面校准 PC，或将含 PC 的 .osc／元数据文件放在扫描文件旁，然后重新开始。",
+    "particleNameTwice": "每个颗粒都需要自己的名称。",
+    "particlePixelOutside": "某个颗粒位于扫描范围之外。",
+    "particleTooLarge": "花样过多：每个颗粒最多比较 200 个，每次运行最多 1000 个。请减小半径。",
+    "noTestablePhase": "所选物相中没有任何一个具有可用于比较的主花样（SHT）。"
   }
 }
