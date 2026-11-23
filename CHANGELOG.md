@@ -28,6 +28,8 @@ You can see which version you are running under **Settings → About Orienta**.
   and the pixel grid are unchanged, and clicks, regions and the crosshair still
   land on the same map pixel. Maps the check found on a raster of their own stay
   as they are; an unclear finding is never corrected.
+  Exports from the EDS page follow the switch: the written picture has the
+  true aspect ratio too, a true scale bar, and `_true-aspect` in its name.
 
 ## v0.4.8 — 2026-11-11
 

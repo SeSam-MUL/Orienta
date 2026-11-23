@@ -65,7 +65,7 @@ import ContextMenu from '../common/ContextMenu';
 import ImageExportDialog from '../common/ImageExportDialog';
 import {
   buildSingleCanvas, buildCompositeCanvas, buildMontageCanvas,
-  sourceBitmapFor, canvasToDataUrl,
+  sourceBitmapFor, canvasToDataUrl, stretchBuilt,
 } from './edsExportSources';
 
 const DISPLAY_MODES = [
@@ -938,6 +938,17 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
 
   const layerName = useCallback((l) => String(l.label ?? l.id), []);
 
+  // Exports follow the page's tilt correction: what is on screen is what is
+  // written. `trueAspect` marks the file name so a stretched picture is never
+  // mistaken for the stored one.
+  const exportStretched = overlayStretch.sx !== 1 || overlayStretch.sy !== 1;
+  const trueAspect = exportStretched ? '_true-aspect' : '';
+  const buildLayerExport = useCallback((l) => () => stretchBuilt(
+    buildSingleCanvas(l, sourceBitmapFor(l, allMaps.bitmaps), umPerPxForLayer(l, pixelSizes)),
+    layerStretch(l),
+    { smooth: l.kind === 'electron' },
+  ), [allMaps.bitmaps, pixelSizes, layerStretch]);
+
   const exportMenuItems = useCallback((hit) => {
     const items = [];
     if (hit?.kind === 'tile' && hit.layer) {
@@ -949,9 +960,8 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
           // A tile is drawn at its source bitmap's own resolution, so the area
           // that bitmap came from is the right scale. `l`, not `l.id`, so a
           // mask resolves through the layer it masks.
-          () => buildSingleCanvas(l, sourceBitmapFor(l, allMaps.bitmaps),
-            umPerPxForLayer(l, pixelSizes)),
-          `${exportStem}_${layerName(l)}`,
+          buildLayerExport(l),
+          `${exportStem}_${layerName(l)}${trueAspect}`,
           `${exportStem} \u00b7 ${layerName(l)}`,
           null,
           { caption: layerName(l) },
@@ -1001,11 +1011,11 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
           // the scale of every pixel in it. Emphatically NOT the bottom
           // layer's step: that is the SE image in the default stack, 8.48x
           // finer on SampleB, and reading it here was the bug.
-          () => buildCompositeCanvas({
+          () => stretchBuilt(buildCompositeCanvas({
             layers: stack.layers, bitmaps: stack.bitmaps, shape: stack.shape,
             umPerPx: scanUmPerPx(pixelSizes),
-          }),
-          `${exportStem}_overlay`,
+          }), overlayStretch),
+          `${exportStem}_overlay${trueAspect}`,
           `${exportStem} \u00b7 ${t('overlay.title', { defaultValue: 'Overlay' })}`,
         ),
       });
@@ -1015,15 +1025,13 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
     // the series", which is what a figure panel is assembled from.
     if (allMaps.layers.length > 1) {
       const first = allMaps.layers[0];
-      const buildFor = (l) => () => buildSingleCanvas(
-        l, sourceBitmapFor(l, allMaps.bitmaps), umPerPxForLayer(l, pixelSizes),
-      );
+      const buildFor = buildLayerExport;
       items.push({
         id: 'each',
         label: t('imageexport:menuExportEachMap'),
         onSelect: () => openExport(
           buildFor(first),
-          `${exportStem}_${layerName(first)}`,
+          `${exportStem}_${layerName(first)}${trueAspect}`,
           `${exportStem} \u00b7 ${layerName(first)}`,
           null,
           {
@@ -1032,7 +1040,7 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
             // files will say.
             caption: layerName(first),
             batch: {
-              stem: exportStem,
+              stem: `${exportStem}${trueAspect}`,
               items: allMaps.layers.map((l) => ({
                 id: l.id,
                 label: layerName(l),
@@ -1056,8 +1064,9 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
           bitmaps: allMaps.bitmaps,
           shape: allMaps.shape,
           labelFor: layerName,
+          stretch: overlayStretch,
         }),
-        `${exportStem}_all-maps`,
+        `${exportStem}_all-maps${trueAspect}`,
         `${exportStem} \u00b7 ${t('allMaps.title', { defaultValue: 'All maps' })}`,
         // No scale argument: a montage mixes rasters and separates them with
         // gaps, so `buildMontageCanvas` reports `umPerPx: null` itself and no
@@ -1065,7 +1074,8 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
       ),
     });
     return items;
-  }, [t, openExport, exportStem, layerName, allMaps, stack, pixelSizes]);
+  }, [t, openExport, exportStem, layerName, allMaps, stack, pixelSizes,
+    buildLayerExport, overlayStretch, trueAspect]);
 
 
   if (!isFileOpen) return <EmptyState />;

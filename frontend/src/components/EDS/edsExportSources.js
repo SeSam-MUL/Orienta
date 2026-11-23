@@ -147,12 +147,13 @@ export function montageColumns(n) {
  * proportion — and the panels need not share a raster anyway. One bar cannot be
  * true here, so none is offered.
  */
-export function buildMontageCanvas({ layers, bitmaps, shape, labelFor, cellWidth = 320, gap = 8, background = '#000000', labelColor = '#ffffff' }) {
+export function buildMontageCanvas({ layers, bitmaps, shape, labelFor, cellWidth = 320, gap = 8, background = '#000000', labelColor = '#ffffff', stretch = null }) {
   const usable = (layers || []).filter((l) => l.visible && sourceBitmapFor(l, bitmaps));
   if (!usable.length) throw new Error('Nothing to export: no visible map has data yet');
 
   const [H, W] = shape || [1, 1];
-  const aspect = H / W;
+  // With the tilt correction the cells take the sample's true aspect ratio.
+  const aspect = (H * (stretch?.sy || 1)) / (W * (stretch?.sx || 1));
   const cellW = Math.max(64, Math.round(cellWidth));
   const cellH = Math.max(32, Math.round(cellW * aspect));
   const labelH = Math.max(14, Math.round(cellH * 0.11));
@@ -190,6 +191,34 @@ export function buildMontageCanvas({ layers, bitmaps, shape, labelFor, cellWidth
   });
 
   return { canvas: c, umPerPx: null };
+}
+
+/**
+ * A built picture (`{ canvas, umPerPx }`) resampled to the sample's true aspect
+ * ratio — the tilt correction of the EDS page (tiltStretch.js), applied to the
+ * exported pixels so the file looks like the screen.
+ *
+ * `stretch` is `{ sx, sy }`; with none (1, 1) the input comes back unchanged.
+ * `smooth` interpolates (for electron images); without it every new pixel is a
+ * copy of its nearest neighbour, so a map's measuring raster stays visible.
+ *
+ * `umPerPx` passes through unchanged, and that is the point: the stored pixels
+ * are `umPerPx` tall but `k·umPerPx` wide on the sample, and after stretching by
+ * k each new pixel is `umPerPx` in both directions — one scale bar is true
+ * across the picture again (for the base plane; structures standing up are
+ * drawn too wide).
+ */
+export function stretchBuilt(built, stretch, { smooth = false } = {}) {
+  const sx = stretch?.sx || 1;
+  const sy = stretch?.sy || 1;
+  if (!built?.canvas || (sx === 1 && sy === 1)) return built;
+  const src = built.canvas;
+  const c = newCanvas(src.width * sx, src.height * sy);
+  const ctx = c.getContext('2d');
+  ctx.imageSmoothingEnabled = !!smooth;
+  if (smooth && 'imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(src, 0, 0, c.width, c.height);
+  return { ...built, canvas: c, stretched: { sx, sy } };
 }
 
 /** Canvas -> data URL the export dialog can load. */

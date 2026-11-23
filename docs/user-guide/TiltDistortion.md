@@ -95,6 +95,13 @@ are. When the check could not tell (no `Relative Size`), they are stretched
 with the image, which the page already draws over the whole map. An unclear
 finding is never corrected.
 
+Exports from the EDS page (**Export image…** and the right-click menu: one map,
+every map, the overlay, the sheet of all maps) follow the switch: with the
+correction on, the written picture is stretched the same way and its file name
+ends in `_true-aspect`. The scale bar stays true: each exported pixel is the
+stored step size in both directions again. The phase and region map exports are
+not stretched yet.
+
 ## Correcting an image
 
 If an X foreshortening is confirmed: stretch X by k and leave Y. A 1024 × 768 px
