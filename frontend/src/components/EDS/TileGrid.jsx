@@ -6,7 +6,7 @@ import { colors } from '../../theme/components';
  * unzoomed and the wheel/pan handlers stay inert — which is what the grid did
  * before zooming existed.
  */
-export default function TileGrid({ layers, bitmaps, errors, shape, onPixelClick, onRegionSelected, minTileWidth = 240, emptyMessage = 'Tick a layer in the panel on the left, or pick a preset.', zoom = null, onTileContextMenu = null }) {
+export default function TileGrid({ layers, bitmaps, errors, shape, onPixelClick, onRegionSelected, minTileWidth = 240, emptyMessage = 'Tick a layer in the panel on the left, or pick a preset.', zoom = null, onTileContextMenu = null, stretchFor = null }) {
   const visible = layers.filter((l) => l.visible);
   if (visible.length === 0) {
     return (
@@ -49,6 +49,8 @@ export default function TileGrid({ layers, bitmaps, errors, shape, onPixelClick,
           onPan={zoom ? ((dx, dy) => zoom.pan(l.id, dx, dy)) : undefined}
           onResetView={zoom ? (() => zoom.resetOne(l.id)) : undefined}
           onContextMenu={onTileContextMenu ? ((x, y) => onTileContextMenu(l, x, y)) : undefined}
+          // Tilt correction of the display, per layer kind (tiltStretch.js).
+          stretch={stretchFor ? stretchFor(l) : undefined}
         />
       ))}
     </div>

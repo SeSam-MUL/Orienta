@@ -749,5 +749,9 @@
     "summed": "One composition from the summed net counts of all these pixels, quantified once.",
     "mean": "The mean of these pixels' compositions.",
     "classifier": "These group compositions are the classifier's: the mean of each group's smoothed interior pixels — not the region composition the region list shows."
+  },
+  "tilt": {
+    "toggle": "True aspect ratio ({{axis}} × {{factor}})",
+    "toggleTooltip": "The sample was tilted: on it, the images and maps are foreshortened in {{axis}} by a factor of {{factor}}. With this on, they are drawn {{factor}}× wider in {{axis}} so lengths and shapes are true to scale (display only; the file is not changed). Strictly valid for the base plane only: structures that stand up are drawn too wide."
   }
 }

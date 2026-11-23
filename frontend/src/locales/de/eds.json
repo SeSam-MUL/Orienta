@@ -749,5 +749,9 @@
     "summed": "Eine Zusammensetzung aus den summierten Netto-Counts aller dieser Pixel, einmal quantifiziert.",
     "mean": "Das Mittel der Zusammensetzungen dieser Pixel.",
     "classifier": "Diese Gruppenzusammensetzungen sind die des Klassifikators: das Mittel der geglätteten inneren Pixel jeder Gruppe — nicht die Zusammensetzung, die die Regionenliste zeigt."
+  },
+  "tilt": {
+    "toggle": "Wahres Seitenverhältnis ({{axis}} × {{factor}})",
+    "toggleTooltip": "Die Probe war gekippt: Auf ihr sind Bilder und Karten in {{axis}} um den Faktor {{factor}} gestaucht. Eingeschaltet werden sie in {{axis}} um {{factor}} gestreckt gezeichnet, sodass Längen und Formen maßstabsgetreu sind (nur Anzeige, die Datei bleibt unverändert). Gilt streng nur für die Grundebene: Aufragende Strukturen werden zu breit gezeichnet."
   }
 }

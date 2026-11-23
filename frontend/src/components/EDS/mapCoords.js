@@ -105,8 +105,10 @@ export function pointerToRowCol(ev, rect, shape, contentBbox = null) {
   }
 
   // Legacy single-letterbox path — kept verbatim for byte-for-byte parity.
+  // A shape from `withDisplayStretch` is drawn wider/taller than its pixel grid
+  // (tilt correction); only the displayed aspect changes, not the grid.
   const containerAspect = rect.width / rect.height;
-  const imageAspect = natW / natH;
+  const imageAspect = (natW / natH) * (shape.aspectScale || 1);
   let dispW, dispH, offX, offY;
   if (containerAspect > imageAspect) {
     dispH = rect.height;
@@ -146,8 +148,10 @@ export function rowColToContainerPx(row, col, rect, shape, contentBbox = null) {
   }
 
   // Legacy single-letterbox path — kept verbatim for byte-for-byte parity.
+  // A shape from `withDisplayStretch` is drawn wider/taller than its pixel grid
+  // (tilt correction); only the displayed aspect changes, not the grid.
   const containerAspect = rect.width / rect.height;
-  const imageAspect = natW / natH;
+  const imageAspect = (natW / natH) * (shape.aspectScale || 1);
   let dispW, dispH, offX, offY;
   if (containerAspect > imageAspect) {
     dispH = rect.height;
@@ -164,4 +168,18 @@ export function rowColToContainerPx(row, col, rect, shape, contentBbox = null) {
     x: offX + (col + 0.5) / natW * dispW,
     y: offY + (row + 0.5) / natH * dispH,
   };
+}
+
+/**
+ * `shape` ([rows, cols]) marked as drawn with a display stretch (tilt
+ * correction, tiltStretch.js), so pointerToRowCol / rowColToContainerPx place
+ * the grid in the stretched box. The same array when there is no stretch.
+ */
+export function withDisplayStretch(shape, stretch) {
+  const sx = stretch?.sx || 1;
+  const sy = stretch?.sy || 1;
+  if (!shape || (sx === 1 && sy === 1)) return shape;
+  const out = [shape[0], shape[1]];
+  out.aspectScale = sx / sy;
+  return out;
 }

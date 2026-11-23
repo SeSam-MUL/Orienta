@@ -22,6 +22,12 @@ You can see which version you are running under **Settings → About Orienta**.
   reported as unclear and never corrected by a guess. `GET /api/ebsd/tilt-check`
   and `scripts/h5oina_tilt_check.py` give the full report. See
   [Tilt distortion](docs/user-guide/TiltDistortion.md).
+- EDS Analysis: with a confirmed tilt finding, the images, maps and composite
+  overlay are drawn with the sample's true aspect ratio (switch **True aspect
+  ratio (X × 2.92)** in the page header, on by default). Display only: the file
+  and the pixel grid are unchanged, and clicks, regions and the crosshair still
+  land on the same map pixel. Maps the check found on a raster of their own stay
+  as they are; an unclear finding is never corrected.
 
 ## v0.4.8 — 2026-11-11
 

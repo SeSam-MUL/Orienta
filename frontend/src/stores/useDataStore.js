@@ -27,6 +27,9 @@ const useDataStore = create((set, get) => ({
   // faktor_korrektur, zusammenfassung, bilder, karten, hinweise, ... }; null = not an .h5oina
   // or not asked yet.
   tiltCheck: null,
+  // Show images and maps of a confirmed tilt finding with the sample's true aspect
+  // ratio (EDS page). Display only; on by default, the EDS page has the switch.
+  tiltDisplayCorrection: true,
   patternCount: 0,
   patternShape: [0, 0],
 
@@ -123,6 +126,7 @@ const useDataStore = create((set, get) => ({
   }),
 
   setTiltCheck: (tiltCheck) => set({ tiltCheck: tiltCheck ?? null }),
+  setTiltDisplayCorrection: (on) => set({ tiltDisplayCorrection: !!on }),
 
   setPosition: (row, col, index, pattern) => set({
     currentRow: row,

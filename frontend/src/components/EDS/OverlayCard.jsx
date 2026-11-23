@@ -1,12 +1,13 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import LayeredCanvas from '../PhaseMap/LayeredCanvas';
 import MagnifierLens from './MagnifierLens';
-import { pointerToRowCol, rowColToContainerPx } from './mapCoords';
+import { pointerToRowCol, rowColToContainerPx, withDisplayStretch } from './mapCoords';
 import { useCursorPublisher, useCursorSync } from './CursorSyncContext';
 import { useRectangleDrag } from './hooks/useRectangleDrag';
 import { IDENTITY_VIEW, isZoomed, viewToTransform, zoomedRect, wheelFactor } from './zoomView';
 import { colors } from '../../theme/components';
+import { NO_STRETCH, stretchedAspect } from './tiltStretch';
 
 // Drags shorter than this still count as a click (see Tile.jsx).
 const CLICK_SLOP_PX = 3;
@@ -17,6 +18,9 @@ export default function OverlayCard({
   swipe = { a: null, b: null }, onSwipeSplitChange,
   magnifierEnabled = false,
   view = IDENTITY_VIEW, onZoomAt, onPan, onResetView, onContextMenu,
+  // Tilt correction of the display (tiltStretch.js); the map grid and the
+  // click -> pixel mapping are unchanged.
+  stretch = NO_STRETCH,
 }) {
   const inSwipeMode = !!(swipe?.a && swipe?.b);
   const hostRef = useRef(null);
@@ -34,8 +38,12 @@ export default function OverlayCard({
   const zoomCbRef = useRef(onZoomAt);
   zoomCbRef.current = onZoomAt;
 
+  // The grid as drawn: with the tilt stretch, clicks and the crosshair are
+  // placed in the stretched box (mapCoords.withDisplayStretch).
+  const geomShape = useMemo(() => withDisplayStretch(shape, stretch), [shape, stretch]);
+
   const drag = useRectangleDrag({
-    shape,
+    shape: geomShape,
     onRegion: onRegionSelected,
     mapRect: (r) => zoomedRect(r, viewRef.current),
   });
@@ -78,7 +86,7 @@ export default function OverlayCard({
     if (!shape || !pos.hovering || !hostRef.current) { setCrosshair(null); return; }
     const rect = hostRef.current.getBoundingClientRect();
     const zr = zoomedRect(rect, viewRef.current);
-    const p = rowColToContainerPx(pos.row, pos.col, zr, shape);
+    const p = rowColToContainerPx(pos.row, pos.col, zr, geomShape);
     if (!p) { setCrosshair(null); return; }
     const x = p.x + (zr.left - rect.left);
     const y = p.y + (zr.top - rect.top);
@@ -105,7 +113,7 @@ export default function OverlayCard({
         onPan?.(dx / rect.width, dy / rect.height);
       }
     }
-    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), geomShape);
     if (out) publish({ row: out.row, col: out.col, hovering: true, screenX: e.clientX, screenY: e.clientY });
   };
 
@@ -123,7 +131,7 @@ export default function OverlayCard({
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (!shape || !hostRef.current || !onPixelClick) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), geomShape);
     if (out) onPixelClick(out.row, out.col);
   };
 
@@ -147,7 +155,7 @@ export default function OverlayCard({
   const onLinePointerDown = (e) => {
     if (!shape || !hostRef.current) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), geomShape);
     if (!out) return;
     lineStartRef.current = {
       row: out.row, col: out.col,
@@ -177,7 +185,7 @@ export default function OverlayCard({
       return;
     }
     const rect = hostRef.current.getBoundingClientRect();
-    const end = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
+    const end = pointerToRowCol(e, zoomedRect(rect, viewRef.current), geomShape);
     if (end) {
       onLineComplete?.({
         start: { row: lineStartRef.current.row, col: lineStartRef.current.col },
@@ -211,7 +219,7 @@ export default function OverlayCard({
       style={{
         position: 'relative',
         width: '100%',
-        aspectRatio: shape ? `${shape[1]}/${shape[0]}` : '156/128',
+        aspectRatio: shape ? stretchedAspect(shape[1], shape[0], stretch) : '156/128',
         background: colors.bgSecondary,
         borderRadius: 4,
         overflow: 'hidden',

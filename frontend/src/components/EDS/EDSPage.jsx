@@ -23,6 +23,7 @@ import { regionAverageIsSummed, regionClipboardText } from './regionAverage';
 import SpectrumFitNotice from './SpectrumFitNotice';
 import { useSpectrumFitStatus } from './hooks/useSpectrumFitStatus';
 import useDataStore from '../../stores/useDataStore';
+import { stretchFor as tiltStretchFor, tiltFinding } from './tiltStretch';
 import useResultStore from '../../stores/useResultStore';
 import { CursorSyncProvider, useCursorSync } from './CursorSyncContext';
 import { umPerPxForLayer, scanUmPerPx } from './layerPixelSize';
@@ -380,7 +381,7 @@ export default function EDSPage({ onNavigate, isActive = true }) {
 }
 
 function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
-  const { t } = useTranslation(['eds', 'imageexport']);
+  const { t, i18n } = useTranslation(['eds', 'imageexport']);
   const isFileOpen = useDataStore((s) => s.isFileOpen);
   const filePath = useDataStore((s) => s.filePath);
   // EDS maps sit on the scan grid, so one pixel is one step — same physical
@@ -389,6 +390,20 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
   const pixelSizes = useDataStore((s) => s.pixelSizes);
   const rawSetPending = useDataStore((s) => s.setPendingPhaseMapIndexing);
   const setPendingPhaseMap = useMemo(() => rawSetPending ?? (() => {}), [rawSetPending]);
+  // Tilt foreshortening of an .h5oina (status bar check): the images and maps are
+  // drawn with the sample's true aspect ratio while the switch is on.
+  const tiltCheck = useDataStore((s) => s.tiltCheck);
+  const tiltCorrect = useDataStore((s) => s.tiltDisplayCorrection ?? true);
+  const setTiltCorrect = useDataStore((s) => s.setTiltDisplayCorrection);
+  const tiltFound = useMemo(() => tiltFinding(tiltCheck), [tiltCheck]);
+  const layerStretch = useCallback(
+    (layer) => tiltStretchFor(tiltCheck, layer?.kind, tiltCorrect),
+    [tiltCheck, tiltCorrect],
+  );
+  const overlayStretch = useMemo(
+    () => tiltStretchFor(tiltCheck, 'composite', tiltCorrect),
+    [tiltCheck, tiltCorrect],
+  );
 
   const [displayMode, setDisplayMode] = useState('at_pct');
   const [overlayW, setOverlayW] = useState(360);    // splitter-controlled
@@ -1059,6 +1074,26 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
         {/* Header */}
         <PageHeader onNavigate={onNavigate}>
           <FileSwitcher />
+          {tiltFound && setTiltCorrect && (
+            <label
+              data-tilt-correction-toggle
+              title={t('tilt.toggleTooltip', {
+                axis: tiltFound.axis,
+                factor: tiltFound.factor.toLocaleString(i18n.language, { maximumFractionDigits: 2 }),
+              })}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4, fontSize: '9pt', cursor: 'pointer',
+                color: tiltCorrect ? colors.yellow : colors.textSecondary, whiteSpace: 'nowrap',
+              }}
+            >
+              <input type="checkbox" checked={tiltCorrect}
+                onChange={(e) => setTiltCorrect(e.target.checked)} />
+              {t('tilt.toggle', {
+                axis: tiltFound.axis,
+                factor: tiltFound.factor.toLocaleString(i18n.language, { maximumFractionDigits: 2 }),
+              })}
+            </label>
+          )}
           <Label secondary small style={{ marginRight: 4 }}>{t('header.displayLabel')}</Label>
           <ModeToggle value={displayMode} onChange={setDisplayMode} />
         </PageHeader>
@@ -1387,6 +1422,7 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
                   onPan={onOverlayPan}
                   onResetView={onOverlayResetView}
                   onContextMenu={(x, y) => setMenu({ x, y, kind: 'overlay' })}
+                  stretch={overlayStretch}
                 />
               </div>
             </GroupBox>
@@ -1473,6 +1509,7 @@ function EDSPageBody({ onNavigate, isActive = true, fitStatus = null }) {
                 emptyMessage={t('allMaps.empty')}
                 zoom={zoom}
                 onTileContextMenu={(layer, x, y) => setMenu({ x, y, kind: 'tile', layer })}
+                stretchFor={layerStretch}
               />
             </GroupBox>
           </div>

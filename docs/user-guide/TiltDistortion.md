@@ -80,6 +80,21 @@ undistorted direction, and in the foreshortened one the true step is
 sizes and grain shapes derived from them. The EBSD `Hit Rate` is reported as
 well; at 0 % a phase map says nothing.
 
+## True aspect ratio on the EDS page
+
+With a confirmed finding (X or Y foreshortened), the EDS Analysis page draws the
+electron images, the element maps and the composite overlay with the sample's
+true aspect ratio: X (or Y) k times longer. The switch **True aspect ratio
+(X × 2.92)** in the page header turns it off and on; it is on by default.
+
+Only the display changes. The file, the bitmaps and the pixel grid stay as they
+are, and a click, a region or the crosshair still lands on the same map pixel. A
+stretched electron image is smoothed; maps keep nearest neighbour so the raster
+stays visible. Maps the check found on a raster of their own are left as they
+are. When the check could not tell (no `Relative Size`), they are stretched
+with the image, which the page already draws over the whole map. An unclear
+finding is never corrected.
+
 ## Correcting an image
 
 If an X foreshortening is confirmed: stretch X by k and leave Y. A 1024 × 768 px

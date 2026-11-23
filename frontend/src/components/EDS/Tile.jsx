@@ -1,10 +1,11 @@
-import { useRef, useEffect, useState } from 'react';
-import { pointerToRowCol, rowColToContainerPx } from './mapCoords';
+import { useRef, useEffect, useState, useMemo } from 'react';
+import { pointerToRowCol, rowColToContainerPx, withDisplayStretch } from './mapCoords';
 import { useCursorPublisher, useCursorSync } from './CursorSyncContext';
 import { useRectangleDrag } from './hooks/useRectangleDrag';
 import { buildMaskCanvas } from '../PhaseMap/maskCanvas';
 import { IDENTITY_VIEW, isZoomed, viewToTransform, zoomedRect, wheelFactor } from './zoomView';
 import { colors } from '../../theme/components';
+import { NO_STRETCH, stretchedAspect } from './tiltStretch';
 
 // A drag shorter than this (in CSS px) still counts as a click, so panning a
 // zoomed tile never fires click-to-quantify by accident.
@@ -13,6 +14,9 @@ const CLICK_SLOP_PX = 3;
 export default function Tile({
   layer, bitmap, error, shape, onPixelClick, onRegionSelected,
   view = IDENTITY_VIEW, onZoomAt, onPan, onResetView, onContextMenu,
+  // Tilt correction of the display (tiltStretch.js): the box takes the sample's
+  // true aspect ratio; the bitmap and the click → pixel mapping are unchanged.
+  stretch = NO_STRETCH,
 }) {
   const hostRef = useRef(null);
   const canvasRef = useRef(null);
@@ -27,8 +31,12 @@ export default function Tile({
   const zoomCbRef = useRef(onZoomAt);
   zoomCbRef.current = onZoomAt;
 
+  // The grid as drawn: with the tilt stretch, clicks and the crosshair are
+  // placed in the stretched box (mapCoords.withDisplayStretch).
+  const geomShape = useMemo(() => withDisplayStretch(shape, stretch), [shape, stretch]);
+
   const drag = useRectangleDrag({
-    shape,
+    shape: geomShape,
     onRegion: onRegionSelected,
     mapRect: (r) => zoomedRect(r, viewRef.current),
   });
@@ -100,7 +108,7 @@ export default function Tile({
     if (!shape || !pos.hovering || !hostRef.current) { setCrosshair(null); return; }
     const rect = hostRef.current.getBoundingClientRect();
     const zr = zoomedRect(rect, viewRef.current);
-    const p = rowColToContainerPx(pos.row, pos.col, zr, shape);
+    const p = rowColToContainerPx(pos.row, pos.col, zr, geomShape);
     if (!p) { setCrosshair(null); return; }
     const x = p.x + (zr.left - rect.left);
     const y = p.y + (zr.top - rect.top);
@@ -126,7 +134,7 @@ export default function Tile({
         onPan?.(dx / rect.width, dy / rect.height);
       }
     }
-    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), geomShape);
     if (out) publish({ row: out.row, col: out.col, hovering: true, screenX: e.clientX, screenY: e.clientY });
   };
   const onLeave = (e) => {
@@ -150,7 +158,7 @@ export default function Tile({
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     if (!shape || !hostRef.current || !onPixelClick) return;
     const rect = hostRef.current.getBoundingClientRect();
-    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), shape);
+    const out = pointerToRowCol(e, zoomedRect(rect, viewRef.current), geomShape);
     if (out) onPixelClick(out.row, out.col);
   };
 
@@ -217,8 +225,8 @@ export default function Tile({
           // is never stretched. Falls back to `shape`, then a sane default,
           // while the bitmap is still fetching.
           aspectRatio: bitmap
-            ? `${bitmap.width}/${bitmap.height}`
-            : (shape ? `${shape[1]}/${shape[0]}` : '156/128'),
+            ? stretchedAspect(bitmap.width, bitmap.height, stretch)
+            : (shape ? stretchedAspect(shape[1], shape[0], stretch) : '156/128'),
         }}
       >
         {/* Zoom wrapper: a CSS transform, so no canvas is ever re-drawn and
@@ -236,7 +244,10 @@ export default function Tile({
             ref={canvasRef}
             style={{
               width: '100%', height: '100%',
-              imageRendering: 'pixelated',
+              // A stretched electron image is smoothed (blocky 3-px columns would
+              // invent structure); maps keep nearest neighbour so the raster stays visible.
+              imageRendering: (layer.kind === 'electron' && (stretch.sx !== 1 || stretch.sy !== 1))
+                ? 'auto' : 'pixelated',
               opacity: Math.max(0.4, layer.opacity ?? 1),
               background: '#000',
             }}
